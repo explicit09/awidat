@@ -24,7 +24,7 @@ use tauri::State;
 use crate::publishing::{
     upload_queue::{
         self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
-        UploadJobEntry, UploadPrefs,
+        UploadJobEntry, UploadMetadata, UploadPrefs,
     },
     ConnectionStatus, OAuthChallenge, ProviderError, ProviderInfo, ProviderRegistry,
     UploadParams, UploadResult,
@@ -168,9 +168,11 @@ pub async fn list_upload_states(
 /// Spawns one tokio task per target so providers fan out
 /// independently — a slow YouTube push can't block a fast TikTok push.
 ///
-/// Stub metadata (title from render label, no description / tags,
-/// `private` visibility) is the contract for W5.A2; W5.A3 replaces it
-/// with a per-target form.
+/// Per-target metadata (W5.A3): if the user filled in the per-target
+/// form, `set_upload_metadata` stored it on the [`UploadJobEntry`] —
+/// the dispatcher reads from there. If a target has no saved
+/// metadata, [`default_upload_params`] supplies the W5.A2 stub
+/// (title from `title` arg, no description / tags, `private`).
 #[tauri::command]
 pub async fn start_uploads_for_job(
     state: State<'_, AwidatState>,
@@ -197,7 +199,14 @@ pub async fn start_uploads_for_job(
                 }
             }
         }
-        let params = upload_queue::default_upload_params(&file_path_buf, &title);
+        let params = build_upload_params(
+            &queue,
+            &job_id,
+            &provider_key,
+            &file_path_buf,
+            &title,
+        )
+        .await;
         let reg_clone = reg.clone();
         let queue_clone = queue.clone();
         let job_id_clone = job_id.clone();
@@ -216,9 +225,40 @@ pub async fn start_uploads_for_job(
     Ok(())
 }
 
+/// Build the [`UploadParams`] for one `(job, provider)` upload —
+/// preferring saved per-target metadata, falling back to the W5.A2
+/// `default_upload_params` stub. Shared between the initial dispatch
+/// (`start_uploads_for_job`) and the retry path so a retried upload
+/// reuses the same metadata the original upload was handed.
+async fn build_upload_params(
+    queue: &crate::publishing::UploadQueue,
+    job_id: &str,
+    provider: &str,
+    file_path: &std::path::Path,
+    fallback_title: &str,
+) -> UploadParams {
+    if let Some(metadata) = queue.metadata_for(job_id, provider).await {
+        // The form treats title-required as a hard validation error,
+        // but the dispatcher defends in depth: if the user somehow
+        // submitted an empty title (e.g. saved metadata before the
+        // validation lint shipped), fall back to the render label so
+        // the provider doesn't reject the call outright.
+        let mut params = metadata.into_upload_params(file_path);
+        if params.title.trim().is_empty() {
+            params.title = fallback_title.to_string();
+        }
+        params
+    } else {
+        upload_queue::default_upload_params(file_path, fallback_title)
+    }
+}
+
 /// Retry a single failed (or successful — caller's choice) upload.
 /// Resets the target to `Pending` and spawns a fresh upload task.
 /// Returns `Err` if the job or provider isn't tracked.
+///
+/// Re-uses any per-target metadata the user configured for the
+/// original upload — retry doesn't re-prompt the form.
 #[tauri::command]
 pub async fn retry_upload(
     state: State<'_, AwidatState>,
@@ -235,10 +275,34 @@ pub async fn retry_upload(
     let reg = registry()?.clone();
     let queue = state.upload_queue.clone();
     let file_path_buf = std::path::PathBuf::from(&file_path);
-    let params = upload_queue::default_upload_params(&file_path_buf, &title);
+    let params =
+        build_upload_params(&queue, &job_id, &provider, &file_path_buf, &title).await;
     tokio::spawn(async move {
         run_upload(&queue, &reg, &job_id, &provider, params).await;
     });
+    Ok(())
+}
+
+/// Persist per-target upload metadata (W5.A3). The frontend's form
+/// calls this on every field edit (debounced); the dispatcher reads
+/// it back via [`UploadQueue::metadata_for`] in
+/// `start_uploads_for_job`. Idempotent — a second call replaces.
+///
+/// Storing metadata before the render kicks (and therefore before
+/// `set_render_upload_targets` has registered the targets list) is
+/// supported: [`UploadQueue::set_metadata`] creates a parked shell so
+/// the metadata isn't lost.
+#[tauri::command]
+pub async fn set_upload_metadata(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    provider: String,
+    metadata: UploadMetadata,
+) -> Result<(), String> {
+    state
+        .upload_queue
+        .set_metadata(job_id, provider, metadata)
+        .await;
     Ok(())
 }
 

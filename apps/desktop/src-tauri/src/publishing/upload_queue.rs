@@ -84,6 +84,59 @@ impl UploadState {
     }
 }
 
+/// Per-target upload metadata (W5.A3). Mirrors the frontend
+/// `UploadMetadata` shape — title / description / tags / visibility /
+/// schedule / thumbnail — keyed by provider key on
+/// [`UploadJobEntry::upload_metadata`]. Filled by the frontend's
+/// per-target form before the render kicks; the dispatcher uses it to
+/// build the per-provider [`UploadParams`] instead of W5.A2's
+/// `default_upload_params` stub.
+///
+/// Missing entries (or fields) fall through to the W5.A2 stub —
+/// safe-default `private` visibility, the render label as the title.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UploadMetadata {
+    /// Provider-facing title. Required by every real platform —
+    /// frontend validation flags empties before the form submits.
+    #[serde(default)]
+    pub title: String,
+    /// Description / caption.
+    #[serde(default)]
+    pub description: String,
+    /// Tags / hashtags. The provider impl maps these to whatever the
+    /// platform calls "tags" (`#hashtag` for TikTok/IG, keyword
+    /// strings for YouTube).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Visibility on publish. Defaults to `Private` if the field is
+    /// absent — same safety default as [`UploadParams`].
+    #[serde(default)]
+    pub visibility: Visibility,
+    /// Optional schedule. Unix epoch seconds.
+    #[serde(default, rename = "scheduledAt")]
+    pub scheduled_at: Option<i64>,
+    /// Optional thumbnail / cover image path on disk.
+    #[serde(default, rename = "thumbnailPath")]
+    pub thumbnail_path: Option<String>,
+}
+
+impl UploadMetadata {
+    /// Map to a [`UploadParams`] given the resolved render output
+    /// path. The metadata carries everything *except* the file path —
+    /// that comes from the render job's `output_path`.
+    pub fn into_upload_params(self, file_path: &Path) -> UploadParams {
+        UploadParams {
+            file_path: file_path.to_string_lossy().into_owned(),
+            title: self.title,
+            description: self.description,
+            tags: self.tags,
+            visibility: self.visibility,
+            scheduled_at: self.scheduled_at,
+            thumbnail_path: self.thumbnail_path,
+        }
+    }
+}
+
 /// One entry in the upload queue — the per-render upload fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UploadJobEntry {
@@ -99,6 +152,12 @@ pub struct UploadJobEntry {
     /// Once `Published`, mirrors the `remote_url` for quick frontend
     /// access. Empty until at least one target publishes.
     pub published_urls: HashMap<String, String>,
+    /// Per-target form payload (W5.A3). Sparse — entries are inserted
+    /// as the user edits each target's form. The dispatcher uses an
+    /// entry if present, falling back to [`default_upload_params`]
+    /// otherwise.
+    #[serde(default)]
+    pub upload_metadata: HashMap<String, UploadMetadata>,
 }
 
 impl UploadJobEntry {
@@ -113,6 +172,7 @@ impl UploadJobEntry {
             upload_targets,
             upload_states,
             published_urls: HashMap::new(),
+            upload_metadata: HashMap::new(),
         }
     }
 
@@ -150,9 +210,61 @@ impl UploadQueue {
     /// second call replaces the targets list. Any previously-running
     /// upload state for providers no longer in the list is dropped
     /// (the frontend is the source of truth on user intent).
+    ///
+    /// Per-target [`UploadMetadata`] inserted ahead of `register` (the
+    /// form can save metadata before the render kicks) is carried
+    /// over for providers still in the targets list — re-registering
+    /// shouldn't clobber the form state the user already typed.
     pub async fn register(&self, job_id: String, providers: Vec<String>) {
         let mut guard = self.entries.lock().await;
-        guard.insert(job_id.clone(), UploadJobEntry::new(job_id, providers));
+        let preserved_metadata = guard
+            .get(&job_id)
+            .map(|existing| {
+                let mut next = HashMap::new();
+                for p in &providers {
+                    if let Some(md) = existing.upload_metadata.get(p) {
+                        next.insert(p.clone(), md.clone());
+                    }
+                }
+                next
+            })
+            .unwrap_or_default();
+        let mut entry = UploadJobEntry::new(job_id.clone(), providers);
+        entry.upload_metadata = preserved_metadata;
+        guard.insert(job_id, entry);
+    }
+
+    /// Replace the per-target metadata for one `(job, provider)`
+    /// pair. If the entry doesn't exist yet (form saved before the
+    /// render kicked off), a fresh shell is created so the metadata
+    /// can be parked until `register` is called with the targets
+    /// list. The shell starts with no `upload_targets` so the
+    /// dispatcher doesn't try to fan out before `register` runs.
+    pub async fn set_metadata(
+        &self,
+        job_id: String,
+        provider: String,
+        metadata: UploadMetadata,
+    ) {
+        let mut guard = self.entries.lock().await;
+        let entry = guard
+            .entry(job_id.clone())
+            .or_insert_with(|| UploadJobEntry::new(job_id, Vec::new()));
+        entry.upload_metadata.insert(provider, metadata);
+    }
+
+    /// Look up one target's saved metadata. Used by the dispatcher to
+    /// build the per-provider [`UploadParams`].
+    pub async fn metadata_for(
+        &self,
+        job_id: &str,
+        provider: &str,
+    ) -> Option<UploadMetadata> {
+        self.entries
+            .lock()
+            .await
+            .get(job_id)
+            .and_then(|e| e.upload_metadata.get(provider).cloned())
     }
 
     /// Read the entry for one job, or `None` if no targets are registered.
@@ -684,5 +796,110 @@ mod tests {
         assert!(p.tags.is_empty());
         assert!(p.description.is_empty());
         assert!(p.scheduled_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_metadata_round_trips_through_queue() {
+        let q = UploadQueue::new();
+        q.register("job-md".into(), vec!["youtube".into()]).await;
+        let md = UploadMetadata {
+            title: "My title".into(),
+            description: "Long-form description".into(),
+            tags: vec!["tag1".into(), "tag2".into()],
+            visibility: Visibility::Public,
+            scheduled_at: Some(1_700_000_000),
+            thumbnail_path: Some("/tmp/cover.png".into()),
+        };
+        q.set_metadata("job-md".into(), "youtube".into(), md.clone()).await;
+        let fetched = q
+            .metadata_for("job-md", "youtube")
+            .await
+            .unwrap_or_else(|| panic!("metadata round-trips"));
+        assert_eq!(fetched, md);
+        // And it survives a snapshot read.
+        let snap = q
+            .snapshot("job-md")
+            .await
+            .unwrap_or_else(|| panic!("snapshot present"));
+        assert_eq!(snap.upload_metadata.get("youtube"), Some(&md));
+    }
+
+    #[tokio::test]
+    async fn set_metadata_before_register_creates_parked_shell() {
+        // The form can save metadata before the user hits Export —
+        // store should park the metadata so it isn't lost when the
+        // worker eventually registers the targets list.
+        let q = UploadQueue::new();
+        let md = UploadMetadata {
+            title: "Drafted".into(),
+            ..UploadMetadata::default()
+        };
+        q.set_metadata("job-parked".into(), "youtube".into(), md.clone()).await;
+        // Render kicks: register replaces the shell but preserves the
+        // metadata for providers still in the targets list.
+        q.register("job-parked".into(), vec!["youtube".into()]).await;
+        let after = q
+            .snapshot("job-parked")
+            .await
+            .unwrap_or_else(|| panic!("entry present"));
+        assert_eq!(after.upload_metadata.get("youtube"), Some(&md));
+        assert_eq!(
+            after.upload_states.get("youtube"),
+            Some(&UploadState::Pending),
+        );
+    }
+
+    #[tokio::test]
+    async fn register_drops_metadata_for_removed_providers() {
+        // If the user removes a target from `uploadTargets` (toggles
+        // the per-target chip off), the next register call should
+        // drop that provider's metadata too — staying in sync with
+        // user intent.
+        let q = UploadQueue::new();
+        q.set_metadata(
+            "job-x".into(),
+            "youtube".into(),
+            UploadMetadata {
+                title: "YT".into(),
+                ..UploadMetadata::default()
+            },
+        )
+        .await;
+        q.set_metadata(
+            "job-x".into(),
+            "tiktok".into(),
+            UploadMetadata {
+                title: "TT".into(),
+                ..UploadMetadata::default()
+            },
+        )
+        .await;
+        q.register("job-x".into(), vec!["youtube".into()]).await;
+        let after = q
+            .snapshot("job-x")
+            .await
+            .unwrap_or_else(|| panic!("entry present"));
+        assert!(after.upload_metadata.contains_key("youtube"));
+        assert!(!after.upload_metadata.contains_key("tiktok"));
+    }
+
+    #[test]
+    fn upload_metadata_into_upload_params_carries_fields() {
+        let md = UploadMetadata {
+            title: "T".into(),
+            description: "D".into(),
+            tags: vec!["a".into(), "b".into()],
+            visibility: Visibility::Unlisted,
+            scheduled_at: Some(42),
+            thumbnail_path: Some("/tmp/x.png".into()),
+        };
+        let params = md.into_upload_params(Path::new("/tmp/clip.mp4"));
+        assert_eq!(params.file_path, "/tmp/clip.mp4");
+        assert_eq!(params.title, "T");
+        assert_eq!(params.description, "D");
+        assert_eq!(params.tags, vec!["a", "b"]);
+        assert_eq!(params.visibility, Visibility::Unlisted);
+        assert_eq!(params.scheduled_at, Some(42));
+        assert_eq!(params.thumbnail_path.as_deref(), Some("/tmp/x.png"));
     }
 }

@@ -35,6 +35,7 @@ import {
   AppShell,
   CommandRail,
   DeliverySurface,
+  DRAFT_METADATA_JOB_ID,
   SkillsSurface,
   HistorySurface,
   BriefSurface,
@@ -80,6 +81,7 @@ import {
   providerKeyForTarget,
   useUploadPrefs,
 } from "./state/uploadPrefs";
+import { useUploadMetadata } from "./state/uploadMetadata";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
   DELIVERY_TARGETS,
@@ -533,13 +535,27 @@ function App() {
     // is the provider key (`youtube` → YouTube), so we just gate on
     // whether the user toggled "Upload after render" for that target.
     const uploadEnabled = useUploadPrefs.getState().enabled;
+    // Per-target metadata the user drafted in the form (W5.A3). The
+    // form persists under DRAFT_METADATA_JOB_ID; on enqueue we copy
+    // the per-provider snapshots onto each entry's own id so the
+    // worker can hand them to the backend on render-done.
+    const metadataStore = useUploadMetadata.getState();
     const entries: RenderQueueEntry[] = ordered.map((key) => {
       const spec = DELIVERY_TARGETS[key];
       const provider = providerKeyForTarget(key);
       const uploadTargets =
         provider && uploadEnabled.has(key) ? [provider] : undefined;
+      const entryId = newQueueId(spec.kind);
+      // Forward the user's draft metadata for this provider, if any,
+      // onto the freshly-allocated entry id so the worker's
+      // `useUploadMetadata.get(entry.id, provider)` lookup finds the
+      // saved values. Done synchronously through the store action.
+      if (uploadTargets && provider) {
+        const draft = metadataStore.get(DRAFT_METADATA_JOB_ID, provider, spec.label);
+        metadataStore.set(entryId, provider, draft);
+      }
       return {
-        id: newQueueId(spec.kind),
+        id: entryId,
         targetId: key,
         label: spec.label,
         kind: spec.kind,

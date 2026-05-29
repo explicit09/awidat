@@ -47,6 +47,7 @@ export {
 export { IndexRail, type IndexRailProps } from "./IndexRail";
 export {
   DeliverySurface,
+  DRAFT_METADATA_JOB_ID,
   type DeliverySurfaceProps,
   type DeliveryTarget,
   type DeliveryTargetKey,

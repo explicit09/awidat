@@ -24,7 +24,8 @@ import { SafeAreaPreview } from "./delivery/SafeAreaPreview";
 import { IssueInspector } from "./delivery/IssueInspector";
 import { RenderSummary, KV } from "./delivery/RenderSummary";
 import { RenderQueuePanel } from "./delivery/RenderQueue";
-import { targetKeyForKind } from "./delivery/targetMeta";
+import { UploadMetadataForm } from "./delivery/UploadMetadataForm";
+import { TARGET_META, targetKeyForKind } from "./delivery/targetMeta";
 import {
   ALL_TARGETS,
   countBySeverity,
@@ -40,6 +41,13 @@ export type {
   DeliveryTargetKey,
   PreflightFinding,
 };
+
+/** Stable scope key for the per-target metadata form *before* the
+ *  user kicks an Export. The form persists draft state under this id
+ *  so a reload survives; on Export, App.tsx copies the drafts onto
+ *  each enqueued `RenderQueueEntry.id` so the worker can hand the
+ *  per-provider metadata to the backend at upload time. */
+export const DRAFT_METADATA_JOB_ID = "awidat.deliver.draft";
 
 /**
  * DeliverySurface — concept Screen 7.
@@ -112,6 +120,23 @@ export function DeliverySurface({
     return out;
   }, [queueEntries]);
 
+  // Publishing targets the user has opted into upload-after-render
+  // *and* has currently selected as a delivery target. The form only
+  // renders for the intersection — picking "YouTube" without
+  // toggling Upload doesn't surface the form.
+  const formTargets = useMemo<DeliveryTargetKey[]>(() => {
+    const selected = new Set(
+      resolvedTargets.filter((t) => t.active).map((t) => t.key),
+    );
+    return Array.from(uploadAfterRender).filter((k) => selected.has(k));
+  }, [resolvedTargets, uploadAfterRender]);
+  // Default title for newly-touched targets. We pick the most
+  // information-bearing render-target label as the seed.
+  const formDefaultTitle = useMemo(() => {
+    if (formTargets.length === 0) return "Untitled render";
+    return TARGET_META[formTargets[0]].label;
+  }, [formTargets]);
+
   const counts = countBySeverity(findings);
   const filtered = severityFilter === "all"
     ? findings
@@ -174,6 +199,13 @@ export function DeliverySurface({
               selectedIssue={selectedIssue}
               onAgentRepair={onAgentRepair}
             />
+            {formTargets.length > 0 ? (
+              <UploadMetadataForm
+                selectedTargets={formTargets}
+                jobIdHint={DRAFT_METADATA_JOB_ID}
+                defaultTitle={formDefaultTitle}
+              />
+            ) : null}
             <RightColumnDetails mode={mode}>
               {summary ? <RenderSummary summary={summary} /> : null}
               <RenderQueuePanel />

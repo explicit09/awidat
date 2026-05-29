@@ -41,7 +41,7 @@ pub use types::{
     ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult,
 };
 pub use upload_queue::{
-    UploadJobEntry, UploadPrefs, UploadQueue, UploadState,
+    UploadJobEntry, UploadMetadata, UploadPrefs, UploadQueue, UploadState,
 };
 // Re-exported separately because tests are the only in-crate
 // consumer today — bundling it with the line above tripped the

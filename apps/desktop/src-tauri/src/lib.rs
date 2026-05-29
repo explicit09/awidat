@@ -239,6 +239,7 @@ pub fn run() {
             commands::publishing::list_upload_states,
             commands::publishing::start_uploads_for_job,
             commands::publishing::retry_upload,
+            commands::publishing::set_upload_metadata,
             commands::publishing::get_default_upload_targets,
             commands::publishing::set_default_upload_targets,
         ])

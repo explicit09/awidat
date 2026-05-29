@@ -23,6 +23,10 @@ import {
   type RenderQueueEntry,
   type RenderUploadState,
 } from "./renderQueue";
+import {
+  useUploadMetadata,
+  type UploadMetadata,
+} from "../state/uploadMetadata";
 
 type TimelineRenderInfo = {
   job_id: string;
@@ -209,11 +213,40 @@ async function maybeChainUploads(
   const targets = entry.uploadTargets ?? [];
   if (targets.length === 0) return;
   const store = useRenderQueueStore.getState();
+  // Snapshot the per-target metadata the user typed into the Deliver
+  // form. Keyed by `(entry.id, provider)` while the form is open, but
+  // the backend keys by `(jobId, provider)` — so we re-key here.
+  const metadataStore = useUploadMetadata.getState();
+  const metadataByProvider: Record<string, UploadMetadata> = {};
+  for (const provider of targets) {
+    metadataByProvider[provider] = metadataStore.get(
+      entry.id,
+      provider,
+      entry.label,
+    );
+  }
   try {
     await invoke<void>("set_render_upload_targets", {
       jobId,
       providers: targets,
     });
+    // Push each target's metadata to the backend before we kick the
+    // upload — `start_uploads_for_job` reads from there to build the
+    // per-provider `UploadParams`. Awaited in parallel to keep total
+    // latency to one round trip even with three targets.
+    await Promise.all(
+      targets.map((provider) =>
+        invoke<void>("set_upload_metadata", {
+          jobId,
+          provider,
+          metadata: metadataByProvider[provider],
+        }),
+      ),
+    );
+    // Mirror the saved metadata onto the queue entry so the retry
+    // path doesn't have to re-read the form (which may have moved on
+    // to a different render's metadata by then).
+    store.setUploadMetadata(entry.id, metadataByProvider);
     await invoke<void>("start_uploads_for_job", {
       jobId,
       filePath: outputPath,

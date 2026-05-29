@@ -17,6 +17,7 @@
 // `markFailed` actions.
 
 import { create } from "zustand";
+import type { UploadMetadata } from "../state/uploadMetadata";
 
 /** A queue entry — one selected target for one Deliver action. */
 export type RenderTargetKind =
@@ -107,6 +108,18 @@ export type RenderQueueEntry = {
    * least one target publishes.
    */
   publishedUrls?: Record<string, string>;
+  /**
+   * Per-target metadata (title / description / tags / visibility /
+   * schedule / thumbnail) the user configured before kicking the
+   * render. Keyed by provider key — same set as `uploadTargets`.
+   *
+   * The render-queue worker forwards each entry to the backend via
+   * `start_uploads_for_job` so the upload dispatcher hands the real
+   * `UploadParams` to the provider instead of W5.A2's stub defaults.
+   * Missing keys (or `undefined`) → dispatcher falls back to the
+   * default `(label, no description, private)` payload.
+   */
+  uploadMetadata?: Record<string, UploadMetadata>;
 };
 
 type State = {
@@ -136,6 +149,18 @@ type State = {
     id: string,
     states: Record<string, RenderUploadState>,
     publishedUrls: Record<string, string>,
+  ) => void;
+  /**
+   * Replace this entry's per-target upload metadata snapshot. Called
+   * by the worker just before `start_uploads_for_job` so the saved
+   * queue entry carries the same metadata the backend was handed —
+   * useful for retry, where we don't want to re-read the user's form
+   * state (they may have edited the form for a *different* render
+   * since then).
+   */
+  setUploadMetadata: (
+    id: string,
+    metadata: Record<string, UploadMetadata>,
   ) => void;
 };
 
@@ -307,6 +332,15 @@ export const useRenderQueueStore = create<State>((set) => ({
         e.id === id
           ? { ...e, uploadStates: states, publishedUrls }
           : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadMetadata: (id, metadata) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, uploadMetadata: metadata } : e,
       );
       persist(next);
       return { entries: next };
