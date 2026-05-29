@@ -12,6 +12,7 @@ pub mod generated_media;
 pub mod history;
 pub mod import;
 pub mod index;
+pub mod indexer_config_overlay;
 pub mod indexer_data;
 pub mod media;
 pub mod motion;

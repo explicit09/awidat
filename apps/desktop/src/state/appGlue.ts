@@ -39,7 +39,7 @@ import {
   emitMenuCommand,
   onMenuCommand,
 } from "../app/menuCommands";
-import { useSkillsStore, useStageStore } from "./index";
+import { useIndexerOverlay, useSkillsStore, useStageStore } from "./index";
 import { INTRO_PROMPT, useIntroState } from "./introState";
 import {
   ITEM_EVENT,
@@ -85,6 +85,7 @@ export function useAppGlue() {
   const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const hydrateSkillsFromDisk = useSkillsStore((s) => s.hydrateFromDisk);
+  const hydrateIndexerOverlayFromDisk = useIndexerOverlay((s) => s.hydrateFromDisk);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const zoomIn = useTimelineStore((s) => s.zoomIn);
@@ -338,6 +339,13 @@ export function useAppGlue() {
       invoke<string[]>("read_disabled_skills", { projectPath: projectRoot })
         .then((disabled) => hydrateSkillsFromDisk(projectRoot, disabled))
         .catch((e) => console.warn("read_disabled_skills failed", e));
+      // Mirror the skills hydration for the indexers overlay (Wave 4
+      // T3). The IndexersStrip popover reads disabled state from this
+      // store; the dispatcher reads the same .awidat/indexers.json on
+      // run so the two views never disagree.
+      invoke<string[]>("read_disabled_indexers", { projectPath: projectRoot })
+        .then((disabled) => hydrateIndexerOverlayFromDisk(projectRoot, disabled))
+        .catch((e) => console.warn("read_disabled_indexers failed", e));
       return () => window.clearTimeout(retry);
     }
   }, [
@@ -350,6 +358,7 @@ export function useAppGlue() {
     clearSelection,
     clearNotes,
     hydrateSkillsFromDisk,
+    hydrateIndexerOverlayFromDisk,
     refreshTimeline,
     refreshMedia,
   ]);

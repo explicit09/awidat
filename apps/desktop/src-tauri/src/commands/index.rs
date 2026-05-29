@@ -93,6 +93,18 @@ pub async fn index_project_at_root(
     let config = Config::load(Some(&project_root)).map_err(|e| format!("load config: {e}"))?;
     let mut servers: Vec<_> = config.indexers().cloned().collect();
     prepare_desktop_indexers(&mut servers);
+    // Per-project overlay (Wave 4 T3) — drop any indexer the user has
+    // disabled via the IndexersStrip popover. Reading the overlay file
+    // server-side keeps the front-end IPC contract unchanged (no
+    // `disabled: Vec<String>` arg threaded through every caller of
+    // `index_project`); auto-chain runs from `import.rs` honor it too.
+    // Fail-open: a missing or malformed file means "run everything",
+    // same as the skill_config overlay.
+    let disabled =
+        crate::commands::indexer_config_overlay::load_disabled_indexers_sync(&project_root);
+    if !disabled.is_empty() {
+        servers.retain(|server| !disabled.iter().any(|name| name == &server.name));
+    }
     if servers.is_empty() {
         return Err(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \

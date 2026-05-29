@@ -217,6 +217,8 @@ pub fn run() {
             commands::skills::read_skill_body,
             commands::skill_config::read_disabled_skills,
             commands::skill_config::write_disabled_skills,
+            commands::indexer_config_overlay::read_disabled_indexers,
+            commands::indexer_config_overlay::write_disabled_indexers,
             commands::agents_md::read_agents_md,
             commands::agents_md::write_agents_md,
         ])

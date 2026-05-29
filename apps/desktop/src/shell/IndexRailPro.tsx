@@ -1,5 +1,12 @@
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button, StatusPill, cn } from "../ui";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/Popover";
+import { useProjectStore } from "../app/state";
+import { useIndexerOverlay } from "../state";
 import type {
   IndexerConfigSnapshot,
   IndexingStructurePreview,
@@ -50,7 +57,7 @@ export function IndexRailPro({
         <SignalGroup title="Speech" signals={model.bySection.speech} />
         <SignalGroup title="Visuals" signals={model.bySection.visuals} />
         <SignalGroup title="Audio" signals={model.bySection.audio} />
-        <IndexersStrip model={model} />
+        <IndexersStrip model={model} onRefreshIndexers={onRefreshIndexers} />
         <Footer
           model={model}
           indexerConfig={indexerConfig}
@@ -174,30 +181,168 @@ function PadTile() {
   );
 }
 
-function IndexersStrip({ model }: { model: RailModel }) {
-  const names = model.indexers.map((i) => i.name);
-  const first = names.slice(0, 3);
-  const overflow = Math.max(0, names.length - 3);
-  return (
-    <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] pt-2 text-[11px] text-[var(--color-text-muted)]">
-      <span>
-        {names.length} {names.length === 1 ? "indexer" : "indexers"} active
-      </span>
-      <div className="flex flex-wrap gap-1">
-        {first.map((n) => (
-          <IndexerChip key={n} label={n} />
-        ))}
-        {overflow > 0 ? <IndexerChip label={`+${overflow}`} /> : null}
+/**
+ * Per-indexer enable/disable popover (Wave 4 T3) — restores the
+ * affordance the legacy IndexReadinessPanel exposed inline. Mirrors
+ * the W4.1 skills pattern: store hydrated from `.awidat/indexers.json`
+ * on project open; every toggle persists back through
+ * `write_disabled_indexers`; the dispatcher reads the same file at
+ * run time, so any view that omits the popover (CLI, auto-chain)
+ * still honors the user's choices.
+ *
+ * Active count in the strip reflects "configured minus disabled" so
+ * the chip count matches what the next Re-run will actually launch.
+ */
+function IndexersStrip({
+  model,
+  onRefreshIndexers,
+}: {
+  model: RailModel;
+  onRefreshIndexers?: () => void;
+}) {
+  const projectRoot = useProjectStore((s) => s.current);
+  // Subscribe to the disabled map (not isDisabled) so the strip
+  // re-renders when toggles happen elsewhere; isDisabled is a getter
+  // that closes over the current map snapshot.
+  const disabledByProject = useIndexerOverlay((s) => s.disabledByProject);
+  const toggle = useIndexerOverlay((s) => s.toggle);
+  const [open, setOpen] = useState(false);
+
+  const disabledSet = useMemo(
+    () => disabledByProject.get(projectRoot ?? "__global__") ?? new Set<string>(),
+    [disabledByProject, projectRoot],
+  );
+
+  const configured = model.indexers;
+  const activeNames = configured
+    .filter((i) => !disabledSet.has(i.name))
+    .map((i) => i.name);
+  const previewNames = configured.map((i) => i.name).slice(0, 3);
+  const overflow = Math.max(0, configured.length - 3);
+
+  if (configured.length === 0) {
+    return (
+      <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] pt-2 text-[11px] text-[var(--color-text-muted)]">
+        <span>0 indexers active</span>
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 rounded border-t border-[var(--color-border-subtle)] pt-2 text-left text-[11px] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:text-[var(--color-text-primary)]"
+          aria-label="Configure active indexers"
+        >
+          <span>
+            {activeNames.length} of {configured.length}{" "}
+            {configured.length === 1 ? "indexer" : "indexers"} active
+          </span>
+          <span className="flex flex-wrap justify-end gap-1">
+            {previewNames.map((n) => (
+              <IndexerChip
+                key={n}
+                label={n}
+                disabled={disabledSet.has(n)}
+              />
+            ))}
+            {overflow > 0 ? <IndexerChip label={`+${overflow}`} /> : null}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={6}>
+        <IndexerTogglePanel
+          configured={configured}
+          disabledSet={disabledSet}
+          onToggle={(name) => toggle(projectRoot, name)}
+          onRerun={
+            onRefreshIndexers
+              ? () => {
+                  setOpen(false);
+                  onRefreshIndexers();
+                }
+              : undefined
+          }
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function IndexerChip({ label }: { label: string }) {
+function IndexerChip({ label, disabled }: { label: string; disabled?: boolean }) {
   return (
-    <span className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-1.5 py-px font-mono text-[10px] text-[var(--color-text-secondary)]">
+    <span
+      className={cn(
+        "rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-1.5 py-px font-mono text-[10px]",
+        disabled
+          ? "text-[var(--color-text-disabled)] line-through opacity-60"
+          : "text-[var(--color-text-secondary)]",
+      )}
+    >
       {label}
     </span>
+  );
+}
+
+function IndexerTogglePanel({
+  configured,
+  disabledSet,
+  onToggle,
+  onRerun,
+}: {
+  configured: RailModel["indexers"];
+  disabledSet: Set<string>;
+  onToggle: (name: string) => void;
+  onRerun?: () => void;
+}) {
+  return (
+    <div className="flex w-[260px] flex-col gap-2 p-2">
+      <div className="px-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+        Active indexers
+      </div>
+      <ul className="flex max-h-[240px] flex-col gap-px overflow-y-auto">
+        {configured.map((indexer) => {
+          const isDisabled = disabledSet.has(indexer.name);
+          return (
+            <li key={indexer.name}>
+              <label
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[12px] transition-colors hover:bg-[var(--color-surface-card)]",
+                  isDisabled
+                    ? "text-[var(--color-text-muted)]"
+                    : "text-[var(--color-text-primary)]",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={!isDisabled}
+                  onChange={() => onToggle(indexer.name)}
+                  className="h-3 w-3 cursor-pointer accent-[var(--color-brand)]"
+                  aria-label={`${isDisabled ? "Enable" : "Disable"} ${indexer.name}`}
+                />
+                <span
+                  className={cn(
+                    "flex-1 truncate font-mono text-[11px]",
+                    isDisabled ? "line-through opacity-70" : undefined,
+                  )}
+                >
+                  {indexer.name}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {onRerun ? (
+        <div className="flex justify-end border-t border-[var(--color-border-subtle)] pt-2">
+          <Button variant="secondary" size="xs" onClick={onRerun}>
+            Re-run indexers
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

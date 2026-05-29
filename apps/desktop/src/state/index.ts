@@ -23,6 +23,11 @@ export {
 } from "./skills";
 
 export {
+  useIndexerOverlay,
+  type IndexerOverlayStore,
+} from "./indexerOverlay";
+
+export {
   useProposalHistoryStore,
   buildHistoryEntry,
   entriesForProject,
