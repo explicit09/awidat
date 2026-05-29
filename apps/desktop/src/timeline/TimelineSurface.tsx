@@ -29,9 +29,19 @@ import {
 } from "./editOps";
 import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT } from "./layout.ts";
 import { collectDeletedKeys, collectHighlightKeys } from "./proposalDiffKeys.ts";
-import { drawMoveGhost, drawPlayhead, drawRuler, drawTracks } from "./renderer.ts";
+import {
+  drawGhostClips,
+  drawMoveGhost,
+  drawPlayhead,
+  drawRuler,
+  drawTracks,
+} from "./renderer.ts";
 import { computeCanvasLayout } from "./canvasLayout.ts";
+import { buildGhostRanges } from "./ghostClipRanges.ts";
+import { usePendingProposals } from "./pendingProposals.ts";
+import { useTimelineProposalFocus } from "./timelineProposalFocus.ts";
 import { TimelineEditorialOverlay } from "./TimelineEditorialOverlay.tsx";
+import { TimelineGhostOverlay } from "./TimelineGhostOverlay.tsx";
 import { UserMoveTooltip, UserTrimTooltip } from "./TimelineDragTooltips.tsx";
 import { useTimelineStore, type TimelineSnapshot } from "./store";
 
@@ -90,6 +100,12 @@ export function TimelineSurface({
         pps={layout.pps}
         laneHeight={layout.laneHeight}
       />
+      <TimelineGhostOverlay
+        snapshot={snapshot}
+        containerWidth={layout.width}
+        pps={layout.pps}
+        laneHeight={layout.laneHeight}
+      />
     </>
   );
 }
@@ -121,6 +137,11 @@ function TimelineCanvas({
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const proposal = useProposalStore((s) => s.active);
+  // Pending cut-medium proposals power the ghost-overlay pass. The
+  // DOM <TimelineGhostOverlay> sibling owns the hover affordance and
+  // keyboard handling; the canvas just draws the dashed-cyan bands.
+  const pendingProposals = usePendingProposals((s) => s.pending);
+  const focusedProposalId = useTimelineProposalFocus((s) => s.focusedId);
   // Cursor hint when hovering near a clip edge (without dragging).
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
@@ -223,6 +244,30 @@ function TimelineCanvas({
         );
       }
 
+      // Wave 3 C2 — ghost-clip review pass. Only fires when there's
+      // no active proposal ghost (the two surfaces conflict; the
+      // single-proposal canvas overlay above already paints the cyan
+      // diff). Cut-medium pendings always render.
+      if (!proposal) {
+        const cutPending = pendingProposals.filter((p) => p.medium === "cut");
+        if (cutPending.length > 0) {
+          const ranges = buildGhostRanges(cutPending, snapshot);
+          if (ranges.length > 0) {
+            const proposalsById = new Map(
+              cutPending.map((p) => [p.callId, p] as const),
+            );
+            drawGhostClips(
+              ctx,
+              ranges,
+              proposalsById,
+              focusedProposalId,
+              pps,
+              laneHeight,
+            );
+          }
+        }
+      }
+
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
 
       // Hover affordance — faint cyan outline on the edge under the
@@ -285,6 +330,8 @@ function TimelineCanvas({
     userMove,
     edgeHover,
     selectedClipKey,
+    pendingProposals,
+    focusedProposalId,
   ]);
 
   // Pointer dispatch:

@@ -1,6 +1,7 @@
 import type { TitleStyling } from "../protocol";
 import { snapMoveDeltaS, type UserMoveDrag } from "./editMath.ts";
 import { formatBadgeNumber, formatTime, transitionLabel } from "./formatting.ts";
+import type { GhostRange } from "./ghostClipRanges.ts";
 import { CLIP_PADDING_X, LANE_HEIGHT, RULER_HEIGHT } from "./layout.ts";
 import {
   fillRoundedRect,
@@ -8,6 +9,7 @@ import {
   strokeRoundedRect,
   truncateToWidth,
 } from "./canvasPrimitives.ts";
+import type { PendingProposal } from "./pendingProposals.ts";
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
 import { getStrip } from "./thumbnailCache.ts";
 import { getBuckets } from "./waveformCache.ts";
@@ -683,6 +685,150 @@ function drawClipBadges(
     ctx.fillText(text, boxX + padX, boxY + padY);
     cursorX = boxX - 4;
   }
+}
+
+/**
+ * Wave 3 C2 — inline ghost-clip review for cut-medium proposals.
+ *
+ * Painted as a final additive pass on top of the normal track render.
+ * Each range becomes:
+ *   - 1.5px dashed cyan border + 8% cyan fill — the "this region is
+ *     pending review" affordance.
+ *   - Title in the top-left, rationale at the bottom (when there's
+ *     room) so the canvas tells you what + why without a tooltip.
+ *   - Focused proposal: solid 2px border + outer glow (parallel
+ *     language to the selected-clip ring).
+ *
+ * Vertical fan-out: when multiple proposals overlap on the same track,
+ * each gets a 4px vertical offset so they're all visible — the caller
+ * passes pre-fanned ranges, so this function only consumes y-offset
+ * metadata.
+ *
+ * No buttons drawn here — the DOM overlay above the canvas owns the
+ * Accept / Reject controls (easier hit-testing + accessibility).
+ */
+export function drawGhostClips(
+  ctx: CanvasRenderingContext2D,
+  ranges: ReadonlyArray<GhostRange>,
+  proposalsById: Map<string, PendingProposal>,
+  focusedId: string | null,
+  pps: number,
+  laneHeight: number,
+) {
+  if (ranges.length === 0) return;
+
+  // Compute per-track stacks so overlapping ghosts fan out vertically.
+  // Stable order — earlier ranges sit higher.
+  const offsetForRange = computeFanOffsets(ranges);
+
+  for (let i = 0; i < ranges.length; i++) {
+    const range = ranges[i]!;
+    const proposal = proposalsById.get(range.proposalId);
+    if (!proposal) continue;
+    const offsetY = offsetForRange[i] ?? 0;
+    drawSingleGhost(
+      ctx,
+      range,
+      proposal,
+      focusedId === range.proposalId,
+      pps,
+      laneHeight,
+      offsetY,
+    );
+  }
+}
+
+/** Greedy fan-out — every overlapping ghost on the same track gets a
+ *  4px stride. Tracks fan independently. Returns one y-offset per
+ *  range, parallel to the input array. */
+function computeFanOffsets(ranges: ReadonlyArray<GhostRange>): number[] {
+  const STRIDE_PX = 4;
+  const offsets: number[] = new Array(ranges.length).fill(0);
+  // Per-track running stacks of (rangeIndex, endS).
+  const stacksByTrack = new Map<number, { idx: number; endS: number }[]>();
+  for (let i = 0; i < ranges.length; i++) {
+    const range = ranges[i]!;
+    const stack = stacksByTrack.get(range.trackIndex) ?? [];
+    // Drop entries that ended before this range starts — they no
+    // longer collide so they don't push us down.
+    const active = stack.filter((entry) => entry.endS > range.startS);
+    offsets[i] = active.length * STRIDE_PX;
+    active.push({ idx: i, endS: range.endS });
+    stacksByTrack.set(range.trackIndex, active);
+  }
+  return offsets;
+}
+
+function drawSingleGhost(
+  ctx: CanvasRenderingContext2D,
+  range: GhostRange,
+  proposal: PendingProposal,
+  focused: boolean,
+  pps: number,
+  laneHeight: number,
+  offsetY: number,
+) {
+  const x = Math.round(range.startS * pps);
+  const w = Math.max(8, Math.round((range.endS - range.startS) * pps));
+  const y = RULER_HEIGHT + range.trackIndex * laneHeight + 4 + offsetY;
+  const h = laneHeight - 8 - offsetY;
+  if (h < 12) return; // ran out of vertical room
+  const radius = 4;
+
+  // 8% cyan fill — sits over the lane tint so the band reads as
+  // "pending" without obliterating the underlying clip imagery.
+  ctx.save();
+  ctx.fillStyle = "rgba(56, 189, 248, 0.08)";
+  fillRoundedRect(ctx, x, y, w, h, radius);
+
+  if (focused) {
+    // Outer glow + 2px solid ring. Matches the selected-clip language
+    // so the focused-ghost reads as "the one ⌘↵ targets."
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.28)";
+    ctx.lineWidth = 6;
+    strokeRoundedRect(ctx, x - 2.5, y - 2.5, w + 5, h + 5, radius + 3);
+    ctx.strokeStyle = TOKEN.brandSecondary;
+    ctx.lineWidth = 2;
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+  } else {
+    // Default — dashed 1.5px border. The dash pattern signals
+    // "proposal, not committed" without a separate label.
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = TOKEN.brandSecondary;
+    ctx.lineWidth = 1.5;
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    ctx.setLineDash([]);
+  }
+  ctx.lineWidth = 1;
+
+  // Top-left title: 10px SemiBold in cyan-hover so it carries the
+  // "proposal" tone the dashed border establishes.
+  if (w > 60) {
+    ctx.font = `600 10px ${FONT_SANS}`;
+    ctx.textBaseline = "top";
+    const titleText = proposal.summary && proposal.summary.trim().length > 0
+      ? proposal.summary
+      : "Proposed edit";
+    const titleLabel = truncateToWidth(ctx, titleText, w - 2 * CLIP_PADDING_X);
+    ctx.fillStyle = TOKEN.brandSecondaryHover;
+    ctx.fillText(titleLabel, x + CLIP_PADDING_X, y + 4);
+  }
+
+  // Bottom-left rationale: 9px italic muted, truncated. Only painted
+  // when there's vertical room below the title.
+  if (proposal.rationale && w > 80 && h >= 30) {
+    ctx.font = `italic 9px ${FONT_SANS}`;
+    ctx.textBaseline = "bottom";
+    const rationaleLabel = truncateToWidth(
+      ctx,
+      proposal.rationale,
+      w - 2 * CLIP_PADDING_X,
+    );
+    ctx.fillStyle = TOKEN.textMuted;
+    ctx.fillText(rationaleLabel, x + CLIP_PADDING_X, y + h - 4);
+  }
+
+  ctx.restore();
 }
 
 export function drawPlayhead(
