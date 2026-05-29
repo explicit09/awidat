@@ -215,6 +215,7 @@ pub fn run() {
             commands::color_scopes::get_color_scopes,
             commands::skills::list_skills,
             commands::skills::read_skill_body,
+            commands::skills::ensure_user_skills_dir,
             commands::skill_config::read_disabled_skills,
             commands::skill_config::write_disabled_skills,
             commands::indexer_config_overlay::read_disabled_indexers,

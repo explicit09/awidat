@@ -139,14 +139,20 @@ impl CodexSession {
 /// contextual fragment ready to prepend to a turn input. Returns
 /// `None` if no skills are installed (then nothing gets prepended).
 ///
-/// Discovery hierarchy from `awidat_core::skills`:
-///   1. user roots — `~/Library/Application Support/awidat/skills`
-///      and `~/.config/awidat/skills` (user overrides bundled)
-///   2. bundled — `<repo>/skills` in dev; in a packaged build,
+/// Discovery hierarchy from `awidat_core::skills` (lowest priority
+/// first; later layers override earlier by skill name, replacing the
+/// entry entirely — not a field-by-field merge):
+///   1. bundled — `<repo>/skills` in dev; in a packaged build,
 ///      `<install>/share/awidat/skills`. We pick the repo-relative
 ///      `skills/` dir via the running binary's grandparent (works in
 ///      `cargo tauri dev`; packaged builds will need a separate
 ///      resolver later when we ship installers).
+///   2. user roots — `~/Library/Application Support/awidat/skills`
+///      (macOS / Windows `%APPDATA%`) via `dirs::config_dir`, plus
+///      the legacy `~/.awidat/skills/` for power users.
+///   3. project — `<project>/skills/` — per-project overrides win
+///      over both user and bundled. Lets a project ship its own
+///      editorial loadout.
 ///
 /// Skills listed in `<project>/.awidat/skills.json` under `disabled`
 /// are removed from the catalog before rendering — the agent never
@@ -158,8 +164,14 @@ impl CodexSession {
 fn render_skills_catalog(project_root: &Path) -> Option<String> {
     let user_roots = user_skill_roots();
     let bundled = bundled_skill_root();
+    let project_override = project_skill_root(project_root);
     let disabled = crate::commands::skill_config::load_disabled_skills_sync(project_root);
-    render_skills_catalog_from_roots(bundled.as_deref(), &user_roots, &disabled)
+    render_skills_catalog_from_roots(
+        bundled.as_deref(),
+        &user_roots,
+        project_override.as_deref(),
+        &disabled,
+    )
 }
 
 /// Inner core — separated so unit tests can drive discovery against
@@ -168,14 +180,24 @@ fn render_skills_catalog(project_root: &Path) -> Option<String> {
 fn render_skills_catalog_from_roots(
     bundled_root: Option<&Path>,
     user_roots: &[PathBuf],
+    project_root: Option<&Path>,
     disabled: &[String],
 ) -> Option<String> {
     use awidat_core::context::{AvailableSkillsFragment, ContextualUserFragment};
     use awidat_core::skills::SkillRegistry;
 
+    // Layer priority: bundled (lowest) -> user (mid) -> project (highest).
+    // `discover_many` applies each overlay in order, with later overlays
+    // replacing earlier entries by name — so we append project last.
+    let mut overlay_roots: Vec<PathBuf> = Vec::with_capacity(user_roots.len() + 1);
+    overlay_roots.extend(user_roots.iter().cloned());
+    if let Some(p) = project_root {
+        overlay_roots.push(p.to_path_buf());
+    }
+
     let (registry, errors) = SkillRegistry::discover_many(
         bundled_root,
-        user_roots.iter().map(PathBuf::as_path),
+        overlay_roots.iter().map(PathBuf::as_path),
     );
     for err in errors {
         tracing::warn!(?err, "skill discovery: malformed entry skipped");
@@ -200,13 +222,36 @@ fn render_skills_catalog_from_roots(
     Some(AvailableSkillsFragment { skill_lines }.render())
 }
 
+/// Per-user skills directories, in priority order (later entries win
+/// on name conflicts). Two layers:
+///   - `dirs::config_dir()` joined with `awidat/skills` — the platform
+///     idiomatic location:
+///       macOS   → `~/Library/Application Support/awidat/skills`
+///       Linux   → `~/.config/awidat/skills`
+///       Windows → `%APPDATA%\awidat\skills`
+///   - the legacy `~/.awidat/skills/` for power users who prefer to
+///     keep everything under their home dir.
 fn user_skill_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Library/Application Support/awidat/skills"));
-        roots.push(home.join(".config/awidat/skills"));
+    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".awidat/skills")) {
+        roots.push(legacy);
+    }
+    if let Some(cfg) = dirs::config_dir().map(|c| c.join("awidat/skills")) {
+        roots.push(cfg);
     }
     roots
+}
+
+/// Per-project skills directory. A project can drop a `skills/` folder
+/// at its root to override or add editorial workflows. Returns `None`
+/// when no such directory exists.
+fn project_skill_root(project_root: &Path) -> Option<PathBuf> {
+    let candidate = project_root.join("skills");
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 /// Best-effort bundled-skills root. In `cargo tauri dev` the binary
@@ -272,7 +317,7 @@ mod tests {
     fn render_skills_catalog_includes_all_when_nothing_disabled() {
         let bundled = make_skills_root(&["alpha-skill", "beta-skill"]);
         let rendered =
-            render_skills_catalog_from_roots(Some(bundled.path()), &[], &[])
+            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[])
                 .expect("catalog non-empty");
         assert!(rendered.contains("alpha-skill"), "missing alpha: {rendered}");
         assert!(rendered.contains("beta-skill"), "missing beta: {rendered}");
@@ -284,6 +329,7 @@ mod tests {
         let rendered = render_skills_catalog_from_roots(
             Some(bundled.path()),
             &[],
+            None,
             &["alpha-skill".to_string()],
         )
         .expect("catalog non-empty");
@@ -300,6 +346,7 @@ mod tests {
         let out = render_skills_catalog_from_roots(
             Some(bundled.path()),
             &[],
+            None,
             &["only-skill".to_string()],
         );
         assert!(out.is_none(), "expected None when every skill is disabled");
@@ -313,6 +360,7 @@ mod tests {
         let rendered = render_skills_catalog_from_roots(
             Some(bundled.path()),
             &[],
+            None,
             &["ghost-skill".to_string()],
         )
         .expect("catalog non-empty");
@@ -322,7 +370,7 @@ mod tests {
     #[test]
     fn render_skills_catalog_returns_none_when_no_skills_installed() {
         let empty = tempfile::tempdir().unwrap();
-        let out = render_skills_catalog_from_roots(Some(empty.path()), &[], &[]);
+        let out = render_skills_catalog_from_roots(Some(empty.path()), &[], None, &[]);
         assert!(out.is_none());
     }
 
@@ -334,8 +382,9 @@ mod tests {
     #[test]
     fn render_skills_catalog_carries_rationale_contract() {
         let bundled = make_skills_root(&["only-skill"]);
-        let rendered = render_skills_catalog_from_roots(Some(bundled.path()), &[], &[])
-            .expect("catalog non-empty");
+        let rendered =
+            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[])
+                .expect("catalog non-empty");
         assert!(
             rendered.contains("## Rationale contract"),
             "rendered catalog must include the rationale contract; got:\n{rendered}"
@@ -344,5 +393,68 @@ mod tests {
             rendered.contains("Every proposal you emit MUST include"),
             "rendered catalog must include the MUST-rule; got:\n{rendered}"
         );
+    }
+
+    /// Build a skills root where a single named skill embeds the
+    /// supplied description, so the priority test can read back the
+    /// rendered catalog and tell which layer won.
+    fn make_skills_root_with_desc(name: &str, description: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = dir.path().join(name);
+        fs::create_dir_all(&sd).unwrap();
+        let body = format!(
+            "---\nname: {name}\ndescription: {description}\n---\n\nbody\n",
+            name = name,
+            description = description
+        );
+        fs::write(sd.join("SKILL.md"), body).unwrap();
+        dir
+    }
+
+    /// Wave 5 B1 — priority must be project > user > bundled. The
+    /// rendered L1 line for an identically-named skill should carry the
+    /// description from the highest-priority layer present.
+    #[test]
+    fn render_skills_catalog_project_layer_overrides_user_and_bundled() {
+        let bundled = make_skills_root_with_desc("shared-skill", "bundled-desc");
+        let user = make_skills_root_with_desc("shared-skill", "user-desc");
+        let project = make_skills_root_with_desc("shared-skill", "project-desc");
+        let rendered = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[user.path().to_path_buf()],
+            Some(project.path()),
+            &[],
+        )
+        .expect("catalog non-empty");
+        assert!(
+            rendered.contains("project-desc"),
+            "project must override user+bundled; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("user-desc"),
+            "user description must be replaced; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("bundled-desc"),
+            "bundled description must be replaced; got:\n{rendered}"
+        );
+    }
+
+    /// Wave 5 B1 — user layer wins over bundled when no project override
+    /// is supplied. Catches a regression where overlay roots get
+    /// reordered.
+    #[test]
+    fn render_skills_catalog_user_layer_overrides_bundled() {
+        let bundled = make_skills_root_with_desc("shared-skill", "bundled-desc");
+        let user = make_skills_root_with_desc("shared-skill", "user-desc");
+        let rendered = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[user.path().to_path_buf()],
+            None,
+            &[],
+        )
+        .expect("catalog non-empty");
+        assert!(rendered.contains("user-desc"), "user must override bundled");
+        assert!(!rendered.contains("bundled-desc"));
     }
 }

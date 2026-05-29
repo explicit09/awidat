@@ -17,15 +17,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Sparkles } from "lucide-react";
+import { FolderOpen, Sparkles } from "lucide-react";
 
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { useSkillsStore } from "../state";
 
-/** Mirror of the Rust `SkillEntry` returned by `list_skills`. */
+/**
+ * Mirror of the Rust `SkillEntry` returned by `list_skills`.
+ *
+ * `provenance` identifies which discovery layer the skill came from:
+ *   - "bundled" → ships with Awidat (lowest priority)
+ *   - "user"    → ~/Library/Application Support/awidat/skills (etc.)
+ *   - "project" → <project>/skills/  (highest priority — wins on name conflict)
+ */
+export type SkillProvenance = "bundled" | "user" | "project";
 export type SkillEntry = {
   name: string;
   display_name: string;
@@ -33,6 +42,7 @@ export type SkillEntry = {
   when_to_use: string | null;
   version: string | null;
   path: string;
+  provenance: SkillProvenance;
 };
 
 /**
@@ -125,8 +135,40 @@ function useSkillBody(name: string | null): {
   return { body, loading, error };
 }
 
+/**
+ * Lazy-resolve the per-user skills directory the first time the
+ * Skills tab opens. The backend creates it if missing so the
+ * "Open skills folder" link always lands somewhere real on a fresh
+ * install. Returns `null` while the call is pending or when not
+ * running inside Tauri.
+ */
+function useUserSkillsDir(): string | null {
+  const [dir, setDir] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    invoke<string>("ensure_user_skills_dir")
+      .then((path) => {
+        if (cancelled) return;
+        setDir(path);
+      })
+      .catch((e: unknown) => {
+        // Non-fatal: the "Open skills folder" link just stays
+        // hidden. A locked-down home dir is the only realistic
+        // cause; logging is enough.
+        // eslint-disable-next-line no-console
+        console.warn("ensure_user_skills_dir failed", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return dir;
+}
+
 export function SkillsSurface() {
   const { skills, loading, error } = useSkills();
+  const userSkillsDir = useUserSkillsDir();
   const projectRoot = useProjectStore((s) => s.current);
   const disabledByProject = useSkillsStore((s) => s.disabledByProject);
   const toggle = useSkillsStore((s) => s.toggle);
@@ -157,6 +199,7 @@ export function SkillsSurface() {
         onSelect={setSelected}
         isDisabled={isDisabled}
         onToggle={(name) => toggle(projectRoot, name)}
+        userSkillsDir={userSkillsDir}
       />
       <SkillDetail
         skill={skills.find((s) => s.name === selected) ?? null}
@@ -174,6 +217,13 @@ type SkillListProps = {
   onSelect: (name: string) => void;
   isDisabled: (name: string) => boolean;
   onToggle: (name: string) => void;
+  /**
+   * Resolved per-user skills directory; the footer renders an "Open
+   * folder" link that reveals it in the OS file manager. `null` when
+   * we're not inside Tauri or the path couldn't be resolved — the
+   * link is hidden in that case.
+   */
+  userSkillsDir: string | null;
 };
 
 function SkillList({
@@ -184,7 +234,15 @@ function SkillList({
   onSelect,
   isDisabled,
   onToggle,
+  userSkillsDir,
 }: SkillListProps) {
+  const openSkillsFolder = () => {
+    if (!userSkillsDir) return;
+    revealItemInDir(userSkillsDir).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("revealItemInDir(skills) failed", err);
+    });
+  };
   return (
     <section
       className="panel flex h-full min-h-0 flex-col overflow-hidden"
@@ -228,6 +286,25 @@ function SkillList({
           </ul>
         )}
       </div>
+      {userSkillsDir ? (
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] px-3 py-2">
+          <button
+            type="button"
+            onClick={openSkillsFolder}
+            className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+            title={userSkillsDir}
+          >
+            <FolderOpen className="h-3 w-3" strokeWidth={1.75} />
+            <span>Skills folder</span>
+          </button>
+          <span
+            className="truncate font-mono text-[10px] text-[var(--color-text-muted)]"
+            title={userSkillsDir}
+          >
+            {userSkillsDir}
+          </span>
+        </footer>
+      ) : null}
     </section>
   );
 }
@@ -269,6 +346,7 @@ function SkillCard({
               <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
                 {skill.display_name}
               </span>
+              <ProvenanceChip provenance={skill.provenance} />
               {skill.version && (
                 <span className="shrink-0 rounded-full bg-[var(--color-surface-input)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-muted)]">
                   v{skill.version}
@@ -359,6 +437,7 @@ function SkillDetail({ skill, disabled }: SkillDetailProps) {
             <h2 className="truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
               {skill.display_name}
             </h2>
+            <ProvenanceChip provenance={skill.provenance} />
             {skill.version && (
               <span className="shrink-0 rounded-full bg-[var(--color-surface-input)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-muted)]">
                 v{skill.version}
@@ -398,6 +477,52 @@ function SkillDetail({ skill, disabled }: SkillDetailProps) {
         <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{skill.path}</span>
       </footer>
     </section>
+  );
+}
+
+/**
+ * Tiny chip rendered next to a skill's name showing which discovery
+ * layer it came from. Color convention (matches the broader brand
+ * vocabulary):
+ *   - bundled → neutral muted   (no special meaning — ships with app)
+ *   - user    → cyan accent     (--color-brand-secondary, "yours")
+ *   - project → orange accent   (--color-brand, "project-scoped")
+ */
+function ProvenanceChip({ provenance }: { provenance: SkillProvenance }) {
+  const palette: Record<
+    SkillProvenance,
+    { label: string; className: string; title: string }
+  > = {
+    bundled: {
+      label: "bundled",
+      className:
+        "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-muted)]",
+      title: "Ships with Awidat",
+    },
+    user: {
+      label: "user",
+      className:
+        "border-[color:var(--color-brand-secondary)]/40 bg-[color:var(--color-brand-secondary)]/15 text-[var(--color-brand-secondary)]",
+      title: "Installed from your per-user skills folder",
+    },
+    project: {
+      label: "project",
+      className:
+        "border-[color:var(--color-brand)]/40 bg-[color:var(--color-brand)]/15 text-[var(--color-brand)]",
+      title: "Defined by this project — overrides user and bundled",
+    },
+  };
+  const { label, className, title } = palette[provenance];
+  return (
+    <span
+      title={title}
+      className={cn(
+        "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+        className,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
