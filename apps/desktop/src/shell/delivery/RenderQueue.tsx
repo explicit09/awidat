@@ -10,6 +10,7 @@ import {
   type RenderUploadState,
 } from "../../app/renderQueue";
 import { retryUploadForTarget } from "../../app/useRenderQueueWorker";
+import { summarizeCredit } from "../../state/aiDisclosure";
 import { TARGET_META } from "./targetMeta";
 import type { DeliveryTargetKey } from "./types";
 
@@ -133,9 +134,12 @@ function RenderQueueRow({
   return (
     <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2 text-[var(--text-caption)]">
       <Inline justify="between" align="center" className="gap-2">
-        <span className="min-w-0 truncate font-medium text-[var(--color-text-primary)]">
-          {entry.label}
-        </span>
+        <Inline gap="2" align="center" className="min-w-0">
+          <span className="min-w-0 truncate font-medium text-[var(--color-text-primary)]">
+            {entry.label}
+          </span>
+          <AiDisclosureChip entry={entry} />
+        </Inline>
         <Inline gap="2" align="center" className="shrink-0">
           {queueStatusPill(entry)}
           {entry.status === "done" || entry.status === "failed" || entry.status === "cancelled" ? (
@@ -331,4 +335,41 @@ async function invokeRevealInFinder(path: string): Promise<void> {
     // eslint-disable-next-line no-console
     console.warn("revealItemInDir failed", err);
   }
+}
+
+/**
+ * Small `AI ⚠` chip surfaced next to the render label when the entry's
+ * disclosure flags synthetic content (W5.A4). The native `title`
+ * attribute carries the full credits list so hover surfaces what's
+ * being claimed without a custom tooltip component.
+ *
+ * Renders nothing when the render is clean (no disclosure, or
+ * disclosure has zero credits) — empty cuts shouldn't get a chip.
+ */
+export function AiDisclosureChip({
+  entry,
+}: {
+  entry: RenderQueueEntry;
+}) {
+  const disclosure = entry.aiDisclosure;
+  if (!disclosure || !disclosure.has_synthetic_content) return null;
+  const lines = disclosure.credits.map((c) => `• ${summarizeCredit(c)}`);
+  const tooltip = [
+    `AI disclosure — ${disclosure.credits.length} generated clip${
+      disclosure.credits.length === 1 ? "" : "s"
+    }:`,
+    ...lines,
+  ].join("\n");
+  return (
+    <span
+      title={tooltip}
+      aria-label={`AI disclosure: ${disclosure.credits.length} generated clip${
+        disclosure.credits.length === 1 ? "" : "s"
+      }`}
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--color-warning)] bg-[rgba(245,158,11,0.12)] px-1.5 py-0.5 font-mono text-[var(--text-caption)] text-[var(--color-warning)]"
+    >
+      <span aria-hidden>⚠</span>
+      AI
+    </span>
+  );
 }

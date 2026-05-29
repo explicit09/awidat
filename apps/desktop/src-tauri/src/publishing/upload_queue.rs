@@ -36,6 +36,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use super::ai_disclosure::AiDisclosure;
 use super::errors::ProviderError;
 use super::types::{UploadParams, Visibility};
 use super::ProviderRegistry;
@@ -122,8 +123,12 @@ pub struct UploadMetadata {
 
 impl UploadMetadata {
     /// Map to a [`UploadParams`] given the resolved render output
-    /// path. The metadata carries everything *except* the file path —
-    /// that comes from the render job's `output_path`.
+    /// path. The metadata carries everything *except* the file path
+    /// and the AI disclosure — the file path comes from the render
+    /// job's `output_path`, and the disclosure is computed centrally
+    /// at register time (`UploadQueue::set_ai_disclosure`) and stamped
+    /// onto the params by the dispatcher so every target sees the
+    /// same disclosure for one render.
     pub fn into_upload_params(self, file_path: &Path) -> UploadParams {
         UploadParams {
             file_path: file_path.to_string_lossy().into_owned(),
@@ -133,6 +138,7 @@ impl UploadMetadata {
             visibility: self.visibility,
             scheduled_at: self.scheduled_at,
             thumbnail_path: self.thumbnail_path,
+            ai_disclosure: None,
         }
     }
 }
@@ -158,6 +164,15 @@ pub struct UploadJobEntry {
     /// otherwise.
     #[serde(default)]
     pub upload_metadata: HashMap<String, UploadMetadata>,
+    /// AI-content disclosure (W5.A4). Computed once at render-job
+    /// register time from the project timeline + generated-media
+    /// registry, then stamped onto every target's [`UploadParams`] by
+    /// the dispatcher. `None` means "not yet computed" — the frontend
+    /// treats that as "no synthetic content" for display, and the
+    /// upload dispatcher passes `None` through to providers (which
+    /// default to "off") so the absence is safe for clean cuts.
+    #[serde(default, rename = "aiDisclosure")]
+    pub ai_disclosure: Option<AiDisclosure>,
 }
 
 impl UploadJobEntry {
@@ -173,6 +188,7 @@ impl UploadJobEntry {
             upload_states,
             published_urls: HashMap::new(),
             upload_metadata: HashMap::new(),
+            ai_disclosure: None,
         }
     }
 
@@ -217,7 +233,7 @@ impl UploadQueue {
     /// shouldn't clobber the form state the user already typed.
     pub async fn register(&self, job_id: String, providers: Vec<String>) {
         let mut guard = self.entries.lock().await;
-        let preserved_metadata = guard
+        let (preserved_metadata, preserved_disclosure) = guard
             .get(&job_id)
             .map(|existing| {
                 let mut next = HashMap::new();
@@ -226,12 +242,43 @@ impl UploadQueue {
                         next.insert(p.clone(), md.clone());
                     }
                 }
-                next
+                // AI disclosure is computed once for the render and
+                // applies to every target — re-registering must not
+                // clobber it (a user toggling targets after the cut
+                // is computed shouldn't have to re-walk the timeline).
+                (next, existing.ai_disclosure.clone())
             })
             .unwrap_or_default();
         let mut entry = UploadJobEntry::new(job_id.clone(), providers);
         entry.upload_metadata = preserved_metadata;
+        entry.ai_disclosure = preserved_disclosure;
         guard.insert(job_id, entry);
+    }
+
+    /// Stamp the AI disclosure for one render job. Called once at
+    /// register time (W5.A4) with the result of
+    /// [`super::cut_contains_generated_media`]. Idempotent — a second
+    /// call replaces.
+    ///
+    /// Parking semantics mirror [`Self::set_metadata`]: if the entry
+    /// doesn't exist yet (disclosure computed before
+    /// `set_render_upload_targets` ran), a fresh shell is created.
+    pub async fn set_ai_disclosure(&self, job_id: String, disclosure: AiDisclosure) {
+        let mut guard = self.entries.lock().await;
+        let entry = guard
+            .entry(job_id.clone())
+            .or_insert_with(|| UploadJobEntry::new(job_id, Vec::new()));
+        entry.ai_disclosure = Some(disclosure);
+    }
+
+    /// Look up the AI disclosure for one render job. Used by the
+    /// dispatcher to stamp every target's [`UploadParams`].
+    pub async fn ai_disclosure_for(&self, job_id: &str) -> Option<AiDisclosure> {
+        self.entries
+            .lock()
+            .await
+            .get(job_id)
+            .and_then(|e| e.ai_disclosure.clone())
     }
 
     /// Replace the per-target metadata for one `(job, provider)`
@@ -376,6 +423,7 @@ pub fn default_upload_params(file_path: &Path, title: &str) -> UploadParams {
         visibility: Visibility::Private,
         scheduled_at: None,
         thumbnail_path: None,
+        ai_disclosure: None,
     }
 }
 
@@ -901,5 +949,88 @@ mod tests {
         assert_eq!(params.visibility, Visibility::Unlisted);
         assert_eq!(params.scheduled_at, Some(42));
         assert_eq!(params.thumbnail_path.as_deref(), Some("/tmp/x.png"));
+        assert!(params.ai_disclosure.is_none(), "metadata never carries disclosure");
+    }
+
+    // ---- W5.A4 ai_disclosure round-trip ----
+
+    #[tokio::test]
+    async fn set_ai_disclosure_round_trips() {
+        let q = UploadQueue::new();
+        q.register("job-ai".into(), vec!["youtube".into()]).await;
+        let disclosure = AiDisclosure::from_credits(vec![
+            super::super::ai_disclosure::GeneratedMediaCredit {
+                provider: "runway".into(),
+                model: Some("gen3".into()),
+                prompt: "sunset over a quiet street".into(),
+                generated_at: Some(1_700_000_000),
+                asset_id: "job-1".into(),
+            },
+        ]);
+        q.set_ai_disclosure("job-ai".into(), disclosure.clone()).await;
+        let fetched = q
+            .ai_disclosure_for("job-ai")
+            .await
+            .unwrap_or_else(|| panic!("disclosure present"));
+        assert!(fetched.has_synthetic_content);
+        assert_eq!(fetched.credits.len(), 1);
+        assert_eq!(fetched, disclosure);
+        let snap = q
+            .snapshot("job-ai")
+            .await
+            .unwrap_or_else(|| panic!("snapshot"));
+        assert!(snap.ai_disclosure.is_some());
+    }
+
+    #[tokio::test]
+    async fn set_ai_disclosure_before_register_parks() {
+        // Disclosure can be computed before the targets list lands —
+        // park it so the next register call preserves the value.
+        let q = UploadQueue::new();
+        let disclosure = AiDisclosure::from_credits(vec![
+            super::super::ai_disclosure::GeneratedMediaCredit {
+                provider: "mock".into(),
+                model: None,
+                prompt: "x".into(),
+                generated_at: None,
+                asset_id: "a".into(),
+            },
+        ]);
+        q.set_ai_disclosure("job-parked-ai".into(), disclosure.clone())
+            .await;
+        q.register("job-parked-ai".into(), vec!["youtube".into()])
+            .await;
+        let snap = q
+            .snapshot("job-parked-ai")
+            .await
+            .unwrap_or_else(|| panic!("snapshot"));
+        assert_eq!(snap.ai_disclosure.as_ref(), Some(&disclosure));
+    }
+
+    #[tokio::test]
+    async fn register_preserves_existing_disclosure() {
+        let q = UploadQueue::new();
+        q.register("job-pre".into(), vec!["youtube".into()]).await;
+        let disclosure = AiDisclosure::from_credits(vec![
+            super::super::ai_disclosure::GeneratedMediaCredit {
+                provider: "mock".into(),
+                model: None,
+                prompt: "x".into(),
+                generated_at: None,
+                asset_id: "a".into(),
+            },
+        ]);
+        q.set_ai_disclosure("job-pre".into(), disclosure.clone()).await;
+        // User toggles a second target — re-register must keep the disclosure.
+        q.register(
+            "job-pre".into(),
+            vec!["youtube".into(), "tiktok".into()],
+        )
+        .await;
+        let snap = q
+            .snapshot("job-pre")
+            .await
+            .unwrap_or_else(|| panic!("snapshot"));
+        assert_eq!(snap.ai_disclosure.as_ref(), Some(&disclosure));
     }
 }

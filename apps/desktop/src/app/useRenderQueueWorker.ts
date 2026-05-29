@@ -27,6 +27,10 @@ import {
   useUploadMetadata,
   type UploadMetadata,
 } from "../state/uploadMetadata";
+import {
+  useAiDisclosure,
+  type AiDisclosure,
+} from "../state/aiDisclosure";
 
 type TimelineRenderInfo = {
   job_id: string;
@@ -247,6 +251,25 @@ async function maybeChainUploads(
     // path doesn't have to re-read the form (which may have moved on
     // to a different render's metadata by then).
     store.setUploadMetadata(entry.id, metadataByProvider);
+    // Compute the AI disclosure (W5.A4) — backend walks the project
+    // timeline against the generated-media registry. The result is
+    // parked on the upload-queue entry so every target's
+    // `UploadParams` carries the same disclosure when the dispatcher
+    // runs. Mirror onto the local entry + the disclosure store so
+    // the RenderQueue chip + UploadMetadataForm banner render.
+    //
+    // When the auto-disclose toggle is OFF (power-user opt-out) we
+    // still compute + show the disclosure locally — the user needs
+    // to *see* what they're not flagging — but explicitly skip the
+    // backend stamp so the upload `UploadParams.ai_disclosure` stays
+    // None and providers don't set the platform flag.
+    const autoDiscloseEnabled =
+      useAiDisclosure.getState().autoDiscloseEnabled;
+    const disclosure = await computeAiDisclosure(jobId, autoDiscloseEnabled);
+    if (disclosure) {
+      store.setAiDisclosure(entry.id, disclosure);
+      useAiDisclosure.getState().set(jobId, disclosure);
+    }
     await invoke<void>("start_uploads_for_job", {
       jobId,
       filePath: outputPath,
@@ -375,6 +398,36 @@ async function pollReframeJobViaAgentStore(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Ask the backend for the AI disclosure for this render. The backend
+ * walks the project's timeline against the generated-media registry
+ * + parks the result on the upload-queue entry for the dispatcher.
+ *
+ * `autoDisclose` mirrors the user's "Auto-disclose AI content" toggle:
+ * when true (default) the backend parks the computed disclosure on
+ * the queue so the dispatcher stamps it onto every target's
+ * `UploadParams`; when false the backend parks an empty disclosure
+ * (no auto-flag) but still returns the real computed one for the UI
+ * to display — the banner must warn the user about what they're not
+ * flagging automatically.
+ *
+ * Failures (no project, IPC error) collapse to `undefined` — the
+ * dispatcher proceeds without a banner; the upload chain stays alive.
+ */
+async function computeAiDisclosure(
+  jobId: string,
+  autoDisclose: boolean,
+): Promise<AiDisclosure | undefined> {
+  try {
+    return await invoke<AiDisclosure>("compute_ai_disclosure", {
+      jobId,
+      autoDisclose,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /**

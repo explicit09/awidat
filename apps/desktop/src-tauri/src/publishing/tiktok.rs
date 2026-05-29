@@ -36,6 +36,12 @@ const SCOPES: &str = "user.info.basic,video.upload";
 
 const DEV_CONSOLE_URL: &str = "https://developers.tiktok.com/";
 
+/// TikTok's AIGC (AI-generated content) label flag. When the W5.A4
+/// disclosure flags synthetic content the real upload will set
+/// `aigc_label_type` in the post info — surfacing the "AI-generated"
+/// badge on the video. The stub folds the name into its log line.
+const AI_DISCLOSURE_FLAG: &str = "aigc_label";
+
 /// TikTok provider. Owns its credential-store path for testability.
 pub struct TiktokProvider {
     store_path: PathBuf,
@@ -90,7 +96,19 @@ impl PublishingProvider for TiktokProvider {
     }
 
     async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
-        stub_upload(&self.store_path, KEY, DEV_CONSOLE_URL, params).await
+        // TODO(W5.A3+): when synthetic content is present, also set
+        // `aigc_label_type` in the publish init body so TikTok shows
+        // the AIGC badge. Today the disclosure intent rides on
+        // `params.ai_disclosure`; `stub_upload` folds it into the log
+        // line + Unsupported message until the real call lands.
+        stub_upload(
+            &self.store_path,
+            KEY,
+            DEV_CONSOLE_URL,
+            AI_DISCLOSURE_FLAG,
+            params,
+        )
+        .await
     }
 
     async fn status(&self) -> ConnectionStatus {

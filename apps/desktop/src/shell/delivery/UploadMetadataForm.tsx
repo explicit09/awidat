@@ -38,6 +38,10 @@ import {
   type UploadMetadata,
   type UploadVisibility,
 } from "../../state/uploadMetadata";
+import {
+  useAiDisclosure,
+  truncatePrompt,
+} from "../../state/aiDisclosure";
 import { TARGET_META } from "./targetMeta";
 import type { DeliveryTargetKey } from "./types";
 
@@ -91,6 +95,7 @@ export function UploadMetadataForm({
       <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
         Upload details
       </span>
+      <AiDisclosureBanner jobIdHint={jobIdHint} />
       <Stack gap="1">
         {publishingTargets.map((target) => (
           <UploadTargetSection
@@ -106,6 +111,85 @@ export function UploadMetadataForm({
         ))}
       </Stack>
     </Stack>
+  );
+}
+
+/**
+ * Non-editable banner at the top of the per-target form (W5.A4).
+ *
+ * Rendered only when the backend's disclosure has at least one
+ * generated credit. Three states:
+ *
+ *   1. `has_synthetic_content === false` → null (clean cut).
+ *   2. `has_synthetic_content === true` + autoDiscloseEnabled
+ *      → warning banner: "AI disclosure: this cut includes N
+ *        generated clips. The AI flag will be set on upload."
+ *   3. `has_synthetic_content === true` + autoDisclose disabled
+ *      → red banner: "Disclosure is disabled — confirm you've
+ *        manually flagged on the platform."
+ *
+ * The credits list is folded into a small expandable section so
+ * the banner stays compact when collapsed.
+ */
+export function AiDisclosureBanner({
+  jobIdHint,
+}: {
+  jobIdHint: string;
+}) {
+  const disclosure = useAiDisclosure((s) => s.byJobId[jobIdHint]);
+  const autoDiscloseEnabled = useAiDisclosure((s) => s.autoDiscloseEnabled);
+  const [expanded, setExpanded] = useState(false);
+  if (!disclosure || !disclosure.has_synthetic_content) return null;
+  const count = disclosure.credits.length;
+  const plural = count === 1 ? "clip" : "clips";
+  const willFlag = autoDiscloseEnabled;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "rounded-[var(--radius-md)] border px-3 py-2",
+        willFlag
+          ? "border-[var(--color-warning)] bg-[rgba(245,158,11,0.08)]"
+          : "border-[var(--color-danger)] bg-[rgba(220,38,38,0.08)]",
+      )}
+    >
+      <Inline justify="between" align="center">
+        <Inline gap="2" align="center">
+          <span aria-hidden className="text-[var(--text-body-sm)]">
+            ⚠
+          </span>
+          <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+            {willFlag
+              ? `AI disclosure: This cut includes ${count} generated ${plural}. The AI flag will be set on upload.`
+              : `Disclosure is disabled — ${count} generated ${plural} in this cut. Confirm you've manually flagged on the platform.`}
+          </span>
+        </Inline>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+        >
+          {expanded ? "Hide credits" : "Show credits"}
+        </button>
+      </Inline>
+      {expanded ? (
+        <ul className="mt-2 space-y-1 border-t border-[var(--color-border-subtle)] pt-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+          {disclosure.credits.map((credit) => (
+            <li key={credit.asset_id} className="flex flex-col">
+              <span className="font-mono text-[var(--color-text-primary)]">
+                {credit.provider}
+                {credit.model ? `/${credit.model}` : ""}
+              </span>
+              <span className="truncate text-[var(--color-text-muted)]" title={credit.prompt}>
+                {truncatePrompt(credit.prompt)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

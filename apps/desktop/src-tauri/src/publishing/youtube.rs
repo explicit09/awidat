@@ -42,6 +42,13 @@ const SCOPES: &str =
 /// missing. Surfaced in error messages so the user can click through.
 const DEV_CONSOLE_URL: &str = "https://console.cloud.google.com/apis/credentials";
 
+/// YouTube's `videos.insert` AI-disclosure field name. When the W5.A4
+/// disclosure flags synthetic content the real upload will set this
+/// to `true` (videoStatus.containsSyntheticMedia in the Data API).
+/// The stub folds the name into its log line so the user can see
+/// what would have been claimed.
+const AI_DISCLOSURE_FLAG: &str = "alteredContent";
+
 /// YouTube provider. Owns its credential-store path so tests can
 /// sandbox it via [`YoutubeProvider::with_store_path`] without env-
 /// var racing.
@@ -98,7 +105,20 @@ impl PublishingProvider for YoutubeProvider {
     }
 
     async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
-        stub_upload(&self.store_path, KEY, DEV_CONSOLE_URL, params).await
+        // TODO(W5.A2+): when synthetic content is present, also set
+        // `containsSyntheticMedia=true` on the `videos.insert` call
+        // so YouTube surfaces the "Altered or synthetic content"
+        // disclosure to viewers. Today the disclosure intent rides
+        // on `params.ai_disclosure`; `stub_upload` folds it into the
+        // log line + Unsupported message until the real call lands.
+        stub_upload(
+            &self.store_path,
+            KEY,
+            DEV_CONSOLE_URL,
+            AI_DISCLOSURE_FLAG,
+            params,
+        )
+        .await
     }
 
     async fn status(&self) -> ConnectionStatus {

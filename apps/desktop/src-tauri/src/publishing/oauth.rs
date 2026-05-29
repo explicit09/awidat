@@ -11,6 +11,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::ai_disclosure::provider_log_line;
 use super::errors::ProviderError;
 use super::storage::{self, Credentials};
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
@@ -169,17 +170,38 @@ pub async fn stub_complete_oauth(
 /// 2. Credentials present → [`ProviderError::Unsupported`] with a
 ///    pointer to the platform's dev console (real upload code ships
 ///    in W5.A2+).
+///
+/// `disclosure_flag_name` is the platform-specific AI flag the real
+/// upload would set when synthetic content is present (YouTube
+/// `alteredContent`, TikTok `aigc_label`, Instagram `ai_label`).
+/// When `params.ai_disclosure.has_synthetic_content` is true the stub
+/// folds a "would set <flag>=true" hint into the Unsupported message
+/// + a `tracing::info!` line so the user (and tests) can confirm the
+/// disclosure intent reached the platform layer.
 pub async fn stub_upload(
     store_path: &std::path::Path,
     key: &str,
     dev_console_url: &str,
-    _params: UploadParams,
+    disclosure_flag_name: &str,
+    params: UploadParams,
 ) -> Result<UploadResult, ProviderError> {
     if !has_credentials(store_path, key).await {
         return Err(ProviderError::NotConfigured);
     }
+    // Synthetic-content disclosure (W5.A4). The stub doesn't actually
+    // hit the platform yet, so the log line + extended error message
+    // are the user-visible evidence that the flag would have been set
+    // on the real upload.
+    let disclosure_hint = match params.ai_disclosure.as_ref() {
+        Some(d) if d.has_synthetic_content => {
+            let line = provider_log_line(disclosure_flag_name, d);
+            tracing::info!(provider = key, "{line}");
+            format!(" [{line}]")
+        }
+        _ => String::new(),
+    };
     Err(ProviderError::Unsupported(format!(
-        "Real upload requires OAuth credentials — register your app at {dev_console_url}",
+        "Real upload requires OAuth credentials — register your app at {dev_console_url}{disclosure_hint}",
     )))
 }
 

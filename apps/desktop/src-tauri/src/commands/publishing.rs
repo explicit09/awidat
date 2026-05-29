@@ -22,12 +22,13 @@ use std::sync::OnceLock;
 use tauri::State;
 
 use crate::publishing::{
+    disclosure_for_project_root,
     upload_queue::{
         self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
         UploadJobEntry, UploadMetadata, UploadPrefs,
     },
-    ConnectionStatus, OAuthChallenge, ProviderError, ProviderInfo, ProviderRegistry,
-    UploadParams, UploadResult,
+    AiDisclosure, ConnectionStatus, OAuthChallenge, ProviderError, ProviderInfo,
+    ProviderRegistry, UploadParams, UploadResult,
 };
 use crate::state::AwidatState;
 
@@ -237,7 +238,7 @@ async fn build_upload_params(
     file_path: &std::path::Path,
     fallback_title: &str,
 ) -> UploadParams {
-    if let Some(metadata) = queue.metadata_for(job_id, provider).await {
+    let mut params = if let Some(metadata) = queue.metadata_for(job_id, provider).await {
         // The form treats title-required as a hard validation error,
         // but the dispatcher defends in depth: if the user somehow
         // submitted an empty title (e.g. saved metadata before the
@@ -250,7 +251,13 @@ async fn build_upload_params(
         params
     } else {
         upload_queue::default_upload_params(file_path, fallback_title)
-    }
+    };
+    // Stamp the per-job AI disclosure onto every target's params.
+    // Disclosure is computed once at register time (W5.A4) and shared
+    // across all providers — the same cut never lies to one platform
+    // and not another about whether it contains generated content.
+    params.ai_disclosure = queue.ai_disclosure_for(job_id).await;
+    params
 }
 
 /// Retry a single failed (or successful — caller's choice) upload.
@@ -326,6 +333,71 @@ pub async fn set_default_upload_targets(providers: Vec<String>) -> Result<(), St
     save_prefs_to(&path, &prefs).await.map_err(stringify_error)
 }
 
+// -------------------------------------------------------------------
+// W5.A4 — AI-disclosure compliance.
+// -------------------------------------------------------------------
+
+/// Compute the AI disclosure for the currently-loaded project by
+/// walking its OTIO timeline against the generated-media registry.
+///
+/// Returns the computed disclosure so the frontend can show the
+/// banner (and the credits list) right next to the per-target form
+/// without a second IPC round trip.
+///
+/// `auto_disclose` is the user's "Auto-disclose AI content" preference
+/// (W5.A4 — default ON, FTC / EU AI Act mandate). When true (default)
+/// the computed disclosure is parked on the upload-queue entry so
+/// every target's `UploadParams` carries it when the dispatcher runs.
+/// When false (power-user override) the disclosure is computed for
+/// display only — the parked copy on the queue stays None so the
+/// dispatcher passes None to providers, which leaves each platform's
+/// flag in its default off state. The banner still surfaces what
+/// would have been claimed so the user can manually flag on-platform.
+///
+/// No project loaded → empty disclosure (no synthetic content). The
+/// frontend treats that the same as "clean cut" and renders nothing.
+#[tauri::command]
+pub async fn compute_ai_disclosure(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    auto_disclose: Option<bool>,
+) -> Result<AiDisclosure, String> {
+    let project_root = state.project_root.lock().await.clone();
+    let disclosure = match project_root {
+        Some(root) => disclosure_for_project_root(&root),
+        None => AiDisclosure::empty(),
+    };
+    // Default ON — the safe choice and the contract: a missing
+    // toggle (older frontend, malformed call) must auto-flag.
+    let auto_disclose = auto_disclose.unwrap_or(true);
+    let parked = if auto_disclose {
+        disclosure.clone()
+    } else {
+        // Toggle off → park an empty disclosure so the dispatcher
+        // doesn't auto-flag, but return the real computed one so
+        // the UI can still show the credits + warning banner.
+        AiDisclosure::empty()
+    };
+    state
+        .upload_queue
+        .set_ai_disclosure(job_id, parked)
+        .await;
+    Ok(disclosure)
+}
+
+/// Read the parked AI disclosure for one render job. Used by the
+/// frontend on app boot to re-hydrate the disclosure banner without
+/// re-walking the timeline. `None` means no disclosure has been
+/// computed yet (e.g. the render hasn't started, or the queue was
+/// cleared after a reload).
+#[tauri::command]
+pub async fn get_ai_disclosure_for_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<Option<AiDisclosure>, String> {
+    Ok(state.upload_queue.ai_disclosure_for(&job_id).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +412,7 @@ mod tests {
             visibility: Visibility::Private,
             scheduled_at: None,
             thumbnail_path: None,
+            ai_disclosure: None,
         }
     }
 
@@ -406,5 +479,127 @@ mod tests {
         };
         let err = yt.upload(stub_params()).await.unwrap_err();
         assert_eq!(stringify_error(err), "not_configured");
+    }
+
+    // ---- W5.A4: disclosure stamping + provider hint ----
+
+    #[tokio::test]
+    async fn build_upload_params_stamps_ai_disclosure() {
+        use crate::publishing::{GeneratedMediaCredit, UploadQueue};
+        let queue = UploadQueue::new();
+        queue
+            .register("job-disc".into(), vec!["youtube".into()])
+            .await;
+        let disclosure = AiDisclosure {
+            has_synthetic_content: true,
+            credits: vec![GeneratedMediaCredit {
+                provider: "runway".into(),
+                model: Some("gen3".into()),
+                prompt: "neon city".into(),
+                generated_at: Some(1),
+                asset_id: "a".into(),
+            }],
+        };
+        queue
+            .set_ai_disclosure("job-disc".into(), disclosure.clone())
+            .await;
+        let params = build_upload_params(
+            &queue,
+            "job-disc",
+            "youtube",
+            std::path::Path::new("/tmp/clip.mp4"),
+            "Fallback",
+        )
+        .await;
+        assert_eq!(params.ai_disclosure.as_ref(), Some(&disclosure));
+    }
+
+    #[tokio::test]
+    async fn build_upload_params_without_disclosure_passes_none() {
+        use crate::publishing::UploadQueue;
+        let queue = UploadQueue::new();
+        queue.register("job-clean".into(), vec!["youtube".into()]).await;
+        let params = build_upload_params(
+            &queue,
+            "job-clean",
+            "youtube",
+            std::path::Path::new("/tmp/clip.mp4"),
+            "Fallback",
+        )
+        .await;
+        assert!(params.ai_disclosure.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_stub_upload_folds_disclosure_into_unsupported_message() {
+        // Brief-named test: with credentials seeded + disclosure flagged,
+        // each provider's stub upload surfaces the AI flag intent so the
+        // user can see what *would* have been claimed on the real call.
+        use crate::publishing::{GeneratedMediaCredit, PublishingProvider};
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
+        // Seed credentials so every provider passes its is_configured gate.
+        for key in ["youtube", "tiktok", "instagram"] {
+            let p = match reg.get(key) {
+                Some(p) => p,
+                None => panic!("provider {key} missing"),
+            };
+            p.complete_oauth(format!("fake-{key}-code"))
+                .await
+                .unwrap_or_else(|e| panic!("complete_oauth({key}): {e}"));
+        }
+        let disclosure = AiDisclosure {
+            has_synthetic_content: true,
+            credits: vec![GeneratedMediaCredit {
+                provider: "runway".into(),
+                model: Some("gen3".into()),
+                prompt: "neon city".into(),
+                generated_at: Some(0),
+                asset_id: "a".into(),
+            }],
+        };
+        let mut params = stub_params();
+        params.ai_disclosure = Some(disclosure);
+        // Each provider's flag is folded into the Unsupported message.
+        let expected = [
+            ("youtube", "alteredContent=true"),
+            ("tiktok", "aigc_label=true"),
+            ("instagram", "ai_label=true"),
+        ];
+        for (key, hint) in expected {
+            let provider = match reg.get(key) {
+                Some(p) => p,
+                None => panic!("provider {key} missing"),
+            };
+            let err = provider.upload(params.clone()).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(hint),
+                "{key} should fold {hint} into its Unsupported message; got: {msg}",
+            );
+            assert!(
+                msg.contains("generated"),
+                "{key} should mention generated clips; got: {msg}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_stub_upload_clean_cut_omits_disclosure_hint() {
+        use crate::publishing::PublishingProvider;
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
+        let yt = match reg.get("youtube") {
+            Some(p) => p,
+            None => panic!("youtube provider missing"),
+        };
+        yt.complete_oauth("fake".into())
+            .await
+            .unwrap_or_else(|e| panic!("complete_oauth: {e}"));
+        // No disclosure → message is the W5.A2 baseline (no AI hint).
+        let err = yt.upload(stub_params()).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(!msg.contains("alteredContent"), "clean cut must not claim disclosure: {msg}");
+        assert!(!msg.contains("generated clip"), "clean cut must not mention generated clips: {msg}");
     }
 }

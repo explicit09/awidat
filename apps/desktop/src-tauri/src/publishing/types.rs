@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::ai_disclosure::AiDisclosure;
+
 /// Pre-OAuth handshake the frontend opens in a browser.
 ///
 /// `url` is a fully-formed authorisation URL with `client_id`,
@@ -77,6 +79,16 @@ pub struct UploadParams {
     /// Optional thumbnail / cover image path on disk.
     #[serde(default)]
     pub thumbnail_path: Option<String>,
+    /// AI-disclosure payload computed at render-job creation time
+    /// (W5.A4). When `has_synthetic_content` is true, each provider's
+    /// `upload()` sets the platform-specific synthetic-content flag
+    /// (YouTube `alteredContent`, TikTok `aigc_label`, Instagram
+    /// `ai_label`). `None` means disclosure was never computed — the
+    /// provider stubs treat that as "no synthetic content" so a missing
+    /// disclosure is safe for clean cuts but the dispatcher should
+    /// always populate this for renders that go through the queue.
+    #[serde(default, rename = "aiDisclosure")]
+    pub ai_disclosure: Option<AiDisclosure>,
 }
 
 /// What we hand back to the frontend after a successful upload.

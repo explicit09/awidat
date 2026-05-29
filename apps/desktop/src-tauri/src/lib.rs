@@ -242,6 +242,8 @@ pub fn run() {
             commands::publishing::set_upload_metadata,
             commands::publishing::get_default_upload_targets,
             commands::publishing::set_default_upload_targets,
+            commands::publishing::compute_ai_disclosure,
+            commands::publishing::get_ai_disclosure_for_job,
         ])
         .build(tauri::generate_context!());
 

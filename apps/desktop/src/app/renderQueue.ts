@@ -17,6 +17,7 @@
 // `markFailed` actions.
 
 import { create } from "zustand";
+import type { AiDisclosure } from "../state/aiDisclosure";
 import type { UploadMetadata } from "../state/uploadMetadata";
 
 /** A queue entry — one selected target for one Deliver action. */
@@ -120,6 +121,19 @@ export type RenderQueueEntry = {
    * default `(label, no description, private)` payload.
    */
   uploadMetadata?: Record<string, UploadMetadata>;
+  /**
+   * AI disclosure (W5.A4) — computed at register time by the backend
+   * walking the project timeline against the generated-media
+   * registry. When `has_synthetic_content` is true the upload
+   * dispatcher folds the disclosure intent into each platform's flag
+   * (YouTube `alteredContent`, TikTok `aigc_label`, IG `ai_label`).
+   *
+   * `undefined` means "not computed yet" — clean cuts where the
+   * dispatcher never asked. The UI treats undefined the same as "no
+   * synthetic content" for display so a missing disclosure doesn't
+   * surface a banner on cuts that never contained generated media.
+   */
+  aiDisclosure?: AiDisclosure;
 };
 
 type State = {
@@ -162,6 +176,13 @@ type State = {
     id: string,
     metadata: Record<string, UploadMetadata>,
   ) => void;
+  /**
+   * Stamp this entry's AI disclosure. Called by the worker right
+   * after `compute_ai_disclosure` round trips so the RenderQueue row
+   * can surface the AI chip + the per-target form can render the
+   * banner. Pass `undefined` to clear (e.g. terminal cleanup).
+   */
+  setAiDisclosure: (id: string, disclosure: AiDisclosure | undefined) => void;
 };
 
 const PERSIST_KEY = "awidat.deliver.renderQueue.v1";
@@ -341,6 +362,15 @@ export const useRenderQueueStore = create<State>((set) => ({
     set((state) => {
       const next = state.entries.map((e) =>
         e.id === id ? { ...e, uploadMetadata: metadata } : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setAiDisclosure: (id, disclosure) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, aiDisclosure: disclosure } : e,
       );
       persist(next);
       return { entries: next };

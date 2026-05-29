@@ -22,6 +22,7 @@
 //! Settings UI now so when credentials show up later we plug into
 //! existing infrastructure.
 
+pub mod ai_disclosure;
 pub mod errors;
 pub mod instagram;
 pub mod oauth;
@@ -35,6 +36,17 @@ pub mod youtube;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use ai_disclosure::{disclosure_for_project_root, AiDisclosure};
+// Direct callers in production today: the `commands::publishing` API
+// re-exports through `disclosure_for_project_root`. The granular
+// helpers (`cut_contains_generated_media`, `disclosure_for_timeline`,
+// `GeneratedMediaCredit`) are exercised by tests and reachable for
+// future direct-timeline callers — re-exported here so the module
+// boundary stays stable.
+#[allow(unused_imports)]
+pub use ai_disclosure::{
+    cut_contains_generated_media, disclosure_for_timeline, GeneratedMediaCredit,
+};
 pub use errors::ProviderError;
 pub use provider::PublishingProvider;
 pub use types::{
@@ -146,6 +158,7 @@ mod tests {
                     visibility: Visibility::Private,
                     scheduled_at: None,
                     thumbnail_path: None,
+                    ai_disclosure: None,
                 })
                 .await
                 .unwrap_err();
@@ -193,6 +206,7 @@ mod tests {
                 visibility: Visibility::Private,
                 scheduled_at: None,
                 thumbnail_path: None,
+                ai_disclosure: None,
             })
             .await
             .unwrap_err();

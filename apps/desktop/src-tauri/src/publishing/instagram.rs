@@ -46,6 +46,12 @@ const SCOPES: &str =
 
 const DEV_CONSOLE_URL: &str = "https://developers.facebook.com/apps";
 
+/// Instagram's AI label (introduced 2024). When the W5.A4 disclosure
+/// flags synthetic content the real upload will set the corresponding
+/// IG Graph API parameter so the "Made with AI" badge appears on the
+/// post. The stub folds the name into its log line.
+const AI_DISCLOSURE_FLAG: &str = "ai_label";
+
 /// Instagram provider. Owns its credential-store path for testability.
 pub struct InstagramProvider {
     store_path: PathBuf,
@@ -101,7 +107,20 @@ impl PublishingProvider for InstagramProvider {
     }
 
     async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
-        stub_upload(&self.store_path, KEY, DEV_CONSOLE_URL, params).await
+        // TODO(W5.A4+): when synthetic content is present, also set
+        // the IG `ai_label` parameter on the media-container POST so
+        // the "Made with AI" badge appears on the post. Today the
+        // disclosure intent rides on `params.ai_disclosure`;
+        // `stub_upload` folds it into the log line + Unsupported
+        // message until the real call lands.
+        stub_upload(
+            &self.store_path,
+            KEY,
+            DEV_CONSOLE_URL,
+            AI_DISCLOSURE_FLAG,
+            params,
+        )
+        .await
     }
 
     async fn status(&self) -> ConnectionStatus {
