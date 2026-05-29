@@ -29,10 +29,14 @@ function resetAll(mockDispatch?: Partial<BriefDispatch>): {
   respondCalls: Array<{ callId: string; decision: string }>;
   acceptCalls: string[];
   rejectCalls: string[];
+  acceptBrollCalls: Array<{ jobId: string; videoPath: string }>;
+  rejectBrollCalls: string[];
 } {
   const respondCalls: Array<{ callId: string; decision: string }> = [];
   const acceptCalls: string[] = [];
   const rejectCalls: string[] = [];
+  const acceptBrollCalls: Array<{ jobId: string; videoPath: string }> = [];
+  const rejectBrollCalls: string[] = [];
   const dispatch: BriefDispatch = {
     respondApproval: async (callId, decision) => {
       respondCalls.push({ callId, decision });
@@ -43,11 +47,28 @@ function resetAll(mockDispatch?: Partial<BriefDispatch>): {
     rejectProposal: async (callId) => {
       rejectCalls.push(callId);
     },
+    acceptBroll: async (jobId, videoPath) => {
+      acceptBrollCalls.push({ jobId, videoPath });
+    },
+    rejectBroll: async (jobId) => {
+      rejectBrollCalls.push(jobId);
+    },
     ...mockDispatch,
   };
-  useBriefProposalsStore.setState({ approvals: new Map(), dispatch });
+  useBriefProposalsStore.setState({
+    approvals: new Map(),
+    brollProposals: new Map(),
+    brollDecided: new Set(),
+    dispatch,
+  });
   usePendingProposals.setState({ pending: [] });
-  return { respondCalls, acceptCalls, rejectCalls };
+  return {
+    respondCalls,
+    acceptCalls,
+    rejectCalls,
+    acceptBrollCalls,
+    rejectBrollCalls,
+  };
 }
 
 type Phase = "started" | "delta" | "completed";
@@ -402,6 +423,149 @@ function ingestPending(fake: unknown): void {
   assert.equal(isApprovalRequestItem(proposed as any), false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   assert.equal(isProposedEditItem(proposed as any), true);
+}
+
+// 11. Generated-broll proposal surfaces with disclosure metadata.
+//     Ingest carries provider / model / prompt / videoPath; the
+//     projected BriefProposal exposes them under `brollMetadata` and
+//     marks the row source as "broll" + medium "broll".
+{
+  resetAll();
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-1",
+    title: "Generated B-roll · openrouter",
+    rationale: "quiet office, late afternoon, soft window light",
+    firstSeenAt: 1000,
+    metadata: {
+      prompt: "quiet office, late afternoon, soft window light",
+      provider: "openrouter",
+      model: "seedance-1.0",
+      videoPath: "/abs/raw/generated/mock/job-1.mp4",
+      generatedAt: 999,
+    },
+  });
+  const pending = useBriefProposalsStore.getState().pending();
+  assert.equal(pending.length, 1);
+  const row = pending[0]!;
+  assert.equal(row.id, "job-1");
+  assert.equal(row.source, "broll");
+  assert.equal(row.medium, "broll");
+  assert.equal(row.title, "Generated B-roll · openrouter");
+  assert.equal(row.rationale, "quiet office, late afternoon, soft window light");
+  assert.equal(row.brollMetadata?.provider, "openrouter");
+  assert.equal(row.brollMetadata?.model, "seedance-1.0");
+  assert.equal(row.brollMetadata?.prompt, "quiet office, late afternoon, soft window light");
+  assert.equal(row.brollMetadata?.videoPath, "/abs/raw/generated/mock/job-1.mp4");
+}
+
+// 12. Non-broll proposals never carry brollMetadata — additive guard.
+{
+  resetAll();
+  ingestApproval(makeApproval("a1", "started", "apply_edl"));
+  ingestPending(makeProposedEdit("p1", "started"));
+  const pending = useBriefProposalsStore.getState().pending();
+  for (const row of pending) {
+    assert.equal(row.brollMetadata, undefined);
+  }
+}
+
+// 13. accept() on a broll proposal dispatches acceptBroll with the
+//     ready video path, drops the row, and latches `brollDecided`.
+{
+  const tracker = resetAll();
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-1",
+    title: "Generated B-roll · openrouter",
+    rationale: "prompt",
+    firstSeenAt: 1000,
+    metadata: {
+      prompt: "prompt",
+      provider: "openrouter",
+      videoPath: "/abs/job-1.mp4",
+    },
+  });
+  await useBriefProposalsStore.getState().accept("job-1");
+  assert.deepEqual(tracker.acceptBrollCalls, [
+    { jobId: "job-1", videoPath: "/abs/job-1.mp4" },
+  ]);
+  assert.equal(tracker.acceptCalls.length, 0);
+  assert.equal(tracker.respondCalls.length, 0);
+  assert.equal(useBriefProposalsStore.getState().pending().length, 0);
+  assert.equal(useBriefProposalsStore.getState().brollDecided.has("job-1"), true);
+}
+
+// 14. reject() on a broll proposal dispatches rejectBroll and latches
+//     the decided set so it cannot re-enter the stack on refresh.
+{
+  const tracker = resetAll();
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-2",
+    title: "Generated B-roll · openrouter",
+    rationale: "prompt",
+    firstSeenAt: 1000,
+    metadata: {
+      prompt: "prompt",
+      provider: "openrouter",
+      videoPath: "/abs/job-2.mp4",
+    },
+  });
+  await useBriefProposalsStore.getState().reject("job-2");
+  assert.deepEqual(tracker.rejectBrollCalls, ["job-2"]);
+  assert.equal(tracker.rejectCalls.length, 0);
+  assert.equal(useBriefProposalsStore.getState().pending().length, 0);
+  assert.equal(useBriefProposalsStore.getState().brollDecided.has("job-2"), true);
+
+  // Re-ingest must NOT bring the row back.
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-2",
+    title: "Generated B-roll · openrouter",
+    rationale: "prompt",
+    firstSeenAt: 2000,
+    metadata: { prompt: "prompt", provider: "openrouter" },
+  });
+  assert.equal(useBriefProposalsStore.getState().pending().length, 0);
+}
+
+// 15. Broll ingest is idempotent on jobId and preserves firstSeenAt.
+{
+  resetAll();
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-3",
+    title: "Generated B-roll · openrouter",
+    rationale: "first prompt",
+    firstSeenAt: 1_000,
+    metadata: { prompt: "first prompt", provider: "openrouter" },
+  });
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-3",
+    title: "Generated B-roll · openrouter",
+    rationale: "later prompt",
+    firstSeenAt: 9_999,
+    metadata: { prompt: "later prompt", provider: "openrouter" },
+  });
+  const pending = useBriefProposalsStore.getState().pending();
+  assert.equal(pending.length, 1);
+  // firstSeenAt is preserved across re-ingest so the "waiting Xm"
+  // badge stays anchored to first sight.
+  assert.equal(pending[0]!.firstSeenAt, 1_000);
+  // The rest of the metadata is the new payload.
+  assert.equal(pending[0]!.rationale, "later prompt");
+  assert.equal(pending[0]!.brollMetadata?.prompt, "later prompt");
+}
+
+// 16. clear() drops broll proposals AND the decided set.
+{
+  resetAll();
+  useBriefProposalsStore.getState().ingestBroll({
+    id: "job-4",
+    title: "Generated B-roll · openrouter",
+    rationale: "prompt",
+    firstSeenAt: 1_000,
+    metadata: { prompt: "prompt", provider: "openrouter" },
+  });
+  useBriefProposalsStore.getState().clear();
+  assert.equal(useBriefProposalsStore.getState().brollProposals.size, 0);
+  assert.equal(useBriefProposalsStore.getState().brollDecided.size, 0);
 }
 
 console.log("pending-brief-proposals: OK");

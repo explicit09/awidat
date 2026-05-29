@@ -27,12 +27,28 @@ import {
 type ApprovalRequestItem = Extract<Item, { kind: "approval_request" }>;
 type ProposedEditItem = Extract<Item, { kind: "proposed_edit" }>;
 
-export type BriefProposalSource = "approval" | "proposed_edit";
+export type BriefProposalSource = "approval" | "proposed_edit" | "broll";
 export type BriefMedium = ProposalMedium;
+
+/**
+ * Disclosure metadata for generated-broll proposals. Mirrors the
+ * fields the user must see to make an informed accept/reject:
+ * provider, model, prompt, when, and (if available) a thumbnail.
+ */
+export interface BrollDisclosureMetadata {
+  prompt: string;
+  provider: string;
+  model?: string;
+  thumbnailPath?: string;
+  generatedAt?: number;
+  /** Absolute path to the rendered video; used by accept(). */
+  videoPath?: string;
+}
 
 /** Unified row the Brief renders. Discriminated by `source`. */
 export interface BriefProposal {
-  /** call_id for approvals; proposed_edit id for ProposedEdits. */
+  /** call_id for approvals; proposed_edit id for ProposedEdits;
+   *  generated-media job_id for broll. */
   id: string;
   source: BriefProposalSource;
   medium: BriefMedium;
@@ -48,6 +64,8 @@ export interface BriefProposal {
   firstSeenAt: number;
   /** Tool name for approval-source rows (kind chip); undefined otherwise. */
   toolName: string | undefined;
+  /** Set only when this row is a generated-broll proposal. */
+  brollMetadata?: BrollDisclosureMetadata;
 }
 
 /**
@@ -58,13 +76,44 @@ export interface BriefDispatch {
   respondApproval: (callId: string, decision: "allow" | "deny") => Promise<void>;
   acceptProposal: (callId: string) => Promise<void>;
   rejectProposal: (callId: string) => Promise<void>;
+  /** Place a ready generated-broll asset on the timeline. */
+  acceptBroll: (jobId: string, videoPath: string) => Promise<void>;
+  /** Dismiss a generated-broll proposal — does not remove the asset. */
+  rejectBroll: (jobId: string) => Promise<void>;
+}
+
+/**
+ * Row tracking a generated-broll job that has reached "ready" and is
+ * waiting on the user to decide whether to insert it. Lives in this
+ * store (not `useGeneratedMediaStore`) because Brief-side decision
+ * state — accepted/rejected — is a Brief concern.
+ */
+export interface BrollEntry {
+  id: string;
+  title: string;
+  rationale: string | undefined;
+  firstSeenAt: number;
+  metadata: BrollDisclosureMetadata;
 }
 
 interface BriefState {
   approvals: Map<string, ApprovalEntry>;
+  brollProposals: Map<string, BrollEntry>;
+  /** Job ids the user accepted/rejected via the Brief; the Media-tab
+   *  panel and the broll ingester use this to filter the stack. */
+  brollDecided: Set<string>;
   dispatch: BriefDispatch;
   ingestApproval: (item: ApprovalRequestItem) => void;
-  /** Combined view: approvals ∪ usePendingProposals.pending, newest first. */
+  /**
+   * Upsert a generated-broll proposal. Idempotent on jobId; preserves
+   * `firstSeenAt` across re-ingest. Callers (appGlue) pass every
+   * "ready" entry on every refresh; once a job is `brollDecided` it
+   * is silently ignored.
+   */
+  ingestBroll: (entry: BrollEntry) => void;
+  /** Drop a generated-broll row when the underlying job disappears. */
+  removeBroll: (jobId: string) => void;
+  /** Combined view: approvals ∪ usePendingProposals.pending ∪ broll, newest first. */
   pending: () => BriefProposal[];
   accept: (id: string) => Promise<void>;
   reject: (id: string, reason?: string) => Promise<void>;
@@ -93,10 +142,24 @@ const defaultDispatch: BriefDispatch = {
     const { editorDispatch } = await import("../editor/tauriDispatch");
     await editorDispatch.rejectProposal(callId);
   },
+  // Generated-broll has no backend "accept" command yet — we place the
+  // rendered video file on the timeline through the existing
+  // `insert_media_on_timeline` path (same code the Media-tab panel
+  // used). Rejection is a Brief-local dismiss; the registry entry
+  // stays so the user can find it under Media → Generated history.
+  acceptBroll: async (_jobId, videoPath) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("insert_media_on_timeline", { assetId: videoPath, atS: null });
+  },
+  rejectBroll: async (_jobId) => {
+    // No-op on the backend; the Brief store records the dismissal.
+  },
 };
 
 export const useBriefProposalsStore = create<BriefState>((set, get) => ({
   approvals: new Map(),
+  brollProposals: new Map(),
+  brollDecided: new Set(),
   dispatch: defaultDispatch,
 
   ingestApproval(item) {
@@ -125,6 +188,31 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
     });
   },
 
+  ingestBroll(entry) {
+    set((state) => {
+      // A job the user has already decided on must not re-enter the
+      // stack on the next registry refresh.
+      if (state.brollDecided.has(entry.id)) return state;
+      const prev = state.brollProposals.get(entry.id);
+      const merged: BrollEntry = {
+        ...entry,
+        firstSeenAt: prev?.firstSeenAt ?? entry.firstSeenAt,
+      };
+      const next = new Map(state.brollProposals);
+      next.set(entry.id, merged);
+      return { brollProposals: next };
+    });
+  },
+
+  removeBroll(jobId) {
+    set((state) => {
+      if (!state.brollProposals.has(jobId)) return state;
+      const next = new Map(state.brollProposals);
+      next.delete(jobId);
+      return { brollProposals: next };
+    });
+  },
+
   pending() {
     const approvals = Array.from(get().approvals.values()).map(
       approvalToBriefProposal,
@@ -132,7 +220,10 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
     const proposedEdits = usePendingProposals
       .getState()
       .pending.map(pendingToBriefProposal);
-    return [...approvals, ...proposedEdits].sort(
+    const broll = Array.from(get().brollProposals.values()).map(
+      brollEntryToBriefProposal,
+    );
+    return [...approvals, ...proposedEdits, ...broll].sort(
       (a, b) => b.firstSeenAt - a.firstSeenAt,
     );
   },
@@ -147,6 +238,15 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
       set((s) => removeApproval(s, id));
       return;
     }
+    if (state.brollProposals.has(id)) {
+      const entry = state.brollProposals.get(id)!;
+      const videoPath = entry.metadata.videoPath;
+      if (videoPath) {
+        await state.dispatch.acceptBroll(id, videoPath);
+      }
+      set((s) => decideBroll(s, id));
+      return;
+    }
     // Otherwise it's a proposed_edit — usePendingProposals clears its
     // own entry when the backend emits Completed.
     await state.dispatch.acceptProposal(id);
@@ -159,11 +259,20 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
       set((s) => removeApproval(s, id));
       return;
     }
+    if (state.brollProposals.has(id)) {
+      await state.dispatch.rejectBroll(id);
+      set((s) => decideBroll(s, id));
+      return;
+    }
     await state.dispatch.rejectProposal(id);
   },
 
   clear() {
-    set({ approvals: new Map() });
+    set({
+      approvals: new Map(),
+      brollProposals: new Map(),
+      brollDecided: new Set(),
+    });
   },
 }));
 
@@ -172,6 +281,14 @@ function removeApproval(state: BriefState, id: string): Partial<BriefState> {
   const next = new Map(state.approvals);
   next.delete(id);
   return { approvals: next };
+}
+
+function decideBroll(state: BriefState, id: string): Partial<BriefState> {
+  const nextProposals = new Map(state.brollProposals);
+  nextProposals.delete(id);
+  const nextDecided = new Set(state.brollDecided);
+  nextDecided.add(id);
+  return { brollProposals: nextProposals, brollDecided: nextDecided };
 }
 
 /**
@@ -263,6 +380,19 @@ function pendingToBriefProposal(p: PendingProposal): BriefProposal {
     rationale: p.rationale,
     firstSeenAt: p.firstSeenAt,
     toolName: undefined,
+  };
+}
+
+function brollEntryToBriefProposal(entry: BrollEntry): BriefProposal {
+  return {
+    id: entry.id,
+    source: "broll",
+    medium: "broll",
+    title: entry.title,
+    rationale: entry.rationale,
+    firstSeenAt: entry.firstSeenAt,
+    toolName: undefined,
+    brollMetadata: entry.metadata,
   };
 }
 

@@ -5,9 +5,11 @@ import {
   Inline,
   Stack,
   StatusPillFromMapping,
+  cn,
   type StatusPillMapping,
 } from "../ui";
 import type { GeneratedMediaEntry } from "./generatedMediaStore";
+import { useBriefProposalsStore } from "../state/briefProposals";
 
 export function GeneratedMediaPanel({
   entries,
@@ -69,7 +71,20 @@ function GeneratedMediaJobCard({
   entry: GeneratedMediaEntry;
   onUse: (entry: GeneratedMediaEntry) => void;
 }) {
-  const usable = entry.state === "succeeded" && Boolean(entry.video_path);
+  // The Brief stack now owns the accept/reject decision for ready
+  // generated-broll jobs. The Media-tab card stays as history: when
+  // an entry is currently pending review, we hide the Add button and
+  // show a "Pending review in Brief" pill so users aren't tempted to
+  // place the same asset from two surfaces. Once decided (or for
+  // entries that never qualified — failed, non-broll), the original
+  // Add-to-timeline affordance returns.
+  const pendingInBrief = useBriefProposalsStore((s) =>
+    s.brollProposals.has(entry.job_id),
+  );
+  const usable =
+    entry.state === "succeeded" &&
+    Boolean(entry.video_path) &&
+    !pendingInBrief;
   return (
     <div
       className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
@@ -103,7 +118,17 @@ function GeneratedMediaJobCard({
           {entry.requires_disclosure ? " · AI disclosure" : ""}
           {entry.uses_likeness ? " · likeness" : ""}
         </span>
-        {usable ? (
+        {pendingInBrief ? (
+          <span
+            className={cn(
+              "shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
+              "bg-[var(--color-surface-panel)] px-1.5 py-[1px]",
+              "text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]",
+            )}
+          >
+            Pending review in Brief
+          </span>
+        ) : usable ? (
           <Button
             variant="ghost"
             size="sm"

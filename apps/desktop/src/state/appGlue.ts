@@ -19,6 +19,11 @@ import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
 import { useMediaStore } from "../media/store";
+import {
+  brollEntryFromGenerated,
+  isBrollProposalCandidate,
+  useGeneratedMediaStore,
+} from "../media/generatedMediaStore";
 import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
@@ -65,7 +70,10 @@ export function useAppGlue() {
   const ingestPendingProposal = usePendingProposals((s) => s.ingest);
   const clearPendingProposals = usePendingProposals((s) => s.clear);
   const ingestBriefApproval = useBriefProposalsStore((s) => s.ingestApproval);
+  const ingestBriefBroll = useBriefProposalsStore((s) => s.ingestBroll);
   const clearBriefProposals = useBriefProposalsStore((s) => s.clear);
+  const generatedMediaEntries = useGeneratedMediaStore((s) => s.entries);
+  const refreshGeneratedMedia = useGeneratedMediaStore((s) => s.refresh);
 
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshMedia = useMediaStore((s) => s.refresh);
@@ -119,6 +127,18 @@ export function useAppGlue() {
       if (item.kind === "editorial_note") {
         void ingestNote(item);
       }
+      // Generated-media lifecycle. The watcher emits `Item::Job` with
+      // `job_kind === "generated_media"` for every registry tick; we
+      // refresh the registry projection on Started/Delta/Completed so
+      // the Brief and the Media-tab panel stay synchronized with the
+      // on-disk state. The actual Brief routing happens below in the
+      // subscriber that watches `useGeneratedMediaStore.entries`.
+      if (
+        item.kind === "job" &&
+        (item as { job_kind?: string }).job_kind === "generated_media"
+      ) {
+        void refreshGeneratedMedia();
+      }
       upsertItem(item);
     });
     const endUnlisten = listen<TurnEndEvent>(TURN_END_EVENT, (event) => {
@@ -144,7 +164,22 @@ export function useAppGlue() {
     ingestPendingProposal,
     ingestBriefApproval,
     ingestNote,
+    refreshGeneratedMedia,
   ]);
+
+  // Broll → Brief subscriber. The watcher refreshes the registry
+  // projection (above); we then take every entry that has reached
+  // "ready, video on disk" and surface it as a generated-broll
+  // BriefProposal. The Brief store dedupes on jobId and silently
+  // ignores entries the user has already decided on, so this can fire
+  // on every render without amplifying.
+  useEffect(() => {
+    if (!isTauri()) return;
+    for (const entry of generatedMediaEntries) {
+      if (!isBrollProposalCandidate(entry)) continue;
+      ingestBriefBroll(brollEntryFromGenerated(entry));
+    }
+  }, [generatedMediaEntries, ingestBriefBroll]);
 
   // Native-menu command routing.
   useEffect(() => {

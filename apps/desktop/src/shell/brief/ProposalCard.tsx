@@ -11,9 +11,26 @@
 
 import { useState } from "react";
 import { Button, cn } from "../../ui";
-import type { BriefProposal, BriefMedium } from "../../state/briefProposals";
+import type {
+  BriefProposal,
+  BriefMedium,
+  BrollDisclosureMetadata,
+} from "../../state/briefProposals";
 import { useBriefProposalsStore } from "../../state/briefProposals";
 import type { CenterMode } from "../../state/centerMode";
+
+/**
+ * Build the muted disclosure label rendered under the prompt for
+ * generated-broll proposals. The "AI-generated" prefix is invariant —
+ * the requires_disclosure flag is upstream and assumed for any row
+ * that reached this branch.
+ */
+function brollDisclosureLabel(metadata: BrollDisclosureMetadata): string {
+  const parts = ["Disclosure: AI-generated"];
+  if (metadata.provider) parts.push(`provider ${metadata.provider}`);
+  if (metadata.model) parts.push(`model ${metadata.model}`);
+  return parts.join(" · ");
+}
 
 /** Medium → color-coded chip. Spec source: B2 task description. */
 const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: string }> = {
@@ -122,7 +139,17 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
     }
   }
 
-  const sourceLabel = proposal.source === "approval" ? "Agent" : "User";
+  const sourceLabel =
+    proposal.source === "broll"
+      ? "Agent"
+      : proposal.source === "approval"
+        ? "Agent"
+        : "User";
+
+  const isBroll =
+    proposal.medium === "broll" &&
+    proposal.source === "broll" &&
+    proposal.brollMetadata !== undefined;
 
   return (
     <article
@@ -148,6 +175,20 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
         {medium.label}
       </span>
 
+      {/* Optional broll thumbnail — left of the body, after the chip.
+          Renders only when the broll branch has a thumbnail path. */}
+      {isBroll && proposal.brollMetadata?.thumbnailPath && (
+        <img
+          src={proposal.brollMetadata.thumbnailPath}
+          alt=""
+          aria-hidden
+          className={cn(
+            "shrink-0 self-center rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
+            "h-10 w-16 object-cover bg-[var(--color-surface-panel)]",
+          )}
+        />
+      )}
+
       {/* Title + rationale + source */}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
@@ -168,13 +209,30 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
             {sourceLabel}
           </span>
         </div>
-        {proposal.rationale && (
-          <div
-            className="truncate text-[11px] italic text-[var(--color-text-muted)]"
-            title={proposal.rationale}
-          >
-            {proposal.rationale}
-          </div>
+        {isBroll && proposal.brollMetadata ? (
+          <>
+            <div
+              className="truncate text-[12px] italic text-[var(--color-text-primary)]"
+              title={proposal.brollMetadata.prompt}
+            >
+              {proposal.brollMetadata.prompt}
+            </div>
+            <div
+              className="truncate text-[10px] text-[var(--color-text-muted)]"
+              title={brollDisclosureLabel(proposal.brollMetadata)}
+            >
+              {brollDisclosureLabel(proposal.brollMetadata)}
+            </div>
+          </>
+        ) : (
+          proposal.rationale && (
+            <div
+              className="truncate text-[11px] italic text-[var(--color-text-muted)]"
+              title={proposal.rationale}
+            >
+              {proposal.rationale}
+            </div>
+          )
         )}
         {reviewLabel && (
           <button
