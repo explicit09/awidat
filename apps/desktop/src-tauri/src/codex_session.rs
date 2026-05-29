@@ -119,12 +119,19 @@ impl CodexSession {
         // "load everything" — see `commands::skill_config` for the
         // schema and fail-mode rules.
         let skills_catalog = render_skills_catalog(&project_root);
+        // Recent rejection feedback (Wave 5 C3). Reads the last
+        // MAX_FEEDBACK_ENTRIES entries from `.awidat/feedback.jsonl` and
+        // renders the `<recent_feedback>` L1 fragment. Missing /
+        // empty log → None, in which case the bridge skips the section
+        // entirely instead of emitting an empty header.
+        let recent_feedback = render_recent_feedback(&project_root);
         let bridge = CodexAppServer::launch(
             emitter,
             project_root.clone(),
             mcp_server_path,
             developer_instructions,
             skills_catalog,
+            recent_feedback,
             resume_thread_id,
         )
         .await?;
@@ -180,6 +187,61 @@ fn render_skills_catalog(project_root: &Path) -> Option<String> {
 /// Sourced from the desktop crate's package version at compile time.
 /// Skills declaring a higher minimum are skipped with a warning.
 const AWIDAT_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Discover the most recent `<= MAX_FEEDBACK_ENTRIES` rejection rows
+/// and render the L1 fragment ready to prepend to a turn input.
+/// Returns `None` when the log is missing / empty — the bridge then
+/// skips the section entirely instead of emitting an empty header.
+///
+/// Wave 5 C3 — see `crates/core/src/context.rs::RecentFeedbackFragment`
+/// for the on-the-wire format. The read side mirrors
+/// `commands::skill_config::load_skill_config_sync`: sync read at
+/// session-launch time so we don't have to plumb async through the
+/// bridge constructor.
+fn render_recent_feedback(project_root: &Path) -> Option<String> {
+    let entries = crate::commands::feedback::load_recent_feedback_sync(
+        project_root,
+        awidat_core::context::MAX_FEEDBACK_ENTRIES,
+    );
+    render_recent_feedback_from_entries(&entries)
+}
+
+/// Inner core — separated so unit tests can drive rendering off a
+/// hand-built entry list without standing up a JSONL file. Empty input
+/// → `None` so the caller can skip the section entirely.
+fn render_recent_feedback_from_entries(
+    entries: &[crate::commands::feedback::FeedbackEntry],
+) -> Option<String> {
+    use awidat_core::context::{ContextualUserFragment, RecentFeedbackFragment};
+    if entries.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = entries.iter().map(format_feedback_line).collect();
+    Some(RecentFeedbackFragment { lines }.render())
+}
+
+/// Format one rejection row as a bullet line for the L1 fragment.
+///
+/// Shape:
+///   - `<medium> "<title>" — reason: <reason>` when the user supplied
+///     a reason.
+///   - `<medium> "<title>" (no reason given)` when the user rejected
+///     silently — we still surface frequency so the agent can spot
+///     "the user just turned down three cuts in a row".
+fn format_feedback_line(entry: &crate::commands::feedback::FeedbackEntry) -> String {
+    match entry.reason.as_deref() {
+        Some(reason) if !reason.trim().is_empty() => format!(
+            "  - {} \"{}\" — reason: {}",
+            entry.medium,
+            entry.title,
+            reason.trim()
+        ),
+        _ => format!(
+            "  - {} \"{}\" (no reason given)",
+            entry.medium, entry.title
+        ),
+    }
+}
 
 /// Inner core — separated so unit tests can drive discovery against
 /// a `tempfile::TempDir`-backed skills root without touching the
@@ -847,6 +909,139 @@ mod tests {
     fn is_compatible_lenient_when_versions_malformed() {
         assert!(is_compatible(&None));
         assert!(is_compatible(&Some("not-a-version".to_string())));
+    }
+
+    // ---- Wave 5 C3 — recent rejection feedback fragment ----
+
+    use crate::commands::feedback::FeedbackEntry;
+
+    fn feedback_entry(
+        ts: i64,
+        medium: &str,
+        title: &str,
+        reason: Option<&str>,
+    ) -> FeedbackEntry {
+        FeedbackEntry {
+            ts,
+            medium: medium.into(),
+            title: title.into(),
+            rationale: None,
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    /// Empty entry list → caller skips the section entirely. We don't
+    /// emit an empty `<recent_feedback>` block.
+    #[test]
+    fn render_recent_feedback_returns_none_when_no_entries() {
+        let out = render_recent_feedback_from_entries(&[]);
+        assert!(
+            out.is_none(),
+            "empty feedback must skip the section, got: {out:?}"
+        );
+    }
+
+    /// One entry with a reason renders the `— reason: <text>` shape;
+    /// the marker tags are present so compaction can find + strip the
+    /// fragment later.
+    #[test]
+    fn render_recent_feedback_renders_with_reason_shape() {
+        let entries = vec![feedback_entry(1, "cut", "Trim 0:12 — 0:12.42", Some("Too aggressive"))];
+        let rendered = render_recent_feedback_from_entries(&entries).expect("non-empty");
+        assert!(rendered.starts_with("<recent_feedback>"));
+        assert!(rendered.ends_with("</recent_feedback>"));
+        // Shape: medium → quoted title → em-dash → "reason:" → text.
+        assert!(
+            rendered.contains("  - cut \"Trim 0:12 — 0:12.42\" — reason: Too aggressive"),
+            "wrong shape: {rendered}"
+        );
+        // Behavioural intro is present.
+        assert!(rendered.contains("Avoid repeating these patterns"));
+    }
+
+    /// Silent reject (no reason) renders `(no reason given)` so the
+    /// agent still sees the frequency without inventing a reason.
+    #[test]
+    fn render_recent_feedback_renders_no_reason_shape() {
+        let entries = vec![feedback_entry(1, "color", "Apply teal-orange", None)];
+        let rendered = render_recent_feedback_from_entries(&entries).expect("non-empty");
+        assert!(
+            rendered.contains("  - color \"Apply teal-orange\" (no reason given)"),
+            "missing no-reason marker: {rendered}"
+        );
+        // No stray "reason:" prefix when the user didn't supply one.
+        assert!(
+            !rendered.contains("reason: \n") && !rendered.contains("reason:  "),
+            "blank reason leaked: {rendered}"
+        );
+    }
+
+    /// Whitespace-only reason should be treated as no reason — we don't
+    /// want to render `reason: ` followed by nothing.
+    #[test]
+    fn render_recent_feedback_whitespace_reason_falls_back_to_no_reason() {
+        let entries = vec![feedback_entry(1, "broll", "Insert", Some("   "))];
+        let rendered = render_recent_feedback_from_entries(&entries).expect("non-empty");
+        assert!(rendered.contains("(no reason given)"), "got: {rendered}");
+    }
+
+    /// Multiple entries → one bullet per row, preserving the caller's
+    /// order. (The caller — `load_recent_feedback_sync` — already
+    /// orders newest-first.)
+    #[test]
+    fn render_recent_feedback_preserves_input_order() {
+        let entries = vec![
+            feedback_entry(3, "cut", "third", Some("a")),
+            feedback_entry(2, "broll", "second", None),
+            feedback_entry(1, "audio", "first", Some("c")),
+        ];
+        let rendered = render_recent_feedback_from_entries(&entries).expect("non-empty");
+        let third_at = rendered.find("third").expect("third row missing");
+        let second_at = rendered.find("second").expect("second row missing");
+        let first_at = rendered.find("first").expect("first row missing");
+        assert!(third_at < second_at);
+        assert!(second_at < first_at);
+    }
+
+    /// Integration with the JSONL log path: a fresh project (no log)
+    /// returns `None` so the bridge skips the section.
+    #[test]
+    fn render_recent_feedback_returns_none_when_log_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = render_recent_feedback(tmp.path());
+        assert!(out.is_none(), "fresh project must skip the section");
+    }
+
+    /// Integration: write two rows to `.awidat/feedback.jsonl`, the
+    /// session-launch helper must surface them in the rendered fragment.
+    #[test]
+    fn render_recent_feedback_reads_jsonl_log_at_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".awidat");
+        std::fs::create_dir_all(&dir).unwrap();
+        // ts ascending in the file; the sync reader reverses to
+        // newest-first, so "newer" appears above "older" in the output.
+        let lines = format!(
+            "{}\n{}\n",
+            serde_json::json!({"ts":100,"medium":"cut","title":"older","rationale":null,"reason":"a"}),
+            serde_json::json!({"ts":200,"medium":"broll","title":"newer","rationale":null,"reason":null}),
+        );
+        std::fs::write(dir.join("feedback.jsonl"), lines).unwrap();
+        let rendered = render_recent_feedback(tmp.path()).expect("non-empty");
+        assert!(rendered.contains("newer"));
+        assert!(rendered.contains("older"));
+        // Newest-first: "newer" appears before "older" in the rendered
+        // block.
+        let newer_at = rendered.find("newer").unwrap();
+        let older_at = rendered.find("older").unwrap();
+        assert!(
+            newer_at < older_at,
+            "rendered block should be newest-first; got:\n{rendered}"
+        );
+        // Newer row had no reason — rendered as "(no reason given)".
+        assert!(rendered.contains("(no reason given)"));
+        // Older row had reason "a" — rendered as "reason: a".
+        assert!(rendered.contains("reason: a"));
     }
 
     /// Task-spec scenario — pin to v1.0.0 with both v1.0.0 (bundled)

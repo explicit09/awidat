@@ -167,6 +167,90 @@ color/audio/transition proposals, name the audited measurement: \
 Do not leave `rationale` null. A missing rationale fails the editorial \
 review.\n";
 
+/// L1 fragment — the user's most recent proposal rejections, surfaced
+/// to the agent so the next turn doesn't repeat patterns the user just
+/// turned down. Mirrors `AvailableSkillsFragment`'s shape: marker-tagged
+/// block the bridge prepends to every `start_turn` input.
+///
+/// Wave 5 task C3. The desktop builds this from
+/// `<project>/.awidat/feedback.jsonl` (the rejection log Wave 5 C2 ships)
+/// at session-launch time, capped at [`MAX_FEEDBACK_ENTRIES`] entries
+/// newest-first.
+///
+/// Format:
+///
+/// ```text
+/// <recent_feedback>
+/// ## Recent feedback from the user
+///
+/// The user has rejected the following proposals recently. Avoid
+/// repeating these patterns:
+///
+///   - cut "Trim 0:12 — 0:12.42" — reason: Too aggressive
+///   - broll "Insert B-roll at 0:14" — reason: Off-topic
+///   - color (no reason given)
+///
+/// Read these as constraints, not absolutes. The user may want similar
+/// proposals in different contexts — use the reasons to refine WHY you
+/// propose, not as a blanket ban.
+/// </recent_feedback>
+/// ```
+///
+/// Empty `lines` → caller skips rendering entirely (see
+/// `codex_session::render_recent_feedback`); we never emit an empty
+/// section, just no section at all.
+pub struct RecentFeedbackFragment {
+    /// One line per rejection, format matches the `format_feedback_line`
+    /// helper in the desktop crate. Newest-first.
+    pub lines: Vec<String>,
+}
+
+/// Hard cap on rejection rows surfaced in the per-turn L1 fragment.
+/// Keep prompt budget honest: 15 short bullets at ~100 chars apiece is
+/// ~1.5 KB of prompt, well under the per-turn fragment budget. The full
+/// 200-entry log on disk stays available for History; this only governs
+/// what the agent sees on the next turn.
+pub const MAX_FEEDBACK_ENTRIES: usize = 15;
+
+impl ContextualUserFragment for RecentFeedbackFragment {
+    const START_MARKER: &'static str = "<recent_feedback>";
+    const END_MARKER: &'static str = "</recent_feedback>";
+
+    fn body(&self) -> String {
+        // Empty bodies should not reach `body()` — the caller filters
+        // them out so the agent's prompt doesn't carry an empty section.
+        // If one slips through anyway, emit nothing inside the markers
+        // (cheap; matches AvailableSkillsFragment's "marker survival"
+        // pattern so compaction can still find + strip the block).
+        if self.lines.is_empty() {
+            return "\n## Recent feedback from the user\n\nNo recent rejections.\n".to_string();
+        }
+        let mut s = String::from("\n## Recent feedback from the user\n");
+        s.push_str(FEEDBACK_INTRO);
+        for line in &self.lines {
+            s.push_str(line);
+            s.push('\n');
+        }
+        s.push_str(FEEDBACK_OUTRO);
+        s
+    }
+}
+
+/// Intro paragraph above the rejection bullet list. Explicitly behavioural
+/// — "avoid repeating these patterns" — so the agent treats the fragment
+/// as a constraint catalog, not a notification feed.
+const FEEDBACK_INTRO: &str = "\nThe user has rejected the following proposals recently. \
+Avoid repeating these patterns:\n\n";
+
+/// Outro paragraph below the rejection bullet list. Softens "avoid" so
+/// the agent doesn't read it as an absolute ban — the user may want a
+/// similar proposal in a different context. The "reasons" tell the
+/// agent WHY a previous attempt missed, not that the entire medium is
+/// off-limits.
+const FEEDBACK_OUTRO: &str = "\nRead these as constraints, not absolutes. The user may want \
+similar proposals in different contexts — use the reasons to refine WHY you propose, \
+not as a blanket ban.\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +314,81 @@ mod tests {
         assert!(!AvailableSkillsFragment::matches_text(
             "<skill>different marker</skill>"
         ));
+    }
+
+    /// Wave 5 C3 — `RecentFeedbackFragment` renders the expected shape:
+    /// marker-tagged block, behavioural heading + intro, one bullet per
+    /// line, and the "constraints, not absolutes" outro that keeps the
+    /// agent from reading the list as a blanket ban.
+    #[test]
+    fn recent_feedback_fragment_renders_with_markers_and_lines() {
+        let frag = RecentFeedbackFragment {
+            lines: vec![
+                "  - cut \"Trim 0:12 — 0:12.42\" — reason: Too aggressive".to_string(),
+                "  - broll \"Insert B-roll at 0:14\" — reason: Off-topic".to_string(),
+                "  - color (no reason given)".to_string(),
+            ],
+        };
+        let rendered = frag.render();
+        assert!(rendered.starts_with("<recent_feedback>"), "{rendered}");
+        assert!(rendered.ends_with("</recent_feedback>"), "{rendered}");
+        assert!(rendered.contains("## Recent feedback from the user"));
+        // Intro: behavioural "avoid repeating" framing, not "FYI".
+        assert!(
+            rendered.contains("Avoid repeating these patterns"),
+            "intro must be behavioural: {rendered}"
+        );
+        // All three rows surfaced.
+        assert!(rendered.contains("Trim 0:12 — 0:12.42"));
+        assert!(rendered.contains("Insert B-roll at 0:14"));
+        assert!(rendered.contains("(no reason given)"));
+        // Outro: softens "avoid" so the agent doesn't read it as a ban.
+        assert!(
+            rendered.contains("constraints, not absolutes"),
+            "outro must soften: {rendered}"
+        );
+    }
+
+    /// Empty `lines` should not occur in production (the caller filters
+    /// before constructing the fragment), but if one slips through we
+    /// keep the markers so compaction can still find + strip the block.
+    /// The body itself just says "no recent rejections" rather than the
+    /// behavioural intro — there's nothing to constrain.
+    #[test]
+    fn recent_feedback_fragment_with_empty_lines_renders_marker_only() {
+        let frag = RecentFeedbackFragment { lines: vec![] };
+        let rendered = frag.render();
+        assert!(rendered.starts_with("<recent_feedback>"));
+        assert!(rendered.ends_with("</recent_feedback>"));
+        assert!(rendered.contains("No recent rejections"));
+        // Empty fragment must NOT emit the behavioural intro — there's
+        // nothing to avoid repeating.
+        assert!(
+            !rendered.contains("Avoid repeating these patterns"),
+            "empty fragment leaked the behavioural intro: {rendered}"
+        );
+    }
+
+    #[test]
+    fn recent_feedback_fragment_matches_text() {
+        let frag = RecentFeedbackFragment {
+            lines: vec!["  - cut x".to_string()],
+        };
+        let rendered = frag.render();
+        assert!(RecentFeedbackFragment::matches_text(&rendered));
+        // Negative — skills-fragment-tagged text must NOT match.
+        let skills_frag = AvailableSkillsFragment {
+            skill_lines: vec!["  - test: x".to_string()],
+        };
+        let skills_rendered = skills_frag.render();
+        assert!(!RecentFeedbackFragment::matches_text(&skills_rendered));
+    }
+
+    /// The 15-entry cap is part of the public surface — the desktop
+    /// honours it on the read side, so the constant must stay stable
+    /// across releases (or the prompt budget assumption breaks).
+    #[test]
+    fn max_feedback_entries_is_fifteen() {
+        assert_eq!(MAX_FEEDBACK_ENTRIES, 15);
     }
 }

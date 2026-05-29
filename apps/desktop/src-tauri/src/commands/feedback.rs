@@ -160,6 +160,46 @@ pub async fn read_feedback(
     Ok(newest_first)
 }
 
+/// Synchronous read of the most recent `limit` entries (capped at
+/// [`MAX_ENTRIES`]) newest-first. Used by [`crate::codex_session`] at
+/// session-launch time so the agent's L1 context can include a "Recent
+/// feedback" fragment without spinning up a separate async task.
+///
+/// Mirrors the read side of [`read_feedback`] but stays sync, returns
+/// an empty Vec on any I/O / parse trouble (a missing log isn't an
+/// error here either — the agent should treat "no log yet" as "no
+/// signal"), and skips the self-pruning rewrite — that's a write
+/// concern owned by the async tauri command path.
+///
+/// `project_root` must be absolute; we don't re-validate here because
+/// the caller (`codex_session::launch`) already has the validated
+/// `project_root` it constructed the bridge with.
+pub fn load_recent_feedback_sync(project_root: &Path, limit: usize) -> Vec<FeedbackEntry> {
+    let file_path = project_root.join(DIR_NAME).join(FILE_NAME);
+    let raw = match std::fs::read_to_string(&file_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) => {
+            tracing::warn!(
+                path = %file_path.display(),
+                error = %err,
+                "feedback.jsonl read failed; treating as empty"
+            );
+            return Vec::new();
+        }
+    };
+    let parsed = parse_jsonl(&raw);
+    // Cap at MAX_ENTRIES first (keeps the slice cheap when the log has
+    // grown past the on-disk cap before the async path got a chance to
+    // self-prune), then bound by the caller's limit.
+    let effective_limit = limit.min(MAX_ENTRIES);
+    let mut newest_first: Vec<FeedbackEntry> = parsed.into_iter().rev().collect();
+    if newest_first.len() > effective_limit {
+        newest_first.truncate(effective_limit);
+    }
+    newest_first
+}
+
 /// Serialise an entry to a single JSONL line (trailing newline
 /// included). Splitting this out keeps the append path testable
 /// without filesystem setup and makes the "one entry = one line"
@@ -468,6 +508,98 @@ mod tests {
         assert_eq!(line.matches('\n').count(), 1);
         assert!(line.ends_with('\n'));
         assert!(line.contains("\\n"), "{line}");
+    }
+
+    // ---- Wave 5 C3 — sync read helper for codex_session ----
+
+    #[test]
+    fn load_recent_feedback_sync_returns_empty_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = load_recent_feedback_sync(tmp.path(), 10);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn load_recent_feedback_sync_returns_empty_when_dir_missing() {
+        // No `.awidat/` subdir at all — the missing-file branch fires.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = load_recent_feedback_sync(tmp.path(), 5);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn load_recent_feedback_sync_returns_newest_first() {
+        // Hand-write the JSONL file so we don't depend on the async
+        // append path here.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rows = [
+            mk(100, "cut", "first", None),
+            mk(200, "broll", "second", None),
+            mk(300, "audio", "third", None),
+        ];
+        let buf = rows
+            .iter()
+            .map(|e| serialize_line(e).unwrap())
+            .collect::<String>();
+        std::fs::write(dir.join(FILE_NAME), buf).unwrap();
+        let out = load_recent_feedback_sync(tmp.path(), 10);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].ts, 300);
+        assert_eq!(out[1].ts, 200);
+        assert_eq!(out[2].ts, 100);
+    }
+
+    #[test]
+    fn load_recent_feedback_sync_honours_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = (0..10)
+            .map(|i| serialize_line(&mk(i, "cut", "x", None)).unwrap())
+            .collect::<String>();
+        std::fs::write(dir.join(FILE_NAME), buf).unwrap();
+
+        let out = load_recent_feedback_sync(tmp.path(), 3);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].ts, 9);
+        assert_eq!(out[1].ts, 8);
+        assert_eq!(out[2].ts, 7);
+    }
+
+    #[test]
+    fn load_recent_feedback_sync_caps_at_max_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Pre-cap the file just above the limit so we exercise the
+        // MAX_ENTRIES cap regardless of what `limit` the caller asks
+        // for. (Sync path does NOT rewrite the file — it just bounds
+        // its slice.)
+        let total = MAX_ENTRIES + 5;
+        let buf = (0..(total as i64))
+            .map(|i| serialize_line(&mk(i, "cut", "x", None)).unwrap())
+            .collect::<String>();
+        std::fs::write(dir.join(FILE_NAME), buf).unwrap();
+
+        // Caller asks for way more than MAX_ENTRIES; sync still bounds.
+        let out = load_recent_feedback_sync(tmp.path(), 10_000);
+        assert_eq!(out.len(), MAX_ENTRIES);
+        assert_eq!(out[0].ts, (total - 1) as i64);
+    }
+
+    #[test]
+    fn load_recent_feedback_sync_skips_garbage_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = serde_json::to_string(&mk(42, "cut", "ok", Some("r"))).unwrap();
+        let contents = format!("{good}\n\n{{not json\n");
+        std::fs::write(dir.join(FILE_NAME), contents).unwrap();
+        let out = load_recent_feedback_sync(tmp.path(), 50);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ts, 42);
     }
 
     #[test]

@@ -189,6 +189,14 @@ pub struct CodexAppServer {
     /// progressive-disclosure design in crates/core/src/skills.rs).
     /// `None` when no skills are installed.
     skills_catalog: Option<String>,
+    /// Pre-rendered L1 recent-feedback fragment (Wave 5 C3). Lists the
+    /// user's most recent proposal rejections so the agent doesn't
+    /// repeat patterns the user just turned down. Prepended to every
+    /// `start_turn` input AHEAD of the skills catalog because feedback
+    /// is higher-priority behavioural context — "don't repeat these
+    /// rejections" comes before "here are your tools". `None` when the
+    /// rejection log is missing or empty.
+    recent_feedback: Option<String>,
     /// Pending server-requests waiting for a desktop reply, keyed by
     /// the codex `item_id` we emitted to the renderer.
     pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
@@ -216,6 +224,7 @@ impl CodexAppServer {
         mcp_server_path: Option<PathBuf>,
         developer_instructions: Option<String>,
         skills_catalog: Option<String>,
+        recent_feedback: Option<String>,
         resume_thread_id: Option<String>,
     ) -> Result<Self, BridgeError> {
         // 1. Build the CLI overrides FIRST so they're baked into the
@@ -385,6 +394,7 @@ impl CodexAppServer {
             request_handle,
             thread_id,
             skills_catalog,
+            recent_feedback,
             pending,
             resolve_tx,
             shutdown_tx: Some(shutdown_tx),
@@ -399,16 +409,24 @@ impl CodexAppServer {
         input: String,
         model: Option<String>,
     ) -> Result<String, BridgeError> {
-        // Per-turn L1 skills catalog. The skills system's design (see
-        // crates/core/src/skills.rs) is progressive disclosure: the
-        // agent sees a catalog every turn, calls `load_skill(name=...)`
-        // to fetch the L2 body, runs L3 scripts via bash. Inject the
-        // catalog as a contextual fragment ahead of the user input so
-        // the agent always knows what skills exist this turn.
-        let text = match &self.skills_catalog {
-            Some(catalog) => format!("{catalog}\n\n{input}"),
-            None => input,
-        };
+        // Per-turn L1 fragments, prepended ahead of the user input so
+        // the agent sees them on every turn. Two fragments today:
+        //
+        //   1. Recent feedback (Wave 5 C3) — the user's most recent
+        //      rejections. Goes FIRST because it's behavioural
+        //      ("don't repeat these patterns") and the model reads
+        //      earlier context as higher priority.
+        //   2. Skills catalog (progressive disclosure, see
+        //      crates/core/src/skills.rs) — what tools / playbooks the
+        //      agent can call `load_skill(name=...)` for.
+        //
+        // Either may be `None`; when both are present the order on the
+        // wire is `<recent_feedback>…</recent_feedback>\n\n<skills_instructions>…</skills_instructions>\n\n<input>`.
+        let text = compose_turn_input(
+            self.recent_feedback.as_deref(),
+            self.skills_catalog.as_deref(),
+            &input,
+        );
         let response: TurnStartResponse = self
             .request_handle
             .request_typed(ClientRequest::TurnStart {
@@ -845,4 +863,65 @@ fn next_request_id() -> i64 {
     use std::sync::atomic::{AtomicI64, Ordering};
     static COUNTER: AtomicI64 = AtomicI64::new(100);
     COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Compose the per-turn text the agent sees: optional L1 fragments
+/// followed by the user input.
+///
+/// Order on the wire — feedback FIRST, then skills, then input. Feedback
+/// is behavioural ("don't repeat these rejections"), and earlier prompt
+/// text is treated as higher priority by the model, so it leads. Skills
+/// are the catalog of available playbooks. Both fragments may be absent;
+/// when only one is set we drop the other entirely (no blank section).
+///
+/// Extracted from `CodexAppServer::start_turn` so the unit test can pin
+/// the exact composition without standing up the in-process app-server.
+fn compose_turn_input(
+    recent_feedback: Option<&str>,
+    skills_catalog: Option<&str>,
+    input: &str,
+) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(3);
+    if let Some(fb) = recent_feedback {
+        parts.push(fb);
+    }
+    if let Some(sk) = skills_catalog {
+        parts.push(sk);
+    }
+    parts.push(input);
+    parts.join("\n\n")
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::compose_turn_input;
+
+    #[test]
+    fn feedback_then_skills_then_input_in_order() {
+        let out = compose_turn_input(Some("<FB>"), Some("<SK>"), "hello");
+        // Feedback wins the lead; skills follow; input lands last.
+        let fb_at = out.find("<FB>").expect("feedback present");
+        let sk_at = out.find("<SK>").expect("skills present");
+        let input_at = out.find("hello").expect("input present");
+        assert!(fb_at < sk_at, "feedback must precede skills: {out}");
+        assert!(sk_at < input_at, "skills must precede input: {out}");
+    }
+
+    #[test]
+    fn no_fragments_returns_input_only() {
+        let out = compose_turn_input(None, None, "hello");
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn feedback_only_skips_skills_section() {
+        let out = compose_turn_input(Some("<FB>"), None, "hello");
+        assert_eq!(out, "<FB>\n\nhello");
+    }
+
+    #[test]
+    fn skills_only_skips_feedback_section() {
+        let out = compose_turn_input(None, Some("<SK>"), "hello");
+        assert_eq!(out, "<SK>\n\nhello");
+    }
 }
