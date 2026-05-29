@@ -7323,3 +7323,135 @@ button {
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
+
+/* ============================================================
+   Wave 4 W4.4 — Transcript-first Source view (`<TranscriptSource>`).
+   Surface chrome + selection-action affordances. Word styles stay in
+   the existing `.transcript-*` block; this block only adds the layers
+   that the new wrapper paints on top.
+   ============================================================ */
+
+.tx-source {
+  /* Container — the outer flex column is set inline; this rule is
+     here for visual debugging hooks (data attrs, etc.). */
+}
+
+.tx-tabs {
+  /* Sub-tab strip — Transcript | Video. Matches the height of
+     .CenterModeTabs (28px) so the two strips line up vertically. */
+  gap: 16px;
+}
+
+.tx-search {
+  /* Inline search bar — slides in under the sub-tab strip. */
+}
+
+/* Word-level search highlights, applied imperatively in SearchBar's
+   effect. Light teal so they sit alongside the existing blue
+   active-word highlight without competing for attention. */
+.transcript-word.tx-search-match {
+  background: rgba(91, 211, 217, 0.18);
+  border-radius: 3px;
+}
+.transcript-word.tx-search-match-cursor {
+  background: rgba(91, 211, 217, 0.45);
+  box-shadow: 0 0 0 1px rgba(91, 211, 217, 0.85);
+}
+
+/* "Strike-through cut" affordance painted on every word inside the
+   active selection range. Dotted red overline + strikethrough text +
+   subtle red wash. Communicates "if you accept, this text leaves the
+   cut". */
+.transcript-word.tx-strike {
+  text-decoration: line-through;
+  text-decoration-color: rgba(232, 81, 81, 0.85);
+  text-decoration-thickness: 1.5px;
+  background: rgba(232, 81, 81, 0.12);
+  border-top: 1px dotted rgba(232, 81, 81, 0.8);
+  border-radius: 0;
+}
+
+/* Yellow underline for must-keep marks. Persists per-project; sits
+   behind the active-word highlight so the playhead still reads as
+   blue when crossing a kept range. */
+.transcript-word.tx-must-keep {
+  border-bottom: 2px solid rgba(245, 200, 60, 0.7);
+}
+
+/* Applied cut — dim + strikethrough on words the agent's accepted
+   cuts have removed from the timeline. Quiet, so the user can still
+   read the surrounding context without the cut text shouting. */
+.transcript-word.tx-applied-cut {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(238, 232, 205, 0.35);
+  opacity: 0.55;
+}
+
+/* Floating action bar — appears anchored below the last selected
+   word. Two buttons (Propose delete, Mark must-keep) + an inline
+   error slot. Positioning is set inline via JS; the rule below sets
+   chrome only. */
+.tx-action-bar {
+  position: absolute;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--color-surface-toolbar, rgba(18, 18, 18, 0.96));
+  border: 1px solid var(--color-border-strong, rgba(238, 232, 205, 0.18));
+  border-radius: var(--radius-md, 6px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.tx-action-button {
+  appearance: none;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.tx-action-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tx-action-delete {
+  color: #fff;
+  background: rgba(232, 81, 81, 0.85);
+}
+.tx-action-delete:hover:not(:disabled) {
+  background: rgba(232, 81, 81, 1);
+}
+
+.tx-action-keep {
+  color: var(--color-text-primary, #fff);
+  background: rgba(245, 200, 60, 0.18);
+  border: 1px solid rgba(245, 200, 60, 0.45);
+}
+.tx-action-keep:hover {
+  background: rgba(245, 200, 60, 0.28);
+}
+
+.tx-action-error {
+  color: var(--color-text-error, #e85151);
+  font-size: 10.5px;
+}
+
+/* Right-click affordance — when the user right-clicks a selected
+   range, the same Mark-must-keep action runs. The surface needs to
+   look interactive, but we don't paint a context menu — the floating
+   action bar above is the menu.
+   (Inline JS sets `oncontextmenu` on the surface; CSS is just here
+   to communicate "this is a clickable surface".) */
+.tx-surface {
+  position: relative;
+}

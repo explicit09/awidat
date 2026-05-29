@@ -22,6 +22,7 @@
     "test:agents-md-editor": "node --experimental-strip-types tests/agents-md-editor.test.ts",
     "test:welcome": "node --experimental-strip-types tests/welcome.test.ts",
     "test:rationale-display": "node --experimental-strip-types tests/rationale-display.test.ts",
+    "test:transcript-source": "node --experimental-strip-types tests/transcript-source.test.ts",
     "test:animation": "tsc src/timeline/animation.ts src/media/videoOverlayStyle.ts --target ES2022 --module ES2022 --moduleResolution bundler --outDir dist-test --skipLibCheck && node tests/animation-evaluator.mjs",
     "test:editor": "node --experimental-strip-types src/editor/dispatch.test.ts",
     "test:timeline": "node --experimental-strip-types src/timeline/editMath.test.ts && node --experimental-strip-types src/timeline/editOps.test.ts && node --experimental-strip-types src/timeline/editorialMarkers.test.ts && node --experimental-strip-types src/timeline/formatting.test.ts && node --experimental-strip-types src/timeline/proposalDiffKeys.test.ts && node --experimental-strip-types src/timeline/renderer.test.ts && node --experimental-strip-types src/timeline/canvasLayout.test.ts && node --experimental-strip-types src/timeline/refreshActivity.test.ts",

@@ -40,7 +40,9 @@ import {
   BriefSurface,
   CenterModeTabs,
   IndexRail,
+  isTranscriptFirstProjectType,
   PreviewSurface,
+  TranscriptSource,
   ProposalInspector,
   TimelineHybrid,
   type ActivityEntry,
@@ -118,6 +120,7 @@ function App() {
 
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
+  const projectType = useProjectStore((s) => s.projectType);
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
   const replaceAgentItems = useAgentStore((s) => s.replace);
@@ -1791,6 +1794,71 @@ function App() {
                   changeCount={effectiveChanges.length}
                   audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
                   contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
+                />
+              </div>
+            ) : isTranscriptFirstProjectType(projectType) ? (
+              // Wave 4 W4.4: podcast/interview/tutorial projects land on
+              // the transcript-first Source view. The legacy video preview
+              // stays reachable through the Video sub-tab inside
+              // <TranscriptSource>.
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TranscriptSource
+                  videoSlot={
+                    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+                      <MediaOfflineBanner />
+                      <PreviewSurface
+                        proposalName={activeProposal?.summary ?? "Source review"}
+                        pendingCount={effectiveChanges.length}
+                        changes={effectiveChanges}
+                        activeChangeId={selectedPreviewChangeId}
+                        currentTimeS={effectiveCurrentTime}
+                        durationS={effectiveDuration}
+                        isPlaying={isPlaying}
+                        volume={previewVolume}
+                        rate={previewRate}
+                        qualityMode={previewQualityMode}
+                        viewMode={previewViewMode}
+                        videoSlot={
+                          isTimelinePreview ? (
+                            <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
+                          ) : realPreviewSrc && selectedPreviewMedia ? (
+                            <RealMediaPreviewSlot
+                              src={realPreviewSrc}
+                              label={selectedPreviewMedia.label}
+                              name={selectedPreviewMedia.name}
+                              isPlaying={isPlaying}
+                              volume={previewVolume}
+                              rate={previewRate}
+                              seekRequestId={sourceSeekRequestId}
+                              seekTargetS={sourceSeekTargetS}
+                              onTime={setSourceTime}
+                              onDuration={setSourceDuration}
+                              onPlaying={setMediaPlaying}
+                              onFirstFrame={() => setHasProxyFrame(true)}
+                            />
+                          ) : undefined
+                        }
+                        sourceMedia={slateSourceMedia}
+                        hasProxyFrame={hasProxyFrame}
+                        indexing={slateIndexing}
+                        onPlayPause={() => setMediaPlaying(!isPlaying)}
+                        onSelectChange={selectPreviewChange}
+                        onPrevCut={() => jumpPreviewChange(-1)}
+                        onNextCut={() => jumpPreviewChange(1)}
+                        onSeek={seekPreview}
+                        onSetVolume={setPreviewVolume}
+                        onSetRate={setPreviewRate}
+                        onSetQualityMode={setPreviewQualityMode}
+                        onSetViewMode={setPreviewViewMode}
+                        onOpenProposalMenu={() => setInspectorCollapsed(false)}
+                        onInspectProposal={inspectActiveProposal}
+                        onReviseProposal={reviseActiveProposal}
+                        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
+                        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
+                        onFullscreen={() => setInspectorCollapsed(false)}
+                      />
+                    </div>
+                  }
                 />
               </div>
             ) : (

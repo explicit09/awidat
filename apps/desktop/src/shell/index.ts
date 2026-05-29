@@ -58,6 +58,13 @@ export { HistorySurface } from "./HistorySurface";
 export { BriefSurface, type BriefSurfaceProps } from "./BriefSurface";
 export { CenterModeTabs, type CenterModeTabsProps } from "./brief/CenterModeTabs";
 export {
+  TranscriptSource,
+  type TranscriptSourceProps,
+} from "./source/TranscriptSource";
+export {
+  isTranscriptFirstProjectType,
+} from "./source/transcriptSourceLogic";
+export {
   LoadingState,
   ErrorState,
   GenericEmpty,
