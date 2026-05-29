@@ -1594,6 +1594,103 @@ button {
   }
 }
 
+/* AGENTS.md in-product editor (Wave 3 T2).
+   Scoped under `.agents-md-editor` so the mono textarea, save chip,
+   and meta row don't leak into other modal callers. */
+.modal.agents-md-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+.agents-md-editor .ame-path {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-md-editor .ame-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
+  display: flex;
+}
+
+.agents-md-editor .ame-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  color: var(--color-text-primary);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  outline: none;
+}
+
+.agents-md-editor .ame-textarea:focus {
+  border-color: var(--color-border-focus);
+}
+
+.agents-md-editor .ame-textarea:disabled {
+  color: var(--color-text-disabled);
+  cursor: progress;
+}
+
+.agents-md-editor .ame-footer {
+  justify-content: space-between;
+}
+
+.agents-md-editor .ame-meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agents-md-editor .ame-wordcount {
+  font-variant-numeric: tabular-nums;
+}
+
+.agents-md-editor .ame-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.agents-md-editor .ame-chip--info {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-proposal-proposed-text);
+}
+
+.agents-md-editor .ame-chip--ok {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--color-proposal-accepted-text);
+}
+
+.agents-md-editor .ame-chip--err {
+  border-color: rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-proposal-rejected-text);
+}
+
 /* Persistent action bar between header and chat */
 .action-bar {
   display: flex;

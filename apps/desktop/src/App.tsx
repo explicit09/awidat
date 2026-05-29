@@ -16,6 +16,7 @@ import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
+import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { SettingsModal } from "./app/SettingsModal";
 import { useMediaStore } from "./media/store";
@@ -1884,6 +1885,7 @@ function App() {
       />
     )}
     <SettingsModal />
+    <AgentsMdEditor />
     {showUrlImport && (
       <div className="modal-backdrop" onClick={() => setShowUrlImport(false)}>
         <div className="modal" onClick={(event) => event.stopPropagation()}>

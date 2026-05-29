@@ -208,6 +208,8 @@ pub fn run() {
             commands::color_scopes::get_color_scopes,
             commands::skills::list_skills,
             commands::skills::read_skill_body,
+            commands::agents_md::read_agents_md,
+            commands::agents_md::write_agents_md,
         ])
         .build(tauri::generate_context!());
 

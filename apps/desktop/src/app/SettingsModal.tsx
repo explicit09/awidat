@@ -25,6 +25,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { useProjectStore } from "./state";
+import { useAgentsMdEditor } from "../state/agentsMdEditor";
 import { useIntroState } from "../state/introState";
 import { useMode } from "../state/mode";
 import { useSettings } from "../state/settings";
@@ -54,6 +55,7 @@ export function SettingsModal() {
   const isOpen = useSettings((s) => s.isOpen);
   const close = useSettings((s) => s.close);
   const projectPath = useProjectStore((s) => s.current);
+  const openAgentsMdEditor = useAgentsMdEditor((s) => s.open);
   const mode = useMode((s) => s.mode);
   const setMode = useMode((s) => s.setMode);
   const introducedCount = useIntroState((s) => s.introduced.size);
@@ -107,14 +109,12 @@ export function SettingsModal() {
     revealItemInDir(path).catch((e) => console.warn("revealItemInDir failed", e));
   }
 
-  function openAgentsMd() {
-    if (!isTauri() || !projectPath) return;
-    // AGENTS.md sits at the root of every Awidat project (stamped by
-    // `init_project`). No dedicated backend invoke needed — the opener
-    // resolves the path with the OS default handler.
-    openPath(`${projectPath}/AGENTS.md`).catch((e) =>
-      console.warn("openPath AGENTS.md failed", e),
-    );
+  function editAgentsMd() {
+    if (!projectPath) return;
+    // Close Settings first so the editor opens on a clean backdrop —
+    // stacked modals make ⌘W / Esc ambiguous.
+    close();
+    openAgentsMdEditor();
   }
 
   return (
@@ -158,12 +158,13 @@ export function SettingsModal() {
             </Row>
             <Row label="AGENTS.md">
               <Button
-                variant="ghost"
+                variant="secondary"
                 size="sm"
-                onClick={openAgentsMd}
+                onClick={editAgentsMd}
                 disabled={!projectPath}
+                title={projectPath ? "Open the in-product editor" : "Load a project first"}
               >
-                Open AGENTS.md
+                Edit AGENTS.md
               </Button>
             </Row>
           </Section>

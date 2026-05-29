@@ -1,6 +1,7 @@
 //! Tauri commands. Grouped by concern; lib.rs's `run()` registers
 //! them all via `generate_handler!`.
 
+pub mod agents_md;
 pub mod auto_insert;
 pub mod captions;
 pub mod clip_params;
