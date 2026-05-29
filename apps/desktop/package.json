@@ -20,6 +20,7 @@
     "test:skills": "node --experimental-strip-types tests/skills-store.test.ts",
     "test:indexer-overlay": "node --experimental-strip-types tests/indexer-overlay.test.ts",
     "test:proposal-history": "node --experimental-strip-types tests/proposal-history.test.ts",
+    "test:learned-patterns": "node --experimental-strip-types tests/learned-patterns.test.ts",
     "test:feedback-log": "node --experimental-strip-types tests/feedback-log.test.ts",
     "test:agents-md-editor": "node --experimental-strip-types tests/agents-md-editor.test.ts",
     "test:welcome": "node --experimental-strip-types tests/welcome.test.ts",

@@ -29,6 +29,7 @@ import { History as HistoryIcon, RotateCcw, Search, Sparkles, User } from "lucid
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { MEDIUM_STYLE } from "./brief/ProposalCard";
+import { PatternsPanel } from "./PatternsPanel";
 import {
   buildRestoreEntry,
   useProposalHistoryStore,
@@ -171,6 +172,7 @@ export function HistorySurface() {
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <PatternsPanel entries={entries} />
         {entries.length === 0 ? (
           <EmptyState>
             No decisions yet. Accept or reject a proposal from the Brief
