@@ -62,6 +62,7 @@ import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingS
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
+import { useIndexReadinessStore } from "./state/indexReadiness";
 import { isIntroSyntheticInput } from "./state/introState";
 import { useSettings } from "./state/settings";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
@@ -510,14 +511,21 @@ function App() {
   async function loadIndexReadiness() {
     if (demoMode || !isTauri() || !current) {
       setIndexReadiness(undefined);
+      useIndexReadinessStore.getState().setSnapshot(undefined);
       return;
     }
     try {
       const snapshot = await invoke<IndexReadinessSnapshot>("index_readiness");
       setIndexReadiness(snapshot);
+      // Mirror into the shared store so evidenceAccessors and any other
+      // surface that doesn't have App-level state access can subscribe.
+      // The local React state above stays as-is to avoid a wider refactor
+      // of the cockpit slate / footer.
+      useIndexReadinessStore.getState().setSnapshot(snapshot);
     } catch (e) {
       console.warn("index_readiness failed", e);
       setIndexReadiness(undefined);
+      useIndexReadinessStore.getState().setSnapshot(undefined);
     }
   }
 
