@@ -426,10 +426,16 @@ function WordOverlays({
     stem ? s.byStem[stem] : undefined,
   );
   const project = useProjectStore((s) => s.current);
-  const marks = useTranscriptAnnotations((s) =>
-    stem && project
-      ? (s.byProject[project]?.filter((m) => m.stem === stem) ?? [])
-      : [],
+  // Subscribe to the stable byProject map; filter to stem-specific marks
+  // in useMemo so the array reference is stable across renders. The prior
+  // `.filter()`-inside-selector form returned a fresh array every tick and
+  // wedged React in an infinite update loop on transcript projects.
+  const allMarks = useTranscriptAnnotations((s) =>
+    project ? s.byProject[project] : undefined,
+  );
+  const marks = useMemo(
+    () => (stem && allMarks ? allMarks.filter((m) => m.stem === stem) : []),
+    [stem, allMarks],
   );
 
   useEffect(() => {

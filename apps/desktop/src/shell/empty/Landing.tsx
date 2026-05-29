@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import mark from "../../brand/awidat-mark.svg";
 import { useProjectStore } from "../../app/state";
 import { MENU_COMMANDS, emitMenuCommand } from "../../app/menuCommands";
@@ -31,19 +32,24 @@ export function Landing() {
   const openProject = () => emitMenuCommand(MENU_COMMANDS.OPEN_PROJECT);
   // TODO(redesign): wire to backend "open example" command when one exists.
   const tryExample = () => emitMenuCommand(MENU_COMMANDS.NEW_PROJECT);
-  // Recents are opened by emitting OPEN_RECENT; ProjectBanner already
-  // listens for this and shows its picker. A direct-open path-by-path
-  // command does not yet exist on the menu bus — see TODO below.
-  // TODO(redesign): wire to a backend command that opens a specific path
-  // directly (skip the popover hop).
-  const openRecent = (_path: string) => emitMenuCommand(MENU_COMMANDS.OPEN_RECENT);
+  // Recents open the picked project directly via `set_project_root`;
+  // useProjectStore.refresh() then pulls the new current/recent state
+  // from the backend so the workspace mounts.
+  const openRecent = async (path: string) => {
+    try {
+      await invoke("set_project_root", { path });
+      await useProjectStore.getState().refresh();
+    } catch (err) {
+      console.warn("openRecent failed", err);
+    }
+  };
 
   // TODO(redesign): drop-zone treatment when drag-over. Tauri-level
   // drop wiring is out of scope for this task.
 
   return (
     <div
-      className="flex flex-col items-center justify-center text-center px-6 py-12 flex-1 min-h-0
+      className="flex flex-col items-center justify-center text-center px-6 py-12 h-full w-full min-h-0
                  bg-[radial-gradient(ellipse_at_50%_40%,#14110E_0%,var(--color-surface-page)_60%)]"
     >
       <img
