@@ -25,6 +25,22 @@ export type RenderTargetKind =
   | "captions"
   | "still";
 
+/**
+ * Per-target upload lifecycle. Mirrors the Rust `UploadState` enum
+ * shape returned by `poll_upload_states` — `state` is the tag, the
+ * other fields appear when the variant carries them.
+ *
+ *   - `pending`    — render done, upload not started yet
+ *   - `uploading`  — in flight; `progress` is 0..1 (or NaN unknown)
+ *   - `published`  — provider accepted; `remote_url` is shareable
+ *   - `failed`     — terminal failure; `reason` is shown verbatim
+ */
+export type RenderUploadState =
+  | { state: "pending" }
+  | { state: "uploading"; progress: number }
+  | { state: "published"; remote_url: string; remote_id: string }
+  | { state: "failed"; reason: string };
+
 export type RenderQueueEntry = {
   /** Stable id; survives reload. */
   id: string;
@@ -73,6 +89,24 @@ export type RenderQueueEntry = {
   stillAssetPath?: string;
   stillTimecodeS?: number;
   stillKind?: "cover" | "custom";
+  /**
+   * Provider keys (`"youtube"`, `"tiktok"`, `"instagram"`) the user
+   * has opted into auto-publishing to once this render lands at
+   * `done`. Empty (or undefined) → no auto-upload.
+   */
+  uploadTargets?: string[];
+  /**
+   * Per-target lifecycle, keyed by provider key. Populated when the
+   * worker registers targets with the backend and updated by the
+   * upload poller. Mirrors the backend `UploadJobEntry.upload_states`.
+   */
+  uploadStates?: Record<string, RenderUploadState>;
+  /**
+   * Convenience mirror of `uploadStates[*].remote_url` so the row can
+   * cheap-fetch link hrefs without pattern-matching. Empty until at
+   * least one target publishes.
+   */
+  publishedUrls?: Record<string, string>;
 };
 
 type State = {
@@ -91,6 +125,18 @@ type State = {
   dismiss: (id: string) => void;
   /** Clear every terminal entry. */
   clearTerminal: () => void;
+  /** Set this entry's upload targets (provider keys). */
+  setUploadTargets: (id: string, providers: string[]) => void;
+  /**
+   * Replace this entry's per-target upload state map. Called by the
+   * upload poller after each backend `poll_upload_states` round trip;
+   * mirrors the wire shape verbatim so the row can render directly.
+   */
+  setUploadStates: (
+    id: string,
+    states: Record<string, RenderUploadState>,
+    publishedUrls: Record<string, string>,
+  ) => void;
 };
 
 const PERSIST_KEY = "awidat.deliver.renderQueue.v1";
@@ -228,6 +274,40 @@ export const useRenderQueueStore = create<State>((set) => ({
     ]);
     set((state) => {
       const next = state.entries.filter((e) => !terminal.has(e.status));
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadTargets: (id, providers) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              uploadTargets: providers,
+              uploadStates: Object.fromEntries(
+                providers.map((p) => [
+                  p,
+                  { state: "pending" as const },
+                ]),
+              ),
+              publishedUrls: {},
+            }
+          : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadStates: (id, states, publishedUrls) => {
+    // Per-progress ticks would be chatty in localStorage — we still
+    // persist because terminal transitions matter for reload reconcile.
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id
+          ? { ...e, uploadStates: states, publishedUrls }
+          : e,
+      );
       persist(next);
       return { entries: next };
     });

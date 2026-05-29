@@ -13,6 +13,7 @@ import {
   type PreflightSeverity,
 } from "../ui";
 import { useMode } from "../state/mode";
+import { useUploadPrefs } from "../state/uploadPrefs";
 import {
   useRenderQueueStore,
   type RenderQueueEntry,
@@ -81,6 +82,8 @@ export function DeliverySurface({
   const [severityFilter, setSeverityFilter] = useState<"all" | PreflightSeverity>("all");
   const [confirmExportOpen, setConfirmExportOpen] = useState(false);
   const queueEntries = useRenderQueueStore((s) => s.entries);
+  const uploadAfterRender = useUploadPrefs((s) => s.enabled);
+  const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
 
   // Resolve targets so all 6 are always rendered.
   const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
@@ -131,7 +134,11 @@ export function DeliverySurface({
           resolvedTargets={resolvedTargets}
           findings={findings}
           runningByTarget={runningByTarget}
+          uploadAfterRender={uploadAfterRender}
           onToggleTarget={onToggleTarget}
+          onToggleUploadAfterRender={(key) => {
+            void toggleUploadAfterRender(key);
+          }}
           onAgentRepair={onAgentRepair}
         />
       </aside>

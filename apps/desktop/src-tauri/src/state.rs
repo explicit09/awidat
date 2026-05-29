@@ -93,6 +93,11 @@ pub struct AwidatState {
     /// frames. Wrapped in `Arc` so the command can drop the lock
     /// before doing the GPU work itself.
     pub gpu_preview_renderers: Mutex<HashMap<TransitionShader, Arc<GpuTransitionRenderer>>>,
+    /// Per-render upload fan-out (W5.A2). Mirrors the frontend's
+    /// `RenderQueueEntry.uploadTargets` so the publishing pipeline can
+    /// chain `render done → uploading → published / failed` per target
+    /// without the frontend having to drive each transition itself.
+    pub upload_queue: crate::publishing::UploadQueue,
 }
 
 /// Shared state for the localhost media streamer.

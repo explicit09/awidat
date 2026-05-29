@@ -29,6 +29,7 @@ pub mod provider;
 pub mod storage;
 pub mod tiktok;
 pub mod types;
+pub mod upload_queue;
 pub mod youtube;
 
 use std::path::PathBuf;
@@ -38,6 +39,9 @@ pub use errors::ProviderError;
 pub use provider::PublishingProvider;
 pub use types::{
     ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult,
+};
+pub use upload_queue::{
+    UploadJobEntry, UploadPrefs, UploadQueue, UploadState,
 };
 // Re-exported separately because tests are the only in-crate
 // consumer today — bundling it with the line above tripped the

@@ -76,6 +76,10 @@ import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
 import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
+import {
+  providerKeyForTarget,
+  useUploadPrefs,
+} from "./state/uploadPrefs";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
   DELIVERY_TARGETS,
@@ -117,6 +121,12 @@ function App() {
   // root so it survives Deliver-tab unmounts and continues exports
   // when the user switches back to Edit.
   useRenderQueueWorker();
+  // Pull the persisted "Upload after render?" opt-ins from the
+  // backend once on mount. Local mirror in localStorage means the UI
+  // doesn't flash an "off" state in the meantime.
+  useEffect(() => {
+    void useUploadPrefs.getState().hydrate();
+  }, []);
 
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
@@ -519,8 +529,15 @@ function App() {
         ordered.push(key);
       }
     }
+    // Per-target auto-upload opt-ins (W5.A2). The target's own key
+    // is the provider key (`youtube` → YouTube), so we just gate on
+    // whether the user toggled "Upload after render" for that target.
+    const uploadEnabled = useUploadPrefs.getState().enabled;
     const entries: RenderQueueEntry[] = ordered.map((key) => {
       const spec = DELIVERY_TARGETS[key];
+      const provider = providerKeyForTarget(key);
+      const uploadTargets =
+        provider && uploadEnabled.has(key) ? [provider] : undefined;
       return {
         id: newQueueId(spec.kind),
         targetId: key,
@@ -532,6 +549,7 @@ function App() {
         reframeHeight: spec.height,
         reframeBitrateKbps: spec.videoBitrateKbps,
         stillKind: spec.stillKind,
+        uploadTargets,
       };
     });
     useRenderQueueStore.getState().enqueue(entries);

@@ -234,6 +234,13 @@ pub fn run() {
             commands::publishing::complete_provider_oauth,
             commands::publishing::get_provider_status,
             commands::publishing::upload_via_provider,
+            commands::publishing::set_render_upload_targets,
+            commands::publishing::poll_upload_states,
+            commands::publishing::list_upload_states,
+            commands::publishing::start_uploads_for_job,
+            commands::publishing::retry_upload,
+            commands::publishing::get_default_upload_targets,
+            commands::publishing::set_default_upload_targets,
         ])
         .build(tauri::generate_context!());
 

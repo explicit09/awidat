@@ -21,6 +21,7 @@ import {
   renderQueueSelectors,
   useRenderQueueStore,
   type RenderQueueEntry,
+  type RenderUploadState,
 } from "./renderQueue";
 
 type TimelineRenderInfo = {
@@ -112,6 +113,7 @@ async function runEntry(
     store.markRunning(entry.id, info.job_id);
     lastMasterPathRef.current = info.output_path;
     await pollVideoJob(info.job_id, entry.id, info.output_path);
+    await maybeChainUploads(entry, info.job_id, info.output_path);
     return;
   }
   if (entry.kind === "video_reframe") {
@@ -145,6 +147,7 @@ async function runEntry(
     // emitted Item::Job for this job_id. Simpler integration than
     // hooking the agent-store subscription here.
     await pollReframeJobViaAgentStore(info.job_id, entry.id, info.output_path);
+    await maybeChainUploads(entry, info.job_id, info.output_path);
     return;
   }
   if (entry.kind === "captions") {
@@ -169,6 +172,99 @@ async function runEntry(
     });
     store.markDone(entry.id, info.output_path);
     return;
+  }
+}
+
+/** Per-target upload entry returned by the backend. Matches Rust's
+ *  `UploadJobEntry`. */
+type UploadJobEntryWire = {
+  job_id: string;
+  upload_targets: string[];
+  upload_states: Record<string, RenderUploadState>;
+  published_urls: Record<string, string>;
+};
+
+/**
+ * After a render lands at `done`, fan out uploads to the user's
+ * selected targets. Two-step protocol:
+ *
+ *   1. `set_render_upload_targets(jobId, providers)` — backend
+ *      registers per-target tracking.
+ *   2. `start_uploads_for_job(jobId, file, title)` — backend spawns
+ *      one tokio task per target, each driving the
+ *      `Pending → Uploading → Published / Failed` lifecycle.
+ *
+ * Then this function polls `poll_upload_states` until every target
+ * lands in a terminal state.
+ *
+ * No-op when the entry has no `uploadTargets` — the queue still
+ * publishes the render-done state via `markDone` upstream, just
+ * without the auto-upload chain.
+ */
+async function maybeChainUploads(
+  entry: RenderQueueEntry,
+  jobId: string,
+  outputPath: string,
+): Promise<void> {
+  const targets = entry.uploadTargets ?? [];
+  if (targets.length === 0) return;
+  const store = useRenderQueueStore.getState();
+  try {
+    await invoke<void>("set_render_upload_targets", {
+      jobId,
+      providers: targets,
+    });
+    await invoke<void>("start_uploads_for_job", {
+      jobId,
+      filePath: outputPath,
+      title: entry.label,
+    });
+  } catch (err) {
+    // Couldn't register / kick — surface as failed states for every
+    // target so the UI doesn't sit on "Pending" forever.
+    const message = err instanceof Error ? err.message : String(err);
+    const states: Record<string, RenderUploadState> = Object.fromEntries(
+      targets.map((p) => [p, { state: "failed", reason: message }]),
+    );
+    store.setUploadStates(entry.id, states, {});
+    return;
+  }
+  await pollUploadStates(entry.id, jobId);
+}
+
+const UPLOAD_POLL_INTERVAL_MS = 800;
+
+/** Poll backend `poll_upload_states` until every target terminal. */
+async function pollUploadStates(queueId: string, jobId: string): Promise<void> {
+  const store = useRenderQueueStore.getState();
+  // Safety bound: ~10 minutes at 800ms cadence. Long-running uploads
+  // (multi-GB to YouTube) can outrun this; that's fine — the worker
+  // returns, the UI reflects the last-seen states, and the user can
+  // hit "Retry" to re-poll on demand.
+  const maxTicks = 750;
+  for (let tick = 0; tick < maxTicks; tick++) {
+    await sleep(UPLOAD_POLL_INTERVAL_MS);
+    let snapshot: UploadJobEntryWire | null;
+    try {
+      snapshot = await invoke<UploadJobEntryWire | null>(
+        "poll_upload_states",
+        { jobId },
+      );
+    } catch {
+      // Treat IPC errors as "try again next tick" — the backend may
+      // not be ready yet, or we may be reloading.
+      continue;
+    }
+    if (!snapshot) continue;
+    store.setUploadStates(
+      queueId,
+      snapshot.upload_states,
+      snapshot.published_urls,
+    );
+    const allTerminal = Object.values(snapshot.upload_states).every(
+      (s) => s.state === "published" || s.state === "failed",
+    );
+    if (allTerminal) return;
   }
 }
 
@@ -246,4 +342,44 @@ async function pollReframeJobViaAgentStore(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry one failed upload for a render. Caller passes the queue
+ * entry's `jobId`, the provider key, and the file/title metadata
+ * (we re-stub it the same way `maybeChainUploads` does — when W5.A3
+ * lands the per-target form, it'll override here too).
+ *
+ * Kicks the backend and starts a fresh poll loop. Errors land in the
+ * target's `failed` state via the standard polling path.
+ */
+export async function retryUploadForTarget(
+  entry: RenderQueueEntry,
+  jobId: string,
+  provider: string,
+): Promise<void> {
+  const filePath = entry.outputPath;
+  if (!filePath) {
+    // Render hasn't completed — nothing to upload. Defensive: the UI
+    // should hide the Retry button until outputPath is set.
+    return;
+  }
+  try {
+    await invoke<void>("retry_upload", {
+      jobId,
+      provider,
+      filePath,
+      title: entry.label,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const store = useRenderQueueStore.getState();
+    const states: Record<string, RenderUploadState> = {
+      ...(entry.uploadStates ?? {}),
+      [provider]: { state: "failed", reason: message },
+    };
+    store.setUploadStates(entry.id, states, entry.publishedUrls ?? {});
+    return;
+  }
+  await pollUploadStates(entry.id, jobId);
 }

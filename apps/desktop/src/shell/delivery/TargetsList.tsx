@@ -15,6 +15,23 @@ import {
 } from "./types";
 
 /**
+ * Publishing-provider keys that map 1:1 to a delivery target. Used to
+ * decide whether the "Upload after render?" toggle is shown on a
+ * target card — captions / cover / custom are local exports so they
+ * don't have an auto-publish option.
+ */
+const UPLOAD_CAPABLE_TARGETS: ReadonlySet<DeliveryTargetKey> = new Set([
+  "youtube",
+  "tiktok",
+  "instagram",
+]);
+
+/** `true` if this target maps to a publishing provider. */
+export function isUploadCapableTarget(key: DeliveryTargetKey): boolean {
+  return UPLOAD_CAPABLE_TARGETS.has(key);
+}
+
+/**
  * Left-rail target picker. Each target is a selectable card; the
  * selected ones get --color-surface-selected + a small brand dot.
  * The format spec sits on a second line and also doubles as the
@@ -30,13 +47,23 @@ export function TargetsList({
   resolvedTargets,
   findings,
   runningByTarget,
+  uploadAfterRender,
   onToggleTarget,
+  onToggleUploadAfterRender,
   onAgentRepair,
 }: {
   resolvedTargets: DeliveryTarget[];
   findings: PreflightFinding[];
   runningByTarget: Partial<Record<DeliveryTargetKey, number>>;
+  /**
+   * Provider keys the user has opted into for auto-upload-after-render.
+   * Each capable target card flips between Off and On based on this set.
+   * Defaults to empty (privacy/cost safety — opt in explicitly).
+   */
+  uploadAfterRender?: ReadonlySet<DeliveryTargetKey>;
   onToggleTarget?: (key: DeliveryTargetKey) => void;
+  /** Flip the auto-upload toggle for one target. */
+  onToggleUploadAfterRender?: (key: DeliveryTargetKey) => void;
   onAgentRepair?: (finding: PreflightFinding) => void;
 }) {
   const counts = countBySeverity(findings);
@@ -66,7 +93,13 @@ export function TargetsList({
                 key={target.key}
                 target={target}
                 runningPercent={percent}
+                uploadAfterRender={uploadAfterRender?.has(target.key) ?? false}
                 onClick={() => onToggleTarget?.(target.key)}
+                onToggleUpload={
+                  isUploadCapableTarget(target.key) && onToggleUploadAfterRender
+                    ? () => onToggleUploadAfterRender(target.key)
+                    : undefined
+                }
               />
             );
           })}
@@ -106,27 +139,46 @@ export function TargetsList({
 
 /** A single target card. Selected cards take the new selected
  *  surface + a brand dot in the checkmark slot. A running render
- *  for this target replaces the dot with a StatusPill (running). */
+ *  for this target replaces the dot with a StatusPill (running).
+ *
+ *  When the target maps to a publishing provider, a small
+ *  "Upload after render?" pip appears under the spec line — flips
+ *  between an inactive ring and a brand-filled pill. Hidden for
+ *  non-publishable targets (captions / cover / custom).
+ *
+ *  The pip click is `stopPropagation`'d so toggling auto-upload
+ *  doesn't also flip the target-active state. */
 function TargetCard({
   target,
   runningPercent,
+  uploadAfterRender,
   onClick,
+  onToggleUpload,
 }: {
   target: DeliveryTarget;
   runningPercent?: number;
+  uploadAfterRender: boolean;
   onClick: () => void;
+  onToggleUpload?: () => void;
 }) {
   const meta = TARGET_META[target.key];
   const Icon = meta.icon;
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       aria-pressed={target.active}
       title={target.spec ?? meta.spec}
       className={cn(
         "group flex items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-2 text-left",
-        "border transition-colors",
+        "border transition-colors cursor-pointer",
         target.active
           ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)]"
           : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-text-muted)] hover:bg-[var(--color-surface-card-hover)]",
@@ -163,6 +215,41 @@ function TargetCard({
         <p className="truncate font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
           {target.spec ?? meta.spec}
         </p>
+        {onToggleUpload ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              // Don't propagate up to the card's onClick — that flips
+              // the target-active state, which is independent of the
+              // auto-upload opt-in.
+              e.stopPropagation();
+              onToggleUpload();
+            }}
+            aria-pressed={uploadAfterRender}
+            title={
+              uploadAfterRender
+                ? "Auto-upload after render is ON"
+                : "Auto-upload after render is OFF"
+            }
+            className={cn(
+              "mt-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[var(--text-caption)] transition-colors",
+              uploadAfterRender
+                ? "border-[var(--color-brand)] bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+                : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-text-muted)]",
+            )}
+          >
+            <span
+              aria-hidden
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                uploadAfterRender
+                  ? "bg-[var(--color-brand)]"
+                  : "bg-[var(--color-text-muted)]",
+              )}
+            />
+            Upload {uploadAfterRender ? "on" : "off"}
+          </button>
+        ) : null}
       </div>
       {runningPercent !== undefined ? (
         <StatusPill
@@ -182,6 +269,6 @@ function TargetCard({
           aria-hidden
         />
       )}
-    </button>
+    </div>
   );
 }

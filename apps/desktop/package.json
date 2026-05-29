@@ -11,6 +11,7 @@
     "test:mode-store": "node --experimental-strip-types tests/mode-store.test.ts",
     "test:center-mode": "node --experimental-strip-types tests/center-mode.test.ts",
     "test:starter-prompts": "node --experimental-strip-types tests/starter-prompts.test.ts",
+    "test:render-queue-upload": "node --experimental-strip-types tests/render-queue-upload.test.ts",
     "test:pending-proposals": "node --experimental-strip-types tests/pending-proposals.test.ts",
     "test:timeline-proposal-focus": "node --experimental-strip-types tests/timeline-proposal-focus.test.ts",
     "test:pending-brief-proposals": "node --experimental-strip-types tests/pending-brief-proposals.test.ts",

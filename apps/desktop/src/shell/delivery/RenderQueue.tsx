@@ -7,7 +7,11 @@ import {
 import {
   useRenderQueueStore,
   type RenderQueueEntry,
+  type RenderUploadState,
 } from "../../app/renderQueue";
+import { retryUploadForTarget } from "../../app/useRenderQueueWorker";
+import { TARGET_META } from "./targetMeta";
+import type { DeliveryTargetKey } from "./types";
 
 /**
  * Right column — live render queue.
@@ -193,7 +197,129 @@ function RenderQueueRow({
           {entry.error}
         </p>
       ) : null}
+      <UploadTargetsBlock entry={entry} />
     </div>
+  );
+}
+
+/**
+ * Per-target upload state block. Renders one row per registered
+ * upload target with its current state — a small arrow + provider
+ * label + status copy.
+ *
+ *   → Uploading to YouTube · 45%
+ *   → Published on YouTube  ↗   (link)
+ *   → YouTube upload failed: not_configured    [Retry]
+ *
+ * Hides entirely when there are no upload targets so existing
+ * captions / cover / custom rows aren't visually padded.
+ */
+function UploadTargetsBlock({
+  entry,
+}: {
+  entry: RenderQueueEntry;
+}) {
+  const targets = entry.uploadTargets ?? [];
+  if (targets.length === 0) return null;
+  return (
+    <ul className="mt-2 space-y-1 text-[var(--text-caption)]">
+      {targets.map((provider) => {
+        const state: RenderUploadState =
+          entry.uploadStates?.[provider] ?? { state: "pending" };
+        return (
+          <UploadTargetRow
+            key={provider}
+            entry={entry}
+            provider={provider}
+            state={state}
+          />
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Look up a provider key's display name. Falls back to the raw key
+ *  for unknown providers (defense — new providers may land before the
+ *  meta table is updated). */
+function providerLabel(provider: string): string {
+  const meta = TARGET_META[provider as DeliveryTargetKey];
+  return meta?.label ?? provider;
+}
+
+function UploadTargetRow({
+  entry,
+  provider,
+  state,
+}: {
+  entry: RenderQueueEntry;
+  provider: string;
+  state: RenderUploadState;
+}) {
+  const label = providerLabel(provider);
+  if (state.state === "pending") {
+    return (
+      <li className="flex items-center gap-1 text-[var(--color-text-muted)]">
+        <span aria-hidden>→</span>
+        <span>Queued for {label}</span>
+      </li>
+    );
+  }
+  if (state.state === "uploading") {
+    const pct = Math.round(
+      Math.max(0, Math.min(1, Number.isFinite(state.progress) ? state.progress : 0)) *
+        100,
+    );
+    return (
+      <li className="flex items-center gap-1 text-[var(--color-text-secondary)]">
+        <span aria-hidden>→</span>
+        <span>
+          Uploading to {label} · {pct}%
+        </span>
+      </li>
+    );
+  }
+  if (state.state === "published") {
+    return (
+      <li className="flex items-center gap-1 text-[var(--color-success)]">
+        <span aria-hidden>→</span>
+        <a
+          href={state.remote_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:underline"
+          title={state.remote_url}
+        >
+          Published on {label} ↗
+        </a>
+      </li>
+    );
+  }
+  // Failed — show the reason + a retry button. Retry only enabled
+  // when we have a backend job id and an output file to re-upload.
+  const canRetry = Boolean(entry.jobId && entry.outputPath);
+  return (
+    <li className="flex items-start gap-1 text-[var(--color-job-failed-text)]">
+      <span aria-hidden>→</span>
+      <div className="min-w-0 flex-1">
+        <span className="truncate" title={state.reason}>
+          {label} upload failed: {state.reason}
+        </span>
+        {canRetry ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (entry.jobId) {
+                void retryUploadForTarget(entry, entry.jobId, provider);
+              }
+            }}
+            className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          >
+            Retry
+          </button>
+        ) : null}
+      </div>
+    </li>
   );
 }
 

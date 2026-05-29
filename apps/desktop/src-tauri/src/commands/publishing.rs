@@ -19,10 +19,17 @@
 
 use std::sync::OnceLock;
 
+use tauri::State;
+
 use crate::publishing::{
+    upload_queue::{
+        self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
+        UploadJobEntry, UploadPrefs,
+    },
     ConnectionStatus, OAuthChallenge, ProviderError, ProviderInfo, ProviderRegistry,
     UploadParams, UploadResult,
 };
+use crate::state::AwidatState;
 
 /// Process-wide registry. Resolved on first command invocation so
 /// the path-resolution error (if `dirs::config_dir()` ever returns
@@ -115,6 +122,144 @@ pub async fn upload_via_provider(
     let reg = registry()?;
     let provider = provider_for(reg, &key)?;
     provider.upload(params).await.map_err(stringify_error)
+}
+
+// -------------------------------------------------------------------
+// W5.A2 — per-render upload-queue commands.
+// -------------------------------------------------------------------
+
+/// Register the list of provider keys to publish to for one render
+/// job. Idempotent — re-registering replaces the targets list and
+/// resets per-target state to `Pending`. Empty `providers` clears the
+/// fan-out (no auto-upload after render).
+#[tauri::command]
+pub async fn set_render_upload_targets(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    providers: Vec<String>,
+) -> Result<(), String> {
+    state.upload_queue.register(job_id, providers).await;
+    Ok(())
+}
+
+/// Snapshot of one render's per-target upload state. Returns `None`
+/// (as `null`) when no targets were ever registered for that job —
+/// the frontend treats that as "no auto-upload requested".
+#[tauri::command]
+pub async fn poll_upload_states(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<Option<UploadJobEntry>, String> {
+    Ok(state.upload_queue.snapshot(&job_id).await)
+}
+
+/// Every tracked render's upload state. Used by the frontend on app
+/// boot to reconcile in-flight uploads after a reload.
+#[tauri::command]
+pub async fn list_upload_states(
+    state: State<'_, AwidatState>,
+) -> Result<Vec<UploadJobEntry>, String> {
+    Ok(state.upload_queue.snapshots().await)
+}
+
+/// Kick off uploads for every target registered against `job_id`.
+/// Called by the render-queue worker once a render lands at `done`.
+///
+/// Spawns one tokio task per target so providers fan out
+/// independently — a slow YouTube push can't block a fast TikTok push.
+///
+/// Stub metadata (title from render label, no description / tags,
+/// `private` visibility) is the contract for W5.A2; W5.A3 replaces it
+/// with a per-target form.
+#[tauri::command]
+pub async fn start_uploads_for_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    file_path: String,
+    title: String,
+) -> Result<(), String> {
+    let Some(entry) = state.upload_queue.snapshot(&job_id).await else {
+        // No targets registered — silent no-op so callers don't have to
+        // gate on the queue's contents.
+        return Ok(());
+    };
+    let reg = registry()?.clone();
+    let queue = state.upload_queue.clone();
+    let file_path_buf = std::path::PathBuf::from(&file_path);
+    for provider_key in entry.upload_targets {
+        // Skip already-terminal targets — re-fires would clobber
+        // Published state. Retry path uses `retry_upload` instead.
+        let snap = state.upload_queue.snapshot(&job_id).await;
+        if let Some(snap) = snap {
+            if let Some(st) = snap.upload_states.get(&provider_key) {
+                if st.is_terminal() {
+                    continue;
+                }
+            }
+        }
+        let params = upload_queue::default_upload_params(&file_path_buf, &title);
+        let reg_clone = reg.clone();
+        let queue_clone = queue.clone();
+        let job_id_clone = job_id.clone();
+        let provider_clone = provider_key.clone();
+        tokio::spawn(async move {
+            run_upload(
+                &queue_clone,
+                &reg_clone,
+                &job_id_clone,
+                &provider_clone,
+                params,
+            )
+            .await;
+        });
+    }
+    Ok(())
+}
+
+/// Retry a single failed (or successful — caller's choice) upload.
+/// Resets the target to `Pending` and spawns a fresh upload task.
+/// Returns `Err` if the job or provider isn't tracked.
+#[tauri::command]
+pub async fn retry_upload(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    provider: String,
+    file_path: String,
+    title: String,
+) -> Result<(), String> {
+    if !state.upload_queue.reset_to_pending(&job_id, &provider).await {
+        return Err(format!(
+            "no upload target {provider:?} registered for job {job_id:?}",
+        ));
+    }
+    let reg = registry()?.clone();
+    let queue = state.upload_queue.clone();
+    let file_path_buf = std::path::PathBuf::from(&file_path);
+    let params = upload_queue::default_upload_params(&file_path_buf, &title);
+    tokio::spawn(async move {
+        run_upload(&queue, &reg, &job_id, &provider, params).await;
+    });
+    Ok(())
+}
+
+/// Read the user's persisted default upload targets. Empty by default
+/// — opt-in only.
+#[tauri::command]
+pub async fn get_default_upload_targets() -> Result<UploadPrefs, String> {
+    let path = default_prefs_path().map_err(stringify_error)?;
+    load_prefs_from(&path).await.map_err(stringify_error)
+}
+
+/// Persist the user's default upload targets. Writes through the
+/// atomic tempfile-rename path so a crash mid-write leaves either the
+/// old prefs or the new ones — never a half-written file.
+#[tauri::command]
+pub async fn set_default_upload_targets(providers: Vec<String>) -> Result<(), String> {
+    let path = default_prefs_path().map_err(stringify_error)?;
+    let prefs = UploadPrefs {
+        default_targets: providers,
+    };
+    save_prefs_to(&path, &prefs).await.map_err(stringify_error)
 }
 
 #[cfg(test)]
