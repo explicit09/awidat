@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 
 use super::errors::ProviderError;
+use super::oauth::ClientCredentialsState;
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
 
 /// One publishing platform.
@@ -56,4 +57,23 @@ pub trait PublishingProvider: Send + Sync {
     /// Defaults to a "not connected" snapshot when storage is missing
     /// or unreadable so callers never need to handle errors here.
     async fn status(&self) -> ConnectionStatus;
+
+    /// W5.A5 — clear the OAuth-issued tokens for this provider while
+    /// preserving the user's BYO `client_credentials`. Idempotent.
+    async fn disconnect(&self) -> Result<(), ProviderError>;
+
+    /// W5.A5 — persist BYO OAuth-app credentials for this provider.
+    /// Used by Settings → Publishing → "Bring your own credentials" so
+    /// the user can plug in their own dev-console-registered app and
+    /// upgrade the placeholder `client_id` substitution to a real one.
+    async fn set_client_credentials(
+        &self,
+        client_id: String,
+        client_secret: String,
+    ) -> Result<(), ProviderError>;
+
+    /// W5.A5 — read the BYO credentials *presence* (booleans only — the
+    /// actual `client_secret` never leaves the backend). Used to render
+    /// the "✓ Configured" pip next to each provider's BYO row.
+    async fn client_credentials_state(&self) -> ClientCredentialsState;
 }

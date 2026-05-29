@@ -18,8 +18,9 @@ use async_trait::async_trait;
 
 use super::errors::ProviderError;
 use super::oauth::{
-    build_authorize, fresh_state, has_credentials, load_status, stub_complete_oauth,
-    stub_upload, CLIENT_ID_PLACEHOLDER,
+    build_authorize, client_id_for, disconnect_provider, fresh_state,
+    get_client_credentials_state, has_credentials, load_status, set_client_credentials,
+    stub_complete_oauth, stub_upload, ClientCredentialsState,
 };
 use super::provider::PublishingProvider;
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
@@ -71,13 +72,15 @@ impl PublishingProvider for TiktokProvider {
     }
 
     async fn begin_oauth(&self) -> Result<OAuthChallenge, ProviderError> {
-        // TODO(W5.A3): replace CLIENT_ID_PLACEHOLDER with the
-        // `client_key` stored in publishing.json once the user has
-        // registered + been approved for the Content Posting API.
+        // W5.A5: substitute the user's BYO client_key when set. TikTok
+        // calls the field `client_key` rather than `client_id` but
+        // semantically it's the same — we store under the canonical
+        // `client_id` name and rewrite at URL-build time.
+        let client_key = client_id_for(&self.store_path, KEY).await;
         Ok(build_authorize(
             AUTHORIZE_URL,
             &[
-                ("client_key", CLIENT_ID_PLACEHOLDER),
+                ("client_key", client_key.as_str()),
                 ("response_type", "code"),
                 ("scope", SCOPES),
             ],
@@ -113,5 +116,21 @@ impl PublishingProvider for TiktokProvider {
 
     async fn status(&self) -> ConnectionStatus {
         load_status(&self.store_path, KEY).await
+    }
+
+    async fn disconnect(&self) -> Result<(), ProviderError> {
+        disconnect_provider(&self.store_path, KEY).await
+    }
+
+    async fn set_client_credentials(
+        &self,
+        client_id: String,
+        client_secret: String,
+    ) -> Result<(), ProviderError> {
+        set_client_credentials(&self.store_path, KEY, client_id, client_secret).await
+    }
+
+    async fn client_credentials_state(&self) -> ClientCredentialsState {
+        get_client_credentials_state(&self.store_path, KEY).await
     }
 }

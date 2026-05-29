@@ -14,6 +14,7 @@
     "test:render-queue-upload": "node --experimental-strip-types tests/render-queue-upload.test.ts",
     "test:upload-metadata": "node --experimental-strip-types tests/upload-metadata.test.ts",
     "test:ai-disclosure": "node --experimental-strip-types tests/ai-disclosure.test.ts",
+    "test:publishing-settings": "node --experimental-strip-types tests/publishing-settings.test.ts",
     "test:pending-proposals": "node --experimental-strip-types tests/pending-proposals.test.ts",
     "test:timeline-proposal-focus": "node --experimental-strip-types tests/timeline-proposal-focus.test.ts",
     "test:pending-brief-proposals": "node --experimental-strip-types tests/pending-brief-proposals.test.ts",

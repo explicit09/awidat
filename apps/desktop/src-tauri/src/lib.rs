@@ -244,6 +244,10 @@ pub fn run() {
             commands::publishing::set_default_upload_targets,
             commands::publishing::compute_ai_disclosure,
             commands::publishing::get_ai_disclosure_for_job,
+            commands::publishing::disconnect_provider,
+            commands::publishing::set_provider_client_credentials,
+            commands::publishing::get_provider_client_credentials,
+            commands::publishing::get_publishing_credentials_path,
         ])
         .build(tauri::generate_context!());
 

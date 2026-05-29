@@ -27,8 +27,8 @@ use crate::publishing::{
         self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
         UploadJobEntry, UploadMetadata, UploadPrefs,
     },
-    AiDisclosure, ConnectionStatus, OAuthChallenge, ProviderError, ProviderInfo,
-    ProviderRegistry, UploadParams, UploadResult,
+    AiDisclosure, ClientCredentialsState, ConnectionStatus, OAuthChallenge,
+    ProviderError, ProviderInfo, ProviderRegistry, UploadParams, UploadResult,
 };
 use crate::state::AwidatState;
 
@@ -383,6 +383,65 @@ pub async fn compute_ai_disclosure(
         .set_ai_disclosure(job_id, parked)
         .await;
     Ok(disclosure)
+}
+
+// -------------------------------------------------------------------
+// W5.A5 — Settings → Publishing: disconnect + BYO client credentials.
+// -------------------------------------------------------------------
+
+/// Clear OAuth-issued tokens for one provider. Preserves the user's
+/// BYO `client_credentials` so the next Connect step doesn't require
+/// re-pasting them.
+#[tauri::command]
+pub async fn disconnect_provider(key: String) -> Result<(), String> {
+    let reg = registry()?;
+    let provider = provider_for(reg, &key)?;
+    provider.disconnect().await.map_err(stringify_error)
+}
+
+/// Persist BYO OAuth-app credentials for one provider.
+///
+/// ⚠ The `client_secret` is written to the same plain-JSON file as
+/// access tokens (`<config_dir>/awidat/publishing.json`). Keychain
+/// integration is deferred to Wave 6 — the Settings UI calls this out.
+///
+/// Empty strings for either field are rejected: BYO is all-or-nothing,
+/// and a partial state would silently fall back to the placeholder
+/// `client_id` mid-OAuth (the worst failure mode — the user thinks
+/// they're using their own app and isn't).
+#[tauri::command]
+pub async fn set_provider_client_credentials(
+    key: String,
+    client_id: String,
+    client_secret: String,
+) -> Result<(), String> {
+    let reg = registry()?;
+    let provider = provider_for(reg, &key)?;
+    provider
+        .set_client_credentials(client_id, client_secret)
+        .await
+        .map_err(stringify_error)
+}
+
+/// Read the *presence* of BYO credentials — booleans only, never the
+/// actual `client_secret`. Used to render the "✓ Configured" pip in
+/// Settings without round-tripping the secret through IPC.
+#[tauri::command]
+pub async fn get_provider_client_credentials(
+    key: String,
+) -> Result<ClientCredentialsState, String> {
+    let reg = registry()?;
+    let provider = provider_for(reg, &key)?;
+    Ok(provider.client_credentials_state().await)
+}
+
+/// Resolve the absolute path to `publishing.json` for the Settings
+/// "Open folder" affordance + the BYO-credentials warning copy.
+#[tauri::command]
+pub async fn get_publishing_credentials_path() -> Result<String, String> {
+    crate::publishing::storage::default_store_path()
+        .map(|p| p.display().to_string())
+        .map_err(stringify_error)
 }
 
 /// Read the parked AI disclosure for one render job. Used by the

@@ -24,6 +24,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
+import { PublishingSettings } from "./PublishingSettings";
 import { useProjectStore } from "./state";
 import { useAgentsMdEditor } from "../state/agentsMdEditor";
 import { useIntroState } from "../state/introState";
@@ -177,6 +178,14 @@ export function SettingsModal() {
                 Edit AGENTS.md
               </Button>
             </Row>
+          </Section>
+
+          <Section title="Publishing">
+            {/* W5.A5 — provider connection rows + AI-disclosure toggle +
+                default-upload-targets pickers + BYO-credentials inputs.
+                Isolated in PublishingSettings.tsx so this modal stays
+                readable. */}
+            <PublishingSettings />
           </Section>
 
           <Section title="Agent">

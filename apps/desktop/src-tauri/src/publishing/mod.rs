@@ -48,6 +48,7 @@ pub use ai_disclosure::{
     cut_contains_generated_media, disclosure_for_timeline, GeneratedMediaCredit,
 };
 pub use errors::ProviderError;
+pub use oauth::ClientCredentialsState;
 pub use provider::PublishingProvider;
 pub use types::{
     ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult,

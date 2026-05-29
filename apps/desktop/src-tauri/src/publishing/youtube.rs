@@ -20,8 +20,9 @@ use async_trait::async_trait;
 
 use super::errors::ProviderError;
 use super::oauth::{
-    build_authorize, fresh_state, has_credentials, load_status, stub_complete_oauth,
-    stub_upload, CLIENT_ID_PLACEHOLDER,
+    build_authorize, client_id_for, disconnect_provider, fresh_state,
+    get_client_credentials_state, has_credentials, load_status, set_client_credentials,
+    stub_complete_oauth, stub_upload, ClientCredentialsState,
 };
 use super::provider::PublishingProvider;
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
@@ -81,13 +82,15 @@ impl PublishingProvider for YoutubeProvider {
     }
 
     async fn begin_oauth(&self) -> Result<OAuthChallenge, ProviderError> {
-        // TODO(W5.A2): replace CLIENT_ID_PLACEHOLDER with the value
-        // read from publishing.json once the user has registered a
-        // Cloud Console project.
+        // W5.A5: substitute the user's BYO client_id when set, fall
+        // back to the placeholder so the URL still looks correct in
+        // dev mode (the platform will reject the placeholder — that's
+        // the expected error path until the user pastes real creds).
+        let client_id = client_id_for(&self.store_path, KEY).await;
         Ok(build_authorize(
             AUTHORIZE_URL,
             &[
-                ("client_id", CLIENT_ID_PLACEHOLDER),
+                ("client_id", client_id.as_str()),
                 ("response_type", "code"),
                 ("scope", SCOPES),
                 ("access_type", "offline"),
@@ -123,5 +126,21 @@ impl PublishingProvider for YoutubeProvider {
 
     async fn status(&self) -> ConnectionStatus {
         load_status(&self.store_path, KEY).await
+    }
+
+    async fn disconnect(&self) -> Result<(), ProviderError> {
+        disconnect_provider(&self.store_path, KEY).await
+    }
+
+    async fn set_client_credentials(
+        &self,
+        client_id: String,
+        client_secret: String,
+    ) -> Result<(), ProviderError> {
+        set_client_credentials(&self.store_path, KEY, client_id, client_secret).await
+    }
+
+    async fn client_credentials_state(&self) -> ClientCredentialsState {
+        get_client_credentials_state(&self.store_path, KEY).await
     }
 }

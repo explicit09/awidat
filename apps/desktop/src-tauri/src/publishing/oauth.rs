@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::ai_disclosure::provider_log_line;
 use super::errors::ProviderError;
-use super::storage::{self, Credentials};
+use super::storage::{self};
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
 
 /// Placeholder marker the provider stubs embed in their authorize
@@ -108,12 +108,15 @@ pub fn build_authorize(
 // global) keeps tests sandboxable without env-var racing — each test
 // constructs its provider with a tempdir-backed path.
 
-/// Cheap check used by `is_configured` — has a non-null slot in the store?
+/// Cheap check used by `is_configured` — has a non-null slot with a
+/// usable access token in the store? A slot that only carries BYO
+/// client_credentials counts as "not configured" (the OAuth flow
+/// hasn't completed yet).
 pub async fn has_credentials(store_path: &std::path::Path, key: &str) -> bool {
     storage::load_from(store_path)
         .await
         .ok()
-        .and_then(|s| s.get(key).cloned())
+        .and_then(|s| s.get_authenticated(key).cloned())
         .is_some()
 }
 
@@ -124,7 +127,7 @@ pub async fn load_status(store_path: &std::path::Path, key: &str) -> ConnectionS
     let creds = storage::load_from(store_path)
         .await
         .ok()
-        .and_then(|s| s.get(key).cloned());
+        .and_then(|s| s.get_authenticated(key).cloned());
     match creds {
         Some(c) => ConnectionStatus {
             connected: true,
@@ -133,6 +136,100 @@ pub async fn load_status(store_path: &std::path::Path, key: &str) -> ConnectionS
         },
         None => ConnectionStatus::default(),
     }
+}
+
+/// Read the user's BYO `client_id` for a provider, falling back to
+/// the placeholder when unset. Centralised so per-provider authorize
+/// URL builders all pick up the same substitution rule.
+pub async fn client_id_for(store_path: &std::path::Path, key: &str) -> String {
+    storage::load_from(store_path)
+        .await
+        .ok()
+        .and_then(|s| s.get(key).cloned())
+        .and_then(|c| c.client_credentials)
+        .map(|cc| cc.client_id)
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| CLIENT_ID_PLACEHOLDER.to_string())
+}
+
+/// Persist a `(client_id, client_secret)` pair for one provider.
+/// Idempotent — re-calling replaces. Preserves the provider's tokens
+/// (so a user fixing a typo in `client_secret` doesn't get logged out).
+///
+/// Empty strings for either field are rejected — the BYO contract is
+/// all-or-nothing (a half-set state would silently fall back to the
+/// placeholder `client_id` mid-OAuth, which is the worst failure mode).
+pub async fn set_client_credentials(
+    store_path: &std::path::Path,
+    key: &str,
+    client_id: String,
+    client_secret: String,
+) -> Result<(), super::errors::ProviderError> {
+    if client_id.trim().is_empty() || client_secret.trim().is_empty() {
+        return Err(super::errors::ProviderError::OAuthFailed(
+            "client_id and client_secret must both be non-empty".into(),
+        ));
+    }
+    let mut store = storage::load_from(store_path).await?;
+    let slot = store.get_or_insert(key);
+    slot.client_credentials = Some(super::storage::ClientCredentials {
+        client_id,
+        client_secret,
+    });
+    storage::save_to(store_path, &store).await
+}
+
+/// Read the *presence* of BYO client credentials — never returns the
+/// secret itself, only `(client_id_set, client_secret_set)` flags. The
+/// frontend uses this to show "✓ Configured" without ever round-tripping
+/// the secret through IPC.
+pub async fn get_client_credentials_state(
+    store_path: &std::path::Path,
+    key: &str,
+) -> ClientCredentialsState {
+    let cc = storage::load_from(store_path)
+        .await
+        .ok()
+        .and_then(|s| s.get(key).cloned())
+        .and_then(|c| c.client_credentials);
+    match cc {
+        Some(cc) => ClientCredentialsState {
+            client_id_set: !cc.client_id.is_empty(),
+            client_secret_set: !cc.client_secret.is_empty(),
+        },
+        None => ClientCredentialsState::default(),
+    }
+}
+
+/// Wire shape for `get_client_credentials_state`. Booleans only — the
+/// actual `client_secret` value never leaves the backend.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ClientCredentialsState {
+    pub client_id_set: bool,
+    pub client_secret_set: bool,
+}
+
+/// Shared `disconnect` — clears the OAuth-issued tokens but preserves
+/// the user's BYO client credentials so they don't have to re-paste.
+/// Returns `Ok(())` even when there were no tokens to clear (idempotent).
+pub async fn disconnect_provider(
+    store_path: &std::path::Path,
+    key: &str,
+) -> Result<(), super::errors::ProviderError> {
+    let mut store = storage::load_from(store_path).await?;
+    // If client_credentials are present, keep the slot around with
+    // tokens cleared; otherwise drop the slot entirely.
+    let keep_slot = store
+        .get(key)
+        .and_then(|c| c.client_credentials.clone())
+        .is_some();
+    if keep_slot {
+        let slot = store.get_or_insert(key);
+        slot.clear_tokens();
+    } else {
+        store.set(key, None);
+    }
+    storage::save_to(store_path, &store).await
 }
 
 /// Shared stub for `complete_oauth` — accepts any non-empty `code`
@@ -150,15 +247,14 @@ pub async fn stub_complete_oauth(
         return Err(ProviderError::OAuthFailed("empty authorization code".into()));
     }
     let mut store = storage::load_from(store_path).await?;
-    store.set(
-        key,
-        Some(Credentials {
-            access_token: format!("stub-token-from-code-{code}"),
-            refresh_token: None,
-            account_name: None,
-            expires_at: None,
-        }),
-    );
+    // Preserve BYO client_credentials on re-authentication. The slot
+    // already holds them if the user pasted them via Settings → BYO,
+    // so we mutate-in-place rather than overwriting.
+    let slot = store.get_or_insert(key);
+    slot.access_token = format!("stub-token-from-code-{code}");
+    slot.refresh_token = None;
+    slot.account_name = None;
+    slot.expires_at = None;
     storage::save_to(store_path, &store).await?;
     Ok(())
 }
@@ -231,6 +327,109 @@ mod tests {
         assert_eq!(percent_encode("?"), "%3F");
         assert_eq!(percent_encode("&"), "%26");
         assert_eq!(percent_encode(":"), "%3A");
+    }
+
+    #[tokio::test]
+    async fn client_id_for_unset_returns_placeholder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        let id = client_id_for(&path, "youtube").await;
+        assert_eq!(id, CLIENT_ID_PLACEHOLDER);
+    }
+
+    #[tokio::test]
+    async fn set_client_credentials_then_client_id_for_returns_real_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        set_client_credentials(
+            &path,
+            "youtube",
+            "real-client-id.apps.googleusercontent.com".into(),
+            "secret-shh".into(),
+        )
+        .await
+        .unwrap();
+        let id = client_id_for(&path, "youtube").await;
+        assert_eq!(id, "real-client-id.apps.googleusercontent.com");
+        // State helper reports presence — never the secret itself.
+        let state = get_client_credentials_state(&path, "youtube").await;
+        assert!(state.client_id_set);
+        assert!(state.client_secret_set);
+    }
+
+    #[tokio::test]
+    async fn set_client_credentials_rejects_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        let err = set_client_credentials(&path, "youtube", "".into(), "x".into())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "oauth_failed");
+    }
+
+    #[tokio::test]
+    async fn disconnect_preserves_client_credentials() {
+        // The named-test from the brief: disconnect clears the access
+        // token but leaves BYO credentials intact so the user doesn't
+        // have to re-paste them.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        // 1. User pastes BYO credentials.
+        set_client_credentials(&path, "youtube", "cid".into(), "csec".into())
+            .await
+            .unwrap();
+        // 2. User completes OAuth → token gets written.
+        stub_complete_oauth(&path, "youtube", "auth-code-abc".into())
+            .await
+            .unwrap();
+        assert!(has_credentials(&path, "youtube").await);
+        // 3. User disconnects.
+        disconnect_provider(&path, "youtube").await.unwrap();
+        // Token gone — provider reads as not configured.
+        assert!(!has_credentials(&path, "youtube").await);
+        // BYO credentials survive.
+        let state = get_client_credentials_state(&path, "youtube").await;
+        assert!(
+            state.client_id_set && state.client_secret_set,
+            "BYO creds must outlive disconnect",
+        );
+        // And the next begin_oauth still picks up the real client_id.
+        let id = client_id_for(&path, "youtube").await;
+        assert_eq!(id, "cid");
+    }
+
+    #[tokio::test]
+    async fn disconnect_without_byo_drops_slot() {
+        // No BYO creds → disconnect collapses the slot entirely so
+        // we don't accumulate empty stubs.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        stub_complete_oauth(&path, "youtube", "code".into())
+            .await
+            .unwrap();
+        assert!(has_credentials(&path, "youtube").await);
+        disconnect_provider(&path, "youtube").await.unwrap();
+        assert!(!has_credentials(&path, "youtube").await);
+        // Slot dropped entirely.
+        let store = storage::load_from(&path).await.unwrap();
+        assert!(store.get("youtube").is_none());
+    }
+
+    #[tokio::test]
+    async fn stub_complete_oauth_preserves_pre_existing_byo() {
+        // Order: paste BYO → complete OAuth. The OAuth step must not
+        // wipe the client_credentials slot.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("publishing.json");
+        set_client_credentials(&path, "youtube", "cid".into(), "csec".into())
+            .await
+            .unwrap();
+        stub_complete_oauth(&path, "youtube", "code".into())
+            .await
+            .unwrap();
+        let state = get_client_credentials_state(&path, "youtube").await;
+        assert!(state.client_id_set);
+        assert!(state.client_secret_set);
     }
 
     #[test]
