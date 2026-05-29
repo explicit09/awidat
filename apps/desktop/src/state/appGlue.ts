@@ -22,6 +22,7 @@ import { useMediaStore } from "../media/store";
 import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
+import { usePendingProposals } from "../timeline/pendingProposals";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
 import {
@@ -56,6 +57,8 @@ export function useAppGlue() {
   const clearProposal = useProposalStore((s) => s.clear);
   const ingestProposal = useProposalStore((s) => s.ingest);
   const activeProposal = useProposalStore((s) => s.active);
+  const ingestPendingProposal = usePendingProposals((s) => s.ingest);
+  const clearPendingProposals = usePendingProposals((s) => s.clear);
 
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshMedia = useMediaStore((s) => s.refresh);
@@ -95,6 +98,7 @@ export function useAppGlue() {
       const item = event.payload.item;
       if (isProposedEditItem(item)) {
         ingestProposal(item);
+        ingestPendingProposal(item);
       }
       if (item.kind === "editorial_note") {
         void ingestNote(item);
@@ -121,6 +125,7 @@ export function useAppGlue() {
     setRunning,
     setTurnError,
     ingestProposal,
+    ingestPendingProposal,
     ingestNote,
   ]);
 
@@ -257,6 +262,7 @@ export function useAppGlue() {
   useEffect(() => {
     clearAgent();
     clearProposal();
+    clearPendingProposals();
     clearMediaStreamUrlCache();
     clearMediaSelection(null);
     clearSelection();
@@ -274,6 +280,7 @@ export function useAppGlue() {
     current,
     clearAgent,
     clearProposal,
+    clearPendingProposals,
     clearMediaSelection,
     clearSelection,
     clearNotes,
