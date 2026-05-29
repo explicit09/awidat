@@ -241,6 +241,30 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   assert.equal(flashes[0].endS, 16);
 }
 
+// caption medium → source + Transcript sub-tab forced + transcript flash.
+// Distinct from title (which leaves the sub-tab alone) because captions
+// live on the transcript track and the reviewer must see the text.
+{
+  const current = makeSnapshot([[{ index: 0, start: 20, duration: 3 }]]);
+  const rec = installRecorder(current);
+  // Pre-set sub-tab to video so we can prove the controller forced it
+  // back to transcript for the caption medium.
+  useSourceFocus.getState().setSubTab("video");
+  useFocusController.getState().focusProposal({
+    proposalId: "p5c",
+    medium: "caption",
+    diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
+    proposedSnapshot: null,
+  });
+  assert.deepEqual(rec.centerMode, ["source"]);
+  assert.equal(useSourceFocus.getState().subTab, "transcript");
+  const flashes = useTranscriptFlashes.getState().flashes;
+  assert.equal(flashes.length, 1);
+  assert.equal(flashes[0].key, "p5c");
+  assert.equal(flashes[0].startS, 20);
+  assert.equal(flashes[0].endS, 23);
+}
+
 // missing diff_hints still switches the tab (no flash, no seek)
 {
   installRecorder(null);

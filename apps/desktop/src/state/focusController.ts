@@ -382,6 +382,22 @@ export const useFocusController = create<FocusControllerState>((_set, get) => ({
         }
         return;
       }
+      case "caption": {
+        // Captions live on the transcript track — always force the
+        // Transcript sub-tab so the reviewer sees the text the agent
+        // is rewriting. Transcript-first projects already default
+        // there; setting it explicitly makes the contract uniform.
+        adapter.setCenterMode("source");
+        useSourceFocus.getState().setSubTab("transcript");
+        if (span) {
+          useTranscriptFlashes.getState().add({
+            key: proposalId,
+            startS: span.startS,
+            endS: span.endS,
+          });
+        }
+        return;
+      }
     }
   },
 }));

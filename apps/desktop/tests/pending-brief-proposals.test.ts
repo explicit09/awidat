@@ -230,6 +230,50 @@ function ingestPending(fake: unknown): void {
   assert.equal(medium, "title");
 }
 
+// 3e2. insert_caption → caption (Wave 4 W4.8: captions are now their
+//      own medium, distinct from titles, so the Brief surfaces a mint
+//      caption chip and the focus controller routes to Transcript.)
+{
+  const medium = mediumFromApprovalRequest({
+    kind: "approval_request",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    id: "x" as any,
+    phase: "started",
+    tool_name: "insert_caption",
+    args_summary: "",
+    capability_metadata: null,
+  });
+  assert.equal(medium, "caption");
+}
+
+// 3e3. set_caption → caption
+{
+  const medium = mediumFromApprovalRequest({
+    kind: "approval_request",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    id: "x" as any,
+    phase: "started",
+    tool_name: "set_caption",
+    args_summary: "",
+    capability_metadata: null,
+  });
+  assert.equal(medium, "caption");
+}
+
+// 3e4. caption_* prefix → caption (future caption tools auto-route).
+{
+  const medium = mediumFromApprovalRequest({
+    kind: "approval_request",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    id: "x" as any,
+    phase: "started",
+    tool_name: "caption_style",
+    args_summary: "",
+    capability_metadata: null,
+  });
+  assert.equal(medium, "caption");
+}
+
 // 3f. insert_transition → transition
 {
   const medium = mediumFromApprovalRequest({

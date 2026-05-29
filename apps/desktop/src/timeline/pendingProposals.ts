@@ -33,6 +33,7 @@ export type ProposalMedium =
   | "transition" // insert/delete_transition — review on timeline
   | "broll" // insert_b_roll diff hint — review on preview + insertion
   | "title" // insert_title / set_title — review on preview
+  | "caption" // insert_caption / set_caption / caption_* — review in transcript
   | "mixed" // proposal touches >1 medium — Brief decides
   | "other"; // anything we didn't classify (animations, track tail, etc.)
 
@@ -114,6 +115,7 @@ export const usePendingProposals = create<PendingState>((set, get) => ({
       transition: [],
       broll: [],
       title: [],
+      caption: [],
       mixed: [],
       other: [],
     };
@@ -202,6 +204,10 @@ const HEADING_MEDIUM: Record<string, ProposalMedium> = {
   // Title family.
   "Insert Title": "title",
   "Set Title": "title",
+  // Caption family — its own medium since captions live on the
+  // transcript track, not the title overlay surface.
+  "Insert Caption": "caption",
+  "Set Caption": "caption",
 };
 
 /**

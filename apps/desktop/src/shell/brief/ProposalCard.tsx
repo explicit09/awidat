@@ -62,10 +62,16 @@ export const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: strin
     className: "bg-[rgba(168,85,247,0.14)] text-[#D8B4FE] border-[rgba(168,85,247,0.32)]",
   },
   title: {
-    // Spec calls captions + titles mint; the medium type collapses both
-    // into `title`. Mint tone keeps the visual contract.
+    // Picture-side titles (insert_title / set_title). Teal-mint per spec.
     label: "Title",
     className: "bg-[rgba(45,212,191,0.12)] text-[#5EEAD4] border-[rgba(45,212,191,0.32)]",
+  },
+  caption: {
+    // Caption is its own medium — transcript-track overlay. Spec keeps
+    // the mint family but uses the emerald-mint shade so the user can
+    // tell captions (transcript) and titles (picture) apart at a glance.
+    label: "Caption",
+    className: "bg-[rgba(16,185,129,0.12)] text-[#6EE7B7] border-[rgba(16,185,129,0.32)]",
   },
   mixed: {
     label: "Mixed",
@@ -89,6 +95,7 @@ export const REVIEW_MODE_FOR_MEDIUM: Record<BriefMedium, CenterMode> = {
   transition: "timeline",
   // Title/caption land on the source preview where the user reads them.
   title: "source",
+  caption: "source",
   mixed: "timeline",
   other: "brief",
 };
@@ -101,6 +108,7 @@ const REVIEW_LABEL: Partial<Record<BriefMedium, string>> = {
   audio: "Review on timeline",
   transition: "Review on timeline",
   title: "Review on preview",
+  caption: "Review on transcript",
   mixed: "Review on timeline",
   // `other` (bash/apply_patch) deliberately omitted — no review link.
 };

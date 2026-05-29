@@ -390,13 +390,19 @@ function mediumFromToolName(toolName: string): BriefMedium {
   ) {
     return "audio";
   }
-  // Captions / titles (caption variants ride the title medium today).
+  // Caption family — distinct medium so the transcript-first review
+  // surface (mint chip) is reachable. Routed separately from titles
+  // because captions live on the transcript track, not the title
+  // overlay surface.
   if (
     toolName === "insert_caption" ||
     toolName === "set_caption" ||
-    toolName === "insert_title" ||
-    toolName === "set_title"
+    toolName.startsWith("caption_")
   ) {
+    return "caption";
+  }
+  // Titles — picture-side overlays (insert_title / set_title).
+  if (toolName === "insert_title" || toolName === "set_title") {
     return "title";
   }
   if (toolName === "insert_transition" || toolName === "delete_transition") return "transition";
