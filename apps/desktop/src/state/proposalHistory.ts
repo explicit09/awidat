@@ -92,6 +92,14 @@ export interface HistoryEntry {
    * the file header comment). Bounded by `MAX_ENTRIES_PER_PROJECT`.
    */
   timelineSnapshot?: string;
+  /**
+   * Free-text or preset reason captured by the Brief proposal card when
+   * the user rejected this row (Wave 5 C1). Only populated on
+   * `decision === "rejected"` rows. Surfaced on the History tab and
+   * — in later C-path tasks — fed back into the agent prompt so the
+   * feedback loop stops being silent.
+   */
+  rejectReason?: string;
 }
 
 /** Persisted shape — versioned for forward migration. */
@@ -133,6 +141,7 @@ export function buildHistoryEntry(args: {
   decidedAt?: number;
   turn_id?: string;
   timelineSnapshot?: string;
+  rejectReason?: string;
 }): HistoryEntry {
   const { proposal, projectPath, decision } = args;
   const decidedAt = args.decidedAt ?? Date.now();
@@ -150,6 +159,7 @@ export function buildHistoryEntry(args: {
     decidedAt,
     brollMetadata: proposal.brollMetadata,
     timelineSnapshot: args.timelineSnapshot,
+    rejectReason: args.rejectReason,
   };
 }
 

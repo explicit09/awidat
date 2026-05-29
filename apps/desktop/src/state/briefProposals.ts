@@ -314,23 +314,26 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
     logDecision(snapshot, "accepted", timelineSnapshot);
   },
 
-  async reject(id, _reason) {
+  async reject(id, reason) {
     const state = get();
     const snapshot = snapshotProposal(state, id);
+    const trimmedReason = reason?.trim();
+    const rejectReason =
+      trimmedReason && trimmedReason.length > 0 ? trimmedReason : undefined;
     if (state.approvals.has(id)) {
       await state.dispatch.respondApproval(id, "deny");
       set((s) => removeApproval(s, id));
-      logDecision(snapshot, "rejected");
+      logDecision(snapshot, "rejected", undefined, rejectReason);
       return;
     }
     if (state.brollProposals.has(id)) {
       await state.dispatch.rejectBroll(id);
       set((s) => decideBroll(s, id));
-      logDecision(snapshot, "rejected");
+      logDecision(snapshot, "rejected", undefined, rejectReason);
       return;
     }
     await state.dispatch.rejectProposal(id);
-    logDecision(snapshot, "rejected");
+    logDecision(snapshot, "rejected", undefined, rejectReason);
   },
 
   clear() {
@@ -497,6 +500,7 @@ function logDecision(
   proposal: BriefProposal | null,
   decision: HistoryDecision,
   timelineSnapshot?: string,
+  rejectReason?: string,
 ): void {
   if (!proposal) return;
   const projectPath = useProjectStore.getState().current;
@@ -506,6 +510,7 @@ function logDecision(
     projectPath,
     decision,
     timelineSnapshot,
+    rejectReason,
   });
   useProposalHistoryStore.getState().record(entry);
 }

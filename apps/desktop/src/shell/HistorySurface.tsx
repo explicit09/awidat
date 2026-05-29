@@ -295,6 +295,14 @@ function HistoryRow({ entry, onRestore }: HistoryRowProps) {
             {entry.rationale}
           </p>
         )}
+        {entry.decision === "rejected" && entry.rejectReason && (
+          <p
+            className="truncate text-[11px] italic text-[var(--color-text-muted)]"
+            title={entry.rejectReason}
+          >
+            Reason: {truncateReason(entry.rejectReason)}
+          </p>
+        )}
       </div>
 
       <span
@@ -581,6 +589,16 @@ function RestoreDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * Soft-cap the reject reason on the history row so a long custom
+ * reason doesn't blow up the row layout. The full reason still rides
+ * on `title=` for the hover tooltip.
+ */
+function truncateReason(reason: string, max = 60): string {
+  if (reason.length <= max) return reason;
+  return `${reason.slice(0, max - 1)}…`;
 }
 
 /**

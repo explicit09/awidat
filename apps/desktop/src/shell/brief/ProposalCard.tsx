@@ -23,6 +23,7 @@ import { useBriefProposalsStore } from "../../state/briefProposals";
 import { useFocusController } from "../../state/focusController";
 import { usePendingProposals } from "../../timeline/pendingProposals";
 import type { CenterMode } from "../../state/centerMode";
+import { RejectReasonPicker } from "./RejectReasonPicker";
 
 /**
  * Build the muted disclosure label rendered under the prompt for
@@ -113,6 +114,27 @@ const REVIEW_LABEL: Partial<Record<BriefMedium, string>> = {
   // `other` (bash/apply_patch) deliberately omitted — no review link.
 };
 
+/**
+ * Preset reject reasons per medium (Wave 5 C1). The chip a user clicks
+ * is captured INSTANTLY (no debounce, no Submit) and forwarded to
+ * `useBriefProposalsStore.reject(id, reason)`. The list is intentionally
+ * tight — every extra chip costs a moment of editorial-flow latency.
+ *
+ * Exported so tests and the History tab can share the catalog without
+ * redefining it per surface.
+ */
+export const REJECT_REASONS: Record<BriefMedium, readonly string[]> = {
+  cut: ["Too aggressive", "Wrong segment", "Pacing", "Loses context", "Wrong speaker"],
+  color: ["Too warm", "Too cool", "Wrong skin tone", "Style mismatch"],
+  broll: ["Off-topic", "Disclosure unclear", "Style mismatch", "Wrong moment"],
+  audio: ["Wrong levels", "Wrong ducking", "Loses ambience"],
+  caption: ["Wrong word", "Wrong speaker label", "Timing off"],
+  transition: ["Style mismatch", "Distracting", "Timing off"],
+  title: ["Style mismatch", "Distracting", "Timing off"],
+  mixed: ["Not now", "Wrong approach", "Misunderstood intent"],
+  other: ["Not now", "Wrong approach", "Misunderstood intent"],
+};
+
 export interface ProposalCardProps {
   proposal: BriefProposal;
   /**
@@ -129,10 +151,16 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
   const reject = useBriefProposalsStore((s) => s.reject);
   const focusProposal = useFocusController((s) => s.focusProposal);
   const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
+  // Inline reason picker — opens below the Accept/Reject row when the
+  // user first clicks Reject. Token-styled, no modal. Closing via Esc or
+  // "Reject without reason" still rejects (the latter) or cancels (Esc).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [customReason, setCustomReason] = useState("");
 
   const medium = MEDIUM_STYLE[proposal.medium];
   const reviewLabel = REVIEW_LABEL[proposal.medium];
   const reviewMode = REVIEW_MODE_FOR_MEDIUM[proposal.medium];
+  const presetReasons = REJECT_REASONS[proposal.medium] ?? [];
 
   function handleReview(): void {
     // Hand the controller everything it needs to focus the entity.
@@ -169,15 +197,29 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
     // would block re-clicks; the rare case isn't worth a useEffect.
   }
 
-  async function onReject() {
+  function onReject() {
+    if (busy) return;
+    // First click opens the inline picker. The existing reject flow only
+    // fires once the user picks a reason — or clicks "Reject without
+    // reason" — so the silent-rejection path is preserved.
+    setPickerOpen(true);
+  }
+
+  async function applyReject(reason?: string) {
     if (busy) return;
     setBusy("reject");
+    setPickerOpen(false);
     try {
-      await reject(proposal.id);
+      await reject(proposal.id, reason);
     } catch (e) {
       console.warn("brief reject failed", proposal.id, e);
       setBusy(null);
     }
+  }
+
+  function cancelPicker() {
+    setPickerOpen(false);
+    setCustomReason("");
   }
 
   const sourceLabel =
@@ -195,14 +237,15 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
   return (
     <article
       className={cn(
-        "flex items-stretch gap-3",
+        "flex flex-col",
         "rounded-[var(--radius-md)] border border-[var(--color-border-subtle)]",
-        "bg-[var(--color-surface-card)] py-2 pl-2 pr-3",
+        "bg-[var(--color-surface-card)]",
         "transition-[background-color] duration-[120ms]",
         "hover:bg-[var(--color-surface-card-hover)]",
       )}
       aria-label={`Proposal: ${proposal.title}`}
     >
+      <div className="flex items-stretch gap-3 py-2 pl-2 pr-3">
       {/* Medium chip — left edge */}
       <span
         className={cn(
@@ -307,11 +350,27 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
           size="sm"
           onClick={onReject}
           disabled={busy !== null}
+          aria-pressed={pickerOpen}
+          aria-expanded={pickerOpen}
+          aria-controls={`reject-picker-${proposal.id}`}
           aria-label={`Reject ${proposal.title}`}
         >
           {busy === "reject" ? "…" : "Reject"}
         </Button>
       </div>
+      </div>
+
+      {pickerOpen && (
+        <RejectReasonPicker
+          proposalId={proposal.id}
+          proposalTitle={proposal.title}
+          presets={presetReasons}
+          customReason={customReason}
+          onCustomChange={setCustomReason}
+          onPick={applyReject}
+          onCancel={cancelPicker}
+        />
+      )}
     </article>
   );
 }

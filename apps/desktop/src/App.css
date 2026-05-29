@@ -2378,6 +2378,27 @@ button {
   }
 }
 
+/**
+ * Wave 5 C1 — inline reject-reason picker entrance.
+ * Slides down + fades in below the Accept/Reject row on the Brief stack.
+ * Kept short (120ms) so editorial flow stays snappy.
+ */
+.reject-picker-enter {
+  animation: reject-picker-slide-down 120ms ease-out;
+  transform-origin: top;
+}
+
+@keyframes reject-picker-slide-down {
+  from {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 .proposal-actions-revision {
   font-size: 10px;
   text-transform: uppercase;
