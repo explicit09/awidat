@@ -144,6 +144,14 @@ pub async fn build_proposal(
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            // `rationale` is the agent's one-sentence justification
+            // ("trimmed 0.42s silence per podcast defaults") that
+            // Wave 3 surfaces on every proposal pill / Brief row.
+            // `build_proposal` is the user-edit path (drag-to-trim,
+            // transcript delete) and has no agent voice, so we emit
+            // `None` here; the agent-side `apply_edl` producer will
+            // populate it once its tool plumbing carries the field.
+            rationale: None,
         },
     );
     Ok(())
@@ -317,6 +325,10 @@ pub async fn accept_proposal(
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            // The Completed phase ends the lifecycle; rationale lives
+            // on the Started / Delta phases where the inspector is
+            // open. No need to re-emit it here.
+            rationale: None,
         },
     );
     Ok(())
@@ -365,6 +377,9 @@ pub async fn reject_proposal(
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            // Reject ends the lifecycle; rationale lives on the
+            // Started / Delta phases.
+            rationale: None,
         },
     );
     Ok(())
@@ -441,6 +456,11 @@ pub async fn adjust_proposal(
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            // Delta phase: the frontend store preserves the rationale
+            // from the prior phase when a Delta omits it (same pattern
+            // as `intent` / `explanation`). User drags don't carry an
+            // agent rationale, so emit `None`.
+            rationale: None,
         },
     );
     Ok(())

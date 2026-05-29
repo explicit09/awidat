@@ -231,7 +231,24 @@ evidence: Array<ProposalEvidence>,
  * proposal, not a full ProposedEdit (the agent re-emits the
  * full thing if the user picks one).
  */
-alternatives: Array<ProposalAlternative>, } | { "kind": "job", 
+alternatives: Array<ProposalAlternative>, 
+/**
+ * Optional short-form rationale — the agent's one-sentence
+ * justification for this proposal, e.g.
+ * "trimmed 0.42s silence per podcast defaults".
+ *
+ * This is the load-bearing trust signal Wave 3 surfaces on
+ * every proposal pill / tooltip / Brief row: a rationale is
+ * what lets the human reviewer take the agent's call on
+ * faith. Distinct from `explanation` (long-form body) and
+ * `intent` (what the agent is *trying* to do); `rationale`
+ * answers *why this specific decision*.
+ *
+ * Backwards-compatible: `Option<String>` so older serialized
+ * proposals deserialize fine. Producers that don't yet emit
+ * it can keep emitting `None`.
+ */
+rationale?: string, } | { "kind": "job", 
 /**
  * Stable id (one per job invocation, e.g. one yt-dlp run or
  * one indexer dispatch).

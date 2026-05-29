@@ -143,6 +143,10 @@ function projectFromItem(
     risk: item.risk ?? prev?.risk,
     evidence: evidence.length ? evidence : (prev?.evidence ?? []),
     alternatives: alternatives.length ? alternatives : (prev?.alternatives ?? []),
+    // Rationale follows the same preserve-on-omit policy: drag-adjust
+    // Deltas typically omit the agent's rationale, but the Brief row
+    // and pill tooltip need it across the full pending lifecycle.
+    rationale: item.rationale ?? prev?.rationale,
   };
 }
 

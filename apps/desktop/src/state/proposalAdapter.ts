@@ -99,6 +99,7 @@ export function useProposalInspectorData(): ProposalInspectorData | undefined {
     statusLabel,
     intent: active.intent,
     explanation: active.explanation,
+    rationale: active.rationale,
     confidence: active.confidence,
     risk: mapRisk(active.risk),
     evidence: mapEvidence(active.evidence ?? []),

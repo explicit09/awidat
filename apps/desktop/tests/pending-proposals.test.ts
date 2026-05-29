@@ -27,6 +27,7 @@ interface FakeOpts {
   revision?: number;
   intent?: string;
   explanation?: string;
+  rationale?: string;
 }
 
 function makeFakeItem(id: string, phase: Phase, opts: FakeOpts = {}): unknown {
@@ -44,6 +45,7 @@ function makeFakeItem(id: string, phase: Phase, opts: FakeOpts = {}): unknown {
     explanation: opts.explanation,
     evidence: [],
     alternatives: [],
+    rationale: opts.rationale,
   };
 }
 
@@ -81,6 +83,53 @@ function ingest(fake: unknown): void {
   assert.equal(state.pending[0]!.firstSeenAt, t0);
   assert.equal(state.pending[0]!.intent, "refined");
   assert.equal(state.pending[0]!.phase, "delta");
+}
+
+// rationale lands intact on Started and survives a rationale-less Delta.
+// Locks the Wave 3 contract: the Brief / pill tooltip / inspector all
+// read `pending[i].rationale`, so a regression that drops the field on
+// projection would silently strip "why" from every proposal in flight.
+{
+  reset();
+  ingest(
+    makeFakeItem("p1", "started", {
+      revision: 1,
+      rationale: "trimmed 0.42s silence per podcast defaults",
+    }),
+  );
+  assert.equal(
+    usePendingProposals.getState().pending[0]!.rationale,
+    "trimmed 0.42s silence per podcast defaults",
+  );
+  // Drag-adjust Delta — no rationale on the wire; the projection must
+  // preserve the prior value rather than clobber it to undefined.
+  ingest(makeFakeItem("p1", "delta", { revision: 2 }));
+  assert.equal(
+    usePendingProposals.getState().pending[0]!.rationale,
+    "trimmed 0.42s silence per podcast defaults",
+  );
+  // A Delta that *does* carry a refined rationale wins.
+  ingest(
+    makeFakeItem("p1", "delta", {
+      revision: 3,
+      rationale: "kept handoff cadence under hostB laugh",
+    }),
+  );
+  assert.equal(
+    usePendingProposals.getState().pending[0]!.rationale,
+    "kept handoff cadence under hostB laugh",
+  );
+}
+
+// Legacy producers omit rationale entirely; the projection must
+// tolerate an undefined field rather than crash.
+{
+  reset();
+  ingest(makeFakeItem("p1", "started"));
+  assert.equal(
+    usePendingProposals.getState().pending[0]!.rationale,
+    undefined,
+  );
 }
 
 // completed phase removes from the stack

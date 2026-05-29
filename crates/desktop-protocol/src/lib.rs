@@ -267,6 +267,23 @@ pub enum Item {
         /// full thing if the user picks one).
         #[serde(default)]
         alternatives: Vec<ProposalAlternative>,
+        /// Optional short-form rationale — the agent's one-sentence
+        /// justification for this proposal, e.g.
+        /// "trimmed 0.42s silence per podcast defaults".
+        ///
+        /// This is the load-bearing trust signal Wave 3 surfaces on
+        /// every proposal pill / tooltip / Brief row: a rationale is
+        /// what lets the human reviewer take the agent's call on
+        /// faith. Distinct from `explanation` (long-form body) and
+        /// `intent` (what the agent is *trying* to do); `rationale`
+        /// answers *why this specific decision*.
+        ///
+        /// Backwards-compatible: `Option<String>` so older serialized
+        /// proposals deserialize fine. Producers that don't yet emit
+        /// it can keep emitting `None`.
+        #[serde(default)]
+        #[ts(optional)]
+        rationale: Option<String>,
     },
     /// Long-running background work (asset import, indexing,
     /// timeline render). Streams over the same item channel as
@@ -2085,6 +2102,7 @@ mod tests {
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            rationale: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         let back: Item = serde_json::from_str(&json).unwrap();
@@ -2096,6 +2114,7 @@ mod tests {
                 summary,
                 revision,
                 diff_hints,
+                rationale,
                 ..
             } => {
                 assert_eq!(id.0, "proposal-1");
@@ -2107,7 +2126,71 @@ mod tests {
                 assert_eq!(summary, "trim 1 clip");
                 assert_eq!(revision, 0);
                 assert_eq!(diff_hints.len(), 1);
+                assert!(rationale.is_none());
             }
+            _ => panic!("expected Item::ProposedEdit"),
+        }
+    }
+
+    /// Lock the rationale plumbing contract: when a producer fills in
+    /// `rationale: Some(_)`, the field must round-trip through JSON
+    /// intact so the frontend can render it in the Proposal Inspector
+    /// and on the proposal-pill tooltips Wave 3 introduces. The
+    /// `Option<String>` shape keeps older proposals (where the field
+    /// is absent on the wire) deserializing cleanly — this test
+    /// asserts both directions.
+    #[test]
+    fn item_proposed_edit_rationale_roundtrips() {
+        let item = Item::ProposedEdit {
+            id: Id::new("proposal-2"),
+            phase: ItemLifecycle::Started,
+            source: ProposalSource::Agent {
+                tool_name: "apply_edl".into(),
+            },
+            edl_text: "*** Begin EDL\n*** End EDL\n".into(),
+            snapshot: TimelineSnapshot {
+                duration_s: 0.0,
+                broadcast_overlay: None,
+                cut_boundaries: vec![],
+                preview_limitations: vec![],
+                tracks: vec![],
+            },
+            diff_hints: vec![],
+            summary: "trim filler".into(),
+            revision: 0,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
+            rationale: Some("trimmed 0.42s silence per podcast defaults".into()),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"rationale\":\"trimmed 0.42s silence per podcast defaults\""),
+            "rationale must serialize on the wire, got: {json}"
+        );
+        let back: Item = serde_json::from_str(&json).unwrap();
+        match back {
+            Item::ProposedEdit { rationale, .. } => {
+                assert_eq!(
+                    rationale.as_deref(),
+                    Some("trimmed 0.42s silence per podcast defaults")
+                );
+            }
+            _ => panic!("expected Item::ProposedEdit"),
+        }
+
+        // Older proposals omit the field entirely; deserialization must
+        // accept that and default to None.
+        let legacy_json = json.replace(
+            ",\"rationale\":\"trimmed 0.42s silence per podcast defaults\"",
+            "",
+        );
+        let legacy: Item = serde_json::from_str(&legacy_json).unwrap();
+        match legacy {
+            Item::ProposedEdit { rationale, .. } => assert!(rationale.is_none()),
             _ => panic!("expected Item::ProposedEdit"),
         }
     }
