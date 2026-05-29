@@ -3,8 +3,8 @@
  *
  * One chip per indexer. Counts come from `evidenceAccessors`; availability
  * comes from `useEvidenceAvailability()`. Available chips are clickable
- * and open a placeholder modal "Coming soon" (drill-down panels land in
- * Wave 3 C1). Unavailable chips render greyed-out.
+ * and open the per-kind drill-down panel from `drillDowns/` (Wave 3 C1).
+ * Unavailable chips render greyed-out.
  */
 
 import { useState } from "react";
@@ -22,6 +22,10 @@ import {
   type EvidenceAvailability,
 } from "../../state/evidenceAccessors";
 import { cn } from "../../ui/cn";
+import {
+  EvidenceDrillDown,
+  type DrillDownKind,
+} from "./drillDowns/EvidenceDrillDown";
 
 type ChipKey = keyof EvidenceAvailability;
 
@@ -68,7 +72,7 @@ export function EvidenceChipRow() {
               role="listitem"
               disabled={!isAvailable}
               onClick={() => isAvailable && setDrillDownFor({ key, label })}
-              title={isAvailable ? `Drill into ${label} (${count})` : `${label}: indexer output not yet exposed`}
+              title={isAvailable ? `Drill into ${label} (${count})` : `${label}: indexer output not yet available`}
               className={cn(
                 "inline-flex items-center gap-1.5 h-6 px-2",
                 "rounded-[var(--radius-sm)] border bg-[var(--color-surface-card)]",
@@ -89,40 +93,12 @@ export function EvidenceChipRow() {
       </div>
 
       {drillDownFor && (
-        // TODO(C1): replace this with the real per-kind drill-down panel.
-        <ComingSoonModal label={drillDownFor.label} onClose={() => setDrillDownFor(null)} />
+        <EvidenceDrillDown
+          kind={drillDownFor.key as DrillDownKind}
+          label={drillDownFor.label}
+          onClose={() => setDrillDownFor(null)}
+        />
       )}
     </>
-  );
-}
-
-function ComingSoonModal({ label, onClose }: { label: string; onClose: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${label} drill-down`}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-modal)] p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">{label} drill-down</div>
-        <p className="mt-1.5 max-w-[28ch] text-[var(--text-caption)] text-[var(--color-text-muted)]">
-          {label} drill-down coming soon.
-        </p>
-        <div className="mt-3 flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-7 px-3 rounded-[var(--radius-sm)] text-[var(--text-caption)] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

@@ -26,6 +26,8 @@
 
 import { strict as assert } from "node:assert";
 import {
+  __resetEvidenceDataForTests,
+  __setEvidenceDataForTests,
   activeTranscript,
   evidenceAvailabilityFromState,
   selectAudioSamples,
@@ -38,11 +40,13 @@ import {
   selectSilences,
   selectSpeakers,
   selectTranscriptSegments,
+  type EvidenceScene,
 } from "../src/state/evidenceAccessors.ts";
 import {
   useIndexReadinessStore,
   type IndexReadinessSnapshot,
 } from "../src/state/indexReadiness.ts";
+import { useProjectStore } from "../src/app/state.ts";
 import { useTranscriptStore } from "../src/transcript/store.ts";
 import type { Transcript } from "../src/protocol";
 
@@ -53,6 +57,8 @@ function resetStores(): void {
     activeStem: null,
     selection: null,
   });
+  useProjectStore.setState({ current: null });
+  __resetEvidenceDataForTests();
 }
 
 function snapshot(overrides: Partial<IndexReadinessSnapshot> = {}): IndexReadinessSnapshot {
@@ -309,20 +315,24 @@ function loadTranscript(t: Transcript, makeActive = true): void {
   assert.equal(avail.speakers, false);
 }
 
-// 11. All on-disk indexers ready, no transcript loaded — the six "data-on-
-//     disk-but-not-loaded" indexers report false in the availability map.
-//     This is the canonical gap the Wave 3 follow-up will close.
+// 11. Wave 3 C1 — all indexers ready on disk, but the lazy-load cache
+//     has nothing fetched yet. The six lazy accessors now report
+//     `available: true` based on the on-disk readiness flag (fallback),
+//     so the chip surfaces as clickable and the drill-down owns the
+//     "loading…" visual. The selectors still return [] until a fetch
+//     populates the cache.
 {
   resetStores();
   useIndexReadinessStore.setState({ snapshot: snapshot() });
   const avail = selectEvidenceAvailability();
-  assert.equal(avail.scenes, false);
-  assert.equal(avail.silences, false);
-  assert.equal(avail.color, false);
-  assert.equal(avail.motion, false);
-  assert.equal(avail.faces, false);
-  assert.equal(avail.audio, false);
-  // And the corresponding accessors return empty arrays.
+  // Fallback to snapshot flags when nothing is cached yet.
+  assert.equal(avail.scenes, true);
+  assert.equal(avail.silences, true);
+  assert.equal(avail.color, true);
+  assert.equal(avail.motion, true);
+  assert.equal(avail.faces, true);
+  assert.equal(avail.audio, true);
+  // Selectors still return [] until the lazy fetch resolves.
   assert.deepEqual(selectScenes(), []);
   assert.deepEqual(selectSilences(), []);
   assert.deepEqual(selectColorStats(), []);
@@ -378,6 +388,54 @@ function loadTranscript(t: Transcript, makeActive = true): void {
   assert.deepEqual(selectCaptions(), []);
   assert.equal(selectEvidenceAvailability().transcript, true);
   assert.equal(selectEvidenceAvailability().captions, true);
+}
+
+// 15. Wave 3 C1 — when the lazy-load cache is seeded with scenes for the
+//     active (project, stem) pair, selectScenes returns those rows and
+//     evidence availability reflects "has data". Mirrors the Tauri
+//     fetch path without invoking it.
+{
+  resetStores();
+  useIndexReadinessStore.setState({ snapshot: snapshot() });
+  useProjectStore.setState({ current: "/tmp/project-x" });
+  loadTranscript(
+    transcript({
+      stem: "asset-x",
+      segments: [{ text: "hi", start_s: 0, end_s: 1 }],
+    }),
+  );
+  const scenes: EvidenceScene[] = [
+    { id: "scene-0", start_s: 0, end_s: 1.5 },
+    { id: "scene-1", start_s: 1.5, end_s: 4.0 },
+  ];
+  __setEvidenceDataForTests("/tmp/project-x", "asset-x", "scenes", scenes);
+  assert.equal(selectScenes().length, 2);
+  assert.equal(selectScenes()[0]!.id, "scene-0");
+  const avail = selectEvidenceAvailability();
+  assert.equal(avail.scenes, true);
+}
+
+// 16. Switching project wipes the lazy-load cache (scope guard).
+{
+  resetStores();
+  useIndexReadinessStore.setState({ snapshot: snapshot() });
+  useProjectStore.setState({ current: "/tmp/project-a" });
+  loadTranscript(
+    transcript({
+      stem: "asset-a",
+      segments: [{ text: "hi", start_s: 0, end_s: 1 }],
+    }),
+  );
+  __setEvidenceDataForTests("/tmp/project-a", "asset-a", "silences", [
+    { start_s: 0, end_s: 1, duration_s: 1 },
+  ]);
+  assert.equal(selectSilences().length, 1);
+  // Switching the project should drop the project-a cache when the
+  // next selector reads (it eagerly re-scopes on cache touch).
+  useProjectStore.setState({ current: "/tmp/project-b" });
+  // Reading silences with no seeded data for project-b returns []
+  // and triggers no invoke (we're not in Tauri).
+  assert.deepEqual(selectSilences(), []);
 }
 
 console.log("evidence-accessors: OK");

@@ -4,38 +4,43 @@
 // answer "show me the data the indexer produced", not just "is the indexer
 // ready". This file is the single place those surfaces look.
 //
-// Status today (Wave 3 F4 audit):
+// Wave 3 C1 closed the previous gap: the six accessors that used to
+// return [] now invoke six Tauri reader commands
+// (`read_scenes`, `read_silences`, `read_audio_samples`, `read_faces`,
+// `read_motion_regions`, `read_color_stats`). Each command resolves the
+// sidecar against the project root and returns parsed rows; an absent
+// sidecar comes back as []. Results live in `useEvidenceDataStore`,
+// keyed by `(project_path, stem)` so a project switch or active-stem
+// switch transparently re-fetches.
 //
-//   indexer        | on disk                            | loaded into FE state?       | accessor returns
-//   ---------------|------------------------------------|-----------------------------|---------------------
-//   transcripts    | index/whisper/*.json               | yes — useTranscriptStore    | EvidenceTranscriptSegment[]
-//   speaker        | index/whisper/*.json (diarized)    | yes — useTranscriptStore    | EvidenceSpeaker[]
-//   captions       | derivable from whisper             | yes — useTranscriptStore    | EvidenceCaption[]
-//   scenes         | index/scenedetect/*.json           | NO  — only scene_count      | []  (gap)
-//   silence        | .awidat/silences/*.json            | NO                          | []  (gap)
-//   audio          | index/audio-energy/*.json          | NO                          | []  (gap)
-//   face           | index/face/*.json                  | NO                          | []  (gap)
-//   motion         | .awidat/motion/*.json              | NO                          | []  (gap)
-//   color          | index/color-analysis/*.json        | NO                          | []  (gap)
+// Per-accessor coverage today:
 //
-// Gaps: scenes / silence / audio / face / motion / color have ready-state
-// booleans only. To make them queryable we'd need a backend command that
-// returns the parsed sidecars (per-asset arrays of scene boundaries,
-// silence ranges, etc.). That's a follow-up; this layer surfaces what's
-// reachable today and exports an availability map so B3 can render the
-// chips that have data as clickable and the rest as greyed-out.
+//   indexer        | sidecar path                          | accessor          | type
+//   ---------------|---------------------------------------|-------------------|----------------------
+//   transcripts    | index/whisper/<asset>.json            | useTranscriptStore| EvidenceTranscriptSegment[]
+//   speaker        | index/whisper/<asset>.json            | useTranscriptStore| EvidenceSpeaker[]
+//   captions       | derivable from whisper                | useTranscriptStore| EvidenceCaption[]
+//   scenes         | index/scenedetect/<asset>.json        | read_scenes       | EvidenceScene[]
+//   silence        | .awidat/silences/<stem>-<hash>.json   | read_silences     | EvidenceSilence[]
+//   audio          | index/audio-energy/<asset>.json       | read_audio_samples| EvidenceAudioSample[]
+//   face           | index/face/<asset>.json               | read_faces        | EvidenceFace[]
+//   motion         | .awidat/motion/<stem>-<hash>.json     | read_motion_regions| EvidenceMotionRegion[]
+//   color          | index/color-analysis/<asset>.json     | read_color_stats  | EvidenceColorStat[]
 //
-// Design rules:
+// Design rules (kept stable from B3):
 //   - Every hook returns an array (or array-equivalent), never undefined.
 //     Callers iterate without null-checks.
-//   - Accessors don't trigger fetches. Whatever's in the stores is what
-//     they return. Triggering loads is the responsibility of the surface
-//     that owns the lifecycle (transcripts are loaded by the transcript
-//     pane / segmented player setting `activeStem`).
+//   - Hooks DO trigger lazy loads as of C1 (single `invoke` per
+//     project+stem pair). Triggering loads is now a side-effect of
+//     reading; we accept the tradeoff so consumers don't need to thread
+//     `useEffect` plumbing through every drill-down.
 //   - When data isn't loaded, return []. Use `useEvidenceAvailability()`
 //     to know whether the empty array means "indexer didn't run" vs
-//     "data not exposed to the frontend yet".
+//     "still loading from disk".
 
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { create } from "zustand";
+import { useProjectStore } from "../app/state.ts";
 import {
   useIndexReadinessStore,
   type IndexReadinessSnapshot,
@@ -48,7 +53,7 @@ import type { Transcript } from "../protocol";
 // Keep these stable; they're the public API of this module.
 // ---------------------------------------------------------------------------
 
-/** One scene boundary from the scenedetect indexer. Not reachable today. */
+/** One scene boundary from the scenedetect indexer. */
 export interface EvidenceScene {
   id: string;
   /** Source-time start of the shot, in seconds. */
@@ -74,7 +79,7 @@ export interface EvidenceSpeaker {
   total_speech_s: number;
 }
 
-/** One silence range from the silence indexer. Not reachable today. */
+/** One silence range from the silence indexer. */
 export interface EvidenceSilence {
   start_s: number;
   end_s: number;
@@ -101,7 +106,7 @@ export interface EvidenceCaption {
   text: string;
 }
 
-/** One face-detection bounding box. Not reachable today. */
+/** One face-detection bounding box. */
 export interface EvidenceFace {
   id: string;
   /** Centre time of the frame the face was detected on, in source seconds. */
@@ -112,7 +117,7 @@ export interface EvidenceFace {
   identity_id?: string;
 }
 
-/** One motion-energy region. Not reachable today. */
+/** One motion-energy region. */
 export interface EvidenceMotionRegion {
   id: string;
   start_s: number;
@@ -121,7 +126,7 @@ export interface EvidenceMotionRegion {
   intensity: number;
 }
 
-/** One color statistic (per-shot or per-frame). Not reachable today. */
+/** One color statistic (per-shot or per-frame). */
 export interface EvidenceColorStat {
   id: string;
   start_s: number;
@@ -132,7 +137,7 @@ export interface EvidenceColorStat {
   saturation_mean?: number;
 }
 
-/** One audio-energy sample. Not reachable today. */
+/** One audio-energy sample. */
 export interface EvidenceAudioSample {
   at_s: number;
   /** RMS magnitude, 0..1. */
@@ -140,23 +145,126 @@ export interface EvidenceAudioSample {
 }
 
 // ---------------------------------------------------------------------------
+// Lazy-loading store — caches per (project_path, stem) tuple.
+//
+// We picked lazy over eager because the indexer fan-out can be large
+// (a 90-minute interview yields ~54000 audio windows) and the user
+// rarely opens every drill-down. The first read of an accessor for a
+// given project triggers the fetch; subsequent reads hit the cached
+// array. `clear()` is called on project change.
+// ---------------------------------------------------------------------------
+
+type EvidenceKind =
+  | "scenes"
+  | "silences"
+  | "audio"
+  | "faces"
+  | "motion"
+  | "color";
+
+type Cached<T> = { kind: "loaded"; data: T[] } | { kind: "loading" };
+
+interface EvidenceDataState {
+  /** `${project}::${stem}::${kind}` → cached rows or in-flight flag. */
+  cache: Record<string, Cached<unknown>>;
+  /** Last project key the cache was scoped to. When this changes the
+   *  cache is wiped — same pattern as transcriptStore.clearCache. */
+  scope: string | null;
+  /** Drop everything cached (project switched, indexer re-ran, etc). */
+  clear: () => void;
+  /** Scope the cache to `project`. Returns true iff the scope changed. */
+  setScope: (project: string | null) => boolean;
+  /** Internal: replace one cache entry. */
+  set: (key: string, value: Cached<unknown>) => void;
+}
+
+const useEvidenceDataStore = create<EvidenceDataState>((set) => ({
+  cache: {},
+  scope: null,
+  clear: () => set({ cache: {} }),
+  setScope: (project) => {
+    let changed = false;
+    set((s) => {
+      if (s.scope === project) return s;
+      changed = true;
+      return { scope: project, cache: {} };
+    });
+    return changed;
+  },
+  set: (key, value) =>
+    set((s) => ({ cache: { ...s.cache, [key]: value } })),
+}));
+
+function cacheKey(project: string, stem: string, kind: EvidenceKind): string {
+  return `${project}::${stem}::${kind}`;
+}
+
+/**
+ * Trigger a lazy load for `kind` against `(project, stem)`. No-op if
+ * the entry is already cached or in flight. Outside Tauri (jest /
+ * vitest / Node) we never invoke; tests seed the store directly.
+ */
+function ensureLoaded<T>(
+  project: string | null,
+  stem: string | null,
+  kind: EvidenceKind,
+  command: string,
+): T[] {
+  if (!project || !stem) return [];
+  const store = useEvidenceDataStore.getState();
+  // Keep the cache scoped to one project; if the project changed,
+  // wipe before checking the per-key entry.
+  store.setScope(project);
+  const key = cacheKey(project, stem, kind);
+  const hit = store.cache[key];
+  if (hit) {
+    return hit.kind === "loaded" ? (hit.data as T[]) : [];
+  }
+  if (!isTauri()) return [];
+  // Mark loading first so re-renders during fetch don't queue parallel
+  // invokes for the same key.
+  store.set(key, { kind: "loading" });
+  invoke<T[]>(command, { projectPath: project, stem })
+    .then((rows) => {
+      useEvidenceDataStore
+        .getState()
+        .set(key, { kind: "loaded", data: rows ?? [] });
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn(`${command} failed for ${stem}`, err);
+      // Treat failures as "no data" rather than retrying forever.
+      useEvidenceDataStore.getState().set(key, { kind: "loaded", data: [] });
+    });
+  return [];
+}
+
+/**
+ * Test-only helper. Seeds the cache so the selectors / availability
+ * map report data without invoking Tauri. Use with care — production
+ * code should never call this.
+ */
+export function __setEvidenceDataForTests<T>(
+  project: string,
+  stem: string,
+  kind: EvidenceKind,
+  data: T[],
+): void {
+  useEvidenceDataStore.getState().setScope(project);
+  useEvidenceDataStore
+    .getState()
+    .set(cacheKey(project, stem, kind), { kind: "loaded", data });
+}
+
+/** Test-only — clear the lazy-load cache between cases. */
+export function __resetEvidenceDataForTests(): void {
+  useEvidenceDataStore.setState({ cache: {}, scope: null });
+}
+
+// ---------------------------------------------------------------------------
 // Availability map — what's true on disk vs reachable from frontend code.
 // ---------------------------------------------------------------------------
 
-/**
- * Per-indexer "is the data actually queryable from the frontend right
- * now?" map. This is the answer B3 needs to decide which evidence chip
- * is clickable vs greyed-out.
- *
- * The booleans here combine two signals:
- *   1. Did the indexer produce output? (`IndexReadinessSnapshot.<kind>`)
- *   2. Do we have a frontend accessor that returns the parsed data?
- *
- * Today only `transcripts`, `speakers`, and `captions` can be both true
- * (via the whisper sidecar that the transcript store already loads).
- * Every other indexer flips to `false` even when the on-disk sidecar
- * exists, because the frontend hasn't loaded it.
- */
 export interface EvidenceAvailability {
   scenes: boolean;
   speakers: boolean;
@@ -185,18 +293,21 @@ const ZERO_AVAILABILITY: EvidenceAvailability = {
  * Snapshot-shaped availability. Use the hook form (`useEvidenceAvailability`)
  * for React components; this pure helper is for tests and non-React
  * consumers.
+ *
+ * Accepts optional per-kind loaded counts so consumers can flip a chip
+ * from "indexer-ready but empty" to "has data" without re-querying the
+ * cache. When a count is unset we fall back to the snapshot boolean —
+ * keeping the contract that "indexer ran, sidecar present" is the
+ * default truth.
  */
 export function evidenceAvailabilityFromState(args: {
   snapshot: IndexReadinessSnapshot | undefined;
   loadedTranscript: Transcript | null;
+  loadedCounts?: Partial<Record<EvidenceKind, number>>;
 }): EvidenceAvailability {
-  const { snapshot, loadedTranscript } = args;
+  const { snapshot, loadedTranscript, loadedCounts } = args;
   if (!snapshot) return ZERO_AVAILABILITY;
 
-  // Transcript / speakers / captions are reachable iff a transcript is
-  // loaded into the store *and* the readiness snapshot agrees the
-  // indexer ran. We require both so a stale store entry doesn't claim
-  // "transcript available" after the user closed the project.
   const transcriptReachable =
     snapshot.transcripts && loadedTranscript !== null;
   const speakersReachable =
@@ -206,19 +317,26 @@ export function evidenceAvailabilityFromState(args: {
     loadedTranscript.speakers.length > 0;
   const captionsReachable = snapshot.captions && loadedTranscript !== null;
 
+  // For the six lazy accessors: if a loaded count is supplied, prefer
+  // it — `> 0` proves the data is reachable. Otherwise fall back to
+  // the readiness snapshot ("sidecar exists" is a reasonable proxy
+  // when we haven't fetched yet).
+  function flagFor(kind: EvidenceKind, snapshotFlag: boolean): boolean {
+    const count = loadedCounts?.[kind];
+    if (count !== undefined) return count > 0;
+    return snapshotFlag;
+  }
+
   return {
     transcript: transcriptReachable,
     speakers: speakersReachable,
     captions: captionsReachable,
-    // The remaining six are "ready on disk but not exposed to the
-    // frontend today". Until a backend accessor lands, callers see
-    // these as false and treat the chip as greyed-out.
-    scenes: false,
-    silences: false,
-    color: false,
-    motion: false,
-    faces: false,
-    audio: false,
+    scenes: flagFor("scenes", snapshot.scenes),
+    silences: flagFor("silences", snapshot.silence),
+    color: flagFor("color", snapshot.color),
+    motion: flagFor("motion", snapshot.motion),
+    faces: flagFor("faces", snapshot.face),
+    audio: flagFor("audio", snapshot.audio),
   };
 }
 
@@ -226,13 +344,6 @@ export function evidenceAvailabilityFromState(args: {
 // Internal helpers — read the active transcript out of useTranscriptStore.
 // ---------------------------------------------------------------------------
 
-/**
- * The transcript that's currently displayed in the transcript pane, if
- * any. Read straight from useTranscriptStore so accessors stay in sync
- * with what the user is looking at.
- *
- * Exposed for tests so they can hook the store via setState.
- */
 export function activeTranscript(): Transcript | null {
   const state = useTranscriptStore.getState();
   if (!state.activeStem) return null;
@@ -241,21 +352,35 @@ export function activeTranscript(): Transcript | null {
   return entry.transcript;
 }
 
+function activeProject(): string | null {
+  return useProjectStore.getState().current;
+}
+
+function activeStem(): string | null {
+  return useTranscriptStore.getState().activeStem;
+}
+
+function readCached<T>(
+  project: string | null,
+  stem: string | null,
+  kind: EvidenceKind,
+): T[] {
+  if (!project || !stem) return [];
+  const hit = useEvidenceDataStore.getState().cache[
+    cacheKey(project, stem, kind)
+  ];
+  if (!hit || hit.kind !== "loaded") return [];
+  return hit.data as T[];
+}
+
 // ---------------------------------------------------------------------------
 // Selectors — pure projections over store state. Tests and non-React
 // callers use these directly; the React hooks below wrap them with a
 // store subscription so components re-render when the data changes.
-//
-// Selectors take "what's already in the stores" and return a typed array.
-// They never trigger fetches.
 // ---------------------------------------------------------------------------
 
 export function selectScenes(): EvidenceScene[] {
-  // Gap: scene boundaries aren't loaded into the frontend today. The
-  // Rust `index_readiness` command reports `scene_count` but the per-
-  // shot list lives in `index/scenedetect/*.json` on disk and isn't
-  // exposed via any Tauri command.
-  return [];
+  return readCached<EvidenceScene>(activeProject(), activeStem(), "scenes");
 }
 
 export function selectSpeakers(): EvidenceSpeaker[] {
@@ -275,8 +400,7 @@ export function selectSpeakers(): EvidenceSpeaker[] {
 }
 
 export function selectSilences(): EvidenceSilence[] {
-  // Gap: `.awidat/silences/` sidecars aren't loaded into the frontend.
-  return [];
+  return readCached<EvidenceSilence>(activeProject(), activeStem(), "silences");
 }
 
 export function selectTranscriptSegments(): EvidenceTranscriptSegment[] {
@@ -292,8 +416,6 @@ export function selectTranscriptSegments(): EvidenceTranscriptSegment[] {
 }
 
 export function selectCaptions(): EvidenceCaption[] {
-  // Derived from the same whisper sidecar; the captions indexer ships
-  // SRT but the row data is identical.
   return selectTranscriptSegments().map((seg) => ({
     id: seg.id.replace(/-seg-/, "-cap-"),
     start_s: seg.start_s,
@@ -303,109 +425,132 @@ export function selectCaptions(): EvidenceCaption[] {
 }
 
 export function selectColorStats(): EvidenceColorStat[] {
-  // Gap: `index/color-analysis/` sidecars aren't loaded into the frontend.
-  return [];
+  return readCached<EvidenceColorStat>(activeProject(), activeStem(), "color");
 }
 
 export function selectMotionRegions(): EvidenceMotionRegion[] {
-  // Gap: `.awidat/motion/` sidecars aren't loaded into the frontend.
-  return [];
+  return readCached<EvidenceMotionRegion>(activeProject(), activeStem(), "motion");
 }
 
 export function selectFaces(): EvidenceFace[] {
-  // Gap: `index/face/` sidecars aren't loaded into the frontend.
-  return [];
+  return readCached<EvidenceFace>(activeProject(), activeStem(), "faces");
 }
 
 export function selectAudioSamples(): EvidenceAudioSample[] {
-  // Gap: `index/audio-energy/` analysis sidecars aren't loaded into the
-  // frontend. Per-asset waveform PEAKS (different signal) are loaded for
-  // the timeline strip via `TimelineItem.waveform_path`.
-  return [];
+  return readCached<EvidenceAudioSample>(activeProject(), activeStem(), "audio");
 }
 
 export function selectEvidenceAvailability(): EvidenceAvailability {
   const snapshot = useIndexReadinessStore.getState().snapshot;
+  const project = activeProject();
+  const stem = activeStem();
+  const loadedCounts: Partial<Record<EvidenceKind, number>> = {};
+  if (project && stem) {
+    const cache = useEvidenceDataStore.getState().cache;
+    const kinds: EvidenceKind[] = [
+      "scenes",
+      "silences",
+      "audio",
+      "faces",
+      "motion",
+      "color",
+    ];
+    for (const kind of kinds) {
+      const hit = cache[cacheKey(project, stem, kind)];
+      if (hit && hit.kind === "loaded") {
+        loadedCounts[kind] = (hit.data as unknown[]).length;
+      }
+    }
+  }
   return evidenceAvailabilityFromState({
     snapshot,
     loadedTranscript: activeTranscript(),
+    loadedCounts,
   });
 }
 
 // ---------------------------------------------------------------------------
 // React hooks — wrap the selectors with store subscriptions so components
-// re-render when the underlying data changes.
-//
-// Each hook subscribes to the minimal slice of store state the selector
-// depends on. The selector itself does the projection. This keeps the
-// pure projection logic testable without React renderer setup.
+// re-render when the underlying data changes. The lazy accessors also
+// kick off a fetch on first read.
 // ---------------------------------------------------------------------------
 
-/** Scenes from the scenedetect indexer. Returns [] today — gap documented. */
 export function useScenes(): EvidenceScene[] {
-  // Subscribe so a future backend that ships per-scene data triggers
-  // re-renders automatically.
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceScene>(activeProject(), activeStem(), "scenes", "read_scenes");
   return selectScenes();
 }
 
-/** Speakers from the active diarized transcript. */
 export function useSpeakers(): EvidenceSpeaker[] {
   useTranscriptStore((s) => s.activeStem);
   useTranscriptStore((s) => s.byStem);
   return selectSpeakers();
 }
 
-/** Silence ranges. Returns [] today — gap documented. */
 export function useSilences(): EvidenceSilence[] {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceSilence>(activeProject(), activeStem(), "silences", "read_silences");
   return selectSilences();
 }
 
-/** Transcript segments from the active whisper sidecar. */
 export function useTranscriptSegments(): EvidenceTranscriptSegment[] {
   useTranscriptStore((s) => s.activeStem);
   useTranscriptStore((s) => s.byStem);
   return selectTranscriptSegments();
 }
 
-/** Caption rows derived from the active whisper sidecar. */
 export function useCaptions(): EvidenceCaption[] {
   useTranscriptStore((s) => s.activeStem);
   useTranscriptStore((s) => s.byStem);
   return selectCaptions();
 }
 
-/** Color stats. Returns [] today — gap documented. */
 export function useColorStats(): EvidenceColorStat[] {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceColorStat>(activeProject(), activeStem(), "color", "read_color_stats");
   return selectColorStats();
 }
 
-/** Motion regions. Returns [] today — gap documented. */
 export function useMotionRegions(): EvidenceMotionRegion[] {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceMotionRegion>(activeProject(), activeStem(), "motion", "read_motion_regions");
   return selectMotionRegions();
 }
 
-/** Face bounding boxes. Returns [] today — gap documented. */
 export function useFaces(): EvidenceFace[] {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceFace>(activeProject(), activeStem(), "faces", "read_faces");
   return selectFaces();
 }
 
-/** Audio-energy samples. Returns [] today — gap documented. */
 export function useAudioSamples(): EvidenceAudioSample[] {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
+  useTranscriptStore((s) => s.activeStem);
+  ensureLoaded<EvidenceAudioSample>(activeProject(), activeStem(), "audio", "read_audio_samples");
   return selectAudioSamples();
 }
 
-/**
- * Combined "which evidence chips have data?" map. Wave 3 B3 reads this
- * to decide which chips render as clickable vs greyed-out.
- */
 export function useEvidenceAvailability(): EvidenceAvailability {
   useIndexReadinessStore((s) => s.snapshot);
+  useEvidenceDataStore((s) => s.cache);
+  useProjectStore((s) => s.current);
   useTranscriptStore((s) => s.activeStem);
   useTranscriptStore((s) => s.byStem);
   return selectEvidenceAvailability();

@@ -208,7 +208,13 @@ fn sidecar_is_fresh(asset: &Path, sidecar: &Path) -> bool {
 
 /// Read the silences sidecar at `path`. Errors when the path doesn't
 /// exist or isn't valid JSON.
-#[tauri::command]
+///
+/// Note: this path-keyed reader was the original `read_silences` Tauri
+/// command. Wave 3 C1 replaced it with the project+stem-keyed
+/// [`crate::commands::indexer_data::read_silences`]. The function is
+/// kept for now because the rendering crate's [`SilenceSidecar`] shape
+/// is its source of truth; future code can call it directly.
+#[allow(dead_code)]
 pub async fn read_silences(path: String) -> Result<SilenceSidecar, String> {
     let bytes = tokio::fs::read(&path)
         .await
