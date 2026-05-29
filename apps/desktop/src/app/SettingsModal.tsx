@@ -25,6 +25,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { useProjectStore } from "./state";
+import { useIntroState } from "../state/introState";
 import { useMode } from "../state/mode";
 import { useSettings } from "../state/settings";
 import { Button, Inline, Stack } from "../ui";
@@ -55,6 +56,8 @@ export function SettingsModal() {
   const projectPath = useProjectStore((s) => s.current);
   const mode = useMode((s) => s.mode);
   const setMode = useMode((s) => s.setMode);
+  const introducedCount = useIntroState((s) => s.introduced.size);
+  const resetIntroState = useIntroState((s) => s.reset);
 
   // Lazy-load the indexer config so the modal stays cheap when closed.
   // Calls the same `read_indexer_config` invoke used by App.tsx.
@@ -179,6 +182,24 @@ export function SettingsModal() {
               <ModePill mode={mode} onChange={setMode} />
             </Row>
             <Row label="Theme" value="Dark (default)" />
+            <Row
+              label="Re-introduce on project open"
+              value={
+                introducedCount === 0
+                  ? "Off · next open will introduce"
+                  : `${introducedCount} project${introducedCount === 1 ? "" : "s"} introduced`
+              }
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={resetIntroState}
+                disabled={introducedCount === 0}
+                title="Clear the set of projects that have already received the agent intro turn"
+              >
+                Reset
+              </Button>
+            </Row>
             <Stack gap="1" className="mt-1">
               <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
                 Keyboard shortcuts

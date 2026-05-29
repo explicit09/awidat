@@ -35,6 +35,7 @@ import {
   onMenuCommand,
 } from "../app/menuCommands";
 import { useStageStore } from "./index";
+import { INTRO_PROMPT, useIntroState } from "./introState";
 import {
   ITEM_EVENT,
   MENU_COMMAND_EVENT,
@@ -68,6 +69,12 @@ export function useAppGlue() {
 
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshMedia = useMediaStore((s) => s.refresh);
+  const mediaSourceCount = useMediaStore((s) => s.sources.length);
+  const mediaProxyCount = useMediaStore((s) => s.proxies.length);
+  const agentRunning = useAgentStore((s) => s.running);
+  const agentItemsCount = useAgentStore((s) => s.items.length);
+  const introduced = useIntroState((s) => s.introduced);
+  const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
@@ -329,6 +336,45 @@ export function useAppGlue() {
           it.job_kind === "url_import") &&
         it.phase === "completed",
     ).length,
+  ]);
+
+  // Synthetic editorial intro turn — Wave 3 task F3. Fires once per
+  // project per persisted-state-clear. The agent has read AGENTS.md and
+  // any cached indexer signals by the time the bridge is up, so this
+  // gives it a chance to introduce itself before the user types. Hidden
+  // from the transcript via the `[awidat:intro]` sentinel in the prompt
+  // body — see `introState.ts` and the `ChatStream` / App.tsx filters.
+  //
+  // Hard constraints:
+  //   - Wait for at least one source media item (sources or proxies).
+  //   - Composer must be empty (agentItemsCount === 0, !agentRunning).
+  //   - Project must not be in the persisted `introduced` set.
+  //   - Single-shot per project — `markIntroduced` is set BEFORE the
+  //     invoke resolves, so a `start_turn` rejection won't queue retries
+  //     against the same project this session.
+  useEffect(() => {
+    if (!isTauri() || current === null) return;
+    if (introduced.has(current)) return;
+    if (agentRunning || agentItemsCount > 0) return;
+    if (mediaSourceCount === 0 && mediaProxyCount === 0) return;
+    // Latch the project before invoking. If `start_turn` fails (codex
+    // not ready), we deliberately do NOT retry — the user can still
+    // type manually. A failed intro should not block the manual path.
+    markIntroduced(current);
+    setRunning(true);
+    invoke("start_turn", { input: INTRO_PROMPT }).catch((err) => {
+      console.warn("intro start_turn failed", err);
+      setRunning(false);
+    });
+  }, [
+    current,
+    introduced,
+    agentRunning,
+    agentItemsCount,
+    mediaSourceCount,
+    mediaProxyCount,
+    markIntroduced,
+    setRunning,
   ]);
 
   // If the timeline has clips with no proxy yet, make

@@ -62,6 +62,7 @@ import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingS
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
+import { isIntroSyntheticInput } from "./state/introState";
 import { useSettings } from "./state/settings";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
@@ -1001,6 +1002,18 @@ function App() {
     let current: ConversationTurn | null = null;
     for (const it of items) {
       if (it.kind === "user_input") {
+        // Synthetic intro turns are hidden from the transcript. Open a
+        // headerless turn so the agent's introduction still has a home
+        // but no user bubble is drawn for the editorial instruction.
+        if (isIntroSyntheticInput(it.text)) {
+          current = {
+            id: `intro-${it.id.toString()}`,
+            userText: "",
+            parts: [],
+          };
+          out.push(current);
+          continue;
+        }
         current = {
           id: it.id.toString(),
           userText: it.text,
