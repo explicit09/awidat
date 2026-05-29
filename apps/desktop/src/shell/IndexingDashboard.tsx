@@ -82,6 +82,13 @@ export type IndexingDashboardProps = {
   system?: IndexingSystemStatus;
   indexerConfig?: IndexerConfigSnapshot;
   structurePreview?: IndexingStructurePreview;
+  /**
+   * Raw one-line status of the currently-running indexer job, e.g.
+   * `"running face · raw/Demo.mp4 · 14 / 84 pairs complete"`. The
+   * rail parses out the indexer name + asset for the meta line.
+   * Undefined / empty when no indexing job is in flight.
+   */
+  activeIndexingStatus?: string;
   /** True when all 9 tasks are at least partially indexed. */
   ready?: boolean;
   onImport?: () => void;

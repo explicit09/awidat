@@ -32,6 +32,7 @@ function toRailProps(props: IndexRailProps) {
     tasks: props.tasks,
     structurePreview: props.structurePreview,
     indexerConfig: props.indexerConfig,
+    activeIndexingStatus: props.activeIndexingStatus,
     ready: props.ready,
     onRefreshIndexers: props.onReviewIndexResults,
     onOpenConfigPath: props.onOpenConfigPath,

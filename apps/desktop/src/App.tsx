@@ -1978,6 +1978,11 @@ function App() {
         )
       }
       timelineCollapsed={false}
+      // Wave 4 W4.8: when the center pane is in Timeline mode the
+      // expanded TimelineHybrid renders there — the bottom dock would
+      // double up. Hide the dock entirely so the user sees the
+      // timeline exactly once. Brief and Source modes keep the dock.
+      timelineHidden={isEditStage && centerMode === "timeline"}
       inspector={
         isEditStage && inspectorCollapsed ? (
           <CollapsedInspectorButton
@@ -2013,6 +2018,9 @@ function App() {
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
                 indexerConfig={indexerConfig}
+                activeIndexingStatus={
+                  activeJobs.find((job) => job.job_kind === "indexing")?.status
+                }
                 ready={realIndexingReady}
                 onReviewIndexResults={() => {
                   void loadIndexerConfig();
