@@ -76,6 +76,18 @@ export const usePendingProposals = create<PendingState>((set, get) => ({
       const entry: PendingProposal = { ...projected, medium, firstSeenAt };
 
       if (existing) {
+        // Revision detection: when the agent re-emits a proposal with
+        // a bumped revision counter we log the prior state as
+        // "revised" so the History tab tells a complete story. Cheap
+        // side-effect — the persisted log silently drops the entry
+        // when no project is loaded.
+        if (
+          existing.revision !== undefined &&
+          entry.revision !== undefined &&
+          entry.revision > existing.revision
+        ) {
+          recordRevision(existing);
+        }
         return {
           pending: state.pending.map((p) =>
             p.callId === item.id ? entry : p,
@@ -222,4 +234,38 @@ export function deriveMedium(proposal: ActiveProposal): ProposalMedium {
   if (mediums.size === 0) return "other";
   if (mediums.size === 1) return mediums.values().next().value as ProposalMedium;
   return "mixed";
+}
+
+/**
+ * Append a "revised" event to the persisted history log for the prior
+ * state of a pending proposal. Dynamic-imported to keep this module
+ * free of the project-store / history-store dependency cycle (the
+ * brief proposals store also imports here).
+ */
+function recordRevision(prior: PendingProposal): void {
+  void Promise.all([import("../app/state"), import("../state/proposalHistory")])
+    .then(([{ useProjectStore }, { buildHistoryEntry, useProposalHistoryStore }]) => {
+      const projectPath = useProjectStore.getState().current;
+      if (!projectPath) return;
+      const entry = buildHistoryEntry({
+        proposal: {
+          id: prior.callId,
+          source: "proposed_edit",
+          medium: prior.medium,
+          title:
+            prior.summary && prior.summary.trim().length > 0
+              ? prior.summary
+              : "Proposed edit",
+          rationale: prior.rationale,
+          firstSeenAt: prior.firstSeenAt,
+          toolName: undefined,
+        },
+        projectPath,
+        decision: "revised",
+      });
+      useProposalHistoryStore.getState().record(entry);
+    })
+    .catch(() => {
+      // History logging is best-effort chrome. Never fail an ingest.
+    });
 }

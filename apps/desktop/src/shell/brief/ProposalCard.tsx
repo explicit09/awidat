@@ -32,8 +32,10 @@ function brollDisclosureLabel(metadata: BrollDisclosureMetadata): string {
   return parts.join(" · ");
 }
 
-/** Medium → color-coded chip. Spec source: B2 task description. */
-const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: string }> = {
+/** Medium → color-coded chip. Spec source: B2 task description.
+ *  Exported so other surfaces (e.g. HistorySurface) can share the
+ *  visual contract instead of redefining the palette per surface. */
+export const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: string }> = {
   cut: {
     label: "Cut",
     className: "bg-[rgba(34,211,238,0.12)] text-[#67E8F9] border-[rgba(34,211,238,0.32)]",

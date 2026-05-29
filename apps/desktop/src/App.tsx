@@ -35,6 +35,7 @@ import {
   CommandRail,
   DeliverySurface,
   SkillsSurface,
+  HistorySurface,
   BriefSurface,
   CenterModeTabs,
   IndexRail,
@@ -1653,6 +1654,8 @@ function App() {
       realDeliveryWorkspace
     ) : !demoMode && stage === "skills" ? (
       <SkillsSurface />
+    ) : !demoMode && stage === "history" ? (
+      <HistorySurface />
     ) : undefined;
 
   if (demoMode && demoScreen.standalone && demoScreen.workspace) {

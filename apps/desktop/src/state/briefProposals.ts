@@ -23,6 +23,12 @@ import {
   type PendingProposal,
   type ProposalMedium,
 } from "../timeline/pendingProposals.ts";
+import { useProjectStore } from "../app/state.ts";
+import {
+  buildHistoryEntry,
+  useProposalHistoryStore,
+  type HistoryDecision,
+} from "./proposalHistory.ts";
 
 type ApprovalRequestItem = Extract<Item, { kind: "approval_request" }>;
 type ProposedEditItem = Extract<Item, { kind: "proposed_edit" }>;
@@ -230,12 +236,14 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
 
   async accept(id) {
     const state = get();
+    const snapshot = snapshotProposal(state, id);
     if (state.approvals.has(id)) {
       await state.dispatch.respondApproval(id, "allow");
       // Optimistic remove. The backend's matching Completed will also
       // arrive and drop it via ingest; the optimistic path keeps the
       // Brief responsive against backend round-trip latency.
       set((s) => removeApproval(s, id));
+      logDecision(snapshot, "accepted");
       return;
     }
     if (state.brollProposals.has(id)) {
@@ -245,26 +253,32 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
         await state.dispatch.acceptBroll(id, videoPath);
       }
       set((s) => decideBroll(s, id));
+      logDecision(snapshot, "accepted");
       return;
     }
     // Otherwise it's a proposed_edit — usePendingProposals clears its
     // own entry when the backend emits Completed.
     await state.dispatch.acceptProposal(id);
+    logDecision(snapshot, "accepted");
   },
 
   async reject(id, _reason) {
     const state = get();
+    const snapshot = snapshotProposal(state, id);
     if (state.approvals.has(id)) {
       await state.dispatch.respondApproval(id, "deny");
       set((s) => removeApproval(s, id));
+      logDecision(snapshot, "rejected");
       return;
     }
     if (state.brollProposals.has(id)) {
       await state.dispatch.rejectBroll(id);
       set((s) => decideBroll(s, id));
+      logDecision(snapshot, "rejected");
       return;
     }
     await state.dispatch.rejectProposal(id);
+    logDecision(snapshot, "rejected");
   },
 
   clear() {
@@ -394,6 +408,38 @@ function brollEntryToBriefProposal(entry: BrollEntry): BriefProposal {
     toolName: undefined,
     brollMetadata: entry.metadata,
   };
+}
+
+/**
+ * Snapshot the BriefProposal row by id BEFORE the decision mutates the
+ * stack. Returns `null` when the row isn't on the stack — caller logs
+ * nothing in that case. We snapshot up front because the optimistic
+ * remove inside accept/reject would otherwise hide the row from the
+ * synchronous lookup that follows the dispatch await.
+ */
+function snapshotProposal(
+  state: BriefState,
+  id: string,
+): BriefProposal | null {
+  const pending = state.pending();
+  return pending.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * Append a decision to the persisted history log. Best-effort: if no
+ * project is loaded (snapshot is null, or no project root yet) we drop
+ * the event silently — the log is non-load-bearing chrome and a missing
+ * entry should never crash a decision dispatch.
+ */
+function logDecision(
+  proposal: BriefProposal | null,
+  decision: HistoryDecision,
+): void {
+  if (!proposal) return;
+  const projectPath = useProjectStore.getState().current;
+  if (!projectPath) return;
+  const entry = buildHistoryEntry({ proposal, projectPath, decision });
+  useProposalHistoryStore.getState().record(entry);
 }
 
 /** Type-narrowing helper for the items subscription in appGlue. */

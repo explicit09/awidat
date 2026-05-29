@@ -21,3 +21,14 @@ export {
   useSkillsStore,
   type SkillsStore,
 } from "./skills";
+
+export {
+  useProposalHistoryStore,
+  buildHistoryEntry,
+  entriesForProject,
+  sortNewestFirst,
+  serialize as serializeHistory,
+  deserialize as deserializeHistory,
+  type HistoryEntry,
+  type HistoryDecision,
+} from "./proposalHistory";

@@ -18,6 +18,7 @@
     "test:evidence-accessors": "node --experimental-strip-types tests/evidence-accessors.test.ts",
     "test:evidence-drill-downs": "node --experimental-strip-types tests/evidence-drill-downs.test.ts",
     "test:skills": "node --experimental-strip-types tests/skills-store.test.ts",
+    "test:proposal-history": "node --experimental-strip-types tests/proposal-history.test.ts",
     "test:agents-md-editor": "node --experimental-strip-types tests/agents-md-editor.test.ts",
     "test:rationale-display": "node --experimental-strip-types tests/rationale-display.test.ts",
     "test:animation": "tsc src/timeline/animation.ts src/media/videoOverlayStyle.ts --target ES2022 --module ES2022 --moduleResolution bundler --outDir dist-test --skipLibCheck && node tests/animation-evaluator.mjs",

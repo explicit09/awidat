@@ -6,19 +6,20 @@ import { useMediaStore } from "../../media/store";
  * WorkspaceRow — row 2 of the redesigned top chrome.
  *
  * Layout:
- *   [Edit] [Deliver] [History*] [Skills*]                     00:00:00:00 / 00:00:38:17
+ *   [Edit] [Deliver] [Skills] [History]                       00:00:00:00 / 00:00:38:17
  *
- * Tabs drive the global stage (`useStageStore`). History and Skills are
- * disabled placeholders kept visible to communicate scope (Tasks beyond
- * Phase 2). The right side mirrors the preview clock — current playhead
- * over total duration — using whichever clock the media store currently
+ * Tabs drive the global stage (`useStageStore`). All four tabs are
+ * routable destinations: Edit and Deliver are workflow stages, Skills
+ * and History are non-linear surfaces the user jumps to and back from.
+ * The right side mirrors the preview clock — current playhead over
+ * total duration — using whichever clock the media store currently
  * exposes (timeline-time when a timeline is loaded, source-time otherwise).
  *
  * Both timecodes fall back to `00:00:00:00` when nothing is loaded so the
  * row always renders cleanly.
  */
 
-type TabId = Stage | "history";
+type TabId = Stage;
 
 type TabDef = {
   id: TabId;
@@ -32,8 +33,8 @@ const TABS: readonly TabDef[] = [
   { id: "deliver", label: "Deliver", kbd: "⌘2" },
   // Skills is a real destination — see `SkillsSurface` in the workspace.
   { id: "skills", label: "Skills", kbd: "⌘3" },
-  // History stays disabled until that tab gets implemented.
-  { id: "history", label: "History", kbd: "", disabled: true },
+  // History surfaces the persisted proposal-decision log (T4).
+  { id: "history", label: "History", kbd: "⌘4" },
 ];
 
 export function WorkspaceRow() {
@@ -61,9 +62,7 @@ export function WorkspaceRow() {
               title={t.kbd ? `${t.label} (${t.kbd})` : t.label}
               onClick={() => {
                 if (t.disabled) return;
-                // Edit/Deliver/Skills are real Stage ids; History
-                // remains disabled and can never reach this branch.
-                setActive(t.id as Stage);
+                setActive(t.id);
               }}
               className={cn(
                 "relative h-[30px] -mb-px text-[12px] font-semibold",

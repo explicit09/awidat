@@ -18,16 +18,17 @@ export const STAGES = ["edit", "deliver"] as const;
 
 /**
  * The full set of routable destinations. `Stage` is the workflow
- * surface union; `skills` is a non-linear tab that lives next to the
- * workflow stages in the WorkspaceRow but doesn't participate in the
- * progress indicator.
+ * surface union; `skills` and `history` are non-linear tabs that live
+ * next to the workflow stages in the WorkspaceRow but don't
+ * participate in the progress indicator.
  */
-export type Stage = (typeof STAGES)[number] | "skills";
+export type Stage = (typeof STAGES)[number] | "skills" | "history";
 
 export const STAGE_LABEL: Record<Stage, string> = {
   edit: "Edit",
   deliver: "Deliver",
   skills: "Skills",
+  history: "History",
 };
 
 /**
