@@ -39,7 +39,7 @@ import {
   emitMenuCommand,
   onMenuCommand,
 } from "../app/menuCommands";
-import { useStageStore } from "./index";
+import { useSkillsStore, useStageStore } from "./index";
 import { INTRO_PROMPT, useIntroState } from "./introState";
 import {
   ITEM_EVENT,
@@ -84,6 +84,7 @@ export function useAppGlue() {
   const introduced = useIntroState((s) => s.introduced);
   const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
+  const hydrateSkillsFromDisk = useSkillsStore((s) => s.hydrateFromDisk);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const zoomIn = useTimelineStore((s) => s.zoomIn);
@@ -327,6 +328,16 @@ export function useAppGlue() {
         refreshMedia().catch(() => {});
       }, 500);
       refreshMedia().catch(() => {});
+      // Hydrate the Skills tab's enable/disable state from
+      // `<project>/.awidat/skills.json` so the toggles reflect any
+      // changes that arrived via file sync (Dropbox/git/etc.). The
+      // file is the source of truth; the localStorage cache is just a
+      // UX optimization for cold loads. Errors are swallowed — the
+      // agent still loads everything when the file is missing.
+      const projectRoot = current;
+      invoke<string[]>("read_disabled_skills", { projectPath: projectRoot })
+        .then((disabled) => hydrateSkillsFromDisk(projectRoot, disabled))
+        .catch((e) => console.warn("read_disabled_skills failed", e));
       return () => window.clearTimeout(retry);
     }
   }, [
@@ -338,6 +349,7 @@ export function useAppGlue() {
     clearMediaSelection,
     clearSelection,
     clearNotes,
+    hydrateSkillsFromDisk,
     refreshTimeline,
     refreshMedia,
   ]);

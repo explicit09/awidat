@@ -26,6 +26,7 @@ pub mod proposal;
 pub mod render;
 pub mod review;
 pub mod silence;
+pub mod skill_config;
 pub mod skills;
 pub mod still_export;
 pub mod thumbnail;

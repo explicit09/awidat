@@ -7,17 +7,25 @@
  * newly added bundled skills don't silently arrive in a disabled
  * state when a project comes back after an upgrade.
  *
- * IMPORTANT — UI-only today:
- *   This toggle does NOT yet affect the agent's loadout. The
- *   `render_skills_catalog()` Tauri path that prepends the L1
- *   catalog to every turn doesn't read this store. Wiring the
- *   per-project disable into the backend is a follow-up task —
- *   we intentionally don't touch `codex_session.rs` from the UI
- *   tab.
+ * Backend integration (Wave 4 T1):
+ *   - On every mutation (toggle / setDisabled) the store invokes the
+ *     `write_disabled_skills` Tauri command for the affected project,
+ *     persisting the list to `<project>/.awidat/skills.json`. The
+ *     agent's `render_skills_catalog()` reads that file at session
+ *     launch and filters disabled skills out of the L1 catalog before
+ *     the bridge ever sees them.
+ *   - `hydrateFromDisk(projectRoot)` lets the app glue prime the
+ *     store from `.awidat/skills.json` whenever a project opens,
+ *     reflecting state that landed via file sync (Dropbox/git/etc.).
+ *
+ * The localStorage cache survives across reloads and across sessions
+ * where the file hasn't been hydrated yet — it's a UX optimization,
+ * not the source of truth. The on-disk file is canonical.
  */
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
 /**
  * Persisted shape: project path → array of disabled skill names.
@@ -43,6 +51,14 @@ export type SkillsStore = {
     skillName: string,
     disabled: boolean,
   ) => void;
+  /**
+   * Replace the in-memory disabled set for a project with the names
+   * read from `.awidat/skills.json` via the backend. Does NOT persist
+   * back to disk — only mirrors what the file already contains.
+   * Called by the app glue on project open so the toggle UI reflects
+   * any state that arrived via file sync.
+   */
+  hydrateFromDisk: (projectRoot: string, disabled: string[]) => void;
   /** Clear all disable state for a project (used by tests). */
   clearForProject: (projectRoot: string) => void;
 };
@@ -119,6 +135,27 @@ export function applySetDisabled(
 }
 
 /**
+ * Replace the project's disabled set wholesale. Used by the
+ * hydrate-from-disk path — the on-disk file is authoritative for the
+ * project's enabled/disabled state, so we don't merge with any prior
+ * UI state; we replace it.
+ */
+export function applyHydrate(
+  map: Map<string, Set<string>>,
+  projectRoot: string,
+  disabled: string[],
+): Map<string, Set<string>> {
+  const next = new Map(map);
+  const key = projectKey(projectRoot);
+  if (disabled.length === 0) {
+    next.delete(key);
+  } else {
+    next.set(key, new Set(disabled));
+  }
+  return next;
+}
+
+/**
  * Convert the in-memory Map<string, Set<string>> into the
  * JSON-friendly persisted shape (and back). Exported for tests.
  */
@@ -141,26 +178,87 @@ export function deserialize(shape: PersistedShape | undefined): Map<string, Set<
   return map;
 }
 
+/**
+ * Persistence hook — invoked after every mutation that affects a real
+ * project root. Pulled out as a swappable function so tests can spy on
+ * it without standing up Tauri's IPC bridge.
+ *
+ * When `projectRoot` is `null` the toggle is operating on the global
+ * bucket (no project loaded) and we have nowhere to write to, so we
+ * skip — the localStorage cache still keeps the UI consistent.
+ *
+ * Errors are logged but swallowed: the on-screen toggle has already
+ * applied, and surfacing a Rust IPC failure to the user mid-toggle
+ * would be noisier than the actual problem. The next mutation retries
+ * the write.
+ */
+let persistDisabled: (projectRoot: string, disabled: string[]) => Promise<void> =
+  async (projectRoot, disabled) => {
+    if (!isTauri()) return;
+    try {
+      await invoke("write_disabled_skills", {
+        projectPath: projectRoot,
+        disabled,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("write_disabled_skills failed", err);
+    }
+  };
+
+/**
+ * Test seam — override the persistence sink. Returns the previous
+ * implementation so callers can restore it in their teardown.
+ */
+export function __setPersistDisabledForTests(
+  next: (projectRoot: string, disabled: string[]) => Promise<void>,
+): (projectRoot: string, disabled: string[]) => Promise<void> {
+  const prev = persistDisabled;
+  persistDisabled = next;
+  return prev;
+}
+
+/** Read the disabled set for a project as a plain sorted array. */
+function disabledFor(
+  map: Map<string, Set<string>>,
+  projectRoot: string,
+): string[] {
+  const set = map.get(projectKey(projectRoot));
+  return set ? Array.from(set).sort() : [];
+}
+
 export const useSkillsStore = create<SkillsStore>()(
   persist(
     (set, get) => ({
       disabledByProject: new Map(),
       isDisabled: (projectRoot, skillName) =>
         computeIsDisabled(get().disabledByProject, projectRoot, skillName),
-      toggle: (projectRoot, skillName) =>
+      toggle: (projectRoot, skillName) => {
+        const nextMap = applyToggle(get().disabledByProject, projectRoot, skillName);
+        set({ disabledByProject: nextMap });
+        // Only persist when we have a real project root — the global
+        // bucket has no on-disk counterpart by design.
+        if (projectRoot !== null) {
+          void persistDisabled(projectRoot, disabledFor(nextMap, projectRoot));
+        }
+      },
+      setDisabled: (projectRoot, skillName, disabled) => {
+        const nextMap = applySetDisabled(
+          get().disabledByProject,
+          projectRoot,
+          skillName,
+          disabled,
+        );
+        set({ disabledByProject: nextMap });
+        if (projectRoot !== null) {
+          void persistDisabled(projectRoot, disabledFor(nextMap, projectRoot));
+        }
+      },
+      hydrateFromDisk: (projectRoot, disabled) =>
         set((state) => ({
-          disabledByProject: applyToggle(
+          disabledByProject: applyHydrate(
             state.disabledByProject,
             projectRoot,
-            skillName,
-          ),
-        })),
-      setDisabled: (projectRoot, skillName, disabled) =>
-        set((state) => ({
-          disabledByProject: applySetDisabled(
-            state.disabledByProject,
-            projectRoot,
-            skillName,
             disabled,
           ),
         })),
