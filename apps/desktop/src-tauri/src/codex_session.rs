@@ -165,14 +165,21 @@ fn render_skills_catalog(project_root: &Path) -> Option<String> {
     let user_roots = user_skill_roots();
     let bundled = bundled_skill_root();
     let project_override = project_skill_root(project_root);
-    let disabled = crate::commands::skill_config::load_disabled_skills_sync(project_root);
+    let cfg = crate::commands::skill_config::load_skill_config_sync(project_root);
     render_skills_catalog_from_roots(
         bundled.as_deref(),
         &user_roots,
         project_override.as_deref(),
-        &disabled,
+        &cfg.disabled,
+        &cfg.pinned,
     )
 }
+
+/// Current Awidat core version — used to gate skills that declare a
+/// minimum compatibility version via `SkillMeta::awidat_min_version`.
+/// Sourced from the desktop crate's package version at compile time.
+/// Skills declaring a higher minimum are skipped with a warning.
+const AWIDAT_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Inner core — separated so unit tests can drive discovery against
 /// a `tempfile::TempDir`-backed skills root without touching the
@@ -182,44 +189,216 @@ fn render_skills_catalog_from_roots(
     user_roots: &[PathBuf],
     project_root: Option<&Path>,
     disabled: &[String],
+    pinned: &[crate::commands::skill_config::PinnedSkill],
 ) -> Option<String> {
     use awidat_core::context::{AvailableSkillsFragment, ContextualUserFragment};
-    use awidat_core::skills::SkillRegistry;
 
-    // Layer priority: bundled (lowest) -> user (mid) -> project (highest).
-    // `discover_many` applies each overlay in order, with later overlays
-    // replacing earlier entries by name — so we append project last.
-    let mut overlay_roots: Vec<PathBuf> = Vec::with_capacity(user_roots.len() + 1);
-    overlay_roots.extend(user_roots.iter().cloned());
-    if let Some(p) = project_root {
-        overlay_roots.push(p.to_path_buf());
-    }
+    // Build a name → resolved (skill, provenance) map by walking each
+    // layer ourselves. We can't use `SkillRegistry::discover_many`
+    // here because pin resolution needs to choose between layers per
+    // skill (a `provenance: "bundled"` pin must reach back past a
+    // project override), and the registry's overlay model collapses
+    // that information.
+    let layers = collect_layered_skills(bundled_root, user_roots, project_root);
 
-    let (registry, errors) = SkillRegistry::discover_many(
-        bundled_root,
-        overlay_roots.iter().map(PathBuf::as_path),
-    );
-    for err in errors {
-        tracing::warn!(?err, "skill discovery: malformed entry skipped");
-    }
-
-    // Filter the discovered skills against the user's disable list
-    // before assembling the L1 fragment. We rebuild the catalog lines
-    // directly (matching the format `SkillRegistry::l1_fragment()`
-    // uses) rather than mutating the registry — keeps this filter
-    // self-contained on the desktop side and avoids leaking a
-    // "disabled skill" concept into `awidat_core::skills`.
     let disabled_set: std::collections::HashSet<&str> =
         disabled.iter().map(String::as_str).collect();
-    let skill_lines: Vec<String> = registry
-        .all()
-        .filter(|s| !disabled_set.contains(s.meta.name.as_str()))
-        .map(|s| format!("  - {}: {}", s.meta.name, s.meta.description))
-        .collect();
+    let pin_table: std::collections::HashMap<&str, &crate::commands::skill_config::PinnedSkill> =
+        pinned.iter().map(|p| (p.name.as_str(), p)).collect();
+
+    // Resolve each skill to its winning layer. Names are collected
+    // from every layer; the loop picks the right `Skill` per name.
+    let mut names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (name, _) in layers.bundled.iter() {
+        names.insert(name.as_str());
+    }
+    for (name, _) in layers.user.iter() {
+        names.insert(name.as_str());
+    }
+    for (name, _) in layers.project.iter() {
+        names.insert(name.as_str());
+    }
+
+    let mut skill_lines: Vec<String> = Vec::new();
+    for name in names {
+        // Disabled wins over every pin. The CLAUDE.md / module doc
+        // contract is explicit: pinning never re-enables a disabled
+        // skill.
+        if disabled_set.contains(name) {
+            continue;
+        }
+        let resolved = match pin_table.get(name) {
+            Some(pin) => resolve_pinned(name, pin, &layers),
+            None => resolve_default(name, &layers),
+        };
+        let Some(skill) = resolved else { continue };
+        // Compatibility gate. A skill that needs a newer Awidat than
+        // we're running is silently skipped with a warning; the
+        // editor sees a missing entry on the Skills tab card (handled
+        // there) and the agent never learns it existed.
+        if !is_compatible(&skill.meta.awidat_min_version) {
+            tracing::warn!(
+                skill = %name,
+                required = ?skill.meta.awidat_min_version,
+                current = %AWIDAT_CORE_VERSION,
+                "skipping skill: requires newer Awidat core"
+            );
+            continue;
+        }
+        skill_lines.push(format!("  - {}: {}", skill.meta.name, skill.meta.description));
+    }
+
     if skill_lines.is_empty() {
         return None;
     }
     Some(AvailableSkillsFragment { skill_lines }.render())
+}
+
+/// Internal: per-layer `name → Skill` index. Bundled-first ordering
+/// matches the discovery hierarchy. Used by `render_skills_catalog_from_roots`
+/// for per-skill layer selection during pin resolution.
+struct LayeredSkills {
+    bundled: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
+    user: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
+    project: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
+}
+
+fn collect_layered_skills(
+    bundled_root: Option<&Path>,
+    user_roots: &[PathBuf],
+    project_root: Option<&Path>,
+) -> LayeredSkills {
+    use awidat_core::skills::SkillRegistry;
+    let load = |root: Option<&Path>| -> std::collections::BTreeMap<String, awidat_core::skills::Skill> {
+        let mut out = std::collections::BTreeMap::new();
+        let Some(root) = root else {
+            return out;
+        };
+        let (reg, errors) = SkillRegistry::discover_many(Some(root), std::iter::empty::<&Path>());
+        for err in errors {
+            tracing::warn!(?err, "skill discovery: malformed entry skipped");
+        }
+        for s in reg.all() {
+            out.insert(s.meta.name.clone(), s.clone());
+        }
+        out
+    };
+
+    // User roots may be multiple paths (legacy `~/.awidat/skills` +
+    // platform config dir) — later wins on name conflict, mirroring
+    // the previous overlay behavior.
+    let mut user_map = std::collections::BTreeMap::new();
+    for root in user_roots {
+        let layer = load(Some(root.as_path()));
+        user_map.extend(layer);
+    }
+
+    LayeredSkills {
+        bundled: load(bundled_root),
+        user: user_map,
+        project: load(project_root),
+    }
+}
+
+/// Default resolution — project > user > bundled. Returns `None` when
+/// none of the layers carry the named skill (shouldn't happen since
+/// we iterate names sourced from these same layers, but keeps the
+/// signature honest).
+fn resolve_default<'a>(
+    name: &str,
+    layers: &'a LayeredSkills,
+) -> Option<&'a awidat_core::skills::Skill> {
+    layers
+        .project
+        .get(name)
+        .or_else(|| layers.user.get(name))
+        .or_else(|| layers.bundled.get(name))
+}
+
+/// Pin resolution — honors `version` (exact match) and `provenance`
+/// (constrain to a single layer). Returns `None` when no layer
+/// satisfies the pin, emitting a `tracing::warn!` so the editor can
+/// trace why a pinned skill went missing.
+fn resolve_pinned<'a>(
+    name: &str,
+    pin: &crate::commands::skill_config::PinnedSkill,
+    layers: &'a LayeredSkills,
+) -> Option<&'a awidat_core::skills::Skill> {
+    // Candidate list filtered by provenance.
+    let candidates: Vec<(&str, Option<&awidat_core::skills::Skill>)> =
+        match pin.provenance.as_deref() {
+            Some("bundled") => vec![("bundled", layers.bundled.get(name))],
+            Some("user") => vec![("user", layers.user.get(name))],
+            Some("project") => vec![("project", layers.project.get(name))],
+            Some(other) => {
+                tracing::warn!(
+                    skill = %name,
+                    provenance = %other,
+                    "skill pin: unknown provenance value; skipping skill"
+                );
+                return None;
+            }
+            None => vec![
+                ("project", layers.project.get(name)),
+                ("user", layers.user.get(name)),
+                ("bundled", layers.bundled.get(name)),
+            ],
+        };
+
+    // Then filter by version if the pin sets it. The first candidate
+    // (highest priority in default ordering) that matches wins.
+    for (_layer_label, candidate) in candidates {
+        let Some(skill) = candidate else { continue };
+        if let Some(required) = pin.version.as_deref() {
+            if skill.meta.version != required {
+                continue;
+            }
+        }
+        return Some(skill);
+    }
+
+    tracing::warn!(
+        skill = %name,
+        required_version = ?pin.version,
+        required_provenance = ?pin.provenance,
+        "skill pin: no candidate satisfies the pin; skipping skill"
+    );
+    None
+}
+
+/// Compatibility check — returns `true` when the running Awidat is
+/// at or above the skill's declared `awidat_min_version`. Skills
+/// without a declared minimum always pass.
+///
+/// Versions are normalized to three `u32` components for an ordered
+/// comparison; non-numeric or short versions fall back to a lenient
+/// "assume compatible" so a malformed string can't lock out an
+/// otherwise-loadable skill.
+fn is_compatible(min_version: &Option<String>) -> bool {
+    let Some(required) = min_version.as_deref() else {
+        return true;
+    };
+    let current = parse_three_part(AWIDAT_CORE_VERSION);
+    let needed = parse_three_part(required);
+    match (current, needed) {
+        (Some(c), Some(n)) => c >= n,
+        _ => true,
+    }
+}
+
+/// Parse `"MAJOR.MINOR.PATCH"` → `(u32, u32, u32)`. Returns `None` on
+/// any deviation so the caller can fall back to a lenient default.
+fn parse_three_part(s: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    // Patch may carry a pre-release / build suffix (e.g. "0-alpha");
+    // strip everything past the first non-digit so "1.2.0-beta" parses
+    // as `1.2.0` for the compatibility check.
+    let patch_raw = parts.next()?;
+    let patch_digits: String = patch_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let patch = patch_digits.parse::<u32>().ok()?;
+    Some((major, minor, patch))
 }
 
 /// Per-user skills directories, in priority order (later entries win
@@ -317,7 +496,7 @@ mod tests {
     fn render_skills_catalog_includes_all_when_nothing_disabled() {
         let bundled = make_skills_root(&["alpha-skill", "beta-skill"]);
         let rendered =
-            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[])
+            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
                 .expect("catalog non-empty");
         assert!(rendered.contains("alpha-skill"), "missing alpha: {rendered}");
         assert!(rendered.contains("beta-skill"), "missing beta: {rendered}");
@@ -331,6 +510,7 @@ mod tests {
             &[],
             None,
             &["alpha-skill".to_string()],
+            &[],
         )
         .expect("catalog non-empty");
         assert!(
@@ -348,6 +528,7 @@ mod tests {
             &[],
             None,
             &["only-skill".to_string()],
+            &[],
         );
         assert!(out.is_none(), "expected None when every skill is disabled");
     }
@@ -362,6 +543,7 @@ mod tests {
             &[],
             None,
             &["ghost-skill".to_string()],
+            &[],
         )
         .expect("catalog non-empty");
         assert!(rendered.contains("alpha-skill"));
@@ -370,7 +552,7 @@ mod tests {
     #[test]
     fn render_skills_catalog_returns_none_when_no_skills_installed() {
         let empty = tempfile::tempdir().unwrap();
-        let out = render_skills_catalog_from_roots(Some(empty.path()), &[], None, &[]);
+        let out = render_skills_catalog_from_roots(Some(empty.path()), &[], None, &[], &[]);
         assert!(out.is_none());
     }
 
@@ -383,7 +565,7 @@ mod tests {
     fn render_skills_catalog_carries_rationale_contract() {
         let bundled = make_skills_root(&["only-skill"]);
         let rendered =
-            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[])
+            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
                 .expect("catalog non-empty");
         assert!(
             rendered.contains("## Rationale contract"),
@@ -424,6 +606,7 @@ mod tests {
             &[user.path().to_path_buf()],
             Some(project.path()),
             &[],
+            &[],
         )
         .expect("catalog non-empty");
         assert!(
@@ -452,9 +635,244 @@ mod tests {
             &[user.path().to_path_buf()],
             None,
             &[],
+            &[],
         )
         .expect("catalog non-empty");
         assert!(rendered.contains("user-desc"), "user must override bundled");
         assert!(!rendered.contains("bundled-desc"));
+    }
+
+    // ---- Wave 5 B2 — version + provenance pinning ----
+
+    /// Build a throwaway skills root with a single skill at a chosen
+    /// version + description. Lets pin tests differentiate two copies
+    /// of the same skill by reading the rendered description back.
+    fn make_skills_root_with_version(
+        name: &str,
+        version: &str,
+        description: &str,
+    ) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = dir.path().join(name);
+        fs::create_dir_all(&sd).unwrap();
+        let body = format!(
+            "---\nname: {name}\ndescription: {description}\nversion: \"{version}\"\n---\n\nbody\n"
+        );
+        fs::write(sd.join("SKILL.md"), body).unwrap();
+        dir
+    }
+
+    use crate::commands::skill_config::PinnedSkill;
+
+    /// Pinning to v1.0.0 must skip a candidate at v1.1.0 even if it's
+    /// the higher-priority layer. The bundled v1.0.0 wins.
+    #[test]
+    fn render_skills_catalog_version_pin_selects_matching_layer() {
+        let bundled = make_skills_root_with_version("auto-cutter", "1.0.0", "v1-zero");
+        // A project-layer copy at a different version that the pin
+        // refuses to load — the bundled v1.0.0 must take its place.
+        let project = make_skills_root_with_version("auto-cutter", "1.1.0", "v1-one");
+        let pins = vec![PinnedSkill {
+            name: "auto-cutter".to_string(),
+            version: Some("1.0.0".to_string()),
+            provenance: None,
+        }];
+        let rendered = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[],
+            Some(project.path()),
+            &[],
+            &pins,
+        )
+        .expect("catalog non-empty");
+        assert!(
+            rendered.contains("v1-zero"),
+            "pinned version should be selected; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("v1-one"),
+            "non-matching version must be skipped; got:\n{rendered}"
+        );
+    }
+
+    /// Pinning to a non-existent version must skip the skill entirely
+    /// (warn + drop). Other skills carry on.
+    #[test]
+    fn render_skills_catalog_unsatisfiable_version_pin_drops_skill() {
+        let bundled = make_skills_root_with_version("auto-cutter", "1.1.0", "actual");
+        let pins = vec![PinnedSkill {
+            name: "auto-cutter".to_string(),
+            version: Some("1.0.0".to_string()),
+            provenance: None,
+        }];
+        // Only this skill exists; an unsatisfiable pin → empty catalog.
+        let out = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[],
+            None,
+            &[],
+            &pins,
+        );
+        assert!(
+            out.is_none(),
+            "unsatisfiable pin should drop the only skill"
+        );
+    }
+
+    /// Pinning to a specific provenance must select that layer even
+    /// when a higher-priority layer carries the same skill.
+    #[test]
+    fn render_skills_catalog_provenance_pin_selects_bundled_over_project() {
+        let bundled = make_skills_root_with_desc("shared", "bundled-desc");
+        let project = make_skills_root_with_desc("shared", "project-desc");
+        let pins = vec![PinnedSkill {
+            name: "shared".to_string(),
+            version: None,
+            provenance: Some("bundled".to_string()),
+        }];
+        let rendered = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[],
+            Some(project.path()),
+            &[],
+            &pins,
+        )
+        .expect("catalog non-empty");
+        assert!(
+            rendered.contains("bundled-desc"),
+            "provenance pin to bundled must override project override; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("project-desc"),
+            "project layer must not leak through; got:\n{rendered}"
+        );
+    }
+
+    /// Disabled list still wins over pins — pinning must not
+    /// re-enable a disabled skill (per CLAUDE.md / module contract).
+    #[test]
+    fn render_skills_catalog_disabled_wins_over_pin() {
+        let bundled = make_skills_root_with_version("auto-cutter", "1.0.0", "actual");
+        let pins = vec![PinnedSkill {
+            name: "auto-cutter".to_string(),
+            version: Some("1.0.0".to_string()),
+            provenance: None,
+        }];
+        let out = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[],
+            None,
+            &["auto-cutter".to_string()],
+            &pins,
+        );
+        assert!(
+            out.is_none(),
+            "disabled skill must stay out even when pinned"
+        );
+    }
+
+    /// Pinning to an unknown provenance value is treated as a
+    /// misconfiguration: warn + skip the skill. We don't crash.
+    #[test]
+    fn render_skills_catalog_unknown_provenance_drops_skill() {
+        let bundled = make_skills_root_with_desc("only-skill", "actual");
+        let pins = vec![PinnedSkill {
+            name: "only-skill".to_string(),
+            version: None,
+            provenance: Some("homebrew".to_string()),
+        }];
+        let out = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[],
+            None,
+            &[],
+            &pins,
+        );
+        assert!(out.is_none(), "unknown provenance must skip the skill");
+    }
+
+    /// Compatibility gate — a skill requiring a future Awidat is
+    /// silently dropped with a warning. Since `AWIDAT_CORE_VERSION`
+    /// is sourced from the package's cargo version we can't pick a
+    /// universally "newer" constant without coupling to it, so we
+    /// use a 99.x.x sentinel that's safely in the future.
+    #[test]
+    fn render_skills_catalog_skips_future_required_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let sd = dir.path().join("future-skill");
+        fs::create_dir_all(&sd).unwrap();
+        fs::write(
+            sd.join("SKILL.md"),
+            "---\nname: future-skill\ndescription: needs newer Awidat\nawidat_min_version: \"99.0.0\"\n---\n\nbody\n",
+        )
+        .unwrap();
+        let out = render_skills_catalog_from_roots(Some(dir.path()), &[], None, &[], &[]);
+        assert!(
+            out.is_none(),
+            "future-version skill must be filtered from the catalog"
+        );
+    }
+
+    /// Compatibility gate — a skill declaring a min version we
+    /// already meet must load normally.
+    #[test]
+    fn render_skills_catalog_loads_compatible_skill() {
+        let dir = tempfile::tempdir().unwrap();
+        let sd = dir.path().join("safe-skill");
+        fs::create_dir_all(&sd).unwrap();
+        fs::write(
+            sd.join("SKILL.md"),
+            "---\nname: safe-skill\ndescription: compat\nawidat_min_version: \"0.0.0\"\n---\n\nbody\n",
+        )
+        .unwrap();
+        let rendered = render_skills_catalog_from_roots(Some(dir.path()), &[], None, &[], &[])
+            .expect("catalog non-empty");
+        assert!(rendered.contains("safe-skill"));
+    }
+
+    /// `parse_three_part` accepts MAJOR.MINOR.PATCH, ignores a build
+    /// suffix on the patch component, and rejects malformed input.
+    #[test]
+    fn parse_three_part_handles_suffix_and_bad_input() {
+        assert_eq!(parse_three_part("1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_three_part("1.2.3-beta"), Some((1, 2, 3)));
+        assert_eq!(parse_three_part("not-a-version"), None);
+        assert_eq!(parse_three_part("1.2"), None);
+    }
+
+    /// `is_compatible` is lenient when versions don't parse — a
+    /// malformed declared minimum can't lock the editor out of a
+    /// skill they otherwise have installed.
+    #[test]
+    fn is_compatible_lenient_when_versions_malformed() {
+        assert!(is_compatible(&None));
+        assert!(is_compatible(&Some("not-a-version".to_string())));
+    }
+
+    /// Task-spec scenario — pin to v1.0.0 with both v1.0.0 (bundled)
+    /// and v1.1.0 (user) installed. Only v1.0.0 wins. Asserted via
+    /// the description so we know exactly which copy made it through.
+    #[test]
+    fn pin_to_v1_0_with_two_copies_only_v1_0_wins() {
+        let bundled = make_skills_root_with_version("auto-cutter", "1.0.0", "the-good-one");
+        let user = make_skills_root_with_version("auto-cutter", "1.1.0", "the-new-one");
+        let pins = vec![PinnedSkill {
+            name: "auto-cutter".to_string(),
+            version: Some("1.0.0".to_string()),
+            provenance: None,
+        }];
+        let rendered = render_skills_catalog_from_roots(
+            Some(bundled.path()),
+            &[user.path().to_path_buf()],
+            None,
+            &[],
+            &pins,
+        )
+        .expect("catalog non-empty");
+        assert!(rendered.contains("the-good-one"), "pinned v1.0.0 must win");
+        assert!(
+            !rendered.contains("the-new-one"),
+            "v1.1.0 must be skipped under the pin; got:\n{rendered}"
+        );
     }
 }

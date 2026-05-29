@@ -69,6 +69,13 @@ pub struct SkillMeta {
     /// technical / creative). Free-form.
     #[serde(default)]
     pub tier: Option<String>,
+    /// Optional minimum Awidat core version required to run this skill.
+    /// Used as a compatibility gate — if the host Awidat is older than
+    /// the declared minimum, the skill is skipped from the catalog
+    /// with a warning. Same shape as `version` (`MAJOR.MINOR.PATCH`).
+    /// Empty / missing = no compatibility check.
+    #[serde(default)]
+    pub awidat_min_version: Option<String>,
 }
 
 fn default_version() -> String {
@@ -447,6 +454,36 @@ mod tests {
     fn empty_registry_emits_no_fragment() {
         let reg = SkillRegistry::default();
         assert!(reg.l1_fragment().is_none());
+    }
+
+    #[test]
+    fn awidat_min_version_round_trips_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(
+            dir.path(),
+            "future-skill",
+            "name: future-skill\ndescription: x\nawidat_min_version: \"0.2.0\"",
+            "body",
+        );
+        let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
+        assert!(errs.is_empty());
+        let s = reg.get("future-skill").unwrap();
+        assert_eq!(s.meta.awidat_min_version.as_deref(), Some("0.2.0"));
+    }
+
+    #[test]
+    fn awidat_min_version_absent_when_not_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(
+            dir.path(),
+            "current-skill",
+            "name: current-skill\ndescription: x",
+            "body",
+        );
+        let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
+        assert!(errs.is_empty());
+        let s = reg.get("current-skill").unwrap();
+        assert!(s.meta.awidat_min_version.is_none());
     }
 
     #[test]

@@ -20,6 +20,7 @@ export {
 export {
   useSkillsStore,
   type SkillsStore,
+  type PinnedSkill,
 } from "./skills";
 
 export {

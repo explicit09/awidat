@@ -25,6 +25,7 @@ import { FolderOpen, Sparkles } from "lucide-react";
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { useSkillsStore } from "../state";
+import type { PinnedSkill } from "../state/skills";
 
 /**
  * Mirror of the Rust `SkillEntry` returned by `list_skills`.
@@ -171,7 +172,10 @@ export function SkillsSurface() {
   const userSkillsDir = useUserSkillsDir();
   const projectRoot = useProjectStore((s) => s.current);
   const disabledByProject = useSkillsStore((s) => s.disabledByProject);
+  const pinnedByProject = useSkillsStore((s) => s.pinnedByProject);
   const toggle = useSkillsStore((s) => s.toggle);
+  const setPin = useSkillsStore((s) => s.setPin);
+  const clearPin = useSkillsStore((s) => s.clearPin);
 
   // Keep selection alive across rerenders. Default to the first
   // skill on first load so the right pane is never empty when there
@@ -182,12 +186,18 @@ export function SkillsSurface() {
     setSelected(skills[0]?.name ?? null);
   }, [skills, selected]);
 
-  // Reactive disable lookup. We pull from the map directly so the
-  // component re-renders when the user toggles a skill.
+  // Reactive lookups — pull from the maps directly so the
+  // component re-renders when the user toggles or pins a skill.
   const isDisabled = useMemo(() => {
     const set = disabledByProject.get(projectRoot ?? "__global__");
     return (name: string) => set?.has(name) ?? false;
   }, [disabledByProject, projectRoot]);
+
+  const getPin = useMemo(() => {
+    const list = pinnedByProject.get(projectRoot ?? "__global__");
+    return (name: string) =>
+      list?.find((p) => p.name === name) ?? null;
+  }, [pinnedByProject, projectRoot]);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[2fr_3fr] gap-2 p-3">
@@ -198,12 +208,16 @@ export function SkillsSurface() {
         selected={selected}
         onSelect={setSelected}
         isDisabled={isDisabled}
+        getPin={getPin}
         onToggle={(name) => toggle(projectRoot, name)}
+        onSetPin={(pin) => setPin(projectRoot, pin)}
+        onClearPin={(name) => clearPin(projectRoot, name)}
         userSkillsDir={userSkillsDir}
       />
       <SkillDetail
         skill={skills.find((s) => s.name === selected) ?? null}
         disabled={selected ? isDisabled(selected) : false}
+        pin={selected ? getPin(selected) : null}
       />
     </div>
   );
@@ -216,7 +230,10 @@ type SkillListProps = {
   selected: string | null;
   onSelect: (name: string) => void;
   isDisabled: (name: string) => boolean;
+  getPin: (name: string) => PinnedSkill | null;
   onToggle: (name: string) => void;
+  onSetPin: (pin: PinnedSkill) => void;
+  onClearPin: (name: string) => void;
   /**
    * Resolved per-user skills directory; the footer renders an "Open
    * folder" link that reveals it in the OS file manager. `null` when
@@ -233,7 +250,10 @@ function SkillList({
   selected,
   onSelect,
   isDisabled,
+  getPin,
   onToggle,
+  onSetPin,
+  onClearPin,
   userSkillsDir,
 }: SkillListProps) {
   const openSkillsFolder = () => {
@@ -278,8 +298,11 @@ function SkillList({
                   skill={skill}
                   selected={selected === skill.name}
                   disabled={isDisabled(skill.name)}
+                  pin={getPin(skill.name)}
                   onSelect={() => onSelect(skill.name)}
                   onToggle={() => onToggle(skill.name)}
+                  onSetPin={onSetPin}
+                  onClearPin={onClearPin}
                 />
               </li>
             ))}
@@ -313,17 +336,46 @@ type SkillCardProps = {
   skill: SkillEntry;
   selected: boolean;
   disabled: boolean;
+  pin: PinnedSkill | null;
   onSelect: () => void;
   onToggle: () => void;
+  onSetPin: (pin: PinnedSkill) => void;
+  onClearPin: (name: string) => void;
 };
+
+/**
+ * Versions above this string get a "Pin" affordance. Skills authored
+ * at the default `0.1.0` floor get no pin link — they have nothing to
+ * lock against. Anything above (1.0.0, 1.2.0, …) is fair game.
+ */
+const PIN_VERSION_FLOOR = "1.0.0";
+
+function meetsPinFloor(version: string | null): boolean {
+  if (!version) return false;
+  // Lexicographic-safe compare via three-part split; mirrors the
+  // backend's normalized comparison.
+  const parts = version.split(".").map((p) => parseInt(p, 10));
+  if (parts.some((p) => Number.isNaN(p))) return false;
+  const floor = PIN_VERSION_FLOOR.split(".").map((p) => parseInt(p, 10));
+  for (let i = 0; i < Math.max(parts.length, floor.length); i++) {
+    const a = parts[i] ?? 0;
+    const b = floor[i] ?? 0;
+    if (a !== b) return a > b;
+  }
+  return true; // equal counts as "meets floor"
+}
 
 function SkillCard({
   skill,
   selected,
   disabled,
+  pin,
   onSelect,
   onToggle,
+  onSetPin,
+  onClearPin,
 }: SkillCardProps) {
+  const canPin = meetsPinFloor(skill.version);
   return (
     <div
       className={cn(
@@ -342,7 +394,7 @@ function SkillCard({
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
                 {skill.display_name}
               </span>
@@ -352,6 +404,7 @@ function SkillCard({
                   v{skill.version}
                 </span>
               )}
+              {pin && <PinChip pin={pin} />}
               {disabled && (
                 <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-muted)]">
                   Disabled
@@ -364,7 +417,17 @@ function SkillCard({
           </div>
         </div>
       </button>
-      <div className="mt-2 flex items-center justify-end">
+      <div className="mt-2 flex items-center justify-between gap-2">
+        {canPin ? (
+          <PinControls
+            skill={skill}
+            pin={pin}
+            onSetPin={onSetPin}
+            onClearPin={onClearPin}
+          />
+        ) : (
+          <span />
+        )}
         <Switch
           checked={!disabled}
           onChange={onToggle}
@@ -372,6 +435,103 @@ function SkillCard({
         />
       </div>
     </div>
+  );
+}
+
+type PinControlsProps = {
+  skill: SkillEntry;
+  pin: PinnedSkill | null;
+  onSetPin: (pin: PinnedSkill) => void;
+  onClearPin: (name: string) => void;
+};
+
+/**
+ * Pin / unpin link + provenance dropdown rendered inline under the
+ * SkillCard's toggle row. Clicking "Pin v1.2.0" locks the project to
+ * that exact version; the dropdown lets the editor further constrain
+ * the discovery layer (bundled / user / project / any).
+ */
+function PinControls({ skill, pin, onSetPin, onClearPin }: PinControlsProps) {
+  const version = skill.version ?? "";
+  const handlePin = () => {
+    if (!version) return;
+    onSetPin({
+      name: skill.name,
+      version,
+      // Default the pin's provenance to "any" — the editor can pick a
+      // specific layer from the dropdown after pinning.
+    });
+  };
+  const handleProvenanceChange = (
+    next: PinnedSkill["provenance"] | undefined,
+  ) => {
+    if (!pin) return;
+    onSetPin({ ...pin, provenance: next });
+  };
+  if (!pin) {
+    return (
+      <button
+        type="button"
+        onClick={handlePin}
+        className="text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-brand)] transition-colors"
+        title={`Lock this project to v${version}`}
+      >
+        Pin v{version}
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onClearPin(skill.name)}
+        className="text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-status-error)] transition-colors"
+        title="Remove this version pin"
+      >
+        Unpin
+      </button>
+      <select
+        value={pin.provenance ?? ""}
+        onChange={(e) =>
+          handleProvenanceChange(
+            (e.target.value || undefined) as PinnedSkill["provenance"] | undefined,
+          )
+        }
+        aria-label="Pinned provenance layer"
+        title="Lock to a specific discovery layer"
+        className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-1 py-0.5 font-mono text-[10px] text-[var(--color-text-secondary)]"
+      >
+        <option value="">any layer</option>
+        <option value="bundled">bundled</option>
+        <option value="user">user</option>
+        <option value="project">project</option>
+      </select>
+    </div>
+  );
+}
+
+/**
+ * Compact chip showing the active pin's constraints. Uses the unicode
+ * pushpin glyph so we don't pull in another icon dependency for a
+ * single 12px badge.
+ */
+function PinChip({ pin }: { pin: PinnedSkill }) {
+  const parts: string[] = [];
+  if (pin.version) parts.push(`v${pin.version}`);
+  if (pin.provenance) parts.push(pin.provenance);
+  const label = parts.length > 0 ? parts.join(" · ") : "pinned";
+  return (
+    <span
+      title={`Pinned${pin.version ? ` to v${pin.version}` : ""}${
+        pin.provenance ? ` · ${pin.provenance} layer` : ""
+      }`}
+      className="shrink-0 rounded-full border border-[color:var(--color-brand)]/40 bg-[color:var(--color-brand)]/15 px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-brand)]"
+    >
+      <span aria-hidden className="mr-0.5">
+        {"\u{1F4CC}"}
+      </span>
+      {label}
+    </span>
   );
 }
 
@@ -414,9 +574,10 @@ function Switch({ checked, onChange, ariaLabel }: SwitchProps) {
 type SkillDetailProps = {
   skill: SkillEntry | null;
   disabled: boolean;
+  pin: PinnedSkill | null;
 };
 
-function SkillDetail({ skill, disabled }: SkillDetailProps) {
+function SkillDetail({ skill, disabled, pin }: SkillDetailProps) {
   const { body, loading, error } = useSkillBody(skill?.name ?? null);
 
   if (!skill) {
@@ -433,7 +594,7 @@ function SkillDetail({ skill, disabled }: SkillDetailProps) {
     <section className="panel flex h-full min-h-0 flex-col overflow-hidden">
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--color-border-subtle)] px-4 py-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h2 className="truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
               {skill.display_name}
             </h2>
@@ -443,6 +604,7 @@ function SkillDetail({ skill, disabled }: SkillDetailProps) {
                 v{skill.version}
               </span>
             )}
+            {pin && <PinChip pin={pin} />}
             {disabled && (
               <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-muted)]">
                 Disabled

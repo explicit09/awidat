@@ -336,9 +336,27 @@ export function useAppGlue() {
       // UX optimization for cold loads. Errors are swallowed — the
       // agent still loads everything when the file is missing.
       const projectRoot = current;
-      invoke<string[]>("read_disabled_skills", { projectPath: projectRoot })
-        .then((disabled) => hydrateSkillsFromDisk(projectRoot, disabled))
-        .catch((e) => console.warn("read_disabled_skills failed", e));
+      // Read the full skill config — disabled + pinned (Wave 5 B2)
+      // — so the pin UI on the Skills tab reflects state that landed
+      // via file sync. v1 files migrate transparently on the Rust
+      // side (empty pin list).
+      invoke<{
+        version: number;
+        disabled: string[];
+        pinned?: Array<{
+          name: string;
+          version?: string;
+          provenance?: "bundled" | "user" | "project";
+        }>;
+      }>("read_skill_config", { projectPath: projectRoot })
+        .then((cfg) =>
+          hydrateSkillsFromDisk(
+            projectRoot,
+            cfg.disabled ?? [],
+            cfg.pinned ?? [],
+          ),
+        )
+        .catch((e) => console.warn("read_skill_config failed", e));
       // Mirror the skills hydration for the indexers overlay (Wave 4
       // T3). The IndexersStrip popover reads disabled state from this
       // store; the dispatcher reads the same .awidat/indexers.json on
