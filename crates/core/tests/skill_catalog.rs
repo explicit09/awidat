@@ -30,6 +30,7 @@ fn bundled_output_workflow_skills_load() {
     assert!(errors.is_empty(), "skill load errors: {errors:?}");
 
     for name in [
+        "audio-separation",
         "auto-cutter",
         "beat-sync-editor",
         "b-roll-suggester",
@@ -61,6 +62,46 @@ fn bundled_output_workflow_skills_load() {
         assert!(
             !skill.body.trim().is_empty(),
             "skill {name} must have a body"
+        );
+    }
+}
+
+#[test]
+fn audio_separation_skill_is_graph_native() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("audio-separation")
+        .expect("audio-separation exists");
+    for tool in [
+        "read_index",
+        "view_timeline",
+        "inspect_clip",
+        "apply_edl",
+        "vedit_diff",
+        "start_render",
+        "poll_render",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "audio-separation must allow {tool}"
+        );
+    }
+    // The picture-held audio grammar and its distinction from Set Volume must
+    // be spelled out so the agent never deletes the clip or just lowers gain.
+    for required in [
+        "Mute Clip",
+        "Remove Audio",
+        "Set Volume",
+        "keep its picture",
+        "clip-local visible seconds",
+        "clear: true",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "audio-separation must mention {required:?}"
         );
     }
 }
