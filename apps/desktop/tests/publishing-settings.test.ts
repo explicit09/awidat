@@ -45,6 +45,12 @@ import {
   assert.equal(DEFAULT_PROVIDER_STATE.credState.client_id_set, false);
   assert.equal(DEFAULT_PROVIDER_STATE.credState.client_secret_set, false);
   assert.equal(DEFAULT_PROVIDER_STATE.oauthInProgress, false);
+  // W6.A1 — the auto-capture path starts disabled on a fresh state;
+  // both the waiting and fallback flags must be false so the row
+  // shows the bare Connect button and nothing else.
+  assert.equal(DEFAULT_PROVIDER_STATE.awaitingCallback, false);
+  assert.equal(DEFAULT_PROVIDER_STATE.fallbackToPaste, false);
+  assert.equal(DEFAULT_PROVIDER_STATE.expectedState, "");
   assert.equal(DEFAULT_PROVIDER_STATE.pendingCode, "");
   // statusText on a fresh state is the "Not connected" copy — this
   // is what every provider row renders on first open.

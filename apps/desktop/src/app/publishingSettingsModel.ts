@@ -49,15 +49,39 @@ export type ClientCredentialsState = {
   client_secret_set: boolean;
 };
 
-/** Per-provider local UI state. The OAuth flow is two-step: Connect
- *  opens the browser, then the user pastes the code into this inline
- *  form. `pendingCode` is the in-progress input. */
+/** Per-provider local UI state.
+ *
+ *  W6.A1 — the OAuth flow is now best-effort auto-capture: Connect
+ *  opens the browser AND the 127.0.0.1:8419 backend listener;
+ *  redirect handoff is invisible. The paste form stays as a fallback
+ *  for when the listener can't bind / the event doesn't arrive in
+ *  time. `awaitingCallback` drives the "Waiting for browser…" copy,
+ *  `fallbackToPaste` flips to true after the LISTENER_FALLBACK_MS
+ *  deadline OR a backend error event so the user has an escape hatch.
+ *  `pendingCode` remains the in-progress paste input for that path.
+ *
+ *  `expectedState` is the CSRF nonce from the `OAuthChallenge` —
+ *  parked here so the event subscriber can ignore stale / cross-flow
+ *  callbacks without round-tripping through Tauri state. */
 export type ProviderUiState = {
   status: ConnectionStatus;
   credState: ClientCredentialsState;
-  /** "code" input visible after Connect was clicked. */
+  /** True between Connect click and either auto-capture success or
+   *  manual paste submission. Drives the "OAuth UI is open" branch. */
   oauthInProgress: boolean;
+  /** True while we're waiting on the backend listener event. False
+   *  means show the paste form (either listener failed or the
+   *  fallback timer fired). */
+  awaitingCallback: boolean;
+  /** True once the fallback path is engaged — paste form visible,
+   *  awaiting copy reads "Listener didn't catch the redirect — paste
+   *  the code manually." */
+  fallbackToPaste: boolean;
   pendingCode: string;
+  /** CSRF nonce echoed back by the provider. Used by the event
+   *  subscriber to discard cross-flow callbacks. Empty when no flow
+   *  is in progress. */
+  expectedState: string;
   /** Inline error or success banner copy. */
   banner?: { kind: "error" | "success"; text: string };
 };
@@ -66,7 +90,10 @@ export const DEFAULT_PROVIDER_STATE: ProviderUiState = {
   status: { connected: false },
   credState: { client_id_set: false, client_secret_set: false },
   oauthInProgress: false,
+  awaitingCallback: false,
+  fallbackToPaste: false,
   pendingCode: "",
+  expectedState: "",
 };
 
 /** Render the human-facing status string for one provider's row.

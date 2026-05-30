@@ -26,6 +26,7 @@ pub mod ai_disclosure;
 pub mod errors;
 pub mod instagram;
 pub mod oauth;
+pub mod oauth_listener;
 pub mod provider;
 pub mod storage;
 pub mod tiktok;

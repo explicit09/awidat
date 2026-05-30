@@ -19,10 +19,12 @@
 
 use std::sync::OnceLock;
 
-use tauri::State;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::publishing::{
     disclosure_for_project_root,
+    oauth_listener::{self, OAuthListenerError},
     upload_queue::{
         self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
         UploadJobEntry, UploadMetadata, UploadPrefs,
@@ -31,6 +33,39 @@ use crate::publishing::{
     ProviderError, ProviderInfo, ProviderRegistry, UploadParams, UploadResult,
 };
 use crate::state::AwidatState;
+
+/// Tauri event channel: fires once per OAuth flow when the 8419
+/// listener (W6.A1) captures the redirect. Frontend subscribes after
+/// invoking `begin_provider_oauth` and auto-calls
+/// `complete_provider_oauth` with the captured code — replaces the
+/// paste-the-code form for the happy path. The paste form stays as a
+/// fallback when the listener can't bind / errors out.
+///
+/// Constant string (rather than `pub const`) to keep the wire shape
+/// trivially greppable from the frontend.
+pub const OAUTH_CALLBACK_EVENT: &str = "publishing://oauth-callback";
+
+/// Payload of [`OAUTH_CALLBACK_EVENT`]. `provider` is the same key
+/// the frontend used in `begin_provider_oauth` so multiple in-flight
+/// flows (today: at most one — port 8419 is single-tenant) don't
+/// cross-pollinate. `state` is included so the frontend can defence-
+/// in-depth re-verify against its own `OAuthChallenge.state` if it
+/// wants to. `error` carries the listener error kind (one of
+/// `port_in_use` / `state_mismatch` / `invalid_request` / `timeout` /
+/// `io`) when the capture failed — frontend uses this to fall back
+/// to the paste form with the appropriate copy.
+#[derive(Debug, Clone, Serialize)]
+pub struct OAuthCallbackEvent {
+    /// Provider key the flow was started for.
+    pub provider: String,
+    /// Captured `code` on success; empty string on error.
+    pub code: String,
+    /// Echoed-back state nonce; empty string on error.
+    pub state: String,
+    /// `None` on success; on failure the listener error kind so the
+    /// frontend can pick the right fallback copy.
+    pub error: Option<String>,
+}
 
 /// Process-wide registry. Resolved on first command invocation so
 /// the path-resolution error (if `dirs::config_dir()` ever returns
@@ -87,11 +122,86 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 /// Start the OAuth flow for one provider. Frontend opens the
 /// returned URL; user authorises; provider redirects back to the
 /// loopback with `?code=…&state=…`.
+///
+/// W6.A1: this also kicks the 127.0.0.1:8419 listener in a background
+/// task — when the redirect lands, an [`OAUTH_CALLBACK_EVENT`] fires
+/// carrying the captured code. The frontend then calls
+/// [`complete_provider_oauth`] without the user touching the paste
+/// form. If the listener can't bind (another flow is in flight, or
+/// the port is squatted) the event still fires with `error =
+/// "port_in_use"` so the frontend can drop straight to the fallback
+/// paste form instead of waiting on the timeout.
+///
+/// The listener runs in `tokio::spawn` so this command returns the
+/// authorisation URL immediately — the browser handoff happens before
+/// the redirect ever lands.
 #[tauri::command]
-pub async fn begin_provider_oauth(key: String) -> Result<OAuthChallenge, String> {
+pub async fn begin_provider_oauth(
+    app: AppHandle,
+    key: String,
+) -> Result<OAuthChallenge, String> {
     let reg = registry()?;
     let provider = provider_for(reg, &key)?;
-    provider.begin_oauth().await.map_err(stringify_error)
+    let challenge = provider.begin_oauth().await.map_err(stringify_error)?;
+    spawn_oauth_listener(app, key, challenge.state.clone());
+    Ok(challenge)
+}
+
+/// Spawn the one-shot listener as a fire-and-forget Tokio task. The
+/// only way the listener communicates with the rest of the app is via
+/// [`OAUTH_CALLBACK_EVENT`] — emit-on-success / emit-on-failure both
+/// land on the same channel with `error` discriminating the cases.
+///
+/// Split out from `begin_provider_oauth` to keep that command's body
+/// readable and to make the listener lifecycle testable in isolation
+/// (the listener itself is covered by
+/// `publishing::oauth_listener::tests`).
+fn spawn_oauth_listener(app: AppHandle, provider: String, expected_state: String) {
+    tokio::spawn(async move {
+        let result = oauth_listener::listen_for_callback(
+            expected_state.clone(),
+            oauth_listener::DEFAULT_TIMEOUT,
+        )
+        .await;
+        let payload = match result {
+            Ok(capture) => OAuthCallbackEvent {
+                provider: provider.clone(),
+                code: capture.code,
+                state: capture.state,
+                error: None,
+            },
+            Err(err) => {
+                tracing::warn!(
+                    provider = %provider,
+                    kind = err.kind(),
+                    error = %err,
+                    "oauth listener failed; frontend will fall back to paste form",
+                );
+                OAuthCallbackEvent {
+                    provider: provider.clone(),
+                    code: String::new(),
+                    state: String::new(),
+                    error: Some(listener_error_kind(&err).to_string()),
+                }
+            }
+        };
+        if let Err(e) = app.emit(OAUTH_CALLBACK_EVENT, payload) {
+            tracing::warn!(
+                provider = %provider,
+                error = %e,
+                "failed to emit oauth-callback event",
+            );
+        }
+    });
+}
+
+/// Map an [`OAuthListenerError`] to its stable wire kind. Centralised
+/// here (rather than baked into `OAuthListenerError::kind`'s body) so
+/// the frontend's switch statement only has to know about these
+/// strings — and so a future listener-error variant is a compile-time
+/// match-exhaustiveness reminder.
+fn listener_error_kind(err: &OAuthListenerError) -> &'static str {
+    err.kind()
 }
 
 /// Complete the OAuth flow with the authorisation code from the
