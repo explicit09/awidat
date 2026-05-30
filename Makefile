@@ -1,5 +1,7 @@
 .PHONY: check fmt clippy test python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp
 
+YT_DLP_VERSION ?= 2026.03.17
+
 check: fmt clippy test
 
 fmt:
@@ -23,26 +25,34 @@ python-smoke-audio:
 desktop-deps:
 	cd apps/desktop && pnpm install
 
-# Fetch the standalone yt-dlp binary for the host triple into
+# Fetch the standalone yt-dlp binary for a Rust target triple into
 # apps/desktop/src-tauri/binaries/. Tauri's externalBin convention
-# names the file with the rust target triple as a suffix; we only
-# fetch the host's triple in dev. CI populates the others on release.
+# names the file with the rust target triple as a suffix. Local dev
+# defaults to the host triple; release jobs can pass TARGET_TRIPLE.
 desktop-yt-dlp:
-	@host_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
-	dest="apps/desktop/src-tauri/binaries/yt-dlp-$$host_triple"; \
-	if [ -x "$$dest" ]; then \
-	    echo "yt-dlp already at $$dest"; \
-	    exit 0; \
+	@target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
 	fi; \
+	dest="apps/desktop/src-tauri/binaries/yt-dlp-$$target_triple"; \
 	mkdir -p "$$(dirname "$$dest")"; \
-	case "$$host_triple" in \
-	  aarch64-apple-darwin)         url='https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos' ;; \
-	  x86_64-apple-darwin)          url='https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos_legacy' ;; \
-	  x86_64-unknown-linux-gnu)     url='https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux' ;; \
-	  aarch64-unknown-linux-gnu)    url='https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64' ;; \
-	  x86_64-pc-windows-msvc)       dest="$$dest.exe"; url='https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' ;; \
-	  *) echo "unknown host triple: $$host_triple" >&2; exit 1 ;; \
+	case "$$target_triple" in \
+	  aarch64-apple-darwin)         asset='yt-dlp_macos' ;; \
+	  x86_64-apple-darwin)          asset='yt-dlp_macos' ;; \
+	  x86_64-unknown-linux-gnu)     asset='yt-dlp_linux' ;; \
+	  aarch64-unknown-linux-gnu)    asset='yt-dlp_linux_aarch64' ;; \
+	  x86_64-pc-windows-msvc)       dest="$$dest.exe"; asset='yt-dlp.exe' ;; \
+	  *) echo "unknown target triple: $$target_triple" >&2; exit 1 ;; \
 	esac; \
+	url="https://github.com/yt-dlp/yt-dlp/releases/download/$(YT_DLP_VERSION)/$$asset"; \
+	if [ -x "$$dest" ] && [ "$${YT_DLP_REFRESH:-0}" != "1" ]; then \
+	    existing_version="$$("$$dest" --version 2>/dev/null || true)"; \
+	    if [ "$$existing_version" = "$(YT_DLP_VERSION)" ]; then \
+	        echo "yt-dlp $(YT_DLP_VERSION) already at $$dest"; \
+	        exit 0; \
+	    fi; \
+	    echo "refreshing yt-dlp at $$dest from $${existing_version:-unknown} to $(YT_DLP_VERSION)"; \
+	fi; \
 	echo "fetching $$url"; \
 	curl -fsSL -o "$$dest" "$$url" && chmod +x "$$dest"; \
 	echo "wrote $$dest"
