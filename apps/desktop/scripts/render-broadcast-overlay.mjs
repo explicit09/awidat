@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { once } from "node:events";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -11,7 +11,7 @@ const args = parseArgs(process.argv.slice(2));
 const desktopRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const width = Number(args.width ?? 1920);
 const height = Number(args.height ?? 1080);
-const fps = Number(args.fps ?? 30);
+const fps = Number(process.env.AWIDAT_BROADCAST_OVERLAY_FPS ?? args.fps ?? 30);
 const duration = Number(args.duration);
 
 const projectRoot = args["project-root"];
@@ -23,7 +23,6 @@ if (!args.config || !projectRoot || !args.output || !Number.isFinite(duration) |
 
 const overlay = JSON.parse(args.config);
 const output = path.resolve(args.output);
-const frameDir = await mkdtemp(path.join(tmpdir(), "awidat-overlay-frames-"));
 let server;
 let browser;
 
@@ -103,38 +102,38 @@ try {
   });
 
   const frameCount = Math.ceil(duration * fps);
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    const t = frame / fps;
-    await page.evaluate((time) => window.__AWIDAT_SET_OVERLAY_TIME__?.(time), t);
-    await page.screenshot({
-      path: path.join(frameDir, `frame-${String(frame).padStart(6, "0")}.png`),
-      omitBackground: true,
-      animations: "allow",
-    });
-  }
-
-  await run("ffmpeg", [
+  const ffmpeg = spawn("ffmpeg", [
     "-y",
     "-loglevel",
     "error",
     "-framerate",
     String(fps),
+    "-f",
+    "image2pipe",
     "-i",
-    path.join(frameDir, "frame-%06d.png"),
+    "pipe:0",
     "-c:v",
     "qtrle",
     "-pix_fmt",
     "argb",
     output,
-  ]);
+  ], { stdio: ["pipe", "inherit", "inherit"] });
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const t = frame / fps;
+    await page.evaluate((time) => window.__AWIDAT_SET_OVERLAY_TIME__?.(time), t);
+    const png = await page.screenshot({
+      omitBackground: true,
+      animations: "allow",
+    });
+    if (!ffmpeg.stdin.write(png)) {
+      await once(ffmpeg.stdin, "drain");
+    }
+  }
+  ffmpeg.stdin.end();
+  await waitForProcess(ffmpeg, "ffmpeg");
 } finally {
   await browser?.close().catch(() => {});
   await server?.close().catch(() => {});
-  if (process.env.AWIDAT_KEEP_OVERLAY_FRAMES !== "1") {
-    await rm(frameDir, { recursive: true, force: true }).catch(() => {});
-  } else {
-    await writeFile(`${output}.frames.txt`, `${frameDir}\n`, "utf8").catch(() => {});
-  }
 }
 
 function contentTypeForPath(filePath) {
@@ -180,9 +179,8 @@ function parseArgs(argv) {
   return out;
 }
 
-function run(command, argv) {
+function waitForProcess(child, command) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, argv, { stdio: "inherit" });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve();
