@@ -18,6 +18,7 @@ import {
   useMotionRegions,
   useFaces,
   useAudioSamples,
+  useEpisodes,
   useEvidenceAvailability,
   type EvidenceAvailability,
 } from "../../state/evidenceAccessors";
@@ -29,7 +30,9 @@ import {
 
 type ChipKey = keyof EvidenceAvailability;
 
-// Display order left → right. Mirrors the indexer fan-out the agent reads.
+// Display order left → right. Mirrors the indexer fan-out the agent
+// reads. Episodes sits at the end because it's a derived feature
+// (stamped on the timeline) rather than a raw indexer output.
 const CHIP_ORDER: { key: ChipKey; label: string }[] = [
   { key: "scenes", label: "Scenes" },
   { key: "speakers", label: "Speakers" },
@@ -40,6 +43,7 @@ const CHIP_ORDER: { key: ChipKey; label: string }[] = [
   { key: "motion", label: "Motion" },
   { key: "faces", label: "Faces" },
   { key: "audio", label: "Audio" },
+  { key: "episodes", label: "Episodes" },
 ];
 
 export function EvidenceChipRow() {
@@ -55,6 +59,7 @@ export function EvidenceChipRow() {
     motion: useMotionRegions().length,
     faces: useFaces().length,
     audio: useAudioSamples().length,
+    episodes: useEpisodes().length,
   };
   const availability = useEvidenceAvailability();
   const [drillDownFor, setDrillDownFor] = useState<{ key: ChipKey; label: string } | null>(null);

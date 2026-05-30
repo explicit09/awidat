@@ -33,6 +33,7 @@ import {
   selectAudioSamples,
   selectCaptions,
   selectColorStats,
+  selectEpisodes,
   selectEvidenceAvailability,
   selectFaces,
   selectMotionRegions,
@@ -46,6 +47,7 @@ import {
   useIndexReadinessStore,
   type IndexReadinessSnapshot,
 } from "../src/state/indexReadiness.ts";
+import { useEpisodesStore, type EpisodesSnapshot } from "../src/state/episodes.ts";
 import { useProjectStore } from "../src/app/state.ts";
 import { useTranscriptStore } from "../src/transcript/store.ts";
 import type { Transcript } from "../src/protocol";
@@ -58,7 +60,18 @@ function resetStores(): void {
     selection: null,
   });
   useProjectStore.setState({ current: null });
+  useEpisodesStore.setState({ snapshot: undefined });
   __resetEvidenceDataForTests();
+}
+
+function episodes(rows: EpisodesSnapshot["episodes"]): EpisodesSnapshot {
+  return {
+    total: rows.length,
+    accepted: rows.filter((r) => r.status === "accepted").length,
+    reviewNeeded: rows.filter((r) => r.status === "review_needed").length,
+    rejected: rows.filter((r) => r.status === "rejected").length,
+    episodes: rows,
+  };
 }
 
 function snapshot(overrides: Partial<IndexReadinessSnapshot> = {}): IndexReadinessSnapshot {
@@ -133,6 +146,8 @@ function loadTranscript(t: Transcript, makeActive = true): void {
   assert.equal(avail.motion, false);
   assert.equal(avail.faces, false);
   assert.equal(avail.audio, false);
+  assert.equal(avail.episodes, false);
+  assert.deepEqual(selectEpisodes(), []);
 }
 
 // 2. activeTranscript() returns null when no stem is active
@@ -436,6 +451,121 @@ function loadTranscript(t: Transcript, makeActive = true): void {
   // Reading silences with no seeded data for project-b returns []
   // and triggers no invoke (we're not in Tauri).
   assert.deepEqual(selectSilences(), []);
+}
+
+// 17. Wave 6 B1 — selectEpisodes returns rows from the episodes store
+//     and orders them by `order`, regardless of insertion order. The
+//     availability map flips `episodes: true` when the store has at
+//     least one row, independently of the indexer readiness snapshot.
+{
+  resetStores();
+  useEpisodesStore.setState({
+    snapshot: episodes([
+      {
+        id: "ep-c",
+        name: "Third",
+        order: 3,
+        startS: 200,
+        endS: 300,
+        durationS: 100,
+        confidence: 0.6,
+        status: "rejected",
+        evidenceCount: 1,
+      },
+      {
+        id: "ep-a",
+        name: "First",
+        order: 1,
+        startS: 0,
+        endS: 60,
+        durationS: 60,
+        confidence: 0.92,
+        status: "accepted",
+        evidenceCount: 12,
+      },
+      {
+        id: "ep-b",
+        name: "Second",
+        order: 2,
+        startS: 60,
+        endS: 200,
+        durationS: 140,
+        confidence: 0.7,
+        status: "review_needed",
+        evidenceCount: 4,
+      },
+    ]),
+  });
+  const eps = selectEpisodes();
+  assert.equal(eps.length, 3);
+  // Sorted by order ascending.
+  assert.equal(eps[0]!.id, "ep-a");
+  assert.equal(eps[1]!.id, "ep-b");
+  assert.equal(eps[2]!.id, "ep-c");
+  assert.equal(eps[0]!.name, "First");
+  assert.equal(eps[0]!.evidenceCount, 12);
+  assert.equal(eps[0]!.status, "accepted");
+  // Episodes flip availability regardless of readiness snapshot state.
+  assert.equal(selectEvidenceAvailability().episodes, true);
+}
+
+// 18. Empty episodes store → availability.episodes false, selector []
+{
+  resetStores();
+  useEpisodesStore.setState({ snapshot: episodes([]) });
+  assert.deepEqual(selectEpisodes(), []);
+  assert.equal(selectEvidenceAvailability().episodes, false);
+}
+
+// 19. Undefined episodes snapshot is treated the same as no rows.
+{
+  resetStores();
+  useEpisodesStore.setState({ snapshot: undefined });
+  assert.deepEqual(selectEpisodes(), []);
+  assert.equal(selectEvidenceAvailability().episodes, false);
+}
+
+// 20. Episodes surface even when no readiness snapshot is loaded yet
+//     (e.g. project just opened, indexer call in-flight). They live in
+//     OTIO metadata, not on disk, so the readiness signal doesn't gate
+//     them.
+{
+  const avail = evidenceAvailabilityFromState({
+    snapshot: undefined,
+    loadedTranscript: null,
+    episodeCount: 2,
+  });
+  assert.equal(avail.episodes, true);
+  // Other flags stay false — undefined snapshot still means "nothing
+  // reachable" for the indexer-backed kinds.
+  assert.equal(avail.scenes, false);
+  assert.equal(avail.transcript, false);
+}
+
+// 21. Episodes with missing/empty name fall back to "Episode N" in
+//     the panel, but the selector preserves the raw value so the UI
+//     owns the fallback (no double-formatting).
+{
+  resetStores();
+  useEpisodesStore.setState({
+    snapshot: episodes([
+      {
+        id: "ep-x",
+        name: "",
+        order: 5,
+        startS: 0,
+        endS: 30,
+        durationS: 30,
+        confidence: 1,
+        status: "accepted",
+        evidenceCount: 0,
+      },
+    ]),
+  });
+  const eps = selectEpisodes();
+  assert.equal(eps[0]!.name, "");
+  assert.equal(eps[0]!.order, 5);
+  assert.equal(eps[0]!.evidenceCount, 0);
 }
 
 console.log("evidence-accessors: OK");

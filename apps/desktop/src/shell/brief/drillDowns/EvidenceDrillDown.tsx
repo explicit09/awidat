@@ -12,6 +12,7 @@ import {
   useAudioSamples,
   useCaptions,
   useColorStats,
+  useEpisodes,
   useFaces,
   useMotionRegions,
   useScenes,
@@ -24,6 +25,7 @@ import { AudioDrillDown } from "./AudioDrillDown";
 import { CaptionsDrillDown } from "./CaptionsDrillDown";
 import { ColorDrillDown } from "./ColorDrillDown";
 import { DrillDownModal } from "./DrillDownModal";
+import { EpisodesDrillDown } from "./EpisodesDrillDown";
 import { FacesDrillDown } from "./FacesDrillDown";
 import { MotionDrillDown } from "./MotionDrillDown";
 import { ScenesDrillDown } from "./ScenesDrillDown";
@@ -87,6 +89,8 @@ function PanelFor({
       return <MotionDrillDown onRunIndexers={onRunIndexers} />;
     case "color":
       return <ColorDrillDown onRunIndexers={onRunIndexers} />;
+    case "episodes":
+      return <EpisodesDrillDown onRunIndexers={onRunIndexers} />;
   }
 }
 
@@ -103,6 +107,7 @@ function useCountFor(kind: DrillDownKind): number {
   const faces = useFaces().length;
   const motion = useMotionRegions().length;
   const color = useColorStats().length;
+  const episodes = useEpisodes().length;
   switch (kind) {
     case "scenes":
       return scenes;
@@ -122,5 +127,7 @@ function useCountFor(kind: DrillDownKind): number {
       return motion;
     case "color":
       return color;
+    case "episodes":
+      return episodes;
   }
 }

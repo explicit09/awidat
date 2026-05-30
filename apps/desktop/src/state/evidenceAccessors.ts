@@ -45,6 +45,7 @@ import {
   useIndexReadinessStore,
   type IndexReadinessSnapshot,
 } from "./indexReadiness.ts";
+import { useEpisodesStore } from "./episodes.ts";
 import { useTranscriptStore } from "../transcript/store.ts";
 import type { Transcript } from "../protocol";
 
@@ -142,6 +143,24 @@ export interface EvidenceAudioSample {
   at_s: number;
   /** RMS magnitude, 0..1. */
   rms: number;
+}
+
+/** One episode span from origin's first-class episodes feature.
+ *
+ *  Source: `get_project_episodes` Tauri command (reads OTIO
+ *  metadata.awidat.episodes). App.tsx owns the fetch and mirrors the
+ *  result into `useEpisodesStore`; this accessor reads from that store
+ *  so it doesn't need to invoke. */
+export interface EvidenceEpisode {
+  id: string;
+  name: string;
+  order: number;
+  startS: number;
+  endS: number;
+  durationS: number;
+  confidence: number;
+  status: "accepted" | "review_needed" | "rejected";
+  evidenceCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +294,7 @@ export interface EvidenceAvailability {
   motion: boolean;
   faces: boolean;
   audio: boolean;
+  episodes: boolean;
 }
 
 const ZERO_AVAILABILITY: EvidenceAvailability = {
@@ -287,6 +307,7 @@ const ZERO_AVAILABILITY: EvidenceAvailability = {
   motion: false,
   faces: false,
   audio: false,
+  episodes: false,
 };
 
 /**
@@ -304,9 +325,21 @@ export function evidenceAvailabilityFromState(args: {
   snapshot: IndexReadinessSnapshot | undefined;
   loadedTranscript: Transcript | null;
   loadedCounts?: Partial<Record<EvidenceKind, number>>;
+  /** Number of episodes in the episodes store. Episodes don't live in
+   *  the readiness snapshot (they're stamped on the timeline, not the
+   *  indexer fan-out), so the count flows in as a separate signal. */
+  episodeCount?: number;
 }): EvidenceAvailability {
-  const { snapshot, loadedTranscript, loadedCounts } = args;
-  if (!snapshot) return ZERO_AVAILABILITY;
+  const { snapshot, loadedTranscript, loadedCounts, episodeCount } = args;
+  if (!snapshot) {
+    // Episodes are independent of the indexer readiness snapshot — if
+    // the timeline has episodes stamped, surface them even before the
+    // indexer load completes.
+    if ((episodeCount ?? 0) > 0) {
+      return { ...ZERO_AVAILABILITY, episodes: true };
+    }
+    return ZERO_AVAILABILITY;
+  }
 
   const transcriptReachable =
     snapshot.transcripts && loadedTranscript !== null;
@@ -337,6 +370,7 @@ export function evidenceAvailabilityFromState(args: {
     motion: flagFor("motion", snapshot.motion),
     faces: flagFor("faces", snapshot.face),
     audio: flagFor("audio", snapshot.audio),
+    episodes: (episodeCount ?? 0) > 0,
   };
 }
 
@@ -440,6 +474,32 @@ export function selectAudioSamples(): EvidenceAudioSample[] {
   return readCached<EvidenceAudioSample>(activeProject(), activeStem(), "audio");
 }
 
+/**
+ * Episodes are stamped on the OTIO timeline (not produced by the
+ * indexer fan-out) so they live in their own store. App.tsx owns the
+ * fetch via `get_project_episodes`; this selector projects the
+ * snapshot into the unified `EvidenceEpisode` shape and orders the
+ * rows by `order` (then `startS` as a tiebreak) so callers don't have
+ * to sort.
+ */
+export function selectEpisodes(): EvidenceEpisode[] {
+  const snapshot = useEpisodesStore.getState().snapshot;
+  if (!snapshot || snapshot.episodes.length === 0) return [];
+  return snapshot.episodes
+    .map((episode) => ({
+      id: episode.id,
+      name: episode.name,
+      order: episode.order,
+      startS: episode.startS,
+      endS: episode.endS,
+      durationS: episode.durationS,
+      confidence: episode.confidence,
+      status: episode.status,
+      evidenceCount: episode.evidenceCount ?? 0,
+    }))
+    .sort((a, b) => a.order - b.order || a.startS - b.startS);
+}
+
 export function selectEvidenceAvailability(): EvidenceAvailability {
   const snapshot = useIndexReadinessStore.getState().snapshot;
   const project = activeProject();
@@ -462,10 +522,13 @@ export function selectEvidenceAvailability(): EvidenceAvailability {
       }
     }
   }
+  const episodeCount =
+    useEpisodesStore.getState().snapshot?.episodes.length ?? 0;
   return evidenceAvailabilityFromState({
     snapshot,
     loadedTranscript: activeTranscript(),
     loadedCounts,
+    episodeCount,
   });
 }
 
@@ -547,11 +610,20 @@ export function useAudioSamples(): EvidenceAudioSample[] {
   return selectAudioSamples();
 }
 
+export function useEpisodes(): EvidenceEpisode[] {
+  // Subscribe to the episodes store so the component re-renders when
+  // App.tsx writes a new snapshot. App.tsx owns the fetch — this hook
+  // never invokes.
+  useEpisodesStore((s) => s.snapshot);
+  return selectEpisodes();
+}
+
 export function useEvidenceAvailability(): EvidenceAvailability {
   useIndexReadinessStore((s) => s.snapshot);
   useEvidenceDataStore((s) => s.cache);
   useProjectStore((s) => s.current);
   useTranscriptStore((s) => s.activeStem);
   useTranscriptStore((s) => s.byStem);
+  useEpisodesStore((s) => s.snapshot);
   return selectEvidenceAvailability();
 }

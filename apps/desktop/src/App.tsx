@@ -76,6 +76,7 @@ import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useIndexReadinessStore } from "./state/indexReadiness";
+import { useEpisodesStore } from "./state/episodes";
 import { useIntroState } from "./state/introState";
 import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
@@ -650,14 +651,21 @@ function App() {
   async function loadProjectEpisodes() {
     if (demoMode || !isTauri() || !current) {
       setEpisodeSummary(undefined);
+      // Mirror the local clear into the shared store so accessors that
+      // subscribe (EpisodesDrillDown, EvidenceChipRow) drop their data
+      // when the project unloads.
+      useEpisodesStore.getState().setSnapshot(undefined);
       return;
     }
     try {
       const snapshot = await invoke<ProjectEpisodesResponse>("get_project_episodes");
-      setEpisodeSummary(projectEpisodesToIndexingSummary(snapshot));
+      const summary = projectEpisodesToIndexingSummary(snapshot);
+      setEpisodeSummary(summary);
+      useEpisodesStore.getState().setSnapshot(summary);
     } catch (e) {
       console.warn("get_project_episodes failed", e);
       setEpisodeSummary(undefined);
+      useEpisodesStore.getState().setSnapshot(undefined);
     }
   }
 
