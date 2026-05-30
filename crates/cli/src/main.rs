@@ -242,21 +242,15 @@ enum Command {
         #[command(subcommand)]
         action: SkillsAction,
     },
-    /// Re-run the installer to upgrade in place. Without `--from`,
-    /// fetches from AWIDAT_RELEASE_BASE env or the canonical GitHub
-    /// Releases URL. Atomic-safe — never overwrites the running
-    /// binary.
+    /// Report that release upgrades are unavailable in this checkout.
     Upgrade {
-        /// Override the release URL or local path. Examples:
-        ///   --from https://example.com/awidat/releases/latest
-        ///   --from file:///path/to/dist/build
-        ///   --from ./dist/build         (bare path is interpreted as file://)
+        /// Reserved for the future restored release path.
         #[arg(long)]
         from: Option<String>,
-        /// Don't actually install — print what would change.
+        /// Reserved for the future restored release path.
         #[arg(long)]
         check: bool,
-        /// Skip the post-install `uv sync` step (passthrough).
+        /// Reserved for the future restored release path.
         #[arg(long)]
         skip_uv_sync: bool,
     },

@@ -10,7 +10,6 @@ The project is early-stage and optimized for local development on macOS and Linu
 - `apps/desktop/` - Tauri 2 desktop app with a React/Vite frontend.
 - `python/` - `uv` workspace for MCP indexers such as Whisper transcription, scene detection, audio energy, face/gaze detection, CLIP frame search, shot classification, and color analysis.
 - `skills/` - bundled editorial workflows exposed through `awidat skills`.
-- `dist/` - packaging, install, and Homebrew release support.
 - `docs/` - design notes and research.
 
 ## Prerequisites
@@ -65,7 +64,6 @@ awidat skills run <skill-name> <project>
 awidat lessons learn
 awidat lessons show
 awidat resume
-awidat upgrade
 ```
 
 During development, prefix commands with:
@@ -121,13 +119,9 @@ cargo test --workspace
 
 ## Packaging
 
-Build a host release tarball:
-
-```bash
-make package
-```
-
-Output is written under `dist/build/`. For the distribution model, local install testing, and release flow, see `dist/README.md`.
+Release packaging is not currently restored in this checkout. The historical
+`dist/` scripts referenced by older automation are absent, so use development
+commands until the release path is rebuilt.
 
 ## Configuration
 
