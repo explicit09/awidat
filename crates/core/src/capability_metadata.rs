@@ -94,8 +94,7 @@ impl CapabilityMetadata {
                 // per-camera face/shot sidecars and proposes an Apply Multicam
                 // Plan EDL fragment for review. Never mutates the graph itself.
                 metadata.export_supported = SupportLevel::NotSupported;
-                metadata.required_indexes =
-                    vec!["transcript".into(), "face".into(), "shot".into()];
+                metadata.required_indexes = vec!["transcript".into(), "face".into(), "shot".into()];
             }
             "analyze_sync" => {
                 // Read-only waveform alignment over raw media; proposes Set
@@ -355,7 +354,11 @@ mod tests {
         assert_eq!(plan.export_supported, SupportLevel::NotSupported);
         assert_eq!(
             plan.required_indexes,
-            vec!["transcript".to_string(), "face".to_string(), "shot".to_string()]
+            vec![
+                "transcript".to_string(),
+                "face".to_string(),
+                "shot".to_string()
+            ]
         );
 
         let sync = CapabilityMetadata::for_tool_name("analyze_sync", false);

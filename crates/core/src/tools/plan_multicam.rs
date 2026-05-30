@@ -504,7 +504,14 @@ mod tests {
         // Speaker A is visible on cam-b even though cam-a is the tighter shot;
         // the +0.55 speaker bonus must win.
         let choice = choose_camera(
-            &cameras, &face, &shot, &quality, &offsets, 0.0, Some("A"), 10.0,
+            &cameras,
+            &face,
+            &shot,
+            &quality,
+            &offsets,
+            0.0,
+            Some("A"),
+            10.0,
         );
         assert_eq!(choice.asset, "raw/cam-b.mp4");
     }
@@ -515,7 +522,10 @@ mod tests {
         // cam-b started 2s late → placed at timeline offset +2. Speaker A's
         // face is at cam-b SOURCE time 8.0, i.e. program time 10.0.
         let mut face = HashMap::new();
-        face.insert("raw/cam-b.mp4".to_string(), face_sidecar("face_1", "A", 8.0));
+        face.insert(
+            "raw/cam-b.mp4".to_string(),
+            face_sidecar("face_1", "A", 8.0),
+        );
         let mut shot = HashMap::new();
         shot.insert("raw/cam-a.mp4".to_string(), shot_sidecar("close")); // +0.20
         shot.insert("raw/cam-b.mp4".to_string(), shot_sidecar("wide")); // +0.05
@@ -549,7 +559,14 @@ mod tests {
             },
         );
         let corrected = choose_camera(
-            &cameras, &face, &shot, &quality, &offsets, 0.0, Some("A"), 10.0,
+            &cameras,
+            &face,
+            &shot,
+            &quality,
+            &offsets,
+            0.0,
+            Some("A"),
+            10.0,
         );
         assert_eq!(
             corrected.asset, "raw/cam-b.mp4",
