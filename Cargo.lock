@@ -916,6 +916,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "awidat-auth",
  "awidat-codex-bridge",
  "awidat-config",
  "awidat-core",

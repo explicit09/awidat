@@ -104,4 +104,5 @@ mod tests {
         );
 
         unsafe { std::env::remove_var(OAUTH_CLIENT_ID_ENV) };
+    }
 }
