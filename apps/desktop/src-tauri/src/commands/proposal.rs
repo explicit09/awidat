@@ -715,6 +715,8 @@ fn build_diff_hints(
             | EdlOp::InsertAnnotation { .. }
             | EdlOp::SetOutputFormat { .. }
             | EdlOp::SetLoudnessTarget { .. }
+            | EdlOp::MuteClip { .. }
+            | EdlOp::RemoveAudio { .. }
             | EdlOp::SetPackageMetadata { .. } => {}
         }
     }
@@ -898,6 +900,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::DeleteTransition { .. } => "DeleteTransition",
         EdlOp::SetCutIntent { .. } => "SetCutIntent",
         EdlOp::SetVolume { .. } => "SetVolume",
+        EdlOp::MuteClip { .. } => "MuteClip",
+        EdlOp::RemoveAudio { .. } => "RemoveAudio",
         EdlOp::SetAudioFade { .. } => "SetAudioFade",
         EdlOp::SetAudioLead { .. } => "SetAudioLead",
         EdlOp::SetAudioTrail { .. } => "SetAudioTrail",
