@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
     AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
-    BroadcastOverlayStyle, BroadcastTimedEntry, CutType, SemanticCutSpec, SplitEditSpec,
-    cut_boundary_key,
+    BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType, SemanticCutSpec,
+    SplitEditSpec, cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
@@ -502,6 +502,9 @@ fn apply_one(
         }
         EdlOp::SetVolume { anchor, value } => {
             apply_set_volume(working, index, anchor, *value, ctx, locator)
+        }
+        EdlOp::MuteClip { anchor, muted } => {
+            apply_mute_clip(working, index, anchor, *muted, ctx, locator)
         }
         EdlOp::SetAudioFade {
             anchor,
@@ -991,6 +994,7 @@ fn resolve_locator_for_op(
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
+        | EdlOp::MuteClip { anchor, .. }
         | EdlOp::SetAudioFade { anchor, .. }
         | EdlOp::SetAudioLead { anchor, .. }
         | EdlOp::SetAudioTrail { anchor, .. }
@@ -6517,6 +6521,48 @@ fn apply_set_volume(
     clip.effects.push(effect);
     Ok(format!(
         "set volume on clip {clip_name:?} to {value:.3} (linear gain)"
+    ))
+}
+
+fn apply_mute_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    muted: bool,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "mute_clip: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "mute_clip: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let clip_name = clip.name.clone();
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
+    let overlay = awidat
+        .audio_override
+        .get_or_insert_with(ClipAudioOverride::default);
+    overlay.muted = muted;
+    // Drop an override that no longer carries any state, keeping clip
+    // metadata clean and the render on the coupled path when possible.
+    if !overlay.muted && overlay.removed_ranges.is_empty() {
+        awidat.audio_override = None;
+    }
+    Ok(format!(
+        "{} audio on clip {clip_name:?} (picture kept)",
+        if muted { "muted" } else { "unmuted" }
     ))
 }
 
@@ -13153,6 +13199,65 @@ mod tests {
             .and_then(|v| v.as_f64())
             .unwrap();
         assert!((v - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_mute_clip_sets_and_clears_override() {
+        let tl = timeline_with_three_clips();
+        let anchor = || Anchor::TranscriptSnippet {
+            text: "bravo snippet".into(),
+        };
+
+        // Mute → audio_override.muted = true; no effects added (picture kept).
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MuteClip {
+                anchor: anchor(),
+                muted: true,
+            }],
+        };
+        let (muted_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &muted_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .map(|o| o.muted)
+                .unwrap_or(false),
+            "clip audio must be muted"
+        );
+        assert!(
+            clip.effects.is_empty(),
+            "mute is metadata, not an effect — picture untouched"
+        );
+
+        // Unmute → override carries nothing else, so it is cleared entirely.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MuteClip {
+                anchor: anchor(),
+                muted: false,
+            }],
+        };
+        let (unmuted_tl, _) = apply(&muted_tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &unmuted_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .is_none(),
+            "unmuting with no other override clears it"
+        );
     }
 
     #[test]

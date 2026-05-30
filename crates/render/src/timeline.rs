@@ -295,6 +295,10 @@ pub struct TimelineSegment {
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
     pub audio_trail_s: Option<f64>,
+    /// Whether this clip's audio is muted while its picture is kept. Set
+    /// from `ClipAudioOverride.muted`; triggers the decoupled audio path
+    /// and makes this segment's synthesized audio silence.
+    pub audio_muted: bool,
 }
 
 /// Clip-level curve-based time remap extracted from `awidat.time_remap`.
@@ -1906,7 +1910,7 @@ pub fn collect_timeline_full_plan(
         .as_ref()
         .and_then(read_timeline_loudness_target);
     if audio_tracks.is_empty() {
-        audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
+        audio_tracks = synthesize_audio_tracks(&segs)?;
     }
     render_limitations.extend(unconsumed_animation_limitations(
         &parameter_animations,
@@ -2797,6 +2801,13 @@ fn collect_timeline_segment(
             .as_ref()
             .and_then(|m| m.split_edit.as_ref())
             .and_then(|s| s.audio_trail_s),
+        audio_muted: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.audio_override.as_ref())
+            .map(|o| o.muted)
+            .unwrap_or(false),
     }))
 }
 
@@ -3124,10 +3135,14 @@ fn audio_volume_automation_expression(
     }
 }
 
-fn synthesize_split_edit_audio_tracks(
+/// Synthesize one audio track per segment when a project has no explicit
+/// audio tracks but its audio must diverge from picture — split edits
+/// (J/L) or a per-clip mute. Returns empty (keeping the coupled
+/// muxed-audio concat path) when no segment needs it.
+fn synthesize_audio_tracks(
     segments: &[TimelineSegment],
 ) -> Result<Vec<AudioTrackPlan>, RenderTimelineError> {
-    if !segments.iter().any(segment_has_split_edit_audio) {
+    if !segments.iter().any(segment_needs_synthesized_audio) {
         return Ok(Vec::new());
     }
     let mut tracks = Vec::new();
@@ -3145,17 +3160,23 @@ fn synthesize_split_edit_audio_tracks(
                 duration_s: audio_start_s,
             });
         }
-        items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
-            asset_path: segment.asset_path.clone(),
-            start_s: source_start_s,
-            duration_s,
-            volume: segment.volume,
-            volume_automation: segment.volume_automation.clone(),
-            speed: segment.speed,
-            fade_in_s: None,
-            fade_out_s: None,
-            audio_fx: segment.audio_fx.clone(),
-        }));
+        if segment.audio_muted {
+            // Picture stays on the video track; this segment contributes
+            // silence, muting the audio without dropping the image.
+            items.push(AudioTrackItemPlan::Gap { duration_s });
+        } else {
+            items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: segment.asset_path.clone(),
+                start_s: source_start_s,
+                duration_s,
+                volume: segment.volume,
+                volume_automation: segment.volume_automation.clone(),
+                speed: segment.speed,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: segment.audio_fx.clone(),
+            }));
+        }
         tracks.push(AudioTrackPlan {
             name: format!("split-edit-a{}", idx + 1),
             role: "dialogue".into(),
@@ -3170,6 +3191,12 @@ fn synthesize_split_edit_audio_tracks(
         picture_start_s += visible_effective_duration(segment);
     }
     Ok(tracks)
+}
+
+/// A segment needs the decoupled audio-synthesis path when its audio
+/// diverges from picture: a split edit (J/L) or a clip mute.
+fn segment_needs_synthesized_audio(segment: &TimelineSegment) -> bool {
+    segment_has_split_edit_audio(segment) || segment.audio_muted
 }
 
 fn segment_has_split_edit_audio(segment: &TimelineSegment) -> bool {
@@ -12690,7 +12717,7 @@ mod tests {
         b.source_available_end_s = Some(30.0);
         b.audio_lead_s = Some(0.5);
 
-        let tracks = synthesize_split_edit_audio_tracks(&[a, b]).unwrap();
+        let tracks = synthesize_audio_tracks(&[a, b]).unwrap();
         assert_eq!(tracks.len(), 2);
         let AudioTrackItemPlan::Clip(first) = &tracks[0].items[0] else {
             panic!("expected first clip")
@@ -12719,7 +12746,7 @@ mod tests {
         b.source_available_end_s = Some(30.0);
         b.audio_lead_s = Some(0.5);
         let segs = vec![a, b];
-        let audio_tracks = synthesize_split_edit_audio_tracks(&segs).unwrap();
+        let audio_tracks = synthesize_audio_tracks(&segs).unwrap();
         let argv = build_timeline_argv_with_audio_tracks(
             &segs,
             &[],
@@ -12740,6 +12767,65 @@ mod tests {
         assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=4.5"));
         assert!(filter.contains("atrim=19.5:25"));
         assert!(filter.contains("amix=inputs=2"));
+    }
+
+    #[test]
+    fn muted_clip_synthesizes_silence_and_keeps_picture() {
+        // Two clips; clip A is muted. The picture of both must stay (the
+        // video-only concat), A's audio becomes silence, B's audio is kept.
+        let mut a = seg("/tmp/a.mp4", 0.0, 5.0);
+        a.audio_muted = true;
+        let b = seg("/tmp/b.mp4", 0.0, 5.0);
+        let segs = vec![a, b];
+
+        let tracks = synthesize_audio_tracks(&segs).unwrap();
+        assert_eq!(tracks.len(), 2, "one synthesized audio track per segment");
+        assert!(
+            matches!(tracks[0].items.as_slice(), [AudioTrackItemPlan::Gap { .. }]),
+            "muted clip A must contribute only a silence gap, got {:?}",
+            tracks[0].items
+        );
+        assert!(
+            tracks[1]
+                .items
+                .iter()
+                .any(|i| matches!(i, AudioTrackItemPlan::Clip(_))),
+            "clip B audio must be preserved"
+        );
+
+        // End-to-end: picture kept (video-only concat), audio mixed, A silent.
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(
+            filter.contains("concat=n=2:v=1:a=0[vonly]"),
+            "both pictures kept on the video-only concat"
+        );
+        assert!(
+            filter.contains("anullsrc=r=48000:cl=stereo:d=5"),
+            "muted clip A renders 5s of silence"
+        );
+        assert!(filter.contains("atrim=0:5"), "clip B audio preserved");
+    }
+
+    #[test]
+    fn no_audio_override_or_split_edit_stays_coupled() {
+        // Regression: plain clips (no mute, no J/L) must NOT synthesize audio
+        // tracks, so render stays on the coupled muxed-audio concat path.
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 5.0)];
+        assert!(synthesize_audio_tracks(&segs).unwrap().is_empty());
     }
 
     #[test]

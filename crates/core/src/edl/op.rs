@@ -343,6 +343,19 @@ pub enum EdlOp {
         /// Linear gain multiplier. Must be finite and `>= 0.0`.
         value: f64,
     },
+    /// Mute a clip's audio while keeping its picture. Stamps
+    /// `ClipAudioOverride.muted` in the clip's awidat metadata; render
+    /// routes the timeline onto the decoupled audio path and emits
+    /// silence for this clip's slot. Unlike `Set Volume 0` (a mixable
+    /// level that still leaves the muxed stream present), this holds the
+    /// picture and removes the audio. Re-applying replaces the flag;
+    /// unmuting with no other override clears the override entirely.
+    MuteClip {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// `true` to mute, `false` to unmute.
+        muted: bool,
+    },
     /// Set per-clip audio fades in seconds. Replaces the existing
     /// `awidat.audio_fade` effect on the clip.
     SetAudioFade {
