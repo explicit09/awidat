@@ -414,7 +414,9 @@ fn next_render_step(scope: &str, state: &str, output_path: &str) -> String {
         );
     }
     if scope == "timeline" {
-        format!("Call verify_render(output_path=\"{output_path}\") to verify the final timeline export.")
+        format!(
+            "Call verify_render(output_path=\"{output_path}\") to verify the final timeline export."
+        )
     } else {
         format!(
             "Diagnostic asset render complete at {output_path}; call verify_render or run scope=\"timeline\" for final editorial output."
@@ -547,7 +549,12 @@ fn optional_file_hash(path: &Path) -> Result<Option<String>, String> {
     }
     awidat_render::fingerprint_file(path, true)
         .map(|fingerprint| Some(fingerprint.sha256))
-        .map_err(|e| format!("start_render: failed to fingerprint {}: {e}", path.display()))
+        .map_err(|e| {
+            format!(
+                "start_render: failed to fingerprint {}: {e}",
+                path.display()
+            )
+        })
 }
 
 fn json_object_to_string_map(value: serde_json::Value) -> BTreeMap<String, String> {
@@ -757,8 +764,8 @@ fn apply_preset_to_argv(
         limitations: Vec::new(),
         metadata: Default::default(),
     };
-    let lowered = awidat_render::professional::apply_export_preset_to_spec(spec, preset)
-        .map_err(|e| {
+    let lowered =
+        awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {
             format!(
                 "start_render: failed to apply export preset '{}': {e}",
                 preset.id

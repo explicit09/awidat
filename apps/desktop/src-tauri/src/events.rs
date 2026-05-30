@@ -32,7 +32,10 @@ pub struct ItemEvent {
 
 /// Payload emitted to `awidat://turn-end` when the run-loop returns.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnEndEvent {
+    /// Codex turn id this terminal signal belongs to.
+    pub turn_id: String,
     /// `Some(msg)` on session-level error, `None` on clean end.
     pub error: Option<String>,
 }
@@ -50,8 +53,8 @@ pub fn emit_item(app: &AppHandle, item: Item) {
 /// Emit a turn-end signal. `error: Some(msg)` indicates the turn
 /// failed (codex error, child exit, mapping error); `None` is a clean
 /// completion. Frontend uses this to clear the "thinking..." spinner.
-pub fn emit_turn_end(app: &AppHandle, error: Option<String>) {
-    if let Err(e) = app.emit(TURN_END_EVENT, TurnEndEvent { error }) {
+pub fn emit_turn_end(app: &AppHandle, turn_id: String, error: Option<String>) {
+    if let Err(e) = app.emit(TURN_END_EVENT, TurnEndEvent { turn_id, error }) {
         warn!(error = %e, "emit turn-end failed");
     }
 }

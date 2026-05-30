@@ -4,7 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use awidat_proto::awidat_meta::{EpisodeSpan, EpisodeSpanStatus};
 use awidat_proto::project::Project;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tokio::fs;
 
@@ -231,6 +233,109 @@ pub async fn get_project_type(
             description: String::new(),
         },
     ))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectEpisodesSummary {
+    pub total: usize,
+    pub accepted: usize,
+    pub review_needed: usize,
+    pub rejected: usize,
+    pub episodes: Vec<ProjectEpisodeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectEpisodeSummary {
+    pub id: String,
+    pub name: String,
+    pub order: u32,
+    pub asset_id: String,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub duration_s: f64,
+    pub confidence: f64,
+    pub status: String,
+    pub evidence_count: usize,
+}
+
+/// Return first-class episode spans stamped on the currently-loaded timeline.
+#[tauri::command]
+pub async fn get_project_episodes(
+    state: State<'_, AwidatState>,
+) -> Result<ProjectEpisodesSummary, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    tokio::task::spawn_blocking(move || summarize_project_episodes(&project_root))
+        .await
+        .map_err(|e| format!("episodes join: {e}"))?
+}
+
+fn summarize_project_episodes(project_root: &Path) -> Result<ProjectEpisodesSummary, String> {
+    let project = Project::read(project_root).map_err(|e| format!("read project: {e}"))?;
+    let mut episodes: Vec<ProjectEpisodeSummary> = project
+        .timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|meta| {
+            meta.episodes
+                .iter()
+                .map(project_episode_summary)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    episodes.sort_by(|a, b| {
+        a.order
+            .cmp(&b.order)
+            .then_with(|| a.start_s.total_cmp(&b.start_s))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let accepted = episodes
+        .iter()
+        .filter(|episode| episode.status == "accepted")
+        .count();
+    let review_needed = episodes
+        .iter()
+        .filter(|episode| episode.status == "review_needed")
+        .count();
+    let rejected = episodes
+        .iter()
+        .filter(|episode| episode.status == "rejected")
+        .count();
+    Ok(ProjectEpisodesSummary {
+        total: episodes.len(),
+        accepted,
+        review_needed,
+        rejected,
+        episodes,
+    })
+}
+
+fn project_episode_summary(episode: &EpisodeSpan) -> ProjectEpisodeSummary {
+    ProjectEpisodeSummary {
+        id: episode.id.clone(),
+        name: episode.name.clone().unwrap_or_default(),
+        order: episode.order.unwrap_or(0),
+        asset_id: episode.asset_id.clone(),
+        start_s: episode.source_start_s,
+        end_s: episode.source_end_s,
+        duration_s: episode.duration_s(),
+        confidence: episode.confidence.unwrap_or(0.0),
+        status: episode_status_label(&episode.status).to_string(),
+        evidence_count: episode.evidence.len(),
+    }
+}
+
+fn episode_status_label(status: &EpisodeSpanStatus) -> &'static str {
+    match status {
+        EpisodeSpanStatus::ReviewNeeded => "review_needed",
+        EpisodeSpanStatus::Accepted => "accepted",
+        EpisodeSpanStatus::Rejected => "rejected",
+    }
 }
 
 /// Update the project type on the currently-loaded project. Persists
@@ -713,5 +818,61 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn summarize_project_episodes_sorts_and_counts_statuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        Project::init(tmp.path()).unwrap();
+        let mut project = Project::read(tmp.path()).unwrap();
+        project.timeline.metadata.awidat.as_mut().unwrap().episodes = vec![
+            EpisodeSpan {
+                id: "needs-review".into(),
+                name: Some("Needs Review".into()),
+                order: Some(2),
+                asset_id: "asset-a".into(),
+                source_start_s: 240.0,
+                source_end_s: 300.0,
+                confidence: Some(0.74),
+                status: EpisodeSpanStatus::ReviewNeeded,
+                evidence: vec!["intro phrase".into()],
+                extra: Default::default(),
+            },
+            EpisodeSpan {
+                id: "accepted".into(),
+                name: Some("Accepted".into()),
+                order: Some(1),
+                asset_id: "asset-a".into(),
+                source_start_s: 20.0,
+                source_end_s: 200.0,
+                confidence: Some(0.91),
+                status: EpisodeSpanStatus::Accepted,
+                evidence: vec![],
+                extra: Default::default(),
+            },
+            EpisodeSpan {
+                id: "rejected".into(),
+                name: Some("Rejected".into()),
+                order: Some(3),
+                asset_id: "asset-a".into(),
+                source_start_s: 320.0,
+                source_end_s: 360.0,
+                confidence: Some(0.3),
+                status: EpisodeSpanStatus::Rejected,
+                evidence: vec![],
+                extra: Default::default(),
+            },
+        ];
+        project.write(tmp.path()).unwrap();
+
+        let summary = summarize_project_episodes(tmp.path()).unwrap();
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.accepted, 1);
+        assert_eq!(summary.review_needed, 1);
+        assert_eq!(summary.rejected, 1);
+        assert_eq!(summary.episodes[0].id, "accepted");
+        assert_eq!(summary.episodes[0].duration_s, 180.0);
+        assert_eq!(summary.episodes[1].evidence_count, 1);
     }
 }

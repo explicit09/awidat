@@ -1597,10 +1597,11 @@ mod tests {
 + scene_json: {"id":"scene-edl","duration_s":3.0,"fps":24.0,"width":1920,"height":1080,"layers":[{"id":"panel","kind":"solid","from_s":0.0,"duration_s":3.0,"z_index":0,"params":{"x":0.08,"y":0.12,"width":0.84,"height":0.76,"color":"#111827","opacity":0.86}},{"id":"logo","kind":"image","from_s":0.2,"duration_s":2.4,"z_index":5,"params":{"asset":"raw/logo.png","x":0.12,"y":0.18,"width":0.28,"height":0.28,"fit":"contain","opacity":0.9}},{"id":"accent","kind":"shape","from_s":0.3,"duration_s":2.0,"z_index":6,"params":{"shape":"rect","x":0.12,"y":0.52,"width":0.28,"height":0.04,"color":"#22C55E","opacity":0.8}},{"id":"headline","kind":"text","from_s":0.5,"duration_s":2.0,"z_index":10,"params":{"text":"From EDL"}}]}
 *** End EDL
 "##;
-        let envelope = parse(edl).expect("motion scene EDL should parse");
+        let envelope =
+            parse(edl).unwrap_or_else(|err| panic!("motion scene EDL should parse: {err}"));
         let timeline = Timeline::empty("motion-scene-edl-preview");
-        let (timeline, outcome) =
-            apply(&timeline, &envelope, &AnchorContext::empty()).expect("EDL should apply");
+        let (timeline, outcome) = apply(&timeline, &envelope, &AnchorContext::empty())
+            .unwrap_or_else(|err| panic!("EDL should apply: {err}"));
 
         assert_eq!(outcome.applied.len(), 1);
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));

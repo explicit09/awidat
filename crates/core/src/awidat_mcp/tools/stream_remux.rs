@@ -78,9 +78,7 @@ pub async fn run(args: StreamRemuxArgs, ctx: McpToolCtx) -> Result<String, Strin
     .map_err(|e| format!("stream_remux: output path preflight failed: {e}"))?;
 
     let streams: Vec<StreamExportSpec> = serde_json::from_value(args.streams).map_err(|e| {
-        format!(
-            "stream_remux: streams must be a list of StreamExportSpec entries ({e})"
-        )
+        format!("stream_remux: streams must be a list of StreamExportSpec entries ({e})")
     })?;
     let contract = StreamExportContract {
         id: format!("stream-remux-{}", stable_slug(&args.input)),
@@ -88,12 +86,9 @@ pub async fn run(args: StreamRemuxArgs, ctx: McpToolCtx) -> Result<String, Strin
         streams,
         metadata: args.metadata,
     };
-    let argv = awidat_render::professional::plan_stream_export_args(
-        &input_path,
-        &contract,
-        &output_path,
-    )
-    .map_err(|e| format!("stream_remux: {e}"))?;
+    let argv =
+        awidat_render::professional::plan_stream_export_args(&input_path, &contract, &output_path)
+            .map_err(|e| format!("stream_remux: {e}"))?;
     let manifest = build_stream_remux_manifest(StreamRemuxManifestInput {
         project_root: &ctx.project_root,
         input_path: &input_path,

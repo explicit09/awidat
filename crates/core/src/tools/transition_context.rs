@@ -11,9 +11,9 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::continuity::{ContinuityInputs, CutKind, WhisperWord, assess_continuity};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 use crate::visual_signals::{BoundaryVisualSignals, SideSignals, load_boundary_signals};
 
 use super::assess_continuity::build_inputs;

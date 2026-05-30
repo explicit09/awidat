@@ -41,6 +41,7 @@ export {
   type IndexingTask,
   type IndexingSystemStatus,
   type IndexingStructurePreview,
+  type IndexingEpisodeSummary,
   type IndexerConfigSnapshot,
   type IndexerConfigEntry,
 } from "./IndexingDashboard";

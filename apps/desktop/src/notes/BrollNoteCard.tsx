@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useAgentStore } from "../agent/store";
 import { useMediaStore } from "../media/store";
 import type { Note, DismissalBucket } from "./store";
 import type { BrollAnchor } from "../protocol";
@@ -33,6 +34,7 @@ export function BrollNoteCard({
   faded?: boolean;
 }) {
   const requestSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
   const [busy, setBusy] = useState(false);
 
   function seek() {
@@ -50,7 +52,8 @@ export function BrollNoteCard({
         `For the b-roll note at ${note.anchorAtS.toFixed(2)}s ("${note.summary}"), ` +
         `call search_broll(query="${note.brollQuery.replace(/"/g, '\\"')}", per_page=5). ` +
         `Then re-emit the note with broll_previews populated so I can pick one.`;
-      await invoke("start_turn", { input: directive });
+      const turnId = await invoke<string>("start_turn", { input: directive });
+      setActiveTurnId(turnId);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("start_turn (search_broll) failed", e);
@@ -74,7 +77,8 @@ export function BrollNoteCard({
         `anchor=${anchorArg}, ` +
         `duration_s=${dur.toFixed(1)}, position="overlay"). ` +
         `Then hand the returned edl_fragment to apply_edl to place the cutaway.`;
-      await invoke("start_turn", { input: directive });
+      const turnId = await invoke<string>("start_turn", { input: directive });
+      setActiveTurnId(turnId);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("start_turn (use_broll) failed", e);

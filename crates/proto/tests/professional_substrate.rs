@@ -1,10 +1,14 @@
+#![allow(clippy::expect_used)]
+
 //! Professional substrate schema acceptance tests.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRole};
+use awidat_proto::awidat_meta::{
+    AwidatTimelineMetadata, BeatMarker, BeatMarkerRole, EpisodeSpan, EpisodeSpanStatus,
+};
 use awidat_proto::professional::{
     AlignedTranscriptPhrase, AlignedTranscriptWord, AnimationTarget, AssetCatalog, AssetQuery,
     AssetReadiness, AssetRecord, AssetRole, AudioBus, AudioFinishingState, BezierHandles,
@@ -285,6 +289,125 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             .iter()
             .any(|capability| capability.area == CapabilityArea::CompositionGraph)
     );
+}
+
+#[test]
+fn first_class_episode_metadata_roundtrips() {
+    let metadata = AwidatTimelineMetadata {
+        episodes: vec![
+            EpisodeSpan {
+                id: "episode-1".into(),
+                name: Some("Founder story".into()),
+                order: Some(1),
+                asset_id: "raw/interview.mov".into(),
+                source_start_s: 72.01,
+                source_end_s: 2405.57,
+                confidence: Some(0.92),
+                status: EpisodeSpanStatus::Accepted,
+                evidence: vec!["intro_language".into(), "outro_language".into()],
+                ..EpisodeSpan::default()
+            },
+            EpisodeSpan {
+                id: "episode-2".into(),
+                name: Some("Second topic".into()),
+                order: Some(2),
+                asset_id: "raw/interview.mov".into(),
+                source_start_s: 2500.0,
+                source_end_s: 3180.0,
+                confidence: Some(0.66),
+                status: EpisodeSpanStatus::ReviewNeeded,
+                evidence: vec!["meta_talk_boundary".into()],
+                ..EpisodeSpan::default()
+            },
+            EpisodeSpan {
+                id: "false-start-1".into(),
+                asset_id: "raw/interview.mov".into(),
+                source_start_s: 12.0,
+                source_end_s: 42.0,
+                confidence: Some(0.31),
+                status: EpisodeSpanStatus::Rejected,
+                evidence: vec!["rehearsal_language".into()],
+                ..EpisodeSpan::default()
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let json = serde_json::to_string(&metadata).expect("serialize metadata");
+    assert!(json.contains("\"status\":\"accepted\""));
+    assert!(json.contains("\"status\":\"review_needed\""));
+    assert!(json.contains("\"status\":\"rejected\""));
+
+    let roundtrip: AwidatTimelineMetadata =
+        serde_json::from_str(&json).expect("deserialize metadata");
+
+    assert_eq!(roundtrip.episodes.len(), 3);
+    assert_eq!(roundtrip.episodes[0].id, "episode-1");
+    assert_eq!(roundtrip.episodes[0].name.as_deref(), Some("Founder story"));
+    assert_eq!(roundtrip.episodes[0].order, Some(1));
+    assert_eq!(roundtrip.episodes[0].asset_id, "raw/interview.mov");
+    assert_eq!(roundtrip.episodes[0].source_start_s, 72.01);
+    assert_eq!(roundtrip.episodes[0].source_end_s, 2405.57);
+    assert_eq!(roundtrip.episodes[0].duration_s(), 2333.56);
+    assert_eq!(roundtrip.episodes[0].confidence, Some(0.92));
+    assert_eq!(roundtrip.episodes[0].status, EpisodeSpanStatus::Accepted);
+    assert_eq!(
+        roundtrip.episodes[0].evidence,
+        vec!["intro_language", "outro_language"]
+    );
+    assert_eq!(
+        roundtrip.episodes[1].status,
+        EpisodeSpanStatus::ReviewNeeded
+    );
+    assert_eq!(roundtrip.episodes[2].status, EpisodeSpanStatus::Rejected);
+}
+
+#[test]
+fn episode_metadata_validation_flags_invalid_ranges() {
+    let metadata = AwidatTimelineMetadata {
+        episodes: vec![
+            EpisodeSpan {
+                id: "episode-dup".into(),
+                asset_id: "raw/interview.mov".into(),
+                source_start_s: 10.0,
+                source_end_s: 20.0,
+                confidence: Some(0.5),
+                ..EpisodeSpan::default()
+            },
+            EpisodeSpan {
+                id: "episode-dup".into(),
+                asset_id: "".into(),
+                source_start_s: 30.0,
+                source_end_s: 20.0,
+                confidence: Some(1.2),
+                ..EpisodeSpan::default()
+            },
+            EpisodeSpan {
+                id: "".into(),
+                asset_id: "raw/interview.mov".into(),
+                source_start_s: 50.0,
+                source_end_s: 60.0,
+                confidence: Some(0.8),
+                ..EpisodeSpan::default()
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let messages = metadata
+        .validate_professional_substrate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(messages.contains("duplicate episode id episode-dup"));
+    assert!(messages.contains("episode episode-dup asset_id must not be empty"));
+    assert!(
+        messages.contains("episode episode-dup source range start_s 30 must be before end_s 20")
+    );
+    assert!(messages.contains("episode episode-dup confidence 1.2 must be between 0 and 1"));
+    assert!(messages.contains("episode id must not be empty"));
 }
 
 #[test]

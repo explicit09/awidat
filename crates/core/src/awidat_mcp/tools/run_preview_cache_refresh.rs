@@ -68,15 +68,13 @@ pub async fn run(args: RunPreviewCacheRefreshArgs, ctx: McpToolCtx) -> Result<St
         .map_err(|e| format!("run_preview_cache_refresh: serialize lifecycle: {e}"));
     }
 
-    let executor =
-        crate::preview_refresh_executor::FfmpegPreviewRefreshExecutor::new(ctx.project_root.clone());
-    let lifecycle = crate::preview_cache::run_preview_cache_refresh(
-        &ctx.project_root,
-        &selection,
-        &executor,
-    )
-    .await
-    .map_err(|e| format!("run_preview_cache_refresh: {e}"))?;
+    let executor = crate::preview_refresh_executor::FfmpegPreviewRefreshExecutor::new(
+        ctx.project_root.clone(),
+    );
+    let lifecycle =
+        crate::preview_cache::run_preview_cache_refresh(&ctx.project_root, &selection, &executor)
+            .await
+            .map_err(|e| format!("run_preview_cache_refresh: {e}"))?;
 
     serde_json::to_string(&RunPreviewCacheRefreshResponse {
         lifecycle,

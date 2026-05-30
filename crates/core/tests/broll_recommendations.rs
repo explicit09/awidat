@@ -1,4 +1,5 @@
 //! B-roll recommendation builder tests.
+#![allow(clippy::too_many_arguments)]
 
 use awidat_core::broll_recommendations::build_broll_recommendation_package;
 use awidat_proto::professional::{

@@ -2119,7 +2119,7 @@ fn layer_u32_param(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
     layer
         .params
         .get(key)
-        .and_then(|value| value.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
 }
 
@@ -2127,7 +2127,7 @@ fn layer_f64_param(layer: &MotionSceneLayer, key: &str) -> Option<f64> {
     layer
         .params
         .get(key)
-        .and_then(|value| value.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
 }
 

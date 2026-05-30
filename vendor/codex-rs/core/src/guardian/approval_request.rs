@@ -234,7 +234,7 @@ fn truncate_guardian_action_value(value: Value) -> (Value, bool) {
         }
         Value::Object(values) => {
             let mut entries = values.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(left, _)| left.clone());
             let mut truncated = false;
             let values = entries
                 .into_iter()

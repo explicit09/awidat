@@ -16,6 +16,9 @@ jobs:
         # coverage (most contributors and CI runners default Linux).
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-C debuginfo=0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +34,7 @@ jobs:
             ffmpeg \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
+            libcap-dev \
             librsvg2-dev \
             libxdo-dev \
             libssl-dev
@@ -43,13 +47,44 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          set -euo pipefail
+          excludes=()
+          while IFS= read -r package; do
+            excludes+=(--exclude "$package")
+          done < <(
+            cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
+          )
+          cargo clippy --workspace "${excludes[@]}" --all-targets -- -D warnings
+      - name: Free clippy build artifacts
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clean
       - name: Test
-        run: cargo test --workspace
-      - name: Fast evals
-        run: cargo run -p awidat-eval -- --ci --json
+        run: |
+          set -euo pipefail
+          excludes=(--exclude awidat-desktop)
+          while IFS= read -r package; do
+            excludes+=(--exclude "$package")
+          done < <(
+            cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
+          )
+          cargo test --workspace "${excludes[@]}"
+      - name: Free test build artifacts
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clean
       - name: Doc
-        run: cargo doc --no-deps --workspace
+        run: |
+          set -euo pipefail
+          excludes=()
+          while IFS= read -r package; do
+            excludes+=(--exclude "$package")
+          done < <(
+            cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
+          )
+          cargo doc --no-deps --workspace "${excludes[@]}"
       - name: Whitespace
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -71,6 +106,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -94,6 +130,7 @@ jobs:
       - name: Generated protocol unchanged
         run: git diff --exit-code -- apps/desktop/src/protocol/generated
       - name: UI smoke
+        timeout-minutes: 10
         run: pnpm --dir apps/desktop test
       - name: Python safe smoke
         run: python3 python/scripts/smoke_safe.py

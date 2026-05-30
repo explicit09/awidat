@@ -235,8 +235,10 @@ fn edl_anchor(anchor: &AnchorArg) -> Result<String, String> {
             index
         ));
     }
-    Err("anchor must include clip_uuid, transcript_snippet, or asset_id + scene_change_index"
-        .into())
+    Err(
+        "anchor must include clip_uuid, transcript_snippet, or asset_id + scene_change_index"
+            .into(),
+    )
 }
 
 fn json_anchor(anchor: &AnchorArg) -> Result<serde_json::Value, String> {
@@ -253,8 +255,10 @@ fn json_anchor(anchor: &AnchorArg) -> Result<serde_json::Value, String> {
             "index": index
         }));
     }
-    Err("anchor must include clip_uuid, transcript_snippet, or asset_id + scene_change_index"
-        .into())
+    Err(
+        "anchor must include clip_uuid, transcript_snippet, or asset_id + scene_change_index"
+            .into(),
+    )
 }
 
 fn push_opt_num(op: &mut String, key: &str, value: Option<f64>) {
@@ -326,7 +330,10 @@ pub fn run_delete_clips(args: DeleteClipsArgs, ctx: McpToolCtx) -> Result<String
     }
     let mut ops = Vec::with_capacity(args.anchors.len());
     for anchor in &args.anchors {
-        ops.push(format!("*** Delete Clip\n@@ anchor: {}", edl_anchor(anchor)?));
+        ops.push(format!(
+            "*** Delete Clip\n@@ anchor: {}",
+            edl_anchor(anchor)?
+        ));
     }
     dispatch(delegated_edl(ops, args.dry_run, args.reasoning), ctx)
 }
@@ -437,10 +444,7 @@ pub fn run_set_marker(args: SetMarkerArgs, ctx: McpToolCtx) -> Result<String, St
 }
 
 /// Run `set_clip_property`.
-pub fn run_set_clip_property(
-    args: SetClipPropertyArgs,
-    ctx: McpToolCtx,
-) -> Result<String, String> {
+pub fn run_set_clip_property(args: SetClipPropertyArgs, ctx: McpToolCtx) -> Result<String, String> {
     let anchor = edl_anchor(&args.anchor)?;
     let mut ops = Vec::new();
     if let Some(volume) = args.volume {
@@ -492,32 +496,22 @@ pub fn run_set_track_property(
 
 // ------- Descriptions -------
 
-pub const DESCRIPTION_SPLIT_CLIP: &str =
-    "Split a clip by lowering to apply_edl's graph-native Split Clip operation; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_SPLIT_CLIP: &str = "Split a clip by lowering to apply_edl's graph-native Split Clip operation; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_TRIM_CLIP: &str =
-    "Trim a clip by lowering to apply_edl's graph-native Trim Clip operation; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_TRIM_CLIP: &str = "Trim a clip by lowering to apply_edl's graph-native Trim Clip operation; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_MOVE_CLIP: &str =
-    "Move a clip by lowering to apply_edl's Move Clip operation; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_MOVE_CLIP: &str = "Move a clip by lowering to apply_edl's Move Clip operation; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_DELETE_CLIPS: &str =
-    "Delete one or more clips in a single apply_edl envelope; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_DELETE_CLIPS: &str = "Delete one or more clips in a single apply_edl envelope; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_ROLL_TRIM: &str =
-    "Roll an edit point by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_ROLL_TRIM: &str = "Roll an edit point by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_SLIP_CLIP: &str =
-    "Slip a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_SLIP_CLIP: &str = "Slip a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_RIPPLE_TRIM: &str =
-    "Ripple-trim a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_RIPPLE_TRIM: &str = "Ripple-trim a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_SET_MARKER: &str =
-    "Add or update a timeline marker by lowering to apply_edl's Professional Timeline Edit marker operations; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_SET_MARKER: &str = "Add or update a timeline marker by lowering to apply_edl's Professional Timeline Edit marker operations; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_SET_CLIP_PROPERTY: &str =
-    "Set basic clip properties by lowering to existing apply_edl ops such as Set Volume, Set Speed, or Set Effect; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_SET_CLIP_PROPERTY: &str = "Set basic clip properties by lowering to existing apply_edl ops such as Set Volume, Set Speed, or Set Effect; apply_edl remains the canonical mutation path.";
 
-pub const DESCRIPTION_SET_TRACK_PROPERTY: &str =
-    "Set basic track audio properties by lowering to apply_edl's Set Track Audio op; apply_edl remains the canonical mutation path.";
+pub const DESCRIPTION_SET_TRACK_PROPERTY: &str = "Set basic track audio properties by lowering to apply_edl's Set Track Audio op; apply_edl remains the canonical mutation path.";

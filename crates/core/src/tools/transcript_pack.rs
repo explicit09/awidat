@@ -5,8 +5,8 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 use crate::transcript_pack::{
     DEFAULT_MAX_WORDS_PER_ASSET, MAX_WORDS_PER_ASSET, TranscriptPackOptions,
     build_timeline_transcript_pack, build_transcript_pack,

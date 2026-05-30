@@ -12,8 +12,8 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 const DEFAULT_SEARCH_UNTIL_S: f64 = 1800.0;
 const MAX_SEARCH_UNTIL_S: f64 = 7200.0;

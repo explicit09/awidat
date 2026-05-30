@@ -361,11 +361,7 @@ pub fn read_otio_timeline(
             // elements' shape, drop the offenders and re-try. We do this
             // ONLY on a strict-parse failure so well-formed files take
             // the fast path.
-            if let Some(quarantined) = quarantine_awidat_metadata_arrays(
-                value,
-                &file,
-                warnings,
-            ) {
+            if let Some(quarantined) = quarantine_awidat_metadata_arrays(value, &file, warnings) {
                 serde_json::from_value::<Timeline>(quarantined).map_err(|e| {
                     ProtoError::Validation {
                         file,
@@ -414,7 +410,8 @@ fn quarantine_awidat_metadata_arrays(
     let mut touched = false;
     let array_keys: Vec<String> = awidat
         .iter()
-        .filter_map(|(k, v)| (v.is_array() && !v.as_array().unwrap().is_empty()).then(|| k.clone()))
+        .filter(|(_, v)| v.as_array().is_some_and(|arr| !arr.is_empty()))
+        .map(|(k, _)| k.clone())
         .collect();
     // If every element of an awidat-metadata array is missing every
     // anchor field we know of (id / time_s / start_s / clip_id / uuid),
@@ -422,10 +419,16 @@ fn quarantine_awidat_metadata_arrays(
     // than fail the whole project load. Editorial sidecars losing
     // entries is recoverable; an unreadable project isn't.
     for key in array_keys {
-        let Some(arr_val) = awidat.get_mut(&key) else { continue; };
-        let Some(arr) = arr_val.as_array() else { continue; };
+        let Some(arr_val) = awidat.get_mut(&key) else {
+            continue;
+        };
+        let Some(arr) = arr_val.as_array() else {
+            continue;
+        };
         let all_bad = arr.iter().all(|el| {
-            let Some(obj) = el.as_object() else { return true; };
+            let Some(obj) = el.as_object() else {
+                return true;
+            };
             !obj.contains_key("id")
                 && !obj.contains_key("time_s")
                 && !obj.contains_key("start_s")

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
 use awidat_core::edl::parser;

@@ -6253,7 +6253,7 @@ fn apply_insert_broll(
                         break;
                     }
                     Err(clip) => {
-                        let TrackChild::Clip(clip) = clip else {
+                        let TrackChild::Clip(clip) = *clip else {
                             unreachable!("insert_overlay_clip_at returned non-clip")
                         };
                         broll = Some(clip);
@@ -8920,7 +8920,7 @@ fn insert_overlay_clip_at(
     start_s: f64,
     duration_s: f64,
     rate: f64,
-) -> Result<(), TrackChild> {
+) -> Result<(), Box<TrackChild>> {
     let cursor = track_cursor(track);
     if cursor <= start_s + 1e-6 {
         if start_s > cursor + 1e-6 {
@@ -8942,7 +8942,7 @@ fn insert_overlay_clip_at(
         let child_end = t + child_dur;
         if start_s >= child_start - 1e-6 && start_s + duration_s <= child_end + 1e-6 {
             if !matches!(track.children[idx], TrackChild::Gap(_)) {
-                return Err(clip);
+                return Err(Box::new(clip));
             }
             let before = (start_s - child_start).max(0.0);
             let after = (child_end - start_s - duration_s).max(0.0);
@@ -8962,12 +8962,12 @@ fn insert_overlay_clip_at(
             return Ok(());
         }
         if start_s < child_end - 1e-6 {
-            return Err(clip);
+            return Err(Box::new(clip));
         }
         t = child_end;
     }
 
-    Err(clip)
+    Err(Box::new(clip))
 }
 
 fn child_duration(child: &TrackChild) -> f64 {

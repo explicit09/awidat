@@ -91,7 +91,7 @@ import type { Item } from "./generated/Item";
 export type ItemEvent = { item: Item };
 
 // Payload emitted on TURN_END_EVENT.
-export type TurnEndEvent = { error: string | null };
+export type TurnEndEvent = { turnId: string; error: string | null };
 
 // Payload emitted on MENU_COMMAND_EVENT.
 export type NativeMenuCommandEvent = { id: string };

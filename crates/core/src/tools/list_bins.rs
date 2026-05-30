@@ -16,8 +16,8 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Synthetic-bin id prefix for built-in role buckets.
 pub const ROLE_BIN_PREFIX: &str = "role:";

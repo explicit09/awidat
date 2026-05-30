@@ -159,10 +159,7 @@ pub async fn run(args: UseBrollArgs, ctx: McpToolCtx) -> Result<String, String> 
     Ok(body.to_string())
 }
 
-async fn fetch_video_by_id(
-    client: &pexels::Client,
-    id: u64,
-) -> Result<pexels::Video, String> {
+async fn fetch_video_by_id(client: &pexels::Client, id: u64) -> Result<pexels::Video, String> {
     // The Pexels API exposes /videos/videos/<id> for a direct lookup;
     // we use the same client surface but it's a thin GET. To keep
     // PexelsClient's surface small we re-do the search via the id
@@ -258,9 +255,11 @@ fn build_edl_fragment(
 
 fn map_pexels_err(err: pexels::PexelsError) -> String {
     match err {
-        pexels::PexelsError::MissingApiKey => "use_broll: PEXELS_API_KEY not set. Set the env var or store via OS keychain \
+        pexels::PexelsError::MissingApiKey => {
+            "use_broll: PEXELS_API_KEY not set. Set the env var or store via OS keychain \
              (service 'awidat', account 'pexels_api_key')."
-            .to_string(),
+                .to_string()
+        }
         pexels::PexelsError::Api { status: 404, .. } => {
             "use_broll: Pexels video id not found. Re-run search_broll for fresh ids.".to_string()
         }

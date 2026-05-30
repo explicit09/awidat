@@ -444,8 +444,10 @@ impl Client {
 
         let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
         let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
-        let mut options = PeerRequestOptions::default();
-        options.timeout = Some(to);
+        let options = PeerRequestOptions {
+            timeout: Some(to),
+            ..Default::default()
+        };
 
         let handle = service
             .peer()

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_session::CodexSession;
 use crate::events::emit_item;
-use crate::state::{AwidatState, TurnHandle};
+use crate::state::{AwidatState, TurnHandle, ViewState};
 use awidat_desktop_protocol::{Id, Item};
 
 /// Drive one turn end-to-end. Ensures a live `CodexSession` exists for
@@ -31,7 +31,8 @@ pub async fn start_turn(
     app: AppHandle,
     state: State<'_, AwidatState>,
     input: String,
-) -> Result<(), String> {
+    context: Option<Vec<String>>,
+) -> Result<String, String> {
     if input.trim().is_empty() {
         return Err("empty input".into());
     }
@@ -61,17 +62,12 @@ pub async fn start_turn(
         },
     );
 
-    // Prefix view-state context onto the input the model sees. If the
-    // user is scrubbed to 0:23 and asks "what's happening here?", the
-    // agent now has the answer to "here." No-op when no media loaded.
-    let model_input = match state.view_state.lock().await.as_ref() {
-        Some(v) => format!(
-            "{}\n\n{}",
-            crate::commands::view::format_view_context(v),
-            input
-        ),
-        None => input.clone(),
-    };
+    let turn_context = context.unwrap_or_default();
+    let model_input = format_model_input(
+        &input,
+        state.view_state.lock().await.as_ref(),
+        &turn_context,
+    );
 
     // Ensure-or-launch the bridge for this project_root. Project switch
     // is handled by `set_project_root` (it tears down the old session),
@@ -122,11 +118,11 @@ pub async fn start_turn(
     // on TurnHandle for now; pass a fresh token to keep the type the
     // same. Future cleanup can drop the field.
     *state.turn.lock().await = Some(TurnHandle {
-        id: turn_id,
+        id: turn_id.clone(),
         cancel: CancellationToken::new(),
     });
 
-    Ok(())
+    Ok(turn_id)
 }
 
 /// Cancel the in-flight turn. Asks the bridge to issue
@@ -206,5 +202,53 @@ fn parse_approval_decision(s: &str) -> Result<ApprovalDecision, String> {
         other => Err(format!(
             "unknown approval decision \"{other}\" (expected allow | allow_for_session | deny)"
         )),
+    }
+}
+
+fn format_model_input(input: &str, view: Option<&ViewState>, context: &[String]) -> String {
+    let mut blocks = Vec::new();
+    if let Some(v) = view {
+        blocks.push(crate::commands::view::format_view_context(v));
+    }
+
+    let context_lines = context
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .take(12)
+        .map(|line| format!("- {}", line.chars().take(240).collect::<String>()))
+        .collect::<Vec<_>>();
+    if !context_lines.is_empty() {
+        blocks.push(format!("[visible context]\n{}", context_lines.join("\n")));
+    }
+
+    if blocks.is_empty() {
+        input.to_string()
+    } else {
+        format!("{}\n\n{}", blocks.join("\n"), input)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::ViewState;
+
+    #[test]
+    fn format_turn_context_prefix_combines_view_state_and_visible_context() {
+        let view = ViewState {
+            stem: "intro".into(),
+            current_time_s: 12.0,
+            is_playing: false,
+        };
+        let context = vec![
+            "project: Episode 12".to_string(),
+            "media: Clip: intro".to_string(),
+        ];
+
+        assert_eq!(
+            format_model_input("What is happening here?", Some(&view), &context),
+            "[user is viewing intro at 0:12]\n[visible context]\n- project: Episode 12\n- media: Clip: intro\n\nWhat is happening here?"
+        );
     }
 }

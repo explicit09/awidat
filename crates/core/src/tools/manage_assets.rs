@@ -6,12 +6,12 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::media_catalog_mutation::{
     CatalogMutationError, create_bin, ensure_asset_catalog, ensure_awidat_metadata,
     move_asset_to_bin,
 };
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Create a durable asset bin.
 pub struct CreateBinTool;

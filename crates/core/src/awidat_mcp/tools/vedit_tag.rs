@@ -43,8 +43,8 @@ pub fn run(args: VeditTagArgs, ctx: McpToolCtx) -> Result<String, String> {
     else {
         return Err("vedit_tag: name is required unless list=true".into());
     };
-    let tag = vc::tag_ref(&repo, name, args.refstr.as_deref())
-        .map_err(|e| format!("vedit_tag: {e}"))?;
+    let tag =
+        vc::tag_ref(&repo, name, args.refstr.as_deref()).map_err(|e| format!("vedit_tag: {e}"))?;
     Ok(serde_json::json!({
         "name": tag.name,
         "target": tag.target,

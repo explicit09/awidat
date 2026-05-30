@@ -47,13 +47,10 @@ pub async fn run(args: AnalyzeSyncArgs, ctx: McpToolCtx) -> Result<String, Strin
             "analyze_sync: reference asset {reference_asset:?} has no audio stream"
         ));
     }
-    let reference_wave = awidat_render::generate_waveform(
-        &reference_path,
-        bucket_count,
-        CancellationToken::new(),
-    )
-    .await
-    .map_err(|e| format!("analyze_sync: waveform reference failed: {e}"))?;
+    let reference_wave =
+        awidat_render::generate_waveform(&reference_path, bucket_count, CancellationToken::new())
+            .await
+            .map_err(|e| format!("analyze_sync: waveform reference failed: {e}"))?;
     let reference_duration_s = reference_probe.duration_s.unwrap_or(bucket_count as f64);
 
     let candidates = args.candidate_assets.unwrap_or_else(|| {
@@ -78,8 +75,7 @@ pub async fn run(args: AnalyzeSyncArgs, ctx: McpToolCtx) -> Result<String, Strin
             }
         };
         if !probe.has_audio {
-            blockers
-                .push(serde_json::json!({ "asset": candidate, "reason": "no audio stream" }));
+            blockers.push(serde_json::json!({ "asset": candidate, "reason": "no audio stream" }));
             continue;
         }
         let wave = match awidat_render::generate_waveform(

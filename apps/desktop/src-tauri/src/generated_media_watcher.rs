@@ -141,16 +141,10 @@ async fn run_loop(
                         }
                         // Was active, now terminal: emit one final
                         // Completed with the right JobResult.
-                        (Some(Phase::Active), Phase::Terminal) | (None, Phase::Terminal)
-                            // (None,Terminal) above is unreachable in practice
-                            // because we always emit Started first, but the
-                            // dual-arm keeps the pattern total. Harmless dup.
-                        => {
+                        (Some(Phase::Active), Phase::Terminal) => {
                             let summary = Some(describe(record));
                             let result = match record.state {
-                                GeneratedMediaState::Succeeded => {
-                                    JobResult::Ok { summary }
-                                }
+                                GeneratedMediaState::Succeeded => JobResult::Ok { summary },
                                 GeneratedMediaState::Failed => JobResult::Err {
                                     message: record
                                         .failure_message
@@ -206,10 +200,7 @@ fn describe(record: &awidat_core::generated_media::registry::GeneratedMediaRecor
         GeneratedMediaState::Running => format!("generating · {prompt}"),
         GeneratedMediaState::Succeeded => format!("ready · {prompt}"),
         GeneratedMediaState::Failed => {
-            let why = record
-                .failure_message
-                .as_deref()
-                .unwrap_or("unknown error");
+            let why = record.failure_message.as_deref().unwrap_or("unknown error");
             format!("failed · {prompt} — {why}")
         }
         GeneratedMediaState::Cancelled => format!("cancelled · {prompt}"),

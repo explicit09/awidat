@@ -60,6 +60,13 @@ export type TurnPart =
       options: string[] | null;
     }
   | {
+      kind: "approval_request";
+      id: string;
+      toolName: string;
+      argsSummary: string;
+      capabilityMetadata: unknown;
+    }
+  | {
       kind: "tool_call";
       id: string;
       /** Stable tool name (e.g. `view_timeline`). */
@@ -132,6 +139,11 @@ export type CommandRailProps = {
   onSuggestion?: (action: SuggestedAction) => void;
   /** Called when the user answers an agent `request_user_input`. */
   onRespondUserInput?: (callId: string, reply: string) => Promise<void> | void;
+  /** Called when the user answers an agent approval request. */
+  onRespondApproval?: (
+    callId: string,
+    decision: "allow" | "allow_for_session" | "deny",
+  ) => Promise<void> | void;
   /** Called when a context chip is removed. */
   onRemoveChip?: (chip: ContextChip, index: number) => void;
   /** Called when the user loads a saved chat. */
@@ -192,6 +204,7 @@ export function CommandRail({
   onCancel,
   onSuggestion,
   onRespondUserInput,
+  onRespondApproval,
   onRemoveChip,
   onSelectChatSession,
   onOpenHistory,
@@ -898,6 +911,8 @@ export function CommandRail({
                             key={turn.id}
                             turn={turn}
                             showSeparator={false}
+                            onRespondUserInput={onRespondUserInput}
+                            onRespondApproval={onRespondApproval}
                           />
                         ))}
                       </div>
@@ -951,6 +966,7 @@ export function CommandRail({
                     turn={turn}
                     showSeparator={false}
                     onRespondUserInput={onRespondUserInput}
+                    onRespondApproval={onRespondApproval}
                   />
                 ))}
               </div>
@@ -1073,10 +1089,15 @@ function ConversationTurnBlock({
   turn,
   showSeparator,
   onRespondUserInput,
+  onRespondApproval,
 }: {
   turn: ConversationTurn;
   showSeparator: boolean;
   onRespondUserInput?: (callId: string, reply: string) => Promise<void> | void;
+  onRespondApproval?: (
+    callId: string,
+    decision: "allow" | "allow_for_session" | "deny",
+  ) => Promise<void> | void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -1115,6 +1136,12 @@ function ConversationTurnBlock({
                 key={part.id}
                 part={part}
                 onRespond={onRespondUserInput}
+              />
+            ) : part.kind === "approval_request" ? (
+              <InlineApprovalRequest
+                key={part.id}
+                part={part}
+                onRespond={onRespondApproval}
               />
             ) : (
               <ToolCallRow key={part.id} part={part} />
@@ -1198,6 +1225,78 @@ function InlineUserInputRequest({
           </Button>
         </form>
       )}
+      {error ? (
+        <p className="mt-2 text-[var(--text-caption)] text-[#ef7168]">{error}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function InlineApprovalRequest({
+  part,
+  onRespond,
+}: {
+  part: Extract<TurnPart, { kind: "approval_request" }>;
+  onRespond?: (
+    callId: string,
+    decision: "allow" | "allow_for_session" | "deny",
+  ) => Promise<void> | void;
+}) {
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send(decision: "allow" | "allow_for_session" | "deny") {
+    if (submitted || !onRespond) return;
+    setSubmitted(true);
+    setError(null);
+    try {
+      await onRespond(part.id, decision);
+    } catch (err) {
+      setError(String(err));
+      setSubmitted(false);
+    }
+  }
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-card)] p-2.5">
+      <div className="mb-2 flex items-center gap-2 text-[var(--text-caption)] font-medium text-[var(--color-text-muted)]">
+        <Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--accent-selection)]" />
+        <span>Approval required</span>
+      </div>
+      <div className="mb-2 min-w-0">
+        <div className="font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
+          {part.toolName.replace(/_/g, " ")}
+        </div>
+        <p className="mt-1 whitespace-pre-wrap break-words text-[var(--text-body-sm)] leading-snug text-[var(--color-text-primary)]">
+          {part.argsSummary}
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={submitted || !onRespond}
+          onClick={() => void send("allow")}
+        >
+          Allow
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={submitted || !onRespond}
+          onClick={() => void send("allow_for_session")}
+        >
+          Session
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={submitted || !onRespond}
+          onClick={() => void send("deny")}
+        >
+          Deny
+        </Button>
+      </div>
       {error ? (
         <p className="mt-2 text-[var(--text-caption)] text-[#ef7168]">{error}</p>
       ) : null}

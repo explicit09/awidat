@@ -78,8 +78,7 @@ pub fn run(args: UseGeneratedMediaArgs, ctx: McpToolCtx) -> Result<String, Strin
             record.job_id
         )
     })?;
-    validate_generated_output_path(asset_path)
-        .map_err(|e| format!("use_generated_media: {e}"))?;
+    validate_generated_output_path(asset_path).map_err(|e| format!("use_generated_media: {e}"))?;
     let absolute_path = ctx.project_root.join(asset_path);
     let edl_fragment = build_edl_fragment(asset_path, &args.anchor, args.duration_s, position)
         .map_err(|message| format!("use_generated_media: {message}"))?;

@@ -12,7 +12,7 @@ fn manifest_id(output_path: &Path) -> String {
     output_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| "timeline".to_string())
 }
 
@@ -53,7 +53,7 @@ pub fn run(project_root: &Path) -> Result<()> {
     // Logs land next to the output mp4 so the user (or a postmortem
     // tool) can read what ffmpeg did. Use separate threads to drain
     // each pipe so neither blocks the other.
-    let log_dir = spec.output_path.parent().map(|p| p.to_path_buf());
+    let log_dir = spec.output_path.parent().map(std::path::Path::to_path_buf);
     let stdout_path = log_dir.as_ref().map(|d| {
         d.join(format!(
             "{}.ffmpeg.stdout.log",
@@ -225,7 +225,7 @@ fn fingerprint_manifest_inputs(
     }
     // Preserve original ordering + duplicate count by cloning the
     // cached fingerprint back into the result vec.
-    Ok(order
+    order
         .into_iter()
         .map(|abs| {
             by_path
@@ -233,7 +233,7 @@ fn fingerprint_manifest_inputs(
                 .cloned()
                 .with_context(|| format!("missing cached fingerprint for {}", abs.display()))
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]

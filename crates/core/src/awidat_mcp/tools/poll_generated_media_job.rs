@@ -62,12 +62,9 @@ pub async fn run(args: PollGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<Str
         return Err("poll_generated_media_job: job_id must not be empty.".into());
     }
 
-    let wait_budget_s = args
-        .wait_until_terminal_s
-        .unwrap_or(0)
-        .min(MAX_WAIT_S);
-    let deadline = std::time::Instant::now()
-        .checked_add(std::time::Duration::from_secs(wait_budget_s as u64));
+    let wait_budget_s = args.wait_until_terminal_s.unwrap_or(0).min(MAX_WAIT_S);
+    let deadline =
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs(wait_budget_s as u64));
 
     loop {
         let registry = Registry::load_or_default(&ctx.project_root)
@@ -75,9 +72,7 @@ pub async fn run(args: PollGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<Str
         let mut record = registry
             .get(&args.job_id)
             .cloned()
-            .ok_or_else(|| {
-                format!("poll_generated_media_job: job '{}' not found.", args.job_id)
-            })?;
+            .ok_or_else(|| format!("poll_generated_media_job: job '{}' not found.", args.job_id))?;
 
         // Terminal states need no polling — return cached state. Same
         // for mock-provider records.
@@ -97,15 +92,12 @@ pub async fn run(args: PollGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<Str
             return Ok(serialize_record(&record));
         }
 
-        let status_url = record
-            .provider_status_url
-            .clone()
-            .ok_or_else(|| {
-                format!(
-                    "poll_generated_media_job: openrouter record '{}' has no provider_status_url.",
-                    args.job_id
-                )
-            })?;
+        let status_url = record.provider_status_url.clone().ok_or_else(|| {
+            format!(
+                "poll_generated_media_job: openrouter record '{}' has no provider_status_url.",
+                args.job_id
+            )
+        })?;
 
         let config = OpenRouterVideoConfig::from_env(None)
             .map_err(|e| format!("poll_generated_media_job: openrouter config: {e}"))?;
@@ -123,9 +115,7 @@ pub async fn run(args: PollGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<Str
             let absolute = ctx.project_root.join(&project_relative);
             download_completed_video(&config, &status, &absolute)
                 .await
-                .map_err(|e| {
-                    format!("poll_generated_media_job: openrouter download: {e}")
-                })?;
+                .map_err(|e| format!("poll_generated_media_job: openrouter download: {e}"))?;
             output_video_path = Some(project_relative);
         }
 

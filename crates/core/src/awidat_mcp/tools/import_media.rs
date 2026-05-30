@@ -138,10 +138,9 @@ pub async fn run_url(args: ImportUrlArgs, ctx: McpToolCtx) -> Result<String, Str
 
     let imported = new_files(&raw_dir, &before)
         .map_err(|e| format!("import_url: unable to inspect raw/: {e}"))?;
-    let destination = imported
-        .into_iter()
-        .next()
-        .ok_or_else(|| "import_url: yt-dlp finished but no new file appeared under raw/".to_string())?;
+    let destination = imported.into_iter().next().ok_or_else(|| {
+        "import_url: yt-dlp finished but no new file appeared under raw/".to_string()
+    })?;
     let rel_path = project_relative_path(&ctx.project_root, &destination)?;
     let size_bytes = destination.metadata().map(|meta| meta.len()).unwrap_or(0);
     record_imported_asset(&ctx.project_root, &rel_path, Some(args.url), "import_url")?;

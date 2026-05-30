@@ -27,8 +27,8 @@ use awidat_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Trigger phrases that, when followed by a concrete noun, suggest
 /// stock b-roll would land. Lowercase-matched against the whisper

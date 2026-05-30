@@ -109,8 +109,9 @@ fn project_with_title_emits_drawtext_filter() {
 }
 
 #[test]
-fn project_with_no_titles_keeps_outv_label() {
-    // Sanity: when there's no Titles track, the video map stays [outv].
+fn project_with_no_titles_uses_copy_path() {
+    // Sanity: when there's no Titles track, the renderer can avoid a
+    // filter graph and copy the single input directly.
     let dir = tempfile::tempdir().unwrap();
     let asset_a = "raw/a.mp4";
     fs::create_dir_all(dir.path().join("raw")).unwrap();
@@ -136,8 +137,12 @@ fn project_with_no_titles_keeps_outv_label() {
     let spec = build_timeline_render_spec(dir.path()).unwrap();
     let cmd = spec.args.join(" ");
     assert!(
-        cmd.contains("-map [outv]"),
-        "expected map [outv] when no titles, got: {cmd}",
+        cmd.contains("-map 0"),
+        "expected input map when no titles, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("-c copy"),
+        "expected copy path when no titles, got: {cmd}",
     );
     assert!(!cmd.contains("[titled_v]"));
 }

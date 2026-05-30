@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::generated_media::registry::{GeneratedMediaState, Registry};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Read a generated-media job from the local registry.
 pub struct PollGeneratedMediaJobTool;

@@ -85,7 +85,6 @@ mod app_backtrack;
 // Awidat fork edit: side-panel that mounts when AWIDAT_PROJECT_ROOT
 // is set in the env. Renders next to the chat column. See
 // vendor/codex-rs/SOURCE.
-mod awidat;
 mod app_command;
 mod app_event;
 mod app_event_sender;
@@ -95,6 +94,7 @@ mod approval_events;
 mod ascii_animation;
 #[cfg(not(target_os = "linux"))]
 mod audio_device;
+mod awidat;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod audio_device {

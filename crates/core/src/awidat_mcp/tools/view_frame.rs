@@ -126,15 +126,8 @@ pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<String, String>
     } else {
         let bytes = match grade.as_ref().and_then(|p| p.graph.as_deref()) {
             Some(graph) => {
-                extract_frame_complex(
-                    &asset_path,
-                    args.t_s,
-                    format,
-                    graph,
-                    "[grade_out]",
-                    max_dim,
-                )
-                .await
+                extract_frame_complex(&asset_path, args.t_s, format, graph, "[grade_out]", max_dim)
+                    .await
             }
             None => extract_frame_filtered(&asset_path, args.t_s, format, max_dim, None).await,
         }
@@ -256,10 +249,7 @@ fn cache_path_for(
 
 /// Look up `clip_name` in the project's OTIO and return the
 /// labeled-graph preview for its effects.
-fn resolve_grade_preview(
-    project_root: &Path,
-    clip_name: &str,
-) -> Result<ClipGradePreview, String> {
+fn resolve_grade_preview(project_root: &Path, clip_name: &str) -> Result<ClipGradePreview, String> {
     let otio_path = project_root.join(files::OTIO);
     let raw = std::fs::read_to_string(&otio_path).map_err(|e| {
         format!(

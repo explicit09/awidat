@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Any
 
 
-INTRO_RE = re.compile(r"\b(welcome|today we have|in this episode|this is episode|welcome back)\b", re.I)
-OUTRO_RE = re.compile(r"\b(thanks for listening|that'?s all|see you next time|subscribe|follow us)\b", re.I)
+INTRO_RE = re.compile(r"\b(welcome|today we have|today we are|in this episode|this is episode|welcome back)\b", re.I)
+OUTRO_RE = re.compile(
+    r"\b(thanks for listening|that'?s all|see you next time|subscribe|follow us|"
+    r"that'?s a wrap|until next time|signing off|bye bye|peace out)\b",
+    re.I,
+)
 RESET_RE = re.compile(r"\b(next episode|new episode|welcome back|now we'?re going to|different topic)\b", re.I)
 REHEARSAL_RE = re.compile(
     r"\b("
@@ -25,6 +29,35 @@ REHEARSAL_RE = re.compile(
 MIN_PUBLISHABLE_DURATION_S = 12 * 60.0
 MIN_SHORT_EPISODE_WITH_OUTRO_S = 4 * 60.0
 REHEARSAL_SCAN_WINDOW_S = 180.0
+META_STRONG = (
+    "off camera",
+    "which topics",
+    "choosing today",
+    "next format",
+    "our intro",
+    "let's do the",
+    "new format",
+    "signing off",
+    "should we talk about",
+    "what are we",
+    "let's plan",
+)
+META_MEDIUM = (
+    "our podcast",
+    "our episode",
+    "the edit",
+    "the caption",
+    "the thumbnail",
+    "the algorithm",
+    "push content",
+    "reaction video",
+    "twenty minute max",
+    "upload",
+    "our people",
+    "our viewers",
+    "retention",
+)
+META_WEAK = ("logo", "content", "clip", "format", "views", "tags", "description")
 
 
 def load_body(path: str | None) -> dict[str, Any]:
@@ -53,8 +86,65 @@ def long_breaks(audio: dict[str, Any]) -> list[dict[str, float]]:
     ]
 
 
+def silence_seconds(audio: dict[str, Any], start_s: float, end_s: float) -> float:
+    total = 0.0
+    for silence in long_breaks(audio):
+        overlap_start = max(start_s, silence["start_s"])
+        overlap_end = min(end_s, silence["end_s"])
+        if overlap_end > overlap_start:
+            total += overlap_end - overlap_start
+    return total
+
+
+def silence_ratio(audio: dict[str, Any], start_s: float, end_s: float) -> float:
+    duration = max(0.0, end_s - start_s)
+    if duration == 0.0:
+        return 0.0
+    return silence_seconds(audio, start_s, end_s) / duration
+
+
 def topics(body: dict[str, Any]) -> list[dict[str, Any]]:
     return body.get("topics", [])
+
+
+def meta_talk_score(text: str) -> int:
+    lowered = text.lower()
+    score = 0
+    for phrase in META_STRONG:
+        if phrase in lowered:
+            score += 2
+    for phrase in META_MEDIUM:
+        if phrase in lowered:
+            score += 1
+    weak_hits = sum(1 for phrase in META_WEAK if phrase in lowered)
+    if weak_hits >= 3:
+        score += 1
+    return score
+
+
+def validate_start(
+    segs: list[dict[str, Any]], audio: dict[str, Any], time_s: float
+) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons = []
+    before_start = max(0.0, time_s - 60.0)
+    before_text = text_between(segs, before_start, time_s)
+    after_text = text_between(segs, time_s, time_s + 300.0)
+    if silence_ratio(audio, before_start, time_s) > 0.5:
+        score += 0.2
+        reasons.append("silence_before_start")
+    if meta_talk_score(before_text) > 0:
+        score += 0.2
+        reasons.append("meta_talk_before_start")
+    # The transcript sidecar has already filtered to speech-bearing segments;
+    # enough words in the next 5 minutes is a cheap sustained-content proxy.
+    if len(after_text.split()) >= 35:
+        score += 0.2
+        reasons.append("sustained_speech_after_start")
+    if meta_talk_score(after_text) == 0:
+        score += 0.1
+        reasons.append("no_meta_talk_after_start")
+    return score, reasons
 
 
 def detect_boundaries(segs: list[dict[str, Any]], audio: dict[str, Any], topic_body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -66,7 +156,9 @@ def detect_boundaries(segs: list[dict[str, Any]], audio: dict[str, Any], topic_b
         if RESET_RE.search(seg["text"]):
             reasons.append("topic_or_episode_reset_language")
         if reasons:
-            boundaries.append({"time_s": seg["start_s"], "kind": "start", "confidence": 0.82, "evidence": seg["text"], "reasons": reasons})
+            validation_score, validation_reasons = validate_start(segs, audio, seg["start_s"])
+            confidence = min(0.95, 0.55 + validation_score)
+            boundaries.append({"time_s": seg["start_s"], "kind": "start", "confidence": confidence, "evidence": seg["text"], "reasons": reasons + validation_reasons})
         if OUTRO_RE.search(seg["text"]):
             boundaries.append({"time_s": seg["end_s"], "kind": "end", "confidence": 0.78, "evidence": seg["text"], "reasons": ["outro_language"]})
     for silence in long_breaks(audio):
@@ -121,7 +213,64 @@ def classify_span(span: dict[str, Any], segs: list[dict[str, Any]]) -> dict[str,
     return {**span, "classification": "publishable", "publishable": True}
 
 
-def build_spans(segs: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def find_end_boundary(
+    segs: list[dict[str, Any]],
+    audio: dict[str, Any],
+    start_s: float,
+    search_end_s: float,
+    explicit_ends: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cursor = start_s + 120.0
+    while cursor < search_end_s - 30.0:
+        window_text = text_between(segs, cursor, cursor + 30.0)
+        meta_score = meta_talk_score(window_text)
+        if meta_score >= 2:
+            after_text = text_between(segs, cursor + 30.0, cursor + 90.0)
+            if meta_talk_score(after_text) >= 1:
+                meta_start = min(
+                    (
+                        seg["start_s"]
+                        for seg in segs
+                        if seg["end_s"] >= cursor
+                        and seg["start_s"] <= cursor + 30.0
+                        and meta_talk_score(seg["text"]) > 0
+                    ),
+                    default=cursor,
+                )
+                return {
+                    "time_s": meta_start,
+                    "confidence": min(0.9, meta_score * 0.25),
+                    "evidence": window_text or f"meta-talk window at {meta_start:.1f}",
+                    "reasons": ["meta_talk_transition"],
+                }
+        cursor += 15.0
+
+    outro_ends = [e for e in explicit_ends if "outro_language" in e.get("reasons", [])]
+    if outro_ends:
+        return outro_ends[-1]
+
+    for silence in long_breaks(audio):
+        if silence["start_s"] >= start_s + 180.0 and silence["start_s"] < search_end_s:
+            if silence["end_s"] - silence["start_s"] >= 30.0:
+                return {
+                    "time_s": silence["start_s"],
+                    "confidence": 0.5,
+                    "evidence": f"sustained silence {silence['start_s']:.1f}-{silence['end_s']:.1f}",
+                    "reasons": ["sustained_silence_end"],
+                }
+
+    if explicit_ends:
+        return explicit_ends[-1]
+
+    return {
+        "time_s": search_end_s,
+        "confidence": 0.3,
+        "evidence": "fallback end",
+        "reasons": ["fallback_end"],
+    }
+
+
+def build_spans(segs: list[dict[str, Any]], audio: dict[str, Any], boundaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not segs:
         return []
     starts = [b for b in boundaries if b["kind"] == "start"]
@@ -131,11 +280,13 @@ def build_spans(segs: list[dict[str, Any]], boundaries: list[dict[str, Any]]) ->
     end_of_recording = segs[-1]["end_s"]
     for idx, start in enumerate(starts):
         next_start = starts[idx + 1]["time_s"] if idx + 1 < len(starts) else None
-        candidate_ends = [b for b in boundaries if b["kind"] == "end" and b["time_s"] > start["time_s"] and (next_start is None or b["time_s"] <= next_start)]
-        end_s = candidate_ends[-1]["time_s"] if candidate_ends else (next_start if next_start is not None else end_of_recording)
+        search_end_s = next_start if next_start is not None else end_of_recording
+        candidate_ends = [b for b in boundaries if b["kind"] == "end" and b["time_s"] > start["time_s"] and b["time_s"] <= search_end_s]
+        end = find_end_boundary(segs, audio, start["time_s"], search_end_s, candidate_ends)
+        end_s = end["time_s"]
         if end_s - start["time_s"] < 20.0:
             continue
-        confidence = min(0.95, float(start["confidence"]) + (0.1 if candidate_ends else 0.0))
+        confidence = min(0.95, float(start["confidence"]) + (0.1 if end["reasons"][0] != "fallback_end" else 0.0))
         spans.append(
             {
                 "label": f"episode_{len(spans) + 1}",
@@ -143,8 +294,8 @@ def build_spans(segs: list[dict[str, Any]], boundaries: list[dict[str, Any]]) ->
                 "end_s": round(float(end_s), 3),
                 "duration_s": round(float(end_s - start["time_s"]), 3),
                 "confidence": round(confidence, 3),
-                "evidence": [start["evidence"]] + [e["evidence"] for e in candidate_ends[-1:]],
-                "reasons": start["reasons"] + ([candidate_ends[-1]["reasons"][0]] if candidate_ends else []),
+                "evidence": [start["evidence"], end["evidence"]],
+                "reasons": start["reasons"] + [end["reasons"][0]],
             }
         )
     return spans
@@ -174,7 +325,7 @@ def main() -> None:
     topic_body = load_body(args.topic)
     segs = segments(transcript)
     boundaries = detect_boundaries(segs, audio, topic_body)
-    raw_spans = build_spans(segs, boundaries)
+    raw_spans = build_spans(segs, audio, boundaries)
     spans, rejected_spans = publishable_plan(raw_spans, segs)
     high_conf = [s for s in spans if s["confidence"] >= 0.7]
     recommended = high_conf[0] if high_conf else (spans[0] if spans else None)

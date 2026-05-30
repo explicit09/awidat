@@ -12,11 +12,73 @@
 
 import { chromium } from "playwright";
 import { strict as assert } from "node:assert";
+import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 
 const BASE_URL = process.env.SMOKE_URL ?? "http://localhost:1420/";
 const SCREENSHOT_DIR = process.env.SMOKE_OUT_DIR ?? "tests/smoke";
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
+
+let appServer = null;
+
+async function canReachApp() {
+  try {
+    const response = await fetch(BASE_URL, { signal: AbortSignal.timeout(500) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureAppServer() {
+  if (await canReachApp()) return;
+
+  appServer = spawn("pnpm", ["--dir", "apps/desktop", "exec", "vite", "--host", "127.0.0.1"], {
+    cwd: new URL("../../..", import.meta.url),
+    env: { ...process.env, BROWSER: "none" },
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  appServer.stdout.on("data", (chunk) => process.stdout.write(chunk));
+  appServer.stderr.on("data", (chunk) => process.stderr.write(chunk));
+
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (await canReachApp()) return;
+    if (appServer.exitCode !== null) {
+      throw new Error(`dev server exited before ${BASE_URL} became reachable`);
+    }
+    await delay(500);
+  }
+
+  throw new Error(`timed out waiting for ${BASE_URL}`);
+}
+
+async function stopAppServer() {
+  if (appServer && appServer.exitCode === null) {
+    const stopped = new Promise((resolve) => {
+      appServer.once("exit", resolve);
+    });
+    if (process.platform === "win32") {
+      appServer.kill("SIGTERM");
+    } else {
+      process.kill(-appServer.pid, "SIGTERM");
+    }
+    await Promise.race([stopped, delay(2000)]);
+  }
+}
+
+process.on("SIGINT", () => {
+  stopAppServer();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  stopAppServer();
+  process.exit(143);
+});
+
+await ensureAppServer();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
@@ -281,6 +343,25 @@ await check("indexing dashboard keeps secondary insights compact and data-backed
   await page.close();
 });
 
+await check("indexing dashboard groups detected episodes by status", async () => {
+  const { page } = await makePage();
+  await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
+  const body = await page.textContent("body");
+  for (const expected of [
+    "Episodes",
+    "Accepted episodes",
+    "Review episodes",
+    "Rejected episodes",
+    "Technologia Talks",
+    "AI News Roundtable",
+    "Rehearsal false start",
+    "3 evidence",
+  ]) {
+    assert.ok(body.includes(expected), `missing episode rollup text: ${expected}`);
+  }
+  await page.close();
+});
+
 await check("agent command rail renders Screen 2 intent, context, plan, activity, suggestions", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
@@ -293,9 +374,7 @@ await check("agent command rail renders Screen 2 intent, context, plan, activity
     "Range: 00:12-18:40",
     "Transcript region selected",
     "Target: YouTube 16:9",
-    "Building proposal...",
-    "Est. time remaining",
-    "00:01:48",
+    "Running",
     "Build assembly (rough cut)",
     "suggested next actions",
     "Inspect 12 changed regions",
@@ -398,8 +477,7 @@ await check("footer exposes model, autosave, render, and disk status", async () 
 });
 
 await browser.close();
+await stopAppServer();
 
 console.log(`\n${passes.length} passed, ${failures.length} failed`);
-if (failures.length > 0) {
-  process.exit(1);
-}
+process.exit(failures.length > 0 ? 1 : 0);

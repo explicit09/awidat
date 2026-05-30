@@ -5,8 +5,8 @@ use awidat_proto::otio::{MediaReference, Stack, StackChild, Track, TrackChild};
 use awidat_proto::project::Project;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Build a podcast timeline QC report before render.
 pub struct PodcastQcReportTool;
@@ -82,12 +82,12 @@ pub(crate) fn build_podcast_qc_report(
             "message": "No audio meter readings found; run podcast_audio_polish before final render."
         }));
     }
-    if !project
+    if project
         .timeline
         .metadata
         .awidat
         .as_ref()
-        .is_some_and(|meta| meta.cut_boundaries.len() > 0)
+        .is_none_or(|meta| meta.cut_boundaries.is_empty())
     {
         issues.push(serde_json::json!({
             "kind": "cut_intent_missing",

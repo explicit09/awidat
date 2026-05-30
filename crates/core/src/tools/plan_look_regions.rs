@@ -12,8 +12,8 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Generate a look-region plan and project-local LUTs from color sidecars.
 pub struct PlanLookRegionsTool;

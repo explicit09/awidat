@@ -28,8 +28,8 @@
 mod app_menu;
 mod codex_session;
 mod commands;
-mod generated_media_watcher;
 mod events;
+mod generated_media_watcher;
 mod secrets;
 mod state;
 
@@ -53,7 +53,7 @@ pub fn run() {
         .thread_stack_size(16 * 1024 * 1024)
         .thread_name("awidat-tokio")
         .build()
-        .expect("build tokio runtime with 16 MB worker stacks");
+        .unwrap_or_else(|err| panic!("build tokio runtime with 16 MB worker stacks: {err}"));
     tauri::async_runtime::set(codex_runtime.handle().clone());
     // Keep the runtime alive for the lifetime of the process. Tauri only
     // holds a Handle; if we drop the Runtime here the worker threads die.
@@ -127,6 +127,7 @@ pub fn run() {
             commands::project::cancel_job,
             commands::project::running_job_ids,
             commands::project::get_project_type,
+            commands::project::get_project_episodes,
             commands::project::set_project_type,
             commands::dismissal::list_dismissals,
             commands::dismissal::dismiss_pattern,

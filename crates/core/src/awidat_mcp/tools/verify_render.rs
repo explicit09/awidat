@@ -233,9 +233,7 @@ pub async fn run(args: VerifyRenderArgs, ctx: McpToolCtx) -> Result<String, Stri
         source_range_manifest_path: args
             .source_range_manifest_path
             .as_deref()
-            .map(|path| {
-                resolve_project_path(&ctx.project_root, path, "source_range_manifest_path")
-            })
+            .map(|path| resolve_project_path(&ctx.project_root, path, "source_range_manifest_path"))
             .transpose()?,
         silence_threshold_db: args
             .silence_threshold_db
@@ -254,8 +252,7 @@ pub async fn run(args: VerifyRenderArgs, ctx: McpToolCtx) -> Result<String, Stri
     validate_options(&options)?;
 
     let report = verify_render_output(&ctx.project_root, &output_path, options).await?;
-    serde_json::to_string_pretty(&report)
-        .map_err(|e| format!("verify_render: encode report: {e}"))
+    serde_json::to_string_pretty(&report).map_err(|e| format!("verify_render: encode report: {e}"))
 }
 
 async fn verify_render_output(
@@ -1130,12 +1127,8 @@ fn write_verification_evidence(
     let report_path = verification_report_path_for_output(output_path);
     let bytes = serde_json::to_vec_pretty(report)
         .map_err(|e| format!("verify_render: encode report artifact: {e}"))?;
-    std::fs::write(&report_path, bytes).map_err(|e| {
-        format!(
-            "verify_render: write report {}: {e}",
-            report_path.display()
-        )
-    })?;
+    std::fs::write(&report_path, bytes)
+        .map_err(|e| format!("verify_render: write report {}: {e}", report_path.display()))?;
     attach_verification_summary(output_path, &report_path, report)?;
     Ok(report_path)
 }
@@ -1696,11 +1689,7 @@ fn validate_options(options: &VerifyRenderOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_project_path(
-    project_root: &Path,
-    value: &str,
-    field: &str,
-) -> Result<PathBuf, String> {
+fn resolve_project_path(project_root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
     if value.trim().is_empty() {
         return Err(format!("verify_render: {field} must not be empty"));
     }
@@ -1740,18 +1729,15 @@ fn newest_render(project_root: &Path) -> Result<PathBuf, String> {
     })?;
     let mut candidates = Vec::new();
     for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("verify_render: read renders entry: {e}"))?;
+        let entry = entry.map_err(|e| format!("verify_render: read renders entry: {e}"))?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("mp4") {
             continue;
         }
-        let modified = entry.metadata().and_then(|m| m.modified()).map_err(|e| {
-            format!(
-                "verify_render: read metadata for {}: {e}",
-                path.display()
-            )
-        })?;
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map_err(|e| format!("verify_render: read metadata for {}: {e}", path.display()))?;
         candidates.push((modified, path));
     }
     candidates.sort_by_key(|(modified, _)| *modified);

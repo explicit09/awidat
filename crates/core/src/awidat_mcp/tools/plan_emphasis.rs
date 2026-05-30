@@ -455,9 +455,8 @@ fn animations_edl(animations: &[ParameterAnimation]) -> Result<String, String> {
         lines.push("*** Set Parameter Animation".to_string());
         lines.push(format!(
             "+ animation_json: {}",
-            serde_json::to_string(animation).map_err(|e| {
-                format!("plan_emphasis: failed to serialize animation: {e}")
-            })?
+            serde_json::to_string(animation)
+                .map_err(|e| { format!("plan_emphasis: failed to serialize animation: {e}") })?
         ));
     }
     lines.push("*** End EDL".to_string());

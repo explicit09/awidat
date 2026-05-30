@@ -10,8 +10,8 @@ use awidat_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 const DEFAULT_MAX_RESULTS: usize = 12;
 const HARD_MAX_RESULTS: usize = 40;

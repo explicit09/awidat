@@ -225,9 +225,8 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
         .duration_s
         .unwrap_or(DEFAULT_BROLL_DURATION_S)
         .clamp(1.0, 8.0);
-    let project = Project::read(&ctx.project_root).map_err(|e| {
-        format!("find_generated_broll_opportunities: failed to read project: {e}")
-    })?;
+    let project = Project::read(&ctx.project_root)
+        .map_err(|e| format!("find_generated_broll_opportunities: failed to read project: {e}"))?;
 
     let findings = scan_generated_broll_opportunities(
         &ctx.project_root,

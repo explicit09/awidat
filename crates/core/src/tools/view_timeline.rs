@@ -20,8 +20,8 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Default window length in seconds. Codex's `view_file` uses ~100 lines;
 /// at ~1s per clip-line for podcast video, 60s ≈ a comfortable read.

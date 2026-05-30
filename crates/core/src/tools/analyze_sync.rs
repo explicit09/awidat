@@ -7,8 +7,8 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// The `analyze_sync` tool.
 pub struct AnalyzeSyncTool;

@@ -6,9 +6,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::broll_recommendations::build_broll_recommendation_package;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 use crate::understanding::build_understanding_package;
 
 /// Read scored B-roll recommendations derived from fused understanding.

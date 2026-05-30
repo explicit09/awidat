@@ -9,8 +9,8 @@ use awidat_proto::index::AssetId;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Read-only episode span planner.
 pub struct PodcastEpisodeSpansTool;

@@ -89,8 +89,7 @@ pub fn run(args: ListAssetsArgs, ctx: McpToolCtx) -> Result<String, String> {
     };
 
     // Stable sort by (scope, relative_path).
-    let mut entries =
-        entries.map_err(|e| format!("list_assets: unable to scan assets: {e}"))?;
+    let mut entries = entries.map_err(|e| format!("list_assets: unable to scan assets: {e}"))?;
     entries.sort_by(|a, b| (&a.scope, &a.rel_path).cmp(&(&b.scope, &b.rel_path)));
 
     // Optional catalog-backed bin filter. Read the project lazily —

@@ -17,8 +17,8 @@ use awidat_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// The `find_eye_contact` tool.
 pub struct FindEyeContactTool;

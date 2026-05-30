@@ -151,8 +151,7 @@ pub fn run(_args: PodcastVisualPolishArgs, ctx: McpToolCtx) -> Result<String, St
         },
         "required_before_render": true,
     });
-    serde_json::to_string(&body)
-        .map_err(|e| format!("podcast_visual_polish serialize: {e}"))
+    serde_json::to_string(&body).map_err(|e| format!("podcast_visual_polish serialize: {e}"))
 }
 
 fn indexed_assets(project_root: &std::path::Path, indexer: &str) -> Vec<String> {

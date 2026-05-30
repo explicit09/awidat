@@ -11,8 +11,8 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Bytes cap on the JSON the tool returns. Keeps token cost predictable
 /// even when the underlying sidecar is huge (e.g. a 1h whisper transcript

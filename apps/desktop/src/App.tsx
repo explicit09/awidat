@@ -9,6 +9,7 @@
  */
 
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -16,6 +17,8 @@ import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpe
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
+import { itemsToConversationTurns } from "./agent/conversationTurns";
+import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
@@ -45,6 +48,7 @@ import {
   type DeliveryRenderSummary,
   type DeliveryTarget,
   type IndexingMediaItem,
+  type IndexingEpisodeSummary,
   type IndexingStructurePreview,
   type IndexingTask,
   type IndexerConfigEntry,
@@ -79,6 +83,7 @@ import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
 import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
+import { TIMELINE_CHANGED_EVENT } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
@@ -110,6 +115,7 @@ function App() {
   const running = useAgentStore((s) => s.running);
   const replaceAgentItems = useAgentStore((s) => s.replace);
   const setRunning = useAgentStore((s) => s.setRunning);
+  const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
@@ -166,6 +172,7 @@ function App() {
   const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
+  const [episodeSummary, setEpisodeSummary] = useState<IndexingEpisodeSummary | undefined>(undefined);
   const [mediaReadiness, setMediaReadiness] = useState<MediaReadinessSnapshot | undefined>(undefined);
   const [runningJobIds, setRunningJobIds] = useState<Set<string> | undefined>(undefined);
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
@@ -365,12 +372,20 @@ function App() {
     setTurnError(null);
     setRunning(true);
     try {
-      await invoke("start_turn", { input });
+      const turnId = await invoke<string>("start_turn", {
+        input,
+        context: buildTurnContext(effectiveContextChips),
+      });
+      setActiveTurnId(turnId);
     } catch (e) {
       if (String(e).includes("turn is already running")) {
         try {
           await invoke("cancel_turn");
-          await invoke("start_turn", { input });
+          const turnId = await invoke<string>("start_turn", {
+            input,
+            context: buildTurnContext(effectiveContextChips),
+          });
+          setActiveTurnId(turnId);
           return;
         } catch (retryErr) {
           setTurnError(String(retryErr));
@@ -394,11 +409,13 @@ function App() {
         refreshMedia(),
         useTimelineStore.getState().refresh(),
         loadIndexReadiness(),
+        loadProjectEpisodes(),
         loadMediaReadiness(),
       ]);
     } catch (e) {
       setCommandError(String(e));
       await loadIndexReadiness();
+      await loadProjectEpisodes();
       await loadMediaReadiness();
     }
   }
@@ -512,6 +529,20 @@ function App() {
     }
   }
 
+  async function loadProjectEpisodes() {
+    if (demoMode || !isTauri() || !current) {
+      setEpisodeSummary(undefined);
+      return;
+    }
+    try {
+      const snapshot = await invoke<ProjectEpisodesResponse>("get_project_episodes");
+      setEpisodeSummary(projectEpisodesToIndexingSummary(snapshot));
+    } catch (e) {
+      console.warn("get_project_episodes failed", e);
+      setEpisodeSummary(undefined);
+    }
+  }
+
   async function loadMediaReadiness() {
     if (demoMode || !isTauri() || !current) {
       setMediaReadiness(undefined);
@@ -591,9 +622,10 @@ function App() {
     if (!isTauri()) return;
     setChatLoading(true);
     try {
-      const history = await invoke<ChatHistory>("load_chat_session", {
-        logPath: session.logPath,
-      });
+      const history = await chatHistoryLoader<Item>(
+        (command, args) => invoke<ChatHistory>(command, args),
+        session,
+      );
       setActiveChatSession(history.session);
       replaceAgentItems(history.items);
     } catch (e) {
@@ -970,55 +1002,10 @@ function App() {
   // agent's outputs are kept in order: text blocks and tool_calls
   // interleaved as they actually fired. The CommandRail renders the
   // user bubble + the per-turn inline tool/text stream.
-  const turns: ConversationTurn[] = useMemo(() => {
-    const out: ConversationTurn[] = [];
-    let current: ConversationTurn | null = null;
-    for (const it of items) {
-      if (it.kind === "user_input") {
-        current = {
-          id: it.id.toString(),
-          userText: it.text,
-          parts: [],
-        };
-        out.push(current);
-        continue;
-      }
-      if (!current) {
-        // Stray pre-input items (rare; could be a resumed session
-        // with no prompt). Synthesize a turn so they have a home.
-        current = { id: `pre-${it.id}`, userText: "", parts: [] };
-        out.push(current);
-      }
-      if (it.kind === "text") {
-        const text = it.text.trim();
-        if (text.length === 0) continue;
-        current.parts.push({ kind: "text", id: it.id.toString(), text });
-      } else if (it.kind === "tool_call") {
-        const status = !it.result
-          ? "running"
-          : "Err" in it.result
-            ? "failed"
-            : "done";
-        current.parts.push({
-          kind: "tool_call",
-          id: it.id.toString(),
-          name: it.name,
-          status,
-          summary: summarizeToolForRail(it),
-          args: it.args ?? null,
-          result: it.result,
-        });
-      } else if (it.kind === "awaiting_user_input") {
-        current.parts.push({
-          kind: "input_request",
-          id: it.id.toString(),
-          question: it.question,
-          options: it.options ?? null,
-        });
-      }
-    }
-    return out.slice(-12);
-  }, [items]);
+  const turns: ConversationTurn[] = useMemo(
+    () => itemsToConversationTurns(items, summarizeToolForRail),
+    [items],
+  );
 
   const activeJobs = useMemo(
     () =>
@@ -1045,9 +1032,10 @@ function App() {
 
   useEffect(() => {
     void loadIndexReadiness();
+    void loadProjectEpisodes();
     void loadRunningJobIds();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
+  }, [current, demoMode, completedJobKinds.size, activeJobs.length, timelineSnapshot.cut_boundaries.length]);
 
   useEffect(() => {
     mediaReadinessCommandUnavailableRef.current = false;
@@ -1073,6 +1061,7 @@ function App() {
   useEffect(() => {
     function onFocus() {
       void loadIndexReadiness();
+      void loadProjectEpisodes();
       void loadMediaReadiness();
       void loadRunningJobIds();
     }
@@ -1080,6 +1069,24 @@ function App() {
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode]);
+
+  // Episode metadata lives in OTIO metadata.awidat.episodes, not in
+  // timelineSnapshot.cut_boundaries, so the cut-boundary-keyed effect
+  // above misses changes from apply_episode_spans. The bridge already
+  // emits timeline-changed after the mutating tool completes — re-pull
+  // episodes whenever it does for our current project.
+  useEffect(() => {
+    if (!isTauri() || !current) return;
+    const unlisten = listen<string>(TIMELINE_CHANGED_EVENT, (event) => {
+      if (event.payload === current) {
+        void loadProjectEpisodes();
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
 
   // User-attached clips from the composer's @-mention picker. Keyed
   // by the asset id so the same clip can't get attached twice.
@@ -1579,6 +1586,10 @@ function App() {
         if (!isTauri()) return;
         await invoke("respond_user_input", { callId, reply });
       }}
+      onRespondApproval={async (callId, decision) => {
+        if (!isTauri()) return;
+        await invoke("respond_approval", { callId, decision });
+      }}
       onRemoveChip={(chip) => dismissContextChip(chip)}
       permissionMode={permissionMode}
       onSetPermissionMode={(mode) => void changePermissionMode(mode)}
@@ -1675,6 +1686,7 @@ function App() {
               sourceCount={sourceMediaCount}
               media={realIndexingMedia}
               ready={realIndexingReady}
+              episodes={episodeSummary}
               onImport={() => void chooseAndImportFiles()}
               onImportUrl={() => setShowUrlImport(true)}
               onOpenProject={() => void chooseAndOpenProject()}
@@ -1806,6 +1818,7 @@ function App() {
                 sourceCount={sourceMediaCount}
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
+                episodes={episodeSummary}
                 indexerConfig={indexerConfig}
                 activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
                 ready={realIndexingReady}
@@ -2158,6 +2171,7 @@ function ProjectMediaPanel({
   sourceCount,
   media,
   ready,
+  episodes,
   onImport,
   onImportUrl,
   onOpenProject,
@@ -2173,6 +2187,7 @@ function ProjectMediaPanel({
   sourceCount: number;
   media: IndexingMediaItem[];
   ready: boolean;
+  episodes?: IndexingEpisodeSummary;
   onImport: () => void;
   onImportUrl: () => void;
   onOpenProject: () => void;
@@ -2222,6 +2237,39 @@ function ProjectMediaPanel({
           Change project
         </Button>
       </Inline>
+      {episodes && episodes.total > 0 ? (
+        <Card padding="sm" tone="flat">
+          <Stack gap="2">
+            <Inline justify="between" align="baseline" gap="2">
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+                Episodes
+              </span>
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                {episodes.total} detected
+              </span>
+            </Inline>
+            <Inline gap="1" wrap="wrap">
+              <Pill status="ready" dot={false}>{episodes.accepted} accepted</Pill>
+              <Pill status="warning" dot={false}>{episodes.reviewNeeded} review</Pill>
+              {episodes.rejected > 0 ? (
+                <Pill status="failed" dot={false}>{episodes.rejected} rejected</Pill>
+              ) : null}
+            </Inline>
+            <Stack gap="1">
+              {episodes.episodes.slice(0, 3).map((episode) => (
+                <Inline key={episode.id} justify="between" align="center" gap="2">
+                  <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                    {episode.name || `Episode ${episode.order}`}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+                    {formatDuration(episode.durationS)}
+                  </span>
+                </Inline>
+              ))}
+            </Stack>
+          </Stack>
+        </Card>
+      ) : null}
       <GeneratedMediaPanel
         entries={generatedMedia}
         loading={generatedMediaLoading}
@@ -2324,6 +2372,32 @@ function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
       return "failed";
     case "missing":
       return "missing";
+  }
+}
+
+function episodeStatusPill(
+  status: IndexingEpisodeSummary["episodes"][number]["status"],
+): PillStatus {
+  switch (status) {
+    case "accepted":
+      return "ready";
+    case "review_needed":
+      return "warning";
+    case "rejected":
+      return "failed";
+  }
+}
+
+function episodeStatusLabel(
+  status: IndexingEpisodeSummary["episodes"][number]["status"],
+): string {
+  switch (status) {
+    case "accepted":
+      return "Accepted";
+    case "review_needed":
+      return "Review";
+    case "rejected":
+      return "Rejected";
   }
 }
 
@@ -2431,6 +2505,7 @@ function IndexReadinessPanel({
   sourceCount,
   tasks,
   structurePreview,
+  episodes,
   indexerConfig,
   activeIndexingStatus,
   ready,
@@ -2443,6 +2518,7 @@ function IndexReadinessPanel({
   sourceCount: number;
   tasks: IndexingTask[];
   structurePreview?: IndexingStructurePreview;
+  episodes?: IndexingEpisodeSummary;
   indexerConfig?: IndexerConfigSnapshot;
   activeIndexingStatus?: string;
   ready: boolean;
@@ -2585,6 +2661,46 @@ function IndexReadinessPanel({
           >
             Trim empty tail
           </button>
+        </Stack>
+      ) : null}
+      {episodes && episodes.total > 0 ? (
+        <Stack gap="2">
+          <Inline justify="between" align="baseline" gap="2">
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+              Episodes
+            </span>
+            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              {episodes.total} detected
+            </span>
+          </Inline>
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Accepted" value={episodes.accepted} />
+            <Metric label="Review" value={episodes.reviewNeeded} />
+            <Metric label="Rejected" value={episodes.rejected} />
+          </div>
+          <Stack gap="1">
+            {episodes.episodes.slice(0, 4).map((episode) => (
+              <Inline
+                key={episode.id}
+                justify="between"
+                align="center"
+                gap="2"
+                className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-1.5"
+              >
+                <Stack gap="0" className="min-w-0">
+                  <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                    {episode.name || `Episode ${episode.order}`}
+                  </span>
+                  <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {formatDuration(episode.durationS)} · {Math.round(episode.confidence * 100)}%
+                  </span>
+                </Stack>
+                <Pill status={episodeStatusPill(episode.status)} dot={false}>
+                  {episodeStatusLabel(episode.status)}
+                </Pill>
+              </Inline>
+            ))}
+          </Stack>
         </Stack>
       ) : null}
       <Stack gap="3">
@@ -3028,6 +3144,47 @@ type IndexReadinessSnapshot = {
   ready_count: number;
   scene_count: number;
 };
+
+type ProjectEpisodesResponse = {
+  total: number;
+  accepted: number;
+  review_needed: number;
+  rejected: number;
+  episodes: Array<{
+    id: string;
+    name: string;
+    order: number;
+    asset_id: string;
+    start_s: number;
+    end_s: number;
+    duration_s: number;
+    confidence: number;
+    status: "accepted" | "review_needed" | "rejected";
+    evidence_count: number;
+  }>;
+};
+
+function projectEpisodesToIndexingSummary(
+  response: ProjectEpisodesResponse,
+): IndexingEpisodeSummary {
+  return {
+    total: response.total,
+    accepted: response.accepted,
+    reviewNeeded: response.review_needed,
+    rejected: response.rejected,
+    episodes: response.episodes.map((episode) => ({
+      id: episode.id,
+      name: episode.name,
+      order: episode.order,
+      startS: episode.start_s,
+      endS: episode.end_s,
+      durationS: episode.duration_s,
+      confidence: episode.confidence,
+      status: episode.status,
+      evidenceCount: episode.evidence_count,
+    })),
+  };
+}
 
 function indexTaskReady(
   readiness: IndexReadinessSnapshot,

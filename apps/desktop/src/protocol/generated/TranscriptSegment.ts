@@ -6,19 +6,27 @@
  * a virtualized row; word-level granularity drives selection,
  * click-to-seek, and active-word highlight.
  */
-export type TranscriptSegment = { 
+export type TranscriptSegment = {
+/**
+ * Stable segment id when provided by the transcript source.
+ */
+id: string | null,
+/**
+ * Stable phrase id when this segment maps to an alignment phrase.
+ */
+phrase_id: string | null,
 /**
  * Concatenated text of the segment (whisper's own merging).
  */
-text: string, 
+text: string,
 /**
  * Source-time start, in seconds.
  */
-start_s: number, 
+start_s: number,
 /**
  * Source-time end, in seconds.
  */
-end_s: number, 
+end_s: number,
 /**
  * Diarized speaker id (e.g. `"SPEAKER_00"`), if available.
  */

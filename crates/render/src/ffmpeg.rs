@@ -912,7 +912,7 @@ fn should_try_lossless_mp4_remux(asset_path: &Path) -> bool {
         asset_path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .as_deref(),
         Some("mov" | "m4v")
     )

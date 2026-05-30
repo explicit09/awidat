@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Tool surface for executing the persisted preview-cache refresh lifecycle.
 pub struct RunPreviewCacheRefreshTool;

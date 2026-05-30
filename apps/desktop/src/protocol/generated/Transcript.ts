@@ -9,30 +9,30 @@ import type { TranscriptWord } from "./TranscriptWord";
  * transcript pane (Step 6 — Descript-style click-word-to-seek +
  * drag-select-to-delete).
  */
-export type Transcript = { 
+export type Transcript = {
 /**
  * Asset stem this transcript is for. Matches `ProxyEntry.stem`
  * so the frontend can key transcripts by the same id it uses
  * for the media pane.
  */
-asset_stem: string, 
+asset_stem: string,
 /**
  * BCP-47 language tag (e.g. `"en"`).
  */
-language: string, 
+language: string,
 /**
  * Whether diarization ran (`speakers` will be empty when false).
  */
-diarized: boolean, 
+diarized: boolean,
 /**
  * Segment-level paragraphs.
  */
-segments: Array<TranscriptSegment>, 
+segments: Array<TranscriptSegment>,
 /**
  * Word-level alignment. May be empty if the indexer didn't
  * produce word timestamps for this asset.
  */
-words: Array<TranscriptWord>, 
+words: Array<TranscriptWord>,
 /**
  * Speaker summary (empty when not diarized).
  */
