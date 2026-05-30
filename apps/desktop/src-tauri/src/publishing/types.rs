@@ -33,23 +33,17 @@ pub struct OAuthChallenge {
 /// `private` on YouTube, `SELF_ONLY` / `PUBLIC_TO_EVERYONE` on TikTok,
 /// `BUSINESS` / `PERSONAL` on Instagram), but the user-facing concept
 /// stays small.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     /// Discoverable to anyone.
     Public,
     /// Anyone with the URL can view; not surfaced in search.
     Unlisted,
-    /// Only the uploader (and explicitly shared accounts) can view.
+    /// Default to the safest option — a user who forgets to set
+    /// visibility shouldn't accidentally publish to the world.
+    #[default]
     Private,
-}
-
-impl Default for Visibility {
-    fn default() -> Self {
-        // Default to the safest option — a user who forgets to set
-        // visibility shouldn't accidentally publish to the world.
-        Self::Private
-    }
 }
 
 /// Per-upload request parameters. Filled by the frontend from the

@@ -118,19 +118,35 @@ try {
     "argb",
     output,
   ], { stdio: ["pipe", "inherit", "inherit"] });
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    const t = frame / fps;
-    await page.evaluate((time) => window.__AWIDAT_SET_OVERLAY_TIME__?.(time), t);
-    const png = await page.screenshot({
-      omitBackground: true,
-      animations: "allow",
-    });
-    if (!ffmpeg.stdin.write(png)) {
-      await once(ffmpeg.stdin, "drain");
+
+  // Attach lifecycle listeners synchronously so spawn-time failures
+  // (binary missing, immediate exit) propagate instead of crashing the
+  // process or hanging the frame loop. `ffmpegDone` resolves after the
+  // stdin pump finishes (either output complete or pump aborted by an
+  // early ffmpeg exit) so the caller still gets a single await point.
+  const ffmpegExit = waitForProcess(ffmpeg, "ffmpeg");
+  let ffmpegFailure = null;
+  ffmpegExit.catch((err) => { ffmpegFailure = err; });
+  ffmpeg.stdin.on("error", (err) => { ffmpegFailure ??= err; });
+
+  try {
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      if (ffmpegFailure) break;
+      const t = frame / fps;
+      await page.evaluate((time) => window.__AWIDAT_SET_OVERLAY_TIME__?.(time), t);
+      const png = await page.screenshot({
+        omitBackground: true,
+        animations: "allow",
+      });
+      if (ffmpegFailure) break;
+      if (!ffmpeg.stdin.write(png)) {
+        await once(ffmpeg.stdin, "drain");
+      }
     }
+  } finally {
+    if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.end();
   }
-  ffmpeg.stdin.end();
-  await waitForProcess(ffmpeg, "ffmpeg");
+  await ffmpegExit;
 } finally {
   await browser?.close().catch(() => {});
   await server?.close().catch(() => {});

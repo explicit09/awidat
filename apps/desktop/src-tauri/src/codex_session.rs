@@ -481,9 +481,9 @@ fn parse_three_part(s: &str) -> Option<(u32, u32, u32)> {
 /// on name conflicts). Two layers:
 ///   - `dirs::config_dir()` joined with `awidat/skills` — the platform
 ///     idiomatic location:
-///       macOS   → `~/Library/Application Support/awidat/skills`
-///       Linux   → `~/.config/awidat/skills`
-///       Windows → `%APPDATA%\awidat\skills`
+///     - macOS   → `~/Library/Application Support/awidat/skills`
+///     - Linux   → `~/.config/awidat/skills`
+///     - Windows → `%APPDATA%\awidat\skills`
 ///   - the legacy `~/.awidat/skills/` for power users who prefer to
 ///     keep everything under their home dir.
 fn user_skill_roots() -> Vec<PathBuf> {

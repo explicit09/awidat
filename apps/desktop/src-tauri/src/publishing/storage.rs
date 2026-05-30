@@ -5,15 +5,15 @@
 //! [`super::keychain`]. This file persists only non-secret metadata:
 //!
 //! - `account_name` — display label ("you@gmail.com", "@handle").
-//! - `expires_at`   — Unix-epoch seconds at which the stored access
-//!                    token stops being valid; renderable in Settings
-//!                    without ever touching the secret itself.
-//! - `client_id`    — the user's BYO OAuth-app public identifier.
-//!                    Not secret (it ships in every authorize URL the
-//!                    user opens) so plain JSON is fine.
-//! - `migrated_at`  — set the first time this slot is rewritten by the
-//!                    keychain path. Lets us short-circuit the legacy
-//!                    migration on subsequent loads.
+//! - `expires_at` — Unix-epoch seconds at which the stored access
+//!   token stops being valid; renderable in Settings
+//!   without ever touching the secret itself.
+//! - `client_id` — the user's BYO OAuth-app public identifier.
+//!   Not secret (it ships in every authorize URL the
+//!   user opens) so plain JSON is fine.
+//! - `migrated_at` — set the first time this slot is rewritten by the
+//!   keychain path. Lets us short-circuit the legacy
+//!   migration on subsequent loads.
 //!
 //! # On-disk shape
 //!
@@ -214,10 +214,7 @@ pub async fn load_with_keychain(
     let mut providers: HashMap<String, Option<Credentials>> =
         HashMap::with_capacity(raw.providers.len());
     for (key, slot) in raw.providers {
-        let migrated = match slot {
-            Some(raw) => Some(migrate_slot(&key, raw, keychain)),
-            None => None,
-        };
+        let migrated = slot.map(|raw| migrate_slot(&key, raw, keychain));
         providers.insert(key, migrated);
     }
     Ok(PublishingStore { providers })

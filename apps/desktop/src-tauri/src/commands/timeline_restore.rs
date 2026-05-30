@@ -147,7 +147,6 @@ pub async fn restore_timeline_otio(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use awidat_proto::otio::Timeline;
 
     #[test]

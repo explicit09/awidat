@@ -81,10 +81,21 @@ process.on("SIGTERM", () => {
 await ensureAppServer();
 
 const browser = await chromium.launch();
+
+// Pre-seed the first-run welcome flag so `WelcomeCard` stays dismissed.
+// Without this every smoke page boots with the welcome modal covering
+// the screen, so text assertions miss and clicks hit the backdrop.
+const SUPPRESS_WELCOME = `
+  try {
+    localStorage.setItem("awidat:welcome:shown", new Date().toISOString());
+  } catch {}
+`;
+
 const ctx = await browser.newContext({
   viewport: { width: 1586, height: 992 },
   deviceScaleFactor: 1,
 });
+await ctx.addInitScript(SUPPRESS_WELCOME);
 
 const passes = [];
 const failures = [];
@@ -209,6 +220,7 @@ await check("spec demo screens fit a compact desktop window", async () => {
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
   });
+  await compact.addInitScript(SUPPRESS_WELCOME);
   try {
     for (const screen of SPEC_SCREENS) {
       const page = await compact.newPage();

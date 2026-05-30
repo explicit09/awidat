@@ -61,6 +61,7 @@ use crate::state::{AwidatState, PendingProposal};
 ///
 /// The id is the proposal's stable identifier — re-used across
 /// adjustment Deltas. Frontend keys its rendering on it.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_proposal(
     app: &AppHandle,
     state: &State<'_, AwidatState>,

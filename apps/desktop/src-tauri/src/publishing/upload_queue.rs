@@ -920,7 +920,7 @@ mod tests {
             entry.upload_states.get("youtube"),
             Some(&UploadState::Pending),
         );
-        assert!(entry.published_urls.get("youtube").is_none());
+        assert!(!entry.published_urls.contains_key("youtube"));
     }
 
     #[tokio::test]

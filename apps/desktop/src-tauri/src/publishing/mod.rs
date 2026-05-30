@@ -55,7 +55,7 @@ pub use errors::ProviderError;
 pub use oauth::ClientCredentialsState;
 pub use provider::PublishingProvider;
 pub use types::{ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult};
-pub use upload_queue::{UploadJobEntry, UploadMetadata, UploadPrefs, UploadQueue, UploadState};
+pub use upload_queue::UploadQueue;
 // Re-exported separately because tests are the only in-crate
 // consumer today — bundling it with the line above tripped the
 // "unused import" lint. Frontend deserialises `UploadParams` (which
