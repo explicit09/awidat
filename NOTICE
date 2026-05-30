@@ -1,0 +1,13 @@
+Awidat
+Copyright 2026 Awidat Authors
+
+This product includes a vendored fork of OpenAI Codex
+(https://github.com/openai/codex), licensed under the Apache License 2.0.
+The fork source and provenance are documented in vendor/codex-rs/SOURCE.
+
+This product includes vendored bubblewrap source under
+vendor/codex-rs/vendor/bubblewrap. Its license text is preserved at
+vendor/codex-rs/vendor/bubblewrap/COPYING.
+
+Synthetic audio files under assets/audio/sfx are dedicated to the public
+domain under CC0-1.0. See assets/audio/LICENSE.
