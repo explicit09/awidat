@@ -37,6 +37,7 @@ fn bundled_output_workflow_skills_load() {
         "cut-director",
         "interview-tightener",
         "meeting-highlights",
+        "multicam-director",
         "pacing-optimizer",
         "podcast-editor",
         "podcast-episode-producer",
@@ -135,6 +136,52 @@ fn cut_and_split_directors_expose_first_class_edit_grammar() {
         assert!(
             split.body.contains(required),
             "split-edit-director must mention {required:?}"
+        );
+    }
+}
+
+#[test]
+fn multicam_director_skill_is_graph_native() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("multicam-director")
+        .expect("multicam-director exists");
+    for tool in [
+        "read_index",
+        "view_timeline",
+        "analyze_sync",
+        "plan_multicam",
+        "view_frame",
+        "apply_edl",
+        "vedit_diff",
+        "start_render",
+        "poll_render",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "multicam-director must allow {tool}"
+        );
+    }
+    // The two-stage contract (sync then direct) and its graph-native ops must
+    // be spelled out so the agent never plans before syncing or bypasses the
+    // edit graph.
+    for required in [
+        "analyze_sync",
+        "Set Sync Group",
+        "plan_multicam",
+        "Apply Multicam Plan",
+        "sync_group_id",
+        "min_hold_s",
+        "manual_offset_required",
+        "offset_corrected",
+        "Sync first",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "multicam-director must mention {required:?}"
         );
     }
 }
