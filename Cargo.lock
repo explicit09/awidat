@@ -915,6 +915,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs",
+ "keyring",
  "serde",
  "serde_json",
  "tauri",

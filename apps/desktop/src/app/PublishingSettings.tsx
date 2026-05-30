@@ -458,8 +458,8 @@ export function PublishingSettings() {
             Open folder
           </Button>
         </Inline>
-        <span className="text-[var(--text-caption)] text-[var(--color-text-warning,#facc15)]">
-          ⚠ Credentials are stored in plain JSON. Keychain integration: Wave 6.
+        <span className="text-[var(--text-caption)] text-[var(--color-text-success,#4ade80)]">
+          ✓ Secrets stored in the OS keychain. Metadata in {credentialsPath ?? "publishing.json"}.
         </span>
       </Stack>
     </Stack>

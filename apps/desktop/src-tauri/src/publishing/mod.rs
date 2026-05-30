@@ -25,6 +25,7 @@
 pub mod ai_disclosure;
 pub mod errors;
 pub mod instagram;
+pub mod keychain;
 pub mod oauth;
 pub mod oauth_listener;
 pub mod provider;
@@ -174,7 +175,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_flow_is_disabled_without_keychain_storage() {
+    async fn oauth_flow_persists_to_keychain_post_w6_a4() {
+        // Replaces the pre-W6.A4 `oauth_flow_is_disabled_without_keychain_storage`
+        // test. With keychain integration in place the flow now lands a
+        // credential successfully — is_configured flips true after a
+        // valid complete_oauth, and the secret material lives in the
+        // keychain (not in publishing.json).
+        crate::publishing::keychain::install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let path = test_store_path(&tmp);
         let registry = ProviderRegistry::with_store_path(path.clone());
@@ -187,19 +194,27 @@ mod tests {
         assert!(challenge.url.contains("client_id=YOUR_CLIENT_ID_HERE"));
         assert!(!challenge.state.is_empty());
 
-        let err = yt
-            .complete_oauth("fake-auth-code-123".into())
+        // complete_oauth used to refuse with `Unsupported`; now it
+        // succeeds and stows the code into the keychain.
+        yt.complete_oauth("fake-auth-code-123".into())
             .await
-            .unwrap_err();
-        assert_eq!(err.kind(), "unsupported");
+            .unwrap();
+        assert!(yt.is_configured().await, "is_configured flips after OAuth");
+
+        // The JSON file carries metadata only — no secret material.
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(
-            !yt.is_configured().await,
-            "OAuth stays unconfigured until keychain storage exists",
+            !raw.contains("fake-auth-code-123"),
+            "secret must not appear in publishing.json: {raw}",
         );
-
+        // Slot exists in the on-disk metadata to mark "this provider
+        // is associated with a keychain entry".
         let on_disk = storage::load_from(&path).await.unwrap();
-        assert!(on_disk.get("youtube").is_none());
+        assert!(on_disk.get("youtube").is_some());
 
+        // Upload still rejects with Unsupported (the real HTTP call
+        // isn't implemented yet) — but the gate has shifted from
+        // "no credentials" to "implementation pending".
         let err = yt
             .upload(UploadParams {
                 file_path: "/tmp/fake.mp4".into(),
@@ -213,7 +228,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), "not_configured");
+        assert_eq!(err.kind(), "unsupported");
     }
 
     #[tokio::test]
@@ -252,6 +267,11 @@ mod tests {
 
     #[tokio::test]
     async fn status_reflects_oauth_completion() {
+        // Post-W6.A4: complete_oauth succeeds and flips the connection
+        // status to `connected = true`. Pre-keychain this test asserted
+        // the opposite — the change is the load-bearing signal that
+        // the W5 write path is unblocked.
+        crate::publishing::keychain::install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let registry = ProviderRegistry::with_store_path(test_store_path(&tmp));
         let ig = registry.get("instagram").unwrap();
@@ -259,10 +279,9 @@ mod tests {
         let before = ig.status().await;
         assert!(!before.connected);
 
-        let err = ig.complete_oauth("ig-code".into()).await.unwrap_err();
-        assert_eq!(err.kind(), "unsupported");
+        ig.complete_oauth("ig-code".into()).await.unwrap();
 
         let after = ig.status().await;
-        assert!(!after.connected);
+        assert!(after.connected, "status flips after a successful complete_oauth");
     }
 }

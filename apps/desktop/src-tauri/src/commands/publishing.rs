@@ -704,18 +704,18 @@ mod tests {
         // each provider's stub upload surfaces the AI flag intent so the
         // user can see what *would* have been claimed on the real call.
         use crate::publishing::GeneratedMediaCredit;
+        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
-        // Seed legacy credentials so every provider passes its is_configured gate.
+        // Seed credentials so every provider passes its is_configured
+        // gate: metadata in publishing.json, secrets in the (mock) keychain.
         let mut store = crate::publishing::storage::PublishingStore::default();
+        let kc = Keychain::new();
         for key in ["youtube", "tiktok", "instagram"] {
-            store.set(
-                key,
-                Some(crate::publishing::storage::Credentials {
-                    access_token: format!("legacy-{key}-token"),
-                    ..Default::default()
-                }),
-            );
+            store.set(key, Some(crate::publishing::storage::Credentials::default()));
+            kc.store_token(key, TokenKind::AccessToken, &format!("seeded-{key}"))
+                .unwrap();
         }
         crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
@@ -758,6 +758,8 @@ mod tests {
 
     #[tokio::test]
     async fn provider_stub_upload_clean_cut_omits_disclosure_hint() {
+        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
         let yt = match reg.get("youtube") {
@@ -767,11 +769,11 @@ mod tests {
         let mut store = crate::publishing::storage::PublishingStore::default();
         store.set(
             "youtube",
-            Some(crate::publishing::storage::Credentials {
-                access_token: "legacy-youtube-token".into(),
-                ..Default::default()
-            }),
+            Some(crate::publishing::storage::Credentials::default()),
         );
+        Keychain::new()
+            .store_token("youtube", TokenKind::AccessToken, "seeded-youtube")
+            .unwrap();
         crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
             .unwrap();

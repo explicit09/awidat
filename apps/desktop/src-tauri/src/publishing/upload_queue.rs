@@ -714,15 +714,18 @@ mod tests {
         let q = UploadQueue::new();
         q.register("render-003".into(), vec!["youtube".into()]).await;
 
-        // Seed legacy credentials so the provider passes is_configured.
+        // Seed credentials so the provider passes is_configured:
+        // metadata in publishing.json, access token in the mock keychain.
+        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        install_mock_backend();
         let mut store = crate::publishing::storage::PublishingStore::default();
         store.set(
             "youtube",
-            Some(crate::publishing::storage::Credentials {
-                access_token: "legacy-youtube-token".into(),
-                ..Default::default()
-            }),
+            Some(crate::publishing::storage::Credentials::default()),
         );
+        Keychain::new()
+            .store_token("youtube", TokenKind::AccessToken, "seeded-youtube")
+            .unwrap_or_else(|err| panic!("seed keychain: {err}"));
         crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
             .unwrap_or_else(|err| panic!("seed credentials: {err}"));
