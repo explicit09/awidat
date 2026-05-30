@@ -96,10 +96,12 @@ True NLE "detach audio to its own movable track" (G-S3) is **deferred**. With th
 
 ## 4. Phasing
 
-1. **Phase 1 — Mute Clip** (G-S1): data model + segment field + synthesis gap + `Mute Clip` op + apply + tests. Smallest end-to-end slice proving the decoupled-by-override mechanism.
-2. **Phase 2 — Remove Audio region** (G-S2): `removed_ranges` + range-splitting in synthesis + `Remove Audio` op + tests. Delivers the user's exact scenario.
-3. **Phase 3 — surface + skill**: agent tool/skill copy, capability metadata, docs.
-4. **Deferred** — independent audio repositioning (G-S3); desktop audio-lane edit affordance.
+> **Status (2026-05-30): Phases 1–3 shipped on `feat/av-separation`.** ClipAudioOverride{muted, removed_ranges} on the clip; render synthesizes per-segment audio (silence for mutes, kept-clip/gap splits for removed ranges) via the existing decoupled video-only+amix path; `Mute Clip` and `Remove Audio` EDL ops (parse + apply); apply_edl grammar + `audio-separation` skill for discoverability. Unsupported combos (speed/split-edit + removal) fail loud via `RenderTimelineError::AudioRemovalUnsupported`. Verified: proto 114, core 815, render 272, skill_catalog 13 — all pass; fmt + clippy clean.
+
+1. ✅ **Phase 1 — Mute Clip** (G-S1): data model + segment field + synthesis gap + `Mute Clip` op + apply + tests. *Done.*
+2. ✅ **Phase 2 — Remove Audio region** (G-S2): `removed_ranges` + range-splitting in synthesis + `Remove Audio` op + tests. *Done — delivers the user's exact scenario.*
+3. ✅ **Phase 3 — surface + skill**: apply_edl grammar entries + `audio-separation` skill + catalog/description tests. *Done. Per-tool capability metadata is N/A — these are EDL ops, not standalone tools.*
+4. **Deferred** — independent audio repositioning (G-S3); audio removal combined with speed/split-edit on one clip; desktop audio-lane edit affordance.
 
 Each phase: build + targeted tests + clippy green, committed as a strategic unit.
 
