@@ -77,20 +77,14 @@ mod tests {
     #[test]
     fn missing_config_defaults_to_file() {
         let home = TempDir::new().unwrap();
-        assert_eq!(
-            read_store_mode(home.path()),
-            AuthCredentialsStoreMode::File
-        );
+        assert_eq!(read_store_mode(home.path()), AuthCredentialsStoreMode::File);
     }
 
     #[test]
     fn config_without_key_defaults_to_file() {
         let home = TempDir::new().unwrap();
         write_config(home.path(), "model = \"gpt-5.5\"\n");
-        assert_eq!(
-            read_store_mode(home.path()),
-            AuthCredentialsStoreMode::File
-        );
+        assert_eq!(read_store_mode(home.path()), AuthCredentialsStoreMode::File);
     }
 
     #[test]
@@ -110,9 +104,6 @@ mod tests {
             home.path(),
             "model = \"gpt-5.5\"\ncli_auth_credentials_store = \"auto\"\n\n[mcp_servers.awidat]\ncommand = \"awidat-mcp-server\"\n",
         );
-        assert_eq!(
-            read_store_mode(home.path()),
-            AuthCredentialsStoreMode::Auto
-        );
+        assert_eq!(read_store_mode(home.path()), AuthCredentialsStoreMode::Auto);
     }
 }
