@@ -2,6 +2,7 @@
 //! them all via `generate_handler!`.
 
 pub mod agents_md;
+pub mod auth;
 pub mod auto_insert;
 pub mod captions;
 pub mod clip_params;

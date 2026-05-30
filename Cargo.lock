@@ -797,6 +797,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "awidat-auth"
+version = "0.1.0"
+dependencies = [
+ "codex-login",
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "awidat-cli"
 version = "0.1.0"
 dependencies = [

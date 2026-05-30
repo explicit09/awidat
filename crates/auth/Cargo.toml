@@ -1,0 +1,29 @@
+[package]
+name = "awidat-auth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Awidat ↔ codex auth boundary: status, ChatGPT sign-in, API key, logout"
+
+[lib]
+name = "awidat_auth"
+path = "src/lib.rs"
+
+[dependencies]
+# Drive codex's own OAuth / API-key / storage logic in-process. We never
+# reimplement OAuth or token refresh — codex-login owns that.
+codex-login = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
