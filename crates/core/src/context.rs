@@ -297,7 +297,10 @@ mod tests {
         // The contract appears exactly once even when many skills are
         // listed — no per-skill body duplication.
         let occurrences = rendered.matches("## Rationale contract").count();
-        assert_eq!(occurrences, 1, "rationale contract must render exactly once");
+        assert_eq!(
+            occurrences, 1,
+            "rationale contract must render exactly once"
+        );
     }
 
     #[test]

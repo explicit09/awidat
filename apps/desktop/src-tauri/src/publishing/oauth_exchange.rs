@@ -191,9 +191,10 @@ async fn post_token_form(
         })?;
 
     let status = response.status();
-    let body = response.text().await.map_err(|e| {
-        ProviderError::NetworkError(format!("read token endpoint response: {e}"))
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ProviderError::NetworkError(format!("read token endpoint response: {e}")))?;
 
     if !status.is_success() {
         // RFC 6749 §5.2: error responses are JSON with `error` + optional
@@ -502,15 +503,10 @@ mod tests {
             .mount(&server)
             .await;
         let endpoint = format!("{}/token", server.uri());
-        let err = exchange_code_for_token(
-            &endpoint,
-            "c".into(),
-            "i".into(),
-            "s".into(),
-            "r".into(),
-        )
-        .await
-        .expect_err("must error on 503");
+        let err =
+            exchange_code_for_token(&endpoint, "c".into(), "i".into(), "s".into(), "r".into())
+                .await
+                .expect_err("must error on 503");
         assert_eq!(err.kind(), "oauth_failed");
         assert!(format!("{err}").contains("503"), "got {err}");
     }
@@ -532,10 +528,14 @@ mod tests {
             .await;
 
         let endpoint = format!("{}/token", server.uri());
-        let tokens =
-            refresh_token(&endpoint, "1/refresh-abc".into(), "cid".into(), "csec".into())
-                .await
-                .expect("refresh ok");
+        let tokens = refresh_token(
+            &endpoint,
+            "1/refresh-abc".into(),
+            "cid".into(),
+            "csec".into(),
+        )
+        .await
+        .expect("refresh ok");
         assert_eq!(tokens.access_token, "ya29.new-access");
         // Refresh responses commonly omit refresh_token — must surface as None.
         assert!(tokens.refresh_token.is_none());
@@ -774,7 +774,10 @@ mod tests {
         assert_eq!(creds.account_name.as_deref(), Some("you@gmail.com"));
         let now = now_unix_seconds();
         let ea = creds.expires_at.expect("ea");
-        assert!(ea >= now + 3500 && ea <= now + 3700, "expires_at = {ea}, now = {now}");
+        assert!(
+            ea >= now + 3500 && ea <= now + 3700,
+            "expires_at = {ea}, now = {now}"
+        );
         // No token material leaks into the JSON file.
         let raw = tokio::fs::read_to_string(&path).await.expect("read");
         assert!(!raw.contains("ya29.fresh"));

@@ -109,7 +109,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.1.2
           package_json_file: apps/desktop/package.json
           run_install: false
       - uses: actions/setup-node@v4

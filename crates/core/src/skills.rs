@@ -546,7 +546,10 @@ mod tests {
             "body",
         );
         let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
-        assert!(errs.is_empty(), "hidden dirs must not surface errors: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "hidden dirs must not surface errors: {errs:?}"
+        );
         assert!(reg.get("real-skill").is_some());
         assert!(reg.get("my-skill").is_none(), "_template must not load");
         assert!(reg.get("scratch").is_none(), ".scratch must not load");

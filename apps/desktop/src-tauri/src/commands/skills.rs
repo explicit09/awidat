@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use awidat_core::skills::{is_hidden_skill_dir, SkillRegistry};
+use awidat_core::skills::{SkillRegistry, is_hidden_skill_dir};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -245,7 +245,11 @@ fn collect_skills(project_root: Option<PathBuf>) -> Vec<SkillEntry> {
 /// its root to override or add editorial workflows.
 fn project_skill_root(project_root: PathBuf) -> Option<PathBuf> {
     let candidate = project_root.join("skills");
-    if candidate.is_dir() { Some(candidate) } else { None }
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 /// Mirror of `codex_session::user_skill_roots`. Kept local so this
@@ -346,8 +350,8 @@ fn create_skill_impl(
     description: String,
     project_root: Option<PathBuf>,
 ) -> Result<String, String> {
-    let bundled = bundled_skill_root()
-        .ok_or_else(|| "bundled skills root not found".to_string())?;
+    let bundled =
+        bundled_skill_root().ok_or_else(|| "bundled skills root not found".to_string())?;
     let user = user_skills_primary_dir();
     create_skill_at(
         &target,
@@ -404,8 +408,7 @@ fn create_skill_at(
     std::fs::create_dir_all(&skill_dir)
         .map_err(|e| format!("create {}: {e}", skill_dir.display()))?;
     let md_path = skill_dir.join("SKILL.md");
-    std::fs::write(&md_path, rendered)
-        .map_err(|e| format!("write {}: {e}", md_path.display()))?;
+    std::fs::write(&md_path, rendered).map_err(|e| format!("write {}: {e}", md_path.display()))?;
 
     Ok(md_path.display().to_string())
 }
@@ -418,8 +421,8 @@ fn create_skill_at(
 #[tauri::command]
 pub async fn skills_authoring_guide_path() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
-        let bundled = bundled_skill_root()
-            .ok_or_else(|| "bundled skills root not found".to_string())?;
+        let bundled =
+            bundled_skill_root().ok_or_else(|| "bundled skills root not found".to_string())?;
         let candidate = bundled
             .parent()
             .map(|p| p.join("docs").join("skills-authoring.md"))
@@ -493,7 +496,10 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("name: my-new-skill"));
         assert!(body.contains("description: Does a thing."));
-        assert!(!body.contains("{{name}}"), "placeholders must be substituted");
+        assert!(
+            !body.contains("{{name}}"),
+            "placeholders must be substituted"
+        );
     }
 
     #[test]
@@ -529,10 +535,7 @@ mod tests {
             .expect("first call writes");
         let err = create_skill_at("user", "dup", "second", None, &bundled, Some(&user))
             .expect_err("second call must fail");
-        assert!(
-            err.contains("already exists"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains("already exists"), "unexpected error: {err}");
     }
 
     #[test]
@@ -557,4 +560,3 @@ mod tests {
         assert!(err.contains("unknown target"), "got: {err}");
     }
 }
-

@@ -236,10 +236,7 @@ pub async fn disconnect_provider(
     // Decide whether to keep the slot around. We keep it if the user
     // still has BYO client credentials configured — wiping the slot
     // there would force them to re-paste on reconnect.
-    let keep_slot = store
-        .get(key)
-        .map(|c| c.has_client_id())
-        .unwrap_or(false);
+    let keep_slot = store.get(key).map(|c| c.has_client_id()).unwrap_or(false);
     if keep_slot {
         let slot = store.get_or_insert(key);
         slot.clear_oauth_metadata();

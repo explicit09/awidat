@@ -245,10 +245,7 @@ fn format_feedback_line(entry: &crate::commands::feedback::FeedbackEntry) -> Str
             entry.title,
             reason.trim()
         ),
-        _ => format!(
-            "  - {} \"{}\" (no reason given)",
-            entry.medium, entry.title
-        ),
+        _ => format!("  - {} \"{}\" (no reason given)", entry.medium, entry.title),
     }
 }
 
@@ -316,7 +313,10 @@ fn render_skills_catalog_from_roots(
             );
             continue;
         }
-        skill_lines.push(format!("  - {}: {}", skill.meta.name, skill.meta.description));
+        skill_lines.push(format!(
+            "  - {}: {}",
+            skill.meta.name, skill.meta.description
+        ));
     }
 
     if skill_lines.is_empty() {
@@ -340,20 +340,22 @@ fn collect_layered_skills(
     project_root: Option<&Path>,
 ) -> LayeredSkills {
     use awidat_core::skills::SkillRegistry;
-    let load = |root: Option<&Path>| -> std::collections::BTreeMap<String, awidat_core::skills::Skill> {
-        let mut out = std::collections::BTreeMap::new();
-        let Some(root) = root else {
-            return out;
+    let load =
+        |root: Option<&Path>| -> std::collections::BTreeMap<String, awidat_core::skills::Skill> {
+            let mut out = std::collections::BTreeMap::new();
+            let Some(root) = root else {
+                return out;
+            };
+            let (reg, errors) =
+                SkillRegistry::discover_many(Some(root), std::iter::empty::<&Path>());
+            for err in errors {
+                tracing::warn!(?err, "skill discovery: malformed entry skipped");
+            }
+            for s in reg.all() {
+                out.insert(s.meta.name.clone(), s.clone());
+            }
+            out
         };
-        let (reg, errors) = SkillRegistry::discover_many(Some(root), std::iter::empty::<&Path>());
-        for err in errors {
-            tracing::warn!(?err, "skill discovery: malformed entry skipped");
-        }
-        for s in reg.all() {
-            out.insert(s.meta.name.clone(), s.clone());
-        }
-        out
-    };
 
     // User roots may be multiple paths (legacy `~/.awidat/skills` +
     // platform config dir) — later wins on name conflict, mirroring
@@ -467,7 +469,10 @@ fn parse_three_part(s: &str) -> Option<(u32, u32, u32)> {
     // strip everything past the first non-digit so "1.2.0-beta" parses
     // as `1.2.0` for the compatibility check.
     let patch_raw = parts.next()?;
-    let patch_digits: String = patch_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let patch_digits: String = patch_raw
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     let patch = patch_digits.parse::<u32>().ok()?;
     Some((major, minor, patch))
 }
@@ -566,10 +571,12 @@ mod tests {
     #[test]
     fn render_skills_catalog_includes_all_when_nothing_disabled() {
         let bundled = make_skills_root(&["alpha-skill", "beta-skill"]);
-        let rendered =
-            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
-                .expect("catalog non-empty");
-        assert!(rendered.contains("alpha-skill"), "missing alpha: {rendered}");
+        let rendered = render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
+            .expect("catalog non-empty");
+        assert!(
+            rendered.contains("alpha-skill"),
+            "missing alpha: {rendered}"
+        );
         assert!(rendered.contains("beta-skill"), "missing beta: {rendered}");
     }
 
@@ -588,7 +595,10 @@ mod tests {
             !rendered.contains("alpha-skill"),
             "alpha-skill should have been filtered: {rendered}"
         );
-        assert!(rendered.contains("beta-skill"), "beta still expected: {rendered}");
+        assert!(
+            rendered.contains("beta-skill"),
+            "beta still expected: {rendered}"
+        );
     }
 
     #[test]
@@ -635,9 +645,8 @@ mod tests {
     #[test]
     fn render_skills_catalog_carries_rationale_contract() {
         let bundled = make_skills_root(&["only-skill"]);
-        let rendered =
-            render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
-                .expect("catalog non-empty");
+        let rendered = render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &[])
+            .expect("catalog non-empty");
         assert!(
             rendered.contains("## Rationale contract"),
             "rendered catalog must include the rationale contract; got:\n{rendered}"
@@ -777,13 +786,7 @@ mod tests {
             provenance: None,
         }];
         // Only this skill exists; an unsatisfiable pin → empty catalog.
-        let out = render_skills_catalog_from_roots(
-            Some(bundled.path()),
-            &[],
-            None,
-            &[],
-            &pins,
-        );
+        let out = render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &pins);
         assert!(
             out.is_none(),
             "unsatisfiable pin should drop the only skill"
@@ -852,13 +855,7 @@ mod tests {
             version: None,
             provenance: Some("homebrew".to_string()),
         }];
-        let out = render_skills_catalog_from_roots(
-            Some(bundled.path()),
-            &[],
-            None,
-            &[],
-            &pins,
-        );
+        let out = render_skills_catalog_from_roots(Some(bundled.path()), &[], None, &[], &pins);
         assert!(out.is_none(), "unknown provenance must skip the skill");
     }
 
@@ -924,12 +921,7 @@ mod tests {
 
     use crate::commands::feedback::FeedbackEntry;
 
-    fn feedback_entry(
-        ts: i64,
-        medium: &str,
-        title: &str,
-        reason: Option<&str>,
-    ) -> FeedbackEntry {
+    fn feedback_entry(ts: i64, medium: &str, title: &str, reason: Option<&str>) -> FeedbackEntry {
         FeedbackEntry {
             ts,
             medium: medium.into(),
@@ -955,7 +947,12 @@ mod tests {
     /// fragment later.
     #[test]
     fn render_recent_feedback_renders_with_reason_shape() {
-        let entries = vec![feedback_entry(1, "cut", "Trim 0:12 — 0:12.42", Some("Too aggressive"))];
+        let entries = vec![feedback_entry(
+            1,
+            "cut",
+            "Trim 0:12 — 0:12.42",
+            Some("Too aggressive"),
+        )];
         let rendered = render_recent_feedback_from_entries(&entries).expect("non-empty");
         assert!(rendered.starts_with("<recent_feedback>"));
         assert!(rendered.ends_with("</recent_feedback>"));

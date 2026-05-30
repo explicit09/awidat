@@ -23,14 +23,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::publishing::{
-    disclosure_for_project_root,
+    AiDisclosure, ClientCredentialsState, ConnectionStatus, OAuthChallenge, ProviderError,
+    ProviderInfo, ProviderRegistry, UploadParams, UploadResult, disclosure_for_project_root,
     oauth_listener::{self, OAuthListenerError},
     upload_queue::{
-        self, default_prefs_path, load_prefs_from, run_upload, save_prefs_to,
-        UploadJobEntry, UploadMetadata, UploadPrefs,
+        self, UploadJobEntry, UploadMetadata, UploadPrefs, default_prefs_path, load_prefs_from,
+        run_upload, save_prefs_to,
     },
-    AiDisclosure, ClientCredentialsState, ConnectionStatus, OAuthChallenge,
-    ProviderError, ProviderInfo, ProviderRegistry, UploadParams, UploadResult,
 };
 use crate::state::AwidatState;
 
@@ -136,10 +135,7 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 /// authorisation URL immediately — the browser handoff happens before
 /// the redirect ever lands.
 #[tauri::command]
-pub async fn begin_provider_oauth(
-    app: AppHandle,
-    key: String,
-) -> Result<OAuthChallenge, String> {
+pub async fn begin_provider_oauth(app: AppHandle, key: String) -> Result<OAuthChallenge, String> {
     let reg = registry()?;
     let provider = provider_for(reg, &key)?;
     let challenge = provider.begin_oauth().await.map_err(stringify_error)?;
@@ -310,14 +306,8 @@ pub async fn start_uploads_for_job(
                 }
             }
         }
-        let params = build_upload_params(
-            &queue,
-            &job_id,
-            &provider_key,
-            &file_path_buf,
-            &title,
-        )
-        .await;
+        let params =
+            build_upload_params(&queue, &job_id, &provider_key, &file_path_buf, &title).await;
         let reg_clone = reg.clone();
         let queue_clone = queue.clone();
         let job_id_clone = job_id.clone();
@@ -384,7 +374,11 @@ pub async fn retry_upload(
     file_path: String,
     title: String,
 ) -> Result<(), String> {
-    if !state.upload_queue.reset_to_pending(&job_id, &provider).await {
+    if !state
+        .upload_queue
+        .reset_to_pending(&job_id, &provider)
+        .await
+    {
         return Err(format!(
             "no upload target {provider:?} registered for job {job_id:?}",
         ));
@@ -392,8 +386,7 @@ pub async fn retry_upload(
     let reg = registry()?.clone();
     let queue = state.upload_queue.clone();
     let file_path_buf = std::path::PathBuf::from(&file_path);
-    let params =
-        build_upload_params(&queue, &job_id, &provider, &file_path_buf, &title).await;
+    let params = build_upload_params(&queue, &job_id, &provider, &file_path_buf, &title).await;
     tokio::spawn(async move {
         run_upload(&queue, &reg, &job_id, &provider, params).await;
     });
@@ -488,10 +481,7 @@ pub async fn compute_ai_disclosure(
         // the UI can still show the credits + warning banner.
         AiDisclosure::empty()
     };
-    state
-        .upload_queue
-        .set_ai_disclosure(job_id, parked)
-        .await;
+    state.upload_queue.set_ai_disclosure(job_id, parked).await;
     Ok(disclosure)
 }
 
@@ -587,7 +577,10 @@ mod tests {
 
     #[test]
     fn stringify_error_includes_kind() {
-        assert_eq!(stringify_error(ProviderError::NotConfigured), "not_configured");
+        assert_eq!(
+            stringify_error(ProviderError::NotConfigured),
+            "not_configured"
+        );
         assert_eq!(stringify_error(ProviderError::RateLimited), "rate_limited");
         assert_eq!(
             stringify_error(ProviderError::OAuthFailed("bad code".into())),
@@ -687,7 +680,9 @@ mod tests {
     async fn build_upload_params_without_disclosure_passes_none() {
         use crate::publishing::UploadQueue;
         let queue = UploadQueue::new();
-        queue.register("job-clean".into(), vec!["youtube".into()]).await;
+        queue
+            .register("job-clean".into(), vec!["youtube".into()])
+            .await;
         let params = build_upload_params(
             &queue,
             "job-clean",
@@ -712,7 +707,7 @@ mod tests {
         // instead. TikTok + Instagram remain stubs until their own
         // real-upload tasks ship, so they continue to drive this test.
         use crate::publishing::GeneratedMediaCredit;
-        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        use crate::publishing::keychain::{Keychain, TokenKind, install_mock_backend};
         install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
@@ -721,7 +716,10 @@ mod tests {
         let mut store = crate::publishing::storage::PublishingStore::default();
         let kc = Keychain::new();
         for key in ["tiktok", "instagram"] {
-            store.set(key, Some(crate::publishing::storage::Credentials::default()));
+            store.set(
+                key,
+                Some(crate::publishing::storage::Credentials::default()),
+            );
             kc.store_token(key, TokenKind::AccessToken, &format!("seeded-{key}"))
                 .unwrap();
         }
@@ -770,7 +768,7 @@ mod tests {
         // above: YouTube post-W6.A3 doesn't ride the stub path, so we
         // probe TikTok (a remaining stub) for the "no disclosure →
         // baseline message" case.
-        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        use crate::publishing::keychain::{Keychain, TokenKind, install_mock_backend};
         install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
@@ -792,7 +790,13 @@ mod tests {
         // No disclosure → message is the W5.A2 baseline (no AI hint).
         let err = tk.upload(stub_params()).await.unwrap_err();
         let msg = err.to_string();
-        assert!(!msg.contains("aigc_label"), "clean cut must not claim disclosure: {msg}");
-        assert!(!msg.contains("generated clip"), "clean cut must not mention generated clips: {msg}");
+        assert!(
+            !msg.contains("aigc_label"),
+            "clean cut must not claim disclosure: {msg}"
+        );
+        assert!(
+            !msg.contains("generated clip"),
+            "clean cut must not mention generated clips: {msg}"
+        );
     }
 }

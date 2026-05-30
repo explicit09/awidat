@@ -205,9 +205,7 @@ pub async fn load_with_keychain(
 ) -> Result<PublishingStore, ProviderError> {
     let raw_str = match tokio::fs::read_to_string(path).await {
         Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PublishingStore::default())
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PublishingStore::default()),
         Err(e) => return Err(ProviderError::Io(format!("read {}: {e}", path.display()))),
     };
     let raw: RawStore = serde_json::from_str(&raw_str)

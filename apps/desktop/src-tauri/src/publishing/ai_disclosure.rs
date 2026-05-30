@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use awidat_core::generated_media::registry::{
-    GeneratedMediaRecord, Registry, REGISTRY_RELATIVE_PATH,
+    GeneratedMediaRecord, REGISTRY_RELATIVE_PATH, Registry,
 };
 use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
 use serde::{Deserialize, Serialize};
@@ -388,8 +388,7 @@ mod tests {
     }
 
     fn record(job_id: &str, output_path: &str, prompt: &str) -> GeneratedMediaRecord {
-        GeneratedMediaRecord::new_mock_succeeded(job_id, output_path, prompt)
-            .expect("mock record")
+        GeneratedMediaRecord::new_mock_succeeded(job_id, output_path, prompt).expect("mock record")
     }
 
     #[test]
@@ -408,7 +407,11 @@ mod tests {
         // → no disclosure.
         seed_registry(
             tmp.path(),
-            vec![record("job-1", "raw/generated/runway/abc.mp4", "a quiet street")],
+            vec![record(
+                "job-1",
+                "raw/generated/runway/abc.mp4",
+                "a quiet street",
+            )],
         );
         let timeline = timeline_with_paths(&["raw/ep-014-cam-a.mp4"]);
         let credits = cut_contains_generated_media(&timeline, tmp.path());
@@ -464,7 +467,10 @@ mod tests {
             metadata: TimelineMetadata::default(),
         };
         let credits = cut_contains_generated_media(&timeline, tmp.path());
-        assert!(credits.is_empty(), "inactive generated clip must not disclose");
+        assert!(
+            credits.is_empty(),
+            "inactive generated clip must not disclose"
+        );
     }
 
     #[test]
@@ -481,15 +487,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut r1 = record("job-old", "raw/generated/a/1.mp4", "old prompt");
         let mut r2 = record("job-new", "raw/generated/a/2.mp4", "new prompt");
-        r1.completed_at =
-            Some(chrono::DateTime::from_timestamp(1_000, 0).unwrap());
-        r2.completed_at =
-            Some(chrono::DateTime::from_timestamp(2_000, 0).unwrap());
+        r1.completed_at = Some(chrono::DateTime::from_timestamp(1_000, 0).unwrap());
+        r2.completed_at = Some(chrono::DateTime::from_timestamp(2_000, 0).unwrap());
         seed_registry(tmp.path(), vec![r1, r2]);
-        let timeline = timeline_with_paths(&[
-            "raw/generated/a/1.mp4",
-            "raw/generated/a/2.mp4",
-        ]);
+        let timeline = timeline_with_paths(&["raw/generated/a/1.mp4", "raw/generated/a/2.mp4"]);
         let credits = cut_contains_generated_media(&timeline, tmp.path());
         assert_eq!(credits.len(), 2);
         assert_eq!(credits[0].asset_id, "job-new", "newest first");
@@ -574,9 +575,7 @@ mod tests {
             .children
             .push(TrackChild::Clip(clip_with_path("c", path)));
         let mut nested_stack = Stack::empty("nested");
-        nested_stack
-            .children
-            .push(StackChild::Track(inner_track));
+        nested_stack.children.push(StackChild::Track(inner_track));
         let mut outer = Stack::empty("tracks");
         outer.children.push(StackChild::Stack(nested_stack));
         let timeline = Timeline {

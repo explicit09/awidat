@@ -40,7 +40,7 @@ pub mod youtube_upload;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub use ai_disclosure::{disclosure_for_project_root, AiDisclosure};
+pub use ai_disclosure::{AiDisclosure, disclosure_for_project_root};
 // Direct callers in production today: the `commands::publishing` API
 // re-exports through `disclosure_for_project_root`. The granular
 // helpers (`cut_contains_generated_media`, `disclosure_for_timeline`,
@@ -49,17 +49,13 @@ pub use ai_disclosure::{disclosure_for_project_root, AiDisclosure};
 // boundary stays stable.
 #[allow(unused_imports)]
 pub use ai_disclosure::{
-    cut_contains_generated_media, disclosure_for_timeline, GeneratedMediaCredit,
+    GeneratedMediaCredit, cut_contains_generated_media, disclosure_for_timeline,
 };
 pub use errors::ProviderError;
 pub use oauth::ClientCredentialsState;
 pub use provider::PublishingProvider;
-pub use types::{
-    ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult,
-};
-pub use upload_queue::{
-    UploadJobEntry, UploadMetadata, UploadPrefs, UploadQueue, UploadState,
-};
+pub use types::{ConnectionStatus, OAuthChallenge, ProviderInfo, UploadParams, UploadResult};
+pub use upload_queue::{UploadJobEntry, UploadMetadata, UploadPrefs, UploadQueue, UploadState};
 // Re-exported separately because tests are the only in-crate
 // consumer today — bundling it with the line above tripped the
 // "unused import" lint. Frontend deserialises `UploadParams` (which
@@ -313,6 +309,9 @@ mod tests {
         ig.complete_oauth("ig-code".into()).await.unwrap();
 
         let after = ig.status().await;
-        assert!(after.connected, "status flips after a successful complete_oauth");
+        assert!(
+            after.connected,
+            "status flips after a successful complete_oauth"
+        );
     }
 }
