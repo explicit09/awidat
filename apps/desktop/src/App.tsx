@@ -120,6 +120,8 @@ import {
 import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
 import "./ui/tokens.css";
 import "./App.css";
+import "./ui/glass.css";
+import { AmbientBackground } from "./ui/glass";
 
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
@@ -1809,6 +1811,7 @@ function App() {
 
   return (
     <>
+    <AmbientBackground />
     <AppShell
       // Top chrome (brand, stage tabs, status, share/settings) now lives in
       // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;

@@ -297,3 +297,53 @@
   .glass-strong { background: rgba(22, 22, 27, 0.96); }
   .glass-soft { background: rgba(16, 16, 20, 0.85); }
 }
+
+/* =====================================================================
+   LIVE-APP INTEGRATION — glassify the real cockpit
+   These bare (unlayered) rules override the @layer utilities defaults in
+   tokens.css by source order + layer precedence. Removing the glass.css
+   import cleanly reverts the app to flat charcoal.
+   ===================================================================== */
+
+/* Solid floor behind the fixed atmosphere plane. */
+html, body, #root { background: #08080A; }
+
+/* Every cockpit region (.panel) becomes frosted glass. Atmosphere drifts
+   through the translucency + the grid gaps between panels. */
+.panel {
+  background: var(--glass-tint-1) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow);
+  background-image: linear-gradient(135deg, var(--glass-inner-glow) 0%, transparent 40%);
+  position: relative;
+  isolation: isolate;
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-specular) 30%, var(--glass-specular) 70%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Modal scrim picks up the stronger blur + the brand-lit base. */
+.modal-backdrop {
+  background: rgba(6, 6, 9, 0.55) !important;
+  backdrop-filter: blur(16px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(140%) !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .panel {
+    background: var(--color-surface-panel) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .panel { background: rgba(18, 18, 22, 0.94) !important; }
+}

@@ -9,7 +9,7 @@ import { WorkspaceRow } from "./WorkspaceRow";
  */
 export function TopChrome() {
   return (
-    <div className="flex flex-col border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)]">
+    <div className="glass-strong flex flex-col border-b border-[var(--glass-border)]" style={{ borderRadius: 0 }}>
       <IdentityRow />
       <WorkspaceRow />
     </div>

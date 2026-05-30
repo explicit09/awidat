@@ -49,8 +49,7 @@ export function Landing() {
 
   return (
     <div
-      className="flex flex-col items-center justify-center text-center px-6 py-12 h-full w-full min-h-0
-                 bg-[radial-gradient(ellipse_at_50%_40%,#14110E_0%,var(--color-surface-page)_60%)]"
+      className="relative z-10 flex flex-col items-center justify-center text-center px-6 py-12 h-full w-full min-h-0 bg-transparent"
     >
       <img
         src={mark}
