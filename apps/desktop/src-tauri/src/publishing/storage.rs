@@ -1,10 +1,8 @@
 //! Flat-file credential store for the publishing providers.
 //!
-//! Real product code should store these in the OS keychain — see the
-//! TODO at the bottom of [`store_path`] — but for the W5 scaffolding
-//! phase we accept the trade-off: JSON on disk lets the user inspect
-//! what's there, and means a missing/corrupt file fails the same way
-//! across providers.
+//! Legacy flat-file credential store for the publishing providers.
+//! New secret writes are blocked until OAuth tokens and client secrets
+//! move to the OS keychain.
 //!
 //! # On-disk shape
 //!
@@ -24,16 +22,14 @@
 //! provider key is independently optional so we never have to mutate
 //! more than one slot per write.
 //!
-//! `client_credentials` (W5.A5) carries the user's developer-console
+//! `client_credentials` (W5.A5) carried the user's developer-console
 //! credentials (BYO OAuth app). It can be present *without* an access
-//! token — that's the state right after the user pastes a `client_id`
-//! / `client_secret` but before they complete the OAuth flow. Disconnect
-//! clears `access_token` + refresh + account + expiry but preserves
-//! `client_credentials` so the user doesn't have to re-paste them.
+//! token in legacy local config. Disconnect clears `access_token` +
+//! refresh + account + expiry but preserves `client_credentials`.
 //!
-//! ⚠ SECURITY: `client_secret` and `access_token` live in the same
-//! plain-JSON file. Keychain integration is deferred to Wave 6 — the
-//! Settings UI surfaces this warning to the user.
+//! SECURITY: this module can read legacy plaintext secrets, but the
+//! OAuth helpers refuse to write new secrets until keychain storage is
+//! implemented.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,7 +41,7 @@ use super::errors::ProviderError;
 /// File name under `<config_dir>/awidat/`.
 const FILE_NAME: &str = "publishing.json";
 
-/// User-supplied OAuth app credentials (W5.A5 BYO credentials).
+/// User-supplied OAuth app credentials from legacy plaintext config.
 ///
 /// These are the values the user gets from a platform's developer
 /// console (Google Cloud Console for YouTube, the TikTok devs portal,
@@ -61,7 +57,7 @@ pub struct ClientCredentials {
     /// `client_id`, TikTok calls it `client_key`, Meta calls it `app_id`).
     /// We use `client_id` as the canonical name.
     pub client_id: String,
-    /// The companion secret. ⚠ Stored in plain JSON for now.
+    /// The companion secret. Legacy reads only; new writes are blocked.
     pub client_secret: String,
 }
 
@@ -176,13 +172,12 @@ impl PublishingStore {
 /// on Linux `~/.config/awidat/publishing.json`, on Windows
 /// `%APPDATA%\awidat\publishing.json`.
 ///
-/// TODO(W5.A2+): move tokens to the OS keychain
+/// TODO: move tokens to the OS keychain
 /// (`keyring::Entry::new("awidat", "<provider>")`) and keep this file
 /// for the non-secret bits only (account name, expiry).
 pub fn default_store_path() -> Result<PathBuf, ProviderError> {
-    let cfg = dirs::config_dir().ok_or_else(|| {
-        ProviderError::Io("could not resolve platform config_dir".into())
-    })?;
+    let cfg = dirs::config_dir()
+        .ok_or_else(|| ProviderError::Io("could not resolve platform config_dir".into()))?;
     Ok(cfg.join("awidat").join(FILE_NAME))
 }
 
@@ -192,24 +187,18 @@ pub async fn load_from(path: &std::path::Path) -> Result<PublishingStore, Provid
         Ok(raw) => serde_json::from_str(&raw)
             .map_err(|e| ProviderError::Io(format!("parse {}: {e}", path.display()))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PublishingStore::default()),
-        Err(e) => Err(ProviderError::Io(format!(
-            "read {}: {e}",
-            path.display()
-        ))),
+        Err(e) => Err(ProviderError::Io(format!("read {}: {e}", path.display()))),
     }
 }
 
 /// Persist the store to an explicit path. Creates parent dirs and
 /// writes atomically (tempfile + rename) so a crash mid-write leaves
 /// either the old file or the new one — never a half-written one.
-pub async fn save_to(
-    path: &std::path::Path,
-    store: &PublishingStore,
-) -> Result<(), ProviderError> {
+pub async fn save_to(path: &std::path::Path, store: &PublishingStore) -> Result<(), ProviderError> {
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            ProviderError::Io(format!("create dir {}: {e}", parent.display()))
-        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ProviderError::Io(format!("create dir {}: {e}", parent.display())))?;
     }
     let buf = serde_json::to_vec_pretty(store)
         .map_err(|e| ProviderError::Io(format!("serialize store: {e}")))?;
@@ -218,9 +207,13 @@ pub async fn save_to(
     tokio::fs::write(&tmp, &buf)
         .await
         .map_err(|e| ProviderError::Io(format!("write {}: {e}", tmp.display())))?;
-    tokio::fs::rename(&tmp, path)
-        .await
-        .map_err(|e| ProviderError::Io(format!("rename {} → {}: {e}", tmp.display(), path.display())))?;
+    tokio::fs::rename(&tmp, path).await.map_err(|e| {
+        ProviderError::Io(format!(
+            "rename {} → {}: {e}",
+            tmp.display(),
+            path.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -352,7 +345,9 @@ mod tests {
         assert!(c.expires_at.is_none());
         // Client credentials survive.
         assert_eq!(
-            c.client_credentials.as_ref().map(|cc| cc.client_id.as_str()),
+            c.client_credentials
+                .as_ref()
+                .map(|cc| cc.client_id.as_str()),
             Some("id"),
         );
         // Idempotent.

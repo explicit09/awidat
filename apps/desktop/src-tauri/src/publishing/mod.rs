@@ -172,11 +172,8 @@ mod tests {
         }
     }
 
-    /// Brief-specified test:
-    /// `publishing::oauth_flow_writes_token` — completing OAuth writes
-    /// to storage.
     #[tokio::test]
-    async fn oauth_flow_writes_token() {
+    async fn oauth_flow_is_disabled_without_keychain_storage() {
         let tmp = tempfile::tempdir().unwrap();
         let path = test_store_path(&tmp);
         let registry = ProviderRegistry::with_store_path(path.clone());
@@ -189,15 +186,19 @@ mod tests {
         assert!(challenge.url.contains("client_id=YOUR_CLIENT_ID_HERE"));
         assert!(!challenge.state.is_empty());
 
-        // Complete with a fake code → storage gets the placeholder token.
-        yt.complete_oauth("fake-auth-code-123".into()).await.unwrap();
-        assert!(yt.is_configured().await, "post-complete → configured");
+        let err = yt
+            .complete_oauth("fake-auth-code-123".into())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "unsupported");
+        assert!(
+            !yt.is_configured().await,
+            "OAuth stays unconfigured until keychain storage exists",
+        );
 
         let on_disk = storage::load_from(&path).await.unwrap();
-        let creds = on_disk.get("youtube").expect("youtube slot populated");
-        assert!(creds.access_token.contains("fake-auth-code-123"));
+        assert!(on_disk.get("youtube").is_none());
 
-        // Upload now reaches the second tier — Unsupported (not NotConfigured).
         let err = yt
             .upload(UploadParams {
                 file_path: "/tmp/fake.mp4".into(),
@@ -211,11 +212,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), "unsupported");
-        // Sanity-check the message points at the YouTube dev console
-        // — the frontend will surface that URL.
-        let msg = err.to_string();
-        assert!(msg.contains("console.cloud.google.com"), "{msg}");
+        assert_eq!(err.kind(), "not_configured");
     }
 
     #[tokio::test]
@@ -261,9 +258,10 @@ mod tests {
         let before = ig.status().await;
         assert!(!before.connected);
 
-        ig.complete_oauth("ig-code".into()).await.unwrap();
+        let err = ig.complete_oauth("ig-code".into()).await.unwrap_err();
+        assert_eq!(err.kind(), "unsupported");
 
         let after = ig.status().await;
-        assert!(after.connected);
+        assert!(!after.connected);
     }
 }

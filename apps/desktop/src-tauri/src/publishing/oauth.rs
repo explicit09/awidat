@@ -4,7 +4,7 @@
 //! and scope set, but the shape of the work — pick a `state` nonce,
 //! url-encode params, hand back an [`OAuthChallenge`] — is identical.
 //! Same goes for the stub-phase `is_configured` / `status` /
-//! `complete_oauth` / `upload` bodies: the only thing that varies is
+//! `upload` bodies: the only thing that varies is
 //! the provider's storage key and the dev-console URL.
 //! Centralising both here keeps the per-provider files focused on the
 //! one platform-specific thing each really owns: the URL template.
@@ -29,6 +29,9 @@ pub const CLIENT_ID_PLACEHOLDER: &str = "YOUR_CLIENT_ID_HERE";
 /// console. Real implementation in W5.A2+ will spin up a one-shot
 /// HTTP server bound to this address.
 pub const REDIRECT_URI: &str = "http://127.0.0.1:8419/oauth/callback";
+
+const KEYCHAIN_REQUIRED: &str =
+    "publishing OAuth is disabled until keychain-backed credential storage is implemented";
 
 /// Pick a fresh state nonce. Cryptographically uninteresting — this
 /// is CSRF defense, not authentication — so a monotonically-unique
@@ -55,8 +58,7 @@ pub fn fresh_state() -> String {
 pub fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
-        let safe = byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'_' | b'.' | b'~');
+        let safe = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
         if safe {
             out.push(byte as char);
         } else {
@@ -79,11 +81,7 @@ pub fn query_string(pairs: &[(&str, &str)]) -> String {
 ///
 /// Drops `redirect_uri` and `state` into the pair list so callers
 /// don't have to repeat them per provider.
-pub fn build_authorize(
-    base: &str,
-    extra_pairs: &[(&str, &str)],
-    state: &str,
-) -> OAuthChallenge {
+pub fn build_authorize(base: &str, extra_pairs: &[(&str, &str)], state: &str) -> OAuthChallenge {
     let mut pairs: Vec<(&str, &str)> = Vec::with_capacity(extra_pairs.len() + 2);
     pairs.extend_from_slice(extra_pairs);
     pairs.push(("redirect_uri", REDIRECT_URI));
@@ -99,9 +97,9 @@ pub fn build_authorize(
 // ---- Shared stub-phase implementations ----
 //
 // The W5.A1 contract is that every provider's `is_configured` /
-// `status` / `complete_oauth` / `upload` collapse to the same logic
-// (read from publishing.json, write a token-shaped placeholder, return
-// `Unsupported` with a dev-console hint). The per-provider files just
+// `status` / `upload` collapse to the same logic (read legacy state
+// from publishing.json, refuse new secret writes, return `Unsupported`
+// with a dev-console hint). The per-provider files just
 // pass in their storage key, dev-console URL, and store path.
 //
 // Taking the store path as an argument (rather than reading from a
@@ -152,9 +150,9 @@ pub async fn client_id_for(store_path: &std::path::Path, key: &str) -> String {
         .unwrap_or_else(|| CLIENT_ID_PLACEHOLDER.to_string())
 }
 
-/// Persist a `(client_id, client_secret)` pair for one provider.
-/// Idempotent — re-calling replaces. Preserves the provider's tokens
-/// (so a user fixing a typo in `client_secret` doesn't get logged out).
+/// Persisting `(client_id, client_secret)` is disabled until secrets
+/// move to an OS keychain. Legacy plaintext config can still be read
+/// so existing local state does not crash the settings surface.
 ///
 /// Empty strings for either field are rejected — the BYO contract is
 /// all-or-nothing (a half-set state would silently fall back to the
@@ -170,13 +168,10 @@ pub async fn set_client_credentials(
             "client_id and client_secret must both be non-empty".into(),
         ));
     }
-    let mut store = storage::load_from(store_path).await?;
-    let slot = store.get_or_insert(key);
-    slot.client_credentials = Some(super::storage::ClientCredentials {
-        client_id,
-        client_secret,
-    });
-    storage::save_to(store_path, &store).await
+    let _ = (store_path, key);
+    Err(super::errors::ProviderError::Unsupported(
+        KEYCHAIN_REQUIRED.into(),
+    ))
 }
 
 /// Read the *presence* of BYO client credentials — never returns the
@@ -232,31 +227,21 @@ pub async fn disconnect_provider(
     storage::save_to(store_path, &store).await
 }
 
-/// Shared stub for `complete_oauth` — accepts any non-empty `code`
-/// and writes a placeholder token to storage so the rest of the flow
-/// (status → upload) can be exercised end-to-end.
-///
-/// Real provider impls (W5.A2+) replace this with a POST to the
-/// platform's token endpoint.
+/// Shared stub for `complete_oauth`. Non-empty codes are accepted as
+/// valid input, but no access token is persisted until the publishing
+/// layer has keychain-backed credential storage.
 pub async fn stub_complete_oauth(
     store_path: &std::path::Path,
     key: &str,
     code: String,
 ) -> Result<(), ProviderError> {
     if code.trim().is_empty() {
-        return Err(ProviderError::OAuthFailed("empty authorization code".into()));
+        return Err(ProviderError::OAuthFailed(
+            "empty authorization code".into(),
+        ));
     }
-    let mut store = storage::load_from(store_path).await?;
-    // Preserve BYO client_credentials on re-authentication. The slot
-    // already holds them if the user pasted them via Settings → BYO,
-    // so we mutate-in-place rather than overwriting.
-    let slot = store.get_or_insert(key);
-    slot.access_token = format!("stub-token-from-code-{code}");
-    slot.refresh_token = None;
-    slot.account_name = None;
-    slot.expires_at = None;
-    storage::save_to(store_path, &store).await?;
-    Ok(())
+    let _ = (store_path, key);
+    Err(ProviderError::Unsupported(KEYCHAIN_REQUIRED.into()))
 }
 
 /// Shared stub for `upload`. Two-tier behaviour:
@@ -338,23 +323,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_client_credentials_then_client_id_for_returns_real_id() {
+    async fn set_client_credentials_is_disabled_until_keychain_storage() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("publishing.json");
-        set_client_credentials(
+        let err = set_client_credentials(
             &path,
             "youtube",
             "real-client-id.apps.googleusercontent.com".into(),
             "secret-shh".into(),
         )
         .await
-        .unwrap();
+        .unwrap_err();
+        assert_eq!(err.kind(), "unsupported");
         let id = client_id_for(&path, "youtube").await;
-        assert_eq!(id, "real-client-id.apps.googleusercontent.com");
-        // State helper reports presence — never the secret itself.
+        assert_eq!(id, CLIENT_ID_PLACEHOLDER);
         let state = get_client_credentials_state(&path, "youtube").await;
-        assert!(state.client_id_set);
-        assert!(state.client_secret_set);
+        assert!(!state.client_id_set);
+        assert!(!state.client_secret_set);
+        assert!(!path.exists());
     }
 
     #[tokio::test]
@@ -368,32 +354,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disconnect_preserves_client_credentials() {
-        // The named-test from the brief: disconnect clears the access
-        // token but leaves BYO credentials intact so the user doesn't
-        // have to re-paste them.
+    async fn disconnect_preserves_legacy_client_credentials() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("publishing.json");
-        // 1. User pastes BYO credentials.
-        set_client_credentials(&path, "youtube", "cid".into(), "csec".into())
-            .await
-            .unwrap();
-        // 2. User completes OAuth → token gets written.
-        stub_complete_oauth(&path, "youtube", "auth-code-abc".into())
-            .await
-            .unwrap();
+        let mut store = storage::PublishingStore::default();
+        store.set(
+            "youtube",
+            Some(storage::Credentials {
+                access_token: "legacy-token".into(),
+                client_credentials: Some(storage::ClientCredentials {
+                    client_id: "cid".into(),
+                    client_secret: "csec".into(),
+                }),
+                ..Default::default()
+            }),
+        );
+        storage::save_to(&path, &store).await.unwrap();
+
         assert!(has_credentials(&path, "youtube").await);
-        // 3. User disconnects.
         disconnect_provider(&path, "youtube").await.unwrap();
-        // Token gone — provider reads as not configured.
         assert!(!has_credentials(&path, "youtube").await);
-        // BYO credentials survive.
         let state = get_client_credentials_state(&path, "youtube").await;
         assert!(
             state.client_id_set && state.client_secret_set,
-            "BYO creds must outlive disconnect",
+            "legacy BYO creds must outlive disconnect",
         );
-        // And the next begin_oauth still picks up the real client_id.
         let id = client_id_for(&path, "youtube").await;
         assert_eq!(id, "cid");
     }
@@ -404,9 +389,15 @@ mod tests {
         // we don't accumulate empty stubs.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("publishing.json");
-        stub_complete_oauth(&path, "youtube", "code".into())
-            .await
-            .unwrap();
+        let mut store = storage::PublishingStore::default();
+        store.set(
+            "youtube",
+            Some(storage::Credentials {
+                access_token: "legacy-token".into(),
+                ..Default::default()
+            }),
+        );
+        storage::save_to(&path, &store).await.unwrap();
         assert!(has_credentials(&path, "youtube").await);
         disconnect_provider(&path, "youtube").await.unwrap();
         assert!(!has_credentials(&path, "youtube").await);
@@ -416,20 +407,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_complete_oauth_preserves_pre_existing_byo() {
-        // Order: paste BYO → complete OAuth. The OAuth step must not
-        // wipe the client_credentials slot.
+    async fn stub_complete_oauth_is_disabled_until_keychain_storage() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("publishing.json");
-        set_client_credentials(&path, "youtube", "cid".into(), "csec".into())
+        let err = stub_complete_oauth(&path, "youtube", "code".into())
             .await
-            .unwrap();
-        stub_complete_oauth(&path, "youtube", "code".into())
-            .await
-            .unwrap();
+            .unwrap_err();
+        assert_eq!(err.kind(), "unsupported");
+        assert!(!has_credentials(&path, "youtube").await);
         let state = get_client_credentials_state(&path, "youtube").await;
-        assert!(state.client_id_set);
-        assert!(state.client_secret_set);
+        assert!(!state.client_id_set);
+        assert!(!state.client_secret_set);
     }
 
     #[test]
@@ -440,13 +428,19 @@ mod tests {
             "fixed-state",
         );
         assert_eq!(challenge.state, "fixed-state");
-        assert!(challenge.url.starts_with("https://example.com/o/authorize?"));
+        assert!(
+            challenge
+                .url
+                .starts_with("https://example.com/o/authorize?")
+        );
         assert!(challenge.url.contains("client_id=YOUR_CLIENT_ID_HERE"));
         assert!(challenge.url.contains("scope=upload"));
         assert!(challenge.url.contains("state=fixed-state"));
         // redirect_uri is encoded.
         assert!(
-            challenge.url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8419%2Foauth%2Fcallback"),
+            challenge
+                .url
+                .contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8419%2Foauth%2Fcallback"),
             "got {}",
             challenge.url,
         );

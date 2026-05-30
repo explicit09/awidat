@@ -714,14 +714,18 @@ mod tests {
         let q = UploadQueue::new();
         q.register("render-003".into(), vec!["youtube".into()]).await;
 
-        // Seed creds so the provider passes is_configured.
-        let yt = match registry.get("youtube") {
-            Some(p) => p,
-            None => panic!("youtube provider missing from registry"),
-        };
-        yt.complete_oauth("fake-code".into())
+        // Seed legacy credentials so the provider passes is_configured.
+        let mut store = crate::publishing::storage::PublishingStore::default();
+        store.set(
+            "youtube",
+            Some(crate::publishing::storage::Credentials {
+                access_token: "legacy-youtube-token".into(),
+                ..Default::default()
+            }),
+        );
+        crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
-            .unwrap_or_else(|err| panic!("complete_oauth: {err}"));
+            .unwrap_or_else(|err| panic!("seed credentials: {err}"));
 
         let file_path = fake_render_file(&tmp);
         let params = default_upload_params(&file_path, "Test render");

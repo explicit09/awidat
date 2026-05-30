@@ -401,9 +401,8 @@ pub async fn disconnect_provider(key: String) -> Result<(), String> {
 
 /// Persist BYO OAuth-app credentials for one provider.
 ///
-/// ⚠ The `client_secret` is written to the same plain-JSON file as
-/// access tokens (`<config_dir>/awidat/publishing.json`). Keychain
-/// integration is deferred to Wave 6 — the Settings UI calls this out.
+/// Currently disabled until the publishing layer stores client secrets
+/// in the OS keychain instead of plaintext config.
 ///
 /// Empty strings for either field are rejected: BYO is all-or-nothing,
 /// and a partial state would silently fall back to the placeholder
@@ -594,19 +593,23 @@ mod tests {
         // Brief-named test: with credentials seeded + disclosure flagged,
         // each provider's stub upload surfaces the AI flag intent so the
         // user can see what *would* have been claimed on the real call.
-        use crate::publishing::{GeneratedMediaCredit, PublishingProvider};
+        use crate::publishing::GeneratedMediaCredit;
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
-        // Seed credentials so every provider passes its is_configured gate.
+        // Seed legacy credentials so every provider passes its is_configured gate.
+        let mut store = crate::publishing::storage::PublishingStore::default();
         for key in ["youtube", "tiktok", "instagram"] {
-            let p = match reg.get(key) {
-                Some(p) => p,
-                None => panic!("provider {key} missing"),
-            };
-            p.complete_oauth(format!("fake-{key}-code"))
-                .await
-                .unwrap_or_else(|e| panic!("complete_oauth({key}): {e}"));
+            store.set(
+                key,
+                Some(crate::publishing::storage::Credentials {
+                    access_token: format!("legacy-{key}-token"),
+                    ..Default::default()
+                }),
+            );
         }
+        crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
+            .await
+            .unwrap();
         let disclosure = AiDisclosure {
             has_synthetic_content: true,
             credits: vec![GeneratedMediaCredit {
@@ -645,16 +648,23 @@ mod tests {
 
     #[tokio::test]
     async fn provider_stub_upload_clean_cut_omits_disclosure_hint() {
-        use crate::publishing::PublishingProvider;
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
         let yt = match reg.get("youtube") {
             Some(p) => p,
             None => panic!("youtube provider missing"),
         };
-        yt.complete_oauth("fake".into())
+        let mut store = crate::publishing::storage::PublishingStore::default();
+        store.set(
+            "youtube",
+            Some(crate::publishing::storage::Credentials {
+                access_token: "legacy-youtube-token".into(),
+                ..Default::default()
+            }),
+        );
+        crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
-            .unwrap_or_else(|e| panic!("complete_oauth: {e}"));
+            .unwrap();
         // No disclosure → message is the W5.A2 baseline (no AI hint).
         let err = yt.upload(stub_params()).await.unwrap_err();
         let msg = err.to_string();
