@@ -29,11 +29,12 @@
 
 ## 2. The real gaps
 
-> **Progress (2026-05-30):** **G1 + G2 + G3 + G4 shipped — only G5 (capability metadata) remains.**
+> **Progress (2026-05-30):** **G1–G5 all shipped — design complete.**
 > - **G1 + G3:** `plan_multicam` reads applied `awidat.sync_group` offsets, scores each camera at its own source time (`sync_offsets` + per-camera `cam_t`), emits `sync_group_id` + `offset_corrected` per decision, warns when no sync groups exist. Mirrored in the MCP port.
 > - **G2:** `skills/multicam-director/SKILL.md` — the two-stage sync→direct workflow, guarded by `multicam_director_skill_is_graph_native` in `skill_catalog.rs` (and the generic all-skills consistency test).
 > - **G4:** 3 `plan_multicam` unit tests (incl. offset-correction regression) + 4 `analyze_sync` unit tests (`best_offset` recovery, zero-confidence gate, degenerate input, zero-drift) + the catalog guard.
-> - Full `awidat-core` lib suite (814 tests) + `skill_catalog` (13) green; clippy clean.
+> - **G5:** `capability_metadata.rs::for_tool_name` now classifies `plan_multicam` (read-only evidence, requires transcript/face/shot) and `analyze_sync` (read-only, no index) — non-mutating, no-approval, non-export. Covered by `multicam_tools_are_read_only_evidence`.
+> - Full `awidat-core` lib suite (815 tests) + `skill_catalog` (13) + `capability_manifest` (4) green; clippy clean.
 
 ### G1 — Sync ↔ planning are disconnected (correctness bug for real shoots) — ✅ DONE
 `analyze_sync` computes per-asset **timeline offsets**, and `SetSyncGroup` stamps them — but **`plan_multicam` never reads them.** It looks up every camera's sidecars at the *same* `t_s` (`grep "sync|offset" plan_multicam.rs` → none). That's only correct if all cameras share a timebase (jam-sync / single recorder). For the common case — separate cameras/recorders started at different times — every per-camera `shot_type_at(t_s)` / `speaker_on_asset(t_s)` / `quality_score_at(t_s)` lookup is **wrong by the offset**, so angle scoring silently degrades. This is the single most important fix.
@@ -47,7 +48,7 @@ The three tools (`analyze_sync` → `plan_multicam` → `apply_edl` → `start_r
 ### G4 — No tool-level tests — ✅ DONE
 The apply path is tested, but `plan_multicam` (camera scoring, min-hold, topic reset) and `analyze_sync` (`best_offset` correlation, drift, confidence gating) have **zero unit tests**. Both are pure-ish functions over fixture JSON/waveforms — cheap to cover, currently uncovered.
 
-### G5 (secondary) — Capability classification + review UX
+### G5 (secondary) — Capability classification + review UX — ✅ DONE (classification; desktop review UX still deferred)
 `capability_metadata.rs::for_tool_name` special-cases `plan_look_regions` (evidence/review treatment) but not `plan_multicam`/`analyze_sync`. And there's no desktop panel to scrub/override angle decisions — agent + EDL review only. Defer.
 
 ---
@@ -153,9 +154,9 @@ skills/multicam-director/
 - `analyze_sync`: synthetic waveforms with a known lag → `best_offset` recovers it within one bucket; flat/empty → confidence below gate; drift fixture → non-zero `speed_factor`/drift.
 - Catalog: extend `crates/core/tests/skill_catalog.rs` with a `multicam_director_skill_is_graph_native` test asserting the skill loads and allowlists the tools above.
 
-### 3.6 G5 — capability metadata (small)
+### 3.6 G5 — capability metadata (small) — ✅ DONE
 
-Add `plan_multicam | analyze_sync` to the read-only/evidence arm of `capability_metadata.rs::for_tool_name` (alongside `plan_look_regions`) so the agent treats their output as reviewable evidence, not a mutation.
+Added `plan_multicam` and `analyze_sync` arms to `capability_metadata.rs::for_tool_name` so the agent treats their output as reviewable evidence, not a mutation: both non-mutating, no-approval, non-export. `plan_multicam` advertises `transcript`/`face`/`shot` index deps; `analyze_sync` declares no index dep (reads raw media). The desktop angle-review panel remains deferred (out of scope).
 
 ---
 
@@ -190,7 +191,7 @@ Add `plan_multicam | analyze_sync` to the read-only/evidence arm of `capability_
 **Phasing:**
 1. ✅ **G1 + G3 + planner tests** (correctness first — offset fix + provenance, with regression net). *Done 2026-05-30.*
 2. ✅ **G2 + catalog test + G4 analyze_sync tests** (skill = usable end-to-end workflow). *Done 2026-05-30.*
-3. **G5** (capability polish) — only remaining item.
+3. ✅ **G5** (capability polish). *Done 2026-05-30.*
 
 ---
 
