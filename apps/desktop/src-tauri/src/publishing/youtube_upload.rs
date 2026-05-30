@@ -91,12 +91,9 @@ where
     F: Fn(f32) + Send + Sync,
 {
     let file_path = Path::new(&params.file_path);
-    let metadata = tokio::fs::metadata(file_path).await.map_err(|e| {
-        ProviderError::Io(format!(
-            "stat {}: {e}",
-            file_path.display(),
-        ))
-    })?;
+    let metadata = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|e| ProviderError::Io(format!("stat {}: {e}", file_path.display(),)))?;
     let total_size = metadata.len();
     if total_size == 0 {
         return Err(ProviderError::Io(format!(
@@ -257,9 +254,7 @@ async fn initiate_resumable(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
         .ok_or_else(|| {
-            ProviderError::Io(
-                "youtube initiate response missing Location header".to_string(),
-            )
+            ProviderError::Io("youtube initiate response missing Location header".to_string())
         })?;
     Ok(location)
 }
@@ -279,9 +274,9 @@ async fn upload_chunks<F>(
 where
     F: Fn(f32) + Send + Sync,
 {
-    let mut file = File::open(file_path).await.map_err(|e| {
-        ProviderError::Io(format!("open {}: {e}", file_path.display()))
-    })?;
+    let mut file = File::open(file_path)
+        .await
+        .map_err(|e| ProviderError::Io(format!("open {}: {e}", file_path.display())))?;
 
     let mut offset: u64 = 0;
     let mut buffer = vec![0u8; CHUNK_SIZE];
@@ -290,23 +285,20 @@ where
         // Resume from the recorded offset on each iteration. Cheap on
         // a freshly-opened file; the seek-then-read pattern also makes
         // a future "resume after network blip" extension trivial.
-        file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            ProviderError::Io(format!("seek {}: {e}", file_path.display()))
-        })?;
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .map_err(|e| ProviderError::Io(format!("seek {}: {e}", file_path.display())))?;
 
         let bytes_remaining = total_size.saturating_sub(offset);
         let target = std::cmp::min(buffer.len() as u64, bytes_remaining) as usize;
         let mut filled = 0;
         while filled < target {
-            let n = file
-                .read(&mut buffer[filled..target])
-                .await
-                .map_err(|e| {
-                    ProviderError::Io(format!(
-                        "read {} at offset {offset}: {e}",
-                        file_path.display(),
-                    ))
-                })?;
+            let n = file.read(&mut buffer[filled..target]).await.map_err(|e| {
+                ProviderError::Io(format!(
+                    "read {} at offset {offset}: {e}",
+                    file_path.display(),
+                ))
+            })?;
             if n == 0 {
                 return Err(ProviderError::Io(format!(
                     "unexpected EOF reading {} at offset {offset}",
@@ -345,9 +337,7 @@ where
             on_progress((offset as f32 / total_size as f32).min(1.0));
             continue;
         }
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(ProviderError::OAuthFailed(format!(
                 "youtube rejected access token mid-upload (HTTP {})",
                 status.as_u16(),
@@ -434,8 +424,8 @@ fn now_unix_seconds() -> i64 {
 mod tests {
     use super::*;
     use crate::publishing::ai_disclosure::{AiDisclosure, GeneratedMediaCredit};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -525,10 +515,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(match_path("/initiate"))
             .and(header("authorization", "Bearer ya29.test"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Location", session.as_str()),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", session.as_str()))
             .mount(&server)
             .await;
 
@@ -536,8 +523,7 @@ mod tests {
         Mock::given(method("PUT"))
             .and(match_path("/upload-session/abc123"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "id": "vid-xyz" })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "vid-xyz" })),
             )
             .mount(&server)
             .await;
@@ -567,10 +553,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(match_path("/initiate"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Location", session.as_str()),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", session.as_str()))
             .mount(&server)
             .await;
 
@@ -606,17 +589,10 @@ mod tests {
             .and(match_path("/session/abc"))
             .and(header(
                 "content-range",
-                format!(
-                    "bytes {}-{}/{}",
-                    CHUNK_SIZE * 2,
-                    total_size - 1,
-                    total_size,
-                )
-                .as_str(),
+                format!("bytes {}-{}/{}", CHUNK_SIZE * 2, total_size - 1, total_size,).as_str(),
             ))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "id": "vid-final" })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "vid-final" })),
             )
             .mount(&server)
             .await;
@@ -647,8 +623,14 @@ mod tests {
         // First tick at 1 MB / 2.5 MB = 0.4, second at 2 MB / 2.5 MB =
         // 0.8, third = 1.0 from the final-chunk hook.
         assert!((captured[0] - 0.4).abs() < 0.01, "first tick: {captured:?}");
-        assert!((captured[1] - 0.8).abs() < 0.01, "second tick: {captured:?}");
-        assert!((captured[2] - 1.0).abs() < 0.001, "final tick: {captured:?}");
+        assert!(
+            (captured[1] - 0.8).abs() < 0.01,
+            "second tick: {captured:?}"
+        );
+        assert!(
+            (captured[2] - 1.0).abs() < 0.001,
+            "final tick: {captured:?}"
+        );
     }
 
     #[tokio::test]
@@ -661,10 +643,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(match_path("/initiate"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Location", session.as_str()),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", session.as_str()))
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
@@ -739,10 +718,7 @@ mod tests {
         let session = format!("{}/sess/x?upload_id=k", server.uri());
         Mock::given(method("POST"))
             .and(match_path("/initiate"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Location", session.as_str()),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", session.as_str()))
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
@@ -790,10 +766,7 @@ mod tests {
         let session = format!("{}/u/sess?upload_id=k", server.uri());
         Mock::given(method("POST"))
             .and(match_path("/initiate"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Location", session.as_str()),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", session.as_str()))
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
@@ -809,17 +782,10 @@ mod tests {
             .and(match_path("/u/sess"))
             .and(header(
                 "content-range",
-                format!(
-                    "bytes {}-{}/{}",
-                    CHUNK_SIZE,
-                    total_size - 1,
-                    total_size,
-                )
-                .as_str(),
+                format!("bytes {}-{}/{}", CHUNK_SIZE, total_size - 1, total_size,).as_str(),
             ))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "id": "vid-clamp" })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "vid-clamp" })),
             )
             .mount(&server)
             .await;

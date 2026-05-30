@@ -3,23 +3,23 @@
 /**
  * One word-level alignment from a whisper transcript sidecar.
  */
-export type TranscriptWord = { 
+export type TranscriptWord = {
 /**
  * Stable word id for transcript-driven editing.
  */
-id: string | null, 
+id: string | null,
 /**
  * Word text (whisper-trimmed, may include punctuation).
  */
-text: string, 
+text: string,
 /**
  * Source-time start, in seconds.
  */
-start_s: number, 
+start_s: number,
 /**
  * Source-time end, in seconds.
  */
-end_s: number, 
+end_s: number,
 /**
  * Diarized speaker id, if available.
  */

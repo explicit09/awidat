@@ -85,10 +85,7 @@ pub struct FeedbackEntry {
 /// atomic on POSIX. JSONL is recovery-friendly: a writer that crashes
 /// mid-line leaves a partial line that the reader silently discards.
 #[tauri::command]
-pub async fn append_feedback(
-    project_path: String,
-    entry: FeedbackEntry,
-) -> Result<(), String> {
+pub async fn append_feedback(project_path: String, entry: FeedbackEntry) -> Result<(), String> {
     let root = validate_project_root(&project_path)?;
     let dir = root.join(DIR_NAME);
     fs::create_dir_all(&dir)
@@ -205,8 +202,8 @@ pub fn load_recent_feedback_sync(project_root: &Path, limit: usize) -> Vec<Feedb
 /// without filesystem setup and makes the "one entry = one line"
 /// invariant explicit.
 fn serialize_line(entry: &FeedbackEntry) -> Result<String, String> {
-    let mut line = serde_json::to_string(entry)
-        .map_err(|e| format!("serialize feedback entry: {e}"))?;
+    let mut line =
+        serde_json::to_string(entry).map_err(|e| format!("serialize feedback entry: {e}"))?;
     // Reject any entry whose serialised form already contains a newline
     // — JSONL's contract is "one object per line", and a stray \n in a
     // title or reason would split the entry across lines on read. In
@@ -407,10 +404,7 @@ mod tests {
         // Newest entry is the highest ts (total - 1).
         assert_eq!(out[0].ts, (total - 1) as i64);
         // Oldest entry in the returned slice is `total - MAX_ENTRIES`.
-        assert_eq!(
-            out[MAX_ENTRIES - 1].ts,
-            (total - MAX_ENTRIES) as i64,
-        );
+        assert_eq!(out[MAX_ENTRIES - 1].ts, (total - MAX_ENTRIES) as i64,);
 
         // On-disk file was rewritten to the kept MAX_ENTRIES (atomic
         // truncation). Verify by reading bytes and counting lines.
@@ -428,7 +422,10 @@ mod tests {
             .unwrap();
         let out2 = read_feedback(path, MAX_ENTRIES).await.unwrap();
         assert_eq!(out2.len(), MAX_ENTRIES);
-        assert_eq!(out2[0].ts, 9999, "new append landed on top after truncation");
+        assert_eq!(
+            out2[0].ts, 9999,
+            "new append landed on top after truncation"
+        );
     }
 
     #[tokio::test]
@@ -467,20 +464,16 @@ mod tests {
         assert_eq!(out[0], entry);
         // And the on-disk shape uses explicit nulls (so the agent can
         // distinguish "no reason" from "missing field").
-        let on_disk =
-            std::fs::read_to_string(tmp.path().join(DIR_NAME).join(FILE_NAME)).unwrap();
+        let on_disk = std::fs::read_to_string(tmp.path().join(DIR_NAME).join(FILE_NAME)).unwrap();
         assert!(on_disk.contains("\"rationale\":null"), "{on_disk}");
         assert!(on_disk.contains("\"reason\":null"), "{on_disk}");
     }
 
     #[tokio::test]
     async fn append_refuses_relative_path() {
-        let err = append_feedback(
-            "relative/path".into(),
-            mk(1, "cut", "x", None),
-        )
-        .await
-        .unwrap_err();
+        let err = append_feedback("relative/path".into(), mk(1, "cut", "x", None))
+            .await
+            .unwrap_err();
         assert!(err.contains("must be absolute"), "got: {err}");
     }
 

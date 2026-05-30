@@ -8,15 +8,15 @@ import type { MediaReadinessEntry } from "./MediaReadinessEntry";
  * whether an asset is playable, still processing, missing, or blocked by
  * a decode/cache failure.
  */
-export type MediaReadinessSnapshot = { 
+export type MediaReadinessSnapshot = {
 /**
  * Optional project identifier, when the caller has one.
  */
-project_id: string | null, 
+project_id: string | null,
 /**
  * Unix timestamp in milliseconds for when this snapshot was built.
  */
-generated_at_ms: number, 
+generated_at_ms: number,
 /**
  * One entry per source asset.
  */

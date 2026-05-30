@@ -5,39 +5,39 @@ import type { PlayableArtifactKind } from "./PlayableArtifactKind";
 /**
  * One concrete media artifact that can be handed to a playback backend.
  */
-export type PlayableArtifact = { 
+export type PlayableArtifact = {
 /**
  * Artifact class.
  */
-kind: PlayableArtifactKind, 
+kind: PlayableArtifactKind,
 /**
  * Absolute path or URL. `None` means the state explains why unavailable.
  */
-path: string | null, 
+path: string | null,
 /**
  * Decode path expected to consume this artifact.
  */
-backend: MediaDecodeBackend, 
+backend: MediaDecodeBackend,
 /**
  * Container name such as `mov`, `mp4`, or `mkv`, when probed.
  */
-container: string | null, 
+container: string | null,
 /**
  * Video codec such as `h264`, `hevc`, or `prores`, when probed.
  */
-video_codec: string | null, 
+video_codec: string | null,
 /**
  * Audio codec such as `aac` or `pcm_s16le`, when probed.
  */
-audio_codec: string | null, 
+audio_codec: string | null,
 /**
  * Pixel width for video artifacts.
  */
-width: number | null, 
+width: number | null,
 /**
  * Pixel height for video artifacts.
  */
-height: number | null, 
+height: number | null,
 /**
  * Artifact duration in seconds.
  */

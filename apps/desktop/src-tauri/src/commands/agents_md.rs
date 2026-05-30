@@ -117,19 +117,18 @@ mod tests {
     async fn write_overwrites_existing_content() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("AGENTS.md"), b"old").unwrap();
-        write_agents_md(
-            tmp.path().to_string_lossy().into_owned(),
-            "new".to_string(),
-        )
-        .await
-        .unwrap();
+        write_agents_md(tmp.path().to_string_lossy().into_owned(), "new".to_string())
+            .await
+            .unwrap();
         let on_disk = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert_eq!(on_disk, "new");
     }
 
     #[tokio::test]
     async fn read_refuses_relative_paths() {
-        let err = read_agents_md("relative/path".to_string()).await.unwrap_err();
+        let err = read_agents_md("relative/path".to_string())
+            .await
+            .unwrap_err();
         assert!(err.contains("must be absolute"), "got: {err}");
     }
 

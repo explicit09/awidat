@@ -36,10 +36,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use super::ProviderRegistry;
 use super::ai_disclosure::AiDisclosure;
 use super::errors::ProviderError;
 use super::types::{UploadParams, Visibility};
-use super::ProviderRegistry;
 
 /// File name (under `<config_dir>/awidat/`) where the default-targets
 /// preferences live. Tiny JSON — list of provider keys the user has
@@ -200,8 +200,7 @@ impl UploadJobEntry {
     /// the same query without re-implementing the predicate.
     #[allow(dead_code)]
     pub fn all_terminal(&self) -> bool {
-        !self.upload_states.is_empty()
-            && self.upload_states.values().all(UploadState::is_terminal)
+        !self.upload_states.is_empty() && self.upload_states.values().all(UploadState::is_terminal)
     }
 }
 
@@ -288,12 +287,7 @@ impl UploadQueue {
     /// can be parked until `register` is called with the targets
     /// list. The shell starts with no `upload_targets` so the
     /// dispatcher doesn't try to fan out before `register` runs.
-    pub async fn set_metadata(
-        &self,
-        job_id: String,
-        provider: String,
-        metadata: UploadMetadata,
-    ) {
+    pub async fn set_metadata(&self, job_id: String, provider: String, metadata: UploadMetadata) {
         let mut guard = self.entries.lock().await;
         let entry = guard
             .entry(job_id.clone())
@@ -303,11 +297,7 @@ impl UploadQueue {
 
     /// Look up one target's saved metadata. Used by the dispatcher to
     /// build the per-provider [`UploadParams`].
-    pub async fn metadata_for(
-        &self,
-        job_id: &str,
-        provider: &str,
-    ) -> Option<UploadMetadata> {
+    pub async fn metadata_for(&self, job_id: &str, provider: &str) -> Option<UploadMetadata> {
         self.entries
             .lock()
             .await
@@ -541,9 +531,8 @@ pub struct UploadPrefs {
 /// migration of credentials to the OS keychain doesn't affect this
 /// non-secret file.
 pub fn default_prefs_path() -> Result<PathBuf, ProviderError> {
-    let cfg = dirs::config_dir().ok_or_else(|| {
-        ProviderError::Io("could not resolve platform config_dir".into())
-    })?;
+    let cfg = dirs::config_dir()
+        .ok_or_else(|| ProviderError::Io("could not resolve platform config_dir".into()))?;
     Ok(cfg.join("awidat").join(PREFS_FILE_NAME))
 }
 
@@ -553,19 +542,16 @@ pub async fn load_prefs_from(path: &Path) -> Result<UploadPrefs, ProviderError> 
         Ok(raw) => serde_json::from_str(&raw)
             .map_err(|e| ProviderError::Io(format!("parse {}: {e}", path.display()))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(UploadPrefs::default()),
-        Err(e) => Err(ProviderError::Io(format!(
-            "read {}: {e}",
-            path.display()
-        ))),
+        Err(e) => Err(ProviderError::Io(format!("read {}: {e}", path.display()))),
     }
 }
 
 /// Atomic write — same pattern as `storage::save_to`.
 pub async fn save_prefs_to(path: &Path, prefs: &UploadPrefs) -> Result<(), ProviderError> {
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            ProviderError::Io(format!("create dir {}: {e}", parent.display()))
-        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ProviderError::Io(format!("create dir {}: {e}", parent.display())))?;
     }
     let buf = serde_json::to_vec_pretty(prefs)
         .map_err(|e| ProviderError::Io(format!("serialize prefs: {e}")))?;
@@ -655,7 +641,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap_or_else(|err| panic!("tempdir: {err}"));
         let registry = test_registry(&tmp);
         let q = UploadQueue::new();
-        q.register("render-001".into(), vec!["youtube".into()]).await;
+        q.register("render-001".into(), vec!["youtube".into()])
+            .await;
 
         // Before any upload work, target is Pending.
         let entry = q
@@ -673,7 +660,10 @@ mod tests {
         // `Unsupported` so we can't fully invoke it; this mirrors what
         // a real provider impl would do.)
         q.mark_uploading("render-001", "youtube", 0.4).await;
-        let mid = q.snapshot("render-001").await.unwrap_or_else(|| panic!("mid"));
+        let mid = q
+            .snapshot("render-001")
+            .await
+            .unwrap_or_else(|| panic!("mid"));
         assert_eq!(
             mid.upload_states.get("youtube"),
             Some(&UploadState::Uploading { progress: 0.4 }),
@@ -712,19 +702,12 @@ mod tests {
     #[tokio::test]
     async fn failed_upload_isolated_to_target() {
         let q = UploadQueue::new();
-        q.register(
-            "render-002".into(),
-            vec!["youtube".into(), "tiktok".into()],
-        )
-        .await;
+        q.register("render-002".into(), vec!["youtube".into(), "tiktok".into()])
+            .await;
 
         // YouTube fails; TikTok unaffected.
-        q.mark_failed(
-            "render-002",
-            "youtube",
-            "not_configured".into(),
-        )
-        .await;
+        q.mark_failed("render-002", "youtube", "not_configured".into())
+            .await;
         let entry = q
             .snapshot("render-002")
             .await
@@ -758,7 +741,7 @@ mod tests {
 
         // Seed credentials so the provider passes is_configured:
         // metadata in publishing.json, access token in the mock keychain.
-        use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
+        use crate::publishing::keychain::{Keychain, TokenKind, install_mock_backend};
         install_mock_backend();
         let mut store = crate::publishing::storage::PublishingStore::default();
         store.set(
@@ -800,21 +783,27 @@ mod tests {
         // We exercise the wiring by handing a fake provider that
         // emits a known sequence and reading the queue state at the
         // tail of the call.
+        use crate::publishing::ClientCredentialsState;
+        use crate::publishing::ProviderError;
         use crate::publishing::provider::PublishingProvider;
         use crate::publishing::types::{
             ConnectionStatus, OAuthChallenge, UploadParams, UploadResult, Visibility,
         };
-        use crate::publishing::ClientCredentialsState;
-        use crate::publishing::ProviderError;
         use async_trait::async_trait;
         use std::time::Duration;
 
         struct ProgressEmitter;
         #[async_trait]
         impl PublishingProvider for ProgressEmitter {
-            fn key(&self) -> &'static str { "fake" }
-            fn display_name(&self) -> &'static str { "Fake" }
-            async fn is_configured(&self) -> bool { true }
+            fn key(&self) -> &'static str {
+                "fake"
+            }
+            fn display_name(&self) -> &'static str {
+                "Fake"
+            }
+            async fn is_configured(&self) -> bool {
+                true
+            }
             async fn begin_oauth(&self) -> Result<OAuthChallenge, ProviderError> {
                 Err(ProviderError::Unsupported("test only".into()))
             }
@@ -822,7 +811,9 @@ mod tests {
                 Ok(())
             }
             async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
-                let tx = params.progress_tx.expect("dispatcher must stamp progress_tx");
+                let tx = params
+                    .progress_tx
+                    .expect("dispatcher must stamp progress_tx");
                 for tick in [0.25_f32, 0.5, 0.75, 1.0] {
                     tx.send(tick).expect("send tick");
                     // Yield so the drain task can land each value
@@ -836,9 +827,17 @@ mod tests {
                     uploaded_at: 0,
                 })
             }
-            async fn status(&self) -> ConnectionStatus { ConnectionStatus::default() }
-            async fn disconnect(&self) -> Result<(), ProviderError> { Ok(()) }
-            async fn set_client_credentials(&self, _: String, _: String) -> Result<(), ProviderError> {
+            async fn status(&self) -> ConnectionStatus {
+                ConnectionStatus::default()
+            }
+            async fn disconnect(&self) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn set_client_credentials(
+                &self,
+                _: String,
+                _: String,
+            ) -> Result<(), ProviderError> {
                 Ok(())
             }
             async fn client_credentials_state(&self) -> ClientCredentialsState {
@@ -910,13 +909,8 @@ mod tests {
     async fn reset_to_pending_clears_published_url() {
         let q = UploadQueue::new();
         q.register("job-r".into(), vec!["youtube".into()]).await;
-        q.mark_published(
-            "job-r",
-            "youtube",
-            "https://youtu.be/x".into(),
-            "x".into(),
-        )
-        .await;
+        q.mark_published("job-r", "youtube", "https://youtu.be/x".into(), "x".into())
+            .await;
         assert!(q.reset_to_pending("job-r", "youtube").await);
         let entry = q
             .snapshot("job-r")
@@ -926,7 +920,7 @@ mod tests {
             entry.upload_states.get("youtube"),
             Some(&UploadState::Pending),
         );
-        assert!(entry.published_urls.get("youtube").is_none());
+        assert!(!entry.published_urls.contains_key("youtube"));
     }
 
     #[tokio::test]
@@ -966,15 +960,14 @@ mod tests {
     fn upload_state_is_terminal_classifies_correctly() {
         assert!(!UploadState::Pending.is_terminal());
         assert!(!UploadState::Uploading { progress: 0.5 }.is_terminal());
-        assert!(UploadState::Published {
-            remote_url: "u".into(),
-            remote_id: "i".into(),
-        }
-        .is_terminal());
-        assert!(UploadState::Failed {
-            reason: "x".into(),
-        }
-        .is_terminal());
+        assert!(
+            UploadState::Published {
+                remote_url: "u".into(),
+                remote_id: "i".into(),
+            }
+            .is_terminal()
+        );
+        assert!(UploadState::Failed { reason: "x".into() }.is_terminal());
     }
 
     #[test]
@@ -1000,7 +993,8 @@ mod tests {
             scheduled_at: Some(1_700_000_000),
             thumbnail_path: Some("/tmp/cover.png".into()),
         };
-        q.set_metadata("job-md".into(), "youtube".into(), md.clone()).await;
+        q.set_metadata("job-md".into(), "youtube".into(), md.clone())
+            .await;
         let fetched = q
             .metadata_for("job-md", "youtube")
             .await
@@ -1024,10 +1018,12 @@ mod tests {
             title: "Drafted".into(),
             ..UploadMetadata::default()
         };
-        q.set_metadata("job-parked".into(), "youtube".into(), md.clone()).await;
+        q.set_metadata("job-parked".into(), "youtube".into(), md.clone())
+            .await;
         // Render kicks: register replaces the shell but preserves the
         // metadata for providers still in the targets list.
-        q.register("job-parked".into(), vec!["youtube".into()]).await;
+        q.register("job-parked".into(), vec!["youtube".into()])
+            .await;
         let after = q
             .snapshot("job-parked")
             .await
@@ -1091,7 +1087,10 @@ mod tests {
         assert_eq!(params.visibility, Visibility::Unlisted);
         assert_eq!(params.scheduled_at, Some(42));
         assert_eq!(params.thumbnail_path.as_deref(), Some("/tmp/x.png"));
-        assert!(params.ai_disclosure.is_none(), "metadata never carries disclosure");
+        assert!(
+            params.ai_disclosure.is_none(),
+            "metadata never carries disclosure"
+        );
     }
 
     // ---- W5.A4 ai_disclosure round-trip ----
@@ -1100,16 +1099,16 @@ mod tests {
     async fn set_ai_disclosure_round_trips() {
         let q = UploadQueue::new();
         q.register("job-ai".into(), vec!["youtube".into()]).await;
-        let disclosure = AiDisclosure::from_credits(vec![
-            super::super::ai_disclosure::GeneratedMediaCredit {
+        let disclosure =
+            AiDisclosure::from_credits(vec![super::super::ai_disclosure::GeneratedMediaCredit {
                 provider: "runway".into(),
                 model: Some("gen3".into()),
                 prompt: "sunset over a quiet street".into(),
                 generated_at: Some(1_700_000_000),
                 asset_id: "job-1".into(),
-            },
-        ]);
-        q.set_ai_disclosure("job-ai".into(), disclosure.clone()).await;
+            }]);
+        q.set_ai_disclosure("job-ai".into(), disclosure.clone())
+            .await;
         let fetched = q
             .ai_disclosure_for("job-ai")
             .await
@@ -1129,15 +1128,14 @@ mod tests {
         // Disclosure can be computed before the targets list lands —
         // park it so the next register call preserves the value.
         let q = UploadQueue::new();
-        let disclosure = AiDisclosure::from_credits(vec![
-            super::super::ai_disclosure::GeneratedMediaCredit {
+        let disclosure =
+            AiDisclosure::from_credits(vec![super::super::ai_disclosure::GeneratedMediaCredit {
                 provider: "mock".into(),
                 model: None,
                 prompt: "x".into(),
                 generated_at: None,
                 asset_id: "a".into(),
-            },
-        ]);
+            }]);
         q.set_ai_disclosure("job-parked-ai".into(), disclosure.clone())
             .await;
         q.register("job-parked-ai".into(), vec!["youtube".into()])
@@ -1153,22 +1151,19 @@ mod tests {
     async fn register_preserves_existing_disclosure() {
         let q = UploadQueue::new();
         q.register("job-pre".into(), vec!["youtube".into()]).await;
-        let disclosure = AiDisclosure::from_credits(vec![
-            super::super::ai_disclosure::GeneratedMediaCredit {
+        let disclosure =
+            AiDisclosure::from_credits(vec![super::super::ai_disclosure::GeneratedMediaCredit {
                 provider: "mock".into(),
                 model: None,
                 prompt: "x".into(),
                 generated_at: None,
                 asset_id: "a".into(),
-            },
-        ]);
-        q.set_ai_disclosure("job-pre".into(), disclosure.clone()).await;
+            }]);
+        q.set_ai_disclosure("job-pre".into(), disclosure.clone())
+            .await;
         // User toggles a second target — re-register must keep the disclosure.
-        q.register(
-            "job-pre".into(),
-            vec!["youtube".into(), "tiktok".into()],
-        )
-        .await;
+        q.register("job-pre".into(), vec!["youtube".into(), "tiktok".into()])
+            .await;
         let snap = q
             .snapshot("job-pre")
             .await

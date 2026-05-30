@@ -23,7 +23,7 @@
     clippy::op_ref,
     clippy::type_complexity
 )]
-#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod app_menu;
 mod codex_session;

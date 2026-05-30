@@ -8,15 +8,15 @@ import type { AdjustField } from "./AdjustField";
  * only needs to send what changed — the backend re-runs `apply()`
  * to get the new snapshot + diff hints.
  */
-export type EditAdjustment = { 
+export type EditAdjustment = {
 /**
  * Position in the proposal's EDL envelope.
  */
-op_index: number, 
+op_index: number,
 /**
  * Which field of that op the user changed.
  */
-field: AdjustField, 
+field: AdjustField,
 /**
  * New value in seconds. Interpretation depends on the field.
  */

@@ -7,19 +7,19 @@ import type { ProposalEvidenceKind } from "./ProposalEvidenceKind";
  * either `confidence` (0..1) or `confidence_level` (categorical) —
  * when both are present, the categorical wins.
  */
-export type ProposalEvidence = { 
+export type ProposalEvidence = {
 /**
  * What kind of evidence this row represents.
  */
-kind: ProposalEvidenceKind, 
+kind: ProposalEvidenceKind,
 /**
  * Human-readable label ("Transcript boundary", "Audio energy drop").
  */
-label: string, 
+label: string,
 /**
  * Optional confidence 0..=1 for this specific signal.
  */
-confidence?: number, 
+confidence?: number,
 /**
  * Optional categorical tier. When present, overrides `confidence`
  * for tier color rendering on the frontend.

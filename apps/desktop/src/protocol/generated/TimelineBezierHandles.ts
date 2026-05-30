@@ -3,19 +3,19 @@
 /**
  * Normalized cubic Bezier handles exposed to desktop preview.
  */
-export type TimelineBezierHandles = { 
+export type TimelineBezierHandles = {
 /**
  * Outgoing control point x, normalized to the segment duration.
  */
-out_x: number, 
+out_x: number,
 /**
  * Outgoing control point y, normalized to the value delta.
  */
-out_y: number, 
+out_y: number,
 /**
  * Incoming control point x, normalized to the segment duration.
  */
-in_x: number, 
+in_x: number,
 /**
  * Incoming control point y, normalized to the value delta.
  */

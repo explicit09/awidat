@@ -21,9 +21,9 @@ use async_trait::async_trait;
 use super::errors::ProviderError;
 use super::keychain::{Keychain, TokenKind};
 use super::oauth::{
-    build_authorize, client_id_for, disconnect_provider, fresh_state,
-    get_client_credentials_state, has_credentials, load_status, set_client_credentials,
-    ClientCredentialsState, REDIRECT_URI,
+    ClientCredentialsState, REDIRECT_URI, build_authorize, client_id_for, disconnect_provider,
+    fresh_state, get_client_credentials_state, has_credentials, load_status,
+    set_client_credentials,
 };
 use super::oauth_exchange::{
     ensure_fresh_token, exchange_code_for_token, fetch_account_name, persist_token_response,
@@ -50,8 +50,7 @@ const USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 /// Minimum scope for uploading via the Data API. `youtube.upload` is
 /// the narrowest scope that lets us POST a video; `youtube.readonly`
 /// gives us the channel name to display in Settings.
-const SCOPES: &str =
-    "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
+const SCOPES: &str = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
 
 /// Developer-console URL we point the user at when credentials are
 /// missing. Surfaced in error messages so the user can click through.
@@ -161,9 +160,14 @@ impl PublishingProvider for YoutubeProvider {
         //      see `youtube_upload.rs` for the wire-level wiring.
         let client_id = read_byo_client_id(&self.store_path).await?;
         let client_secret = read_byo_client_secret()?;
-        let access_token =
-            ensure_fresh_token(&self.store_path, KEY, TOKEN_ENDPOINT, client_id, client_secret)
-                .await?;
+        let access_token = ensure_fresh_token(
+            &self.store_path,
+            KEY,
+            TOKEN_ENDPOINT,
+            client_id,
+            client_secret,
+        )
+        .await?;
 
         // The disclosure flag name only matters to the stub log-line
         // path; the real upload writes `containsSyntheticMedia`

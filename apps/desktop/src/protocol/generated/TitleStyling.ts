@@ -7,32 +7,32 @@
  * can pass them straight back through `*** Set Title` without
  * having to know the typed enum names.
  */
-export type TitleStyling = { 
+export type TitleStyling = {
 /**
  * Text the overlay renders.
  */
-text: string, 
+text: string,
 /**
  * Vertical band: `"top"`, `"center"`, or `"bottom"`.
  */
-position: string, 
+position: string,
 /**
  * Font size in pixels.
  */
-font_size: number, 
+font_size: number,
 /**
  * Hex colour like `"#FFFFFF"`.
  */
-color: string, 
+color: string,
 /**
  * Font weight: `"normal"` or `"bold"`.
  */
-font_weight: string, 
+font_weight: string,
 /**
  * Animation: `"none"`, `"fade_in"`, `"fade_out"`, `"fade_in_out"`,
  * `"slide_in"`, or `"slide_out"`.
  */
-animation: string, 
+animation: string,
 /**
  * Text reveal: `"none"`, `"typewriter"`, `"word"`, or `"line"`.
  */

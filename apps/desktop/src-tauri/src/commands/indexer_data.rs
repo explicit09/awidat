@@ -227,10 +227,7 @@ pub async fn read_scenes(project_path: String, stem: String) -> Result<Vec<Scene
 /// silence sidecar uses the renderer's `SilenceSidecar` shape
 /// (`{ ranges, threshold_db, min_duration_s }`).
 #[tauri::command]
-pub async fn read_silences(
-    project_path: String,
-    stem: String,
-) -> Result<Vec<Silence>, String> {
+pub async fn read_silences(project_path: String, stem: String) -> Result<Vec<Silence>, String> {
     let project_root = PathBuf::from(project_path);
     tokio::task::spawn_blocking(move || -> Result<Vec<Silence>, String> {
         let Some((asset_abs, _)) = resolve_asset(&project_root, &stem) else {
@@ -312,10 +309,7 @@ pub async fn read_audio_samples(
 /// pairs and a clustered `face_id`. We flatten into per-detection rows
 /// keyed by frame time so the drill-down can group by identity.
 #[tauri::command]
-pub async fn read_faces(
-    project_path: String,
-    stem: String,
-) -> Result<Vec<FaceDetection>, String> {
+pub async fn read_faces(project_path: String, stem: String) -> Result<Vec<FaceDetection>, String> {
     let project_root = PathBuf::from(project_path);
     tokio::task::spawn_blocking(move || -> Result<Vec<FaceDetection>, String> {
         let Some((_, asset_id)) = resolve_asset(&project_root, &stem) else {
@@ -502,12 +496,9 @@ mod tests {
     #[tokio::test]
     async fn read_scenes_returns_empty_when_raw_dir_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let scenes = read_scenes(
-            dir.path().to_string_lossy().into_owned(),
-            "missing".into(),
-        )
-        .await
-        .unwrap();
+        let scenes = read_scenes(dir.path().to_string_lossy().into_owned(), "missing".into())
+            .await
+            .unwrap();
         assert!(scenes.is_empty());
     }
 
@@ -572,12 +563,9 @@ mod tests {
                 }
             }"#,
         );
-        let samples = read_audio_samples(
-            dir.path().to_string_lossy().into_owned(),
-            "clip".into(),
-        )
-        .await
-        .unwrap();
+        let samples = read_audio_samples(dir.path().to_string_lossy().into_owned(), "clip".into())
+            .await
+            .unwrap();
         assert_eq!(samples.len(), 3);
         assert!((samples[0].rms - 0.0).abs() < 1e-6);
         assert!((samples[1].rms - 0.5).abs() < 1e-6);
@@ -629,12 +617,9 @@ mod tests {
             &sidecar,
             r#"{"samples_per_second": 1, "magnitudes": [0.1, 0.5, 0.9]}"#,
         );
-        let regions = read_motion_regions(
-            dir.path().to_string_lossy().into_owned(),
-            "clip".into(),
-        )
-        .await
-        .unwrap();
+        let regions = read_motion_regions(dir.path().to_string_lossy().into_owned(), "clip".into())
+            .await
+            .unwrap();
         assert_eq!(regions.len(), 3);
         assert!((regions[0].intensity - 0.1).abs() < 1e-6);
         assert!((regions[1].start_s - 1.0).abs() < 1e-6);
@@ -659,12 +644,9 @@ mod tests {
                 }
             }"#,
         );
-        let stats = read_color_stats(
-            dir.path().to_string_lossy().into_owned(),
-            "clip".into(),
-        )
-        .await
-        .unwrap();
+        let stats = read_color_stats(dir.path().to_string_lossy().into_owned(), "clip".into())
+            .await
+            .unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].id, "color_scene_1");
         assert!((stats[0].luma_mean.unwrap() - 0.5).abs() < 1e-3);
@@ -690,12 +672,9 @@ mod tests {
                 "min_duration_s": 0.6
             }"#,
         );
-        let silences = read_silences(
-            dir.path().to_string_lossy().into_owned(),
-            "clip".into(),
-        )
-        .await
-        .unwrap();
+        let silences = read_silences(dir.path().to_string_lossy().into_owned(), "clip".into())
+            .await
+            .unwrap();
         assert_eq!(silences.len(), 2);
         assert!((silences[0].duration_s - 1.5).abs() < 1e-6);
         assert!((silences[1].start_s - 5.0).abs() < 1e-6);

@@ -123,6 +123,17 @@ use_broll(
 returns an `edl_fragment` ready for `apply_edl`. Hand the fragment
 to `apply_edl` to actually place the cutaway.
 
+After `apply_edl`, verify the timeline state instead of trusting the tool
+summary. Run `view_timeline` around each anchor and confirm:
+
+- The stock clip landed on an overlay/B-roll track at the intended timeline
+  time, not appended to the end or clustered with unrelated inserts.
+- The selected asset still matches the transcript phrase and reason that
+  triggered it.
+- The cutaway does not cover a never-auto-B-roll moment.
+- Any search failures, missing `PEXELS_API_KEY`, weak matches, or user-declined
+  candidates are listed explicitly.
+
 ## Editorial conventions
 
 - **Cutaway duration by situation** (match these — don't invent):
@@ -203,10 +214,14 @@ to `apply_edl` to actually place the cutaway.
       placed cutaway OR a clear reason it was skipped (Pexels match
       too weak; user declined; metaphor not literal).
 - [ ] `view_timeline` shows the new b-roll clips on a separate track
-      (the apply layer routes overlays to V2).
+      at the intended transcript anchors (the apply layer routes
+      overlays to V2).
 - [ ] Each placed cutaway is 2–4 seconds.
 - [ ] The user explicitly confirmed each placement (the
       "user-in-the-loop" rule).
+- [ ] `podcast_visual_polish` does not report accidental B-roll
+      clustering, hard-cut edges that need treatment, or an unreviewed
+      B-roll package.
 - [ ] If you skipped a finding, you said so to the user instead of
       letting them wonder why a Note disappeared.
 

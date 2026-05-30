@@ -203,10 +203,7 @@ pub async fn write_disabled_skills(
 /// version / provenance pin. Sorts + dedupes the disabled list on the
 /// way out so writes are stable across machines.
 #[tauri::command]
-pub async fn write_skill_config(
-    project_path: String,
-    config: SkillConfig,
-) -> Result<(), String> {
+pub async fn write_skill_config(project_path: String, config: SkillConfig) -> Result<(), String> {
     let root = validate_project_root(&project_path)?;
     let cfg = SkillConfig {
         version: CURRENT_VERSION,
@@ -223,8 +220,7 @@ async fn write_config_to_disk(root: &Path, cfg: &SkillConfig) -> Result<(), Stri
     fs::create_dir_all(&awidat_dir)
         .await
         .map_err(|e| format!("create {AWIDAT_DIR}/: {e}"))?;
-    let json =
-        serde_json::to_vec_pretty(cfg).map_err(|e| format!("serialize skills.json: {e}"))?;
+    let json = serde_json::to_vec_pretty(cfg).map_err(|e| format!("serialize skills.json: {e}"))?;
     let path = awidat_dir.join(SKILLS_CONFIG_FILENAME);
     fs::write(&path, json)
         .await

@@ -228,6 +228,17 @@ and makes everything after it correct.\
 \n- read_media_readiness: verify source, playable artifact, proxy/cache, \
 and index-sidecar readiness before relying on transcript, scenes, speaker \
 labels, or visual evidence.\
+\n\nTreat media understanding as progressive state, not a single done flag. \
+Audio, transcript, speakers, scenes, topics, moments, clip candidates, \
+B-roll, proxies, and render readiness can be complete at different times. \
+Use read_media_intelligence/read_media_readiness to verify the layer you are \
+about to rely on, and report missing layers as blockers or skips instead of \
+claiming the whole edit is ready.\
+\n\nPreserve timestamp integrity. When inspecting frames, transcript anchors, \
+B-roll anchors, or preview state, distinguish timeline time from source-media \
+time. Use the project/timeline tools to map through trims, speed changes, \
+gaps, overlays, and proxies instead of assuming the visible timeline second is \
+the same second inside the source file.\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
 \n- find_audio_asset(kind, mood?, max_duration_s?): pull a candidate \
 SFX / music / ambience clip from the bundled audio library, ranked by \
@@ -455,7 +466,12 @@ stock match → AI-gen via `plan_generated_media` → \
 AVOID AI-gen for real people, real products, real buildings, real \
 charts, real news events — use a screenshot or chart instead.\
 \n  Every insert lands via `apply_edl` so the user reviews it via the \
-standard approval card; do not auto-apply.\
+standard approval card; do not auto-apply. After apply, verify the actual \
+timeline graph with `view_timeline` and `podcast_visual_polish`: each B-roll \
+asset must still match its transcript anchor, land at the intended timeline \
+time, avoid never-auto-B-roll moments, and avoid accidental append clustering \
+or asset swaps. List skipped, failed, weak, or unplaced candidates explicitly \
+before saying B-roll is done.\
 \n- Duration + density:\
 \n    Long-form episode (45-120 min): individual B-roll 2-5 sec; \
 overall density LOW (use only at topic shifts, examples, stats, \

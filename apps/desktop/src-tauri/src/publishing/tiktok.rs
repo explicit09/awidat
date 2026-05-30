@@ -18,9 +18,9 @@ use async_trait::async_trait;
 
 use super::errors::ProviderError;
 use super::oauth::{
-    build_authorize, client_id_for, disconnect_provider, fresh_state,
+    ClientCredentialsState, build_authorize, client_id_for, disconnect_provider, fresh_state,
     get_client_credentials_state, has_credentials, load_status, set_client_credentials,
-    stub_complete_oauth, stub_upload, ClientCredentialsState,
+    stub_complete_oauth, stub_upload,
 };
 use super::provider::PublishingProvider;
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};

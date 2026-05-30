@@ -52,8 +52,7 @@ pub async fn read_timeline_otio_raw(state: State<'_, AwidatState>) -> Result<Str
         if !path.is_file() {
             return Ok(String::new());
         }
-        std::fs::read_to_string(&path)
-            .map_err(|e| format!("read {}: {e}", path.display()))
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))
     })
     .await
     .map_err(|e| format!("join: {e}"))??;
@@ -93,8 +92,8 @@ pub async fn restore_timeline_otio(
         // touch disk. serde's error message carries line/column, which
         // is more useful than "write failed" when the caller hands us
         // a corrupted blob.
-        let restored_timeline: Timeline = serde_json::from_str(&snapshot_owned)
-            .map_err(|e| format!("parse snapshot: {e}"))?;
+        let restored_timeline: Timeline =
+            serde_json::from_str(&snapshot_owned).map_err(|e| format!("parse snapshot: {e}"))?;
 
         // Read the project so we preserve the edit_plan + manifest;
         // we only swap the timeline. If the project no longer exists
@@ -148,7 +147,6 @@ pub async fn restore_timeline_otio(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use awidat_proto::otio::Timeline;
 
     #[test]

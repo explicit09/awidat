@@ -100,6 +100,33 @@ type PreviewPlan = {
 
 export const AUTO_ADVANCE_GAP_LIMIT_S = 0.25;
 
+export function safeSegmentSpeed(speed: number): number {
+  return Number.isFinite(speed) && speed > 0
+    ? Math.max(0.0625, Math.min(16, speed))
+    : 1;
+}
+
+export function sourceDurationForTimelineDuration(
+  timelineDurationS: number,
+  speed: number,
+): number {
+  return timelineDurationS * safeSegmentSpeed(speed);
+}
+
+export function sourceTimeForTimelineTime(
+  seg: PlaySegment,
+  timelineTime: number,
+): number {
+  return seg.sourceStart + (timelineTime - seg.timelineStart) * safeSegmentSpeed(seg.speed);
+}
+
+export function timelineTimeForSourceTime(
+  seg: PlaySegment,
+  sourceTime: number,
+): number {
+  return seg.timelineStart + (sourceTime - seg.sourceStart) / safeSegmentSpeed(seg.speed);
+}
+
 /**
  * Walk the snapshot's first video track and produce the playable
  * segments. Empty array when:
@@ -152,6 +179,7 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           continue;
         }
         const sourceStart = item.source_start_s ?? 0;
+        const speed = safeSegmentSpeed(item.speed ?? 1);
         const overlay = item.video_overlay;
         const isPip = overlay?.mode === "pip";
         segments.push({
@@ -160,11 +188,11 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           assetId: item.asset_id ?? null,
           sourceStem: stemFromAssetId(item.asset_id),
           sourceStart,
-          sourceEnd: sourceStart + item.duration_s,
+          sourceEnd: sourceStart + sourceDurationForTimelineDuration(item.duration_s, speed),
           timelineStart: item.track_start_s,
           timelineEnd: item.track_start_s + item.duration_s,
           volume: 0,
-          speed: item.speed ?? 1,
+          speed,
           clipIndex: item.index,
           mode: isPip ? "pip" : "full_frame",
           corner: normalizeCorner(overlay?.corner),
@@ -266,17 +294,18 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
     }
 
     const originalSourceStart = item.source_start_s ?? 0;
+    const speed = safeSegmentSpeed(item.speed ?? 1);
     const segment: PlaySegment = {
       proxyPath: playable,
       proxyStem: stemFromProxyPath(playable),
       assetId: item.asset_id ?? null,
       sourceStem: stemFromAssetId(item.asset_id),
       sourceStart: originalSourceStart,
-      sourceEnd: originalSourceStart + item.duration_s,
+      sourceEnd: originalSourceStart + sourceDurationForTimelineDuration(item.duration_s, speed),
       timelineStart: item.track_start_s,
       timelineEnd: item.track_start_s + item.duration_s,
       volume: item.volume ?? 1,
-      speed: item.speed ?? 1,
+      speed,
       clipIndex: item.index,
     };
 
@@ -335,7 +364,7 @@ export function timelineTimeForSource(
   for (const seg of segments) {
     if (seg.proxyStem !== stem) continue;
     if (sourceTime < seg.sourceStart || sourceTime > seg.sourceEnd) continue;
-    return seg.timelineStart + (sourceTime - seg.sourceStart);
+    return timelineTimeForSourceTime(seg, sourceTime);
   }
   return null;
 }
@@ -359,7 +388,7 @@ export function nearestTimelineTimeForSource(
       Math.min(sourceTime, seg.sourceEnd),
     );
     const distance = Math.abs(sourceTime - clampedSource);
-    const timelineTime = seg.timelineStart + (clampedSource - seg.sourceStart);
+    const timelineTime = timelineTimeForSourceTime(seg, clampedSource);
     if (!best || distance < best.distance) {
       best = { distance, timelineTime };
     }

@@ -4,7 +4,7 @@ import type { TimelineMotionPathPoint } from "./TimelineMotionPathPoint";
 /**
  * 2D motion path exposed to desktop preview.
  */
-export type TimelineMotionPath = { 
+export type TimelineMotionPath = {
 /**
  * Ordered path points.
  */

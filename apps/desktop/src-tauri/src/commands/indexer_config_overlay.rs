@@ -137,8 +137,8 @@ pub async fn write_disabled_indexers(
         version: CURRENT_VERSION,
         disabled: sorted,
     };
-    let json = serde_json::to_vec_pretty(&cfg)
-        .map_err(|e| format!("serialize indexers.json: {e}"))?;
+    let json =
+        serde_json::to_vec_pretty(&cfg).map_err(|e| format!("serialize indexers.json: {e}"))?;
     let path = awidat_dir.join(INDEXERS_CONFIG_FILENAME);
     fs::write(&path, json)
         .await

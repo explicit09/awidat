@@ -402,9 +402,7 @@ mod tests {
     /// address without hardcoding the URL string everywhere.
     async fn send_get(addr: std::net::SocketAddr, query: &str) -> String {
         let mut stream = TcpStream::connect(addr).await.expect("connect to listener");
-        let request = format!(
-            "GET /oauth/callback?{query} HTTP/1.1\r\nHost: {addr}\r\n\r\n",
-        );
+        let request = format!("GET /oauth/callback?{query} HTTP/1.1\r\nHost: {addr}\r\n\r\n",);
         stream
             .write_all(request.as_bytes())
             .await
@@ -505,10 +503,9 @@ mod tests {
 
     #[test]
     fn parse_request_line_surfaces_provider_error() {
-        let err = parse_request_line(
-            "GET /oauth/callback?error=access_denied&state=x HTTP/1.1\r\n",
-        )
-        .expect_err("error param must reject");
+        let err =
+            parse_request_line("GET /oauth/callback?error=access_denied&state=x HTTP/1.1\r\n")
+                .expect_err("error param must reject");
         match err {
             OAuthListenerError::InvalidRequest(msg) => {
                 assert!(msg.contains("access_denied"), "{msg}");
