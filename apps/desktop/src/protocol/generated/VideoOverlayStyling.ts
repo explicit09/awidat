@@ -4,19 +4,19 @@
  * Clip-level media overlay styling, lifted off
  * `awidat.video_overlay` effect metadata.
  */
-export type VideoOverlayStyling = { 
+export type VideoOverlayStyling = {
 /**
  * Overlay mode: `"pip"` or `"full_frame"`.
  */
-mode: string, 
+mode: string,
 /**
  * PiP corner. `None` for full-frame overlays.
  */
-corner: string | null, 
+corner: string | null,
 /**
  * PiP width as a fraction of output width.
  */
-scale: number | null, 
+scale: number | null,
 /**
  * PiP margin as a fraction of output width/height.
  */

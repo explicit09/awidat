@@ -7,56 +7,56 @@ import type { BroadcastTimedEntry } from "./BroadcastTimedEntry";
  * Timeline-level broadcast overlay config, stored in OTIO metadata
  * under `awidat.broadcast_overlay` and surfaced to desktop preview.
  */
-export type BroadcastOverlayConfig = { 
+export type BroadcastOverlayConfig = {
 /**
  * Whether the overlay should render.
  */
-enabled: boolean, 
+enabled: boolean,
 /**
  * Optional source template name for audit/debug display.
  */
-template_name: string | null, 
+template_name: string | null,
 /**
  * Episode title shown by the title card.
  */
-episode_title: string, 
+episode_title: string,
 /**
  * Optional subtitle shown under the title.
  */
-episode_subtitle: string, 
+episode_subtitle: string,
 /**
  * Show/brand label used by the ticker.
  */
-show_name: string, 
+show_name: string,
 /**
  * Left/primary host.
  */
-host_a: BroadcastHost, 
+host_a: BroadcastHost,
 /**
  * Right/secondary host.
  */
-host_b: BroadcastHost, 
+host_b: BroadcastHost,
 /**
  * Sponsor and brand names used by the ticker.
  */
-sponsors: Array<string>, 
+sponsors: Array<string>,
 /**
  * Timed topic labels used by the ticker.
  */
-topics: Array<BroadcastTimedEntry>, 
+topics: Array<BroadcastTimedEntry>,
 /**
  * Timed chapter cards.
  */
-chapters: Array<BroadcastTimedEntry>, 
+chapters: Array<BroadcastTimedEntry>,
 /**
  * Optional project-relative logo path.
  */
-brand_logo_path: string | null, 
+brand_logo_path: string | null,
 /**
  * Whether to suppress full long-form overlays and render only the
  * short-form brand bar.
  */
-short_form_mode: boolean, 
+short_form_mode: boolean,
 /**
  * Timing, colour, and layout values.
  */

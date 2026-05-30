@@ -3,47 +3,47 @@
 /**
  * Styling fields for a native MotionScene shape preview.
  */
-export type MotionShapeStyling = { 
+export type MotionShapeStyling = {
 /**
  * Shape primitive. The first native subset supports `"rect"`.
  */
-shape: string, 
+shape: string,
 /**
  * Normalized x coordinate in output space.
  */
-x: number, 
+x: number,
 /**
  * Normalized y coordinate in output space.
  */
-y: number, 
+y: number,
 /**
  * Normalized width in output space.
  */
-width: number, 
+width: number,
 /**
  * Normalized height in output space.
  */
-height: number, 
+height: number,
 /**
  * Fill color, usually a hex color like `"#224466"`.
  */
-color: string, 
+color: string,
 /**
  * Fill opacity in `[0, 1]`.
  */
-opacity: number, 
+opacity: number,
 /**
  * Static scale multiplier.
  */
-scale: number, 
+scale: number,
 /**
  * Transform origin x in `[0, 1]`.
  */
-anchor_x: number, 
+anchor_x: number,
 /**
  * Transform origin y in `[0, 1]`.
  */
-anchor_y: number, 
+anchor_y: number,
 /**
  * Static clockwise rotation in degrees.
  */
