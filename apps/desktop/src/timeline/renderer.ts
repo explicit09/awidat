@@ -573,14 +573,12 @@ function drawClipWaveform(
   const centerY = y + h / 2;
   const ampMax = Math.max(1, h / 2 - 3);
 
-  // Slate by default; lifts to green when the clip is selected so the
-  // active waveform reads as "this is the audio you're inspecting"
-  // without flooding the timeline with brand-green elsewhere.
-  ctx.strokeStyle = selected
-    ? "rgba(34, 197, 94, 0.92)" // --color-job-ready-dot
-    : "rgba(100, 116, 139, 0.85)"; // --color-viz-audio
-  ctx.lineWidth = 1;
-
+  // DaVinci-style audio: a bright teal envelope filled and mirrored about
+  // the centre line (the "tape" look), brightening to cyan when selected.
+  // Top edge left→right, bottom edge right→left, close, fill.
+  ctx.fillStyle = selected
+    ? "rgba(94, 234, 212, 0.95)" // cyan-300 — active/inspecting
+    : "rgba(45, 196, 170, 0.80)"; // teal — DaVinci audio
   ctx.beginPath();
   for (let i = 0; i < w; i++) {
     const ampPx = waveformPeakForColumn(buckets, startBucket, endBucket, i, w) * ampMax;
@@ -591,18 +589,22 @@ function drawClipWaveform(
       ctx.lineTo(colX, centerY - ampPx);
     }
   }
-  ctx.stroke();
-
-  ctx.beginPath();
-  for (let i = 0; i < w; i++) {
+  for (let i = w - 1; i >= 0; i--) {
     const ampPx = waveformPeakForColumn(buckets, startBucket, endBucket, i, w) * ampMax;
     const colX = x + i + 0.5;
-    if (i === 0) {
-      ctx.moveTo(colX, centerY + ampPx);
-    } else {
-      ctx.lineTo(colX, centerY + ampPx);
-    }
+    ctx.lineTo(colX, centerY + ampPx);
   }
+  ctx.closePath();
+  ctx.fill();
+
+  // Faint centre baseline anchors quiet passages so silence still reads.
+  ctx.strokeStyle = selected
+    ? "rgba(94, 234, 212, 0.45)"
+    : "rgba(45, 196, 170, 0.30)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, centerY + 0.5);
+  ctx.lineTo(x + w, centerY + 0.5);
   ctx.stroke();
 
   ctx.restore();
