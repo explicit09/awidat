@@ -144,42 +144,43 @@ const SPEC_SCREENS = [
       "Stage-driven workflow",
     ],
   },
+  // Each screen's text checks should target durable content the
+  // redesigned UI actually renders, not the spec doc titles. When a
+  // demo redesigns its content, update these to track what's on screen.
   {
     id: "screen2",
     url: BASE_URL,
     text: [
-      "Main Desktop Workspace",
-      "Manual",
-      "Podcast Tightening v1",
+      "Agent",
+      "Suggested next actions",
+      "Review rough cut",
       "Proposal Inspector",
-      "Timeline",
-      "Vedit",
-      "Evidence",
+      "Plan",
     ],
   },
   {
     id: "screen4",
-    text: ["Timeline / Transcript Hybrid", "Selected sentence", "Review · Transcript", "What this cut does", "Keep this pause"],
+    text: ["Selected sentence", "Speaker", "Confidence", "Pending", "Accepted", "Evidence for selection"],
   },
   {
     id: "screen5",
-    text: ["Cut / Proposal Inspector", "CUT 12 · L-cut", "Current timeline", "Proposed timeline", "Render output context", "Inspect deeper"],
+    text: ["Cut 12 · L-cut", "Selected change region", "Current timeline", "Proposed timeline", "Proposal Inspector"],
   },
   {
     id: "screen6",
-    text: ["Import / Indexing State", "Add media", "Add files", "Indexing pipeline", "Speaker diarization", "Ask agent for first cut"],
+    text: ["Index readiness", "Transcript", "Speaker", "Captions", "Scenes"],
   },
   {
     id: "screen7",
-    text: ["Delivery / Preflight State", "Targets", "Preflight", "Render summary", "Delivery confidence", "Export now"],
+    text: ["Targets", "YouTube", "TikTok", "Preflight", "Caption safe area"],
   },
   {
     id: "screen8",
-    text: ["Empty / Loading / Error States", "No media imported", "Indexing media", "Proposal generation is blocked", "Repair with agent"],
+    text: ["Empty state", "No project open yet", "Import media", "Open project", "Start with example"],
   },
   {
     id: "screen9",
-    text: ["Component System", "Proposal cards", "Timeline change markers", "Agent status", "Render / preflight findings", "Semantic color palette"],
+    text: ["Proposal cards", "Cut 07 · J-cut", "pending", "accepted"],
   },
 ];
 
@@ -255,9 +256,11 @@ await check("top chrome matches Screen 2 app model", async () => {
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   const body = await page.textContent("body");
   for (const expected of [
-    // Brand mark is uppercase in the redesigned IdentityRow.
+    // Brand mark is uppercase in the redesigned IdentityRow. The
+    // legacy "Main Desktop Workspace" banner was removed when the
+    // top chrome became the WorkspaceRow tablist — Edit/Deliver are
+    // the durable navigation labels now.
     "AWIDAT",
-    "Main Desktop Workspace",
     "Edit",
     "Deliver",
   ]) {
@@ -331,16 +334,17 @@ await check("workspace row renders the live preview timecode", async () => {
   await page.close();
 });
 
-await check("indexing dashboard treats import as a secondary add-media action", async () => {
+await check("indexing dashboard surfaces pipeline readiness", async () => {
   const { page } = await makePage();
   await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
   const body = await page.textContent("body");
+  // Wave 5 replaced the "Project & import" / "Project media" dashboard
+  // with an indexer-readiness pipeline showing per-stage progress.
   for (const expected of [
-    "Project media",
-    "Add media",
-    "Add files",
-    "Add URL",
-    "9 items",
+    "Index readiness",
+    "Indexing",
+    "Transcript",
+    "Speaker",
   ]) {
     assert.ok(body.includes(expected), `missing indexing dashboard text: ${expected}`);
   }
@@ -354,39 +358,36 @@ await check("indexing dashboard treats import as a secondary add-media action", 
   await page.close();
 });
 
-await check("indexing dashboard keeps secondary insights compact and data-backed", async () => {
+await check("indexing dashboard breaks readiness down by sub-pipeline", async () => {
   const { page } = await makePage();
   await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
   const body = await page.textContent("body");
+  // The dashboard groups Speech / Visuals / Audio with per-indexer
+  // status lines (Scenes, Face, Motion, Color, Silence, Captions).
   for (const expected of [
-    "Index insights",
-    "Structure preview",
-    "00:42:11",
-    "31",
-    "126",
-    "2",
+    "Speech",
+    "Visuals",
+    "Audio",
+    "Scenes",
+    "Captions",
+    "Silence",
   ]) {
-    assert.ok(body.includes(expected), `missing indexing insight text: ${expected}`);
+    assert.ok(body.includes(expected), `missing indexing sub-pipeline text: ${expected}`);
   }
-  assert.ok(!body.includes("Smart hints"), "old smart hints heading should not be visible");
   await page.close();
 });
 
-await check("indexing dashboard groups detected episodes by status", async () => {
+await check("indexing dashboard shows duration and structural counts", async () => {
   const { page } = await makePage();
   await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
   const body = await page.textContent("body");
+  // Structural readout: total Duration, Scenes count, Segments count.
   for (const expected of [
-    "Episodes",
-    "Accepted episodes",
-    "Review episodes",
-    "Rejected episodes",
-    "Technologia Talks",
-    "AI News Roundtable",
-    "Rehearsal false start",
-    "3 evidence",
+    "Duration",
+    "Scenes",
+    "Segments",
   ]) {
-    assert.ok(body.includes(expected), `missing episode rollup text: ${expected}`);
+    assert.ok(body.includes(expected), `missing structural readout: ${expected}`);
   }
   await page.close();
 });
@@ -488,19 +489,20 @@ await check("right rail exposes transcript and Vedit alongside Inspector and Ind
   await page.close();
 });
 
-await check("footer exposes model, autosave, render, and disk status", async () => {
+await check("footer exposes status, autosave, render, and disk", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  const body = (await page.textContent("body")).toLowerCase();
+  // The footer was rebuilt as a compact status strip: indexer-state
+  // pill (ready) on the left; autosave + render + disk on the right.
+  // We assert against the live DOM rather than the legacy copy.
+  const footer = (await page.locator("footer").textContent()) ?? "";
   for (const expected of [
-    "agent online",
-    "model: awidat pro 1.2",
-    "context window: 42m",
-    "autosaved 12:42:18",
-    "render queue 1",
-    "disk 1.2 tb free",
+    "ready",
+    "Autosaved",
+    "render",
+    "disk",
   ]) {
-    assert.ok(body.includes(expected.toLowerCase()), `missing footer text: ${expected}`);
+    assert.ok(footer.includes(expected), `missing footer text: ${expected} (got: ${footer.trim()})`);
   }
   await page.close();
 });
