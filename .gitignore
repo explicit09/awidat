@@ -3,6 +3,18 @@ target/
 .DS_Store
 .claude/
 
+# Local secrets and credentials.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.der
+*.secret
+
 # Superpowers brainstorming session artifacts
 .superpowers/
 
@@ -15,6 +27,10 @@ dist/build/
 # Desktop test compile output (per-suite TS → JS staging dirs).
 apps/desktop/dist-test-play-segments/
 apps/desktop/dist-test/
+
+# Downloaded desktop sidecars.
+apps/desktop/src-tauri/binaries/yt-dlp-*
+apps/desktop/src-tauri/binaries/*.exe
 
 # Python workspace
 python/.venv/

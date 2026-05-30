@@ -12,6 +12,16 @@ dist
 dist-test
 dist-ssr
 *.local
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.der
+*.secret
 
 # Gallery / smoke screenshots — generated artifacts
 tests/*.png

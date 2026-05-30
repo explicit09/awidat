@@ -144,7 +144,7 @@ edition = "2024"
 rust-version = "1.95"
 authors = ["Awidat Authors"]
 license = "Apache-2.0"
-repository = "https://github.com/awidat/awidat"
+repository = "https://github.com/explicit09/awidat"
 
 # Centralized lints: every crate inherits via `[lints] workspace = true` in
 # its Cargo.toml. New crates added later get the same treatment by default.
