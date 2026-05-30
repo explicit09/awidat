@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use awidat_index::{read_sidecar, walk_indexer};
 use awidat_proto::index::AssetId;
+use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use awidat_proto::project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +57,14 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
     let quality_by_asset = load_index_map(&ctx.project_root, "frame-quality");
     let topics = load_topics(&ctx.project_root, &audio_master);
 
+    // Per-camera timeline offsets from applied `awidat.sync_group` effects, so
+    // separate-device cameras are scored at the correct source time. Falls back
+    // to a shared timebase when the project can't be read or has no sync groups.
+    let offsets = Project::read(&ctx.project_root)
+        .map(|p| sync_offsets(&p.timeline))
+        .unwrap_or_default();
+    let am_offset = offset_of(&offsets, &audio_master);
+
     let mut decisions = Vec::new();
     let mut last_asset: Option<String> = None;
     let mut last_cut_s = f64::NEG_INFINITY;
@@ -65,6 +75,8 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
             &face_by_asset,
             &shot_by_asset,
             &quality_by_asset,
+            &offsets,
+            am_offset,
             seg.speaker.as_deref(),
             (seg.start_s + seg.end_s) / 2.0,
         );
@@ -79,9 +91,10 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
             );
         }
         if topic_reset
-            && let Some(wide) = cameras
-                .iter()
-                .find(|a| shot_type_at(&shot_by_asset, a, seg.start_s).contains("wide"))
+            && let Some(wide) = cameras.iter().find(|a| {
+                let t = seg.start_s + am_offset - offset_of(&offsets, a);
+                shot_type_at(&shot_by_asset, a, t).contains("wide")
+            })
         {
             choice.asset = wide.clone();
             choice.reason = "wide reset at topic change".into();
@@ -90,18 +103,34 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
             last_cut_s = seg.start_s;
         }
         last_asset = Some(choice.asset.clone());
+        let sync_group_id = offsets
+            .get(&choice.asset)
+            .and_then(|s| s.sync_group_id.clone());
+        let offset_corrected = offsets.contains_key(&choice.asset);
         decisions.push(serde_json::json!({
             "start_s": seg.start_s,
             "end_s": seg.end_s,
             "source_asset": choice.asset,
+            "sync_group_id": sync_group_id,
             "speaker": seg.speaker,
             "reason": choice.reason,
             "metadata": {
                 "traceable_source": true,
                 "min_hold_s": min_hold_s,
+                "offset_corrected": offset_corrected,
                 "flattened_program_track": "Program Video"
             }
         }));
+    }
+
+    let mut warnings = Vec::new();
+    if offsets.is_empty() && cameras.len() > 1 {
+        warnings.push(
+            "no applied sync groups found — assuming all cameras share a timebase. \
+If the cameras were recorded on separate devices, run analyze_sync and apply the \
+Set Sync Group fragments first, then re-run plan_multicam for offset-corrected angles."
+                .to_string(),
+        );
     }
 
     let apply_plan = serde_json::json!({
@@ -118,8 +147,9 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
         "cameras": cameras,
         "program_track": "Program Video",
         "decisions": apply_plan["decisions"].clone(),
+        "warnings": warnings,
         "apply_edl": apply_edl,
-        "review_flow": "Review the decisions, then apply the included Apply Multicam Plan EDL fragment to atomically replace the flattened Program Video track while preserving source_asset and reason metadata for vedit audit.",
+        "review_flow": "Review the decisions, then apply the included Apply Multicam Plan EDL fragment to atomically replace the flattened Program Video track while preserving source_asset, sync_group_id, and reason metadata for vedit audit.",
     });
     Ok(body.to_string())
 }
@@ -199,19 +229,82 @@ fn load_topics(project_root: &std::path::Path, asset_id: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Per-camera timeline sync info read from applied `awidat.sync_group` effects.
+#[derive(Debug, Clone, Default)]
+struct SyncInfo {
+    /// Timeline offset (seconds) relative to the reference. Positive means the
+    /// camera was placed later, so its source time at program time `t` is
+    /// `t - offset_s`.
+    offset_s: f64,
+    /// Sync group this camera belongs to, propagated onto multicam decisions.
+    sync_group_id: Option<String>,
+}
+
+const SYNC_GROUP_EFFECT_NAME: &str = "awidat.sync_group";
+
+/// Collect per-asset sync offsets from applied `awidat.sync_group` effects.
+/// Maps source asset id (clip `target_url`) → [`SyncInfo`]. The first effect
+/// seen per asset wins (one sync group per camera in v1).
+fn sync_offsets(timeline: &Timeline) -> HashMap<String, SyncInfo> {
+    let mut out: HashMap<String, SyncInfo> = HashMap::new();
+    for stack_child in &timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        for tc in &track.children {
+            let TrackChild::Clip(clip) = tc else {
+                continue;
+            };
+            let MediaReference::External(ext) = &clip.media_reference else {
+                continue;
+            };
+            let Some(effect) = clip
+                .effects
+                .iter()
+                .find(|e| e.effect_name == SYNC_GROUP_EFFECT_NAME)
+            else {
+                continue;
+            };
+            let Some(offset_s) = effect.metadata.get("offset_s").and_then(|v| v.as_f64()) else {
+                continue;
+            };
+            let sync_group_id = effect
+                .metadata
+                .get("sync_group_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            out.entry(ext.target_url.clone()).or_insert(SyncInfo {
+                offset_s,
+                sync_group_id,
+            });
+        }
+    }
+    out
+}
+
+/// Timeline offset for `asset`, or 0.0 (shared timebase) when no sync group
+/// has been applied to it.
+fn offset_of(offsets: &HashMap<String, SyncInfo>, asset: &str) -> f64 {
+    offsets.get(asset).map(|s| s.offset_s).unwrap_or(0.0)
+}
+
 fn choose_camera(
     cameras: &[String],
     face_by_asset: &HashMap<String, serde_json::Value>,
     shot_by_asset: &HashMap<String, serde_json::Value>,
     quality_by_asset: &HashMap<String, serde_json::Value>,
+    offsets: &HashMap<String, SyncInfo>,
+    am_offset: f64,
     speaker: Option<&str>,
     t_s: f64,
 ) -> CameraChoice {
     let mut ranked = cameras
         .iter()
         .map(|asset| {
-            let mut score = quality_score_at(quality_by_asset, asset, t_s);
-            let shot = shot_type_at(shot_by_asset, asset, t_s);
+            // Convert the program-timeline time into this camera's source time.
+            let t = t_s + am_offset - offset_of(offsets, asset);
+            let mut score = quality_score_at(quality_by_asset, asset, t);
+            let shot = shot_type_at(shot_by_asset, asset, t);
             if shot.contains("close") || shot.contains("medium") {
                 score += 0.20;
             }
@@ -219,7 +312,7 @@ fn choose_camera(
                 score += 0.05;
             }
             if let Some(speaker) = speaker
-                && speaker_on_asset(face_by_asset, asset, speaker, t_s)
+                && speaker_on_asset(face_by_asset, asset, speaker, t)
             {
                 score += 0.55;
             }
