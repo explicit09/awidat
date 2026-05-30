@@ -1,8 +1,7 @@
 # Pro editing gap closure: 06 Color and 12 Export/Delivery
 
-This note reconciles the local
-`.reference-research/pro-editing-gap-analysis` audit for categories 06 and 12
-with the current implementation state.
+This note reconciles the color and export/delivery gap review with the current
+implementation state.
 
 ## 06 Color
 

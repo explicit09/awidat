@@ -1,6 +1,7 @@
 # AI-Assisted Gap Remediation
 
-Source input: `/Users/explicit/Projects/awidat/.reference-research/pro-editing-gap-analysis/13-ai-assisted.md`.
+This note reconciles the AI-assisted editing gap review with the current
+implementation state.
 
 ## Status
 

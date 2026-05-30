@@ -1,9 +1,8 @@
 # Media Service Affordances
 
-Reference inspected:
-`/Users/tadies/Projects/video-editor/VideoEditor/Packages/EditorCore/Sources/EditorCore/{Media,Playback,Export,Rendering}`.
-
-Awidat should keep media affordances in existing project caches and sidecars unless a user-facing workflow proves a separate service is needed.
+This note captures media-service affordances that should stay in existing
+Awidat project caches and sidecars unless a user-facing workflow proves a
+separate service is needed.
 
 ## Concept Map
 

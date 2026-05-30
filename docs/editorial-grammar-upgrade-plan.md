@@ -812,10 +812,9 @@ implemented in the worktree:
 
 Completion audit evidence:
 
-- A unified local real-corpus fixture at
-  `/private/tmp/awidat-ben-unified-corpus` reuses real Ben media/index
-  sidecars, adds an adjacent-clip timeline, and mounts transition
-  planner, assessor proposal, and rough-assembly fixture manifests.
+- A unified real-corpus fixture can reuse representative media/index sidecars,
+  add an adjacent-clip timeline, and mount transition planner, assessor
+  proposal, and rough-assembly fixture manifests.
 - `python/scripts/composition_model_from_sidecars.py` gives the
   model-sidecar rollout a repeatable producer path from existing
   model-derived face/gaze/CLIP sidecars into the stable
@@ -838,10 +837,8 @@ Completion audit evidence:
 
 Operational follow-up:
 
-- The current proof corpus is local and intentionally not committed
-  because it references large private media. A self-hosted runner should
-  mount an equivalent persistent corpus and set the same gate variables
-  for scheduled regression runs.
+- A self-hosted runner should mount an equivalent persistent corpus and set the
+  same gate variables for scheduled regression runs.
 
 ## Risks and Mitigations
 
