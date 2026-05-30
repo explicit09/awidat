@@ -144,6 +144,11 @@ pub async fn run(args: StartRenderArgs, ctx: McpToolCtx) -> Result<String, Strin
                      Shorten the transition, choose a different alignment, or apply Untrim Clip \
                      to widen the source range before rendering."
                 ),
+                RenderTimelineError::AudioRemovalUnsupported { clip_name, reason } => format!(
+                    "start_render: clip '{clip_name}' audio removal can't be exported: {reason}. \
+                     Remove the speed change or split edit on that clip, or clear the audio \
+                     removal (Remove Audio with clear:true) before rendering."
+                ),
                 RenderTimelineError::UnsupportedTransition { kind, message } => format!(
                     "start_render: timeline transition {kind:?} cannot be exported: \
                      {message}"

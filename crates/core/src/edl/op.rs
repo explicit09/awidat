@@ -356,6 +356,24 @@ pub enum EdlOp {
         /// `true` to mute, `false` to unmute.
         muted: bool,
     },
+    /// Remove (silence) a clip's audio over a clip-local span while keeping
+    /// its picture — the "cut the sound here, hold the image" edit. Appends
+    /// `[start_s, end_s)` (clip-local visible seconds) to
+    /// `ClipAudioOverride.removed_ranges`; render holds the picture on the
+    /// video track and fills the span with silence. Pass `clear: true` to
+    /// drop all removed ranges on the clip instead of adding one.
+    RemoveAudio {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Span start, clip-local visible seconds. Required unless `clear`.
+        start_s: Option<f64>,
+        /// Span end, clip-local visible seconds (exclusive). Required unless
+        /// `clear`; must be `> start_s`.
+        end_s: Option<f64>,
+        /// When true, clear all removed ranges on the clip and ignore the
+        /// span fields.
+        clear: bool,
+    },
     /// Set per-clip audio fades in seconds. Replaces the existing
     /// `awidat.audio_fade` effect on the clip.
     SetAudioFade {
