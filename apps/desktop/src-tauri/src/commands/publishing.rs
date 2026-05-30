@@ -581,6 +581,7 @@ mod tests {
             scheduled_at: None,
             thumbnail_path: None,
             ai_disclosure: None,
+            progress_tx: None,
         }
     }
 
@@ -701,18 +702,25 @@ mod tests {
     #[tokio::test]
     async fn provider_stub_upload_folds_disclosure_into_unsupported_message() {
         // Brief-named test: with credentials seeded + disclosure flagged,
-        // each provider's stub upload surfaces the AI flag intent so the
-        // user can see what *would* have been claimed on the real call.
+        // each *stub* provider surfaces the AI flag intent so the user
+        // can see what *would* have been claimed on the real call.
+        //
+        // Post-W6.A3 YouTube is no longer a stub — it short-circuits on
+        // the BYO `client_id` check and never reaches the disclosure
+        // log line. The YouTube path's disclosure wiring is covered by
+        // `youtube_upload::build_metadata_body_sets_synthetic_flag_when_disclosed`
+        // instead. TikTok + Instagram remain stubs until their own
+        // real-upload tasks ship, so they continue to drive this test.
         use crate::publishing::GeneratedMediaCredit;
         use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
         install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
-        // Seed credentials so every provider passes its is_configured
+        // Seed credentials so the stub providers pass their is_configured
         // gate: metadata in publishing.json, secrets in the (mock) keychain.
         let mut store = crate::publishing::storage::PublishingStore::default();
         let kc = Keychain::new();
-        for key in ["youtube", "tiktok", "instagram"] {
+        for key in ["tiktok", "instagram"] {
             store.set(key, Some(crate::publishing::storage::Credentials::default()));
             kc.store_token(key, TokenKind::AccessToken, &format!("seeded-{key}"))
                 .unwrap();
@@ -732,9 +740,8 @@ mod tests {
         };
         let mut params = stub_params();
         params.ai_disclosure = Some(disclosure);
-        // Each provider's flag is folded into the Unsupported message.
+        // Each stub provider's flag is folded into the Unsupported message.
         let expected = [
-            ("youtube", "alteredContent=true"),
             ("tiktok", "aigc_label=true"),
             ("instagram", "ai_label=true"),
         ];
@@ -758,29 +765,34 @@ mod tests {
 
     #[tokio::test]
     async fn provider_stub_upload_clean_cut_omits_disclosure_hint() {
+        // Same provider-swap rationale as
+        // `provider_stub_upload_folds_disclosure_into_unsupported_message`
+        // above: YouTube post-W6.A3 doesn't ride the stub path, so we
+        // probe TikTok (a remaining stub) for the "no disclosure →
+        // baseline message" case.
         use crate::publishing::keychain::{install_mock_backend, Keychain, TokenKind};
         install_mock_backend();
         let tmp = tempfile::tempdir().unwrap();
         let reg = ProviderRegistry::with_store_path(tmp.path().join("publishing.json"));
-        let yt = match reg.get("youtube") {
+        let tk = match reg.get("tiktok") {
             Some(p) => p,
-            None => panic!("youtube provider missing"),
+            None => panic!("tiktok provider missing"),
         };
         let mut store = crate::publishing::storage::PublishingStore::default();
         store.set(
-            "youtube",
+            "tiktok",
             Some(crate::publishing::storage::Credentials::default()),
         );
         Keychain::new()
-            .store_token("youtube", TokenKind::AccessToken, "seeded-youtube")
+            .store_token("tiktok", TokenKind::AccessToken, "seeded-tiktok")
             .unwrap();
         crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
             .unwrap();
         // No disclosure → message is the W5.A2 baseline (no AI hint).
-        let err = yt.upload(stub_params()).await.unwrap_err();
+        let err = tk.upload(stub_params()).await.unwrap_err();
         let msg = err.to_string();
-        assert!(!msg.contains("alteredContent"), "clean cut must not claim disclosure: {msg}");
+        assert!(!msg.contains("aigc_label"), "clean cut must not claim disclosure: {msg}");
         assert!(!msg.contains("generated clip"), "clean cut must not mention generated clips: {msg}");
     }
 }

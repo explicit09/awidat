@@ -139,6 +139,7 @@ impl UploadMetadata {
             scheduled_at: self.scheduled_at,
             thumbnail_path: self.thumbnail_path,
             ai_disclosure: None,
+            progress_tx: None,
         }
     }
 }
@@ -424,6 +425,7 @@ pub fn default_upload_params(file_path: &Path, title: &str) -> UploadParams {
         scheduled_at: None,
         thumbnail_path: None,
         ai_disclosure: None,
+        progress_tx: None,
     }
 }
 
@@ -433,12 +435,20 @@ pub fn default_upload_params(file_path: &Path, title: &str) -> UploadParams {
 /// Mockable: callers in production pass the live `ProviderRegistry`;
 /// tests inject a stub registry built from
 /// `ProviderRegistry::with_store_path(tempdir)`.
+///
+/// W6.A3 progress wiring: this function owns the
+/// [`UploadParams::progress_tx`] mpsc side-channel. The receiver runs
+/// in a spawned task that forwards each `0.0..=1.0` value into
+/// [`UploadQueue::mark_uploading`]. The provider sees only the
+/// sender — it doesn't know (and shouldn't) that the queue exists.
+/// Sender is dropped (channel closes) the moment `provider.upload`
+/// returns, which lets the drain task exit cleanly without leaking.
 pub async fn run_upload(
     queue: &UploadQueue,
     registry: &ProviderRegistry,
     job_id: &str,
     provider_key: &str,
-    params: UploadParams,
+    mut params: UploadParams,
 ) {
     queue.mark_uploading(job_id, provider_key, 0.0).await;
     let provider = match registry.get(provider_key) {
@@ -454,7 +464,36 @@ pub async fn run_upload(
             return;
         }
     };
-    match provider.upload(params).await {
+
+    // Build the progress side channel. Unbounded so a slow drain
+    // never back-pressures the upload itself; each chunk emits one
+    // value so the volume is bounded by (file_size / chunk_size) —
+    // 1 MB chunks cap a 4 GB upload at ~4096 values, well under any
+    // memory concern.
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<f32>();
+    params.progress_tx = Some(progress_tx);
+    let drain_queue = queue.clone();
+    let drain_job = job_id.to_string();
+    let drain_provider = provider_key.to_string();
+    let drain_handle = tokio::spawn(async move {
+        while let Some(p) = progress_rx.recv().await {
+            // Clamp defensively — a buggy provider that emits 1.2
+            // shouldn't fingerprint as "completed" in the UI.
+            let clamped = p.clamp(0.0, 1.0);
+            drain_queue
+                .mark_uploading(&drain_job, &drain_provider, clamped)
+                .await;
+        }
+    });
+
+    let upload_result = provider.upload(params).await;
+    // Sender is dropped here when `params` goes out of scope inside
+    // the provider call, so the drain loop has already broken out.
+    // Awaiting the join is a clean-shutdown guard — we don't want
+    // the next `mark_published` to race a still-running drain tick.
+    let _ = drain_handle.await;
+
+    match upload_result {
         Ok(result) => {
             queue
                 .mark_published(job_id, provider_key, result.remote_url, result.remote_id)
@@ -705,14 +744,17 @@ mod tests {
 
     #[tokio::test]
     async fn run_upload_against_stub_provider_records_failure() {
-        // The W5.A1 stub providers all return Unsupported once
-        // credentials are present. We exercise the dispatcher path to
-        // make sure it correctly funnels the ProviderError into a
-        // Failed entry rather than panicking.
+        // The W5.A1 stub providers return Unsupported once credentials
+        // are present. Post-W6.A3 YouTube is no longer a stub (it hits
+        // the real `videos.insert` endpoint), so this test now drives
+        // TikTok — which still uses `stub_upload` until its own real-
+        // upload task lands — to keep covering the dispatcher path
+        // that funnels a ProviderError into a Failed entry rather
+        // than panicking.
         let tmp = tempfile::tempdir().unwrap_or_else(|err| panic!("tempdir: {err}"));
         let registry = test_registry(&tmp);
         let q = UploadQueue::new();
-        q.register("render-003".into(), vec!["youtube".into()]).await;
+        q.register("render-003".into(), vec!["tiktok".into()]).await;
 
         // Seed credentials so the provider passes is_configured:
         // metadata in publishing.json, access token in the mock keychain.
@@ -720,11 +762,11 @@ mod tests {
         install_mock_backend();
         let mut store = crate::publishing::storage::PublishingStore::default();
         store.set(
-            "youtube",
+            "tiktok",
             Some(crate::publishing::storage::Credentials::default()),
         );
         Keychain::new()
-            .store_token("youtube", TokenKind::AccessToken, "seeded-youtube")
+            .store_token("tiktok", TokenKind::AccessToken, "seeded-tiktok")
             .unwrap_or_else(|err| panic!("seed keychain: {err}"));
         crate::publishing::storage::save_to(&tmp.path().join("publishing.json"), &store)
             .await
@@ -732,7 +774,7 @@ mod tests {
 
         let file_path = fake_render_file(&tmp);
         let params = default_upload_params(&file_path, "Test render");
-        run_upload(&q, &registry, "render-003", "youtube", params).await;
+        run_upload(&q, &registry, "render-003", "tiktok", params).await;
 
         let entry = q
             .snapshot("render-003")
@@ -740,14 +782,107 @@ mod tests {
             .unwrap_or_else(|| panic!("registered"));
         let state = entry
             .upload_states
-            .get("youtube")
-            .unwrap_or_else(|| panic!("youtube state"));
+            .get("tiktok")
+            .unwrap_or_else(|| panic!("tiktok state"));
         match state {
             UploadState::Failed { reason } => {
                 assert!(reason.starts_with("unsupported:"), "{reason}");
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn run_upload_drains_progress_channel_into_queue() {
+        // W6.A3 contract: `run_upload` opens an mpsc channel, stashes
+        // the sender on the params, and forwards every f32 the
+        // provider sends through into `UploadQueue::mark_uploading`.
+        // We exercise the wiring by handing a fake provider that
+        // emits a known sequence and reading the queue state at the
+        // tail of the call.
+        use crate::publishing::provider::PublishingProvider;
+        use crate::publishing::types::{
+            ConnectionStatus, OAuthChallenge, UploadParams, UploadResult, Visibility,
+        };
+        use crate::publishing::ClientCredentialsState;
+        use crate::publishing::ProviderError;
+        use async_trait::async_trait;
+        use std::time::Duration;
+
+        struct ProgressEmitter;
+        #[async_trait]
+        impl PublishingProvider for ProgressEmitter {
+            fn key(&self) -> &'static str { "fake" }
+            fn display_name(&self) -> &'static str { "Fake" }
+            async fn is_configured(&self) -> bool { true }
+            async fn begin_oauth(&self) -> Result<OAuthChallenge, ProviderError> {
+                Err(ProviderError::Unsupported("test only".into()))
+            }
+            async fn complete_oauth(&self, _: String) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
+                let tx = params.progress_tx.expect("dispatcher must stamp progress_tx");
+                for tick in [0.25_f32, 0.5, 0.75, 1.0] {
+                    tx.send(tick).expect("send tick");
+                    // Yield so the drain task can land each value
+                    // separately rather than coalescing them all
+                    // under the same `mark_uploading` write.
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Ok(UploadResult {
+                    remote_url: "https://fake/url".into(),
+                    remote_id: "fake-id".into(),
+                    uploaded_at: 0,
+                })
+            }
+            async fn status(&self) -> ConnectionStatus { ConnectionStatus::default() }
+            async fn disconnect(&self) -> Result<(), ProviderError> { Ok(()) }
+            async fn set_client_credentials(&self, _: String, _: String) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn client_credentials_state(&self) -> ClientCredentialsState {
+                ClientCredentialsState::default()
+            }
+        }
+
+        // Hand-build a registry around the fake; we can't use the
+        // production constructor because it always installs the trio
+        // (youtube + tiktok + instagram).
+        let providers: Vec<Box<dyn PublishingProvider>> = vec![Box::new(ProgressEmitter)];
+        let registry = ProviderRegistry::from_providers(providers);
+
+        let q = UploadQueue::new();
+        q.register("job-drain".into(), vec!["fake".into()]).await;
+        let params = UploadParams {
+            file_path: "/tmp/x".into(),
+            title: "t".into(),
+            description: String::new(),
+            tags: vec![],
+            visibility: Visibility::Private,
+            scheduled_at: None,
+            thumbnail_path: None,
+            ai_disclosure: None,
+            progress_tx: None, // dispatcher overwrites this
+        };
+        run_upload(&q, &registry, "job-drain", "fake", params).await;
+
+        let entry = q
+            .snapshot("job-drain")
+            .await
+            .unwrap_or_else(|| panic!("registered"));
+        // Final state is Published — the channel drained all the way
+        // through without losing the terminal transition.
+        match entry.upload_states.get("fake") {
+            Some(UploadState::Published { remote_id, .. }) => {
+                assert_eq!(remote_id, "fake-id");
+            }
+            other => panic!("expected Published, got {other:?}"),
+        }
+        assert_eq!(
+            entry.published_urls.get("fake").map(String::as_str),
+            Some("https://fake/url"),
+        );
     }
 
     #[tokio::test]

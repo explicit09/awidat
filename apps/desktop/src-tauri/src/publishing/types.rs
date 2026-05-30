@@ -8,6 +8,7 @@
 //! shapes — provider impls extend privately when they need more.
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use super::ai_disclosure::AiDisclosure;
 
@@ -56,7 +57,15 @@ impl Default for Visibility {
 ///
 /// `scheduled_at` is unix epoch seconds. When `None` the upload goes
 /// live as soon as the platform finishes encoding.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// `progress_tx` is a backend-only side channel for chunked uploads
+/// (W6.A3). The dispatcher creates an unbounded mpsc, stashes the
+/// sender here, and drains the receiver into the upload queue's
+/// `mark_uploading` calls. `#[serde(skip)]` keeps it off the IPC wire
+/// — the frontend never sees or sets it. Cloning the params (the
+/// dispatcher does this for tokio::spawn) clones the sender, which is
+/// the intended fan-in pattern.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadParams {
     /// Absolute path to the rendered file on disk.
     pub file_path: String,
@@ -89,6 +98,12 @@ pub struct UploadParams {
     /// always populate this for renders that go through the queue.
     #[serde(default, rename = "aiDisclosure")]
     pub ai_disclosure: Option<AiDisclosure>,
+    /// Per-chunk progress sink (W6.A3). Set by the upload dispatcher;
+    /// providers send `0.0..=1.0` after each chunk. Skipped from
+    /// serialisation because mpsc senders aren't wire-shippable and
+    /// the frontend never produces these (it polls the queue instead).
+    #[serde(skip)]
+    pub progress_tx: Option<mpsc::UnboundedSender<f32>>,
 }
 
 /// What we hand back to the frontend after a successful upload.

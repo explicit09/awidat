@@ -35,6 +35,7 @@ pub mod tiktok;
 pub mod types;
 pub mod upload_queue;
 pub mod youtube;
+pub mod youtube_upload;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -119,6 +120,16 @@ impl ProviderRegistry {
             .map(|b| b.as_ref())
     }
 
+    /// Test-only constructor that wraps an arbitrary provider list.
+    /// Lets `upload_queue::tests` exercise the dispatcher against a
+    /// fake provider without dragging the production trio in.
+    #[cfg(test)]
+    pub(crate) fn from_providers(providers: Vec<Box<dyn PublishingProvider>>) -> Self {
+        Self {
+            providers: Arc::new(providers),
+        }
+    }
+
     /// Build the `list_providers` payload — one `{key, display_name,
     /// configured}` row per provider.
     pub async fn list_info(&self) -> Vec<ProviderInfo> {
@@ -163,6 +174,7 @@ mod tests {
                     scheduled_at: None,
                     thumbnail_path: None,
                     ai_disclosure: None,
+                    progress_tx: None,
                 })
                 .await
                 .unwrap_err();
@@ -225,6 +237,7 @@ mod tests {
                 scheduled_at: None,
                 thumbnail_path: None,
                 ai_disclosure: None,
+                progress_tx: None,
             })
             .await
             .unwrap_err();

@@ -23,14 +23,15 @@ use super::keychain::{Keychain, TokenKind};
 use super::oauth::{
     build_authorize, client_id_for, disconnect_provider, fresh_state,
     get_client_credentials_state, has_credentials, load_status, set_client_credentials,
-    stub_upload, ClientCredentialsState, REDIRECT_URI,
+    ClientCredentialsState, REDIRECT_URI,
 };
 use super::oauth_exchange::{
-    exchange_code_for_token, fetch_account_name, persist_token_response,
+    ensure_fresh_token, exchange_code_for_token, fetch_account_name, persist_token_response,
 };
 use super::provider::PublishingProvider;
 use super::storage::keychain_to_provider;
 use super::types::{ConnectionStatus, OAuthChallenge, UploadParams, UploadResult};
+use super::youtube_upload::upload_video;
 
 /// Stable provider key — referenced by Tauri commands and storage.
 pub const KEY: &str = "youtube";
@@ -146,19 +147,40 @@ impl PublishingProvider for YoutubeProvider {
     }
 
     async fn upload(&self, params: UploadParams) -> Result<UploadResult, ProviderError> {
-        // TODO(W5.A2+): when synthetic content is present, also set
-        // `containsSyntheticMedia=true` on the `videos.insert` call
-        // so YouTube surfaces the "Altered or synthetic content"
-        // disclosure to viewers. Today the disclosure intent rides
-        // on `params.ai_disclosure`; `stub_upload` folds it into the
-        // log line + Unsupported message until the real call lands.
-        stub_upload(
-            &self.store_path,
-            KEY,
-            DEV_CONSOLE_URL,
-            AI_DISCLOSURE_FLAG,
-            params,
-        )
+        // W6.A3 — real resumable upload. The contract is:
+        //
+        //   1. Refresh the OAuth token if it's near expiry (auto-flow
+        //      from W6.A2). NotConfigured here pops the user back into
+        //      the connect sheet rather than letting a 401 land in the
+        //      middle of a chunk upload.
+        //   2. Hand the file off to `youtube_upload::upload_video`,
+        //      bridging the params' `progress_tx` (set by the upload
+        //      dispatcher) into the `on_progress` closure.
+        //   3. The `containsSyntheticMedia` flag is set inside
+        //      `build_metadata_body` based on `params.ai_disclosure` —
+        //      see `youtube_upload.rs` for the wire-level wiring.
+        let client_id = read_byo_client_id(&self.store_path).await?;
+        let client_secret = read_byo_client_secret()?;
+        let access_token =
+            ensure_fresh_token(&self.store_path, KEY, TOKEN_ENDPOINT, client_id, client_secret)
+                .await?;
+
+        // The disclosure flag name only matters to the stub log-line
+        // path; the real upload writes `containsSyntheticMedia`
+        // directly into the metadata body. Keep the constant referenced
+        // so a future rename has a single grep target.
+        let _ = AI_DISCLOSURE_FLAG;
+        let _ = DEV_CONSOLE_URL;
+
+        let progress_tx = params.progress_tx.clone();
+        upload_video(access_token, params, move |fraction| {
+            if let Some(tx) = progress_tx.as_ref() {
+                // `send` only fails when the receiver has been dropped,
+                // which means the dispatcher is no longer interested —
+                // safe to swallow: it doesn't affect the upload itself.
+                let _ = tx.send(fraction);
+            }
+        })
         .await
     }
 
