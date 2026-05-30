@@ -51,6 +51,13 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
+# OAuth token-exchange HTTP client. Uses the workspace `reqwest` with
+# `rustls-tls` (the `json` feature pulls in serde plumbing for the
+# `TokenResponse` deserialise) so we don't have to depend on system
+# OpenSSL on macOS / Linux. The `cookies` and `stream` workspace
+# features are unused here but harmless — they ride along for the
+# render / index crates that share this dep.
+reqwest = { workspace = true }
 
 # Per-target keyring backends. Same matrix the rest of the workspace uses
 # (mirrors `crates/secrets/Cargo.toml` and `vendor/codex-rs/keyring-store`):
@@ -72,6 +79,9 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Mocked HTTP server for OAuth token-exchange / refresh / userinfo
+# unit tests so the test suite never reaches out to Google.
+wiremock = { workspace = true }
 
 # This crate intentionally does NOT inherit workspace lints. Tauri's
 # generated code (via the `tauri::generate_handler!` macro) emits
