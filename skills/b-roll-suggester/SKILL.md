@@ -157,6 +157,13 @@ Wait for the user to pick. Once they confirm, draft the EDL via
 `apply_edl Insert Clip` to add the cutaway as a layered video clip
 on a new track named `broll`.
 
+After applying, inspect the actual graph. Run `view_timeline` around the
+spoken anchor and confirm the chosen cutaway is at that timeline time, on an
+overlay/B-roll track, and still matches the sentence it was chosen for. If the
+timeline shows the cutaway appended elsewhere, clustered with unrelated
+cutaways, swapped with another asset, or covering a never-auto-B-roll moment,
+stop and fix or report that failure before saying B-roll is done.
+
 ### 4. Asset priority (already on the right side — see addendum)
 
 This skill's whole reason for existing is priority slot #1 (user's
@@ -263,7 +270,9 @@ of these are true:
       you called `apply_edl`. If you applied without confirmation,
       that's a violation of the suggester contract.
 - [ ] After `apply_edl`, you called `view_timeline` and confirmed the
-      new B-roll track shows up where you placed it.
+      new B-roll track shows up at the intended transcript anchor.
+- [ ] You reconciled each placed asset's visual content with the transcript
+      phrase it supports, and listed any skipped or failed placements.
 
 If `clip_search` returned 0 results across all your queries, that's a
 real signal — say "no semantic match found for this passage" and move

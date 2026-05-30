@@ -122,6 +122,14 @@ for the delivery target before rendering when the user wants publishable
 output. Per-speaker mix imbalance still needs isolated tracks or careful
 clip-level/track-level gain decisions.
 
+Do not treat the agent's prior summary as proof that the timeline is good.
+Before saying podcast polish, B-roll, or a preview-related fix is done, inspect
+the actual timeline state: run `view_timeline`, `vedit_diff`, and the relevant
+podcast polish/QC tool. For visual/B-roll work, also run
+`podcast_visual_polish` and reconcile each placed support visual against its
+transcript anchor. Explicitly list skipped, failed, or weak candidates instead
+of collapsing them into "done."
+
 Before final render/export, ask the user to confirm that the current
 timeline is ready to render unless they already gave explicit render
 approval in the same turn. Render and verify. If `ffprobe`/FFmpeg
@@ -137,5 +145,7 @@ verification could not run.
 - Preserve at least 300ms between speaker turns.
 - Do not flatten personality by deleting every verbal tic.
 - Do not skip the `vedit_diff` checkpoint.
+- Do not report completion from generated media jobs, search results, or
+  assistant memory alone; completion requires verified timeline state.
 - Final report must include seconds removed, speed changes, and any
   loudness/speaker-balance concerns.
