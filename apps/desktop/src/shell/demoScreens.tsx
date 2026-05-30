@@ -39,14 +39,14 @@ import {
   EvidenceChip,
   Inline,
   MediaStatusRow,
-  Pill,
   ReviewActions,
   RiskIndicator,
   Stack,
+  StatusPill,
   TimelineMarker,
   cn,
   type ChannelLane,
-  type PillStatus,
+  type ProposalPillState,
 } from "../ui";
 import type { CommandRailProps } from "./CommandRail";
 import { DeliverySurface, type DeliveryRenderSummary, type DeliveryTarget, type PreflightFinding } from "./DeliverySurface";
@@ -212,7 +212,7 @@ const semanticLanes: ChannelLane[] = [
 
 const cutInspectorData: ProposalInspectorData = {
   title: "Cut 12 · L-cut",
-  status: "pending",
+  proposalState: "proposed",
   statusLabel: "Pending",
   timeRange: "00:06:42:11 – 00:06:45:02",
   duration: "2.91s",
@@ -757,6 +757,7 @@ function ProductConceptBoard() {
                       ["Decision", "Accept, reject, revise before render"],
                     ].map(([label, detail]) => (
                       <Inline key={label} gap="2" align="start" className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 py-1">
+                        {/* brand-sweep: decorative list bullet in a concept diagram; brand orange used as a visual accent, not a status. */}
                         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-brand)] mt-1.5" />
                         <Stack gap="0" className="min-w-0">
                           <span className="text-[10px] font-semibold leading-3 text-[var(--color-text-primary)]">{label}</span>
@@ -949,7 +950,11 @@ function ComponentSystemBoard() {
                   <Stack gap="1">
                     <Inline justify="between" align="center" gap="2">
                       <span className="truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">{title}</span>
-                      <Pill status={status as PillStatus} dot={false}>{status}</Pill>
+                      <StatusPill
+                        family="proposal"
+                        state={demoProposalState(status)}
+                        label={status}
+                      />
                     </Inline>
                     <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{range}</span>
                     <span className="text-[10px] leading-3 text-[var(--color-text-secondary)]">Remove filler phrase while preserving speaker cadence.</span>
@@ -978,7 +983,17 @@ function ComponentSystemBoard() {
                   <span className="font-mono text-[10px] text-[var(--color-brand-secondary)]">{speaker}</span>
                   <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{time}</span>
                   <span className="truncate text-[var(--text-caption)] text-[var(--color-text-secondary)]">{text}</span>
-                  <Pill status={state === "neutral" ? "neutral" : (state as PillStatus)} dot={false}>{state}</Pill>
+                  {state === "neutral" || state === "selected" ? (
+                    // migrated: old kind=neutral/selected → replaced with span (no StatusPill family fits;
+                    // neutral has no proposal/job equivalent and "selected" is a UI affordance, not a real status)
+                    <span className="text-[var(--color-text-muted)] text-[11px]">{state}</span>
+                  ) : (
+                    <StatusPill
+                      family="proposal"
+                      state={demoProposalState(state)}
+                      label={state}
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -1142,6 +1157,7 @@ function SemanticTranscriptPanel({ segments }: { segments: ReviewTranscriptSegme
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface-app)]">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border-subtle)] px-4">
         <Inline gap="2" align="center">
+          {/* brand-sweep: section-header glyph in the concept demo; decorative brand accent, not a status. */}
           <Eye className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand)]" />
           <span className="text-[var(--text-label)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-secondary)]">
             Review · Transcript
@@ -1202,7 +1218,17 @@ function SemanticTranscriptPanel({ segments }: { segments: ReviewTranscriptSegme
                 <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
                   {typeof seg.confidence === "number" ? `${Math.round(seg.confidence * 100)} High` : "—"}
                 </span>
-                <Pill status={status as PillStatus} dot={false}>{status}</Pill>
+                {status === "warning" ? (
+                  // Lossy: old `status="warning"` → job/failed visually per Task 4 mapping.
+                  // The demo label is preserved as "warning" via label=.
+                  <StatusPill family="job" state="failed" label={status} />
+                ) : (
+                  <StatusPill
+                    family="proposal"
+                    state={demoProposalState(status)}
+                    label={status}
+                  />
+                )}
               </div>
             );
           })}
@@ -1306,7 +1332,7 @@ function SemanticTimelineWorkspace() {
                 </Inline>
                 <Inline justify="between">
                   <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">Confidence</span>
-                  <Pill status="accepted" dot={false}>High</Pill>
+                  <StatusPill family="proposal" state="accepted" label="High" />
                 </Inline>
               </Stack>
             </div>
@@ -1582,7 +1608,7 @@ function CutInspectorWorkspace() {
           <img src={podcastWide} alt="" className="h-full w-full object-cover opacity-90" />
           <div className="absolute inset-y-[12%] left-[46%] w-[14%] rounded-[var(--radius-sm)] border-2 border-[var(--color-brand-purple)] bg-[rgba(168,85,247,0.16)] shadow-[0_0_24px_rgba(168,85,247,0.24)]" />
           <div className="absolute inset-y-[8%] left-[53%] w-0.5 bg-[var(--color-viz-playhead)] shadow-[0_0_12px_var(--color-viz-playhead)]" />
-          <div className="absolute left-[46%] top-[12%] -translate-y-full rounded-t-[var(--radius-xs)] border border-[rgba(168,85,247,0.6)] bg-[rgba(30,15,50,0.85)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-pill-reviewing-text)]">
+          <div className="absolute left-[46%] top-[12%] -translate-y-full rounded-t-[var(--radius-xs)] border border-[rgba(168,85,247,0.6)] bg-[rgba(30,15,50,0.85)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-proposal-proposed-text)]">
             CUT 12 · L-cut
           </div>
           <div className="absolute bottom-4 left-4 rounded-[var(--radius-md)] border border-black/40 bg-black/70 px-3 py-2">
@@ -1697,6 +1723,27 @@ function DemoImage({ src, label }: { src: string; label: string }) {
       </figcaption>
     </figure>
   );
+}
+
+/**
+ * Demo helper: lift loosely-typed demo status strings into the new
+ * ProposalPillState set. "pending" is folded into "proposed" (awaiting
+ * human action). Anything unknown falls back to "proposed" so the demo
+ * still renders.
+ */
+function demoProposalState(value: string): ProposalPillState {
+  switch (value) {
+    case "accepted":
+      return "accepted";
+    case "rejected":
+      return "rejected";
+    case "revised":
+      return "revised";
+    case "proposed":
+    case "pending":
+    default:
+      return "proposed";
+  }
 }
 
 // Keep these imports active for planned screen variants.

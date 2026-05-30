@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import wordmark from "../brand/awidat-wordmark.svg";
-import { AgentStatusBadge, Inline, cn } from "../ui";
+import { cn } from "../ui";
+import { TopChrome } from "./chrome/TopChrome";
 
 /**
  * AppShell — the v2 application shell.
@@ -23,13 +23,17 @@ import { AgentStatusBadge, Inline, cn } from "../ui";
  * Phase 2 task. Until those land, each region renders a placeholder.
  */
 export type AppShellProps = {
-  topChromeStart?: ReactNode;
-  topChromeCenter?: ReactNode;
-  topChromeEnd?: ReactNode;
   commandRail?: ReactNode;
   preview?: ReactNode;
   timeline?: ReactNode;
   timelineCollapsed?: boolean;
+  /**
+   * When true, the bottom timeline dock + its resize handle are
+   * fully removed from the layout (preview swells to fill the whole
+   * center). Used by Wave 4 W4.8 when the center pane is itself in
+   * Timeline mode and the dock would be a duplicate.
+   */
+  timelineHidden?: boolean;
   inspector?: ReactNode;
   inspectorCollapsed?: boolean;
   /** Optional whole-workspace override for screens whose spec layout is not the three-pane cockpit. */
@@ -38,34 +42,20 @@ export type AppShellProps = {
 };
 
 export function AppShell({
-  topChromeStart,
-  topChromeCenter,
-  topChromeEnd,
   commandRail,
   preview,
   timeline,
   timelineCollapsed = false,
+  timelineHidden = false,
   inspector,
   inspectorCollapsed = false,
   workspace,
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
-      {/* Top chrome */}
-      <header className="grid min-w-0 grid-cols-[auto_minmax(160px,1fr)_auto] items-center gap-3 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3">
-        <div className="flex min-w-0 items-center justify-start">
-          {topChromeStart ?? (
-            <Inline gap="2" align="center">
-              <img src={wordmark} alt="Awidat" className="h-7" />
-            </Inline>
-          )}
-        </div>
-        <div className="flex min-w-0 items-center justify-center overflow-hidden">{topChromeCenter}</div>
-        <div className="flex min-w-0 items-center justify-end overflow-hidden">
-          {topChromeEnd ?? <AgentStatusBadge status="idle" detail="No project" />}
-        </div>
-      </header>
+    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[auto_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
+      {/* Top chrome — redesigned in Task 8 (IdentityRow) + Task 9 (WorkspaceRow). */}
+      <TopChrome />
 
       {/* Workspace */}
       {workspace ? (
@@ -106,39 +96,49 @@ export function AppShell({
               minSize={30}
               className="min-h-0 min-w-0"
             >
-              <PanelGroup
-                direction="vertical"
-                autoSaveId={
-                  timelineCollapsed
-                    ? "awidat.shell.v.timeline-collapsed"
-                    : "awidat.shell.v"
-                }
-                className="h-full min-h-0"
-              >
-                <Panel
-                  id="preview"
-                  order={1}
-                  // ~79/21 preview/timeline mirrors the settled
-                  // dogfood layout — preview-heavy, timeline as a
-                  // strip the user opens up only when they're
-                  // actively trimming.
-                  defaultSize={timelineCollapsed ? 92 : 79}
-                  minSize={20}
-                  className="panel min-h-0 min-w-0 overflow-hidden"
-                >
+              {timelineHidden ? (
+                // Dock is hidden — preview fills the whole center
+                // column. Skipping the PanelGroup entirely avoids
+                // react-resizable-panels re-balancing into a stale
+                // ratio when the dock comes back.
+                <div className="panel h-full min-h-0 min-w-0 overflow-hidden">
                   {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
-                </Panel>
-                <ResizeHandle orientation="vertical" />
-                <Panel
-                  id="timeline"
-                  order={2}
-                  defaultSize={timelineCollapsed ? 8 : 21}
-                  minSize={timelineCollapsed ? 4 : 15}
-                  className="panel min-h-0 min-w-0 overflow-hidden"
+                </div>
+              ) : (
+                <PanelGroup
+                  direction="vertical"
+                  autoSaveId={
+                    timelineCollapsed
+                      ? "awidat.shell.v.timeline-collapsed"
+                      : "awidat.shell.v"
+                  }
+                  className="h-full min-h-0"
                 >
-                  {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
-                </Panel>
-              </PanelGroup>
+                  <Panel
+                    id="preview"
+                    order={1}
+                    // ~79/21 preview/timeline mirrors the settled
+                    // dogfood layout — preview-heavy, timeline as a
+                    // strip the user opens up only when they're
+                    // actively trimming.
+                    defaultSize={timelineCollapsed ? 92 : 79}
+                    minSize={20}
+                    className="panel min-h-0 min-w-0 overflow-hidden"
+                  >
+                    {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
+                  </Panel>
+                  <ResizeHandle orientation="vertical" />
+                  <Panel
+                    id="timeline"
+                    order={2}
+                    defaultSize={timelineCollapsed ? 8 : 21}
+                    minSize={timelineCollapsed ? 4 : 15}
+                    className="panel min-h-0 min-w-0 overflow-hidden"
+                  >
+                    {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
+                  </Panel>
+                </PanelGroup>
+              )}
             </Panel>
             <ResizeHandle orientation="horizontal" />
             <Panel

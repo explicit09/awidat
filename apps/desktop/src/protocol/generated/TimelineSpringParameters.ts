@@ -3,15 +3,15 @@
 /**
  * Physical spring parameters exposed to desktop preview.
  */
-export type TimelineSpringParameters = {
+export type TimelineSpringParameters = { 
 /**
  * Moving mass.
  */
-mass: number,
+mass: number, 
 /**
  * Spring stiffness.
  */
-stiffness: number,
+stiffness: number, 
 /**
  * Damping coefficient.
  */

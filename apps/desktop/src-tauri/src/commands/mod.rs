@@ -1,16 +1,20 @@
 //! Tauri commands. Grouped by concern; lib.rs's `run()` registers
 //! them all via `generate_handler!`.
 
+pub mod agents_md;
 pub mod auto_insert;
 pub mod captions;
 pub mod clip_params;
 pub mod color_scopes;
 pub mod config;
 pub mod dismissal;
+pub mod feedback;
 pub mod generated_media;
 pub mod history;
 pub mod import;
 pub mod index;
+pub mod indexer_config_overlay;
+pub mod indexer_data;
 pub mod media;
 pub mod motion;
 pub mod notes;
@@ -21,12 +25,16 @@ pub mod preview_cache;
 pub mod professional;
 pub mod project;
 pub mod proposal;
+pub mod publishing;
 pub mod render;
 pub mod review;
 pub mod silence;
+pub mod skill_config;
+pub mod skills;
 pub mod still_export;
 pub mod thumbnail;
 pub mod timeline;
+pub mod timeline_restore;
 pub mod transcode;
 pub mod transcript;
 pub mod turn;

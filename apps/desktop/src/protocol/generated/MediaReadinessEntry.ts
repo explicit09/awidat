@@ -8,47 +8,47 @@ import type { PlayableArtifact } from "./PlayableArtifact";
 /**
  * Media-service state for one source asset.
  */
-export type MediaReadinessEntry = {
+export type MediaReadinessEntry = { 
 /**
  * Project-relative asset id, usually the raw media path.
  */
-asset_id: string,
+asset_id: string, 
 /**
  * Display name shown in media and timeline panes.
  */
-display_name: string,
+display_name: string, 
 /**
  * Absolute source path if the source still resolves on disk.
  */
-source_path: string | null,
+source_path: string | null, 
 /**
  * Overall state for this asset.
  */
-state: MediaReadinessState,
+state: MediaReadinessState, 
 /**
  * Best artifact to use for playback now, if one exists.
  */
-playable: PlayableArtifact | null,
+playable: PlayableArtifact | null, 
 /**
  * Cache/index sidecars available for this asset.
  */
-cache: MediaCacheReadiness,
+cache: MediaCacheReadiness, 
 /**
  * Machine-readable reasons explaining blocked, failed, or offline states.
  */
-failures: Array<MediaFailureReason>,
+failures: Array<MediaFailureReason>, 
 /**
  * Estimated transcript/index progress while the local worker is active.
  */
-transcript_progress: MediaProcessingProgress | null,
+transcript_progress: MediaProcessingProgress | null, 
 /**
  * Source duration in seconds, when probed.
  */
-duration_s: number | null,
+duration_s: number | null, 
 /**
  * Source file size in bytes, when known.
  */
-source_size_bytes: number | null,
+source_size_bytes: number | null, 
 /**
  * Last status update time in Unix milliseconds.
  */

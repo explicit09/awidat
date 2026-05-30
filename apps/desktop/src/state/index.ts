@@ -16,3 +16,25 @@ export {
   type StageProgress,
   type StageStore,
 } from "./stages";
+
+export {
+  useSkillsStore,
+  type SkillsStore,
+  type PinnedSkill,
+} from "./skills";
+
+export {
+  useIndexerOverlay,
+  type IndexerOverlayStore,
+} from "./indexerOverlay";
+
+export {
+  useProposalHistoryStore,
+  buildHistoryEntry,
+  entriesForProject,
+  sortNewestFirst,
+  serialize as serializeHistory,
+  deserialize as deserializeHistory,
+  type HistoryEntry,
+  type HistoryDecision,
+} from "./proposalHistory";

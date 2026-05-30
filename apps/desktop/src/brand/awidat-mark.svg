@@ -1,5 +1,5 @@
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Awidat mark">
-  <path d="M16 2L30 28H22L16 17L10 28H2L16 2Z" fill="#14B8A6"/>
-  <path d="M16 7.2L24.4 24H21.2L16 14.7L10.8 24H7.6L16 7.2Z" fill="#22C55E"/>
-  <circle cx="16" cy="25.4" r="2" fill="#38BDF8"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect x="0" y="0" width="1024" height="1024" rx="256" fill="#0F1110"/>
+  <rect x="0.5" y="0.5" width="1023" height="1023" rx="255.5" fill="none" stroke="#2A2C2B" stroke-width="1"/>
+  <polygon points="512,210 814,778 210,778" fill="#FF7A18"/>
 </svg>

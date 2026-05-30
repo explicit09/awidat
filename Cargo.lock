@@ -901,6 +901,7 @@ name = "awidat-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "awidat-codex-bridge",
  "awidat-config",
  "awidat-core",
@@ -922,6 +923,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",

@@ -24,10 +24,9 @@ import {
   IconButton,
   Inline,
   MediaStatusRow,
-  Pill,
-  PILL_STATUSES,
   PreflightFindingRow,
   ProposalCard,
+  StatusPill,
   ReviewActions,
   RiskIndicator,
   Stack,
@@ -171,13 +170,21 @@ export function Gallery() {
 
           <Section title="Status pills">
             <Card padding="lg">
-              <Inline gap="2" wrap="wrap">
-                {PILL_STATUSES.map((s) => (
-                  <Pill key={s} status={s}>
-                    {s.replace(/^./, (c) => c.toUpperCase())}
-                  </Pill>
-                ))}
-              </Inline>
+              <Stack gap="3">
+                <Inline gap="2" wrap="wrap">
+                  <StatusPill family="job" state="idle" />
+                  <StatusPill family="job" state="running" />
+                  <StatusPill family="job" state="running" percent={56} label="Indexing" />
+                  <StatusPill family="job" state="ready" />
+                  <StatusPill family="job" state="failed" />
+                </Inline>
+                <Inline gap="2" wrap="wrap">
+                  <StatusPill family="proposal" state="proposed" />
+                  <StatusPill family="proposal" state="accepted" />
+                  <StatusPill family="proposal" state="rejected" />
+                  <StatusPill family="proposal" state="revised" />
+                </Inline>
+              </Stack>
             </Card>
           </Section>
 
@@ -242,7 +249,8 @@ export function Gallery() {
           <Section title="Proposal cards" columns={4}>
             <ProposalCard
               title="Cut 07 · J-cut"
-              status="pending"
+              proposalState="proposed"
+              statusLabel="Pending"
               timeRange="00:12:04 → 00:12:18"
               cutType="J-cut"
               explanation="Lifts host welcome by 0.8s under the guest reaction."
@@ -253,7 +261,7 @@ export function Gallery() {
             />
             <ProposalCard
               title="Cut 12 · L-cut"
-              status="proposed"
+              proposalState="proposed"
               timeRange="00:18:42 → 00:18:51"
               cutType="L-cut"
               explanation="Extends speaker A audio under the cutaway."
@@ -265,7 +273,7 @@ export function Gallery() {
             />
             <ProposalCard
               title="Cut 23 · Filler"
-              status="rejected"
+              proposalState="rejected"
               timeRange="00:24:11 → 00:24:13"
               cutType="Filler removal"
               explanation="Removes 'um' but cuts mid-thought."
@@ -276,7 +284,7 @@ export function Gallery() {
             />
             <ProposalCard
               title="Cut 31 · Pause"
-              status="accepted"
+              proposalState="accepted"
               timeRange="00:31:08 → 00:31:11"
               cutType="Tighten pause"
               explanation="Removes 2.4s pause; preserves natural breath."

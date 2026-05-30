@@ -3,19 +3,19 @@
 /**
  * Ducking controls for reducing a non-dialogue track under dialogue.
  */
-export type DuckingControls = {
+export type DuckingControls = { 
 /**
  * Whether ducking is enabled.
  */
-enabled: boolean,
+enabled: boolean, 
 /**
  * Desired gain reduction in dB.
  */
-amount_db: number,
+amount_db: number, 
 /**
  * Attack time in milliseconds.
  */
-attack_ms: number,
+attack_ms: number, 
 /**
  * Release time in milliseconds.
  */

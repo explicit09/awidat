@@ -30,6 +30,7 @@ mod codex_session;
 mod commands;
 mod events;
 mod generated_media_watcher;
+mod publishing;
 mod secrets;
 mod state;
 
@@ -132,6 +133,8 @@ pub fn run() {
             commands::dismissal::list_dismissals,
             commands::dismissal::dismiss_pattern,
             commands::dismissal::undismiss_pattern,
+            commands::feedback::append_feedback,
+            commands::feedback::read_feedback,
             commands::history::list_chat_sessions,
             commands::history::load_chat_history,
             commands::history::load_chat_session,
@@ -171,9 +174,16 @@ pub fn run() {
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,
             commands::waveform::read_waveform,
-            commands::silence::read_silences,
+            commands::indexer_data::read_scenes,
+            commands::indexer_data::read_silences,
+            commands::indexer_data::read_audio_samples,
+            commands::indexer_data::read_faces,
+            commands::indexer_data::read_motion_regions,
+            commands::indexer_data::read_color_stats,
             commands::view::set_view_state,
             commands::timeline::read_timeline,
+            commands::timeline_restore::read_timeline_otio_raw,
+            commands::timeline_restore::restore_timeline_otio,
             commands::media::insert_media_on_timeline,
             commands::render::start_timeline_render,
             commands::render::poll_timeline_render,
@@ -207,6 +217,38 @@ pub fn run() {
             commands::vedit::restore_vedit_ref,
             commands::review::author_local_review_package,
             commands::color_scopes::get_color_scopes,
+            commands::skills::list_skills,
+            commands::skills::read_skill_body,
+            commands::skills::ensure_user_skills_dir,
+            commands::skills::create_skill,
+            commands::skills::skills_authoring_guide_path,
+            commands::skill_config::read_disabled_skills,
+            commands::skill_config::write_disabled_skills,
+            commands::skill_config::read_skill_config,
+            commands::skill_config::write_skill_config,
+            commands::indexer_config_overlay::read_disabled_indexers,
+            commands::indexer_config_overlay::write_disabled_indexers,
+            commands::agents_md::read_agents_md,
+            commands::agents_md::write_agents_md,
+            commands::publishing::list_providers,
+            commands::publishing::begin_provider_oauth,
+            commands::publishing::complete_provider_oauth,
+            commands::publishing::get_provider_status,
+            commands::publishing::upload_via_provider,
+            commands::publishing::set_render_upload_targets,
+            commands::publishing::poll_upload_states,
+            commands::publishing::list_upload_states,
+            commands::publishing::start_uploads_for_job,
+            commands::publishing::retry_upload,
+            commands::publishing::set_upload_metadata,
+            commands::publishing::get_default_upload_targets,
+            commands::publishing::set_default_upload_targets,
+            commands::publishing::compute_ai_disclosure,
+            commands::publishing::get_ai_disclosure_for_job,
+            commands::publishing::disconnect_provider,
+            commands::publishing::set_provider_client_credentials,
+            commands::publishing::get_provider_client_credentials,
+            commands::publishing::get_publishing_credentials_path,
         ])
         .build(tauri::generate_context!());
 

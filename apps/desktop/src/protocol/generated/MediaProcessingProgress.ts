@@ -3,27 +3,27 @@
 /**
  * Estimated progress for one media processing task.
  */
-export type MediaProcessingProgress = {
+export type MediaProcessingProgress = { 
 /**
  * User-visible task label, e.g. `transcribing chunk 3 / 166`.
  */
-label: string,
+label: string, 
 /**
  * Completed work units.
  */
-completed_units: number,
+completed_units: number, 
 /**
  * Total estimated work units.
  */
-total_units: number,
+total_units: number, 
 /**
  * Current 1-based work unit, when known.
  */
-current_unit: number | null,
+current_unit: number | null, 
 /**
  * Unit label, e.g. `chunks`.
  */
-unit: string,
+unit: string, 
 /**
  * Rounded 0..100 progress estimate.
  */

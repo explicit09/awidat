@@ -18,13 +18,13 @@ import {
   ConfidenceMeter,
   ConfidenceRing,
   Inline,
-  Pill,
   ReviewActions,
   RiskIndicator,
   Stack,
+  StatusPill,
   cn,
   type ConfidenceLevel,
-  type PillStatus,
+  type ProposalPillState,
   type RiskLevel,
 } from "../ui";
 
@@ -78,7 +78,12 @@ export type Alternative = {
 
 export type ProposalInspectorData = {
   title: string;
-  status: PillStatus;
+  /**
+   * Proposal-family pill state. The inspector is always proposal-flavored,
+   * so we restrict the surface to the proposal state set. Display string
+   * can still be customized via `statusLabel`.
+   */
+  proposalState: ProposalPillState;
   statusLabel?: string;
   /** Time range in 24-frame TC string format (e.g. "00:06:35:21 - 00:06:42:05"). */
   timeRange?: string;
@@ -90,6 +95,14 @@ export type ProposalInspectorData = {
   intent?: string;
   /** Long-form explanation. */
   explanation?: string;
+  /**
+   * Short-form rationale — the agent's one-sentence justification
+   * for this proposal ("trimmed 0.42s silence per podcast defaults").
+   * Wave 3 surfaces this on every proposal pill / Brief row;
+   * the Inspector renders it as a compact "Rationale" row above
+   * Confidence so reviewers see *why* before *how strong*.
+   */
+  rationale?: string;
   /** 0..1 — drives both Ring + Bar render. */
   confidence?: number;
   risk?: RiskLevel;
@@ -149,7 +162,7 @@ export function ProposalInspector({
               <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
                 {data.title}
               </span>
-              <Pill status={data.status}>{data.statusLabel ?? defaultStatusLabel(data.status)}</Pill>
+              <StatusPill family="proposal" state={data.proposalState} label={data.statusLabel} />
             </Inline>
             <KeyValue label="Time">
               <span className="font-mono text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
@@ -171,6 +184,17 @@ export function ProposalInspector({
             <Section title="Agent intent">
               <p className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)] leading-relaxed">
                 {data.intent}
+              </p>
+            </Section>
+          ) : null}
+
+          {/* Rationale — the one-sentence "why" surfaced on every
+              proposal pill / Brief row. Placed above Confidence so
+              reviewers see *why* before *how strong*. */}
+          {data.rationale ? (
+            <Section title="Rationale">
+              <p className="text-[var(--text-body-sm)] text-[var(--color-text-primary)] leading-relaxed">
+                {data.rationale}
               </p>
             </Section>
           ) : null}
@@ -377,6 +401,3 @@ function toLevel(score: number): ConfidenceLevel {
   return "very-low";
 }
 
-function defaultStatusLabel(status: PillStatus): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}

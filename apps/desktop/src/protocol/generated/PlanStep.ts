@@ -4,11 +4,11 @@
  * One row in a Plan item — mirrors `awidat_core::tool::PlanItem` but
  * stripped to fields the frontend actually renders.
  */
-export type PlanStep = {
+export type PlanStep = { 
 /**
  * Free-text step description.
  */
-step: string,
+step: string, 
 /**
  * One of `pending`, `in_progress`, `completed`. Kept as a string
  * (not an enum) because the agent may emit other states the

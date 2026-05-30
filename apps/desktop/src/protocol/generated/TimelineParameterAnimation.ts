@@ -6,31 +6,31 @@ import type { TimelineMotionPath } from "./TimelineMotionPath";
 /**
  * Renderable or previewable parameter animation attached to a timeline clip.
  */
-export type TimelineParameterAnimation = {
+export type TimelineParameterAnimation = { 
 /**
  * Stable animation id from the project metadata.
  */
-id: string,
+id: string, 
 /**
  * Clip-local animation target.
  */
-target: TimelineAnimationTarget,
+target: TimelineAnimationTarget, 
 /**
  * Ordered keyframes in seconds relative to the clip start.
  */
-keyframes: Array<TimelineKeyframe>,
+keyframes: Array<TimelineKeyframe>, 
 /**
  * Behavior before the first keyframe.
  */
-pre_extrapolation: string,
+pre_extrapolation: string, 
 /**
  * Behavior after the last keyframe.
  */
-post_extrapolation: string,
+post_extrapolation: string, 
 /**
  * Optional 2D motion path for position parameters.
  */
-motion_path: TimelineMotionPath | null,
+motion_path: TimelineMotionPath | null, 
 /**
  * Optional agent/user rationale for review.
  */

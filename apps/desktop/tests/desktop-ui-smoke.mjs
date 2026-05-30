@@ -243,21 +243,23 @@ await check("top chrome matches Screen 2 app model", async () => {
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   const body = await page.textContent("body");
   for (const expected of [
-    "Awidat",
+    // Brand mark is uppercase in the redesigned IdentityRow.
+    "AWIDAT",
     "Main Desktop Workspace",
     "Edit",
     "Deliver",
-    "Awaiting review",
   ]) {
     assert.ok(body.includes(expected), `missing top chrome text: ${expected}`);
   }
-  await page.getByTitle("Settings").waitFor({ state: "visible" });
+  // Settings button uses aria-label (not title) in the redesigned IdentityRow.
+  await page.getByRole("button", { name: "Settings" }).waitFor({ state: "visible" });
   const clippedTopNav = await page.evaluate(() => {
-    const header = document.querySelector("header");
-    if (!header) return ["missing header"];
+    // The redesigned chrome is the WorkspaceRow tablist (no <header> wrapper).
+    const tablist = document.querySelector('[role="tablist"][aria-label="Workspace"]');
+    if (!tablist) return ["missing workspace tablist"];
     const labels = ["Edit", "Deliver"];
     const clipped = [];
-    const buttons = Array.from(header.querySelectorAll('button[role="tab"]'));
+    const buttons = Array.from(tablist.querySelectorAll('button[role="tab"]'));
     for (const label of labels) {
       const button = buttons.find((el) => el.textContent?.trim() === label);
       if (!button) {
@@ -266,7 +268,7 @@ await check("top chrome matches Screen 2 app model", async () => {
       }
       const rect = button.getBoundingClientRect();
       let node = button.parentElement;
-      while (node && node !== header.parentElement) {
+      while (node && node !== document.body) {
         const style = getComputedStyle(node);
         if (style.overflow !== "visible" || style.overflowX !== "visible") {
           const clip = node.getBoundingClientRect();
@@ -284,21 +286,36 @@ await check("top chrome matches Screen 2 app model", async () => {
   await page.close();
 });
 
-await check("top stage row is the only global workflow navigation", async () => {
+await check("top workspace row is the only global workflow navigation", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   const lensRows = await page.locator('[role="tablist"][aria-label="Workflow lens"]').count();
   assert.equal(lensRows, 0, "secondary workflow lens row should not render");
-  const stageNames = await page.locator('[role="tablist"][aria-label="Stage"] button[role="tab"]').allTextContents();
-  for (const expected of [
-    "Edit",
-    "Deliver",
-  ]) {
-    assert.ok(stageNames.some((s) => s.includes(expected)), `stage "${expected}" missing`);
+  // The legacy Stage tablist was replaced by the WorkspaceRow.
+  const tabNames = await page
+    .locator('[role="tablist"][aria-label="Workspace"] button[role="tab"]')
+    .allTextContents();
+  for (const expected of ["Edit", "Deliver"]) {
+    assert.ok(tabNames.some((s) => s.includes(expected)), `workspace tab "${expected}" missing`);
   }
   for (const folded of ["Intent", "Index", "Proposal", "Review", "Revise", "Import", "Selects", "Assembly", "Captions", "Audio", "Color"]) {
-    assert.ok(!stageNames.some((s) => s.includes(folded)), `${folded} should not be a second-level global tab`);
+    assert.ok(!tabNames.some((s) => s.includes(folded)), `${folded} should not be a second-level global tab`);
   }
+  await page.close();
+});
+
+await check("workspace row renders the live preview timecode", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const tablist = page.locator('[role="tablist"][aria-label="Workspace"]');
+  await tablist.waitFor({ state: "visible" });
+  // Timecode lives inside the WorkspaceRow tablist (sibling of the tabs)
+  // and is rendered as HH:MM:SS:FF / HH:MM:SS:FF at 24 fps.
+  const rowText = (await tablist.textContent()) ?? "";
+  assert.ok(
+    /\d{2}:\d{2}:\d{2}:\d{2}\s*\/\s*\d{2}:\d{2}:\d{2}:\d{2}/.test(rowText),
+    `expected HH:MM:SS:FF / HH:MM:SS:FF timecode in workspace row, got: ${rowText.trim()}`,
+  );
   await page.close();
 });
 

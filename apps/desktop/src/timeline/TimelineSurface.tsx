@@ -29,11 +29,23 @@ import {
 } from "./editOps";
 import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT } from "./layout.ts";
 import { collectDeletedKeys, collectHighlightKeys } from "./proposalDiffKeys.ts";
-import { drawMoveGhost, drawPlayhead, drawRuler, drawTracks } from "./renderer.ts";
+import {
+  drawGhostClips,
+  drawMoveGhost,
+  drawPlayhead,
+  drawRuler,
+  drawTracks,
+} from "./renderer.ts";
 import { computeCanvasLayout } from "./canvasLayout.ts";
+import { buildGhostRanges } from "./ghostClipRanges.ts";
+import { usePendingProposals } from "./pendingProposals.ts";
+import { useTimelineProposalFocus } from "./timelineProposalFocus.ts";
 import { TimelineEditorialOverlay } from "./TimelineEditorialOverlay.tsx";
+import { TimelineGhostOverlay } from "./TimelineGhostOverlay.tsx";
 import { UserMoveTooltip, UserTrimTooltip } from "./TimelineDragTooltips.tsx";
 import { useTimelineStore, type TimelineSnapshot } from "./store";
+import { useFlashRanges } from "../state/focusController";
+import { drawFlashRanges } from "./flashOverlay.ts";
 
 /** Wrapper that owns layout state (pps, width) so the canvas can
  *  publish it on each paint and the handles can subscribe. Avoids
@@ -90,6 +102,12 @@ export function TimelineSurface({
         pps={layout.pps}
         laneHeight={layout.laneHeight}
       />
+      <TimelineGhostOverlay
+        snapshot={snapshot}
+        containerWidth={layout.width}
+        pps={layout.pps}
+        laneHeight={layout.laneHeight}
+      />
     </>
   );
 }
@@ -121,6 +139,15 @@ function TimelineCanvas({
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const proposal = useProposalStore((s) => s.active);
+  // Pending cut-medium proposals power the ghost-overlay pass. The
+  // DOM <TimelineGhostOverlay> sibling owns the hover affordance and
+  // keyboard handling; the canvas just draws the dashed-cyan bands.
+  const pendingProposals = usePendingProposals((s) => s.pending);
+  const focusedProposalId = useTimelineProposalFocus((s) => s.focusedId);
+  // Wave 4 W4.6 — Review → flashes. Subscribe to the focus controller's
+  // ephemeral range set so the canvas re-paints when a range arrives
+  // and again when it expires (the range list is empty after ~600ms).
+  const flashRanges = useFlashRanges((s) => s.ranges);
   // Cursor hint when hovering near a clip edge (without dragging).
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
@@ -201,7 +228,15 @@ function TimelineCanvas({
           cssWidth,
           proposal.snapshot.tracks,
           pps,
-          { highlightKeys, selectedKey },
+          {
+            highlightKeys,
+            selectedKey,
+            // Surface the agent's one-sentence rationale below the
+            // clip name on highlighted clips. The Inspector / Brief
+            // own the full treatment; this is the lightweight
+            // canvas hint (Wave 3 B5).
+            proposalRationale: proposal.rationale,
+          },
           laneHeight,
         );
       } else {
@@ -215,11 +250,44 @@ function TimelineCanvas({
         );
       }
 
+      // Wave 3 C2 — ghost-clip review pass. Only fires when there's
+      // no active proposal ghost (the two surfaces conflict; the
+      // single-proposal canvas overlay above already paints the cyan
+      // diff). Cut-medium pendings always render.
+      if (!proposal) {
+        const cutPending = pendingProposals.filter((p) => p.medium === "cut");
+        if (cutPending.length > 0) {
+          const ranges = buildGhostRanges(cutPending, snapshot);
+          if (ranges.length > 0) {
+            const proposalsById = new Map(
+              cutPending.map((p) => [p.callId, p] as const),
+            );
+            drawGhostClips(
+              ctx,
+              ranges,
+              proposalsById,
+              focusedProposalId,
+              pps,
+              laneHeight,
+            );
+          }
+        }
+      }
+
+      // Wave 4 W4.6 — Review-focus flash pass. Paints a brief glow on
+      // ranges the focus controller registered (cleared after ~600ms).
+      // Drawn before the playhead so the playhead stays visible over a
+      // flashed range.
+      if (flashRanges.length > 0) {
+        drawFlashRanges(ctx, flashRanges, pps, laneHeight);
+      }
+
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
 
-      // Hover affordance — a faint amber outline on the edge under
-      // the pointer when the user isn't yet dragging. Tells them
-      // "yes, you can grab this" before they commit.
+      // Hover affordance — faint cyan outline on the edge under the
+      // pointer when the user isn't yet dragging. Tells them "yes,
+      // you can grab this" before they commit. Cyan matches the
+      // brand-secondary token (--color-brand-secondary).
       if (edgeHover && !userTrim) {
         const item = snapshot.tracks[edgeHover.trackIndex]?.items.find(
           (it) => it.index === edgeHover.clipIndex,
@@ -230,18 +298,18 @@ function TimelineCanvas({
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
           const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
-          ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
+          ctx.fillStyle = "rgba(56, 189, 248, 0.62)";
           ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
         }
       }
 
-      // Draw the live drag-edge phantom on top of everything else.
-      // 2px amber line at the dragged x.
+      // Live drag-edge phantom — 2px cyan line at the dragged x so it
+      // stays consistent with the selection / hover language above.
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
         const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
-        ctx.fillStyle = "#78b8ff";
+        ctx.fillStyle = "#38BDF8";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
@@ -276,6 +344,9 @@ function TimelineCanvas({
     userMove,
     edgeHover,
     selectedClipKey,
+    pendingProposals,
+    focusedProposalId,
+    flashRanges,
   ]);
 
   // Pointer dispatch:
@@ -600,8 +671,7 @@ function TimelineCanvas({
     <div className="timeline-canvas-wrap" ref={containerRef}>
       {snapshot.tracks.length === 0 && (
         <div className="timeline-empty">
-          No clips on the timeline yet — ask the agent for an edit
-          ("trim filler", "cut to the punchline") and they'll show up here.
+          Drop a clip on a track to start editing.
         </div>
       )}
       <canvas

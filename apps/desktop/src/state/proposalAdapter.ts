@@ -79,10 +79,12 @@ export function useProposalInspectorData(): ProposalInspectorData | undefined {
   // get a structured `title` field we'll swap it in.
   const title = active.summary || "Proposal";
 
-  // Map our internal phase to a pill status. The inspector accepts the
-  // full PillStatus set; we render Started/Delta as "Pending" and let
-  // Accept/Reject upstream flip the store, which clears `active`.
-  const status: ProposalInspectorData["status"] = "pending";
+  // Map our internal phase to a proposal-family pill state. The inspector
+  // surface is always proposal-flavored; Started/Delta phases render as
+  // "proposed" with a "Pending" label until Accept/Reject upstream flips
+  // the store, which clears `active`.
+  const proposalState: ProposalInspectorData["proposalState"] = "proposed";
+  const statusLabel = "Pending";
 
   const alternatives: Alternative[] =
     active.alternatives?.map((a) => ({
@@ -93,9 +95,11 @@ export function useProposalInspectorData(): ProposalInspectorData | undefined {
 
   return {
     title,
-    status,
+    proposalState,
+    statusLabel,
     intent: active.intent,
     explanation: active.explanation,
+    rationale: active.rationale,
     confidence: active.confidence,
     risk: mapRisk(active.risk),
     evidence: mapEvidence(active.evidence ?? []),

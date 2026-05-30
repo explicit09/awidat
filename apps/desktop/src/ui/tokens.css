@@ -60,10 +60,16 @@
   --color-text-on-accent: #ECFEFF;
   --color-text-on-danger: #FEF2F2;
 
-  /* brand */
-  --color-brand: #20C997;
-  --color-brand-hover: #2EE6AE;
-  --color-brand-active: #17A77E;
+  /* brand — Studio orange is the single primary action accent. Mint
+     is demoted to liveness indicators only (agent online, daemon
+     connected) and lives at --color-accent-mint. See spec §5.1. */
+  --color-brand: #FF7A18;
+  --color-brand-hover: #FF8B33;
+  --color-brand-active: #E5641A;
+
+  --color-accent-mint: #20C997;
+  --color-accent-mint-hover: #2EE6AE;
+  --color-accent-mint-active: #17A77E;
   --color-brand-secondary: #38BDF8;
   --color-brand-secondary-hover: #7DD3FC;
   --color-brand-secondary-active: #0284C7;
@@ -82,61 +88,57 @@
   --color-processing: #3B82F6;
   --color-info: #3B82F6;
 
-  /* status pills — fill / border / text / dot */
-  --color-pill-proposed-fill: rgba(59, 130, 246, 0.14);
-  --color-pill-proposed-border: rgba(59, 130, 246, 0.55);
-  --color-pill-proposed-text: #93C5FD;
-  --color-pill-proposed-dot: #38BDF8;
+  /* status pills — two families × 4 states. See spec §5.2.
+     Job lifecycle: indexers, jobs, proxy builds, exports.
+     Proposal lifecycle: agent-generated edits, human-arbitrated. */
 
-  --color-pill-pending-fill: rgba(245, 158, 11, 0.14);
-  --color-pill-pending-border: rgba(245, 158, 11, 0.55);
-  --color-pill-pending-text: #FBBF24;
-  --color-pill-pending-dot: #F59E0B;
+  /* job × idle */
+  --color-job-idle-fill: rgba(75, 75, 82, 0.20);
+  --color-job-idle-border: rgba(120, 120, 128, 0.30);
+  --color-job-idle-text: #B4B4B8;
+  --color-job-idle-dot: #3F3F46;
 
-  --color-pill-accepted-fill: rgba(34, 197, 94, 0.14);
-  --color-pill-accepted-border: rgba(34, 197, 94, 0.55);
-  --color-pill-accepted-text: #86EFAC;
-  --color-pill-accepted-dot: #22C55E;
+  /* job × running (orange = the action accent) */
+  --color-job-running-fill: rgba(255, 122, 24, 0.10);
+  --color-job-running-border: rgba(255, 122, 24, 0.40);
+  --color-job-running-text: #FCA67A;
+  --color-job-running-dot: #FF7A18;
 
-  --color-pill-rejected-fill: rgba(239, 68, 68, 0.14);
-  --color-pill-rejected-border: rgba(239, 68, 68, 0.55);
-  --color-pill-rejected-text: #FCA5A5;
-  --color-pill-rejected-dot: #EF4444;
+  /* job × ready (true green, distinct from mint) */
+  --color-job-ready-fill: rgba(34, 197, 94, 0.10);
+  --color-job-ready-border: rgba(34, 197, 94, 0.40);
+  --color-job-ready-text: #86EFAC;
+  --color-job-ready-dot: #22C55E;
 
-  --color-pill-reviewing-fill: rgba(168, 85, 247, 0.14);
-  --color-pill-reviewing-border: rgba(168, 85, 247, 0.55);
-  --color-pill-reviewing-text: #D8B4FE;
-  --color-pill-reviewing-dot: #A855F7;
+  /* job × failed */
+  --color-job-failed-fill: rgba(239, 68, 68, 0.12);
+  --color-job-failed-border: rgba(239, 68, 68, 0.45);
+  --color-job-failed-text: #FCA5A5;
+  --color-job-failed-dot: #EF4444;
 
-  --color-pill-processing-fill: rgba(56, 189, 248, 0.14);
-  --color-pill-processing-border: rgba(56, 189, 248, 0.55);
-  --color-pill-processing-text: #7DD3FC;
-  --color-pill-processing-dot: #38BDF8;
+  /* proposal × proposed (cyan = awaiting human) */
+  --color-proposal-proposed-fill: rgba(56, 189, 248, 0.12);
+  --color-proposal-proposed-border: rgba(56, 189, 248, 0.45);
+  --color-proposal-proposed-text: #7DD3FC;
+  --color-proposal-proposed-dot: #38BDF8;
 
-  --color-pill-ready-fill: rgba(32, 201, 151, 0.14);
-  --color-pill-ready-border: rgba(32, 201, 151, 0.55);
-  --color-pill-ready-text: #5EEAD4;
-  --color-pill-ready-dot: #20C997;
+  /* proposal × accepted (shares green with job-ready: a positive completion) */
+  --color-proposal-accepted-fill: rgba(34, 197, 94, 0.10);
+  --color-proposal-accepted-border: rgba(34, 197, 94, 0.40);
+  --color-proposal-accepted-text: #86EFAC;
+  --color-proposal-accepted-dot: #22C55E;
 
-  --color-pill-failed-fill: rgba(220, 38, 38, 0.16);
-  --color-pill-failed-border: rgba(220, 38, 38, 0.6);
-  --color-pill-failed-text: #F87171;
-  --color-pill-failed-dot: #DC2626;
+  /* proposal × rejected */
+  --color-proposal-rejected-fill: rgba(239, 68, 68, 0.12);
+  --color-proposal-rejected-border: rgba(239, 68, 68, 0.45);
+  --color-proposal-rejected-text: #FCA5A5;
+  --color-proposal-rejected-dot: #EF4444;
 
-  --color-pill-warning-fill: rgba(245, 158, 11, 0.14);
-  --color-pill-warning-border: rgba(245, 158, 11, 0.55);
-  --color-pill-warning-text: #FBBF24;
-  --color-pill-warning-dot: #F59E0B;
-
-  --color-pill-missing-fill: rgba(124, 135, 148, 0.12);
-  --color-pill-missing-border: rgba(124, 135, 148, 0.48);
-  --color-pill-missing-text: #D1D5DB;
-  --color-pill-missing-dot: #7C8794;
-
-  --color-pill-revised-fill: rgba(139, 92, 246, 0.14);
-  --color-pill-revised-border: rgba(139, 92, 246, 0.55);
-  --color-pill-revised-text: #C7D2FE;
-  --color-pill-revised-dot: #818CF8;
+  /* proposal × revised (purple — human modified) */
+  --color-proposal-revised-fill: rgba(168, 85, 247, 0.12);
+  --color-proposal-revised-border: rgba(168, 85, 247, 0.45);
+  --color-proposal-revised-text: #D8B4FE;
+  --color-proposal-revised-dot: #A855F7;
 
   /* data viz */
   --color-viz-speaker-a: #3B82F6;

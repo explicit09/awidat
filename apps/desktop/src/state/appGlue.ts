@@ -19,9 +19,19 @@ import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
 import { useMediaStore } from "../media/store";
+import {
+  brollEntryFromGenerated,
+  isBrollProposalCandidate,
+  useGeneratedMediaStore,
+} from "../media/generatedMediaStore";
 import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
+import { usePendingProposals } from "../timeline/pendingProposals";
+import {
+  isApprovalRequestItem,
+  useBriefProposalsStore,
+} from "./briefProposals";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
 import {
@@ -29,7 +39,8 @@ import {
   emitMenuCommand,
   onMenuCommand,
 } from "../app/menuCommands";
-import { useStageStore } from "./index";
+import { useIndexerOverlay, useSkillsStore, useStageStore } from "./index";
+import { INTRO_PROMPT, useIntroState } from "./introState";
 import {
   ITEM_EVENT,
   MENU_COMMAND_EVENT,
@@ -57,10 +68,25 @@ export function useAppGlue() {
   const clearProposal = useProposalStore((s) => s.clear);
   const ingestProposal = useProposalStore((s) => s.ingest);
   const activeProposal = useProposalStore((s) => s.active);
+  const ingestPendingProposal = usePendingProposals((s) => s.ingest);
+  const clearPendingProposals = usePendingProposals((s) => s.clear);
+  const ingestBriefApproval = useBriefProposalsStore((s) => s.ingestApproval);
+  const ingestBriefBroll = useBriefProposalsStore((s) => s.ingestBroll);
+  const clearBriefProposals = useBriefProposalsStore((s) => s.clear);
+  const generatedMediaEntries = useGeneratedMediaStore((s) => s.entries);
+  const refreshGeneratedMedia = useGeneratedMediaStore((s) => s.refresh);
 
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshMedia = useMediaStore((s) => s.refresh);
+  const mediaSourceCount = useMediaStore((s) => s.sources.length);
+  const mediaProxyCount = useMediaStore((s) => s.proxies.length);
+  const agentRunning = useAgentStore((s) => s.running);
+  const agentItemsCount = useAgentStore((s) => s.items.length);
+  const introduced = useIntroState((s) => s.introduced);
+  const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
+  const hydrateSkillsFromDisk = useSkillsStore((s) => s.hydrateFromDisk);
+  const hydrateIndexerOverlayFromDisk = useIndexerOverlay((s) => s.hydrateFromDisk);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const zoomIn = useTimelineStore((s) => s.zoomIn);
@@ -96,9 +122,25 @@ export function useAppGlue() {
       const item = event.payload.item;
       if (isProposedEditItem(item)) {
         ingestProposal(item);
+        ingestPendingProposal(item);
+      }
+      if (isApprovalRequestItem(item)) {
+        ingestBriefApproval(item);
       }
       if (item.kind === "editorial_note") {
         void ingestNote(item);
+      }
+      // Generated-media lifecycle. The watcher emits `Item::Job` with
+      // `job_kind === "generated_media"` for every registry tick; we
+      // refresh the registry projection on Started/Delta/Completed so
+      // the Brief and the Media-tab panel stay synchronized with the
+      // on-disk state. The actual Brief routing happens below in the
+      // subscriber that watches `useGeneratedMediaStore.entries`.
+      if (
+        item.kind === "job" &&
+        (item as { job_kind?: string }).job_kind === "generated_media"
+      ) {
+        void refreshGeneratedMedia();
       }
       upsertItem(item);
     });
@@ -132,8 +174,25 @@ export function useAppGlue() {
     setActiveTurnId,
     setTurnError,
     ingestProposal,
+    ingestPendingProposal,
+    ingestBriefApproval,
     ingestNote,
+    refreshGeneratedMedia,
   ]);
+
+  // Broll → Brief subscriber. The watcher refreshes the registry
+  // projection (above); we then take every entry that has reached
+  // "ready, video on disk" and surface it as a generated-broll
+  // BriefProposal. The Brief store dedupes on jobId and silently
+  // ignores entries the user has already decided on, so this can fire
+  // on every render without amplifying.
+  useEffect(() => {
+    if (!isTauri()) return;
+    for (const entry of generatedMediaEntries) {
+      if (!isBrollProposalCandidate(entry)) continue;
+      ingestBriefBroll(brollEntryFromGenerated(entry));
+    }
+  }, [generatedMediaEntries, ingestBriefBroll]);
 
   // Native-menu command routing.
   useEffect(() => {
@@ -268,6 +327,8 @@ export function useAppGlue() {
   useEffect(() => {
     clearAgent();
     clearProposal();
+    clearPendingProposals();
+    clearBriefProposals();
     clearMediaStreamUrlCache();
     clearMediaSelection(null);
     clearSelection();
@@ -279,15 +340,54 @@ export function useAppGlue() {
         refreshMedia().catch(() => {});
       }, 500);
       refreshMedia().catch(() => {});
+      // Hydrate the Skills tab's enable/disable state from
+      // `<project>/.awidat/skills.json` so the toggles reflect any
+      // changes that arrived via file sync (Dropbox/git/etc.). The
+      // file is the source of truth; the localStorage cache is just a
+      // UX optimization for cold loads. Errors are swallowed — the
+      // agent still loads everything when the file is missing.
+      const projectRoot = current;
+      // Read the full skill config — disabled + pinned (Wave 5 B2)
+      // — so the pin UI on the Skills tab reflects state that landed
+      // via file sync. v1 files migrate transparently on the Rust
+      // side (empty pin list).
+      invoke<{
+        version: number;
+        disabled: string[];
+        pinned?: Array<{
+          name: string;
+          version?: string;
+          provenance?: "bundled" | "user" | "project";
+        }>;
+      }>("read_skill_config", { projectPath: projectRoot })
+        .then((cfg) =>
+          hydrateSkillsFromDisk(
+            projectRoot,
+            cfg.disabled ?? [],
+            cfg.pinned ?? [],
+          ),
+        )
+        .catch((e) => console.warn("read_skill_config failed", e));
+      // Mirror the skills hydration for the indexers overlay (Wave 4
+      // T3). The IndexersStrip popover reads disabled state from this
+      // store; the dispatcher reads the same .awidat/indexers.json on
+      // run so the two views never disagree.
+      invoke<string[]>("read_disabled_indexers", { projectPath: projectRoot })
+        .then((disabled) => hydrateIndexerOverlayFromDisk(projectRoot, disabled))
+        .catch((e) => console.warn("read_disabled_indexers failed", e));
       return () => window.clearTimeout(retry);
     }
   }, [
     current,
     clearAgent,
     clearProposal,
+    clearPendingProposals,
+    clearBriefProposals,
     clearMediaSelection,
     clearSelection,
     clearNotes,
+    hydrateSkillsFromDisk,
+    hydrateIndexerOverlayFromDisk,
     refreshTimeline,
     refreshMedia,
   ]);
@@ -321,6 +421,45 @@ export function useAppGlue() {
           it.job_kind === "url_import") &&
         it.phase === "completed",
     ).length,
+  ]);
+
+  // Synthetic editorial intro turn — Wave 3 task F3. Fires once per
+  // project per persisted-state-clear. The agent has read AGENTS.md and
+  // any cached indexer signals by the time the bridge is up, so this
+  // gives it a chance to introduce itself before the user types. Hidden
+  // from the transcript via the `[awidat:intro]` sentinel in the prompt
+  // body — see `introState.ts` and the `ChatStream` / App.tsx filters.
+  //
+  // Hard constraints:
+  //   - Wait for at least one source media item (sources or proxies).
+  //   - Composer must be empty (agentItemsCount === 0, !agentRunning).
+  //   - Project must not be in the persisted `introduced` set.
+  //   - Single-shot per project — `markIntroduced` is set BEFORE the
+  //     invoke resolves, so a `start_turn` rejection won't queue retries
+  //     against the same project this session.
+  useEffect(() => {
+    if (!isTauri() || current === null) return;
+    if (introduced.has(current)) return;
+    if (agentRunning || agentItemsCount > 0) return;
+    if (mediaSourceCount === 0 && mediaProxyCount === 0) return;
+    // Latch the project before invoking. If `start_turn` fails (codex
+    // not ready), we deliberately do NOT retry — the user can still
+    // type manually. A failed intro should not block the manual path.
+    markIntroduced(current);
+    setRunning(true);
+    invoke("start_turn", { input: INTRO_PROMPT }).catch((err) => {
+      console.warn("intro start_turn failed", err);
+      setRunning(false);
+    });
+  }, [
+    current,
+    introduced,
+    agentRunning,
+    agentItemsCount,
+    mediaSourceCount,
+    mediaProxyCount,
+    markIntroduced,
+    setRunning,
   ]);
 
   // If the timeline has clips with no proxy yet, make

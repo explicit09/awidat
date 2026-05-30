@@ -1,6 +1,15 @@
 import { RefreshCw, Sparkles } from "lucide-react";
-import { Button, Card, Inline, Pill, Stack, type PillStatus } from "../ui";
+import {
+  Button,
+  Card,
+  Inline,
+  Stack,
+  StatusPillFromMapping,
+  cn,
+  type StatusPillMapping,
+} from "../ui";
 import type { GeneratedMediaEntry } from "./generatedMediaStore";
+import { useBriefProposalsStore } from "../state/briefProposals";
 
 export function GeneratedMediaPanel({
   entries,
@@ -62,7 +71,20 @@ function GeneratedMediaJobCard({
   entry: GeneratedMediaEntry;
   onUse: (entry: GeneratedMediaEntry) => void;
 }) {
-  const usable = entry.state === "succeeded" && Boolean(entry.video_path);
+  // The Brief stack now owns the accept/reject decision for ready
+  // generated-broll jobs. The Media-tab card stays as history: when
+  // an entry is currently pending review, we hide the Add button and
+  // show a "Pending review in Brief" pill so users aren't tempted to
+  // place the same asset from two surfaces. Once decided (or for
+  // entries that never qualified — failed, non-broll), the original
+  // Add-to-timeline affordance returns.
+  const pendingInBrief = useBriefProposalsStore((s) =>
+    s.brollProposals.has(entry.job_id),
+  );
+  const usable =
+    entry.state === "succeeded" &&
+    Boolean(entry.video_path) &&
+    !pendingInBrief;
   return (
     <div
       className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
@@ -84,9 +106,11 @@ function GeneratedMediaJobCard({
             {entry.prompt_excerpt}
           </span>
         </Stack>
-        <Pill status={statePill(entry.state)} dot={false} className="shrink-0">
-          {stateLabel(entry.state)}
-        </Pill>
+        <StatusPillFromMapping
+          mapping={statePill(entry.state)}
+          label={stateLabel(entry.state)}
+          className="shrink-0"
+        />
       </Inline>
       <Inline justify="between" align="center" gap="2" className="mt-2">
         <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
@@ -94,7 +118,17 @@ function GeneratedMediaJobCard({
           {entry.requires_disclosure ? " · AI disclosure" : ""}
           {entry.uses_likeness ? " · likeness" : ""}
         </span>
-        {usable ? (
+        {pendingInBrief ? (
+          <span
+            className={cn(
+              "shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
+              "bg-[var(--color-surface-panel)] px-1.5 py-[1px]",
+              "text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]",
+            )}
+          >
+            Pending review in Brief
+          </span>
+        ) : usable ? (
           <Button
             variant="ghost"
             size="sm"
@@ -116,19 +150,22 @@ function GeneratedMediaJobCard({
   );
 }
 
-function statePill(state: string): PillStatus {
+function statePill(state: string): StatusPillMapping {
   switch (state) {
     case "succeeded":
-      return "ready";
+      return { family: "job", state: "ready" };
     case "queued":
     case "running":
-      return "processing";
+      return { family: "job", state: "running" };
     case "failed":
-      return "failed";
+      return { family: "job", state: "failed" };
     case "cancelled":
-      return "warning";
+      // Lossy: "warning" had no direct equivalent; cancelled is closer
+      // to "failed" than to "ready" — render in the failed treatment.
+      return { family: "job", state: "failed" };
     default:
-      return "reviewing";
+      // "reviewing" → proposal/proposed (awaiting human action).
+      return { family: "proposal", state: "proposed" };
   }
 }
 

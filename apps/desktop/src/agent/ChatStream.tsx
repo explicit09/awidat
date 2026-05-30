@@ -13,9 +13,12 @@ import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
 import { useProjectStore } from "../app/state";
 import { EmptyState } from "../app/EmptyState";
+import { EmptyConversation } from "./EmptyConversation";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../timeline/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
+import { isAwidatSentinel } from "../state/introState";
+import { RationaleHint } from "../ui/components/RationaleHint";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -65,9 +68,7 @@ export function ChatStream() {
         !turnError &&
         projectReady && (
           hasTimelineClips ? (
-            <p className="chat-empty chat-empty-loaded">
-              Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it.
-            </p>
+            <EmptyConversation />
           ) : timelineRefreshing ? (
             <p className="chat-empty chat-empty-loaded">Loading project...</p>
           ) : (
@@ -75,9 +76,7 @@ export function ChatStream() {
           )
         )}
       {items.length === 0 && !running && !turnError && !projectReady && (
-        <p className="chat-empty">
-          Open or create a project to get started.
-        </p>
+        <EmptyConversation />
       )}
       {items.map((item) => (
         <ItemView key={item.id} item={item} />
@@ -96,7 +95,11 @@ export function ChatStream() {
 function latestUserPrompt(items: Item[]): string | null {
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];
-    if (item.kind === "user_input" && item.text.trim()) {
+    if (
+      item.kind === "user_input" &&
+      item.text.trim() &&
+      !isAwidatSentinel(item.text)
+    ) {
       const hasReplyAfter = items.slice(i + 1).some((next) => next.kind !== "user_input");
       if (!hasReplyAfter) return null;
       return summarizeText(item.text, 160);
@@ -108,6 +111,12 @@ function latestUserPrompt(items: Item[]): string | null {
 function ItemView({ item }: { item: Item }) {
   switch (item.kind) {
     case "user_input":
+      // Synthetic editorial turns carry an `[awidat:*]` sentinel —
+      // they are an instruction to the model, not a user message. Hide
+      // them from the transcript so the agent's reply reads as a
+      // direct, unprompted response to project state. Covers the intro
+      // (F3) and "Prepare a starting cut" (B4) flows.
+      if (isAwidatSentinel(item.text)) return null;
       return (
         <article className="item item-user">
           <div className="item-meta">you</div>
@@ -174,6 +183,10 @@ function ItemView({ item }: { item: Item }) {
               <span className="proposal-phase-hint"> — {phaseLabel}</span>
             )}
           </div>
+          {/* Rationale — the agent's one-sentence "why", surfaced
+              right under the summary so the user can take the call
+              on faith without opening the inspector. */}
+          <RationaleHint rationale={item.rationale} className="mt-1" />
         </article>
       );
     }

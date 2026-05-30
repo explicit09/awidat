@@ -37,6 +37,13 @@ export type ActiveProposal = {
   risk?: RiskLevel;
   evidence?: ProposalEvidence[];
   alternatives?: ProposalAlternative[];
+  /**
+   * Optional short-form rationale — the agent's one-sentence
+   * justification ("trimmed 0.42s silence per podcast defaults").
+   * Wave 3 renders this on every proposal pill / Brief row /
+   * inspector header so the reviewer can take the call on faith.
+   */
+  rationale?: string;
 };
 
 type ProposalState = {
@@ -82,6 +89,7 @@ export const useProposalStore = create<ProposalState>((set) => ({
             risk: item.risk ?? undefined,
             evidence: item.evidence ?? [],
             alternatives: item.alternatives ?? [],
+            rationale: item.rationale ?? undefined,
           },
         };
       }
@@ -111,6 +119,10 @@ export const useProposalStore = create<ProposalState>((set) => ({
             alternatives: item.alternatives?.length
               ? item.alternatives
               : state.active.alternatives,
+            // Newer deltas can carry a rationale; preserve the prior
+            // value if the delta omits it (drag-adjust deltas don't
+            // re-emit the agent's rationale).
+            rationale: item.rationale ?? state.active.rationale,
           },
         };
       }

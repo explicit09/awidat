@@ -1424,6 +1424,273 @@ button {
   cursor: not-allowed;
 }
 
+/* New Project modal — Studio Pro refinements.
+   Scoped under `.new-project` so the type-card picker, kbd hints, and
+   path preview don't bleed into other modal callers (URL import, etc.). */
+.modal.new-project {
+  width: 540px;
+}
+
+.new-project .np-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-project .np-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.new-project .np-kbd-primary {
+  margin-left: 6px;
+  border-color: rgba(10, 11, 11, 0.28);
+  background: rgba(10, 11, 11, 0.18);
+  color: rgba(10, 11, 11, 0.78);
+}
+
+.new-project .np-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.new-project .np-row input {
+  flex: initial;
+}
+
+.new-project .np-input-hint {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.new-project .np-types {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.new-project .np-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.new-project .np-type-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-card);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.new-project .np-type-card:hover:not(:disabled) {
+  background: var(--color-surface-card-hover);
+}
+
+.new-project .np-type-card-selected,
+.new-project .np-type-card-selected:hover:not(:disabled) {
+  border-color: var(--color-brand);
+  background: var(--color-surface-selected);
+}
+
+.new-project .np-type-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-text-secondary);
+}
+
+.new-project .np-type-card-selected .np-type-icon {
+  color: var(--color-brand);
+}
+
+.new-project .np-type-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.new-project .np-type-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.new-project .np-type-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.25;
+}
+
+.new-project .np-helper {
+  margin: 2px 0 0;
+}
+
+.new-project .np-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.new-project .np-preview > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.new-project .np-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-project .np-spin {
+  animation: np-spin 720ms linear infinite;
+}
+
+@keyframes np-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-project .np-spin {
+    animation: none;
+  }
+}
+
+/* AGENTS.md in-product editor (Wave 3 T2).
+   Scoped under `.agents-md-editor` so the mono textarea, save chip,
+   and meta row don't leak into other modal callers. */
+.modal.agents-md-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+.agents-md-editor .ame-path {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-md-editor .ame-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
+  display: flex;
+}
+
+.agents-md-editor .ame-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  color: var(--color-text-primary);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  outline: none;
+}
+
+.agents-md-editor .ame-textarea:focus {
+  border-color: var(--color-border-focus);
+}
+
+.agents-md-editor .ame-textarea:disabled {
+  color: var(--color-text-disabled);
+  cursor: progress;
+}
+
+.agents-md-editor .ame-footer {
+  justify-content: space-between;
+}
+
+.agents-md-editor .ame-meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agents-md-editor .ame-wordcount {
+  font-variant-numeric: tabular-nums;
+}
+
+.agents-md-editor .ame-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.agents-md-editor .ame-chip--info {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-proposal-proposed-text);
+}
+
+.agents-md-editor .ame-chip--ok {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--color-proposal-accepted-text);
+}
+
+.agents-md-editor .ame-chip--err {
+  border-color: rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-proposal-rejected-text);
+}
+
 /* Persistent action bar between header and chat */
 .action-bar {
   display: flex;
@@ -2065,8 +2332,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
   text-align: center;
   padding: 0 24px;
   pointer-events: none;
@@ -2106,6 +2374,27 @@ button {
   }
   to {
     transform: translateX(-50%);
+    opacity: 1;
+  }
+}
+
+/**
+ * Wave 5 C1 — inline reject-reason picker entrance.
+ * Slides down + fades in below the Accept/Reject row on the Brief stack.
+ * Kept short (120ms) so editorial flow stays snappy.
+ */
+.reject-picker-enter {
+  animation: reject-picker-slide-down 120ms ease-out;
+  transform-origin: top;
+}
+
+@keyframes reject-picker-slide-down {
+  from {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -3776,6 +4065,379 @@ button {
   border-radius: 3px;
   padding: 1px;
   cursor: pointer;
+}
+
+/* ─── Wave 2 — Inspector Studio-Pro polish ─────────────────────────
+ * On-brand slider primitive, value-badge typography, LUT swatch,
+ * audio-fade steppers, split-edit/track-mix tightening. The visual
+ * vocabulary mirrors IndexRailPro: charcoal surfaces, cyan as the
+ * "active control" accent, mono badges right-aligned in a fixed
+ * column. */
+
+.properties-slider-pro {
+  flex: 1;
+  min-width: 92px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 999px;
+  /* the inline `style={background:...}` from Slider.tsx provides the
+   * fill gradient; we own thumb shape + hit area + focus ring here. */
+}
+
+.properties-slider-pro:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 3px;
+}
+
+/* WebKit / Blink */
+.properties-slider-pro::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent; /* inline gradient on the input itself */
+}
+
+.properties-slider-pro::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-active);
+  background: var(--color-brand-secondary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.properties-slider-pro:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.22), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro[data-rest="true"]::-webkit-slider-thumb {
+  background: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+/* Firefox */
+.properties-slider-pro::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.properties-slider-pro::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-active);
+  background: var(--color-brand-secondary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.properties-slider-pro:hover::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro[data-rest="true"]::-moz-range-thumb {
+  background: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+/* Value badge — always mono, right-aligned, fixed-width so the column
+ * doesn't reflow when the readout grows from "1.00" to "12.50". */
+.properties-value-badge {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.18em; /* thin space between number and unit */
+  min-width: 64px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.properties-value-badge .unit {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.properties-value-badge[data-rest="true"] {
+  color: var(--color-text-muted);
+}
+
+/* LUT control — 28×16 swatch left of the path input. When no LUT is
+ * set, paint a diagonal charcoal slash to signal "empty". When a path
+ * is set but we have no first-frame average yet, fall back to a small
+ * 2-tone checkerboard. */
+.properties-lut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.properties-lut-swatch {
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: var(--color-surface-input);
+}
+
+.properties-lut-swatch[data-state="empty"] {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-surface-input) 0,
+    var(--color-surface-input) 3px,
+    var(--color-surface-card) 3px,
+    var(--color-surface-card) 6px
+  );
+}
+
+.properties-lut-swatch[data-state="loaded"] {
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.05) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.05) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: var(--color-surface-card);
+}
+
+/* Audio fade — paired up/down steppers tucked into a compact row. */
+.properties-fade-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.properties-fade-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.properties-fade-cell-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  width: 18px;
+  text-align: right;
+}
+
+.properties-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  overflow: hidden;
+}
+
+.properties-stepper input {
+  width: 48px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  text-align: right;
+  outline: none;
+}
+
+.properties-stepper button {
+  width: 18px;
+  border: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.properties-stepper button:hover {
+  background: var(--color-surface-input-hover);
+  color: var(--color-text-primary);
+}
+
+.properties-stepper-stack {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+.properties-stepper-stack button {
+  height: 12px;
+  border-left: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.properties-stepper-stack button:last-child {
+  border-bottom: 0;
+}
+
+/* Split-edit / inline apply — shrink the Apply chip to row height
+ * and dial it back to ghost so it doesn't shout. */
+.properties-inline-apply {
+  height: 22px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-card);
+  color: var(--color-text-secondary);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.properties-inline-apply:hover:not(:disabled) {
+  background: var(--color-surface-card-hover);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.properties-inline-apply:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.properties-split-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.properties-split-row > span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Track Mix — volume + mute/solo chips on one row, ducking row below.
+ * Chip toggles share the StatusPill rhythm: pill height, neutral when
+ * off, semantic when on. */
+.properties-mix-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.properties-chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-card);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.properties-chip-toggle:hover {
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="mute"] {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="solo"] {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="duck"] {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--color-proposal-proposed-text);
+}
+
+.properties-ducking-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Timing Metadata — mono everywhere, tighter row gaps. */
+.properties-meta-row .properties-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+/* Delete button — keep the red but tighten its weight + casing so it
+ * reads as a decisive action, not an alarm. */
+.properties-danger-pro {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.10);
+  color: #fca5a5;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.properties-danger-pro:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--color-danger);
+  color: #fecaca;
 }
 
 /* Step 1.7 — Editorial notes panel. Sits inside .workspace-chat at
@@ -5679,9 +6341,9 @@ button {
 .proposal-actions-primary,
 .modal-footer button.primary,
 .note-broll-use {
-  background: linear-gradient(180deg, #3d8ff0, #2b6fbf);
-  border-color: #5ba8ff;
-  color: #eef7ff;
+  background: linear-gradient(180deg, var(--color-brand), var(--color-brand-active));
+  border-color: var(--color-brand-hover);
+  color: var(--color-text-inverse);
 }
 
 .workspace-editor {
@@ -6681,4 +7343,158 @@ button {
   font-size: 10.5px;
   color: var(--color-text-muted);
   flex-shrink: 0;
+}
+
+/* ============================================================
+   Wave 4 W4.4 — Transcript-first Source view (`<TranscriptSource>`).
+   Surface chrome + selection-action affordances. Word styles stay in
+   the existing `.transcript-*` block; this block only adds the layers
+   that the new wrapper paints on top.
+   ============================================================ */
+
+.tx-source {
+  /* Container — the outer flex column is set inline; this rule is
+     here for visual debugging hooks (data attrs, etc.). */
+}
+
+.tx-tabs {
+  /* Sub-tab strip — Transcript | Video. Matches the height of
+     .CenterModeTabs (28px) so the two strips line up vertically. */
+  gap: 16px;
+}
+
+.tx-search {
+  /* Inline search bar — slides in under the sub-tab strip. */
+}
+
+/* Word-level search highlights, applied imperatively in SearchBar's
+   effect. Light teal so they sit alongside the existing blue
+   active-word highlight without competing for attention. */
+.transcript-word.tx-search-match {
+  background: rgba(91, 211, 217, 0.18);
+  border-radius: 3px;
+}
+.transcript-word.tx-search-match-cursor {
+  background: rgba(91, 211, 217, 0.45);
+  box-shadow: 0 0 0 1px rgba(91, 211, 217, 0.85);
+}
+
+/* "Strike-through cut" affordance painted on every word inside the
+   active selection range. Dotted red overline + strikethrough text +
+   subtle red wash. Communicates "if you accept, this text leaves the
+   cut". */
+.transcript-word.tx-strike {
+  text-decoration: line-through;
+  text-decoration-color: rgba(232, 81, 81, 0.85);
+  text-decoration-thickness: 1.5px;
+  background: rgba(232, 81, 81, 0.12);
+  border-top: 1px dotted rgba(232, 81, 81, 0.8);
+  border-radius: 0;
+}
+
+/* Yellow underline for must-keep marks. Persists per-project; sits
+   behind the active-word highlight so the playhead still reads as
+   blue when crossing a kept range. */
+.transcript-word.tx-must-keep {
+  border-bottom: 2px solid rgba(245, 200, 60, 0.7);
+}
+
+/* Applied cut — dim + strikethrough on words the agent's accepted
+   cuts have removed from the timeline. Quiet, so the user can still
+   read the surrounding context without the cut text shouting. */
+.transcript-word.tx-applied-cut {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(238, 232, 205, 0.35);
+  opacity: 0.55;
+}
+
+/* Wave 4 W4.6 — Review-focus flash on transcript words. Applied
+   imperatively by <FocusFlashOverlay> for ~600ms after the user clicks
+   "Review →" on a caption/title proposal so the eye lands on the
+   affected words. The cyan tone matches the timeline ghost-clip and
+   selection language for visual consistency across surfaces. */
+.transcript-word.tx-focus-flash {
+  background: rgba(56, 189, 248, 0.32);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.85);
+  border-radius: 3px;
+  animation: tx-focus-flash-anim 600ms ease-out;
+}
+@keyframes tx-focus-flash-anim {
+  0% {
+    background: rgba(56, 189, 248, 0.55);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 1);
+  }
+  100% {
+    background: rgba(56, 189, 248, 0.18);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4);
+  }
+}
+
+/* Floating action bar — appears anchored below the last selected
+   word. Two buttons (Propose delete, Mark must-keep) + an inline
+   error slot. Positioning is set inline via JS; the rule below sets
+   chrome only. */
+.tx-action-bar {
+  position: absolute;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--color-surface-toolbar, rgba(18, 18, 18, 0.96));
+  border: 1px solid var(--color-border-strong, rgba(238, 232, 205, 0.18));
+  border-radius: var(--radius-md, 6px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.tx-action-button {
+  appearance: none;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.tx-action-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tx-action-delete {
+  color: #fff;
+  background: rgba(232, 81, 81, 0.85);
+}
+.tx-action-delete:hover:not(:disabled) {
+  background: rgba(232, 81, 81, 1);
+}
+
+.tx-action-keep {
+  color: var(--color-text-primary, #fff);
+  background: rgba(245, 200, 60, 0.18);
+  border: 1px solid rgba(245, 200, 60, 0.45);
+}
+.tx-action-keep:hover {
+  background: rgba(245, 200, 60, 0.28);
+}
+
+.tx-action-error {
+  color: var(--color-text-error, #e85151);
+  font-size: 10.5px;
+}
+
+/* Right-click affordance — when the user right-clicks a selected
+   range, the same Mark-must-keep action runs. The surface needs to
+   look interactive, but we don't paint a context menu — the floating
+   action bar above is the menu.
+   (Inline JS sets `oncontextmenu` on the surface; CSS is just here
+   to communicate "this is a clickable surface".) */
+.tx-surface {
+  position: relative;
 }

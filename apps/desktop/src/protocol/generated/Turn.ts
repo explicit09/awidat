@@ -9,19 +9,19 @@ import type { Item } from "./Item";
  * A Turn lives inside a Thread. Turns are append-only within a Thread;
  * re-running an old turn forks the Thread.
  */
-export type Turn = {
+export type Turn = { 
 /**
  * Stable id within the parent Thread.
  */
-id: Id,
+id: Id, 
 /**
  * The user input that opened this Turn.
  */
-user_input: string,
+user_input: string, 
 /**
  * Items emitted during this Turn, in arrival order.
  */
-items: Array<Item>,
+items: Array<Item>, 
 /**
  * Whether this Turn is still running. `true` between TurnStart and
  * TurnEnd events; `false` once the agent loop hands control back.

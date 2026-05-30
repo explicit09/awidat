@@ -4,51 +4,51 @@ import type { MediaCacheArtifactStatus } from "./MediaCacheArtifactStatus";
 /**
  * Cache/index sidecar readiness for one asset.
  */
-export type MediaCacheReadiness = {
+export type MediaCacheReadiness = { 
 /**
  * Timeline playback proxy.
  */
-proxy: MediaCacheArtifactStatus,
+proxy: MediaCacheArtifactStatus, 
 /**
  * Browser-safe preview/cache media.
  */
-compatibility_media: MediaCacheArtifactStatus,
+compatibility_media: MediaCacheArtifactStatus, 
 /**
  * Filmstrip thumbnails.
  */
-thumbnails: MediaCacheArtifactStatus,
+thumbnails: MediaCacheArtifactStatus, 
 /**
  * Waveform peaks sidecar.
  */
-waveform: MediaCacheArtifactStatus,
+waveform: MediaCacheArtifactStatus, 
 /**
  * Word/segment transcript sidecar.
  */
-transcript: MediaCacheArtifactStatus,
+transcript: MediaCacheArtifactStatus, 
 /**
  * Caption export/index sidecar.
  */
-captions: MediaCacheArtifactStatus,
+captions: MediaCacheArtifactStatus, 
 /**
  * Scene detection sidecar.
  */
-scenes: MediaCacheArtifactStatus,
+scenes: MediaCacheArtifactStatus, 
 /**
  * Face detection sidecar.
  */
-face_detection: MediaCacheArtifactStatus,
+face_detection: MediaCacheArtifactStatus, 
 /**
  * Color analysis sidecar.
  */
-color_analysis: MediaCacheArtifactStatus,
+color_analysis: MediaCacheArtifactStatus, 
 /**
  * Motion analysis sidecar.
  */
-motion_analysis: MediaCacheArtifactStatus,
+motion_analysis: MediaCacheArtifactStatus, 
 /**
  * Audio analysis sidecar.
  */
-audio_analysis: MediaCacheArtifactStatus,
+audio_analysis: MediaCacheArtifactStatus, 
 /**
  * Silence detection sidecar.
  */

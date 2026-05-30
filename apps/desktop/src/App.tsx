@@ -13,14 +13,16 @@ import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, RefreshCw, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
+import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
+import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
+import { SettingsModal } from "./app/SettingsModal";
+import { WelcomeCard } from "./app/WelcomeCard";
 import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
@@ -36,9 +38,16 @@ import {
   AppShell,
   CommandRail,
   DeliverySurface,
+  DRAFT_METADATA_JOB_ID,
+  SkillsSurface,
+  HistorySurface,
+  BriefSurface,
+  CenterModeTabs,
+  IndexRail,
+  isTranscriptFirstProjectType,
   PreviewSurface,
+  TranscriptSource,
   ProposalInspector,
-  StageIndicator,
   TimelineHybrid,
   type ActivityEntry,
   type ChatSessionSummary,
@@ -60,12 +69,23 @@ import {
   type TimelineTab,
   type TimelineViewMode,
 } from "./shell";
-import { JobsStatusBar } from "./shell/JobsStatusBar";
-import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
-import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Pill, Stack, type MediaIndexingStatus, type PillStatus } from "./ui";
+import { Footer as ChromeFooter } from "./shell/chrome/Footer";
+import { Landing } from "./shell/empty/Landing";
+import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
+import { useIndexReadinessStore } from "./state/indexReadiness";
+import { useIntroState } from "./state/introState";
+import { useBriefProposalsStore } from "./state/briefProposals";
+import { useCenterModeStore, type CenterMode } from "./state/centerMode";
+import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
+import { useSettings } from "./state/settings";
+import {
+  providerKeyForTarget,
+  useUploadPrefs,
+} from "./state/uploadPrefs";
+import { useUploadMetadata } from "./state/uploadMetadata";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
   DELIVERY_TARGETS,
@@ -81,7 +101,7 @@ import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
-import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
+import { MENU_COMMANDS, onMenuCommand } from "./app/menuCommands";
 import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
 import { TIMELINE_CHANGED_EVENT } from "./protocol";
 import {
@@ -108,9 +128,16 @@ function App() {
   // root so it survives Deliver-tab unmounts and continues exports
   // when the user switches back to Edit.
   useRenderQueueWorker();
+  // Pull the persisted "Upload after render?" opt-ins from the
+  // backend once on mount. Local mirror in localStorage means the UI
+  // doesn't flash an "off" state in the meantime.
+  useEffect(() => {
+    void useUploadPrefs.getState().hydrate();
+  }, []);
 
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
+  const projectType = useProjectStore((s) => s.projectType);
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
   const replaceAgentItems = useAgentStore((s) => s.replace);
@@ -152,6 +179,61 @@ function App() {
   const activeProposal = useProposalStore((s) => s.active);
   const inspectorData = useProposalInspectorData();
 
+  // Wave 3 B1: Brief / Source / Timeline center-pane toggle. The store
+  // resolves the active mode per-project with a default rule (Brief
+  // when the agent has work waiting or the project hasn't been
+  // introduced yet; Source otherwise).
+  //
+  // Subscribe to the slice so re-renders fire after every set(). The
+  // approvals subscription on the brief store keeps `pending().length`
+  // current; intro state is read once per project change via hasIntroduced.
+  useBriefProposalsStore((s) => s.approvals);
+  useCenterModeStore((s) => s.byProject);
+  const briefPendingCount = useBriefProposalsStore.getState().pending().length;
+  const hasIntroduced = useIntroState((s) => s.hasIntroduced);
+  const centerModeStoreGet = useCenterModeStore.getState().get;
+  const setCenterModeStore = useCenterModeStore.getState().set;
+  const centerMode: CenterMode = centerModeStoreGet(current, {
+    pendingCount: briefPendingCount,
+    isFirstSession: current ? !hasIntroduced(current) : false,
+  });
+  const setCenterMode = (next: CenterMode) => setCenterModeStore(current, next);
+
+  // Wave 4 W4.6 — wire the focus controller. The adapter closes over
+  // the latest `current` (project root) + setCenterMode at the time of
+  // the effect, so a project switch re-installs the adapter and the
+  // controller drives the right project's tab. `installFocusAdapter`
+  // only swaps the singleton's adapter ref — it never re-creates the
+  // controller, so subscribers stay attached across re-installs.
+  useEffect(() => {
+    installFocusAdapter({
+      setCenterMode: (next: CenterMode) => {
+        if (current) setCenterModeStore(current, next);
+      },
+      requestTimelineSeek: (t) => {
+        useMediaStore.getState().requestTimelineSeek(t);
+      },
+      scrollTimelineTo: (centerTimeS) => {
+        // The timeline-stage's scrollLeft governs horizontal scroll.
+        // We translate seconds → pixels via the canvas's width / the
+        // snapshot duration — the canvas only renders once it has both,
+        // so when either is zero we skip silently.
+        const stage = document.querySelector<HTMLElement>(".timeline-stage");
+        const canvas = stage?.querySelector<HTMLCanvasElement>(".timeline-canvas");
+        if (!stage || !canvas) return;
+        const canvasWidth = canvas.clientWidth;
+        const duration = useTimelineStore.getState().snapshot.duration_s;
+        if (canvasWidth <= 0 || duration <= 0) return;
+        const pps = canvasWidth / duration;
+        const targetX = centerTimeS * pps;
+        const viewportWidth = stage.clientWidth;
+        const desiredLeft = Math.max(0, targetX - viewportWidth / 2);
+        stage.scrollTo({ left: desiredLeft, behavior: "smooth" });
+      },
+      readTimelineSnapshot: () => useTimelineStore.getState().snapshot,
+    });
+  }, [current, setCenterModeStore]);
+
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
   const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
   const [previewViewMode, setPreviewViewMode] = useState<PreviewViewMode>("before-after");
@@ -162,6 +244,13 @@ function App() {
   const [, setRealVideoFrames] = useState<string[]>([]);
   const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
+  // Tracks whether the current `RealMediaPreviewSlot` has decoded its
+  // first frame. Lifted out of the slot so `PreviewSurface` can render
+  // the `FilmSlate` overlay until the swap and cross-fade it out once
+  // the player has something paintable. Reset to false whenever the
+  // selected media changes (see effect below) so re-selecting a clip
+  // re-shows the slate while its frame loads.
+  const [hasProxyFrame, setHasProxyFrame] = useState(false);
   const mediaReadinessCommandUnavailableRef = useRef(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [pendingImportPaths, setPendingImportPaths] = useState<string[] | null>(null);
@@ -459,10 +548,31 @@ function App() {
         ordered.push(key);
       }
     }
+    // Per-target auto-upload opt-ins (W5.A2). The target's own key
+    // is the provider key (`youtube` → YouTube), so we just gate on
+    // whether the user toggled "Upload after render" for that target.
+    const uploadEnabled = useUploadPrefs.getState().enabled;
+    // Per-target metadata the user drafted in the form (W5.A3). The
+    // form persists under DRAFT_METADATA_JOB_ID; on enqueue we copy
+    // the per-provider snapshots onto each entry's own id so the
+    // worker can hand them to the backend on render-done.
+    const metadataStore = useUploadMetadata.getState();
     const entries: RenderQueueEntry[] = ordered.map((key) => {
       const spec = DELIVERY_TARGETS[key];
+      const provider = providerKeyForTarget(key);
+      const uploadTargets =
+        provider && uploadEnabled.has(key) ? [provider] : undefined;
+      const entryId = newQueueId(spec.kind);
+      // Forward the user's draft metadata for this provider, if any,
+      // onto the freshly-allocated entry id so the worker's
+      // `useUploadMetadata.get(entry.id, provider)` lookup finds the
+      // saved values. Done synchronously through the store action.
+      if (uploadTargets && provider) {
+        const draft = metadataStore.get(DRAFT_METADATA_JOB_ID, provider, spec.label);
+        metadataStore.set(entryId, provider, draft);
+      }
       return {
-        id: newQueueId(spec.kind),
+        id: entryId,
         targetId: key,
         label: spec.label,
         kind: spec.kind,
@@ -472,6 +582,7 @@ function App() {
         reframeHeight: spec.height,
         reframeBitrateKbps: spec.videoBitrateKbps,
         stillKind: spec.stillKind,
+        uploadTargets,
       };
     });
     useRenderQueueStore.getState().enqueue(entries);
@@ -518,14 +629,21 @@ function App() {
   async function loadIndexReadiness() {
     if (demoMode || !isTauri() || !current) {
       setIndexReadiness(undefined);
+      useIndexReadinessStore.getState().setSnapshot(undefined);
       return;
     }
     try {
       const snapshot = await invoke<IndexReadinessSnapshot>("index_readiness");
       setIndexReadiness(snapshot);
+      // Mirror into the shared store so evidenceAccessors and any other
+      // surface that doesn't have App-level state access can subscribe.
+      // The local React state above stays as-is to avoid a wider refactor
+      // of the cockpit slate / footer.
+      useIndexReadinessStore.getState().setSnapshot(snapshot);
     } catch (e) {
       console.warn("index_readiness failed", e);
       setIndexReadiness(undefined);
+      useIndexReadinessStore.getState().setSnapshot(undefined);
     }
   }
 
@@ -754,17 +872,10 @@ function App() {
     void runEngineCommand("Revise the selected proposal and explain the tradeoffs.");
   }
 
-  function openDeliveryFromChrome() {
-    setStage(current ? "deliver" : "edit");
-  }
-
-  function openSettingsFromChrome() {
-    setStage("edit");
-    setRightPanel("index");
-    if (current) {
-      void loadIndexerConfig();
-    }
-  }
+  // Chrome handlers `openDeliveryFromChrome` / `openSettingsFromChrome`
+  // were removed alongside the old chrome JSX. The new `<TopChrome />`
+  // (IdentityRow + WorkspaceRow) is wired in Tasks 8–9; we will reintroduce
+  // these once the redesigned chrome handlers land.
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -783,9 +894,26 @@ function App() {
         setPendingImportPaths(null);
         setPendingImportUrl(null);
         setShowNewProject(true);
+      } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
+        useSettings.getState().open();
       }
     });
   });
+
+  // Global keyboard shortcut: ⌘, (or Ctrl+, on non-mac) opens
+  // Settings. Mounted once at the App root so the modal can be
+  // opened from anywhere. The settings modal handles its own Esc.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const isCommaShortcut = event.key === "," && (event.metaKey || event.ctrlKey);
+      if (isCommaShortcut) {
+        event.preventDefault();
+        useSettings.getState().open();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (demoMode) {
@@ -911,6 +1039,14 @@ function App() {
     };
   }, [demoMode, timelineSnapshot]);
 
+  // Reset the "first frame painted" flag whenever the selected media
+  // (or its quality-mode source) changes. Without this, switching to a
+  // new clip would skip showing the FilmSlate because the flag would
+  // still be true from the previously-loaded media.
+  useEffect(() => {
+    setHasProxyFrame(false);
+  }, [selectedPreviewMedia?.path]);
+
   useEffect(() => {
     if (demoMode || !isTauri() || !selectedPreviewMedia) {
       setRealPreviewSrc(null);
@@ -1002,6 +1138,9 @@ function App() {
   // agent's outputs are kept in order: text blocks and tool_calls
   // interleaved as they actually fired. The CommandRail renders the
   // user bubble + the per-turn inline tool/text stream.
+  // Use the extracted helper (origin's refactor). It owns sentinel
+  // filtering (W3 F3 intro / B4 prepare) and approval-request rendering;
+  // see conversationTurns.ts.
   const turns: ConversationTurn[] = useMemo(
     () => itemsToConversationTurns(items, summarizeToolForRail),
     [items],
@@ -1346,7 +1485,7 @@ function App() {
         detail = "Waiting for index output";
       } else {
         status = "missing";
-        detail = "Waiting for local indexer";
+        detail = "Not yet run";
       }
       return {
         id: `real-${kind}`,
@@ -1476,6 +1615,51 @@ function App() {
   const effectiveInspector = demoMode ? screen2Inspector : inspectorData;
   const isTimelinePreview = !demoMode && timelineDuration > 0;
   const selectedPreviewChangeId = demoMode ? "c07" : activePreviewChangeId;
+
+  // FilmSlate inputs — only meaningful when we're previewing real
+  // source media (not the timeline-segmented view and not demo mode).
+  // The slate stays hidden in those modes by leaving `slateSourceMedia`
+  // undefined. Fields beyond `name` are best-effort: the current media
+  // store only carries `name` + `size_bytes`, and source-time duration
+  // (`sourceDurationS`) is populated once the <video> reads metadata.
+  // Resolution / codec / audio aren't surfaced by the model yet — left
+  // undefined so the slate collapses them. TODO(redesign): wire probe
+  // metadata once it lives on `SourceMediaEntry`.
+  const slateSourceMedia = useMemo(() => {
+    if (demoMode || isTimelinePreview) return undefined;
+    if (!selectedPreviewMedia) return undefined;
+    return {
+      name: selectedPreviewMedia.name,
+      sizeBytes: selectedSource?.size_bytes,
+      durationSec: sourceDurationS > 0 ? sourceDurationS : undefined,
+    };
+  }, [demoMode, isTimelinePreview, selectedPreviewMedia, selectedSource?.size_bytes, sourceDurationS]);
+
+  // Total indexers reported by the backend snapshot — keep in sync with
+  // the boolean fields on `IndexReadinessSnapshot`. Hard-coded rather
+  // than derived because the snapshot type is a flat record, not a list.
+  const INDEXER_TOTAL = 9;
+  const slateIndexing = useMemo(() => {
+    if (!indexReadiness) {
+      // No snapshot yet — show a calm "preparing" placeholder so the
+      // slate doesn't claim more progress than is real.
+      return {
+        ready: 0.1,
+        status: "Preparing media…",
+        detail: "Awaiting indexer status",
+      };
+    }
+    const ready = indexReadiness.ready_count;
+    const fraction = Math.max(0, Math.min(1, ready / INDEXER_TOTAL));
+    const transcriptSegment = indexReadiness.transcripts
+      ? " · transcript ready"
+      : "";
+    return {
+      ready: fraction,
+      status: fraction < 1 ? "Building proxy…" : "Decoding first frame…",
+      detail: `${ready} of ${INDEXER_TOTAL} indexers ready${transcriptSegment}`,
+    };
+  }, [indexReadiness]);
   const seekPreview = (timeS: number) => {
     if (demoMode) return;
     if (isTimelinePreview) {
@@ -1535,9 +1719,13 @@ function App() {
   // land later as a small list above the inspector.
   const realWorkspace =
     !demoMode && !hasProject ? (
-      <NoProjectWorkspace />
+      <Landing />
     ) : !demoMode && stage === "deliver" ? (
       realDeliveryWorkspace
+    ) : !demoMode && stage === "skills" ? (
+      <SkillsSurface />
+    ) : !demoMode && stage === "history" ? (
+      <HistorySurface />
     ) : undefined;
 
   if (demoMode && demoScreen.standalone && demoScreen.workspace) {
@@ -1614,66 +1802,9 @@ function App() {
   return (
     <>
     <AppShell
-      topChromeStart={
-        <Inline gap={demoMode ? "3" : "2"} align="center">
-          {demoMode ? (
-            <Inline gap="1" align="center" aria-hidden>
-              <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-              <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-              <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-            </Inline>
-          ) : null}
-          {demoMode ? (
-            <span className="text-[13px] font-bold text-[var(--color-text-primary)]">Awidat</span>
-          ) : (
-            <img src={wordmark} alt="Awidat" className="h-6" />
-          )}
-        </Inline>
-      }
-      topChromeCenter={
-        <Inline gap="3" align="center" className="min-w-0">
-          <StageIndicator className="shrink-0" />
-          {demoMode ? (
-            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)]">
-              {demoScreen.specLabel} · {demoScreen.title}
-            </span>
-          ) : null}
-        </Inline>
-      }
-      topChromeEnd={
-          <Inline gap="1" align="center">
-          {activeProposal || demoMode ? (
-            <Pill status="warning">{demoMode ? demoScreen.pendingLabel ?? "Demo" : `${effectiveChanges.length} pending`}</Pill>
-          ) : null}
-          <AgentStatusBadge
-            status={
-              demoMode
-                ? "awaiting-review"
-                : running
-                ? "analyzing"
-                : activeProposal
-                  ? "awaiting-review"
-                  : current
-                    ? "online"
-                    : "idle"
-            }
-            detail={demoMode ? demoScreen.statusLabel : running ? "Working" : activeProposal ? "Review pending" : current ? "Ready" : "No project"}
-          />
-          {demoMode ? (
-            <>
-              <IconButton icon={<Undo2 />} label="Undo" size="md" />
-              <IconButton icon={<Redo2 />} label="Redo" size="md" />
-              <IconButton icon={<CircleHelp />} label="Help" size="md" />
-              <IconButton icon={<Bell />} label="Notifications" size="md" />
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[9px] font-semibold text-[var(--color-text-secondary)]">
-                T
-              </span>
-            </>
-          ) : null}
-          <IconButton icon={<Share2 />} label="Share" size="md" onClick={openDeliveryFromChrome} />
-          <IconButton icon={<SettingsIcon />} label="Settings" size="md" onClick={openSettingsFromChrome} />
-        </Inline>
-      }
+      // Top chrome (brand, stage tabs, status, share/settings) now lives in
+      // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;
+      // Task 9 brings the workspace/stage row back.
       workspace={workspaceOverride}
       commandRail={
         <LeftWorkspaceRail
@@ -1703,7 +1834,101 @@ function App() {
       }
       preview={
         isEditStage ? (
-          <>
+          <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+            <CenterModeTabs
+              active={centerMode}
+              onChange={setCenterMode}
+              badges={{ brief: briefPendingCount }}
+            />
+            {centerMode === "brief" ? (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {/* Wave 4 W4.6: the focus controller wired in
+                    `installFocusAdapter` above owns the tab switch +
+                    entity focus on every "Review →". BriefSurface no
+                    longer needs a per-click callback. */}
+                <BriefSurface />
+              </div>
+            ) : centerMode === "timeline" ? (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TimelineHybrid
+                  tab={timelineTab}
+                  onChangeTab={setTimelineTab}
+                  viewMode={timelineViewMode}
+                  onChangeViewMode={setTimelineViewMode}
+                  durationS={effectiveDuration}
+                  currentTimeS={effectiveCurrentTime}
+                  changeCount={effectiveChanges.length}
+                  audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
+                  contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
+                />
+              </div>
+            ) : isTranscriptFirstProjectType(projectType) ? (
+              // Wave 4 W4.4: podcast/interview/tutorial projects land on
+              // the transcript-first Source view. The legacy video preview
+              // stays reachable through the Video sub-tab inside
+              // <TranscriptSource>.
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TranscriptSource
+                  videoSlot={
+                    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+                      <MediaOfflineBanner />
+                      <PreviewSurface
+                        proposalName={activeProposal?.summary ?? "Source review"}
+                        pendingCount={effectiveChanges.length}
+                        changes={effectiveChanges}
+                        activeChangeId={selectedPreviewChangeId}
+                        currentTimeS={effectiveCurrentTime}
+                        durationS={effectiveDuration}
+                        isPlaying={isPlaying}
+                        volume={previewVolume}
+                        rate={previewRate}
+                        qualityMode={previewQualityMode}
+                        viewMode={previewViewMode}
+                        videoSlot={
+                          isTimelinePreview ? (
+                            <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
+                          ) : realPreviewSrc && selectedPreviewMedia ? (
+                            <RealMediaPreviewSlot
+                              src={realPreviewSrc}
+                              label={selectedPreviewMedia.label}
+                              name={selectedPreviewMedia.name}
+                              isPlaying={isPlaying}
+                              volume={previewVolume}
+                              rate={previewRate}
+                              seekRequestId={sourceSeekRequestId}
+                              seekTargetS={sourceSeekTargetS}
+                              onTime={setSourceTime}
+                              onDuration={setSourceDuration}
+                              onPlaying={setMediaPlaying}
+                              onFirstFrame={() => setHasProxyFrame(true)}
+                            />
+                          ) : undefined
+                        }
+                        sourceMedia={slateSourceMedia}
+                        hasProxyFrame={hasProxyFrame}
+                        indexing={slateIndexing}
+                        onPlayPause={() => setMediaPlaying(!isPlaying)}
+                        onSelectChange={selectPreviewChange}
+                        onPrevCut={() => jumpPreviewChange(-1)}
+                        onNextCut={() => jumpPreviewChange(1)}
+                        onSeek={seekPreview}
+                        onSetVolume={setPreviewVolume}
+                        onSetRate={setPreviewRate}
+                        onSetQualityMode={setPreviewQualityMode}
+                        onSetViewMode={setPreviewViewMode}
+                        onOpenProposalMenu={() => setInspectorCollapsed(false)}
+                        onInspectProposal={inspectActiveProposal}
+                        onReviseProposal={reviseActiveProposal}
+                        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
+                        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
+                        onFullscreen={() => setInspectorCollapsed(false)}
+                      />
+                    </div>
+                  }
+                />
+              </div>
+            ) : (
+              <>
             <MediaOfflineBanner />
             <PreviewSurface
             proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
@@ -1735,9 +1960,13 @@ function App() {
                   onTime={setSourceTime}
                   onDuration={setSourceDuration}
                   onPlaying={setMediaPlaying}
+                  onFirstFrame={() => setHasProxyFrame(true)}
                 />
               ) : undefined
             }
+            sourceMedia={slateSourceMedia}
+            hasProxyFrame={hasProxyFrame}
+            indexing={slateIndexing}
             onPlayPause={() => setMediaPlaying(!isPlaying)}
             onSelectChange={selectPreviewChange}
             onPrevCut={() => jumpPreviewChange(-1)}
@@ -1754,7 +1983,9 @@ function App() {
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
             onFullscreen={() => setInspectorCollapsed(false)}
           />
-          </>
+              </>
+            )}
+          </div>
         ) : stage === "deliver" ? (
           realDeliveryWorkspace
         ) : (
@@ -1783,6 +2014,11 @@ function App() {
         )
       }
       timelineCollapsed={false}
+      // Wave 4 W4.8: when the center pane is in Timeline mode the
+      // expanded TimelineHybrid renders there — the bottom dock would
+      // double up. Hide the dock entirely so the user sees the
+      // timeline exactly once. Brief and Source modes keep the dock.
+      timelineHidden={isEditStage && centerMode === "timeline"}
       inspector={
         isEditStage && inspectorCollapsed ? (
           <CollapsedInspectorButton
@@ -1814,19 +2050,19 @@ function App() {
               )
             }
             index={
-              <IndexReadinessPanel
-                sourceCount={sourceMediaCount}
+              <IndexRail
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
                 episodes={episodeSummary}
                 indexerConfig={indexerConfig}
-                activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
+                activeIndexingStatus={
+                  activeJobs.find((job) => job.job_kind === "indexing")?.status
+                }
                 ready={realIndexingReady}
-                onRunIndex={() => {
+                onReviewIndexResults={() => {
                   void loadIndexerConfig();
                   void runIndexers();
                 }}
-                onRefresh={() => void loadIndexReadiness()}
                 onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
                 onOpenConfigPath={openConfigPath}
                 onRevealConfigPath={revealConfigPath}
@@ -1857,6 +2093,9 @@ function App() {
         }}
       />
     )}
+    <SettingsModal />
+    <AgentsMdEditor />
+    <WelcomeCard />
     {showUrlImport && (
       <div className="modal-backdrop" onClick={() => setShowUrlImport(false)}>
         <div className="modal" onClick={(event) => event.stopPropagation()}>
@@ -1922,6 +2161,7 @@ function RealMediaPreviewSlot({
   onTime,
   onDuration,
   onPlaying,
+  onFirstFrame,
 }: {
   src: string;
   label: string;
@@ -1935,9 +2175,22 @@ function RealMediaPreviewSlot({
   onTime: (timeS: number) => void;
   onDuration: (durationS: number) => void;
   onPlaying: (playing: boolean) => void;
+  /**
+   * Fires once per mount when the `<video>` first reports that a
+   * frame is decoded and ready to display. Used by the parent to
+   * cross-fade out the `FilmSlate` loading overlay. Multiple frame
+   * events still fire `setHasPaintedFrame(true)` locally — the
+   * parent callback is invoked on every transition since it's
+   * idempotent (parent owns its own boolean).
+   */
+  onFirstFrame?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasPaintedFrame, setHasPaintedFrame] = useState(false);
+  const markPainted = () => {
+    setHasPaintedFrame(true);
+    onFirstFrame?.();
+  };
 
   useEffect(() => {
     const video = videoRef.current;
@@ -2021,10 +2274,10 @@ function RealMediaPreviewSlot({
         preload="metadata"
         className="relative h-full w-full object-contain"
         onLoadedMetadata={(event) => onDuration(event.currentTarget.duration)}
-        onLoadedData={() => setHasPaintedFrame(true)}
-        onCanPlay={() => setHasPaintedFrame(true)}
+        onLoadedData={markPainted}
+        onCanPlay={markPainted}
         onTimeUpdate={(event) => {
-          setHasPaintedFrame(true);
+          markPainted();
           onTime(event.currentTarget.currentTime);
         }}
         onPlay={() => onPlaying(true)}
@@ -2249,10 +2502,16 @@ function ProjectMediaPanel({
               </span>
             </Inline>
             <Inline gap="1" wrap="wrap">
-              <Pill status="ready" dot={false}>{episodes.accepted} accepted</Pill>
-              <Pill status="warning" dot={false}>{episodes.reviewNeeded} review</Pill>
+              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(74,200,130,0.16)] text-[#5EEAD4]">
+                {episodes.accepted} accepted
+              </span>
+              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(217,165,75,0.16)] text-[#FCD34D]">
+                {episodes.reviewNeeded} review
+              </span>
               {episodes.rejected > 0 ? (
-                <Pill status="failed" dot={false}>{episodes.rejected} rejected</Pill>
+                <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(220,100,95,0.16)] text-[#FCA5A5]">
+                  {episodes.rejected} rejected
+                </span>
               ) : null}
             </Inline>
             <Stack gap="1">
@@ -2320,9 +2579,11 @@ function ProjectMediaPanel({
                   </div>
                 ) : null}
               </Stack>
-              <Pill status={mediaStatusPill(item.status)} dot={false} className="shrink-0">
-                {mediaStatusLabel(item.status)}
-              </Pill>
+              <StatusPillFromMapping
+                mapping={mediaStatusPill(item.status)}
+                label={mediaStatusLabel(item.status)}
+                className="shrink-0"
+              />
             </Inline>
             {item.assetId ? (
               <div className="mt-2 flex justify-end">
@@ -2356,59 +2617,27 @@ function ProjectMediaPanel({
   );
 }
 
-function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
+function mediaStatusPill(status: IndexingMediaItem["status"]): StatusPillMapping {
   switch (status) {
     case "indexed":
     case "imported":
-      return "ready";
+      return { family: "job", state: "ready" };
     case "indexing":
-      return "processing";
+      return { family: "job", state: "running" };
     case "processing":
     case "queued":
-      return "reviewing";
+      // "reviewing" → proposal/proposed (awaiting human / queued for action).
+      return { family: "proposal", state: "proposed" };
     case "partial":
-      return "warning";
+      // Lossy: original "warning" → job/failed visually per Task 4 mapping.
+      return { family: "job", state: "failed" };
     case "failed":
-      return "failed";
+      return { family: "job", state: "failed" };
     case "missing":
-      return "missing";
+      // "missing" → job/idle.
+      return { family: "job", state: "idle" };
   }
 }
-
-function episodeStatusPill(
-  status: IndexingEpisodeSummary["episodes"][number]["status"],
-): PillStatus {
-  switch (status) {
-    case "accepted":
-      return "ready";
-    case "review_needed":
-      return "warning";
-    case "rejected":
-      return "failed";
-  }
-}
-
-function episodeStatusLabel(
-  status: IndexingEpisodeSummary["episodes"][number]["status"],
-): string {
-  switch (status) {
-    case "accepted":
-      return "Accepted";
-    case "review_needed":
-      return "Review";
-    case "rejected":
-      return "Rejected";
-  }
-}
-
-function formatIndexerActivity(runningCount: number, queuedCount: number): string {
-  if (runningCount === 0 && queuedCount === 0) return "idle";
-  const parts: string[] = [];
-  if (runningCount > 0) parts.push(`${runningCount} running`);
-  if (queuedCount > 0) parts.push(`${queuedCount} queued`);
-  return parts.join(", ");
-}
-
 function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
   switch (status) {
     case "indexed":
@@ -2429,444 +2658,6 @@ function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
       return "Missing";
   }
 }
-
-/** Small color dot per status for the calmer signal-row treatment.
- *  Tiny dot + muted text label replaces the big colored pill — same
- *  information, far less visual weight. Three semantic colors only:
- *  ready (green), in-flight (amber), needs-attention (red). */
-function statusDotColor(
-  status: IndexingMediaItem["status"] | "disabled",
-): string {
-  switch (status) {
-    case "indexed":
-    case "imported":
-      return "rgb(74, 200, 130)"; // muted green
-    case "indexing":
-    case "processing":
-    case "queued":
-    case "partial":
-      return "rgb(217, 165, 75)"; // muted amber
-    case "failed":
-      return "rgb(220, 100, 95)"; // muted red
-    case "missing":
-    case "disabled":
-      return "rgba(255, 255, 255, 0.25)"; // neutral / inactive
-  }
-}
-
-/**
- * Map each signal kind to the indexer(s) it depends on. When none of
- * the listed indexers is enabled in the project config, the signal
- * gets a "Disabled" treatment instead of a red "Missing" — different
- * meaning, different fix path. Signals not in this map are produced
- * by the global `indexing` job (whisper, scenedetect, etc.).
- */
-const SIGNAL_INDEXER_DEPS: Partial<Record<IndexingTask["kind"], string[]>> = {
-  transcripts: ["whisper"],
-  scenes: ["scenedetect"],
-  audio: ["audio-energy", "beats"],
-  captions: ["whisper"],
-  speaker: ["whisper"],
-  face: ["face"],
-  color: ["color-analysis"],
-  // motion and silence are built-in FFmpeg passes, not MCP indexers,
-  // so they have no entry in indexerConfig to check enabled-ness on.
-  // The previous deps ("motion" / "audio-energy") made the panel
-  // permanently render them as "Disabled". They follow normal
-  // missing/indexing/indexed status flow via the readiness sidecars.
-};
-
-/**
- * Three logical clusters the user actually thinks in. The current
- * arbitrary order (Transcripts/Scenes/Audio/Face/Motion/Color/…)
- * doesn't help anyone scan. Grouping by what the signal feeds into
- * does.
- */
-const SIGNAL_GROUPS: Array<{ label: string; kinds: IndexingTask["kind"][] }> = [
-  { label: "Speech & captions", kinds: ["transcripts", "captions", "speaker"] },
-  { label: "Visuals", kinds: ["scenes", "face", "color", "motion"] },
-  { label: "Audio", kinds: ["audio", "silence"] },
-];
-
-function isSignalDisabled(
-  kind: IndexingTask["kind"],
-  indexerConfig: IndexerConfigSnapshot | undefined,
-): boolean {
-  const deps = SIGNAL_INDEXER_DEPS[kind];
-  if (!deps || deps.length === 0) return false;
-  if (!indexerConfig) return false;
-  const enabledNames = new Set(
-    indexerConfig.indexers.filter((i) => i.enabled).map((i) => i.name),
-  );
-  return !deps.some((name) => enabledNames.has(name));
-}
-
-function IndexReadinessPanel({
-  sourceCount,
-  tasks,
-  structurePreview,
-  episodes,
-  indexerConfig,
-  activeIndexingStatus,
-  ready,
-  onRunIndex,
-  onRefresh,
-  onToggleIndexer,
-  onOpenConfigPath,
-  onRevealConfigPath,
-}: {
-  sourceCount: number;
-  tasks: IndexingTask[];
-  structurePreview?: IndexingStructurePreview;
-  episodes?: IndexingEpisodeSummary;
-  indexerConfig?: IndexerConfigSnapshot;
-  activeIndexingStatus?: string;
-  ready: boolean;
-  onRunIndex: () => void;
-  /** Re-poll index readiness from disk. Needed when the dispatcher's
-   *  event stream is gone (e.g. orphaned indexer subprocesses from a
-   *  previous binary's session) so the user can manually sync. */
-  onRefresh: () => void;
-  onToggleIndexer: (indexer: IndexerConfigEntry) => void;
-  onOpenConfigPath: (path: string) => void;
-  onRevealConfigPath: (path: string) => void;
-}) {
-  // Bucket tasks by group, dropping any kind that doesn't belong to a
-  // group (defensive — keeps the panel coherent if a new task kind
-  // ships before its group entry does).
-  const tasksByKind = new Map(tasks.map((t) => [t.kind, t]));
-  const groupedTasks = SIGNAL_GROUPS.map((group) => ({
-    label: group.label,
-    items: group.kinds
-      .map((kind) => tasksByKind.get(kind))
-      .filter((t): t is IndexingTask => t !== undefined),
-  })).filter((g) => g.items.length > 0);
-
-  // For the readiness denominator we want signals the project is
-  // *trying* to produce, not the whole catalog — otherwise a project
-  // with face/motion/speaker disabled looks permanently broken at
-  // "6 of 9 ready".
-  const enabledTasks = tasks.filter(
-    (task) => !isSignalDisabled(task.kind, indexerConfig),
-  );
-  const readyCount = enabledTasks.filter(
-    (task) => task.status === "indexed" || task.status === "imported",
-  ).length;
-  const runningCount = enabledTasks.filter(
-    (task) =>
-      task.status === "indexing" ||
-      task.status === "processing" ||
-      task.status === "partial",
-  ).length;
-  const queuedCount = enabledTasks.filter((task) => task.status === "queued").length;
-  const inFlightCount = runningCount + queuedCount;
-  const disabledCount = tasks.length - enabledTasks.length;
-  const activeIndexers = indexerConfig?.indexers.filter((indexer) => indexer.enabled) ?? [];
-  const complete = readyCount === enabledTasks.length && enabledTasks.length > 0;
-  const usable = ready || readyCount > 0;
-  const readinessLabel = complete
-    ? "Complete"
-    : usable
-      ? "Usable"
-      : inFlightCount > 0
-        ? "Indexing"
-        : "Needs index";
-  const readinessStatus: PillStatus = complete
-    ? "ready"
-    : usable
-      ? "warning"
-      : inFlightCount > 0
-        ? "processing"
-        : "missing";
-  const readinessProgress =
-    enabledTasks.length > 0 ? Math.round((readyCount / enabledTasks.length) * 100) : 0;
-  return (
-    <Stack gap="4" className="p-3">
-      <Inline justify="between" align="start" gap="2" className="min-w-0">
-        <Stack gap="1" className="min-w-0">
-          <Inline gap="1" align="center">
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Index readiness
-            </span>
-            <IconButton
-              icon={<RefreshCw />}
-              label="Refresh from disk"
-              size="sm"
-              onClick={onRefresh}
-            />
-          </Inline>
-          <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
-            {readyCount} of {enabledTasks.length} signals ready
-            {disabledCount > 0 ? (
-              <span className="ml-1 text-[var(--text-caption)] font-normal text-[var(--color-text-muted)]">
-                · {disabledCount} disabled
-              </span>
-            ) : null}
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {formatIndexerActivity(runningCount, queuedCount)}
-          </span>
-          {activeIndexingStatus ? (
-            <span
-              className="block max-w-full truncate text-[10px] text-[var(--color-text-muted)]"
-              title={`Active indexer: ${activeIndexingStatus}`}
-            >
-              Active indexer: {compactActiveIndexerStatus(activeIndexingStatus)}
-            </span>
-          ) : null}
-        </Stack>
-        <Pill status={readinessStatus} dot className="shrink-0">
-          {readinessLabel}
-        </Pill>
-      </Inline>
-      <Stack gap="1">
-        <Inline justify="between" align="center">
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            Evidence coverage
-          </span>
-          <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-            {readinessProgress}%
-          </span>
-        </Inline>
-        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
-          <div
-            className="h-full rounded-full bg-[var(--color-warning)]"
-            style={{
-              width: `${readinessProgress}%`,
-              backgroundColor: complete ? "var(--color-brand)" : usable ? "var(--color-warning)" : "var(--color-processing)",
-            }}
-          />
-        </div>
-      </Stack>
-      {structurePreview ? (
-        <Stack gap="2">
-          <div className="grid grid-cols-2 gap-2">
-            <Metric label="Duration" value={structurePreview.duration ?? "—"} />
-            <Metric label="Scenes" value={structurePreview.scenes ?? "—"} />
-            <Metric label="Segments" value={structurePreview.segments ?? "—"} />
-            <Metric label="Transcript" value={typeof structurePreview.transcriptPercent === "number" ? `${structurePreview.transcriptPercent}%` : "—"} />
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                await invoke("trim_timeline_tail");
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.warn("trim_timeline_tail failed", e);
-              }
-            }}
-            className="self-start h-7 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Strip trailing empty space so the timeline ends on the last clip"
-          >
-            Trim empty tail
-          </button>
-        </Stack>
-      ) : null}
-      {episodes && episodes.total > 0 ? (
-        <Stack gap="2">
-          <Inline justify="between" align="baseline" gap="2">
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Episodes
-            </span>
-            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              {episodes.total} detected
-            </span>
-          </Inline>
-          <div className="grid grid-cols-3 gap-2">
-            <Metric label="Accepted" value={episodes.accepted} />
-            <Metric label="Review" value={episodes.reviewNeeded} />
-            <Metric label="Rejected" value={episodes.rejected} />
-          </div>
-          <Stack gap="1">
-            {episodes.episodes.slice(0, 4).map((episode) => (
-              <Inline
-                key={episode.id}
-                justify="between"
-                align="center"
-                gap="2"
-                className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-1.5"
-              >
-                <Stack gap="0" className="min-w-0">
-                  <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
-                    {episode.name || `Episode ${episode.order}`}
-                  </span>
-                  <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                    {formatDuration(episode.durationS)} · {Math.round(episode.confidence * 100)}%
-                  </span>
-                </Stack>
-                <Pill status={episodeStatusPill(episode.status)} dot={false}>
-                  {episodeStatusLabel(episode.status)}
-                </Pill>
-              </Inline>
-            ))}
-          </Stack>
-        </Stack>
-      ) : null}
-      <Stack gap="3">
-        {groupedTasks.map((group) => (
-          <Stack key={group.label} gap="1">
-            <span className="text-[10px] uppercase tracking-[0.08em] font-semibold text-[var(--color-text-muted)] px-1">
-              {group.label}
-            </span>
-            <Stack gap="1">
-              {group.items.map((task) => {
-                const disabled = isSignalDisabled(task.kind, indexerConfig);
-                const showDetail =
-                  task.status !== "indexed" && task.status !== "imported";
-                const detail = disabled
-                  ? "Enable the indexer to compute this signal."
-                  : task.detail ?? indexTaskDetail(task.status);
-                const statusLabel = disabled ? "Disabled" : mediaStatusLabel(task.status);
-                return (
-                  <div
-                    key={task.id}
-                    className={cn(
-                      "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2.5 py-1.5 transition-colors",
-                      disabled && "opacity-60",
-                    )}
-                  >
-                    <Stack gap="0" className="min-w-0">
-                      <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
-                        {indexTaskLabel(task.kind)}
-                      </span>
-                      {showDetail ? (
-                        <span
-                          className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]"
-                          title={detail}
-                        >
-                          {detail}
-                        </span>
-                      ) : null}
-                    </Stack>
-                    {/* Dot + label, not a colored pill. Color is held
-                        in reserve for active state — here we use it
-                        only to mark the status (green = ready, amber
-                        = working, red = needs attention). */}
-                    <span className="shrink-0 inline-flex items-center gap-1.5 text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ backgroundColor: statusDotColor(disabled ? "disabled" : task.status) }}
-                        aria-hidden
-                      />
-                      <span>{statusLabel}</span>
-                    </span>
-                  </div>
-                );
-              })}
-            </Stack>
-          </Stack>
-        ))}
-      </Stack>
-      {/* Status footer — when indexing is finished and usable, tell
-          the user to switch to the Agent rail to actually do work.
-          The action surface for "ask the agent" belongs in the rail
-          where they're typing commands, not in the index panel. */}
-      <Stack gap="2">
-        <div
-          className={cn(
-            "rounded-[var(--radius-sm)] border px-3 py-2 text-[var(--text-caption)]",
-            usable
-              ? "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.06)] text-[var(--color-pill-ready-text)]"
-              : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-muted)]",
-          )}
-        >
-          {sourceCount === 0
-            ? "Import media to start indexing."
-            : usable
-              ? "Indexed — ready for the agent. Open the Agent rail to direct an edit."
-              : inFlightCount > 0
-                ? `Indexing… ${inFlightCount} signal${inFlightCount === 1 ? "" : "s"} in flight.`
-                : "Index pending. Re-run indexers to populate evidence."}
-        </div>
-        <button
-          type="button"
-          onClick={onRunIndex}
-          className="text-center text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors py-1"
-        >
-          Re-run indexers
-        </button>
-      </Stack>
-      {indexerConfig ? (
-        <Stack gap="2">
-          <Inline justify="between" align="center">
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Indexers
-            </span>
-            <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-              {activeIndexers.length} active
-            </span>
-          </Inline>
-          {indexerConfig.indexers.slice(0, 4).map((indexer) => (
-            <Inline
-              key={indexer.name}
-              justify="between"
-              align="center"
-              gap="2"
-              className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
-            >
-              <Stack gap="0" className="min-w-0">
-                <span className="truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-                  {indexer.name}
-                </span>
-                <span className="truncate text-[10px] text-[var(--color-text-muted)]">
-                  {indexer.cwd ?? "global"} · {indexer.resourceClass}
-                </span>
-              </Stack>
-              <Button variant="ghost" size="sm" onClick={() => onToggleIndexer(indexer)}>
-                {indexer.enabled ? "Disable" : "Enable"}
-              </Button>
-            </Inline>
-          ))}
-          <Inline gap="1" wrap="wrap">
-            {indexerConfig.projectPath ? (
-              <Button variant="ghost" size="sm" onClick={() => onRevealConfigPath(indexerConfig.projectPath!)}>
-                Project config
-              </Button>
-            ) : null}
-            {indexerConfig.globalPath ? (
-              <Button variant="ghost" size="sm" onClick={() => onOpenConfigPath(indexerConfig.globalPath!)}>
-                Global config
-              </Button>
-            ) : null}
-          </Inline>
-        </Stack>
-      ) : null}
-    </Stack>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2">
-      <span className="block text-[var(--text-caption)] font-mono text-[var(--color-text-primary)]">{value}</span>
-      <span className="block text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">{label}</span>
-    </div>
-  );
-}
-
-function indexTaskLabel(kind: IndexingTask["kind"]): string {
-  const labels: Record<IndexingTask["kind"], string> = {
-    transcripts: "Transcripts",
-    scenes: "Scenes",
-    audio: "Audio analysis",
-    face: "Face detection",
-    motion: "Motion analysis",
-    color: "Color analysis",
-    silence: "Silence detection",
-    speaker: "Speaker diarization",
-    captions: "Caption readiness",
-  };
-  return labels[kind];
-}
-
-function indexTaskDetail(status: IndexingTask["status"]): string {
-  if (status === "indexed" || status === "imported") return "Ready for edit evidence";
-  if (status === "indexing" || status === "processing" || status === "partial") return "Indexing locally";
-  if (status === "failed") return "Needs attention";
-  return "Missing";
-}
-
 function CollapsedInspectorButton({
   onOpen,
 }: {
@@ -2913,185 +2704,18 @@ function CollapsedRailSpine({
   );
 }
 
-function NoProjectWorkspace() {
-  return (
-    <div className="flex h-full min-h-0 items-center justify-center bg-[var(--color-surface-app)] p-4">
-      <div className="grid w-full max-w-4xl grid-cols-[minmax(0,1fr)_280px] gap-3">
-        <Card padding="lg" tone="elevated" className="min-h-[340px]">
-          <Stack gap="3" align="center" className="h-full justify-center text-center">
-            <span className="relative flex h-16 w-16 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-brand-secondary)]">
-              <Film className="h-7 w-7 stroke-[1.5]" />
-              <span className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--color-border-active)] bg-[var(--color-surface-selected)]">
-                <ImportIcon className="h-3.5 w-3.5 stroke-[1.75]" />
-              </span>
-            </span>
-            <Stack gap="2" align="center" className="max-w-md">
-              <span className="text-[var(--text-h1)] font-semibold text-[var(--color-text-primary)]">
-                No project open yet
-              </span>
-              <span className="text-[var(--text-body)] leading-relaxed text-[var(--color-text-secondary)]">
-                Import media or create a new project to get started with intelligent proposals and review.
-              </span>
-            </Stack>
-            <Inline gap="2" wrap="wrap" justify="center">
-              <Button
-                variant="primary"
-                leadingIcon={<ImportIcon className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.IMPORT_FILES)}
-              >
-                Import media
-              </Button>
-              <Button
-                variant="secondary"
-                leadingIcon={<FolderOpen className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.OPEN_PROJECT)}
-              >
-                Open project
-              </Button>
-              <Button
-                variant="ghost"
-                leadingIcon={<Play className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.NEW_PROJECT)}
-              >
-                Start with example
-              </Button>
-            </Inline>
-            <Card padding="sm" tone="flat" className="max-w-md text-left">
-              <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-muted)]">
-                Awidat's agents will analyze your content and propose a tight, publish-ready edit.
-              </span>
-            </Card>
-          </Stack>
-        </Card>
-        <div className="grid gap-3">
-          <Card padding="md">
-            <Stack gap="3">
-              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                What happens next
-              </span>
-              {[
-                "Media is indexed locally first.",
-                "The agent builds proposals with evidence.",
-                "You review, revise, and deliver safely.",
-              ].map((item, index) => (
-                <Inline key={item} gap="2" align="center">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] font-mono text-[var(--text-caption)] text-[var(--color-brand-secondary)]">
-                    {index + 1}
-                  </span>
-                  <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                    {item}
-                  </span>
-                </Inline>
-              ))}
-            </Stack>
-          </Card>
-          <Card padding="md">
-            <Stack gap="2">
-              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                System state
-              </span>
-              <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
-                Ready for local project
-              </span>
-              <span className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
-                No media is loaded, no proposal is active, and no timeline changes can be applied until a project is opened.
-              </span>
-            </Stack>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-}
+// `NoProjectWorkspace` was removed in Task 11 (redesign empty state). Its
+// replacement is `<Landing />` in `./shell/empty/Landing.tsx`, rendered
+// via `realWorkspace` above.
 
-function Footer({ demoMode = false }: { demoMode?: boolean }) {
-  const running = useAgentStore((s) => s.running);
-  const items = useAgentStore((s) => s.items);
-  if (demoMode) {
-    return (
-      <>
-        <Inline gap="3" align="center">
-          <span className="h-2 w-2 rounded-full bg-[var(--color-success)]" aria-hidden />
-          <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-            Agent online
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Model: Awidat Pro 1.2
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Context window: 42m
-          </span>
-        </Inline>
-        <Inline gap="3" align="center">
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Autosaved 12:42:18 ✓
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Render queue 1
-          </span>
-          <span className="inline-flex h-3.5 items-end gap-0.5" aria-hidden>
-            {[5, 9, 4, 11, 7].map((h, i) => (
-              <span
-                key={i}
-                className="w-1 rounded-full bg-[var(--color-brand-secondary)]/60"
-                style={{ height: h }}
-              />
-            ))}
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Disk 1.2 TB free
-          </span>
-        </Inline>
-      </>
-    );
-  }
-  const activeJobs = items.filter((item) => item.kind === "job" && item.phase !== "completed");
-  const renderQueueLabel = activeJobs.length > 0 ? activeJobs.length.toString() : "0";
-  const jobsForBar = activeJobs.map((it) => toActiveJobLike({ id: it.id, job_kind: (it as any).job_kind, status: (it as any).status, percent: (it as any).percent }));
-  return (
-    <>
-      <Inline gap="3" align="center" className="min-w-0">
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: running ? "var(--color-warning)" : "var(--color-success)" }}
-          aria-hidden
-        />
-        <span className="shrink-0 text-[var(--text-body-sm)] font-semibold text-[var(--color-text-secondary)] font-mono">
-          {running ? "Agent working" : "Agent online"}
-        </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Model: Awidat Pro 1.2
-        </span>
-        <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-          Context window: local
-        </span>
-      </Inline>
-      <Inline gap="3" align="center" className="min-w-0 justify-end">
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Autosaved local ✓
-        </span>
-        <JobsStatusBar
-          jobs={jobsForBar}
-          totalPercent={aggregatePercent(jobsForBar)}
-        />
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Render queue {renderQueueLabel}
-        </span>
-        <span className="inline-flex h-3.5 shrink-0 items-end gap-0.5" aria-hidden>
-          {[4, 8, 5, 10, 6].map((h, i) => (
-            <span
-              key={i}
-              className="w-1 rounded-full bg-[var(--color-brand-secondary)]/60"
-              style={{ height: h }}
-            />
-          ))}
-        </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-          Disk local
-        </span>
-      </Inline>
-    </>
-  );
+/**
+ * Footer — thin wrapper that delegates to the redesigned
+ * `shell/chrome/Footer` (Task 10). The `demoMode` prop is retained for the
+ * call site but is currently a no-op; the redesigned footer renders the
+ * same job/system state in both demo and live runs.
+ */
+function Footer(_: { demoMode?: boolean }) {
+  return <ChromeFooter />;
 }
 
 function projectName(path: string): string {
@@ -3436,15 +3060,6 @@ function summarizeToolForRail(item: ToolCallItem): string {
 function oneLine(text: string, max: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
-
-function compactActiveIndexerStatus(status: string): string {
-  const firstLine = status.split("\n").find((line) => line.trim().length > 0)?.trim() ?? status;
-  const running = firstLine.match(/^still running\s+(.+?)\s+·\s+.+?\s+·\s+(.+?)\s+elapsed$/);
-  if (running) {
-    return `${running[1].trim()} · ${running[2].trim()}`;
-  }
-  return oneLine(firstLine, 56);
 }
 
 function summarizeJobStatus(status: string): { summary: string; detail?: string } {

@@ -17,6 +17,8 @@
 // `markFailed` actions.
 
 import { create } from "zustand";
+import type { AiDisclosure } from "../state/aiDisclosure";
+import type { UploadMetadata } from "../state/uploadMetadata";
 
 /** A queue entry — one selected target for one Deliver action. */
 export type RenderTargetKind =
@@ -24,6 +26,22 @@ export type RenderTargetKind =
   | "video_reframe"
   | "captions"
   | "still";
+
+/**
+ * Per-target upload lifecycle. Mirrors the Rust `UploadState` enum
+ * shape returned by `poll_upload_states` — `state` is the tag, the
+ * other fields appear when the variant carries them.
+ *
+ *   - `pending`    — render done, upload not started yet
+ *   - `uploading`  — in flight; `progress` is 0..1 (or NaN unknown)
+ *   - `published`  — provider accepted; `remote_url` is shareable
+ *   - `failed`     — terminal failure; `reason` is shown verbatim
+ */
+export type RenderUploadState =
+  | { state: "pending" }
+  | { state: "uploading"; progress: number }
+  | { state: "published"; remote_url: string; remote_id: string }
+  | { state: "failed"; reason: string };
 
 export type RenderQueueEntry = {
   /** Stable id; survives reload. */
@@ -73,6 +91,49 @@ export type RenderQueueEntry = {
   stillAssetPath?: string;
   stillTimecodeS?: number;
   stillKind?: "cover" | "custom";
+  /**
+   * Provider keys (`"youtube"`, `"tiktok"`, `"instagram"`) the user
+   * has opted into auto-publishing to once this render lands at
+   * `done`. Empty (or undefined) → no auto-upload.
+   */
+  uploadTargets?: string[];
+  /**
+   * Per-target lifecycle, keyed by provider key. Populated when the
+   * worker registers targets with the backend and updated by the
+   * upload poller. Mirrors the backend `UploadJobEntry.upload_states`.
+   */
+  uploadStates?: Record<string, RenderUploadState>;
+  /**
+   * Convenience mirror of `uploadStates[*].remote_url` so the row can
+   * cheap-fetch link hrefs without pattern-matching. Empty until at
+   * least one target publishes.
+   */
+  publishedUrls?: Record<string, string>;
+  /**
+   * Per-target metadata (title / description / tags / visibility /
+   * schedule / thumbnail) the user configured before kicking the
+   * render. Keyed by provider key — same set as `uploadTargets`.
+   *
+   * The render-queue worker forwards each entry to the backend via
+   * `start_uploads_for_job` so the upload dispatcher hands the real
+   * `UploadParams` to the provider instead of W5.A2's stub defaults.
+   * Missing keys (or `undefined`) → dispatcher falls back to the
+   * default `(label, no description, private)` payload.
+   */
+  uploadMetadata?: Record<string, UploadMetadata>;
+  /**
+   * AI disclosure (W5.A4) — computed at register time by the backend
+   * walking the project timeline against the generated-media
+   * registry. When `has_synthetic_content` is true the upload
+   * dispatcher folds the disclosure intent into each platform's flag
+   * (YouTube `alteredContent`, TikTok `aigc_label`, IG `ai_label`).
+   *
+   * `undefined` means "not computed yet" — clean cuts where the
+   * dispatcher never asked. The UI treats undefined the same as "no
+   * synthetic content" for display so a missing disclosure doesn't
+   * surface a banner on cuts that never contained generated media.
+   */
+  aiDisclosure?: AiDisclosure;
 };
 
 type State = {
@@ -91,6 +152,37 @@ type State = {
   dismiss: (id: string) => void;
   /** Clear every terminal entry. */
   clearTerminal: () => void;
+  /** Set this entry's upload targets (provider keys). */
+  setUploadTargets: (id: string, providers: string[]) => void;
+  /**
+   * Replace this entry's per-target upload state map. Called by the
+   * upload poller after each backend `poll_upload_states` round trip;
+   * mirrors the wire shape verbatim so the row can render directly.
+   */
+  setUploadStates: (
+    id: string,
+    states: Record<string, RenderUploadState>,
+    publishedUrls: Record<string, string>,
+  ) => void;
+  /**
+   * Replace this entry's per-target upload metadata snapshot. Called
+   * by the worker just before `start_uploads_for_job` so the saved
+   * queue entry carries the same metadata the backend was handed —
+   * useful for retry, where we don't want to re-read the user's form
+   * state (they may have edited the form for a *different* render
+   * since then).
+   */
+  setUploadMetadata: (
+    id: string,
+    metadata: Record<string, UploadMetadata>,
+  ) => void;
+  /**
+   * Stamp this entry's AI disclosure. Called by the worker right
+   * after `compute_ai_disclosure` round trips so the RenderQueue row
+   * can surface the AI chip + the per-target form can render the
+   * banner. Pass `undefined` to clear (e.g. terminal cleanup).
+   */
+  setAiDisclosure: (id: string, disclosure: AiDisclosure | undefined) => void;
 };
 
 const PERSIST_KEY = "awidat.deliver.renderQueue.v1";
@@ -228,6 +320,58 @@ export const useRenderQueueStore = create<State>((set) => ({
     ]);
     set((state) => {
       const next = state.entries.filter((e) => !terminal.has(e.status));
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadTargets: (id, providers) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              uploadTargets: providers,
+              uploadStates: Object.fromEntries(
+                providers.map((p) => [
+                  p,
+                  { state: "pending" as const },
+                ]),
+              ),
+              publishedUrls: {},
+            }
+          : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadStates: (id, states, publishedUrls) => {
+    // Per-progress ticks would be chatty in localStorage — we still
+    // persist because terminal transitions matter for reload reconcile.
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id
+          ? { ...e, uploadStates: states, publishedUrls }
+          : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadMetadata: (id, metadata) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, uploadMetadata: metadata } : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setAiDisclosure: (id, disclosure) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, aiDisclosure: disclosure } : e,
+      );
       persist(next);
       return { entries: next };
     });

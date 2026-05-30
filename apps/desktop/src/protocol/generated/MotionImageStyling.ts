@@ -3,47 +3,47 @@
 /**
  * Styling fields for a native MotionScene image preview.
  */
-export type MotionImageStyling = {
+export type MotionImageStyling = { 
 /**
  * Project-relative asset id/path.
  */
-asset_id: string,
+asset_id: string, 
 /**
  * Normalized x coordinate in output space.
  */
-x: number,
+x: number, 
 /**
  * Normalized y coordinate in output space.
  */
-y: number,
+y: number, 
 /**
  * Normalized width in output space.
  */
-width: number,
+width: number, 
 /**
  * Normalized height in output space.
  */
-height: number,
+height: number, 
 /**
  * Layer opacity in `[0, 1]`.
  */
-opacity: number,
+opacity: number, 
 /**
  * Fit behavior: `"cover"`, `"contain"`, or `"stretch"`.
  */
-fit: string,
+fit: string, 
 /**
  * Static scale multiplier.
  */
-scale: number,
+scale: number, 
 /**
  * Transform origin x in `[0, 1]`.
  */
-anchor_x: number,
+anchor_x: number, 
 /**
  * Transform origin y in `[0, 1]`.
  */
-anchor_y: number,
+anchor_y: number, 
 /**
  * Static clockwise rotation in degrees.
  */

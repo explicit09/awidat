@@ -172,6 +172,23 @@ pub enum Item {
         /// desktop protocol does not depend on core internals.
         #[ts(type = "unknown")]
         capability_metadata: serde_json::Value,
+        /// Optional short-form rationale — the agent's one-sentence
+        /// justification for the underlying tool call, e.g.
+        /// "trimmed 0.42s silence per podcast defaults". Captured from
+        /// `apply_edl(reasoning = …)` and equivalent fields on other
+        /// tool calls; absent when the producing tool does not (yet)
+        /// emit a `reasoning` argument.
+        ///
+        /// Wave 3's Brief surface reads this on every row (approvals
+        /// included). Distinct from `args_summary` (mechanical "what")
+        /// and the matching ToolCall's full args (raw envelope).
+        ///
+        /// Backwards-compatible: `Option<String>` so older serialized
+        /// approvals deserialize fine. Producers that don't yet emit
+        /// it can keep emitting `None`.
+        #[serde(default)]
+        #[ts(optional)]
+        rationale: Option<String>,
     },
     /// A turn-fatal error from the agent loop. Renders as a banner /
     /// red card. The turn ends after emitting this.
@@ -267,6 +284,23 @@ pub enum Item {
         /// full thing if the user picks one).
         #[serde(default)]
         alternatives: Vec<ProposalAlternative>,
+        /// Optional short-form rationale — the agent's one-sentence
+        /// justification for this proposal, e.g.
+        /// "trimmed 0.42s silence per podcast defaults".
+        ///
+        /// This is the load-bearing trust signal Wave 3 surfaces on
+        /// every proposal pill / tooltip / Brief row: a rationale is
+        /// what lets the human reviewer take the agent's call on
+        /// faith. Distinct from `explanation` (long-form body) and
+        /// `intent` (what the agent is *trying* to do); `rationale`
+        /// answers *why this specific decision*.
+        ///
+        /// Backwards-compatible: `Option<String>` so older serialized
+        /// proposals deserialize fine. Producers that don't yet emit
+        /// it can keep emitting `None`.
+        #[serde(default)]
+        #[ts(optional)]
+        rationale: Option<String>,
     },
     /// Long-running background work (asset import, indexing,
     /// timeline render). Streams over the same item channel as
@@ -2031,6 +2065,7 @@ mod tests {
                 "side_effects": ["starts an ffmpeg render job", "writes render output files"],
                 "known_limitations": []
             }),
+            rationale: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         let back: Item = serde_json::from_str(&json).unwrap();
@@ -2038,6 +2073,7 @@ mod tests {
             Item::ApprovalRequest {
                 tool_name,
                 capability_metadata,
+                rationale,
                 ..
             } => {
                 assert_eq!(tool_name, "start_render");
@@ -2049,7 +2085,61 @@ mod tests {
                         "writes render output files"
                     ])
                 );
+                assert!(rationale.is_none());
             }
+            _ => panic!("expected Item::ApprovalRequest"),
+        }
+    }
+
+    /// Lock the rationale plumbing contract on the approval path:
+    /// when the bridge captures `reasoning` from an `apply_edl` (or
+    /// equivalent) tool call, the field must round-trip through JSON
+    /// so the frontend's Brief surface and approval card can render
+    /// the agent's "why" alongside the mechanical `args_summary`.
+    ///
+    /// Backwards-compatible: a producer that emits no `rationale` key
+    /// on the wire still deserializes — this test covers the missing-
+    /// field path too.
+    #[test]
+    fn item_approval_request_rationale_roundtrips() {
+        let item = Item::ApprovalRequest {
+            id: Id::new("approval-2"),
+            phase: ItemLifecycle::Started,
+            tool_name: "apply_edl".into(),
+            args_summary: "trim 1 clip".into(),
+            capability_metadata: serde_json::json!({}),
+            rationale: Some("trimmed 0.42s silence per podcast defaults".into()),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"rationale\":\"trimmed 0.42s silence per podcast defaults\""),
+            "rationale must serialize on the wire, got: {json}"
+        );
+        let back: Item = serde_json::from_str(&json).unwrap();
+        match back {
+            Item::ApprovalRequest { rationale, .. } => {
+                assert_eq!(
+                    rationale.as_deref(),
+                    Some("trimmed 0.42s silence per podcast defaults"),
+                );
+            }
+            _ => panic!("expected Item::ApprovalRequest"),
+        }
+
+        // Legacy producer path: a serialized payload without the
+        // `rationale` key must deserialize cleanly to `None`.
+        let legacy = serde_json::json!({
+            "kind": "approval_request",
+            "id": "approval-legacy",
+            "phase": "started",
+            "tool_name": "bash",
+            "args_summary": "ls -l",
+            "capability_metadata": {},
+        })
+        .to_string();
+        let parsed: Item = serde_json::from_str(&legacy).unwrap();
+        match parsed {
+            Item::ApprovalRequest { rationale, .. } => assert!(rationale.is_none()),
             _ => panic!("expected Item::ApprovalRequest"),
         }
     }
@@ -2085,6 +2175,7 @@ mod tests {
             risk: None,
             evidence: vec![],
             alternatives: vec![],
+            rationale: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         let back: Item = serde_json::from_str(&json).unwrap();
@@ -2096,6 +2187,7 @@ mod tests {
                 summary,
                 revision,
                 diff_hints,
+                rationale,
                 ..
             } => {
                 assert_eq!(id.0, "proposal-1");
@@ -2107,7 +2199,71 @@ mod tests {
                 assert_eq!(summary, "trim 1 clip");
                 assert_eq!(revision, 0);
                 assert_eq!(diff_hints.len(), 1);
+                assert!(rationale.is_none());
             }
+            _ => panic!("expected Item::ProposedEdit"),
+        }
+    }
+
+    /// Lock the rationale plumbing contract: when a producer fills in
+    /// `rationale: Some(_)`, the field must round-trip through JSON
+    /// intact so the frontend can render it in the Proposal Inspector
+    /// and on the proposal-pill tooltips Wave 3 introduces. The
+    /// `Option<String>` shape keeps older proposals (where the field
+    /// is absent on the wire) deserializing cleanly — this test
+    /// asserts both directions.
+    #[test]
+    fn item_proposed_edit_rationale_roundtrips() {
+        let item = Item::ProposedEdit {
+            id: Id::new("proposal-2"),
+            phase: ItemLifecycle::Started,
+            source: ProposalSource::Agent {
+                tool_name: "apply_edl".into(),
+            },
+            edl_text: "*** Begin EDL\n*** End EDL\n".into(),
+            snapshot: TimelineSnapshot {
+                duration_s: 0.0,
+                broadcast_overlay: None,
+                cut_boundaries: vec![],
+                preview_limitations: vec![],
+                tracks: vec![],
+            },
+            diff_hints: vec![],
+            summary: "trim filler".into(),
+            revision: 0,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
+            rationale: Some("trimmed 0.42s silence per podcast defaults".into()),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"rationale\":\"trimmed 0.42s silence per podcast defaults\""),
+            "rationale must serialize on the wire, got: {json}"
+        );
+        let back: Item = serde_json::from_str(&json).unwrap();
+        match back {
+            Item::ProposedEdit { rationale, .. } => {
+                assert_eq!(
+                    rationale.as_deref(),
+                    Some("trimmed 0.42s silence per podcast defaults")
+                );
+            }
+            _ => panic!("expected Item::ProposedEdit"),
+        }
+
+        // Older proposals omit the field entirely; deserialization must
+        // accept that and default to None.
+        let legacy_json = json.replace(
+            ",\"rationale\":\"trimmed 0.42s silence per podcast defaults\"",
+            "",
+        );
+        let legacy: Item = serde_json::from_str(&legacy_json).unwrap();
+        match legacy {
+            Item::ProposedEdit { rationale, .. } => assert!(rationale.is_none()),
             _ => panic!("expected Item::ProposedEdit"),
         }
     }

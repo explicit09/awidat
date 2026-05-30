@@ -32,19 +32,19 @@ const button = cva(
           "hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
         ],
         accept: [
-          "bg-[rgba(34,197,94,0.12)] text-[var(--color-pill-accepted-text)]",
+          "bg-[rgba(34,197,94,0.12)] text-[var(--color-proposal-accepted-text)]",
           "hover:bg-[rgba(34,197,94,0.18)]",
         ],
         reject: [
-          "bg-[rgba(239,68,68,0.11)] text-[var(--color-pill-rejected-text)]",
+          "bg-[rgba(239,68,68,0.11)] text-[var(--color-proposal-rejected-text)]",
           "hover:bg-[rgba(239,68,68,0.17)]",
         ],
         revise: [
-          "bg-[rgba(59,130,246,0.1)] text-[var(--color-pill-proposed-text)]",
+          "bg-[rgba(59,130,246,0.1)] text-[var(--color-proposal-proposed-text)]",
           "hover:bg-[rgba(59,130,246,0.16)] hover:text-[#DBEAFE]",
         ],
         repair: [
-          "bg-[rgba(168,85,247,0.12)] text-[var(--color-pill-reviewing-text)]",
+          "bg-[rgba(168,85,247,0.12)] text-[var(--color-proposal-proposed-text)]",
           "hover:bg-[rgba(168,85,247,0.18)]",
         ],
         danger: [

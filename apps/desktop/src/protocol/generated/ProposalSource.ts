@@ -6,7 +6,7 @@
  * same Accept/Reject), but the source helps with chat-side
  * summaries ("agent proposed…" vs "you proposed…").
  */
-export type ProposalSource = { "source": "agent",
+export type ProposalSource = { "source": "agent", 
 /**
  * Tool name (always `"apply_edl"` today; future EDL-emitting
  * tools fold into this same path).

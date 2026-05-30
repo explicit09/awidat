@@ -1,7 +1,15 @@
 export { BrandIcon, type BrandIconProps, type SimpleIconShape } from "./BrandIcon";
 export { Button, type ButtonProps } from "./primitives/Button";
 export { IconButton, type IconButtonProps } from "./primitives/IconButton";
-export { Pill, PILL_STATUSES, type PillStatus, type PillProps } from "./primitives/Pill";
+export {
+  StatusPill,
+  StatusPillFromMapping,
+  resolveStatusLabel,
+  type JobPillState,
+  type ProposalPillState,
+  type StatusPillProps,
+  type StatusPillMapping,
+} from "./primitives/StatusPill";
 export { Card, type CardProps } from "./primitives/Card";
 export { Stack, Inline, Divider, type StackProps } from "./primitives/Stack";
 export { EvidenceChip, type EvidenceChipProps } from "./primitives/EvidenceChip";
@@ -21,6 +29,7 @@ export {
 export { ReviewActions, type ReviewActionsProps } from "./primitives/ReviewActions";
 
 export { ProposalCard, type ProposalCardProps } from "./components/ProposalCard";
+export { RationaleHint, type RationaleHintProps } from "./components/RationaleHint";
 export { TranscriptSegment, type TranscriptSegmentProps } from "./components/TranscriptSegment";
 export {
   TimelineMarker,

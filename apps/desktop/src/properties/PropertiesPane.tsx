@@ -16,6 +16,8 @@ import { useMediaStore } from "../media/store";
 import { type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { MotionAnimationControl } from "./MotionAnimationControl";
+import { Slider } from "./Slider";
+import { CollapsiblePanel, type RevealLevel } from "../ui/primitives/CollapsiblePanel";
 
 /** Default values when a clip carries no awidat.volume / awidat.speed effect.
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
@@ -194,7 +196,7 @@ export function PropertiesPane() {
           </>
         ) : (
           <>
-            <PanelSection title="Visual">
+            <PanelSection title="Visual" revealLevel="pro">
               <ColorCorrectionControl
                 clipUuid={item.clip_uuid}
                 value={item.color_correction}
@@ -242,23 +244,29 @@ export function PropertiesPane() {
           </>
         )}
         {track?.audio && (
-          <PanelSection title="Track Mix">
+          <PanelSection title="Track Mix" revealLevel="pro">
             <TrackAudioControl trackName={track.name} audio={track.audio} />
           </PanelSection>
         )}
-        <PanelSection title="Timing Metadata">
+        <PanelSection title="Timing Metadata" revealLevel="advanced">
           <Field label="Source">
-            <span className="properties-value">
-              {sourceStart.toFixed(2)}s → {sourceEnd.toFixed(2)}s
+            <span className="properties-meta-row">
+              <span className="properties-value">
+                {sourceStart.toFixed(2)}s → {sourceEnd.toFixed(2)}s
+              </span>
             </span>
           </Field>
           <Field label="Timeline">
-            <span className="properties-value">
-              {trackStart.toFixed(2)}s → {trackEnd.toFixed(2)}s
+            <span className="properties-meta-row">
+              <span className="properties-value">
+                {trackStart.toFixed(2)}s → {trackEnd.toFixed(2)}s
+              </span>
             </span>
           </Field>
           <Field label="Duration">
-            <span className="properties-value">{item.duration_s.toFixed(2)}s</span>
+            <span className="properties-meta-row">
+              <span className="properties-value">{item.duration_s.toFixed(2)}s</span>
+            </span>
           </Field>
           <Field label="Clip uuid">
             <code className="properties-code" title={item.clip_uuid}>
@@ -266,9 +274,9 @@ export function PropertiesPane() {
             </code>
           </Field>
         </PanelSection>
-        <PanelSection title="Danger Zone">
+        <PanelSection title="Danger Zone" revealLevel="advanced">
           <div className="properties-action-row">
-            <button className="properties-danger" onClick={() => void deleteClip()}>
+            <button className="properties-danger-pro" onClick={() => void deleteClip()}>
               Delete clip
             </button>
             {item.link_group_id && (
@@ -547,7 +555,7 @@ function TransitionEditor({
           </button>
         </div>
       </PanelSection>
-      <PanelSection title="Timing Metadata">
+      <PanelSection title="Timing Metadata" revealLevel="advanced">
         <Field label="Timeline">
           <span className="properties-value">
             {transition.track_start_s.toFixed(2)}s →{" "}
@@ -987,7 +995,7 @@ function SplitEditControl({
   return (
     <Field label="Split edit">
       <div className="properties-split-edit">
-        <label className="properties-mini-field">
+        <label className="properties-split-row">
           <span>Lead</span>
           <input
             type="number"
@@ -997,11 +1005,11 @@ function SplitEditControl({
             value={lead}
             onChange={(e) => setLead(parseFloat(e.target.value))}
           />
-          <button className="properties-apply" type="button" onClick={() => apply("lead")}>
+          <button className="properties-inline-apply" type="button" onClick={() => apply("lead")}>
             Apply
           </button>
         </label>
-        <label className="properties-mini-field">
+        <label className="properties-split-row">
           <span>Trail</span>
           <input
             type="number"
@@ -1011,7 +1019,7 @@ function SplitEditControl({
             value={trail}
             onChange={(e) => setTrail(parseFloat(e.target.value))}
           />
-          <button className="properties-apply" type="button" onClick={() => apply("trail")}>
+          <button className="properties-inline-apply" type="button" onClick={() => apply("trail")}>
             Apply
           </button>
         </label>
@@ -1040,6 +1048,25 @@ function signature(
   animation: TitleAnimation,
 ): string {
   return `${text}|${position}|${fontSize}|${color}|${fontWeight}|${animation}`;
+}
+
+function ValueBadge({
+  value,
+  unit,
+  atRest,
+  precision = 2,
+}: {
+  value: number;
+  unit?: string;
+  atRest?: boolean;
+  precision?: number;
+}) {
+  return (
+    <span className="properties-value-badge" data-rest={atRest ? "true" : "false"}>
+      <span>{value.toFixed(precision)}</span>
+      {unit ? <span className="unit">{unit}</span> : null}
+    </span>
+  );
 }
 
 function VolumeControl({
@@ -1076,16 +1103,16 @@ function VolumeControl({
   return (
     <Field label="Volume">
       <div className="properties-control-row">
-        <input
-          type="range"
+        <Slider
+          value={local}
           min={0}
           max={4}
           step={0.01}
-          value={local}
-          onChange={(e) => handleChange(parseFloat(e.target.value))}
-          className="properties-slider"
+          defaultValue={DEFAULT_VOLUME}
+          onChange={handleChange}
+          ariaLabel="Clip volume"
         />
-        <span className="properties-control-value">{local.toFixed(2)}×</span>
+        <ValueBadge value={local} unit="×" atRest={Math.abs(local - DEFAULT_VOLUME) < 0.005} />
       </div>
     </Field>
   );
@@ -1137,27 +1164,65 @@ function AudioFadeControl({
 
   return (
     <Field label="Fades">
-      <div className="properties-control-row">
-        <input
-          type="number"
-          min={0}
-          step={0.05}
-          className="properties-number-input"
+      <div className="properties-fade-row">
+        <FadeStepper
+          label="In"
           value={localIn}
-          onChange={(e) => handleInChange(parseFloat(e.target.value) || 0)}
-          aria-label="Fade in seconds"
-        />
-        <input
-          type="number"
-          min={0}
           step={0.05}
-          className="properties-number-input"
+          onChange={handleInChange}
+          ariaLabel="Fade in seconds"
+        />
+        <FadeStepper
+          label="Out"
           value={localOut}
-          onChange={(e) => handleOutChange(parseFloat(e.target.value) || 0)}
-          aria-label="Fade out seconds"
+          step={0.05}
+          onChange={handleOutChange}
+          ariaLabel="Fade out seconds"
         />
       </div>
     </Field>
+  );
+}
+
+function FadeStepper({
+  label,
+  value,
+  step,
+  onChange,
+  ariaLabel,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  onChange: (next: number) => void;
+  ariaLabel?: string;
+}) {
+  const bump = (delta: number) => {
+    const next = Math.max(0, Math.round((value + delta) * 100) / 100);
+    onChange(next);
+  };
+  return (
+    <div className="properties-fade-cell">
+      <span className="properties-fade-cell-label">{label}</span>
+      <div className="properties-stepper">
+        <input
+          type="number"
+          min={0}
+          step={step}
+          value={value}
+          aria-label={ariaLabel}
+          onChange={(e) => onChange(Math.max(0, parseFloat(e.target.value) || 0))}
+        />
+        <div className="properties-stepper-stack">
+          <button type="button" aria-label={`Increase ${label}`} onClick={() => bump(step)}>
+            ▴
+          </button>
+          <button type="button" aria-label={`Decrease ${label}`} onClick={() => bump(-step)}>
+            ▾
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1238,60 +1303,86 @@ function TrackAudioControl({
         </select>
       </Field>
       <Field label="Track mix">
-        <div className="properties-control-row">
-          <input
-            type="range"
+        <div className="properties-mix-row">
+          <Slider
+            value={volume}
             min={0}
             max={2}
             step={0.01}
-            value={volume}
-            onChange={(e) => setVolume(parseFloat(e.target.value))}
-            className="properties-slider"
+            defaultValue={1}
+            onChange={setVolume}
+            ariaLabel="Track volume"
           />
-          <span className="properties-control-value">{volume.toFixed(2)}×</span>
-          <label className="properties-inline-check">
-            <input
-              type="checkbox"
-              checked={muted}
-              onChange={(e) => setMuted(e.target.checked)}
-            />
+          <ValueBadge value={volume} unit="×" atRest={Math.abs(volume - 1) < 0.005} />
+          <button
+            type="button"
+            className="properties-chip-toggle"
+            data-on={muted ? "true" : "false"}
+            data-tone="mute"
+            onClick={() => setMuted(!muted)}
+            aria-pressed={muted}
+          >
             Mute
-          </label>
-          <label className="properties-inline-check">
-            <input
-              type="checkbox"
-              checked={solo}
-              onChange={(e) => setSolo(e.target.checked)}
-            />
+          </button>
+          <button
+            type="button"
+            className="properties-chip-toggle"
+            data-on={solo ? "true" : "false"}
+            data-tone="solo"
+            onClick={() => setSolo(!solo)}
+            aria-pressed={solo}
+          >
             Solo
-          </label>
+          </button>
         </div>
       </Field>
       {role !== "dialogue" && (
         <Field label="Ducking">
-          <div className="properties-control-row">
-            <label className="properties-inline-check">
+          <div className="properties-ducking-row">
+            <button
+              type="button"
+              className="properties-chip-toggle"
+              data-on={ducking ? "true" : "false"}
+              data-tone="duck"
+              onClick={() => setDucking(!ducking)}
+              aria-pressed={ducking}
+            >
+              {ducking ? "On" : "Off"}
+            </button>
+            <div className="properties-stepper">
               <input
-                type="checkbox"
-                checked={ducking}
-                onChange={(e) => setDucking(e.target.checked)}
+                type="number"
+                step={1}
+                value={amountDb}
+                aria-label="Ducking amount in dB"
+                onChange={(e) => setAmountDb(parseFloat(e.target.value) || -12)}
               />
-              On
-            </label>
-            <input
-              type="number"
-              step={1}
-              className="properties-number-input"
-              value={amountDb}
-              onChange={(e) => setAmountDb(parseFloat(e.target.value) || -12)}
-            />
-            <span className="properties-control-value">dB</span>
+              <div className="properties-stepper-stack">
+                <button
+                  type="button"
+                  aria-label="Increase ducking"
+                  onClick={() => setAmountDb(amountDb + 1)}
+                >
+                  ▴
+                </button>
+                <button
+                  type="button"
+                  aria-label="Decrease ducking"
+                  onClick={() => setAmountDb(amountDb - 1)}
+                >
+                  ▾
+                </button>
+              </div>
+            </div>
+            <span className="properties-value-badge">
+              <span className="unit">dB</span>
+            </span>
           </div>
         </Field>
       )}
       {dirty && (
         <Field label="Track audio">
-          <button className="properties-apply" type="button" onClick={apply}>
+          <button className="properties-inline-apply" type="button" onClick={apply}>
             Apply
           </button>
         </Field>
@@ -1341,16 +1432,16 @@ function SpeedControl({
   return (
     <Field label="Speed">
       <div className="properties-control-row">
-        <input
-          type="range"
+        <Slider
+          value={local}
           min={0.25}
           max={4}
           step={0.05}
-          value={local}
-          onChange={(e) => handleChange(parseFloat(e.target.value))}
-          className="properties-slider"
+          defaultValue={DEFAULT_SPEED}
+          onChange={handleChange}
+          ariaLabel="Clip speed"
         />
-        <span className="properties-control-value">{local.toFixed(2)}×</span>
+        <ValueBadge value={local} unit="×" atRest={Math.abs(local - DEFAULT_SPEED) < 0.025} />
       </div>
     </Field>
   );
@@ -1448,7 +1539,8 @@ function ColorCorrectionControl({
         min={-4}
         max={4}
         step={0.05}
-        unit=" EV"
+        unit="EV"
+        defaultValue={DEFAULT_COLOR.exposureEv}
         onChange={(next) => setField("exposureEv", next)}
       />
       <ColorSlider
@@ -1458,6 +1550,7 @@ function ColorCorrectionControl({
         max={3}
         step={0.05}
         unit="×"
+        defaultValue={DEFAULT_COLOR.contrast}
         onChange={(next) => setField("contrast", next)}
       />
       <ColorSlider
@@ -1467,6 +1560,7 @@ function ColorCorrectionControl({
         max={3}
         step={0.05}
         unit="×"
+        defaultValue={DEFAULT_COLOR.saturation}
         onChange={(next) => setField("saturation", next)}
       />
       <ColorSlider
@@ -1475,6 +1569,7 @@ function ColorCorrectionControl({
         min={-1}
         max={1}
         step={0.02}
+        defaultValue={DEFAULT_COLOR.temperature}
         onChange={(next) => setField("temperature", next)}
       />
       <ColorSlider
@@ -1483,6 +1578,7 @@ function ColorCorrectionControl({
         min={-1}
         max={1}
         step={0.02}
+        defaultValue={DEFAULT_COLOR.tint}
         onChange={(next) => setField("tint", next)}
       />
       <ColorSlider
@@ -1491,6 +1587,7 @@ function ColorCorrectionControl({
         min={-1}
         max={1}
         step={0.02}
+        defaultValue={DEFAULT_COLOR.shadows}
         onChange={(next) => setField("shadows", next)}
       />
       <ColorSlider
@@ -1499,11 +1596,12 @@ function ColorCorrectionControl({
         min={-1}
         max={1}
         step={0.02}
+        defaultValue={DEFAULT_COLOR.highlights}
         onChange={(next) => setField("highlights", next)}
       />
       {dirty && (
         <Field label="Color">
-          <button className="properties-apply" type="button" onClick={apply}>
+          <button className="properties-inline-apply" type="button" onClick={apply}>
             Apply
           </button>
         </Field>
@@ -1518,7 +1616,8 @@ function ColorSlider({
   min,
   max,
   step,
-  unit = "",
+  unit,
+  defaultValue,
   onChange,
 }: {
   label: string;
@@ -1527,24 +1626,23 @@ function ColorSlider({
   max: number;
   step: number;
   unit?: string;
+  defaultValue: number;
   onChange: (value: number) => void;
 }) {
+  const atRest = Math.abs(value - defaultValue) < step / 2;
   return (
     <Field label={label}>
       <div className="properties-control-row">
-        <input
-          type="range"
+        <Slider
+          value={value}
           min={min}
           max={max}
           step={step}
-          value={value}
-          onChange={(e) => onChange(parseFloat(e.target.value))}
-          className="properties-slider"
+          defaultValue={defaultValue}
+          onChange={onChange}
+          ariaLabel={label}
         />
-        <span className="properties-control-value">
-          {value.toFixed(2)}
-          {unit}
-        </span>
+        <ValueBadge value={value} unit={unit} atRest={atRest} />
       </div>
     </Field>
   );
@@ -1605,9 +1703,17 @@ function LutControl({
     });
   }
 
+  // No `firstFrameAverage` field exists on TimelineItem yet, so a loaded
+  // LUT always paints the neutral checkerboard fallback. When the backend
+  // starts shipping an average colour, swap the swatch's inline style
+  // here. See LutSwatch below.
+  const lutState: "empty" | "loaded" =
+    lastCommittedRef.current.length > 0 ? "loaded" : "empty";
+
   return (
     <Field label="LUT">
-      <div className="properties-control-row">
+      <div className="properties-lut-row">
+        <LutSwatch state={lutState} />
         <input
           type="text"
           className="properties-text-input"
@@ -1617,7 +1723,7 @@ function LutControl({
         />
         {dirty && (
           <button
-            className="properties-apply"
+            className="properties-inline-apply"
             type="button"
             onClick={apply}
             disabled={!canApply}
@@ -1626,12 +1732,23 @@ function LutControl({
           </button>
         )}
         {canRemove && (
-          <button className="properties-apply" type="button" onClick={remove}>
+          <button className="properties-inline-apply" type="button" onClick={remove}>
             Clear
           </button>
         )}
       </div>
     </Field>
+  );
+}
+
+function LutSwatch({ state }: { state: "empty" | "loaded" }) {
+  return (
+    <span
+      className="properties-lut-swatch"
+      data-state={state}
+      aria-hidden
+      title={state === "empty" ? "No LUT applied" : "LUT applied"}
+    />
   );
 }
 
@@ -1653,10 +1770,19 @@ function Field({
 function PanelSection({
   title,
   children,
+  revealLevel,
 }: {
   title: string;
   children: React.ReactNode;
+  revealLevel?: RevealLevel;
 }) {
+  if (revealLevel !== undefined) {
+    return (
+      <CollapsiblePanel title={title} revealLevel={revealLevel}>
+        {children}
+      </CollapsiblePanel>
+    );
+  }
   return (
     <section className="properties-section">
       <h3>{title}</h3>

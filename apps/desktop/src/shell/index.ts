@@ -45,14 +45,27 @@ export {
   type IndexerConfigSnapshot,
   type IndexerConfigEntry,
 } from "./IndexingDashboard";
+export { IndexRail, type IndexRailProps } from "./IndexRail";
 export {
   DeliverySurface,
+  DRAFT_METADATA_JOB_ID,
   type DeliverySurfaceProps,
   type DeliveryTarget,
   type DeliveryTargetKey,
   type PreflightFinding,
   type DeliveryRenderSummary,
 } from "./DeliverySurface";
+export { SkillsSurface, type SkillEntry } from "./SkillsSurface";
+export { HistorySurface } from "./HistorySurface";
+export { BriefSurface, type BriefSurfaceProps } from "./BriefSurface";
+export { CenterModeTabs, type CenterModeTabsProps } from "./brief/CenterModeTabs";
+export {
+  TranscriptSource,
+  type TranscriptSourceProps,
+} from "./source/TranscriptSource";
+export {
+  isTranscriptFirstProjectType,
+} from "./source/transcriptSourceLogic";
 export {
   LoadingState,
   ErrorState,

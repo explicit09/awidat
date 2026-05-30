@@ -6,17 +6,17 @@ import type { Id } from "./Id";
  * "ALTERNATIVES" section. This is a *summary*; switching emits a
  * fresh `ProposedEdit` with the full payload.
  */
-export type ProposalAlternative = {
+export type ProposalAlternative = { 
 /**
  * Stable id for this alternative. Used by the frontend when the
  * user picks one — the backend re-emits the full ProposedEdit
  * keyed on this id.
  */
-id: Id,
+id: Id, 
 /**
  * Short label ("Keep more context", "Tighter cut", "Hard cut").
  */
-label: string,
+label: string, 
 /**
  * Optional one-line detail ("+0.9s", "-1.2s", "—"). Rendered in
  * the right column of the alternative chip in mono.
