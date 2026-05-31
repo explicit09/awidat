@@ -934,6 +934,9 @@ function App() {
   }, [demoMode, demoScreen.stage, setStage, stage]);
 
   useEffect(() => {
+    // Dev-only: when a stage is pinned via VITE_AWIDAT_STAGE (native
+    // screenshot tours), don't auto-route the stage back to "edit".
+    if (import.meta.env?.VITE_AWIDAT_STAGE) return;
     if (demoMode) {
       routedProjectRef.current = { project: null, mode: null };
       return;

@@ -44,9 +44,16 @@ export type StageStore = {
   reset: () => void;
 };
 
+/** Dev-only: boot straight into a stage via `VITE_AWIDAT_STAGE=deliver`
+ *  (used for native screenshot tours; ignored in production builds). */
+const DEV_INITIAL_STAGE = ((): Stage => {
+  const v = import.meta.env?.VITE_AWIDAT_STAGE as string | undefined;
+  return v === "deliver" || v === "skills" || v === "history" ? v : "edit";
+})();
+
 export const useStageStore = create<StageStore>((set) => ({
-  current: "edit",
-  visited: new Set<Stage>(["edit"]),
+  current: DEV_INITIAL_STAGE,
+  visited: new Set<Stage>(["edit", DEV_INITIAL_STAGE]),
   set: (stage) =>
     set((s) => ({
       current: stage,
