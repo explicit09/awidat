@@ -13,7 +13,9 @@
 
 use awidat_auth::{AuthEnv, AuthModeKind, AuthStatus};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::state::AwidatState;
 
 /// Event emitted when stored credentials change out-of-band (i.e. a ChatGPT
 /// login completed in the background). The frontend re-fetches `auth_status`.
@@ -80,18 +82,41 @@ pub async fn auth_status() -> Result<AuthStatusDto, String> {
 /// Validate and store an API key as the active credential, then return the new
 /// status.
 #[tauri::command]
-pub async fn auth_set_api_key(key: String) -> Result<AuthStatusDto, String> {
+pub async fn auth_set_api_key(
+    state: State<'_, AwidatState>,
+    key: String,
+) -> Result<AuthStatusDto, String> {
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
     awidat_auth::set_api_key(&env, &key).map_err(|e| e.to_string())?;
+    refresh_agent_auth(&state).await;
     Ok(awidat_auth::status(&env).into())
 }
 
 /// Clear stored credentials, then return the new status.
 #[tauri::command]
-pub async fn auth_logout() -> Result<AuthStatusDto, String> {
+pub async fn auth_logout(state: State<'_, AwidatState>) -> Result<AuthStatusDto, String> {
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
     awidat_auth::logout(&env).map_err(|e| e.to_string())?;
+    refresh_agent_auth(&state).await;
     Ok(awidat_auth::status(&env).into())
+}
+
+/// Make a credential change take effect on the *running* agent.
+///
+/// The in-process codex app-server caches auth (codex's own login paths call
+/// `AuthManager::reload()` after writing). We don't hold that manager, so we drop
+/// the live session instead — `start_turn` lazily relaunches it, picking up the
+/// new `auth.json`. Skipped while a turn is in flight so we don't kill its pump
+/// task mid-event: the new credential is already persisted and applies on the
+/// next session rebuild.
+async fn refresh_agent_auth(state: &State<'_, AwidatState>) {
+    if state.turn.lock().await.is_some() {
+        tracing::info!(
+            "auth changed during an active turn; new credentials apply on the next session rebuild"
+        );
+        return;
+    }
+    crate::commands::project::tear_down_codex_session(state).await;
 }
 
 /// Start "Sign in with ChatGPT". Returns the consent URL immediately; the
@@ -110,6 +135,8 @@ pub async fn auth_begin_chatgpt(app: AppHandle) -> Result<BeginChatgptDto, Strin
     tauri::async_runtime::spawn(async move {
         match handle.wait().await {
             Ok(()) => {
+                // Drop the cached session so the new ChatGPT creds apply next turn.
+                refresh_agent_auth(&app.state::<AwidatState>()).await;
                 if let Err(err) = app.emit(EVENT_AUTH_CHANGED, ()) {
                     tracing::warn!(error = %err, "failed to emit auth-changed");
                 }

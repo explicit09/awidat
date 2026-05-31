@@ -87,13 +87,15 @@ impl AuthStatus {
 
 /// Read the effective auth state.
 ///
-/// Precedence mirrors codex's [`AuthManager`](codex_login::AuthManager): an
-/// `OPENAI_API_KEY` in the environment overrides whatever is stored, so we
-/// report that first. Otherwise we classify the stored `auth.json`. A read error
-/// is treated as "signed out" (and logged) rather than propagated — status is a
-/// display concern, not a place to fail a turn.
+/// Precedence mirrors codex's [`AuthManager`](codex_login::AuthManager): an API
+/// key in the environment overrides whatever is stored, so we report that first.
+/// The desktop bridge launches codex with `enable_codex_api_key_env: true`, so
+/// **both** `CODEX_API_KEY` and `OPENAI_API_KEY` are honoured by the running
+/// agent — we must check both or the wallet readout lies. Otherwise we classify
+/// the stored `auth.json`. A read error is treated as "signed out" (and logged)
+/// rather than propagated — status is a display concern, not a place to fail a turn.
 pub fn status(env: &AuthEnv) -> AuthStatus {
-    if let Some(key) = read_openai_api_key_from_env() {
+    if let Some(key) = env_api_key() {
         return AuthStatus::new(AuthModeKind::ApiKey, Some(mask_secret(&key)), true);
     }
     match load_auth_dot_json(&env.codex_home, env.store_mode) {
@@ -132,6 +134,32 @@ fn classify_parts(has_tokens: bool, api_key: Option<&str>, has_agent_identity: b
     } else {
         AuthStatus::new(AuthModeKind::None, None, false)
     }
+}
+
+/// The API key the running agent would pick up from the environment, if any.
+///
+/// Mirrors codex precedence: `CODEX_API_KEY` wins over `OPENAI_API_KEY`. Returns
+/// `None` when neither is set to a non-empty value.
+fn env_api_key() -> Option<String> {
+    pick_env_api_key(
+        read_env_var(codex_login::CODEX_API_KEY_ENV_VAR),
+        read_openai_api_key_from_env(),
+    )
+}
+
+/// Pure precedence rule (codex key first), split out so it is unit-testable
+/// without mutating process-global environment in tests.
+fn pick_env_api_key(codex_key: Option<String>, openai_key: Option<String>) -> Option<String> {
+    codex_key.or(openai_key)
+}
+
+/// Read an env var, trimmed, treating empty as unset — matches codex's own
+/// `read_non_empty_env_var`.
+fn read_env_var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Mask a secret to a safe hint: `sk-…` plus the last four characters. Never
@@ -176,6 +204,21 @@ mod tests {
     fn agent_identity_is_classified() {
         let status = classify_parts(false, None, true);
         assert_eq!(status.mode, AuthModeKind::AgentIdentity);
+    }
+
+    #[test]
+    fn env_api_key_prefers_codex_over_openai() {
+        // codex checks CODEX_API_KEY before OPENAI_API_KEY, so the wallet readout
+        // must reflect the same key the agent will actually use.
+        assert_eq!(
+            pick_env_api_key(Some("sk-codex".to_string()), Some("sk-openai".to_string())),
+            Some("sk-codex".to_string())
+        );
+        assert_eq!(
+            pick_env_api_key(None, Some("sk-openai".to_string())),
+            Some("sk-openai".to_string())
+        );
+        assert_eq!(pick_env_api_key(None, None), None);
     }
 
     #[test]
