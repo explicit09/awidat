@@ -64,6 +64,7 @@ pub mod plan_scene_aware_short_form;
 pub mod plan_short_form_review;
 pub mod plan_transition;
 pub mod plan_visual_support;
+pub mod plan_visual_support_proposals;
 pub mod podcast_apply_accepted_edits;
 pub mod podcast_audio_polish;
 pub mod podcast_cleanup_candidates;

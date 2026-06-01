@@ -109,6 +109,10 @@ use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAware
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
+use crate::awidat_mcp::tools::plan_visual_support_proposals::{
+    self, PlanVisualSupportProposalArgs, ReviseVisualSupportProposalArgs,
+    SaveVisualSupportDefaultsArgs, VerifyVisualSupportArtifactArgs,
+};
 use crate::awidat_mcp::tools::podcast_apply_accepted_edits::{self, PodcastApplyAcceptedEditsArgs};
 use crate::awidat_mcp::tools::podcast_audio_polish::{self, PodcastAudioPolishArgs};
 use crate::awidat_mcp::tools::podcast_cleanup_candidates::{self, PodcastCleanupCandidatesArgs};
@@ -1423,6 +1427,81 @@ FFmpeg/Rust render primitives.",
         args: Parameters<PlanVisualSupportArgs>,
     ) -> Result<String, ErrorData> {
         plan_visual_support::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_visual_support_proposals` — return reviewable visual artifact
+    /// proposals for a selected transcript/topic/timeline region.
+    #[tool(
+        description = "\
+Read-only Proposal-to-Visual-Support planner. Given selected transcript/topic \
+text and an editor request, returns visual artifact proposals with evidence, \
+missing-information prompts, apply_edl payloads, preview expectations, and \
+render-verification steps. Use before apply_edl for quote highlights, animated \
+lists, title cards, search bars, counters, maps, and B-roll packages.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_visual_support_proposals(
+        &self,
+        args: Parameters<PlanVisualSupportProposalArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_visual_support_proposals::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `revise_visual_support_proposal` — revise a pending visual-support
+    /// proposal from a natural-language instruction and return a diff.
+    #[tool(
+        description = "\
+Read-only Proposal-to-Visual-Support revision tool. Given one proposal returned \
+by plan_visual_support_proposals and a natural-language instruction, returns a \
+revised proposal plus a compact diff for review before apply_edl. Use for changes \
+such as shorter, faster, transparent background, or alpha intent.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn revise_visual_support_proposal(
+        &self,
+        args: Parameters<ReviseVisualSupportProposalArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_visual_support_proposals::run_revision(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `verify_visual_support_artifact` — run proposal-level
+    /// artifact-specific verification before or after render verification.
+    #[tool(
+        description = "\
+Read-only artifact-specific verifier for proposals returned by \
+plan_visual_support_proposals. Checks quote highlights, animated lists, and \
+B-roll packages against transcript evidence, MotionScene/EDL payloads, and \
+optionally project-local B-roll asset existence. Pair this with verify_render \
+after rendering.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn verify_visual_support_artifact(
+        &self,
+        args: Parameters<VerifyVisualSupportArtifactArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_visual_support_proposals::run_artifact_verification(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `save_visual_support_defaults` — persist project style/export defaults
+    /// learned from visual-support clarification answers.
+    #[tool(
+        description = "\
+Persist project-local visual-support defaults learned from editor clarification \
+answers. Saves preferred aspect ratio, platform, alpha/transparent-background \
+intent, and reusable reference assets to .awidat/visual_support_defaults.json. \
+Later plan_visual_support_proposals calls reuse these values when arguments omit \
+them.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn save_visual_support_defaults(
+        &self,
+        args: Parameters<SaveVisualSupportDefaultsArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_visual_support_proposals::save_visual_support_defaults(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
