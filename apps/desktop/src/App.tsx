@@ -36,6 +36,7 @@ import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
 import {
   AppShell,
+  StageShell,
   CommandRail,
   DeliverySurface,
   DRAFT_METADATA_JOB_ID,
@@ -149,6 +150,8 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
+  // 2026 "Stage" shell. Flip to false to fall back to the three-rail cockpit.
+  const STAGE_SHELL = true;
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
@@ -1812,9 +1815,108 @@ function App() {
     realWorkspace
   );
 
+  // ---- Stage shell nodes (2026 UX) ----------------------------------
+  // The cinematic preview hero (bare video, no center-mode tabs) and the
+  // timeline strip, reused by StageShell. They consume the same state the
+  // old cockpit did.
+  const stagePreview = (
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+      <MediaOfflineBanner />
+      <PreviewSurface
+        proposalName={activeProposal?.summary ?? "Source review"}
+        pendingCount={effectiveChanges.length}
+        changes={effectiveChanges}
+        activeChangeId={selectedPreviewChangeId}
+        currentTimeS={effectiveCurrentTime}
+        durationS={effectiveDuration}
+        isPlaying={isPlaying}
+        volume={previewVolume}
+        rate={previewRate}
+        qualityMode={previewQualityMode}
+        viewMode={previewViewMode}
+        videoSlot={
+          isTimelinePreview ? (
+            <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
+          ) : realPreviewSrc && selectedPreviewMedia ? (
+            <RealMediaPreviewSlot
+              src={realPreviewSrc}
+              label={selectedPreviewMedia.label}
+              name={selectedPreviewMedia.name}
+              isPlaying={isPlaying}
+              volume={previewVolume}
+              rate={previewRate}
+              seekRequestId={sourceSeekRequestId}
+              seekTargetS={sourceSeekTargetS}
+              onTime={setSourceTime}
+              onDuration={setSourceDuration}
+              onPlaying={setMediaPlaying}
+              onFirstFrame={() => setHasProxyFrame(true)}
+            />
+          ) : undefined
+        }
+        sourceMedia={slateSourceMedia}
+        hasProxyFrame={hasProxyFrame}
+        indexing={slateIndexing}
+        onPlayPause={() => setMediaPlaying(!isPlaying)}
+        onSelectChange={selectPreviewChange}
+        onPrevCut={() => jumpPreviewChange(-1)}
+        onNextCut={() => jumpPreviewChange(1)}
+        onSeek={seekPreview}
+        onSetVolume={setPreviewVolume}
+        onSetRate={setPreviewRate}
+        onSetQualityMode={setPreviewQualityMode}
+        onSetViewMode={setPreviewViewMode}
+        onOpenProposalMenu={() => setInspectorCollapsed(false)}
+        onInspectProposal={inspectActiveProposal}
+        onReviseProposal={reviseActiveProposal}
+        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
+        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
+        onFullscreen={() => setInspectorCollapsed(false)}
+      />
+    </div>
+  );
+  const stageTimeline = (
+    <TimelineHybrid
+      tab={timelineTab}
+      onChangeTab={setTimelineTab}
+      viewMode={timelineViewMode}
+      onChangeViewMode={setTimelineViewMode}
+      durationS={effectiveDuration}
+      currentTimeS={effectiveCurrentTime}
+      changeCount={effectiveChanges.length}
+      audioPeaks={realAudioPeaks}
+      contentForTab={{ timeline: <TimelinePane /> }}
+    />
+  );
+
   return (
     <>
     <AmbientBackground />
+    {STAGE_SHELL && !demoMode ? (
+      <StageShell
+        hasProject={hasProject}
+        landing={<Landing />}
+        preview={stagePreview}
+        timeline={stageTimeline}
+        deliver={realDeliveryWorkspace}
+        skills={<SkillsSurface />}
+        history={<HistorySurface />}
+        stage={stage}
+        onStage={setStage}
+        onCommand={(text) => void runEngineCommand(text)}
+        running={running}
+        onCancel={() => {
+          if (!isTauri()) return;
+          invoke("cancel_turn").catch((e) => console.warn("cancel_turn failed", e));
+        }}
+        projectLabel={current ? projectName(current) : undefined}
+        agentRead={
+          hasProject
+            ? `${briefPendingCount} proposal${briefPendingCount === 1 ? "" : "s"} ready · ${realIndexingReady ? "indexed" : "indexing"}`
+            : undefined
+        }
+      />
+    ) : (
     <AppShell
       // Top chrome (brand, stage tabs, status, share/settings) now lives in
       // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;
@@ -2092,6 +2194,7 @@ function App() {
       inspectorCollapsed={isEditStage && inspectorCollapsed}
       footer={<Footer demoMode={demoMode} />}
     />
+    )}
     {/* The bottom dock used to support a popout mode for transcript /
         vedit; now those panels live in the right rail, so the popout
         is gone. */}
