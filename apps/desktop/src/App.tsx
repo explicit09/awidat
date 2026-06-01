@@ -1844,9 +1844,12 @@ function App() {
     effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
   const stagePreview = (
     <div className="relative h-full w-full overflow-hidden bg-black/40">
-      {/* the footage */}
-      <div className="absolute inset-0 grid place-items-center">
-        {stageVideoSlot ?? (
+      {/* the footage — must FILL the hero (the player sizes to its box),
+          not sit centered at intrinsic size or it renders ~zero/black. */}
+      {stageVideoSlot ? (
+        <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
+      ) : (
+        <div className="absolute inset-0 grid place-items-center">
           <div className="text-center">
             <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
               {slateIndexing ? "Indexing…" : "Preview"}
@@ -1855,8 +1858,8 @@ function App() {
               {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       {/* minimal glass scrubber */}
       <div
         className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 py-3"
