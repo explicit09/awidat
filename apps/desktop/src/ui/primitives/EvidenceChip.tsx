@@ -11,9 +11,12 @@ export function EvidenceChip({ icon, label, confidence, className, ...rest }: Ev
   return (
     <span
       className={cn(
+        // Obsidian Glass 2026: small translucent glass chip.
         "inline-flex items-center gap-1.5 h-6 px-2",
-        "rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
-        "bg-[var(--color-surface-card)] text-[var(--color-text-secondary)]",
+        "rounded-[var(--radius-sm)] border border-[var(--glass-border)]",
+        "bg-[rgba(255,255,255,0.05)] text-[var(--color-text-secondary)]",
+        "transition-[background-color,border-color] duration-[120ms]",
+        "hover:bg-[rgba(255,255,255,0.08)] hover:border-[var(--glass-border-strong)]",
         "text-[var(--text-caption)] leading-[1] tracking-[var(--text-caption--letter-spacing)]",
         "font-medium whitespace-nowrap",
         className,

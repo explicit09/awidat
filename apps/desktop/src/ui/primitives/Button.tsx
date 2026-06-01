@@ -6,50 +6,52 @@ const button = cva(
   [
     "inline-flex items-center justify-center gap-2",
     "font-medium select-none whitespace-nowrap",
-    "rounded-[var(--radius-md)] border border-transparent",
-    "transition-[background-color,color] duration-[120ms]",
+    "rounded-[var(--radius-md)] border",
+    "transition-[background-color,color,border-color,box-shadow,filter,transform] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
     "focus-visible:outline-none",
     "disabled:opacity-40 disabled:cursor-not-allowed",
   ],
   {
     variants: {
-      // Cursor-style: ghost by default, semantic fills only for
-      // primary actions, no colored borders anywhere.
+      // Obsidian Glass 2026: primary is the radiating orange CTA
+      // (glass-cta), everything else is frosted translucent glass
+      // (glass-ghost) tinted toward its semantic hue on hover.
       variant: {
-        primary: [
-          "bg-[var(--color-brand)] text-[var(--color-text-inverse)]",
-          "hover:bg-[var(--color-brand-hover)]",
-          "active:bg-[var(--color-brand-active)]",
-        ],
-        secondary: [
-          "bg-[var(--color-surface-card)] text-[var(--color-text-primary)]",
-          "hover:bg-[var(--color-surface-card-hover)]",
-          "active:bg-[var(--color-surface-card-active)]",
-        ],
-        ghost: [
-          "bg-transparent text-[var(--color-text-secondary)]",
-          "hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
-        ],
+        // Radiating orange CTA with dark text — see .glass-cta in glass.css.
+        primary: "glass-cta border-transparent",
+        // Frosted translucent ghost that lights up on hover.
+        secondary: "glass-ghost",
+        ghost: "glass-ghost",
         accept: [
-          "bg-[rgba(34,197,94,0.12)] text-[var(--color-proposal-accepted-text)]",
-          "hover:bg-[rgba(34,197,94,0.18)]",
+          "glass-ghost",
+          "text-[var(--color-proposal-accepted-text)]",
+          "hover:bg-[rgba(45,212,191,0.16)] hover:text-[var(--color-proposal-accepted-text)]",
+          "hover:border-[rgba(45,212,191,0.3)]",
         ],
         reject: [
-          "bg-[rgba(239,68,68,0.11)] text-[var(--color-proposal-rejected-text)]",
-          "hover:bg-[rgba(239,68,68,0.17)]",
+          "glass-ghost",
+          "text-[var(--color-proposal-rejected-text)]",
+          "hover:bg-[rgba(220,100,95,0.16)] hover:text-[var(--color-proposal-rejected-text)]",
+          "hover:border-[rgba(220,100,95,0.3)]",
         ],
         revise: [
-          "bg-[rgba(59,130,246,0.1)] text-[var(--color-proposal-proposed-text)]",
-          "hover:bg-[rgba(59,130,246,0.16)] hover:text-[#DBEAFE]",
+          "glass-ghost",
+          "text-[var(--color-proposal-proposed-text)]",
+          "hover:bg-[rgba(245,158,11,0.16)] hover:text-[var(--color-proposal-proposed-text)]",
+          "hover:border-[rgba(245,158,11,0.3)]",
         ],
         repair: [
-          "bg-[rgba(168,85,247,0.12)] text-[var(--color-proposal-proposed-text)]",
-          "hover:bg-[rgba(168,85,247,0.18)]",
+          "glass-ghost",
+          "text-[var(--color-proposal-revised-text)]",
+          "hover:bg-[rgba(168,85,247,0.16)] hover:text-[var(--color-proposal-revised-text)]",
+          "hover:border-[rgba(168,85,247,0.3)]",
         ],
         danger: [
-          "bg-[var(--color-failure)] text-[var(--color-text-on-danger)]",
-          "hover:bg-[#B91C1C]",
+          "glass-ghost",
+          "text-[var(--color-proposal-rejected-text)]",
+          "hover:bg-[rgba(220,100,95,0.16)] hover:text-[#FCA5A5]",
+          "hover:border-[rgba(220,100,95,0.45)]",
         ],
       },
       size: {

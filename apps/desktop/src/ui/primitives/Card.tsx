@@ -3,31 +3,28 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../cn";
 
 const card = cva(
-  [
-    "rounded-[var(--radius-md)] border bg-[var(--color-surface-card)]",
-    "border-[var(--color-border-subtle)]",
-    "transition-[background-color,color] duration-[120ms]",
-    "ease-[cubic-bezier(0.2,0,0,1)]",
-  ],
+  // Obsidian Glass 2026: translucent dark glass content surface. The
+  // .glass-content class owns bg/border/radius + the hover lift (see
+  // glass.css), so every Card that uses it inherits the new look.
+  ["glass-content"],
   {
     variants: {
       interactive: {
-        // Hover changes only background, not the border color. Border
-        // stays subtle so neighboring cards don't visually "pop" on
-        // each hover.
-        true: "hover:bg-[var(--color-surface-card-hover)] cursor-pointer",
+        // .glass-content already brightens bg + border on hover; the
+        // interactive variant only opts the row into pointer affordance.
+        true: "cursor-pointer",
         false: "",
       },
       tone: {
         default: "",
-        // Elevated reads through stronger background tint, not a
-        // colored shadow. Same for tone variants — color through fill,
-        // not border or glow.
-        elevated: "bg-[var(--color-surface-modal)]",
-        flat: "bg-transparent",
-        accent: "bg-[rgba(56,189,248,0.05)]",
-        warning: "bg-[rgba(245,158,11,0.05)]",
-        danger: "bg-[rgba(239,68,68,0.05)]",
+        // Elevated reads through a stronger glass tint; the colored
+        // tones wash a faint semantic hue over the glass without adding
+        // a hard border or glow.
+        elevated: "bg-[var(--glass-content-hover)]",
+        flat: "bg-transparent border-transparent",
+        accent: "bg-[rgba(56,189,248,0.07)]",
+        warning: "bg-[rgba(245,158,11,0.07)]",
+        danger: "bg-[rgba(220,100,95,0.07)]",
       },
       padding: {
         none: "p-0",

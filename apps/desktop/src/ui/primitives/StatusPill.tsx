@@ -13,11 +13,21 @@ import {
 export { resolveStatusLabel };
 export type { JobPillState, ProposalPillState, StatusPillProps };
 
+// Obsidian Glass 2026 status-pill palette. Color-coded glass chips:
+// mono uppercase text, translucent semantic fill, matching ~.3-alpha
+// border. State→family mapping is owned by StatusPill.logic.ts — this
+// only paints the visuals for each (family, state) pair.
+//
+//   ready / accepted        → mint   (#5EEAD4 on rgba(45,212,191,.16))
+//   proposed / revised      → amber  (#FCD34D on rgba(245,158,11,.16))
+//   failed / rejected       → red    (#FCA5A5 on rgba(220,100,95,.16))
+//   running                 → orange (#FF9A45 on rgba(255,122,24,.16))
+//   idle                    → muted  (text-muted on rgba(255,255,255,.06))
 const pill = cva(
   [
     "inline-flex items-center gap-1.5",
     "rounded-full border",
-    "font-semibold",
+    "font-mono font-semibold uppercase tracking-[0.06em]",
     "whitespace-nowrap",
   ],
   {
@@ -34,19 +44,19 @@ const pill = cva(
         revised: "",
       },
       size: {
-        sm: "h-4 px-1.5 text-[10px] leading-none",
-        md: "h-[18px] px-2 text-[11px] leading-none",
+        sm: "h-4 px-1.5 text-[9px] leading-none",
+        md: "h-[18px] px-2 text-[10px] leading-none",
       },
     },
     compoundVariants: [
-      { family: "job", state: "idle", className: "bg-[var(--color-job-idle-fill)] border-[var(--color-job-idle-border)] text-[var(--color-job-idle-text)]" },
-      { family: "job", state: "running", className: "bg-[var(--color-job-running-fill)] border-[var(--color-job-running-border)] text-[var(--color-job-running-text)]" },
-      { family: "job", state: "ready", className: "bg-[var(--color-job-ready-fill)] border-[var(--color-job-ready-border)] text-[var(--color-job-ready-text)]" },
-      { family: "job", state: "failed", className: "bg-[var(--color-job-failed-fill)] border-[var(--color-job-failed-border)] text-[var(--color-job-failed-text)]" },
-      { family: "proposal", state: "proposed", className: "bg-[var(--color-proposal-proposed-fill)] border-[var(--color-proposal-proposed-border)] text-[var(--color-proposal-proposed-text)]" },
-      { family: "proposal", state: "accepted", className: "bg-[var(--color-proposal-accepted-fill)] border-[var(--color-proposal-accepted-border)] text-[var(--color-proposal-accepted-text)]" },
-      { family: "proposal", state: "rejected", className: "bg-[var(--color-proposal-rejected-fill)] border-[var(--color-proposal-rejected-border)] text-[var(--color-proposal-rejected-text)]" },
-      { family: "proposal", state: "revised", className: "bg-[var(--color-proposal-revised-fill)] border-[var(--color-proposal-revised-border)] text-[var(--color-proposal-revised-text)]" },
+      { family: "job", state: "idle", className: "bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.12)] text-[var(--color-text-muted)]" },
+      { family: "job", state: "running", className: "bg-[rgba(255,122,24,0.16)] border-[rgba(255,122,24,0.3)] text-[#FF9A45]" },
+      { family: "job", state: "ready", className: "bg-[rgba(45,212,191,0.16)] border-[rgba(45,212,191,0.3)] text-[#5EEAD4]" },
+      { family: "job", state: "failed", className: "bg-[rgba(220,100,95,0.16)] border-[rgba(220,100,95,0.3)] text-[#FCA5A5]" },
+      { family: "proposal", state: "proposed", className: "bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.3)] text-[#FCD34D]" },
+      { family: "proposal", state: "accepted", className: "bg-[rgba(45,212,191,0.16)] border-[rgba(45,212,191,0.3)] text-[#5EEAD4]" },
+      { family: "proposal", state: "rejected", className: "bg-[rgba(220,100,95,0.16)] border-[rgba(220,100,95,0.3)] text-[#FCA5A5]" },
+      { family: "proposal", state: "revised", className: "bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.3)] text-[#FCD34D]" },
     ],
     defaultVariants: { size: "md", family: "job", state: "idle" },
   },
@@ -61,14 +71,14 @@ const dot = cva("h-1.5 w-1.5 shrink-0 rounded-full", {
     },
   },
   compoundVariants: [
-    { family: "job", state: "idle", className: "bg-[var(--color-job-idle-dot)]" },
-    { family: "job", state: "running", className: "bg-[var(--color-job-running-dot)] shadow-[0_0_6px_rgba(255,122,24,0.6)]" },
-    { family: "job", state: "ready", className: "bg-[var(--color-job-ready-dot)]" },
-    { family: "job", state: "failed", className: "bg-[var(--color-job-failed-dot)]" },
-    { family: "proposal", state: "proposed", className: "bg-[var(--color-proposal-proposed-dot)]" },
-    { family: "proposal", state: "accepted", className: "bg-[var(--color-proposal-accepted-dot)]" },
-    { family: "proposal", state: "rejected", className: "bg-[var(--color-proposal-rejected-dot)]" },
-    { family: "proposal", state: "revised", className: "bg-[var(--color-proposal-revised-dot)]" },
+    { family: "job", state: "idle", className: "bg-[var(--color-text-muted)]" },
+    { family: "job", state: "running", className: "bg-[#FF9A45] shadow-[0_0_6px_rgba(255,122,24,0.6)]" },
+    { family: "job", state: "ready", className: "bg-[#5EEAD4]" },
+    { family: "job", state: "failed", className: "bg-[#FCA5A5]" },
+    { family: "proposal", state: "proposed", className: "bg-[#FCD34D]" },
+    { family: "proposal", state: "accepted", className: "bg-[#5EEAD4]" },
+    { family: "proposal", state: "rejected", className: "bg-[#FCA5A5]" },
+    { family: "proposal", state: "revised", className: "bg-[#FCD34D]" },
   ],
 });
 
