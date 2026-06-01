@@ -386,3 +386,8 @@ html, body, #root { background: #0a0a12; }
 @supports not (backdrop-filter: blur(1px)) {
   .panel { background: rgba(18, 18, 22, 0.94) !important; }
 }
+
+/* Stage timeline strip: hide TimelinePane's internal header (track count,
+   +Track, zoom) — the Stage wants a clean ribbon, not cockpit chrome. */
+.stage-timeline .timeline-header { display: none !important; }
+.stage-timeline > * { height: 100%; }

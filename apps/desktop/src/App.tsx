@@ -1816,77 +1816,80 @@ function App() {
   );
 
   // ---- Stage shell nodes (2026 UX) ----------------------------------
-  // The cinematic preview hero (bare video, no center-mode tabs) and the
-  // timeline strip, reused by StageShell. They consume the same state the
-  // old cockpit did.
+  // A clean cinematic hero: the raw video slot + a minimal glass scrubber.
+  // Deliberately NOT the old PreviewSurface — no "Source review", no
+  // Before/After, no quality dropdown. Just the footage + transport.
+  const stageVideoSlot = isTimelinePreview ? (
+    <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
+  ) : realPreviewSrc && selectedPreviewMedia ? (
+    <RealMediaPreviewSlot
+      src={realPreviewSrc}
+      label={selectedPreviewMedia.label}
+      name={selectedPreviewMedia.name}
+      isPlaying={isPlaying}
+      volume={previewVolume}
+      rate={previewRate}
+      seekRequestId={sourceSeekRequestId}
+      seekTargetS={sourceSeekTargetS}
+      onTime={setSourceTime}
+      onDuration={setSourceDuration}
+      onPlaying={setMediaPlaying}
+      onFirstFrame={() => setHasProxyFrame(true)}
+    />
+  ) : null;
+  const stageProgress =
+    effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
   const stagePreview = (
-    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
-      <MediaOfflineBanner />
-      <PreviewSurface
-        proposalName={activeProposal?.summary ?? "Source review"}
-        pendingCount={effectiveChanges.length}
-        changes={effectiveChanges}
-        activeChangeId={selectedPreviewChangeId}
-        currentTimeS={effectiveCurrentTime}
-        durationS={effectiveDuration}
-        isPlaying={isPlaying}
-        volume={previewVolume}
-        rate={previewRate}
-        qualityMode={previewQualityMode}
-        viewMode={previewViewMode}
-        videoSlot={
-          isTimelinePreview ? (
-            <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
-          ) : realPreviewSrc && selectedPreviewMedia ? (
-            <RealMediaPreviewSlot
-              src={realPreviewSrc}
-              label={selectedPreviewMedia.label}
-              name={selectedPreviewMedia.name}
-              isPlaying={isPlaying}
-              volume={previewVolume}
-              rate={previewRate}
-              seekRequestId={sourceSeekRequestId}
-              seekTargetS={sourceSeekTargetS}
-              onTime={setSourceTime}
-              onDuration={setSourceDuration}
-              onPlaying={setMediaPlaying}
-              onFirstFrame={() => setHasProxyFrame(true)}
-            />
-          ) : undefined
-        }
-        sourceMedia={slateSourceMedia}
-        hasProxyFrame={hasProxyFrame}
-        indexing={slateIndexing}
-        onPlayPause={() => setMediaPlaying(!isPlaying)}
-        onSelectChange={selectPreviewChange}
-        onPrevCut={() => jumpPreviewChange(-1)}
-        onNextCut={() => jumpPreviewChange(1)}
-        onSeek={seekPreview}
-        onSetVolume={setPreviewVolume}
-        onSetRate={setPreviewRate}
-        onSetQualityMode={setPreviewQualityMode}
-        onSetViewMode={setPreviewViewMode}
-        onOpenProposalMenu={() => setInspectorCollapsed(false)}
-        onInspectProposal={inspectActiveProposal}
-        onReviseProposal={reviseActiveProposal}
-        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
-        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
-        onFullscreen={() => setInspectorCollapsed(false)}
-      />
+    <div className="relative h-full w-full overflow-hidden bg-black/40">
+      {/* the footage */}
+      <div className="absolute inset-0 grid place-items-center">
+        {stageVideoSlot ?? (
+          <div className="text-center">
+            <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
+              {slateIndexing ? "Indexing…" : "Preview"}
+            </div>
+            <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+              {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* minimal glass scrubber */}
+      <div
+        className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 py-3"
+        style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.55), transparent)" }}
+      >
+        <button
+          onClick={() => setMediaPlaying(!isPlaying)}
+          className="glass-ghost grid h-8 w-8 place-items-center rounded-full text-[12px]"
+        >
+          {isPlaying ? "❚❚" : "▶"}
+        </button>
+        <button onClick={() => jumpPreviewChange(-1)} className="text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">⤴</button>
+        <button onClick={() => jumpPreviewChange(1)} className="text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">⤵</button>
+        <div
+          className="group relative h-1.5 flex-1 cursor-pointer rounded-full bg-[rgba(255,255,255,0.16)]"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            const pct = (e.clientX - r.left) / r.width;
+            if (effectiveDuration > 0) seekPreview(Math.max(0, Math.min(1, pct)) * effectiveDuration);
+          }}
+        >
+          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#FF7A18", boxShadow: "0 0 10px #FF7A18" }} />
+        </div>
+        <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">
+          {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
+        </span>
+      </div>
     </div>
   );
+  // Bare timeline canvas — no Hybrid tab/zoom chrome in the Stage strip.
+  // `.stage-timeline` hides TimelinePane's internal header (track count /
+  // +Track / zoom) via glass.css so the strip reads as a clean ribbon.
   const stageTimeline = (
-    <TimelineHybrid
-      tab={timelineTab}
-      onChangeTab={setTimelineTab}
-      viewMode={timelineViewMode}
-      onChangeViewMode={setTimelineViewMode}
-      durationS={effectiveDuration}
-      currentTimeS={effectiveCurrentTime}
-      changeCount={effectiveChanges.length}
-      audioPeaks={realAudioPeaks}
-      contentForTab={{ timeline: <TimelinePane /> }}
-    />
+    <div className="stage-timeline h-full w-full overflow-hidden">
+      <TimelinePane />
+    </div>
   );
 
   return (
