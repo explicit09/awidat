@@ -89,6 +89,19 @@ impl CapabilityMetadata {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["color_analysis".into()];
             }
+            "plan_multicam" => {
+                // Read-only angle director: reads diarized transcript plus
+                // per-camera face/shot sidecars and proposes an Apply Multicam
+                // Plan EDL fragment for review. Never mutates the graph itself.
+                metadata.export_supported = SupportLevel::NotSupported;
+                metadata.required_indexes = vec!["transcript".into(), "face".into(), "shot".into()];
+            }
+            "analyze_sync" => {
+                // Read-only waveform alignment over raw media; proposes Set
+                // Sync Group EDL fragments. Runs ffmpeg waveform extraction but
+                // writes nothing and depends on no index sidecar.
+                metadata.export_supported = SupportLevel::NotSupported;
+            }
             "start_render" => {
                 metadata.graph_mutates = false;
                 metadata.preview_supported = SupportLevel::NotSupported;
@@ -329,5 +342,30 @@ mod tests {
                 .iter()
                 .any(|limitation| limitation.contains("does not apply it"))
         );
+    }
+
+    #[test]
+    fn multicam_tools_are_read_only_evidence() {
+        // Both planners propose EDL fragments for review; neither mutates the
+        // graph or requires approval, and neither is an export path.
+        let plan = CapabilityMetadata::for_tool_name("plan_multicam", false);
+        assert!(!plan.graph_mutates);
+        assert!(!plan.approval_required);
+        assert_eq!(plan.export_supported, SupportLevel::NotSupported);
+        assert_eq!(
+            plan.required_indexes,
+            vec![
+                "transcript".to_string(),
+                "face".to_string(),
+                "shot".to_string()
+            ]
+        );
+
+        let sync = CapabilityMetadata::for_tool_name("analyze_sync", false);
+        assert!(!sync.graph_mutates);
+        assert!(!sync.approval_required);
+        assert_eq!(sync.export_supported, SupportLevel::NotSupported);
+        // analyze_sync reads raw media directly — it depends on no index.
+        assert!(sync.required_indexes.is_empty());
     }
 }

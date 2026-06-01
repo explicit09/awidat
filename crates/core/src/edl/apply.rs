@@ -4692,9 +4692,14 @@ fn build_multicam_program_track(
         let mut clip = Clip::empty(format!("multicam-{decision_index}"));
         clip.media_reference =
             MediaReference::External(ExternalReference::new(decision.source_asset.clone()));
+        // Timeline duration is always the program span; the source IN point
+        // is the offset-corrected source time when the planner supplied one
+        // (separate-device cameras), else the program start (shared timebase).
+        let timeline_duration_s = decision.end_s - decision.start_s;
+        let source_in_s = decision.source_start_s.unwrap_or(decision.start_s);
         clip.source_range = Some(TimeRange::new(
-            RationalTime::new(decision.start_s * rate, rate),
-            RationalTime::new((decision.end_s - decision.start_s) * rate, rate),
+            RationalTime::new(source_in_s * rate, rate),
+            RationalTime::new(timeline_duration_s * rate, rate),
         ));
         {
             let awidat = clip
@@ -12943,6 +12948,10 @@ mod tests {
                             source_asset: "raw/cam-a.mov".into(),
                             start_s: 0.0,
                             end_s: 3.0,
+                            // cam-a started 2s late on the shoot → its source
+                            // for program 0..3 is source 2..5.
+                            source_start_s: Some(2.0),
+                            source_end_s: Some(5.0),
                             reason: Some("speaker A".into()),
                             speaker: Some("A".into()),
                             sync_group_id: Some("sync-1".into()),
@@ -12954,6 +12963,7 @@ mod tests {
                             reason: Some("reaction".into()),
                             speaker: None,
                             sync_group_id: Some("sync-1".into()),
+                            ..Default::default()
                         },
                     ],
                 },
@@ -12991,6 +13001,11 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("sync-1")
         );
+        // The clip reads the offset-corrected source IN point (2.0), not the
+        // program start (0.0); timeline duration stays the program span (3.0).
+        let range = first.source_range.as_ref().expect("source_range");
+        assert!((range.start_time.to_seconds() - 2.0).abs() < 1e-6);
+        assert!((range.duration.to_seconds() - 3.0).abs() < 1e-6);
     }
 
     #[test]
@@ -13006,17 +13021,13 @@ mod tests {
                             source_asset: "raw/cam-a.mov".into(),
                             start_s: 0.0,
                             end_s: 5.0,
-                            reason: None,
-                            speaker: None,
-                            sync_group_id: None,
+                            ..Default::default()
                         },
                         MulticamDecision {
                             source_asset: "raw/cam-b.mov".into(),
                             start_s: 4.0,
                             end_s: 6.0,
-                            reason: None,
-                            speaker: None,
-                            sync_group_id: None,
+                            ..Default::default()
                         },
                     ],
                 },

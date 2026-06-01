@@ -1075,10 +1075,23 @@ pub struct MulticamApplyPlan {
 pub struct MulticamDecision {
     /// Source asset id/path for this angle.
     pub source_asset: String,
-    /// Source and timeline start in seconds.
+    /// Program-timeline start in seconds (where this angle lands in the
+    /// flattened cut).
     pub start_s: f64,
-    /// Source and timeline end in seconds.
+    /// Program-timeline end in seconds.
     pub end_s: f64,
+    /// Source-media in point in seconds. When present, the rendered clip
+    /// reads source from here instead of `start_s` — required for
+    /// separate-device cameras whose source time is offset from the
+    /// program timeline. Defaults to `start_s` (shared timebase) when
+    /// omitted, preserving the prior behavior.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_start_s: Option<f64>,
+    /// Source-media out point in seconds. Defaults to `end_s` when
+    /// omitted. The clip's timeline duration is always `end_s - start_s`;
+    /// `source_end_s` only shifts which source span is read.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_end_s: Option<f64>,
     /// Optional decision reason for audit/review.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reason: Option<String>,

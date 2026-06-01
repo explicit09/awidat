@@ -303,3 +303,63 @@ assets. Uses FFmpeg waveform extraction and cross-correlation, reports \
 offset_s, confidence, optional speed_factor for small stable drift, and \
 an EDL Set Sync Group snippet. Low-confidence results are surfaced as \
 manual offset proposals instead of silently committing.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A distinctive non-periodic waveform: zeros with a single bump, so the
+    /// cross-correlation peak is unambiguous.
+    fn bump_wave(n: usize, at: usize) -> Vec<f32> {
+        let mut w = vec![0f32; n];
+        for (k, v) in [1.0, 2.0, 3.0, 2.0, 1.0].iter().enumerate() {
+            w[at + k] = *v;
+        }
+        w
+    }
+
+    #[test]
+    fn best_offset_recovers_known_lag() {
+        // Candidate bump is shifted +3 buckets relative to the reference.
+        // With duration_s == n, bucket_s == 1, so offset_s ≈ -3.
+        let reference = bump_wave(64, 18);
+        let candidate = bump_wave(64, 21);
+        let r = best_offset(&reference, &candidate, 64.0);
+        assert!(
+            (r.offset_s - (-3.0)).abs() < 1e-6,
+            "expected offset ≈ -3, got {}",
+            r.offset_s
+        );
+        assert!(r.confidence > 0.9, "aligned bumps should correlate near 1");
+    }
+
+    #[test]
+    fn best_offset_reports_zero_confidence_for_silent_candidate() {
+        // A flat/silent candidate has no energy to correlate against, so every
+        // lag is rejected and confidence collapses to 0 — the signal that
+        // gates `manual_offset_required` in the tool.
+        let reference = bump_wave(64, 18);
+        let silent = vec![0f32; 64];
+        let r = best_offset(&reference, &silent, 64.0);
+        assert_eq!(r.confidence, 0.0);
+    }
+
+    #[test]
+    fn best_offset_handles_degenerate_short_input() {
+        let r = best_offset(&[1.0, 2.0], &[1.0, 2.0], 2.0);
+        assert_eq!(r.offset_s, 0.0);
+        assert_eq!(r.confidence, 0.0);
+    }
+
+    #[test]
+    fn drift_estimate_is_zero_for_aligned_signals() {
+        // Identical halves → both half-windows align at the same offset → no
+        // drift, so no spurious speed_factor is proposed.
+        let mut wave = vec![0f32; 64];
+        for (a, b) in [(8, 1.0), (20, 3.0), (40, 2.0), (52, 1.5)] {
+            wave[a] = b;
+        }
+        let drift = drift_estimate(&wave, &wave, 64.0);
+        assert!(drift.abs() < 1e-6, "aligned signal should not drift");
+    }
+}
