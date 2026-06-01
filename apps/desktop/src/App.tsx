@@ -22,6 +22,7 @@ import { useProjectStore } from "./app/state";
 import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { SettingsModal } from "./app/SettingsModal";
+import { AuthChooser } from "./app/auth/AuthChooser";
 import { WelcomeCard } from "./app/WelcomeCard";
 import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
@@ -2102,6 +2103,7 @@ function App() {
       />
     )}
     <SettingsModal />
+    <AuthChooser />
     <AgentsMdEditor />
     <WelcomeCard />
     {showUrlImport && (

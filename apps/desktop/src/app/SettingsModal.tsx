@@ -30,6 +30,7 @@ import { useAgentsMdEditor } from "../state/agentsMdEditor";
 import { useIntroState } from "../state/introState";
 import { useMode } from "../state/mode";
 import { useSettings } from "../state/settings";
+import { useAuth } from "../state/auth";
 import { useWelcome } from "../state/welcome";
 import { Button, Inline, Stack } from "../ui";
 import type { IndexerConfigSnapshot } from "../shell";
@@ -64,6 +65,9 @@ export function SettingsModal() {
   const resetIntroState = useIntroState((s) => s.reset);
   const welcomeShown = useWelcome((s) => s.shown);
   const resetWelcome = useWelcome((s) => s.reset);
+  const authStatus = useAuth((s) => s.status);
+  const refreshAuth = useAuth((s) => s.refresh);
+  const openAuth = useAuth((s) => s.open);
 
   // Lazy-load the indexer config so the modal stays cheap when closed.
   // Calls the same `read_indexer_config` invoke used by App.tsx.
@@ -81,10 +85,12 @@ export function SettingsModal() {
       .catch((e) => {
         console.warn("read_indexer_config failed", e);
       });
+    // Refresh the OpenAI auth status so the Account section shows live state.
+    void refreshAuth();
     return () => {
       cancelled = true;
     };
-  }, [isOpen]);
+  }, [isOpen, refreshAuth]);
 
   // Esc closes — registered at document level so it works regardless of
   // which child has focus. Only mounts when the modal is open so we
@@ -126,6 +132,12 @@ export function SettingsModal() {
     // another modal so the Esc / backdrop semantics stay sane.
     close();
     resetWelcome();
+  }
+
+  function manageSignIn() {
+    // Close Settings before opening the auth chooser — avoid stacked modals.
+    close();
+    openAuth();
   }
 
   return (
@@ -178,6 +190,28 @@ export function SettingsModal() {
                 Edit AGENTS.md
               </Button>
             </Row>
+          </Section>
+
+          <Section title="OpenAI account">
+            {/* Which "wallet" powers the agent — ChatGPT plan vs API key.
+                Full chooser lives in AuthChooser; this is the entry point. */}
+            <Row
+              label="Powered by"
+              value={authStatus ? authStatus.walletTitle : "Not signed in"}
+            >
+              <Button variant="secondary" size="sm" onClick={manageSignIn}>
+                Manage sign-in
+              </Button>
+            </Row>
+            {authStatus?.accountHint ? (
+              <Row label="Account" mono value={authStatus.accountHint} />
+            ) : null}
+            {authStatus?.viaEnv ? (
+              <Row
+                label="Note"
+                value={`A ${authStatus.envVar ?? "credential"} in your environment is overriding stored auth.`}
+              />
+            ) : null}
           </Section>
 
           <Section title="Publishing">
