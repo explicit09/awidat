@@ -1932,8 +1932,6 @@ function App() {
         onAgentRepair={() => {
           void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
         }}
-        onMaximize={() => setInspectorCollapsed(false)}
-        onCollapse={() => setInspectorCollapsed(true)}
       />
     ) : (
       <ClipInspector />

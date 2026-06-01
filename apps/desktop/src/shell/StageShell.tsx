@@ -63,7 +63,14 @@ const TOOLS: ToolItem[] = [
 // Timeline strip sizing — fits ALL tracks without vertical scroll.
 const TL_BASE = 48; // header/padding chrome
 const TL_ROW = 58; // per-track lane height
-const TL_MAX_VH = 46; // never eat more than ~46vh of screen
+const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
+
+// Tool side-panel geometry — single source of truth (was 3 duplicated
+// magic numbers 372/380/380 that had to stay in sync by hand).
+const TOOL_W = 372; // panel width
+const TOOL_GUTTER = 12; // gap from the right edge
+const TOOL_DOCK_W = 44; // right dock width
+const TOOL_RESERVE = TOOL_W + TOOL_GUTTER + TOOL_DOCK_W + 12; // stage reflow when a tool is open
 
 export type StageShellProps = {
   hasProject: boolean;
@@ -225,7 +232,10 @@ export function StageShell(props: StageShellProps) {
       {/* right-edge tool dock — summon cockpit tools as a side panel.
           Hidden while a destination sheet (deliver/skills/history) is open. */}
       {tools && onStage_ ? (
-        <div className="group/tools absolute right-3 top-1/2 z-40 -translate-y-1/2">
+        <div
+          className="group/tools absolute top-1/2 z-40 -translate-y-1/2 transition-[right] duration-300"
+          style={{ right: tool ? TOOL_W + TOOL_GUTTER + 8 : 12 }}
+        >
           <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
             {TOOLS.map((t) => {
               const on = tool === t.id;
@@ -255,9 +265,10 @@ export function StageShell(props: StageShellProps) {
             position: "absolute",
             top: 64,
             bottom: 88,
-            right: 12,
+            right: TOOL_GUTTER,
             left: "auto",
-            width: 372,
+            width: TOOL_W,
+            maxWidth: "calc(100vw - 24px)",
             borderRadius: 18,
           }}>
           <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2.5">
@@ -276,8 +287,8 @@ export function StageShell(props: StageShellProps) {
           filter: onStage_ ? "none" : "blur(8px) brightness(0.5)",
           transform: onStage_ ? "none" : "scale(0.98)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: `calc(96px + 56px + ${timelineHeight})`,
-          paddingRight: tool ? 380 : undefined,
+          paddingBottom: convoOpen ? 120 : `calc(96px + 56px + ${timelineHeight})`,
+          paddingRight: tool ? TOOL_RESERVE : undefined,
         }}>
         <div className="relative flex min-w-0 flex-1 flex-col gap-2">
           <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
@@ -342,14 +353,17 @@ export function StageShell(props: StageShellProps) {
         ) : null}
       </div>
 
-      {/* timeline glass strip — height grows with track count, every track
-          visible at once (no vertical scroll), capped so it never eats the
-          whole screen; the preview hero flexes to give it room. */}
-      <div className="absolute inset-x-20 bottom-24 z-20 transition-opacity duration-300" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? 380 : undefined }}>
-        <div className="glass glass-soft overflow-hidden" style={{ borderRadius: 14, height: timelineHeight }}>
-          {timeline}
+      {/* timeline glass strip — height grows with track count so every track
+          is visible at once; past the soft cap it scrolls (never clips a
+          track). Hidden while the conversation panel is open so the two don't
+          fight for the bottom region. */}
+      {!convoOpen ? (
+        <div className="absolute inset-x-20 bottom-24 z-20 transition-opacity duration-300" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? TOOL_RESERVE : undefined }}>
+          <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
+            {timeline}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* destination sheets slide over the dimmed stage */}
       {!onStage_ ? (

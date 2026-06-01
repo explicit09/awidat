@@ -317,14 +317,16 @@ function Header({ onMaximize, onCollapse }: { onMaximize?: () => void; onCollaps
             <Maximize2 className="h-3 w-3 stroke-[1.75]" />
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={onCollapse}
-          className="h-6 w-6 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
-          aria-label="Collapse"
-        >
-          <PanelRightClose className="h-3 w-3 stroke-[1.75]" />
-        </button>
+        {onCollapse ? (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="h-6 w-6 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+            aria-label="Collapse"
+          >
+            <PanelRightClose className="h-3 w-3 stroke-[1.75]" />
+          </button>
+        ) : null}
       </Inline>
     </div>
   );
