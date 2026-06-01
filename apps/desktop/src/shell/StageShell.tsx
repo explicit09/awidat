@@ -3,7 +3,6 @@ import { useCursorGlass } from "../ui/glass";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
 import type { Stage } from "../state/stages";
 import { ChatStream } from "../agent/ChatStream";
-import { ShellModeToggle } from "./ShellModeToggle";
 import mark from "../brand/awidat-mark.svg";
 
 /**
@@ -134,7 +133,6 @@ export function StageShell(props: StageShellProps) {
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-3">
-          <ShellModeToggle />
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? ORANGE : "#20C997", boxShadow: `0 0 8px ${running ? ORANGE : "#20C997"}` }} />
             {running ? "working" : "ready"}

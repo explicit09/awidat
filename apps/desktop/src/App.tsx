@@ -75,7 +75,6 @@ import { Landing } from "./shell/empty/Landing";
 import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
-import { useShellMode } from "./state/shellMode";
 import { useAppGlue } from "./state/appGlue";
 import { useIndexReadinessStore } from "./state/indexReadiness";
 import { useEpisodesStore } from "./state/episodes";
@@ -151,9 +150,10 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
-  // 2026 "Stage" shell vs legacy cockpit — user-chosen, persisted.
-  const shellMode = useShellMode((s) => s.mode);
-  const STAGE_SHELL = shellMode === "stage";
+  // The Stage is THE app. The legacy cockpit stays as the ternary's else
+  // branch (compiles, keeps its consts live) but has no user-facing switch,
+  // so there's nothing confusing to flip between.
+  const STAGE_SHELL = true;
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);

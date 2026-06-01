@@ -3,7 +3,6 @@ import mark from "../../brand/awidat-mark.svg";
 import { useMode } from "../../state/mode";
 import { useProjectStore } from "../../app/state";
 import { useSettings } from "../../state/settings";
-import { ShellModeToggle } from "../ShellModeToggle";
 
 /**
  * IdentityRow — row 1 of the redesigned top chrome.
@@ -49,7 +48,6 @@ export function IdentityRow() {
         )}
       </div>
       <div className="flex items-center gap-2" data-tauri-drag-region={false}>
-        <ShellModeToggle tone="flat" />
         <ModePill mode={mode} onToggle={toggle} />
         <IconBtn label="Share">
           <Share2 size={14} />
