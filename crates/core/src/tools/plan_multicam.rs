@@ -159,8 +159,13 @@ impl ToolHandler for PlanMulticamTool {
             // the offset-adjusted source IN/OUT so Apply Multicam Plan reads
             // the right source frames; timeline span stays start_s..end_s.
             let cam_offset = offset_of(&offsets, &choice.asset);
-            let source_start_s = seg.start_s + am_offset - cam_offset;
-            let source_end_s = seg.end_s + am_offset - cam_offset;
+            // Clamp the source window to non-negative: a late-starting camera
+            // (positive offset) chosen before its source exists would yield a
+            // negative source_start, which Apply Multicam Plan copies into the
+            // clip and the render path then rejects. Bound it to source 0 so
+            // the plan always applies and renders.
+            let source_start_s = (seg.start_s + am_offset - cam_offset).max(0.0);
+            let source_end_s = (seg.end_s + am_offset - cam_offset).max(source_start_s);
             let offset_corrected = chosen_offset.is_some()
                 || (reference_is_unambiguous && !offsets.contains_key(&choice.asset));
             decisions.push(serde_json::json!({
@@ -260,10 +265,16 @@ fn load_segments(
 ) -> Result<Vec<Segment>, FunctionCallError> {
     let sidecar = read_sidecar(project_root, "whisper", &AssetId::new(asset_id.to_string()))
         .map_err(|e| FunctionCallError::RespondToModel(format!("plan_multicam: {e}")))?;
+    Ok(parse_segments(&sidecar))
+}
+
+/// Parse `/data/segments` into [`Segment`]s. Pure over the sidecar JSON so
+/// the speaker-id handling is unit-testable without disk.
+fn parse_segments(sidecar: &serde_json::Value) -> Vec<Segment> {
     let Some(segments) = sidecar.pointer("/data/segments").and_then(|v| v.as_array()) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
-    Ok(segments
+    segments
         .iter()
         .filter_map(|seg| {
             let start_s = seg.get("start").or_else(|| seg.get("start_s"))?.as_f64()?;
@@ -271,13 +282,17 @@ fn load_segments(
             (end_s > start_s).then_some(Segment {
                 start_s,
                 end_s,
+                // Whisper sidecars label segments with `speaker_id`; accept the
+                // legacy `speaker` key too. Without this the diarization bonus
+                // never fires and the director falls back to shot/quality only.
                 speaker: seg
-                    .get("speaker")
+                    .get("speaker_id")
+                    .or_else(|| seg.get("speaker"))
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
             })
         })
-        .collect())
+        .collect()
 }
 
 fn load_index_map(
@@ -631,5 +646,26 @@ mod tests {
         assert_eq!(info.sync_group_id.as_deref(), Some("sync-ab"));
         // A camera with no sync_group effect reports the shared-timebase default.
         assert_eq!(offset_of(&offsets, "raw/cam-a.mp4"), 0.0);
+    }
+
+    #[test]
+    fn parse_segments_reads_speaker_id_and_legacy_speaker() {
+        // Real whisper sidecars label segments with `speaker_id`.
+        let sidecar = serde_json::json!({
+            "data": { "segments": [
+                { "start_s": 0.0, "end_s": 1.0, "speaker_id": "A" },
+                { "start_s": 1.0, "end_s": 2.0, "speaker": "B" },
+                { "start_s": 2.0, "end_s": 3.0 },
+            ] }
+        });
+        let segs = parse_segments(&sidecar);
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].speaker.as_deref(), Some("A"), "reads speaker_id");
+        assert_eq!(
+            segs[1].speaker.as_deref(),
+            Some("B"),
+            "reads legacy speaker"
+        );
+        assert_eq!(segs[2].speaker, None);
     }
 }

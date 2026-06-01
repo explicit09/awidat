@@ -116,8 +116,11 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
         // right source frames; timeline span stays start_s..end_s. Reference
         // camera (offset 0 by design) counts as corrected when unambiguous.
         let cam_offset = offset_of(&offsets, &choice.asset);
-        let source_start_s = seg.start_s + am_offset - cam_offset;
-        let source_end_s = seg.end_s + am_offset - cam_offset;
+        // Clamp the source window to non-negative — a late camera chosen
+        // before its source exists would otherwise emit a negative source_start
+        // that the render path rejects.
+        let source_start_s = (seg.start_s + am_offset - cam_offset).max(0.0);
+        let source_end_s = (seg.end_s + am_offset - cam_offset).max(source_start_s);
         let offset_corrected = chosen_offset.is_some()
             || (reference_is_unambiguous && !offsets.contains_key(&choice.asset));
         decisions.push(serde_json::json!({
@@ -221,8 +224,12 @@ fn load_segments(project_root: &std::path::Path, asset_id: &str) -> Result<Vec<S
             (end_s > start_s).then_some(Segment {
                 start_s,
                 end_s,
+                // Whisper sidecars label segments with `speaker_id`; accept the
+                // legacy `speaker` key too. Without this the diarization bonus
+                // never fires and the director falls back to shot/quality only.
                 speaker: seg
-                    .get("speaker")
+                    .get("speaker_id")
+                    .or_else(|| seg.get("speaker"))
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
             })
