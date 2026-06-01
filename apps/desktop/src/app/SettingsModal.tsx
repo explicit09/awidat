@@ -209,7 +209,7 @@ export function SettingsModal() {
             {authStatus?.viaEnv ? (
               <Row
                 label="Note"
-                value="An OPENAI_API_KEY in your environment is overriding stored auth."
+                value={`A ${authStatus.envVar ?? "credential"} in your environment is overriding stored auth.`}
               />
             ) : null}
           </Section>

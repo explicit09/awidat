@@ -37,8 +37,11 @@ pub struct AuthStatusDto {
     pub wallet_detail: String,
     /// Masked credential hint (e.g. `sk-…wxyz`); never the full secret.
     pub account_hint: Option<String>,
-    /// True when an `OPENAI_API_KEY` env var is overriding stored auth.
+    /// True when an environment variable is overriding stored auth.
     pub via_env: bool,
+    /// When `via_env`, the name of the overriding variable (e.g. `CODEX_API_KEY`)
+    /// so the UI can name the exact variable to unset.
+    pub env_var: Option<String>,
 }
 
 impl From<AuthStatus> for AuthStatusDto {
@@ -49,6 +52,7 @@ impl From<AuthStatus> for AuthStatusDto {
             wallet_detail: status.wallet.detail,
             account_hint: status.account_hint,
             via_env: status.via_env,
+            env_var: status.env_var,
         }
     }
 }
@@ -107,11 +111,19 @@ pub async fn auth_logout(state: State<'_, AwidatState>) -> Result<AuthStatusDto,
     Ok(awidat_auth::status(&env).into())
 }
 
-/// Shut down and forget any in-flight ChatGPT OAuth login. Called before a
-/// different credential change so a late browser callback can't clobber it.
+/// Cancel any in-flight ChatGPT OAuth login and *wait for its task to finish*
+/// before the caller writes new credentials.
+///
+/// Invalidating the id stops the task from acting on its result; awaiting the
+/// task guarantees codex has finished (or abandoned) persisting `auth.json`, so
+/// the caller's subsequent write is the last one — closing the race where a
+/// completing browser callback overwrites a just-chosen API key.
 async fn cancel_pending_oauth(state: &State<'_, AwidatState>) {
-    if let Some((_, handle)) = state.pending_oauth.lock().await.take() {
-        handle.shutdown();
+    state.current_oauth_id.store(0, Ordering::SeqCst);
+    let pending = state.pending_oauth.lock().await.take();
+    if let Some((cancel, task)) = pending {
+        cancel.shutdown();
+        let _ = task.await;
     }
 }
 
@@ -120,17 +132,18 @@ async fn cancel_pending_oauth(state: &State<'_, AwidatState>) {
 /// The in-process codex app-server caches auth (codex's own login paths call
 /// `AuthManager::reload()` after writing). We don't hold that manager, so we drop
 /// the live session instead — `start_turn` lazily relaunches it, picking up the
-/// new `auth.json`. Skipped while a turn is in flight so we don't kill its pump
-/// task mid-event: the new credential is already persisted and applies on the
-/// next session rebuild.
+/// new `auth.json`. If a turn is in flight we can't tear down mid-event, so we
+/// set `auth_dirty`; `start_turn` honors it and rebuilds on the next turn.
 async fn refresh_agent_auth(state: &State<'_, AwidatState>) {
     if state.turn.lock().await.is_some() {
+        state.auth_dirty.store(true, Ordering::SeqCst);
         tracing::info!(
-            "auth changed during an active turn; new credentials apply on the next session rebuild"
+            "auth changed during an active turn; the session will rebuild on the next turn"
         );
         return;
     }
     crate::commands::project::tear_down_codex_session(state).await;
+    state.auth_dirty.store(false, Ordering::SeqCst);
 }
 
 /// Start "Sign in with ChatGPT". Returns the consent URL immediately; the
@@ -148,36 +161,24 @@ pub async fn auth_begin_chatgpt(
         port: handle.port,
     };
 
-    // Register this as the current pending login, cancelling any prior one, and
-    // tag it with a generation so a superseded login can detect it's stale.
-    let id = state.oauth_generation.fetch_add(1, Ordering::SeqCst);
-    {
-        let mut slot = state.pending_oauth.lock().await;
-        if let Some((_, prev)) = slot.take() {
-            prev.shutdown();
-        }
-        *slot = Some((id, handle.cancel_handle()));
+    // This login becomes "the current choice"; shut down any prior pending one.
+    let id = state.oauth_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.current_oauth_id.store(id, Ordering::SeqCst);
+    if let Some((cancel, _prev_task)) = state.pending_oauth.lock().await.take() {
+        cancel.shutdown();
     }
+    let cancel = handle.cancel_handle();
 
     // Wait for the callback off the command thread so the UI gets the URL now.
-    tauri::async_runtime::spawn(async move {
+    let app_for_task = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
         let result = handle.wait().await;
-        let state = app.state::<AwidatState>();
+        let state = app_for_task.state::<AwidatState>();
 
         // Only act if we're still the current login: a later set-API-key / logout
-        // / second sign-in clears or replaces the slot, and we must not then tear
-        // down the session or emit auth-changed for a choice the user moved on from.
-        let still_current = {
-            let mut slot = state.pending_oauth.lock().await;
-            match slot.as_ref() {
-                Some((current, _)) if *current == id => {
-                    slot.take();
-                    true
-                }
-                _ => false,
-            }
-        };
-        if !still_current {
+        // / second sign-in bumps `current_oauth_id`, and we must not then tear the
+        // session down or emit auth-changed for a choice the user moved on from.
+        if state.current_oauth_id.load(Ordering::SeqCst) != id {
             return;
         }
 
@@ -185,16 +186,17 @@ pub async fn auth_begin_chatgpt(
             Ok(()) => {
                 // Drop the cached session so the new ChatGPT creds apply next turn.
                 refresh_agent_auth(&state).await;
-                if let Err(err) = app.emit(EVENT_AUTH_CHANGED, ()) {
+                if let Err(err) = app_for_task.emit(EVENT_AUTH_CHANGED, ()) {
                     tracing::warn!(error = %err, "failed to emit auth-changed");
                 }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "chatgpt login did not complete");
-                let _ = app.emit(EVENT_AUTH_LOGIN_FAILED, err.to_string());
+                let _ = app_for_task.emit(EVENT_AUTH_LOGIN_FAILED, err.to_string());
             }
         }
     });
+    *state.pending_oauth.lock().await = Some((cancel, task));
 
     Ok(dto)
 }

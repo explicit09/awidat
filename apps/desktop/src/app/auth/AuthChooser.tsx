@@ -181,7 +181,8 @@ function ActiveWalletBanner({
         <div style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-caption)" }}>{detail}</div>
         {status?.viaEnv ? (
           <div style={{ color: "var(--color-text-warning, #c90)", fontSize: "var(--text-caption)" }}>
-            An OPENAI_API_KEY in your environment is overriding this.
+            A {status.envVar ?? "credential"} in your environment is overriding this; unset it to
+            use the wallet you choose here.
           </div>
         ) : null}
       </div>

@@ -98,15 +98,27 @@ pub struct AwidatState {
     /// chain `render done → uploading → published / failed` per target
     /// without the frontend having to drive each transition itself.
     pub upload_queue: crate::publishing::UploadQueue,
-    /// Cancel handle + generation for an in-flight "Sign in with ChatGPT"
-    /// OAuth login. A later auth action (set API key / sign out / a second
-    /// sign-in) shuts the pending callback server down so its browser flow
-    /// can't complete late and silently overwrite the newer wallet choice.
-    /// The generation lets a superseded login detect it's no longer current
-    /// before clearing the slot. See [`crate::commands::auth`].
-    pub pending_oauth: Mutex<Option<(u64, awidat_auth::ShutdownHandle)>>,
-    /// Monotonic id source for `pending_oauth` logins.
+    /// Cancel handle + task join handle for an in-flight "Sign in with
+    /// ChatGPT" OAuth login. A later auth action (set API key / sign out / a
+    /// second sign-in) shuts the pending callback server down *and awaits the
+    /// task* so codex can't finish persisting ChatGPT credentials after the
+    /// newer choice was written. See [`crate::commands::auth`].
+    pub pending_oauth: Mutex<
+        Option<(
+            awidat_auth::ShutdownHandle,
+            tauri::async_runtime::JoinHandle<()>,
+        )>,
+    >,
+    /// Monotonic id source for OAuth logins.
     pub oauth_generation: std::sync::atomic::AtomicU64,
+    /// Id of the login that is currently "the choice". A pending OAuth task only
+    /// applies its result if this still equals its own id (else it was
+    /// superseded or cancelled). `0` means none.
+    pub current_oauth_id: std::sync::atomic::AtomicU64,
+    /// Set when an auth change happened during an active turn (we can't swap
+    /// credentials mid-turn). The next `start_turn` honors it by tearing the
+    /// session down and relaunching with the new `auth.json`.
+    pub auth_dirty: std::sync::atomic::AtomicBool,
 }
 
 /// Shared state for the localhost media streamer.

@@ -23,8 +23,10 @@ export interface AuthStatus {
   walletDetail: string;
   /** Masked credential hint (e.g. `sk-…wxyz`); never the full secret. */
   accountHint: string | null;
-  /** True when an `OPENAI_API_KEY` env var overrides stored auth. */
+  /** True when an environment variable overrides stored auth. */
   viaEnv: boolean;
+  /** When `viaEnv`, the name of the overriding variable (e.g. `CODEX_API_KEY`). */
+  envVar: string | null;
 }
 
 interface AuthStore {

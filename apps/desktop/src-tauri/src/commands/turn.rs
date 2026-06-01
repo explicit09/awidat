@@ -75,6 +75,19 @@ pub async fn start_turn(
     // already-launched-for-this-project.
     {
         let mut slot = state.codex.lock().await;
+        // An auth change during a previous turn deferred its session teardown
+        // (credentials can't be swapped mid-turn); honor it now so this turn
+        // runs on the new auth instead of the stale cached credential.
+        if state
+            .auth_dirty
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            if let Some(old) = slot.take() {
+                if let Err(e) = old.bridge.shutdown().await {
+                    tracing::warn!(error = %e, "shutting down session after a deferred auth change");
+                }
+            }
+        }
         let needs_launch = match slot.as_ref() {
             Some(s) if s.project_root == project_root => false,
             Some(_) => {

@@ -69,18 +69,31 @@ pub struct AuthStatus {
     /// no safe hint exists (ChatGPT tokens carry no plaintext key here).
     pub account_hint: Option<String>,
     /// True when the effective mode comes from an environment variable rather
-    /// than stored `auth.json`. Env wins, mirroring codex's own precedence — so
-    /// the UI can warn "an OPENAI_API_KEY in your environment is overriding this".
+    /// than stored `auth.json`. Env wins, mirroring codex's own precedence.
     pub via_env: bool,
+    /// When `via_env`, the *name* of the overriding variable (e.g.
+    /// `CODEX_API_KEY`), so the UI can tell the user exactly which variable to
+    /// unset instead of guessing. `None` when not env-derived.
+    pub env_var: Option<String>,
 }
 
 impl AuthStatus {
+    /// Build a stored-auth status (not env-derived).
     fn new(mode: AuthModeKind, account_hint: Option<String>, via_env: bool) -> Self {
         Self {
             mode,
             wallet: WalletLabel::for_mode(mode),
             account_hint,
             via_env,
+            env_var: None,
+        }
+    }
+
+    /// Build an env-override status, recording which variable is responsible.
+    fn from_env(mode: AuthModeKind, account_hint: Option<String>, env_var: &str) -> Self {
+        Self {
+            env_var: Some(env_var.to_string()),
+            ..Self::new(mode, account_hint, true)
         }
     }
 }
@@ -147,14 +160,18 @@ fn classify_parts(has_tokens: bool, api_key: Option<&str>, has_agent_identity: b
 /// can warn that an environment variable is overriding stored auth.
 fn env_override_status() -> Option<AuthStatus> {
     if let Some(key) = read_env_var(codex_login::CODEX_API_KEY_ENV_VAR) {
-        return Some(AuthStatus::new(
+        return Some(AuthStatus::from_env(
             AuthModeKind::ApiKey,
             Some(mask_secret(&key)),
-            true,
+            codex_login::CODEX_API_KEY_ENV_VAR,
         ));
     }
     if read_env_var(codex_login::CODEX_ACCESS_TOKEN_ENV_VAR).is_some() {
-        return Some(AuthStatus::new(AuthModeKind::AgentIdentity, None, true));
+        return Some(AuthStatus::from_env(
+            AuthModeKind::AgentIdentity,
+            None,
+            codex_login::CODEX_ACCESS_TOKEN_ENV_VAR,
+        ));
     }
     None
 }
