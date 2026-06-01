@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "map_visualization",
+  "selection_text": "The route moves from Lagos to Nairobi.",
+  "request": "Create a route map visualization.",
+  "evidence": [
+    {
+      "kind": "transcript",
+      "text": "Lagos to Nairobi"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks map-origin, map-destination, and route-line slots",
+    "start_render and verify_render pass before delivery"
+  ]
+}

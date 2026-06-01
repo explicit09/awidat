@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "title_card",
+  "selection_text": "Chapter two: the retention problem.",
+  "request": "Create a chapter intro title card.",
+  "evidence": [
+    {
+      "kind": "topic",
+      "text": "the retention problem"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks title text against topic evidence",
+    "start_render and verify_render pass before delivery"
+  ]
+}

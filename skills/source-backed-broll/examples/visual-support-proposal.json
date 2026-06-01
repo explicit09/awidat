@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "broll_package",
+  "selection_text": "Show the product workflow while the host explains it.",
+  "request": "Create source-backed B-roll visual support.",
+  "evidence": [
+    {
+      "kind": "source",
+      "text": "raw/generated/product-workflow.mp4"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks source provenance",
+    "start_render and verify_render pass before delivery"
+  ]
+}

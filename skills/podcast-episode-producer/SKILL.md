@@ -20,6 +20,9 @@ tools_allowlist:
   - podcast_editorial_review_pack
   - find_speaker_oncam
   - plan_visual_support
+  - plan_visual_support_proposals
+  - revise_visual_support_proposal
+  - verify_visual_support_artifact
   - plan_motion_scene
   - find_broll_opportunities
   - inspect_clip
@@ -29,6 +32,7 @@ tools_allowlist:
   - vedit_diff
   - start_render
   - poll_render
+  - verify_render
   - update_plan
   - bash
 ---
@@ -200,14 +204,24 @@ fresh inserts — that fails on round-boundary anchoring).
 
 Once the conversation flow is locked, make visual decisions:
 
-- For every nontrivial visual-support request, call `plan_visual_support`
-  first. Treat its `needs`, `intents`, `primary_lane`,
-  `supporting_lanes`, and `plan_steps` as the visual reasoning record,
-  not just a keyword route. The agent should detect abstract
-  explanations, product/asset mentions, factual references,
-  lists/processes, emotional emphasis, jump-cut covers,
-  chapter/topic transitions, and sponsor/CTA moments before choosing
-  tools.
+- For every nontrivial visual-support request, call
+  `plan_visual_support_proposals` on the selected transcript/topic/timeline
+  context. Review its Proposal-to-Visual-Support `evidence`, rationale,
+  confidence, risk, missing information, export intent, and `apply_edl`
+  payload before applying anything. Use `revise_visual_support_proposal`
+  when the editor asks for changes such as shorter, faster, or transparent
+  background, or switching a graphic proposal to B-roll. Review its `diff`
+  and `visual_diff` before applying the revised payload. Run
+  `verify_visual_support_artifact` on accepted quote, list, and B-roll
+  proposals before final `verify_render`. Keep
+  `plan_visual_support` as a lower-level lane router when you need to explain
+  why the work belongs in b-roll, MotionScene, title, finishing, or
+  timeline-edit lanes.
+- Treat visual-support planning as the visual reasoning record, not just a
+  keyword route. The agent should detect abstract explanations,
+  product/asset mentions, factual references, lists/processes, emotional
+  emphasis, jump-cut covers, chapter/topic transitions, and sponsor/CTA
+  moments before choosing tools.
 - Choose the lane from editorial intent: `broll` for actual footage or
   evidence, `motion_scene` for native procedural explainers/diagrams/
   cards/callouts/kinetic text/still overlays, generated media for new

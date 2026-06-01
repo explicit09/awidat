@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "quote_highlight",
+  "selection_text": "Cold open: the edit almost failed on launch day.",
+  "request": "Package this podcast hook with visual support.",
+  "evidence": [
+    {
+      "kind": "editorial_moment",
+      "text": "cold open hook"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks proposal evidence and MotionScene text",
+    "start_render and verify_render pass before delivery"
+  ]
+}

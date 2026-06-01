@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "animated_list",
+  "selection_text": "We will cover hooks, retention, and export checks.",
+  "request": "Create a retention list opener.",
+  "evidence": [
+    {
+      "kind": "transcript",
+      "text": "hooks, retention, and export checks"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks list step layers",
+    "start_render and verify_render pass before delivery"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "title_card",
+  "selection_text": "Reframe this moment for Shorts.",
+  "request": "Create short-form framing support.",
+  "evidence": [
+    {
+      "kind": "transcript",
+      "text": "short-form reframing moment"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks proposal evidence and export intent",
+    "start_render and verify_render pass before delivery"
+  ]
+}

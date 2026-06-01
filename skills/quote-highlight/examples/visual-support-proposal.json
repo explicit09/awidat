@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "quote_highlight",
+  "selection_text": "This is the quote that should land harder.",
+  "request": "Make this quote land visually.",
+  "evidence": [
+    {
+      "kind": "transcript",
+      "text": "quote that should land harder"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks quote text against transcript evidence",
+    "start_render and verify_render pass before delivery"
+  ]
+}
