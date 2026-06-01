@@ -22,34 +22,38 @@
  */
 
 :root {
-  /* ---- glass surface tints (over the dark atmosphere) ---- */
-  --glass-tint-1: rgba(22, 22, 26, 0.55);   /* primary panels / chrome */
-  --glass-tint-2: rgba(26, 26, 31, 0.66);   /* raised glass (modals)   */
-  --glass-tint-3: rgba(18, 18, 22, 0.42);   /* faint glass (overlays)  */
-  --glass-content: rgba(20, 20, 23, 0.92);  /* z2 near-opaque content  */
-  --glass-content-hover: rgba(28, 28, 32, 0.94);
+  /* ---- glass surface tints (over the dark atmosphere) ----
+     Cool blue-grey, genuinely translucent so the colored atmosphere
+     reads THROUGH the frost. These are deliberately light + see-through
+     — a near-opaque charcoal panel just looks like the old flat UI. */
+  --glass-tint-1: rgba(30, 34, 48, 0.42);   /* primary panels / chrome */
+  --glass-tint-2: rgba(34, 38, 54, 0.55);   /* raised glass (modals)   */
+  --glass-tint-3: rgba(26, 30, 44, 0.30);   /* faint glass (overlays)  */
+  --glass-content: rgba(26, 30, 42, 0.66);  /* z2 content — tinted, still readable */
+  --glass-content-hover: rgba(38, 44, 60, 0.74);
 
-  /* ---- glass edges & light ---- */
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-border-strong: rgba(255, 255, 255, 0.14);
-  --glass-specular: rgba(255, 255, 255, 0.22);  /* top-edge light catch */
-  --glass-inner-glow: rgba(255, 255, 255, 0.05);
+  /* ---- glass edges & light (brighter so the lip clearly catches light) ---- */
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-border-strong: rgba(255, 255, 255, 0.24);
+  --glass-specular: rgba(255, 255, 255, 0.55);  /* top-edge light catch */
+  --glass-inner-glow: rgba(255, 255, 255, 0.10);
 
   /* ---- blur / saturation ---- */
-  --glass-blur: 20px;
-  --glass-blur-strong: 30px;
-  --glass-blur-soft: 12px;
-  --glass-sat: 165%;
+  --glass-blur: 26px;
+  --glass-blur-strong: 40px;
+  --glass-blur-soft: 14px;
+  --glass-sat: 180%;
 
   /* ---- shadows (plane separation) ---- */
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.30);
   --glass-shadow-lift: 0 16px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.34);
 
-  /* ---- brand light (orange as ambient, not paint) ---- */
-  --orb-warm: rgba(255, 122, 24, 0.55);   /* awidat orange */
-  --orb-amber: rgba(255, 176, 64, 0.40);
-  --orb-cool: rgba(13, 148, 136, 0.34);   /* teal counter-light for tension */
-  --orb-violet: rgba(124, 58, 237, 0.28); /* deep violet accent */
+  /* ---- brand light (orange as ambient, not paint) — vivid so it
+     actually bleeds through the frosted panels ---- */
+  --orb-warm: rgba(255, 122, 24, 0.95);   /* awidat orange */
+  --orb-amber: rgba(255, 184, 72, 0.75);
+  --orb-cool: rgba(20, 184, 166, 0.70);   /* teal counter-light for tension */
+  --orb-violet: rgba(139, 92, 246, 0.62); /* deep violet accent */
   --glow-brand: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 0 24px rgba(255, 122, 24, 0.30);
   --glow-cyan: 0 0 0 1px rgba(56, 189, 248, 0.40), 0 0 20px rgba(56, 189, 248, 0.22);
   --glow-violet: 0 0 0 1px rgba(168, 85, 247, 0.40), 0 0 20px rgba(168, 85, 247, 0.22);
@@ -192,39 +196,43 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  background: #08080A;
+  /* deep blue-charcoal base, not pure black, so the frost reads as glass */
+  background:
+    radial-gradient(ellipse at 22% 18%, #1a1530 0%, transparent 55%),
+    radial-gradient(ellipse at 82% 88%, #0c2230 0%, transparent 55%),
+    #0a0a12;
   pointer-events: none;
 }
 .atmosphere__orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
+  filter: blur(72px);
   will-change: transform;
   transform: translateZ(0);
   mix-blend-mode: screen;
 }
 .atmosphere__orb--warm {
-  width: 52vw; height: 52vw;
-  left: -8vw; top: -12vw;
-  background: radial-gradient(circle, var(--orb-warm), transparent 68%);
+  width: 64vw; height: 64vw;
+  left: -10vw; top: -16vw;
+  background: radial-gradient(circle, var(--orb-warm), transparent 70%);
   animation: orb-drift-a 34s ease-in-out infinite alternate;
 }
 .atmosphere__orb--amber {
-  width: 38vw; height: 38vw;
-  right: -6vw; top: 18vh;
-  background: radial-gradient(circle, var(--orb-amber), transparent 66%);
+  width: 48vw; height: 48vw;
+  right: -8vw; top: 12vh;
+  background: radial-gradient(circle, var(--orb-amber), transparent 68%);
   animation: orb-drift-b 41s ease-in-out infinite alternate;
 }
 .atmosphere__orb--cool {
-  width: 46vw; height: 46vw;
-  right: 6vw; bottom: -16vw;
-  background: radial-gradient(circle, var(--orb-cool), transparent 68%);
+  width: 58vw; height: 58vw;
+  right: 4vw; bottom: -20vw;
+  background: radial-gradient(circle, var(--orb-cool), transparent 70%);
   animation: orb-drift-c 47s ease-in-out infinite alternate;
 }
 .atmosphere__orb--violet {
-  width: 34vw; height: 34vw;
-  left: 12vw; bottom: -8vw;
-  background: radial-gradient(circle, var(--orb-violet), transparent 66%);
+  width: 44vw; height: 44vw;
+  left: 8vw; bottom: -10vw;
+  background: radial-gradient(circle, var(--orb-violet), transparent 68%);
   animation: orb-drift-d 53s ease-in-out infinite alternate;
 }
 
@@ -243,7 +251,7 @@
 .atmosphere__vignette {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at 50% 38%, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(ellipse at 50% 42%, transparent 62%, rgba(0, 0, 0, 0.30) 100%);
 }
 
 @keyframes orb-drift-a {
@@ -306,7 +314,38 @@
    ===================================================================== */
 
 /* Solid floor behind the fixed atmosphere plane. */
-html, body, #root { background: #08080A; }
+html, body, #root { background: #0a0a12; }
+
+/* Re-point the core surface tokens to TRANSLUCENT tints so the colored
+   atmosphere bleeds through the ENTIRE UI stack — not just the outer
+   panels. This is what makes the dense editor read as glass instead of
+   flat charcoal: every card, input, row, and rail is now see-through
+   frost. Loaded after tokens.css, so these win. */
+:root {
+  --color-surface-app: rgba(20, 24, 36, 0.30);
+  --color-surface-panel: rgba(24, 28, 42, 0.34);
+  --color-surface-panel-hover: rgba(36, 42, 60, 0.46);
+  --color-surface-card: rgba(30, 35, 50, 0.50);
+  --color-surface-card-hover: rgba(42, 48, 66, 0.60);
+  --color-surface-input: rgba(16, 20, 32, 0.55);
+  --color-surface-input-hover: rgba(24, 30, 44, 0.62);
+  --color-surface-hover: rgba(42, 48, 66, 0.55);
+  --color-surface-selected: rgba(56, 64, 88, 0.62);
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-border-subtle: rgba(255, 255, 255, 0.07);
+}
+
+/* Surfaces that carry a translucent token also need the blur, or they
+   look like flat tinted glass with nothing behind. Blur the common
+   content surfaces so they frost whatever (atmosphere or panel) is
+   behind them. Scoped to elements that opt in via .aw-glass-surface,
+   plus the structural .panel. */
+.panel,
+[class*="surface-card"],
+[class*="surface-panel"] {
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+}
 
 /* Every cockpit region (.panel) becomes frosted glass. Atmosphere drifts
    through the translucency + the grid gaps between panels. */

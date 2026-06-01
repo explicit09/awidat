@@ -38,6 +38,7 @@ export default defineConfig(async () => ({
         gallery: resolve(__dirname, "gallery.html"),
         shell: resolve(__dirname, "shell.html"),
         glass: resolve(__dirname, "glass.html"),
+        studio: resolve(__dirname, "studio.html"),
       },
     },
   },
