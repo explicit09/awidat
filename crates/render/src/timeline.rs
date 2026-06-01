@@ -3188,13 +3188,13 @@ fn synthesize_audio_tracks(
         }
         if segment.audio_muted {
             // Picture stays on the video track; this segment contributes
-            // silence, muting the audio without dropping the image. The gap
-            // spans the clip's TRACK footprint, not its source span: a
-            // non-muted clip's audio is sped by `speed`, so its track length
-            // is `duration_s / speed`. Matching that keeps the silence aligned
-            // with the picture instead of over-/under-running it.
+            // silence over the clip's TRACK footprint, not its source span.
+            // `visible_effective_duration` is that footprint — it already
+            // accounts for speed AND any freeze hold — and is exactly how
+            // `picture_start_s` advances below, so the silence stays aligned
+            // with the picture and the next track starts in the right place.
             items.push(AudioTrackItemPlan::Gap {
-                duration_s: duration_s / segment_speed(segment),
+                duration_s: visible_effective_duration(segment),
             });
         } else if !segment.audio_removed_ranges.is_empty() {
             // Picture stays; the audio is cut into kept clips + silence
@@ -3256,10 +3256,33 @@ fn audio_items_with_removals(
 ) -> Result<Vec<AudioTrackItemPlan>, RenderTimelineError> {
     let lead_s = normalized_split_offset(segment.audio_lead_s);
     let trail_s = normalized_split_offset(segment.audio_trail_s);
+    // v1 lowering maps clip-local visible seconds 1:1 to source seconds. Any
+    // transform that breaks that identity must fail loud rather than silence
+    // the wrong span. `segment_speed == 1.0` alone is not enough: a reversed
+    // clip, a freeze hold, or a nonlinear time-remap can all leave speed at
+    // 1.0 while still remapping visible→source time.
     if (segment_speed(segment) - 1.0).abs() > 1e-9 {
         return Err(RenderTimelineError::AudioRemovalUnsupported {
             clip_name: segment.clip_name.clone(),
             reason: "audio removal with a clip speed change is not supported yet".into(),
+        });
+    }
+    if segment.speed.is_some_and(|s| s.reverse) {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal on a reversed clip is not supported yet".into(),
+        });
+    }
+    if segment.time_remap.is_some() {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal with a time-remap is not supported yet".into(),
+        });
+    }
+    if segment.freeze.is_some() {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal combined with a freeze hold is not supported yet".into(),
         });
     }
     if lead_s > 0.0 || trail_s > 0.0 {
@@ -12970,6 +12993,61 @@ mod tests {
         assert!(
             (duration_s - 5.0).abs() < 1e-9,
             "muted gap must be the 5s track footprint, got {duration_s}"
+        );
+    }
+
+    #[test]
+    fn muted_clip_with_freeze_silences_full_held_footprint() {
+        // A muted 10s clip with a 3s freeze hold occupies 13s on the timeline.
+        // The silence must cover all 13s, or the next track drifts 3s early.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_muted = true;
+        a.freeze = Some(FreezePlan {
+            freeze_at_source_s: 5.0,
+            duration_s: 3.0,
+        });
+        let tracks = synthesize_audio_tracks(&[a]).unwrap();
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[0].items[0] else {
+            panic!("expected a silence gap, got {:?}", tracks[0].items)
+        };
+        assert!(
+            (duration_s - 13.0).abs() < 1e-9,
+            "muted gap must cover the 13s held footprint, got {duration_s}"
+        );
+    }
+
+    #[test]
+    fn audio_removal_on_freeze_clip_is_unsupported() {
+        // segment_speed stays 1.0 with a freeze, but the freeze hold breaks
+        // the clip-local→source mapping, so removal must fail loud.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(2.0, 4.0)];
+        a.freeze = Some(FreezePlan {
+            freeze_at_source_s: 5.0,
+            duration_s: 3.0,
+        });
+        let err = synthesize_audio_tracks(&[a]).unwrap_err();
+        assert!(
+            matches!(err, RenderTimelineError::AudioRemovalUnsupported { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn audio_removal_on_reversed_clip_is_unsupported() {
+        // factor 1.0 + reverse keeps segment_speed at 1.0 but flips
+        // visible→source mapping, so removal must fail loud.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(0.0, 2.0)];
+        a.speed = Some(SpeedPlan {
+            factor: 1.0,
+            reverse: true,
+            ..SpeedPlan::new(1.0)
+        });
+        let err = synthesize_audio_tracks(&[a]).unwrap_err();
+        assert!(
+            matches!(err, RenderTimelineError::AudioRemovalUnsupported { .. }),
+            "got {err:?}"
         );
     }
 
