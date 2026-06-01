@@ -23,7 +23,7 @@ import {
   useRenderQueueStore,
   type RenderQueueEntry,
 } from "../app/renderQueue";
-import { TargetsList } from "./delivery/TargetsList";
+import { TargetsList, isUploadCapableTarget } from "./delivery/TargetsList";
 import { PreflightPanel } from "./delivery/PreflightPanel";
 import { SafeAreaPreview } from "./delivery/SafeAreaPreview";
 import { IssueInspector } from "./delivery/IssueInspector";
@@ -300,6 +300,11 @@ function DeliverySheet({
   onGenerateVariants,
 }: DeliverySurfaceProps) {
   const [confirmExportOpen, setConfirmExportOpen] = useState(false);
+  // Publish wiring — shared with the cockpit so the Stage sheet can opt
+  // targets into upload-after-render, fill metadata, and watch the queue.
+  const uploadAfterRender = useUploadPrefs((s) => s.enabled);
+  const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
+  const queueEntries = useRenderQueueStore((s) => s.entries);
 
   const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
     const provided = targets.find((t) => t.key === key);
@@ -308,6 +313,22 @@ function DeliverySheet({
   const activeTargetCount = resolvedTargets.filter((t) => t.active).length;
   const counts = countBySeverity(findings);
   const blockingCount = counts.warning + counts.error + counts.failure;
+
+  // Active, upload-capable targets get a "publish after render" toggle.
+  const publishableActive = useMemo(
+    () => resolvedTargets.filter((t) => t.active && isUploadCapableTarget(t.key)),
+    [resolvedTargets],
+  );
+  // The metadata form renders for the intersection of "upload enabled" and
+  // "selected target" — mirrors the cockpit's formTargets contract exactly.
+  const formTargets = useMemo<DeliveryTargetKey[]>(() => {
+    const selected = new Set(resolvedTargets.filter((t) => t.active).map((t) => t.key));
+    return Array.from(uploadAfterRender).filter((k) => selected.has(k));
+  }, [resolvedTargets, uploadAfterRender]);
+  const formDefaultTitle = useMemo(
+    () => (formTargets.length === 0 ? "Untitled render" : TARGET_META[formTargets[0]].label),
+    [formTargets],
+  );
 
   // No dedicated AI-disclosure prop exists, so derive a soft signal
   // from the findings: if any finding talks about AI / synthetic /
@@ -362,6 +383,32 @@ function DeliverySheet({
           </div>
         </section>
 
+        {/* Publish after render — only for active, upload-capable targets.
+            Opting in surfaces the metadata form below (title/description/
+            visibility), matching the cockpit's right-column publish flow. */}
+        {publishableActive.length > 0 ? (
+          <section className="flex flex-col gap-3">
+            <SheetSectionLabel>Publish after render</SheetSectionLabel>
+            <div className="flex flex-col gap-1.5">
+              {publishableActive.map((t) => (
+                <PublishToggleRow
+                  key={t.key}
+                  target={t}
+                  on={uploadAfterRender.has(t.key)}
+                  onToggle={() => void toggleUploadAfterRender(t.key)}
+                />
+              ))}
+            </div>
+            {formTargets.length > 0 ? (
+              <UploadMetadataForm
+                selectedTargets={formTargets}
+                jobIdHint={DRAFT_METADATA_JOB_ID}
+                defaultTitle={formDefaultTitle}
+              />
+            ) : null}
+          </section>
+        ) : null}
+
         {/* Preflight */}
         <section className="flex flex-col gap-3">
           <SheetSectionLabel>
@@ -397,6 +444,15 @@ function DeliverySheet({
           <section className="flex flex-col gap-3">
             <SheetSectionLabel>Render summary</SheetSectionLabel>
             <RenderSummaryCard summary={summary} outputs={activeTargetCount} />
+          </section>
+        ) : null}
+
+        {/* Render queue — appears once there's something rendering/queued so
+            the sheet stays calm when idle. Same panel the cockpit uses. */}
+        {queueEntries.length > 0 ? (
+          <section className="flex flex-col gap-3">
+            <SheetSectionLabel>Render queue</SheetSectionLabel>
+            <RenderQueuePanel />
           </section>
         ) : null}
 
@@ -532,6 +588,52 @@ function TargetChip({
         </div>
       </div>
     </button>
+  );
+}
+
+/**
+ * Publish-after-render toggle for one active, upload-capable target.
+ * A flat glass row (label + switch) — opting in feeds the metadata form
+ * above the actions and routes the render to the provider's upload path.
+ */
+function PublishToggleRow({
+  target,
+  on,
+  onToggle,
+}: {
+  target: DeliveryTarget;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  const meta = TARGET_META[target.key];
+  const label = target.label ?? meta.label;
+  return (
+    <div className="glass-content flex items-center gap-3 rounded-xl px-3.5 py-2.5">
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[rgba(255,122,24,0.16)]">
+        {meta.brand ? (
+          <BrandIcon icon={meta.brand} tinted className="h-4 w-4" />
+        ) : (
+          <meta.icon className="h-4 w-4 stroke-[1.75] text-[var(--color-brand)]" />
+        )}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+        {label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={`Upload to ${label} after render — ${on ? "on" : "off"}`}
+        onClick={onToggle}
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors",
+          on ? "glass-cta" : "glass-ghost text-[var(--color-text-secondary)]",
+        )}
+      >
+        <Upload className="h-3.5 w-3.5 stroke-[1.75]" />
+        Upload {on ? "on" : "off"}
+      </button>
+    </div>
   );
 }
 

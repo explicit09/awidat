@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { useCursorGlass } from "../ui/glass";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
+import { usePendingProposals } from "../timeline/pendingProposals";
+import { ProposalCard } from "./brief/ProposalCard";
 import { useTimelineStore } from "../timeline/store";
 import type { Stage } from "../state/stages";
 import { ChatStream } from "../agent/ChatStream";
@@ -119,12 +120,14 @@ export function StageShell(props: StageShellProps) {
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
-  // Subscribe to the store so the deck re-renders on proposal changes,
-  // then read the unified pending() view (same pattern as BriefSurface).
+  // pending() merges three reactive sources — approvals + broll (both on
+  // the brief store) and proposed_edits (on usePendingProposals). Subscribe
+  // to ALL of them so the deck re-renders when any source changes; reading
+  // only s.approvals (the prior bug) missed proposed_edit + b-roll arrivals.
   useBriefProposalsStore((s) => s.approvals);
+  useBriefProposalsStore((s) => s.brollProposals);
+  usePendingProposals((s) => s.pending);
   const pending = useBriefProposalsStore.getState().pending();
-  const accept = useBriefProposalsStore((s) => s.accept);
-  const reject = useBriefProposalsStore((s) => s.reject);
 
   const [active, setActive] = useState(0);
   const [draft, setDraft] = useState("");
@@ -329,22 +332,15 @@ export function StageShell(props: StageShellProps) {
         </div>
 
         {pending.length > 0 && cur ? (
-          <div className="flex w-[300px] shrink-0 flex-col">
+          <div className="flex w-[340px] shrink-0 flex-col">
             <div className="mb-2 flex items-center gap-2 pl-1">
               <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">{pending.length} proposal{pending.length === 1 ? "" : "s"}</span>
               <span className="text-[11px] text-[var(--color-text-muted)]">waiting</span>
             </div>
-            <ProposalCard
-              key={cur.id}
-              title={cur.title}
-              medium={cur.medium}
-              rationale={cur.rationale}
-              index={active}
-              total={pending.length}
-              onAccept={() => void accept(cur.id)}
-              onReject={() => void reject(cur.id)}
-              onNext={() => setActive((a) => (a + 1) % pending.length)}
-            />
+            {/* Reuse the canonical Brief ProposalCard so the deck keeps the
+                full contract: reason picker on reject, "Review on …" focus
+                routing, and generated-b-roll disclosure. */}
+            <ProposalCard key={cur.id} proposal={cur} />
             <div className="mt-2 flex flex-col gap-1.5 overflow-auto">
               {pending.map((p, i) => i === active ? null : (
                 <button key={p.id} onClick={() => setActive(i)}
@@ -433,30 +429,4 @@ export function StageShell(props: StageShellProps) {
 function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
   if (!tools) return null;
   return tools[key];
-}
-
-function ProposalCard({
-  title, medium, rationale, index, total, onAccept, onReject, onNext,
-}: {
-  title: string; medium: BriefMedium; rationale: string | undefined;
-  index: number; total: number; onAccept: () => void; onReject: () => void; onNext: () => void;
-}) {
-  const { ref, onMouseMove } = useCursorGlass<HTMLDivElement>();
-  const c = mediumColor(medium);
-  return (
-    <div ref={ref} onMouseMove={onMouseMove} className="glass glass-strong glass-reactive relative overflow-hidden p-3"
-      style={{ borderRadius: 16, boxShadow: `0 0 0 1px ${c}55, 0 0 28px ${c}30, var(--glass-shadow-lift)` }}>
-      <div className="flex items-center gap-2">
-        <span className="rounded-md px-1.5 py-0.5 font-mono text-[9px] uppercase" style={{ color: c, background: `${c}22`, border: `1px solid ${c}44` }}>{medium}</span>
-        <span className="ml-auto font-mono text-[10px] text-[var(--color-text-muted)]">{index + 1} / {total}</span>
-      </div>
-      <div className="mt-2 text-[13px] font-semibold text-[var(--color-text-primary)]">{title}</div>
-      {rationale ? <div className="mt-0.5 text-[11px] italic leading-snug text-[var(--color-text-muted)]">{rationale}</div> : null}
-      <div className="mt-3 flex items-center gap-2">
-        <button onClick={onAccept} className="glass-cta h-8 flex-1 rounded-lg text-[12px]">✓ Accept</button>
-        <button onClick={onReject} className="glass-ghost h-8 rounded-lg px-3 text-[12px]">✕</button>
-        {total > 1 ? <button onClick={onNext} className="glass-ghost h-8 rounded-lg px-3 text-[12px]">→</button> : null}
-      </div>
-    </div>
-  );
 }
