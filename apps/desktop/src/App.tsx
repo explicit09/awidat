@@ -2631,7 +2631,7 @@ function ProjectMediaPanel({
         </Button>
       </Inline>
       {episodes && episodes.total > 0 ? (
-        <Card padding="sm" tone="flat">
+        <Card padding="sm">
           <Stack gap="2">
             <Inline justify="between" align="baseline" gap="2">
               <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
@@ -2642,14 +2642,14 @@ function ProjectMediaPanel({
               </span>
             </Inline>
             <Inline gap="1" wrap="wrap">
-              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(74,200,130,0.16)] text-[#5EEAD4]">
+              <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(45,212,191,0.16)] border-[rgba(45,212,191,0.3)] text-[#5EEAD4]">
                 {episodes.accepted} accepted
               </span>
-              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(217,165,75,0.16)] text-[#FCD34D]">
+              <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.3)] text-[#FCD34D]">
                 {episodes.reviewNeeded} review
               </span>
               {episodes.rejected > 0 ? (
-                <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(220,100,95,0.16)] text-[#FCA5A5]">
+                <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(220,100,95,0.16)] border-[rgba(220,100,95,0.3)] text-[#FCA5A5]">
                   {episodes.rejected} rejected
                 </span>
               ) : null}
@@ -2690,7 +2690,7 @@ function ProjectMediaPanel({
               event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
-            className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+            className="glass-content cursor-pointer px-3 py-2 text-left"
             title={item.title}
             draggable={item.assetId !== undefined}
             onDragStart={(event) => {
@@ -2741,7 +2741,7 @@ function ProjectMediaPanel({
             ) : null}
           </div>
         )) : (
-          <Card padding="sm" tone="flat">
+          <Card padding="sm">
             <Stack gap="2">
               <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
                 No media yet
