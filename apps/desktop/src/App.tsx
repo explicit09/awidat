@@ -1906,7 +1906,7 @@ function App() {
         timeline={stageTimeline}
         deliver={realDeliveryWorkspace}
         skills={<SkillsSurface variant="sheet" />}
-        history={<HistorySurface />}
+        history={<HistorySurface variant="sheet" />}
         stage={stage}
         onStage={setStage}
         onCommand={(text) => void runEngineCommand(text)}

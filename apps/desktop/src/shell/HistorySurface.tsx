@@ -30,6 +30,7 @@ import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { MEDIUM_STYLE } from "./brief/ProposalCard";
 import { PatternsPanel } from "./PatternsPanel";
+import { synthesizeLearnedPatterns } from "../state/learnedPatterns";
 import {
   buildRestoreEntry,
   useProposalHistoryStore,
@@ -87,7 +88,19 @@ const DECISION_BADGE: Record<HistoryDecision, { label: string; className: string
   },
 };
 
-export function HistorySurface() {
+/**
+ * `cockpit` (default) is the dense workspace layout. `sheet` is the calm,
+ * glass-sheet-native decision-stream timeline used by the 2026 Stage shell.
+ * Both variants share the SAME data source (`useProposalHistoryStore`) and
+ * filter logic — only the chrome differs.
+ */
+export type HistorySurfaceVariant = "sheet" | "cockpit";
+
+export function HistorySurface({
+  variant = "cockpit",
+}: {
+  variant?: HistorySurfaceVariant;
+} = {}) {
   const projectPath = useProjectStore((s) => s.current);
   // Subscribe to entries so re-renders fire on every decision. We
   // re-derive the per-project slice in a memo below.
@@ -115,6 +128,24 @@ export function HistorySurface() {
     () => applyFilters(entries, { decisionFilter, mediumFilter, query }),
     [entries, decisionFilter, mediumFilter, query],
   );
+
+  if (variant === "sheet") {
+    return (
+      <HistorySheet
+        entries={entries}
+        filtered={filtered}
+        decisionFilter={decisionFilter}
+        mediumFilter={mediumFilter}
+        onDecisionFilter={setDecisionFilter}
+        onMediumFilter={setMediumFilter}
+        restoreEntry={restoreEntry}
+        onOpenRestore={setRestoreEntry}
+        onCloseRestore={() => setRestoreEntry(null)}
+        restoreToast={restoreToast}
+        onRestored={setRestoreToast}
+      />
+    );
+  }
 
   return (
     <section
@@ -218,6 +249,260 @@ export function HistorySurface() {
         </div>
       )}
     </section>
+  );
+}
+
+/* =====================================================================
+   SHEET VARIANT — glass-sheet-native decision-stream timeline
+   Calm vertical list of glass rows with a left timeline hairline. Reuses
+   the same entries, filters, badge colors, MEDIUM_STYLE, restore flow,
+   and relative-time helper as the cockpit; only the chrome differs.
+   ===================================================================== */
+
+/** Decision → sheet accent color (mint / red / amber / blue per spec). */
+const SHEET_DECISION_COLOR: Record<HistoryDecision, string> = {
+  accepted: "#5EEAD4",
+  rejected: "#FCA5A5",
+  revised: "#FCD34D",
+  restored: "#93C5FD",
+};
+
+type HistorySheetProps = {
+  entries: HistoryEntry[];
+  filtered: HistoryEntry[];
+  decisionFilter: DecisionFilter;
+  mediumFilter: MediumFilter;
+  onDecisionFilter: (f: DecisionFilter) => void;
+  onMediumFilter: (f: MediumFilter) => void;
+  restoreEntry: HistoryEntry | null;
+  onOpenRestore: (entry: HistoryEntry) => void;
+  onCloseRestore: () => void;
+  restoreToast: string | null;
+  onRestored: (message: string) => void;
+};
+
+function HistorySheet({
+  entries,
+  filtered,
+  decisionFilter,
+  mediumFilter,
+  onDecisionFilter,
+  onMediumFilter,
+  restoreEntry,
+  onOpenRestore,
+  onCloseRestore,
+  restoreToast,
+  onRestored,
+}: HistorySheetProps) {
+  // Reuse the existing learned-patterns synthesis for a calm one-line
+  // summary — no new computation, no LLM, just the reject log.
+  const patterns = useMemo(
+    () => synthesizeLearnedPatterns(entries),
+    [entries],
+  );
+
+  return (
+    <section
+      className="relative flex h-full min-h-0 flex-col overflow-hidden"
+      aria-label="Decision history"
+    >
+      <header className="shrink-0 px-1 pb-4">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="text-[16px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+            History
+            <span className="text-[var(--color-text-muted)]"> · decisions</span>
+          </h2>
+          <span className="font-mono text-[12px] text-[var(--color-text-muted)] tabular-nums">
+            {entries.length} total
+          </span>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {DECISION_FILTERS.map((f) => (
+            <SheetChip
+              key={f.id}
+              label={f.label}
+              active={decisionFilter === f.id}
+              onClick={() => onDecisionFilter(f.id)}
+            />
+          ))}
+          <span
+            className="mx-1 h-3.5 w-px bg-[var(--glass-border)]"
+            aria-hidden
+          />
+          {MEDIUM_FILTERS.map((f) => (
+            <SheetChip
+              key={f.id}
+              label={f.label}
+              active={mediumFilter === f.id}
+              onClick={() => onMediumFilter(f.id)}
+            />
+          ))}
+        </div>
+
+        {patterns.totalRejects > 0 && patterns.mostRejectedMedium && (
+          <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
+            <span className="text-[var(--color-text-secondary)]">
+              Learned pattern ·
+            </span>{" "}
+            {patterns.mostRejectedMedium.pct}% of rejections are{" "}
+            {MEDIUM_STYLE[patterns.mostRejectedMedium.medium].label} edits
+            {patterns.silentRejectPct > 0 &&
+              ` · ${patterns.silentRejectPct}% rejected without a reason`}
+            .
+          </p>
+        )}
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+        {entries.length === 0 ? (
+          <SheetEmptyState>
+            No decisions yet. Accept or reject a proposal from the Stage to
+            start building history.
+          </SheetEmptyState>
+        ) : filtered.length === 0 ? (
+          <SheetEmptyState>No decisions match these filters.</SheetEmptyState>
+        ) : (
+          <ol className="relative flex flex-col gap-2.5 pl-4">
+            {/* connecting timeline hairline down the left edge */}
+            <span
+              className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-px bg-[var(--glass-border)]"
+              aria-hidden
+            />
+            {filtered.map((entry, idx) => (
+              <li key={`${entry.id}-${entry.decidedAt}-${idx}`} className="relative">
+                <SheetRow
+                  entry={entry}
+                  onRestore={() => onOpenRestore(entry)}
+                />
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+
+      {restoreEntry && (
+        <RestoreDialog
+          entry={restoreEntry}
+          onClose={onCloseRestore}
+          onRestored={onRestored}
+        />
+      )}
+
+      {restoreToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="glass-strong pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-[12px] px-3 py-1.5 text-[11px] text-[var(--color-text-primary)]"
+        >
+          {restoreToast}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SheetRow({
+  entry,
+  onRestore,
+}: {
+  entry: HistoryEntry;
+  onRestore: () => void;
+}) {
+  const medium = MEDIUM_STYLE[entry.medium];
+  const badge = DECISION_BADGE[entry.decision];
+  const accent = SHEET_DECISION_COLOR[entry.decision];
+  const rationale =
+    entry.decision === "rejected" && entry.rejectReason
+      ? `Reason: ${truncateReason(entry.rejectReason)}`
+      : entry.rationale;
+
+  return (
+    <div className="glass-content relative px-3.5 py-3">
+      {/* timeline node — sits on the left hairline, colored by decision */}
+      <span
+        className="absolute -left-[15px] top-4 h-2 w-2 rounded-full ring-2 ring-[var(--glass-content)]"
+        style={{ backgroundColor: accent }}
+        aria-hidden
+      />
+
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+            badge.className,
+          )}
+        >
+          {badge.label}
+        </span>
+        <span
+          className={cn(
+            "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+            medium.className,
+          )}
+        >
+          {medium.label}
+        </span>
+        <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] tabular-nums">
+          {formatRelative(entry.decidedAt)}
+        </span>
+        {canRestore(entry) && (
+          <button
+            type="button"
+            onClick={onRestore}
+            className="glass-ghost ml-1 inline-flex shrink-0 items-center gap-1 rounded-[10px] px-1.5 py-0.5 text-[10px]"
+            title="Restore the timeline to this point"
+          >
+            <RotateCcw className="h-3 w-3" strokeWidth={1.75} />
+            Restore
+          </button>
+        )}
+      </div>
+
+      <p className="mt-1.5 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+        {entry.title}
+      </p>
+      {rationale && (
+        <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-muted)]">
+          {rationale}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SheetChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "glass-ghost h-6 rounded-full px-2.5 text-[10px] font-medium",
+        active &&
+          "border-[var(--color-brand)] text-[var(--color-text-primary)] glow-brand",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SheetEmptyState({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-8 text-center">
+      <p className="max-w-xs text-[12px] leading-relaxed text-[var(--color-text-muted)]">
+        {children}
+      </p>
+    </div>
   );
 }
 
