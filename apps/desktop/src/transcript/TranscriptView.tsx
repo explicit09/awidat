@@ -706,6 +706,15 @@ function LoadedTranscript({
     selection && selection.stem === stem ? selection.startWordIdx : -1;
   const selectionEnd =
     selection && selection.stem === stem ? selection.endWordIdx : -1;
+  const selectedTranscriptText = useMemo(() => {
+    if (selectionStart < 0 || selectionEnd < 0) return "";
+    return t.words
+      .slice(selectionStart, selectionEnd + 1)
+      .map((word) => word.text)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }, [selectionStart, selectionEnd, t.words]);
   useEffect(() => {
     const scope = scrollRef.current;
     if (!scope) return;
@@ -759,6 +768,21 @@ function LoadedTranscript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionStart, selectionEnd, snapshot, stem, t.words]);
 
+  function requestVisualSupportForSelection() {
+    if (!selectedTranscriptText) return;
+    editorDispatch
+      .proposeVisualSupport({
+        selectionText: selectedTranscriptText,
+        request: "request visual support",
+        anchorTranscript: selectedTranscriptText,
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn("propose_visual_support (transcript selection) failed", err);
+      });
+    setSelection(null);
+  }
+
   return (
     <div className="transcript-pane">
       <header className="transcript-meta">
@@ -766,8 +790,19 @@ function LoadedTranscript({
           {t.language || "—"}
           {t.diarized ? " · diarized" : ""}
         </span>
-        <span className="transcript-meta-counts">
-          {t.segments.length} segments · {t.words.length} words
+        <span className="transcript-meta-right">
+          {selectedTranscriptText ? (
+            <button
+              type="button"
+              className="transcript-action-button"
+              onClick={requestVisualSupportForSelection}
+            >
+              Visual support
+            </button>
+          ) : null}
+          <span className="transcript-meta-counts">
+            {t.segments.length} segments · {t.words.length} words
+          </span>
         </span>
       </header>
       <div

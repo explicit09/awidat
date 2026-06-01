@@ -200,6 +200,7 @@ pub fn run() {
             commands::proposal::reject_proposal,
             commands::proposal::adjust_proposal,
             commands::proposal::propose_user_edit,
+            commands::proposal::propose_visual_support,
             commands::clip_params::set_clip_volume,
             commands::clip_params::set_clip_speed,
             commands::clip_params::set_clip_fade,
