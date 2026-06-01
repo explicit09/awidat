@@ -405,3 +405,94 @@ html, body, #root { background: #0a0a12; }
 .stage-tool-body .media-empty,
 .stage-tool-body .properties-pane,
 .stage-tool-body .index-rail { background: transparent !important; }
+
+/* =====================================================================
+   GLASS CONTROL KIT — one canonical vocabulary for every surface so the
+   whole app reads consistent. Use these everywhere (modals, panels,
+   sheets, tools) instead of bespoke button/close/input/pill styles.
+   ===================================================================== */
+
+/* Universal close (×) button — frosted circle, brightens on hover. */
+.gk-close {
+  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-muted);
+  font-size: 13px; line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.gk-close:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* Frosted input. */
+.gk-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  color: var(--color-text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.gk-input::placeholder { color: var(--color-text-muted); }
+.gk-input:focus {
+  outline: none;
+  border-color: var(--glass-border-strong);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+}
+
+/* Section label — 11px uppercase tracked muted. */
+.gk-label {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Raw pill (for chips not using the StatusPill primitive). */
+.gk-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px; border-radius: 7px;
+  font-family: var(--font-mono); font-size: 9px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+}
+.gk-pill--mint   { color: #5EEAD4; background: rgba(45, 212, 191, 0.16); }
+.gk-pill--amber  { color: #FCD34D; background: rgba(245, 158, 11, 0.16); }
+.gk-pill--red    { color: #FCA5A5; background: rgba(220, 100, 95, 0.16); }
+.gk-pill--orange { color: #FF9A45; background: rgba(255, 122, 24, 0.16); }
+.gk-pill--muted  { color: var(--color-text-muted); background: rgba(255, 255, 255, 0.06); }
+
+/* Consistent thin scrollbar inside glass surfaces. */
+.glass *::-webkit-scrollbar,
+.stage-tool-body *::-webkit-scrollbar,
+.modal *::-webkit-scrollbar { width: 8px; height: 8px; }
+.glass *::-webkit-scrollbar-thumb,
+.stage-tool-body *::-webkit-scrollbar-thumb,
+.modal *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14); border-radius: 8px;
+}
+.glass *::-webkit-scrollbar-track,
+.stage-tool-body *::-webkit-scrollbar-track,
+.modal *::-webkit-scrollbar-track { background: transparent; }
+
+/* Modal chrome → glass (covers SettingsModal, NewProject, URL import,
+   AgentsMd editor — they use .modal / .modal-header / .modal-footer). */
+.modal {
+  background: var(--glass-tint-2) !important;
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow-lift) !important;
+}
+.modal-header, .modal-footer { border-color: var(--glass-border) !important; }
+.modal-close { /* legacy close buttons inherit the gk-close look */
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 9px !important;
+  color: var(--color-text-muted) !important;
+}
+.modal-close:hover { background: rgba(255,255,255,0.10) !important; color: var(--color-text-primary) !important; }
