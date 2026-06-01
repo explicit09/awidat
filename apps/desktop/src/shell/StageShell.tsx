@@ -1,7 +1,9 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useCursorGlass } from "../ui/glass";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
 import type { Stage } from "../state/stages";
+import { ChatStream } from "../agent/ChatStream";
+import { ShellModeToggle } from "./ShellModeToggle";
 import mark from "../brand/awidat-mark.svg";
 
 /**
@@ -91,6 +93,14 @@ export function StageShell(props: StageShellProps) {
   const onStage_ = stage === "edit";
   const cur = pending[Math.min(active, Math.max(0, pending.length - 1))];
 
+  // Conversation home: the command bar expands into a glass thread.
+  // Auto-opens whenever the agent is working so its replies have a place
+  // to land (the gap the old cockpit's rail used to fill).
+  const [convoOpen, setConvoOpen] = useState(false);
+  useEffect(() => {
+    if (running) setConvoOpen(true);
+  }, [running]);
+
   const submit = () => {
     const text = draft.trim();
     if (!text) return;
@@ -101,6 +111,7 @@ export function StageShell(props: StageShellProps) {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
+      setConvoOpen(true); // show the thread so the reply is visible
     }
     setDraft("");
   };
@@ -123,6 +134,7 @@ export function StageShell(props: StageShellProps) {
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-3">
+          <ShellModeToggle />
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? ORANGE : "#20C997", boxShadow: `0 0 8px ${running ? ORANGE : "#20C997"}` }} />
             {running ? "working" : "ready"}
@@ -218,10 +230,28 @@ export function StageShell(props: StageShellProps) {
         </div>
       ) : null}
 
-      {/* command bar — edits AND navigates */}
-      <div className="absolute inset-x-0 bottom-0 z-40 flex justify-center px-8 pb-6">
+      {/* command bar + conversation home — edits, navigates, and shows
+          the agent's replies in a glass thread that grows from the bar */}
+      <div className="absolute inset-x-0 bottom-0 z-40 flex flex-col items-center px-8 pb-6">
+        {convoOpen ? (
+          <div className="glass glass-strong stage-convo mb-2 flex w-full max-w-[760px] flex-col overflow-hidden" style={{ borderRadius: 18, maxHeight: "min(46vh, 460px)" }}>
+            <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2">
+              <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">Conversation</span>
+              {agentRead ? <span className="text-[10px] text-[var(--color-text-muted)]">· {agentRead}</span> : null}
+              <button onClick={() => setConvoOpen(false)} className="glass-ghost ml-auto rounded-md px-2 py-0.5 text-[11px]">▾ collapse</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              <ChatStream />
+            </div>
+          </div>
+        ) : null}
         <div className="glass glass-strong glass-reactive flex w-full max-w-[760px] items-center gap-3 rounded-2xl px-4 py-3" style={{ borderRadius: 18 }}>
-          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg" style={{ background: "rgba(255,122,24,0.16)", color: "#FF9A45" }}>◇</span>
+          <button
+            onClick={() => setConvoOpen((o) => !o)}
+            title={convoOpen ? "Hide conversation" : "Show conversation"}
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg transition"
+            style={{ background: convoOpen ? "rgba(255,122,24,0.30)" : "rgba(255,122,24,0.16)", color: "#FF9A45" }}
+          >◇</button>
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

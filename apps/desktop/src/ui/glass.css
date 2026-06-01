@@ -391,3 +391,8 @@ html, body, #root { background: #0a0a12; }
    +Track, zoom) — the Stage wants a clean ribbon, not cockpit chrome. */
 .stage-timeline .timeline-header { display: none !important; }
 .stage-timeline > * { height: 100%; }
+
+/* Stage conversation panel: let ChatStream breathe inside the glass.
+   Strip its solid cockpit background so the frost shows through. */
+.stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
+.stage-convo .sticky-user-prompt { background: rgba(255,255,255,0.04); border-radius: 10px; }
