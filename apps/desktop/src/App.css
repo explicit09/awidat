@@ -7835,3 +7835,251 @@ button {
 .vedit-diff-json pre {
   font-family: var(--font-mono);
 }
+
+/* ============================================================
+   2026 "Obsidian Glass" — Transcript view + agent conversation
+   cards. Appended last so these rules win by source order over
+   the earlier editorial/charcoal blocks. Visual-only: no layout,
+   handler, or data-attribute changes. Cards opt into .glass-content
+   / .glass-cta / .glass-ghost in their TSX (see src/ui/glass.css).
+   ============================================================ */
+
+/* ---- Transcript: frost the pane so the panel atmosphere shows ---- */
+.transcript-pane {
+  background: transparent;
+}
+
+.transcript-meta {
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+/* meta header counts → mono muted */
+.transcript-meta-lang,
+.transcript-meta-counts {
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.transcript-segment {
+  border-top-color: rgba(255, 255, 255, 0.05);
+}
+
+.transcript-segment:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+/* speaker label → subtle frosted chip */
+.transcript-segment .transcript-speaker {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+
+/* Active / seek word highlight → soft cyan glow (kept, retinted from
+   the editorial blue to the glass cyan accent). Selection stays a
+   distinct soft cyan-teal wash. */
+.transcript-word:hover {
+  background: rgba(56, 189, 248, 0.16);
+}
+
+.transcript-word.transcript-word-active {
+  background: rgba(56, 189, 248, 0.26);
+  color: #e6f8ff;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55),
+    0 2px 14px rgba(56, 189, 248, 0.30);
+  font-weight: 500;
+}
+
+.transcript-word.transcript-word-selected {
+  background: rgba(94, 234, 212, 0.22);
+  color: #eafff9;
+}
+
+/* Whole-segment active cue → soft cyan ribbon + wash */
+.transcript-segment:has(.transcript-word-active),
+.transcript-segment.transcript-segment-active {
+  background: linear-gradient(
+    90deg,
+    rgba(56, 189, 248, 0.10),
+    rgba(56, 189, 248, 0.02) 60%,
+    transparent
+  );
+  border-left-color: rgba(56, 189, 248, 0.85);
+}
+
+.transcript-segment:has(.transcript-word-active) .transcript-time {
+  color: rgba(125, 211, 252, 0.95);
+}
+
+.transcript-segment:has(.transcript-word-active) .transcript-speaker {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: rgba(186, 230, 253, 0.95);
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.transcript-segment .transcript-speaker-button:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.transcript-segment .transcript-speaker-input {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+/* ---- Agent conversation cards: lean on .glass-content from the TSX,
+   strip the old flat solid fills + accent borders so the frost reads.
+   `.glass-content` already supplies translucent dark glass + 1px
+   border + radius 14; here we just remove conflicting per-kind
+   backgrounds/borders and quiet the inner blocks. ---- */
+.item-job.glass-content,
+.item-approval.glass-content,
+.item-input.glass-content {
+  background: var(--glass-content);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+/* per-kind accent stays as a left ribbon rather than a full border */
+.item-job.glass-content {
+  border-left: 3px solid var(--accent);
+}
+.item-job-ok.glass-content {
+  border-left-color: #5eead4;
+}
+.item-job-err.glass-content {
+  border-left-color: #fca5a5;
+}
+.item-job-cancelled.glass-content {
+  border-left-color: var(--text-muted);
+}
+.item-approval.glass-content {
+  border-left: 3px solid #ff9a45;
+}
+.item-input.glass-content {
+  border-left: 3px solid var(--accent);
+}
+
+/* approval summary block → faint inner glass instead of flat elev2 */
+.item-approval.glass-content .approval-summary {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+
+/* ---- Status / label glass chips — mono, uppercase, color-coded ---- */
+.job-chip,
+.approval-chip,
+.input-chip {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+}
+
+/* running / awaiting / input → orange glass */
+.job-chip-running,
+.approval-chip,
+.input-chip {
+  color: #ff9a45;
+  background: rgba(255, 154, 69, 0.14);
+}
+
+/* done / ok → mint glass */
+.job-chip-ok {
+  color: #5eead4;
+  background: rgba(94, 234, 212, 0.14);
+}
+
+/* failed → red glass */
+.job-chip-err {
+  color: #fca5a5;
+  background: rgba(220, 100, 95, 0.16);
+}
+
+/* cancelled → muted glass */
+.job-chip-cancelled {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Card buttons: glass-cta (approve/primary) + glass-ghost
+   (secondary). Deny / danger → red glass per the guide. These follow
+   the earlier editorial button block in source order, so they win.
+   Padding/radius preserved to keep the cards compact. ---- */
+.approval-actions button,
+.input-options button,
+.input-form button,
+.job-action,
+.job-cancel {
+  min-height: 28px;
+  border-radius: 10px;
+}
+
+/* primary CTA buttons that carry .glass-cta — let glass.css paint them;
+   only normalize the disabled state used by the cards. */
+.approval-actions button.glass-cta:disabled,
+.input-form button.glass-cta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* the "chosen" decision on an approval CTA keeps the filled look */
+.approval-actions button.glass-cta.chosen {
+  filter: brightness(1.04);
+}
+
+/* deny / danger button → red glass */
+.approval-actions button.deny,
+.job-cancel.glass-ghost,
+.deny.glass-ghost {
+  color: #fca5a5;
+  background: rgba(220, 100, 95, 0.16);
+  border: 1px solid rgba(220, 100, 95, 0.4);
+}
+.approval-actions button.deny:hover:not(:disabled),
+.job-cancel.glass-ghost:hover:not(:disabled),
+.deny.glass-ghost:hover:not(:disabled) {
+  color: #ffc4bd;
+  background: rgba(220, 100, 95, 0.24);
+  border-color: rgba(220, 100, 95, 0.6);
+}
+.approval-actions button.deny.chosen {
+  background: rgba(220, 100, 95, 0.32);
+  border-color: rgba(220, 100, 95, 0.7);
+  color: #fff;
+}
+
+/* user-input text field → frosted glass input */
+.input-form input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  border-radius: 10px;
+}
+.input-form input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+/* job progress bar → glass trough + color-coded fill */
+.item-job .job-progress {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+.item-job-ok .job-progress-fill {
+  background: #5eead4;
+}
+.item-job-err .job-progress-fill {
+  background: #fca5a5;
+}

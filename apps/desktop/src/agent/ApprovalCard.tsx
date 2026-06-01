@@ -32,9 +32,10 @@ export function ApprovalCard({ item }: Props) {
   const capability = readCapabilityMetadata(item.capability_metadata);
 
   return (
-    <article className="item item-approval">
+    <article className="item item-approval glass-content">
       <div className="item-meta">
         approval · <code>{item.tool_name}</code>
+        <span className="approval-chip">awaiting</span>
       </div>
       <div className="approval-summary">{item.args_summary}</div>
       {capability && (
@@ -63,21 +64,21 @@ export function ApprovalCard({ item }: Props) {
         <button
           onClick={() => respond("allow")}
           disabled={decision !== null}
-          className={decision === "allow" ? "chosen" : ""}
+          className={`glass-cta ${decision === "allow" ? "chosen" : ""}`}
         >
           Allow
         </button>
         <button
           onClick={() => respond("allow_for_session")}
           disabled={decision !== null}
-          className={decision === "allow_for_session" ? "chosen" : ""}
+          className={`glass-ghost ${decision === "allow_for_session" ? "chosen" : ""}`}
         >
           Allow for session
         </button>
         <button
           onClick={() => respond("deny")}
           disabled={decision !== null}
-          className={`deny ${decision === "deny" ? "chosen" : ""}`}
+          className={`deny glass-ghost ${decision === "deny" ? "chosen" : ""}`}
         >
           Deny
         </button>
