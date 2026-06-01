@@ -65,6 +65,13 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
         .unwrap_or_default();
     let am_offset = offset_of(&offsets, &audio_master);
 
+    // "synced mode": at least one camera carries an applied sync offset. In a
+    // correct N-camera sync exactly one camera (the reference) has no
+    // sync_group; the rest are offset against it.
+    let synced_mode = !offsets.is_empty();
+    let cameras_without_offset = cameras.iter().filter(|c| !offsets.contains_key(*c)).count();
+    let reference_is_unambiguous = synced_mode && cameras_without_offset == 1;
+
     let mut decisions = Vec::new();
     let mut last_asset: Option<String> = None;
     let mut last_cut_s = f64::NEG_INFINITY;
@@ -103,13 +110,21 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
             last_cut_s = seg.start_s;
         }
         last_asset = Some(choice.asset.clone());
-        let sync_group_id = offsets
-            .get(&choice.asset)
-            .and_then(|s| s.sync_group_id.clone());
-        let offset_corrected = offsets.contains_key(&choice.asset);
+        let chosen_offset = offsets.get(&choice.asset);
+        let sync_group_id = chosen_offset.and_then(|s| s.sync_group_id.clone());
+        // Carry offset-adjusted source IN/OUT so Apply Multicam Plan reads the
+        // right source frames; timeline span stays start_s..end_s. Reference
+        // camera (offset 0 by design) counts as corrected when unambiguous.
+        let cam_offset = offset_of(&offsets, &choice.asset);
+        let source_start_s = seg.start_s + am_offset - cam_offset;
+        let source_end_s = seg.end_s + am_offset - cam_offset;
+        let offset_corrected = chosen_offset.is_some()
+            || (reference_is_unambiguous && !offsets.contains_key(&choice.asset));
         decisions.push(serde_json::json!({
             "start_s": seg.start_s,
             "end_s": seg.end_s,
+            "source_start_s": source_start_s,
+            "source_end_s": source_end_s,
             "source_asset": choice.asset,
             "sync_group_id": sync_group_id,
             "speaker": seg.speaker,
@@ -124,13 +139,22 @@ pub fn run(args: PlanMulticamArgs, ctx: McpToolCtx) -> Result<String, String> {
     }
 
     let mut warnings = Vec::new();
-    if offsets.is_empty() && cameras.len() > 1 {
+    if !synced_mode && cameras.len() > 1 {
         warnings.push(
             "no applied sync groups found — assuming all cameras share a timebase. \
 If the cameras were recorded on separate devices, run analyze_sync and apply the \
 Set Sync Group fragments first, then re-run plan_multicam for offset-corrected angles."
                 .to_string(),
         );
+    } else if synced_mode && cameras_without_offset > 1 {
+        warnings.push(format!(
+            "{} of {} cameras have no applied sync group — only one can be the reference. \
+The others are scored on the shared-timebase assumption and may pick wrong angles or source \
+frames. Run analyze_sync for every non-reference camera and apply the Set Sync Group fragments \
+before relying on this plan.",
+            cameras_without_offset,
+            cameras.len()
+        ));
     }
 
     let apply_plan = serde_json::json!({

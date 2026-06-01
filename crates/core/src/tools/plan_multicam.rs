@@ -103,6 +103,17 @@ impl ToolHandler for PlanMulticamTool {
             .unwrap_or_default();
         let am_offset = offset_of(&offsets, &audio_master);
 
+        // "synced mode": at least one camera carries an applied sync offset.
+        // In a correct N-camera sync, exactly one camera (the reference)
+        // deliberately has no sync_group; the rest are offset against it.
+        let synced_mode = !offsets.is_empty();
+        let cameras_without_offset = cameras.iter().filter(|c| !offsets.contains_key(*c)).count();
+        // The lone un-offset camera in synced mode is the reference (its
+        // source time IS the program timebase, offset 0). If more than one
+        // camera lacks an offset, we can't tell reference from skipped, so
+        // those stay "uncorrected" and the partial-sync warning fires.
+        let reference_is_unambiguous = synced_mode && cameras_without_offset == 1;
+
         let mut decisions = Vec::new();
         let mut last_asset: Option<String> = None;
         let mut last_cut_s = f64::NEG_INFINITY;
@@ -141,13 +152,22 @@ impl ToolHandler for PlanMulticamTool {
                 last_cut_s = seg.start_s;
             }
             last_asset = Some(choice.asset.clone());
-            let sync_group_id = offsets
-                .get(&choice.asset)
-                .and_then(|s| s.sync_group_id.clone());
-            let offset_corrected = offsets.contains_key(&choice.asset);
+            let chosen_offset = offsets.get(&choice.asset);
+            let sync_group_id = chosen_offset.and_then(|s| s.sync_group_id.clone());
+            // Offset-corrected when the chosen camera has an applied offset,
+            // OR it's the unambiguous reference (offset 0 by design). Carry
+            // the offset-adjusted source IN/OUT so Apply Multicam Plan reads
+            // the right source frames; timeline span stays start_s..end_s.
+            let cam_offset = offset_of(&offsets, &choice.asset);
+            let source_start_s = seg.start_s + am_offset - cam_offset;
+            let source_end_s = seg.end_s + am_offset - cam_offset;
+            let offset_corrected = chosen_offset.is_some()
+                || (reference_is_unambiguous && !offsets.contains_key(&choice.asset));
             decisions.push(serde_json::json!({
                 "start_s": seg.start_s,
                 "end_s": seg.end_s,
+                "source_start_s": source_start_s,
+                "source_end_s": source_end_s,
                 "source_asset": choice.asset,
                 "sync_group_id": sync_group_id,
                 "speaker": seg.speaker,
@@ -162,13 +182,25 @@ impl ToolHandler for PlanMulticamTool {
         }
 
         let mut warnings = Vec::new();
-        if offsets.is_empty() && cameras.len() > 1 {
+        if !synced_mode && cameras.len() > 1 {
             warnings.push(
                 "no applied sync groups found — assuming all cameras share a timebase. \
 If the cameras were recorded on separate devices, run analyze_sync and apply the \
 Set Sync Group fragments first, then re-run plan_multicam for offset-corrected angles."
                     .to_string(),
             );
+        } else if synced_mode && cameras_without_offset > 1 {
+            // Partial sync: some cameras synced, but more than one lacks an
+            // offset. Beyond the single reference, the rest are being scored
+            // with the unsafe shared-timebase assumption this warning guards.
+            warnings.push(format!(
+                "{} of {} cameras have no applied sync group — only one can be the reference. \
+The others are scored on the shared-timebase assumption and may pick wrong angles or source \
+frames. Run analyze_sync for every non-reference camera and apply the Set Sync Group fragments \
+before relying on this plan.",
+                cameras_without_offset,
+                cameras.len()
+            ));
         }
 
         let apply_plan = serde_json::json!({

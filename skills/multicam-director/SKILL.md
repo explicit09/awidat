@@ -39,7 +39,7 @@ the inputs exist before planning:
 
 ```
 view_timeline
-read_index(channel="whisper", asset_id=<audio master>)
+read_index(channel="transcript", asset_id=<audio master>)
 read_index(channel="face", asset_id=<each camera>)
 read_index(channel="shot", asset_id=<each camera>)
 ```
