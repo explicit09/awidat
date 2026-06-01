@@ -1905,7 +1905,7 @@ function App() {
         preview={stagePreview}
         timeline={stageTimeline}
         deliver={realDeliveryWorkspace}
-        skills={<SkillsSurface />}
+        skills={<SkillsSurface variant="sheet" />}
         history={<HistorySurface />}
         stage={stage}
         onStage={setStage}
