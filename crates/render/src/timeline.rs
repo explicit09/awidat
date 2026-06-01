@@ -3188,8 +3188,14 @@ fn synthesize_audio_tracks(
         }
         if segment.audio_muted {
             // Picture stays on the video track; this segment contributes
-            // silence, muting the audio without dropping the image.
-            items.push(AudioTrackItemPlan::Gap { duration_s });
+            // silence, muting the audio without dropping the image. The gap
+            // spans the clip's TRACK footprint, not its source span: a
+            // non-muted clip's audio is sped by `speed`, so its track length
+            // is `duration_s / speed`. Matching that keeps the silence aligned
+            // with the picture instead of over-/under-running it.
+            items.push(AudioTrackItemPlan::Gap {
+                duration_s: duration_s / segment_speed(segment),
+            });
         } else if !segment.audio_removed_ranges.is_empty() {
             // Picture stays; the audio is cut into kept clips + silence
             // gaps around the removed source spans.
@@ -12946,6 +12952,25 @@ mod tests {
         // tracks, so render stays on the coupled muxed-audio concat path.
         let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 5.0)];
         assert!(synthesize_audio_tracks(&segs).unwrap().is_empty());
+    }
+
+    #[test]
+    fn muted_clip_with_speed_change_silences_track_footprint() {
+        // A muted 10s source clip at 2x occupies 5s on the timeline. The
+        // silence gap must match that track footprint (5s), not the 10s
+        // source span, or the mixed audio would over-run the picture.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_muted = true;
+        a.speed = Some(SpeedPlan::new(2.0));
+        let tracks = synthesize_audio_tracks(&[a]).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[0].items[0] else {
+            panic!("expected a silence gap, got {:?}", tracks[0].items)
+        };
+        assert!(
+            (duration_s - 5.0).abs() < 1e-9,
+            "muted gap must be the 5s track footprint, got {duration_s}"
+        );
     }
 
     #[test]
