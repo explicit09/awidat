@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useCursorGlass } from "../ui/glass";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
+import { useTimelineStore } from "../timeline/store";
 import type { Stage } from "../state/stages";
 import { ChatStream } from "../agent/ChatStream";
 import mark from "../brand/awidat-mark.svg";
@@ -47,6 +48,23 @@ const DOCK: DockItem[] = [
   { id: "history", glyph: "◷", label: "History" },
 ];
 
+// Summonable cockpit tools — slide in as a right-side glass panel over the
+// (still-visible) stage. Transcript leads: it's the click-a-word→seek surface.
+type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
+type ToolItem = { id: ToolKey; glyph: string; label: string };
+const TOOLS: ToolItem[] = [
+  { id: "transcript", glyph: "¶", label: "Transcript" },
+  { id: "media", glyph: "▦", label: "Media" },
+  { id: "inspector", glyph: "⚙", label: "Inspector" },
+  { id: "index", glyph: "☰", label: "Index" },
+  { id: "vedit", glyph: "✎", label: "Vedit" },
+];
+
+// Timeline strip sizing — fits ALL tracks without vertical scroll.
+const TL_BASE = 48; // header/padding chrome
+const TL_ROW = 58; // per-track lane height
+const TL_MAX_VH = 46; // never eat more than ~46vh of screen
+
 export type StageShellProps = {
   hasProject: boolean;
   landing: ReactNode;
@@ -54,6 +72,18 @@ export type StageShellProps = {
   preview: ReactNode;
   /** Real timeline node (TimelineHybrid + TimelinePane). */
   timeline: ReactNode;
+  /** Track count drives the timeline strip height (fit all, no scroll). */
+  trackCount?: number;
+  /** Summonable cockpit tools, opened from the right-edge dock. */
+  tools?: {
+    media: ReactNode;
+    inspector: ReactNode;
+    index: ReactNode;
+    transcript: ReactNode;
+    vedit: ReactNode;
+  };
+  /** Rising edge auto-opens the Inspector tool (proposal/clip selected). */
+  autoInspect?: boolean;
   deliver: ReactNode;
   skills: ReactNode;
   history: ReactNode;
@@ -74,7 +104,8 @@ export type StageShellProps = {
 
 export function StageShell(props: StageShellProps) {
   const {
-    hasProject, landing, preview, timeline, deliver, skills, history,
+    hasProject, landing, preview, timeline, trackCount = 0, tools, autoInspect,
+    deliver, skills, history,
     stage, onStage, onCommand, running, onCancel,
     projectLabel, projectType, timecode, agentRead,
   } = props;
@@ -100,13 +131,38 @@ export function StageShell(props: StageShellProps) {
     if (running) setConvoOpen(true);
   }, [running]);
 
+  // Summonable tool side-panel — one open at a time.
+  const [tool, setTool] = useState<ToolKey | null>(null);
+  const toggleTool = (id: ToolKey) => setTool((t) => (t === id ? null : id));
+
+  // Auto-open the Inspector on the rising edge of a selection — never fight
+  // the user (don't reopen if they've closed it while the selection holds).
+  const prevAutoInspect = useRef(false);
+  useEffect(() => {
+    if (autoInspect && !prevAutoInspect.current) setTool("inspector");
+    prevAutoInspect.current = !!autoInspect;
+  }, [autoInspect]);
+
+  // Track-sized timeline strip — fit every track, never scroll vertically.
+  // Falls back to the live store count if App didn't pass one.
+  const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
+  const tracks = trackCount || storeTrackCount;
+  const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
+
+  // Empty stage: a project is loaded but there's nothing to show yet.
+  const stageEmpty = pending.length === 0;
+  const node = tool ? toolNode(tool, tools) : null;
+
   const submit = () => {
     const text = draft.trim();
     if (!text) return;
     // Command routes: bare destination words navigate; everything else
     // is an editorial instruction to the agent.
     const lower = text.toLowerCase().replace(/^\//, "");
-    if (lower === "deliver" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
+    if (lower === "transcript" || lower === "media" || lower === "inspector" || lower === "index" || lower === "vedit") {
+      onStage("edit"); // tools live on the Stage
+      setTool(lower as ToolKey);
+    } else if (lower === "deliver" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
@@ -162,12 +218,87 @@ export function StageShell(props: StageShellProps) {
         </div>
       </div>
 
-      {/* STAGE LAYER — preview hero + proposal deck (dims when a destination opens) */}
-      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16 pb-44 transition-all duration-300"
-        style={{ filter: onStage_ ? "none" : "blur(8px) brightness(0.5)", transform: onStage_ ? "none" : "scale(0.98)", pointerEvents: onStage_ ? "auto" : "none" }}>
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
+      {/* right-edge tool dock — summon cockpit tools as a side panel.
+          Hidden while a destination sheet (deliver/skills/history) is open. */}
+      {tools && onStage_ ? (
+        <div className="group/tools absolute right-3 top-1/2 z-40 -translate-y-1/2">
+          <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
+            {TOOLS.map((t) => {
+              const on = tool === t.id;
+              return (
+                <button key={t.id} onClick={() => toggleTool(t.id)}
+                  className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
+                  style={{
+                    background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
+                    color: on ? "#1A0E04" : "var(--color-text-muted)",
+                    boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
+                  }}>
+                  <span className="order-2 max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/tools:max-w-[90px] group-hover/tools:opacity-100">{t.label}</span>
+                  <span className="order-1 grid w-5 place-items-center text-[13px]">{t.glyph}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* tool side-panel — slides in from the right; the stage stays visible
+          to its left (NOT a full sheet like the destinations). */}
+      {tools && onStage_ ? (
+        <div
+          className="glass glass-strong absolute right-0 top-14 z-30 flex flex-col overflow-hidden transition-transform duration-300"
+          style={{
+            width: 360,
+            bottom: 96,
+            borderTopLeftRadius: 18,
+            borderBottomLeftRadius: 18,
+            transform: tool ? "translateX(0)" : "translateX(110%)",
+            pointerEvents: tool ? "auto" : "none",
+          }}>
+          <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2.5">
+            <span className="text-[13px] font-semibold capitalize text-[var(--color-text-primary)]">{tool ?? ""}</span>
+            <button onClick={() => setTool(null)} className="glass-ghost ml-auto grid h-6 w-6 place-items-center rounded-md text-[12px]">×</button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">{node}</div>
+        </div>
+      ) : null}
+
+      {/* STAGE LAYER — preview hero + proposal deck (dims when a destination
+          opens). Bottom padding tracks the (track-sized) timeline height so
+          the hero flexes; right padding makes room for an open tool panel. */}
+      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16 transition-all duration-300"
+        style={{
+          filter: onStage_ ? "none" : "blur(8px) brightness(0.5)",
+          transform: onStage_ ? "none" : "scale(0.98)",
+          pointerEvents: onStage_ ? "auto" : "none",
+          paddingBottom: `calc(96px + 56px + ${timelineHeight})`,
+          paddingRight: tool ? 380 : undefined,
+        }}>
+        <div className="relative flex min-w-0 flex-1 flex-col gap-2">
           <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
             {preview}
+            {/* purposeful empty state — overlays the black hero when there's
+                nothing to review yet (no pending proposals). */}
+            {stageEmpty ? (
+              <div className="absolute inset-0 z-10 grid place-items-center p-8 text-center">
+                <div className="flex max-w-[420px] flex-col items-center gap-4">
+                  <div className="text-[22px] font-bold tracking-tight text-[var(--color-text-primary)]">Direct the edit.</div>
+                  <div className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+                    Drop footage, pick media, or ask me to prepare a cut — I'll propose edits you review here.
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <button
+                      onClick={() => onCommand("Prepare a starting cut for this project using AGENTS.md and the indexed signals.")}
+                      className="glass-cta rounded-xl px-4 py-2 text-[13px] font-semibold"
+                    >Prepare a starting cut</button>
+                    <button
+                      onClick={() => { onStage("edit"); setTool("media"); }}
+                      className="glass-ghost rounded-xl px-4 py-2 text-[13px]"
+                    >Open media</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
           {agentRead ? (
             <div className="flex items-center gap-2 pl-1 text-[11px] text-[var(--color-text-muted)]">
@@ -206,9 +337,11 @@ export function StageShell(props: StageShellProps) {
         ) : null}
       </div>
 
-      {/* timeline glass strip */}
-      <div className="absolute inset-x-20 bottom-24 z-20 transition-opacity duration-300" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none" }}>
-        <div className="glass glass-soft overflow-hidden" style={{ borderRadius: 14, height: 96 }}>
+      {/* timeline glass strip — height grows with track count, every track
+          visible at once (no vertical scroll), capped so it never eats the
+          whole screen; the preview hero flexes to give it room. */}
+      <div className="absolute inset-x-20 bottom-24 z-20 transition-opacity duration-300" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? 380 : undefined }}>
+        <div className="glass glass-soft overflow-hidden" style={{ borderRadius: 14, height: timelineHeight }}>
           {timeline}
         </div>
       </div>
@@ -271,6 +404,11 @@ export function StageShell(props: StageShellProps) {
       </div>
     </div>
   );
+}
+
+function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
+  if (!tools) return null;
+  return tools[key];
 }
 
 function ProposalCard({

@@ -1895,6 +1895,66 @@ function App() {
     </div>
   );
 
+  // ── Shared cockpit tool nodes ──────────────────────────────────────────
+  // Defined ONCE here and reused by BOTH the Stage (summonable tool dock)
+  // and the legacy cockpit branch below (LeftWorkspaceRail / RightEditPanel).
+  // All referenced state/handlers are already in scope at this point.
+  const stageMedia = (
+    <ProjectMediaPanel
+      projectName={current ? projectName(current) : undefined}
+      sourceCount={sourceMediaCount}
+      media={realIndexingMedia}
+      ready={realIndexingReady}
+      episodes={episodeSummary}
+      onImport={() => void chooseAndImportFiles()}
+      onImportUrl={() => setShowUrlImport(true)}
+      onOpenProject={() => void chooseAndOpenProject()}
+      onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
+      onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
+      generatedMedia={generatedMedia}
+      generatedMediaLoading={generatedMediaLoading}
+      generatedMediaError={generatedMediaError}
+      onRefreshGeneratedMedia={() => void refreshGeneratedMedia()}
+      onPlaceGeneratedMedia={(entry) => void placeGeneratedMediaOnTimeline(entry)}
+    />
+  );
+  const stageInspector =
+    activeProposal || demoMode ? (
+      <ProposalInspector
+        data={effectiveInspector}
+        onAccept={acceptActiveProposal}
+        onReject={rejectActiveProposal}
+        onInspectDeeper={inspectActiveProposal}
+        onRevise={reviseActiveProposal}
+        onAgentRepair={() => {
+          void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
+        }}
+        onMaximize={() => setInspectorCollapsed(false)}
+        onCollapse={() => setInspectorCollapsed(true)}
+      />
+    ) : (
+      <ClipInspector />
+    );
+  const stageIndex = (
+    <IndexRail
+      tasks={realIndexingTasks}
+      structurePreview={realIndexingStructure}
+      episodes={episodeSummary}
+      indexerConfig={indexerConfig}
+      activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
+      ready={realIndexingReady}
+      onReviewIndexResults={() => {
+        void loadIndexerConfig();
+        void runIndexers();
+      }}
+      onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
+      onOpenConfigPath={openConfigPath}
+      onRevealConfigPath={revealConfigPath}
+    />
+  );
+  const stageTranscript = <TranscriptView stem={selectedStem} />;
+  const stageVedit = <VeditPanel />;
+
   return (
     <>
     <AmbientBackground />
@@ -1904,6 +1964,15 @@ function App() {
         landing={<Landing />}
         preview={stagePreview}
         timeline={stageTimeline}
+        trackCount={timelineSnapshot.tracks.length}
+        tools={{
+          media: stageMedia,
+          inspector: stageInspector,
+          index: stageIndex,
+          transcript: stageTranscript,
+          vedit: stageVedit,
+        }}
+        autoInspect={activeProposal !== null}
         deliver={realDeliveryWorkspace}
         skills={<SkillsSurface variant="sheet" />}
         history={<HistorySurface variant="sheet" />}
@@ -1933,25 +2002,7 @@ function App() {
           active={leftPanel}
           onChange={setLeftPanel}
           agent={agentRail}
-          media={
-            <ProjectMediaPanel
-              projectName={current ? projectName(current) : undefined}
-              sourceCount={sourceMediaCount}
-              media={realIndexingMedia}
-              ready={realIndexingReady}
-              episodes={episodeSummary}
-              onImport={() => void chooseAndImportFiles()}
-              onImportUrl={() => setShowUrlImport(true)}
-              onOpenProject={() => void chooseAndOpenProject()}
-              onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
-              onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
-              generatedMedia={generatedMedia}
-              generatedMediaLoading={generatedMediaLoading}
-              generatedMediaError={generatedMediaError}
-              onRefreshGeneratedMedia={() => void refreshGeneratedMedia()}
-              onPlaceGeneratedMedia={(entry) => void placeGeneratedMediaOnTimeline(entry)}
-            />
-          }
+          media={stageMedia}
         />
       }
       preview={
@@ -2153,45 +2204,10 @@ function App() {
           <RightEditPanel
             active={rightPanel}
             onChange={setRightPanel}
-            inspector={
-              activeProposal || demoMode ? (
-                <ProposalInspector
-                  data={effectiveInspector}
-                  onAccept={acceptActiveProposal}
-                  onReject={rejectActiveProposal}
-                  onInspectDeeper={inspectActiveProposal}
-                  onRevise={reviseActiveProposal}
-                  onAgentRepair={() => {
-                    void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
-                  }}
-                  onMaximize={() => setInspectorCollapsed(false)}
-                  onCollapse={() => setInspectorCollapsed(true)}
-                />
-              ) : (
-                <ClipInspector />
-              )
-            }
-            index={
-              <IndexRail
-                tasks={realIndexingTasks}
-                structurePreview={realIndexingStructure}
-                episodes={episodeSummary}
-                indexerConfig={indexerConfig}
-                activeIndexingStatus={
-                  activeJobs.find((job) => job.job_kind === "indexing")?.status
-                }
-                ready={realIndexingReady}
-                onReviewIndexResults={() => {
-                  void loadIndexerConfig();
-                  void runIndexers();
-                }}
-                onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
-                onOpenConfigPath={openConfigPath}
-                onRevealConfigPath={revealConfigPath}
-              />
-            }
-            transcript={<TranscriptView stem={selectedStem} />}
-            vedit={<VeditPanel />}
+            inspector={stageInspector}
+            index={stageIndex}
+            transcript={stageTranscript}
+            vedit={stageVedit}
           />
         ) : (
           <span />
