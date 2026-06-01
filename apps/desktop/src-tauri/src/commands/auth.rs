@@ -11,6 +11,8 @@
 //! publishing OAuth in [`crate::publishing`] (awidat acting on a user's behalf
 //! toward YouTube/TikTok/IG). They share no token store.
 
+use std::sync::atomic::Ordering;
+
 use awidat_auth::{AuthEnv, AuthModeKind, AuthStatus};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -86,6 +88,9 @@ pub async fn auth_set_api_key(
     state: State<'_, AwidatState>,
     key: String,
 ) -> Result<AuthStatusDto, String> {
+    // Shut down any pending ChatGPT login first so its browser callback can't
+    // land after this and overwrite the API key the user just chose.
+    cancel_pending_oauth(&state).await;
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
     awidat_auth::set_api_key(&env, &key).map_err(|e| e.to_string())?;
     refresh_agent_auth(&state).await;
@@ -95,10 +100,19 @@ pub async fn auth_set_api_key(
 /// Clear stored credentials, then return the new status.
 #[tauri::command]
 pub async fn auth_logout(state: State<'_, AwidatState>) -> Result<AuthStatusDto, String> {
+    cancel_pending_oauth(&state).await;
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
-    awidat_auth::logout(&env).map_err(|e| e.to_string())?;
+    awidat_auth::logout(&env).await.map_err(|e| e.to_string())?;
     refresh_agent_auth(&state).await;
     Ok(awidat_auth::status(&env).into())
+}
+
+/// Shut down and forget any in-flight ChatGPT OAuth login. Called before a
+/// different credential change so a late browser callback can't clobber it.
+async fn cancel_pending_oauth(state: &State<'_, AwidatState>) {
+    if let Some((_, handle)) = state.pending_oauth.lock().await.take() {
+        handle.shutdown();
+    }
 }
 
 /// Make a credential change take effect on the *running* agent.
@@ -123,7 +137,10 @@ async fn refresh_agent_auth(state: &State<'_, AwidatState>) {
 /// browser flow completes asynchronously, after which we emit
 /// [`EVENT_AUTH_CHANGED`] so the UI refreshes its status.
 #[tauri::command]
-pub async fn auth_begin_chatgpt(app: AppHandle) -> Result<BeginChatgptDto, String> {
+pub async fn auth_begin_chatgpt(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+) -> Result<BeginChatgptDto, String> {
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
     let handle = awidat_auth::begin_chatgpt_login(&env).map_err(|e| e.to_string())?;
     let dto = BeginChatgptDto {
@@ -131,12 +148,43 @@ pub async fn auth_begin_chatgpt(app: AppHandle) -> Result<BeginChatgptDto, Strin
         port: handle.port,
     };
 
+    // Register this as the current pending login, cancelling any prior one, and
+    // tag it with a generation so a superseded login can detect it's stale.
+    let id = state.oauth_generation.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut slot = state.pending_oauth.lock().await;
+        if let Some((_, prev)) = slot.take() {
+            prev.shutdown();
+        }
+        *slot = Some((id, handle.cancel_handle()));
+    }
+
     // Wait for the callback off the command thread so the UI gets the URL now.
     tauri::async_runtime::spawn(async move {
-        match handle.wait().await {
+        let result = handle.wait().await;
+        let state = app.state::<AwidatState>();
+
+        // Only act if we're still the current login: a later set-API-key / logout
+        // / second sign-in clears or replaces the slot, and we must not then tear
+        // down the session or emit auth-changed for a choice the user moved on from.
+        let still_current = {
+            let mut slot = state.pending_oauth.lock().await;
+            match slot.as_ref() {
+                Some((current, _)) if *current == id => {
+                    slot.take();
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !still_current {
+            return;
+        }
+
+        match result {
             Ok(()) => {
                 // Drop the cached session so the new ChatGPT creds apply next turn.
-                refresh_agent_auth(&app.state::<AwidatState>()).await;
+                refresh_agent_auth(&state).await;
                 if let Err(err) = app.emit(EVENT_AUTH_CHANGED, ()) {
                     tracing::warn!(error = %err, "failed to emit auth-changed");
                 }

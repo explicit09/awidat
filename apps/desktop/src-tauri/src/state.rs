@@ -98,6 +98,15 @@ pub struct AwidatState {
     /// chain `render done → uploading → published / failed` per target
     /// without the frontend having to drive each transition itself.
     pub upload_queue: crate::publishing::UploadQueue,
+    /// Cancel handle + generation for an in-flight "Sign in with ChatGPT"
+    /// OAuth login. A later auth action (set API key / sign out / a second
+    /// sign-in) shuts the pending callback server down so its browser flow
+    /// can't complete late and silently overwrite the newer wallet choice.
+    /// The generation lets a superseded login detect it's no longer current
+    /// before clearing the slot. See [`crate::commands::auth`].
+    pub pending_oauth: Mutex<Option<(u64, awidat_auth::ShutdownHandle)>>,
+    /// Monotonic id source for `pending_oauth` logins.
+    pub oauth_generation: std::sync::atomic::AtomicU64,
 }
 
 /// Shared state for the localhost media streamer.

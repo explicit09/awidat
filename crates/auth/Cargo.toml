@@ -24,6 +24,9 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
+# `logout` is async (it awaits codex's revoking logout); the test drives it on a
+# current-thread runtime.
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

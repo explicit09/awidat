@@ -1,6 +1,6 @@
 //! Classifying the current credential into a UI-ready status snapshot.
 
-use codex_login::{AuthDotJson, load_auth_dot_json, read_openai_api_key_from_env};
+use codex_login::{AuthDotJson, load_auth_dot_json};
 use serde::{Deserialize, Serialize};
 
 use crate::env::AuthEnv;
@@ -87,16 +87,20 @@ impl AuthStatus {
 
 /// Read the effective auth state.
 ///
-/// Precedence mirrors codex's [`AuthManager`](codex_login::AuthManager): an API
-/// key in the environment overrides whatever is stored, so we report that first.
-/// The desktop bridge launches codex with `enable_codex_api_key_env: true`, so
-/// **both** `CODEX_API_KEY` and `OPENAI_API_KEY` are honoured by the running
-/// agent — we must check both or the wallet readout lies. Otherwise we classify
-/// the stored `auth.json`. A read error is treated as "signed out" (and logged)
-/// rather than propagated — status is a display concern, not a place to fail a turn.
+/// Mirrors the precedence of codex's own turn-auth resolver (`load_auth`): env
+/// credentials win over stored `auth.json`, in the order `CODEX_API_KEY` then
+/// `CODEX_ACCESS_TOKEN`. Otherwise we classify the stored `auth.json`. A read
+/// error is treated as "signed out" (and logged) rather than propagated — status
+/// is a display concern, not a place to fail a turn.
+///
+/// Note `OPENAI_API_KEY` is deliberately *not* an override here: the bridge runs
+/// codex with `enable_codex_api_key_env: true`, but `load_auth` only consults
+/// `CODEX_API_KEY` / `CODEX_ACCESS_TOKEN` for turns — `OPENAI_API_KEY` affects
+/// only realtime-voice sessions (which awidat doesn't use), so reporting it as
+/// the active wallet would misstate what turns are billed to.
 pub fn status(env: &AuthEnv) -> AuthStatus {
-    if let Some(key) = env_api_key() {
-        return AuthStatus::new(AuthModeKind::ApiKey, Some(mask_secret(&key)), true);
+    if let Some(status) = env_override_status() {
+        return status;
     }
     match load_auth_dot_json(&env.codex_home, env.store_mode) {
         Ok(Some(auth)) => classify(&auth),
@@ -136,21 +140,23 @@ fn classify_parts(has_tokens: bool, api_key: Option<&str>, has_agent_identity: b
     }
 }
 
-/// The API key the running agent would pick up from the environment, if any.
+/// The env credential the running agent would use for turns, classified, if any.
 ///
-/// Mirrors codex precedence: `CODEX_API_KEY` wins over `OPENAI_API_KEY`. Returns
-/// `None` when neither is set to a non-empty value.
-fn env_api_key() -> Option<String> {
-    pick_env_api_key(
-        read_env_var(codex_login::CODEX_API_KEY_ENV_VAR),
-        read_openai_api_key_from_env(),
-    )
-}
-
-/// Pure precedence rule (codex key first), split out so it is unit-testable
-/// without mutating process-global environment in tests.
-fn pick_env_api_key(codex_key: Option<String>, openai_key: Option<String>) -> Option<String> {
-    codex_key.or(openai_key)
+/// Order matches codex's `load_auth`: `CODEX_API_KEY` (→ API key) then
+/// `CODEX_ACCESS_TOKEN` (→ agent identity). Both carry `via_env: true` so the UI
+/// can warn that an environment variable is overriding stored auth.
+fn env_override_status() -> Option<AuthStatus> {
+    if let Some(key) = read_env_var(codex_login::CODEX_API_KEY_ENV_VAR) {
+        return Some(AuthStatus::new(
+            AuthModeKind::ApiKey,
+            Some(mask_secret(&key)),
+            true,
+        ));
+    }
+    if read_env_var(codex_login::CODEX_ACCESS_TOKEN_ENV_VAR).is_some() {
+        return Some(AuthStatus::new(AuthModeKind::AgentIdentity, None, true));
+    }
+    None
 }
 
 /// Read an env var, trimmed, treating empty as unset — matches codex's own
@@ -204,21 +210,6 @@ mod tests {
     fn agent_identity_is_classified() {
         let status = classify_parts(false, None, true);
         assert_eq!(status.mode, AuthModeKind::AgentIdentity);
-    }
-
-    #[test]
-    fn env_api_key_prefers_codex_over_openai() {
-        // codex checks CODEX_API_KEY before OPENAI_API_KEY, so the wallet readout
-        // must reflect the same key the agent will actually use.
-        assert_eq!(
-            pick_env_api_key(Some("sk-codex".to_string()), Some("sk-openai".to_string())),
-            Some("sk-codex".to_string())
-        );
-        assert_eq!(
-            pick_env_api_key(None, Some("sk-openai".to_string())),
-            Some("sk-openai".to_string())
-        );
-        assert_eq!(pick_env_api_key(None, None), None);
     }
 
     #[test]

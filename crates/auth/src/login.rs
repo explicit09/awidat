@@ -2,22 +2,41 @@
 
 use std::path::Path;
 
-use codex_login::{LoginServer, ServerOptions, login_with_api_key, run_login_server};
+use codex_login::{
+    LoginServer, ServerOptions, ShutdownHandle, login_with_api_key, logout_with_revoke,
+    run_login_server,
+};
 
-use crate::env::AuthEnv;
+use crate::env::{AuthEnv, ForcedMethod};
 use crate::{AuthError, oauth_client_id, validate_api_key};
 
 /// Validate `raw_key`, then persist it as the active credential, replacing any
 /// existing auth. The running agent picks it up on its next read of `auth.json`.
+///
+/// Rejected on a managed install that forces ChatGPT login, mirroring codex's own
+/// `forced_login_method` enforcement so the chooser can't switch a locked install
+/// to API-key billing.
 pub fn set_api_key(env: &AuthEnv, raw_key: &str) -> Result<(), AuthError> {
+    if env.forced_login_method == Some(ForcedMethod::ChatGpt) {
+        return Err(AuthError::ForbiddenByPolicy(
+            "this install requires Sign in with ChatGPT; API keys are not allowed".to_string(),
+        ));
+    }
     let key = validate_api_key(raw_key)?;
     ensure_home(&env.codex_home)?;
     login_with_api_key(&env.codex_home, &key, env.store_mode).map_err(AuthError::Io)
 }
 
 /// Clear stored credentials. Returns whether a credential was present to remove.
-pub fn logout(env: &AuthEnv) -> Result<bool, AuthError> {
-    codex_login::logout(&env.codex_home, env.store_mode).map_err(AuthError::Io)
+///
+/// Uses codex's *revoking* logout so a ChatGPT refresh-token grant is invalidated
+/// server-side (matching `codex logout`), not just deleted locally — otherwise a
+/// copied/restored `auth.json` would keep working. It still deletes locally even
+/// if the network revoke fails, so offline sign-out keeps working.
+pub async fn logout(env: &AuthEnv) -> Result<bool, AuthError> {
+    logout_with_revoke(&env.codex_home, env.store_mode)
+        .await
+        .map_err(AuthError::Io)
 }
 
 /// A running "Sign in with ChatGPT" flow: the consent URL plus the local OAuth
@@ -43,6 +62,13 @@ impl LoginHandle {
     pub fn cancel(&self) {
         self.server.cancel();
     }
+
+    /// A cloneable handle to cancel this login from elsewhere — e.g. so a later
+    /// API-key save / logout can shut the pending callback server down before its
+    /// browser flow completes and silently overwrites the newer choice.
+    pub fn cancel_handle(&self) -> ShutdownHandle {
+        self.server.cancel_handle()
+    }
 }
 
 /// Start "Sign in with ChatGPT": bind the local callback server and open the
@@ -52,12 +78,21 @@ impl LoginHandle {
 /// tokio task. Await [`LoginHandle::wait`] to learn the outcome. The OAuth client
 /// id comes from [`oauth_client_id`], so the policy-sensitive reuse of codex's
 /// first-party client stays centralized and env-overridable.
+///
+/// Rejected on a managed install that forces API-key login, and any configured
+/// `forced_chatgpt_workspace_id` allow-list is passed to the callback so
+/// credentials from other workspaces are refused — mirroring codex.
 pub fn begin_chatgpt_login(env: &AuthEnv) -> Result<LoginHandle, AuthError> {
+    if env.forced_login_method == Some(ForcedMethod::Api) {
+        return Err(AuthError::ForbiddenByPolicy(
+            "this install requires an API key; ChatGPT sign-in is not allowed".to_string(),
+        ));
+    }
     ensure_home(&env.codex_home)?;
     let options = ServerOptions::new(
         env.codex_home.clone(),
         oauth_client_id(),
-        /* forced_chatgpt_workspace_id */ None,
+        env.forced_workspace_ids.clone(),
         env.store_mode,
     );
     let server = run_login_server(options).map_err(AuthError::Io)?;
@@ -115,13 +150,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn logout_reports_presence_then_absence() {
+    #[tokio::test]
+    async fn logout_reports_presence_then_absence() {
         let (_home, env) = temp_env();
+        // API-key auth has no ChatGPT tokens, so the revoking logout makes no
+        // network call here — the test stays offline.
         set_api_key(&env, "sk-proj-validkey0123456789abc").unwrap();
-        assert!(logout(&env).unwrap(), "first logout removes the key");
+        assert!(logout(&env).await.unwrap(), "first logout removes the key");
         assert!(
-            !logout(&env).unwrap(),
+            !logout(&env).await.unwrap(),
             "second logout finds nothing to remove"
         );
     }
@@ -133,5 +170,30 @@ mod tests {
         let env = AuthEnv::new(nested.clone(), AuthCredentialsStoreMode::File);
         set_api_key(&env, "sk-proj-validkey0123456789abc").unwrap();
         assert!(nested.join("auth.json").exists());
+    }
+
+    #[test]
+    fn set_api_key_blocked_when_chatgpt_is_forced() {
+        let home = TempDir::new().unwrap();
+        let mut env = AuthEnv::new(home.path().to_path_buf(), AuthCredentialsStoreMode::File);
+        env.forced_login_method = Some(ForcedMethod::ChatGpt);
+        let err = set_api_key(&env, "sk-proj-validkey0123456789abc").unwrap_err();
+        assert!(matches!(err, AuthError::ForbiddenByPolicy(_)));
+        assert!(
+            load_auth_dot_json(&env.codex_home, env.store_mode)
+                .unwrap()
+                .is_none(),
+            "no key should be written when policy forbids it"
+        );
+    }
+
+    #[test]
+    fn begin_chatgpt_blocked_when_api_is_forced() {
+        let home = TempDir::new().unwrap();
+        let mut env = AuthEnv::new(home.path().to_path_buf(), AuthCredentialsStoreMode::File);
+        env.forced_login_method = Some(ForcedMethod::Api);
+        // `LoginHandle` isn't `Debug`, so match instead of `unwrap_err()`.
+        let result = begin_chatgpt_login(&env);
+        assert!(matches!(result, Err(AuthError::ForbiddenByPolicy(_))));
     }
 }

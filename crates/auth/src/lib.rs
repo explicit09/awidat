@@ -24,14 +24,15 @@ mod login;
 mod status;
 mod validate;
 
-pub use env::AuthEnv;
+pub use env::{AuthEnv, ForcedMethod};
 pub use login::{LoginHandle, begin_chatgpt_login, logout, set_api_key};
 pub use status::{AuthModeKind, AuthStatus, WalletLabel, status};
 pub use validate::validate_api_key;
 
 /// Re-exported so callers can construct an [`AuthEnv`] with an explicit store
-/// mode without depending on codex crates directly.
-pub use codex_login::AuthCredentialsStoreMode;
+/// mode, or retain a cancel handle for a pending login, without depending on
+/// codex crates directly.
+pub use codex_login::{AuthCredentialsStoreMode, ShutdownHandle};
 
 /// Environment variable that overrides which OAuth client id ChatGPT sign-in
 /// uses. Empty/unset falls back to codex's first-party client.
@@ -43,14 +44,27 @@ pub const OAUTH_CLIENT_ID_ENV: &str = "AWIDAT_OAUTH_CLIENT_ID";
 /// user's ChatGPT subscription for inference). Override via
 /// [`OAUTH_CLIENT_ID_ENV`] to point at a different registered client.
 ///
-/// This indirection is the project's escape hatch: reusing codex's client is
-/// policy-unsanctioned, so if OpenAI ships a real third-party program (or
-/// clamps down) we change behaviour by setting one env var.
+/// **Partial escape hatch.** This only changes the client used for the initial
+/// browser *authorize*. Codex's vendored token *refresh* and *revoke* paths still
+/// submit the built-in [`codex_login::CLIENT_ID`], so an override alone will
+/// authorize successfully and then fail once the access token must be refreshed.
+/// A genuine pivot to a different client also requires codex-side changes — until
+/// then this knob is only safe for clients that share codex's token endpoints. We
+/// log a warning when an override is active so the limitation isn't silent.
 pub fn oauth_client_id() -> String {
-    std::env::var(OAUTH_CLIENT_ID_ENV)
+    match std::env::var(OAUTH_CLIENT_ID_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| codex_login::CLIENT_ID.to_string())
+    {
+        Some(override_id) => {
+            tracing::warn!(
+                "{OAUTH_CLIENT_ID_ENV} overrides the authorize client only; codex still refreshes \
+                 and revokes with its built-in client, so token refresh may fail"
+            );
+            override_id
+        }
+        None => codex_login::CLIENT_ID.to_string(),
+    }
 }
 
 /// Errors surfaced by this crate. Fail loud with full context — callers (Tauri
@@ -64,6 +78,10 @@ pub enum AuthError {
     /// `CODEX_HOME` could not be resolved (e.g. it points at a missing path).
     #[error("could not resolve CODEX_HOME: {0}")]
     Home(#[source] std::io::Error),
+
+    /// The action is disallowed by a managed-install `forced_login_method` policy.
+    #[error("{0}")]
+    ForbiddenByPolicy(String),
 
     /// A filesystem / codex-login operation failed.
     #[error(transparent)]

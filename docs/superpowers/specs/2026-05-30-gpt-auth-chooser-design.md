@@ -39,8 +39,10 @@ Research finding that shapes the whole design:
 
 **Design consequences:**
 1. The API-key path is **first-class**, not a footnote — it is the only ToS-sanctioned mode.
-2. The OAuth client ID is **centralized in one swappable constant** (env-overridable) so we can
-   pivot instantly if OpenAI clamps down or offers a real program.
+2. The OAuth client ID is **centralized + env-overridable** (`AWIDAT_OAUTH_CLIENT_ID`). Caveat:
+   the override only changes the initial browser *authorize* — codex's vendored token *refresh*
+   and *revoke* still use its built-in client, so a full pivot also needs codex-side changes.
+   `oauth_client_id()` logs a warning when an override is active so the limitation isn't silent.
 3. The UI **names the wallet explicitly** at selection and persistently after login.
 
 ## Decisions (made autonomously, per user delegation)
