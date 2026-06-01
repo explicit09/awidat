@@ -1,11 +1,16 @@
 import {
+  AlertTriangle,
+  CheckCircle2,
   Download,
   Play,
   Save,
+  Sparkles,
   Upload,
+  XCircle,
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
+  BrandIcon,
   Button,
   Inline,
   Stack,
@@ -73,9 +78,23 @@ export type DeliverySurfaceProps = {
   onSavePreset?: () => void;
   onGenerateVariants?: () => void;
   onAgentRepair?: (finding: PreflightFinding) => void;
+  /**
+   * Layout flavor.
+   *   "cockpit" (default) — the legacy dense 3-column AppShell cockpit.
+   *   "sheet"             — the calm, single-column glass layout that
+   *                         lives inside the 2026 Stage glass sheet.
+   * The cockpit path is preserved byte-for-byte; the sheet path is a
+   * pure restyle/re-arrange over the SAME props + handlers.
+   */
+  variant?: "cockpit" | "sheet";
 };
 
-export function DeliverySurface({
+export function DeliverySurface(props: DeliverySurfaceProps) {
+  if (props.variant === "sheet") return <DeliverySheet {...props} />;
+  return <DeliveryCockpit {...props} />;
+}
+
+function DeliveryCockpit({
   targets = [],
   findings = [],
   summary,
@@ -259,6 +278,374 @@ export function DeliverySurface({
           onConfirm={confirmExport}
         />
       ) : null}
+    </div>
+  );
+}
+
+/* =====================================================================
+   SHEET LAYOUT — calm, single-column, glass-sheet-native (2026 Stage)
+   Same props + handlers as the cockpit; only the arrangement + skin
+   change. A centered readable column of glass cards instead of the
+   dense 3-column cockpit.
+   ===================================================================== */
+
+function DeliverySheet({
+  targets = [],
+  findings = [],
+  summary,
+  onToggleTarget,
+  onExportNow,
+  onFixIssues,
+  onSavePreset,
+  onGenerateVariants,
+}: DeliverySurfaceProps) {
+  const [confirmExportOpen, setConfirmExportOpen] = useState(false);
+
+  const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
+    const provided = targets.find((t) => t.key === key);
+    return provided ?? { key, active: false };
+  });
+  const activeTargetCount = resolvedTargets.filter((t) => t.active).length;
+  const counts = countBySeverity(findings);
+  const blockingCount = counts.warning + counts.error + counts.failure;
+
+  // No dedicated AI-disclosure prop exists, so derive a soft signal
+  // from the findings: if any finding talks about AI / synthetic /
+  // generated media, surface a small disclosure chip.
+  const aiDisclosed = useMemo(
+    () =>
+      findings.some((f) =>
+        /\b(ai|synthetic|generated)\b/i.test(`${f.message} ${f.asset ?? ""}`),
+      ),
+    [findings],
+  );
+
+  function confirmExport() {
+    setConfirmExportOpen(false);
+    onExportNow?.();
+  }
+
+  return (
+    <div className="h-full overflow-y-auto px-6 py-8">
+      <div className="mx-auto flex w-full max-w-[640px] flex-col gap-7">
+        {/* Header */}
+        <div className="flex items-center gap-3">
+          <div className="min-w-0">
+            <h1 className="text-[var(--text-h1)] font-semibold leading-tight text-[var(--color-text-primary)]">
+              Deliver
+            </h1>
+            <p className="mt-1 text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+              {activeTargetCount === 0
+                ? "Pick where this goes, then export."
+                : `${activeTargetCount} ${activeTargetCount === 1 ? "target" : "targets"} selected.`}
+            </p>
+          </div>
+          {aiDisclosed ? (
+            <span className="glass-content glow-violet ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold text-[var(--color-text-primary)]">
+              <Sparkles className="h-3.5 w-3.5 stroke-[1.75]" style={{ color: "#D8B4FE" }} />
+              AI <span aria-hidden>⚠</span> disclosed
+            </span>
+          ) : null}
+        </div>
+
+        {/* Targets */}
+        <section className="flex flex-col gap-3">
+          <SheetSectionLabel>Targets</SheetSectionLabel>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {resolvedTargets.map((target) => (
+              <TargetChip
+                key={target.key}
+                target={target}
+                onToggle={() => onToggleTarget?.(target.key)}
+              />
+            ))}
+          </div>
+        </section>
+
+        {/* Preflight */}
+        <section className="flex flex-col gap-3">
+          <SheetSectionLabel>
+            Preflight
+            {blockingCount > 0 ? (
+              <span className="ml-2 font-normal text-[var(--color-text-muted)]">
+                {blockingCount} to review
+              </span>
+            ) : null}
+          </SheetSectionLabel>
+          {findings.length === 0 ? (
+            <PreflightRow
+              severity="pass"
+              message="No issues found — clean to export."
+            />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {findings.map((f) => (
+                <PreflightRow
+                  key={f.id}
+                  severity={f.severity}
+                  message={f.message}
+                  asset={f.asset}
+                  time={f.time}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Render summary */}
+        {summary ? (
+          <section className="flex flex-col gap-3">
+            <SheetSectionLabel>Render summary</SheetSectionLabel>
+            <RenderSummaryCard summary={summary} outputs={activeTargetCount} />
+          </section>
+        ) : null}
+
+        {/* Actions */}
+        <section className="flex flex-col gap-3 pb-2">
+          <button
+            type="button"
+            onClick={() => setConfirmExportOpen(true)}
+            disabled={activeTargetCount === 0}
+            className={cn(
+              "glass-cta flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-[15px]",
+              activeTargetCount === 0 && "cursor-not-allowed opacity-50",
+            )}
+          >
+            <Upload className="h-4 w-4 stroke-[2]" />
+            Export now
+          </button>
+          {blockingCount > 0 ? (
+            <button
+              type="button"
+              onClick={onFixIssues}
+              className="glass-ghost glow-brand w-full rounded-xl px-4 py-2.5 text-[13px] font-medium"
+            >
+              Fix issues first
+            </button>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={onSavePreset}
+              className="glass-ghost inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px]"
+            >
+              <Save className="h-3.5 w-3.5 stroke-[1.75]" />
+              Save preset
+            </button>
+            <button
+              type="button"
+              onClick={onGenerateVariants}
+              className="glass-ghost inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px]"
+            >
+              <Download className="h-3.5 w-3.5 stroke-[1.75]" />
+              Generate variants
+            </button>
+          </div>
+        </section>
+      </div>
+      {confirmExportOpen ? (
+        <ExportConfirmDialog
+          targetCount={activeTargetCount}
+          summary={summary}
+          onCancel={() => setConfirmExportOpen(false)}
+          onConfirm={confirmExport}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SheetSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <h2 className="text-[var(--text-label)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-secondary)]">
+      {children}
+    </h2>
+  );
+}
+
+/** A single platform/asset target as a glass toggle chip. */
+function TargetChip({
+  target,
+  onToggle,
+}: {
+  target: DeliveryTarget;
+  onToggle: () => void;
+}) {
+  const meta = TARGET_META[target.key];
+  const label = target.label ?? meta.label;
+  const spec = target.spec ?? meta.spec;
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={target.active}
+      aria-label={`${label} — ${target.active ? "on" : "off"}`}
+      onClick={onToggle}
+      className={cn(
+        "glass-content flex flex-col gap-2 rounded-2xl p-3.5 text-left transition-transform",
+        "hover:-translate-y-px",
+        target.active && "glow-brand",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span
+          className={cn(
+            "grid h-8 w-8 shrink-0 place-items-center rounded-lg",
+            target.active
+              ? "bg-[rgba(255,122,24,0.16)]"
+              : "bg-[rgba(255,255,255,0.05)]",
+          )}
+        >
+          {meta.brand ? (
+            <BrandIcon
+              icon={meta.brand}
+              tinted={target.active}
+              className="h-4 w-4"
+            />
+          ) : (
+            <meta.icon
+              className={cn(
+                "h-4 w-4 stroke-[1.75]",
+                target.active
+                  ? "text-[var(--color-brand)]"
+                  : "text-[var(--color-text-secondary)]",
+              )}
+            />
+          )}
+        </span>
+        {/* on/off pip */}
+        <span
+          className={cn(
+            "mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full transition-colors",
+            target.active
+              ? "bg-[var(--color-brand)] shadow-[0_0_8px_rgba(255,122,24,0.7)]"
+              : "bg-[rgba(255,255,255,0.18)]",
+          )}
+        />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
+          {label}
+        </div>
+        <div className="truncate text-[11px] text-[var(--color-text-muted)]">
+          {spec}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/** Quiet preflight row: severity dot + icon + message. */
+function PreflightRow({
+  severity,
+  message,
+  asset,
+  time,
+}: {
+  severity: PreflightSeverity;
+  message: string;
+  asset?: string;
+  time?: string;
+}) {
+  const { color, Icon } = severityVisual(severity);
+  return (
+    <div className="flex items-start gap-2.5 px-1 py-1.5">
+      <Icon
+        className="mt-0.5 h-4 w-4 shrink-0 stroke-[1.75]"
+        style={{ color }}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] leading-snug text-[var(--color-text-primary)]">
+          {message}
+        </p>
+        {asset || time ? (
+          <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+            {[time, asset].filter(Boolean).join(" · ")}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function severityVisual(severity: PreflightSeverity): {
+  color: string;
+  Icon: typeof CheckCircle2;
+} {
+  switch (severity) {
+    case "error":
+    case "failure":
+      return { color: "var(--color-danger)", Icon: XCircle };
+    case "warning":
+      return { color: "var(--color-warning)", Icon: AlertTriangle };
+    default:
+      return { color: "var(--color-success)", Icon: CheckCircle2 };
+  }
+}
+
+/** Compact render-summary glass card with a delivery-confidence bar. */
+function RenderSummaryCard({
+  summary,
+  outputs,
+}: {
+  summary: DeliveryRenderSummary;
+  outputs: number;
+}) {
+  const confidence = Math.max(0, Math.min(1, summary.confidence));
+  const pct = Math.round(confidence * 100);
+  const outputCount = summary.outputs || outputs;
+  // Confidence reads warm(green)→amber→red as it drops.
+  const confColor =
+    confidence >= 0.85
+      ? "var(--color-success)"
+      : confidence >= 0.6
+        ? "var(--color-warning)"
+        : "var(--color-danger)";
+  return (
+    <div className="glass-content rounded-2xl p-4">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+        <SummaryStat label="Duration" value={summary.duration} />
+        <SummaryStat
+          label="Outputs"
+          value={`${outputCount} ${outputCount === 1 ? "file" : "files"}`}
+        />
+        {summary.estimatedSize ? (
+          <SummaryStat label="Est. size" value={summary.estimatedSize} />
+        ) : null}
+      </div>
+      <div className="mt-4 flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">
+            Delivery confidence
+          </span>
+          <span
+            className="font-mono text-[11px] font-semibold"
+            style={{ color: confColor }}
+          >
+            {pct}%
+          </span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
+          <div
+            className="h-full rounded-full transition-[width] duration-300"
+            style={{ width: `${pct}%`, background: confColor }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
+        {label}
+      </div>
+      <div className="truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
+        {value}
+      </div>
     </div>
   );
 }

@@ -75,6 +75,7 @@ import { Landing } from "./shell/empty/Landing";
 import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
+import { useShellMode } from "./state/shellMode";
 import { useAppGlue } from "./state/appGlue";
 import { useIndexReadinessStore } from "./state/indexReadiness";
 import { useEpisodesStore } from "./state/episodes";
@@ -150,8 +151,9 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
-  // 2026 "Stage" shell. Flip to false to fall back to the three-rail cockpit.
-  const STAGE_SHELL = true;
+  // 2026 "Stage" shell vs legacy cockpit — user-chosen, persisted.
+  const shellMode = useShellMode((s) => s.mode);
+  const STAGE_SHELL = shellMode === "stage";
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
@@ -1710,6 +1712,7 @@ function App() {
   };
   const realDeliveryWorkspace = (
     <DeliverySurface
+      variant="sheet"
       targets={effectiveDeliveryTargets}
       findings={realPreflightFindings}
       summary={realDeliverySummary}
