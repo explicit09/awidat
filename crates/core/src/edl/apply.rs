@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
-    AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
-    BroadcastOverlayStyle, BroadcastTimedEntry, CutType, SemanticCutSpec, SplitEditSpec,
-    cut_boundary_key,
+    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
+    BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType, SemanticCutSpec,
+    SplitEditSpec, cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
@@ -503,6 +503,17 @@ fn apply_one(
         EdlOp::SetVolume { anchor, value } => {
             apply_set_volume(working, index, anchor, *value, ctx, locator)
         }
+        EdlOp::MuteClip { anchor, muted } => {
+            apply_mute_clip(working, index, anchor, *muted, ctx, locator)
+        }
+        EdlOp::RemoveAudio {
+            anchor,
+            start_s,
+            end_s,
+            clear,
+        } => apply_remove_audio(
+            working, index, anchor, *start_s, *end_s, *clear, ctx, locator,
+        ),
         EdlOp::SetAudioFade {
             anchor,
             fade_in_s,
@@ -991,6 +1002,8 @@ fn resolve_locator_for_op(
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
+        | EdlOp::MuteClip { anchor, .. }
+        | EdlOp::RemoveAudio { anchor, .. }
         | EdlOp::SetAudioFade { anchor, .. }
         | EdlOp::SetAudioLead { anchor, .. }
         | EdlOp::SetAudioTrail { anchor, .. }
@@ -6522,6 +6535,113 @@ fn apply_set_volume(
     clip.effects.push(effect);
     Ok(format!(
         "set volume on clip {clip_name:?} to {value:.3} (linear gain)"
+    ))
+}
+
+fn apply_mute_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    muted: bool,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "mute_clip: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "mute_clip: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let clip_name = clip.name.clone();
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
+    let overlay = awidat
+        .audio_override
+        .get_or_insert_with(ClipAudioOverride::default);
+    overlay.muted = muted;
+    // Drop an override that no longer carries any state, keeping clip
+    // metadata clean and the render on the coupled path when possible.
+    if !overlay.muted && overlay.removed_ranges.is_empty() {
+        awidat.audio_override = None;
+    }
+    Ok(format!(
+        "{} audio on clip {clip_name:?} (picture kept)",
+        if muted { "muted" } else { "unmuted" }
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_remove_audio(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    start_s: Option<f64>,
+    end_s: Option<f64>,
+    clear: bool,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "remove_audio: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "remove_audio: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let clip_name = clip.name.clone();
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
+
+    if clear {
+        if let Some(overlay) = awidat.audio_override.as_mut() {
+            overlay.removed_ranges.clear();
+            if !overlay.muted {
+                awidat.audio_override = None;
+            }
+        }
+        return Ok(format!("cleared audio removals on clip {clip_name:?}"));
+    }
+
+    let (Some(start_s), Some(end_s)) = (start_s, end_s) else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "remove_audio: start_s and end_s are required unless clear:true".into(),
+        });
+    };
+    if !start_s.is_finite() || !end_s.is_finite() || start_s < 0.0 || end_s <= start_s {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "remove_audio: need finite 0 <= start_s < end_s (got {start_s}..{end_s})"
+            ),
+        });
+    }
+
+    let overlay = awidat
+        .audio_override
+        .get_or_insert_with(ClipAudioOverride::default);
+    overlay.removed_ranges.push(AudioRange { start_s, end_s });
+    Ok(format!(
+        "removed audio {start_s:.3}..{end_s:.3}s on clip {clip_name:?} (picture kept)"
     ))
 }
 
@@ -13164,6 +13284,152 @@ mod tests {
             .and_then(|v| v.as_f64())
             .unwrap();
         assert!((v - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_mute_clip_sets_and_clears_override() {
+        let tl = timeline_with_three_clips();
+        let anchor = || Anchor::TranscriptSnippet {
+            text: "bravo snippet".into(),
+        };
+
+        // Mute → audio_override.muted = true; no effects added (picture kept).
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MuteClip {
+                anchor: anchor(),
+                muted: true,
+            }],
+        };
+        let (muted_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &muted_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .map(|o| o.muted)
+                .unwrap_or(false),
+            "clip audio must be muted"
+        );
+        assert!(
+            clip.effects.is_empty(),
+            "mute is metadata, not an effect — picture untouched"
+        );
+
+        // Unmute → override carries nothing else, so it is cleared entirely.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MuteClip {
+                anchor: anchor(),
+                muted: false,
+            }],
+        };
+        let (unmuted_tl, _) = apply(&muted_tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &unmuted_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .is_none(),
+            "unmuting with no other override clears it"
+        );
+    }
+
+    #[test]
+    fn apply_remove_audio_appends_and_clears_ranges() {
+        let tl = timeline_with_three_clips();
+        let anchor = || Anchor::TranscriptSnippet {
+            text: "bravo snippet".into(),
+        };
+        let removed = |tl: &Timeline| -> Vec<AudioRange> {
+            let StackChild::Track(t) = &tl.tracks.children[0] else {
+                panic!()
+            };
+            let TrackChild::Clip(clip) = &t.children[1] else {
+                panic!()
+            };
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .map(|o| o.removed_ranges.clone())
+                .unwrap_or_default()
+        };
+
+        // Two removals accumulate; picture untouched (no effects added).
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::RemoveAudio {
+                    anchor: anchor(),
+                    start_s: Some(1.0),
+                    end_s: Some(2.0),
+                    clear: false,
+                },
+                EdlOp::RemoveAudio {
+                    anchor: anchor(),
+                    start_s: Some(4.0),
+                    end_s: Some(5.0),
+                    clear: false,
+                },
+            ],
+        };
+        let (added_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let ranges = removed(&added_tl);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!((ranges[0].start_s, ranges[0].end_s), (1.0, 2.0));
+        assert_eq!((ranges[1].start_s, ranges[1].end_s), (4.0, 5.0));
+
+        // clear:true drops all removals and (no mute) clears the override.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::RemoveAudio {
+                anchor: anchor(),
+                start_s: None,
+                end_s: None,
+                clear: true,
+            }],
+        };
+        let (cleared_tl, _) = apply(&added_tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(removed(&cleared_tl).is_empty());
+        let StackChild::Track(t) = &cleared_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.audio_override.as_ref())
+                .is_none(),
+            "clearing the only override removes it"
+        );
+    }
+
+    #[test]
+    fn apply_remove_audio_rejects_inverted_span() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::RemoveAudio {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                start_s: Some(5.0),
+                end_s: Some(3.0),
+                clear: false,
+            }],
+        };
+        assert!(apply(&tl, &env, &AnchorContext::empty()).is_err());
     }
 
     #[test]

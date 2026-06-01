@@ -722,6 +722,19 @@ change — the default for clips with no Set Volume), values above \
 on the clip; re-applying replaces the existing effect rather than \
 stacking. Render emits `volume=<value>` on this segment's audio \
 stream before concat / xfade.\
+\n  - **Mute Clip**: `+ muted: <true|false>` (optional, default \
+`true`). Silences the whole clip's audio while keeping its \
+picture on the video track. Unlike `Set Volume 0` (a mixable level \
+that leaves the muxed audio stream present), this holds the image \
+and removes the sound. `muted: false` unmutes. Use when you want \
+the shot but not its sound.\
+\n  - **Remove Audio**: silence part of a clip's audio while \
+keeping its picture — the \"cut the sound here, hold the image\" \
+edit. `+ start_s: <s>` and `+ end_s: <s>` (clip-local visible \
+seconds, `end_s > start_s`) silence that span; repeat to remove \
+several spans. `+ clear: true` drops all removed spans on the \
+clip. v1 supports unity-speed clips with no split edit; other \
+combinations are reported at render.\
 \n  - **Set Effect**: generic registered clip effect. Required \
 fields: `+ effect: <awidat.effect_id>` and optional `+ params_json: \
 {...}` plus optional `+ rationale: <why>`. The effect id must exist \
@@ -947,6 +960,15 @@ mod tests {
         assert!(DESCRIPTION.contains("graph-native editing path"));
         assert!(DESCRIPTION.contains("project.otio.json by hand"));
         assert!(DESCRIPTION.contains("bash/FFmpeg"));
+    }
+
+    #[test]
+    fn description_documents_audio_separation_grammar() {
+        // The agent discovers Mute Clip / Remove Audio from this grammar list;
+        // keep them documented alongside Set Volume.
+        assert!(DESCRIPTION.contains("**Mute Clip**"));
+        assert!(DESCRIPTION.contains("**Remove Audio**"));
+        assert!(DESCRIPTION.contains("hold the image"));
     }
 
     #[tokio::test]

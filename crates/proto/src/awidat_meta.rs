@@ -1263,9 +1263,38 @@ pub struct AwidatClipMetadata {
     /// Intentional audio-picture offset for J-cuts and L-cuts.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub split_edit: Option<SplitEditSpec>,
+    /// Per-clip audio override (mute / removed ranges): silence a clip's
+    /// audio while keeping its picture. Absent = audio follows picture
+    /// (the coupled default).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_override: Option<ClipAudioOverride>,
     /// Forward-compat passthrough.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Per-clip audio override — silence a clip's audio while keeping its
+/// picture. Honored by the render's per-segment audio synthesis path:
+/// any clip carrying an override flips the timeline onto the decoupled
+/// video-only + audio-mix render path (the same path J-cuts/L-cuts use).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipAudioOverride {
+    /// Whole-clip silence; the picture stays on the video track.
+    #[serde(default)]
+    pub muted: bool,
+    /// Clip-local source-time spans to silence while keeping the picture.
+    /// Empty = no per-range removal. (Phase 2.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_ranges: Vec<AudioRange>,
+}
+
+/// A half-open audio time span `[start_s, end_s)` in clip-local source seconds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioRange {
+    /// Span start, clip-local source seconds.
+    pub start_s: f64,
+    /// Span end, clip-local source seconds (exclusive).
+    pub end_s: f64,
 }
 
 /// Per-clip split-edit metadata.

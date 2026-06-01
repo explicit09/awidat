@@ -95,6 +95,16 @@ pub enum RenderTimelineError {
         /// Timeline seconds available in the source media.
         available_s: f64,
     },
+    /// A clip carries an audio `removed_ranges` override combined with a
+    /// case the v1 audio-removal lowering does not support yet (a speed
+    /// change or a split-edit lead/trail on the same clip).
+    #[error("clip '{clip_name}' audio removal unsupported: {reason}")]
+    AudioRemovalUnsupported {
+        /// Clip name from the OTIO.
+        clip_name: String,
+        /// Why the removal can't be lowered for this clip.
+        reason: String,
+    },
     /// A clip referenced a LUT path that isn't on disk.
     #[error("clip '{clip_name}' references missing LUT {missing}")]
     MissingLut {
@@ -295,6 +305,14 @@ pub struct TimelineSegment {
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
     pub audio_trail_s: Option<f64>,
+    /// Whether this clip's audio is muted while its picture is kept. Set
+    /// from `ClipAudioOverride.muted`; triggers the decoupled audio path
+    /// and makes this segment's synthesized audio silence.
+    pub audio_muted: bool,
+    /// Clip-local visible-second spans `(start, end)` to silence while the
+    /// picture is kept, from `ClipAudioOverride.removed_ranges`. Empty =
+    /// no per-region removal.
+    pub audio_removed_ranges: Vec<(f64, f64)>,
 }
 
 /// Clip-level curve-based time remap extracted from `awidat.time_remap`.
@@ -1906,7 +1924,7 @@ pub fn collect_timeline_full_plan(
         .as_ref()
         .and_then(read_timeline_loudness_target);
     if audio_tracks.is_empty() {
-        audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
+        audio_tracks = synthesize_audio_tracks(&segs)?;
     }
     render_limitations.extend(unconsumed_animation_limitations(
         &parameter_animations,
@@ -2797,6 +2815,25 @@ fn collect_timeline_segment(
             .as_ref()
             .and_then(|m| m.split_edit.as_ref())
             .and_then(|s| s.audio_trail_s),
+        audio_muted: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.audio_override.as_ref())
+            .map(|o| o.muted)
+            .unwrap_or(false),
+        audio_removed_ranges: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.audio_override.as_ref())
+            .map(|o| {
+                o.removed_ranges
+                    .iter()
+                    .map(|r| (r.start_s, r.end_s))
+                    .collect()
+            })
+            .unwrap_or_default(),
     }))
 }
 
@@ -3124,10 +3161,14 @@ fn audio_volume_automation_expression(
     }
 }
 
-fn synthesize_split_edit_audio_tracks(
+/// Synthesize one audio track per segment when a project has no explicit
+/// audio tracks but its audio must diverge from picture — split edits
+/// (J/L) or a per-clip mute. Returns empty (keeping the coupled
+/// muxed-audio concat path) when no segment needs it.
+fn synthesize_audio_tracks(
     segments: &[TimelineSegment],
 ) -> Result<Vec<AudioTrackPlan>, RenderTimelineError> {
-    if !segments.iter().any(segment_has_split_edit_audio) {
+    if !segments.iter().any(segment_needs_synthesized_audio) {
         return Ok(Vec::new());
     }
     let mut tracks = Vec::new();
@@ -3145,17 +3186,37 @@ fn synthesize_split_edit_audio_tracks(
                 duration_s: audio_start_s,
             });
         }
-        items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
-            asset_path: segment.asset_path.clone(),
-            start_s: source_start_s,
-            duration_s,
-            volume: segment.volume,
-            volume_automation: segment.volume_automation.clone(),
-            speed: segment.speed,
-            fade_in_s: None,
-            fade_out_s: None,
-            audio_fx: segment.audio_fx.clone(),
-        }));
+        if segment.audio_muted {
+            // Picture stays on the video track; this segment contributes
+            // silence over the clip's TRACK footprint, not its source span.
+            // `visible_effective_duration` is that footprint — it already
+            // accounts for speed AND any freeze hold — and is exactly how
+            // `picture_start_s` advances below, so the silence stays aligned
+            // with the picture and the next track starts in the right place.
+            items.push(AudioTrackItemPlan::Gap {
+                duration_s: visible_effective_duration(segment),
+            });
+        } else if !segment.audio_removed_ranges.is_empty() {
+            // Picture stays; the audio is cut into kept clips + silence
+            // gaps around the removed source spans.
+            items.extend(audio_items_with_removals(
+                segment,
+                source_start_s,
+                duration_s,
+            )?);
+        } else {
+            items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: segment.asset_path.clone(),
+                start_s: source_start_s,
+                duration_s,
+                volume: segment.volume,
+                volume_automation: segment.volume_automation.clone(),
+                speed: segment.speed,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: segment.audio_fx.clone(),
+            }));
+        }
         tracks.push(AudioTrackPlan {
             name: format!("split-edit-a{}", idx + 1),
             role: "dialogue".into(),
@@ -3170,6 +3231,121 @@ fn synthesize_split_edit_audio_tracks(
         picture_start_s += visible_effective_duration(segment);
     }
     Ok(tracks)
+}
+
+/// A segment needs the decoupled audio-synthesis path when its audio
+/// diverges from picture: a split edit (J/L), a clip mute, or a
+/// per-region audio removal.
+fn segment_needs_synthesized_audio(segment: &TimelineSegment) -> bool {
+    segment_has_split_edit_audio(segment)
+        || segment.audio_muted
+        || !segment.audio_removed_ranges.is_empty()
+}
+
+/// Split a segment's audio into kept clips + silence gaps around its
+/// `audio_removed_ranges` (clip-local visible seconds, picture held).
+///
+/// v1 lowers the common case: unity speed and no split-edit lead/trail on
+/// the same clip — there source seconds and output seconds coincide, so
+/// gap durations map directly. Other combinations fail loudly rather than
+/// emit silently wrong audio.
+fn audio_items_with_removals(
+    segment: &TimelineSegment,
+    source_start_s: f64,
+    duration_s: f64,
+) -> Result<Vec<AudioTrackItemPlan>, RenderTimelineError> {
+    let lead_s = normalized_split_offset(segment.audio_lead_s);
+    let trail_s = normalized_split_offset(segment.audio_trail_s);
+    // v1 lowering maps clip-local visible seconds 1:1 to source seconds. Any
+    // transform that breaks that identity must fail loud rather than silence
+    // the wrong span. `segment_speed == 1.0` alone is not enough: a reversed
+    // clip, a freeze hold, or a nonlinear time-remap can all leave speed at
+    // 1.0 while still remapping visible→source time.
+    if (segment_speed(segment) - 1.0).abs() > 1e-9 {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal with a clip speed change is not supported yet".into(),
+        });
+    }
+    if segment.speed.is_some_and(|s| s.reverse) {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal on a reversed clip is not supported yet".into(),
+        });
+    }
+    if segment.time_remap.is_some() {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal with a time-remap is not supported yet".into(),
+        });
+    }
+    if segment.freeze.is_some() {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason: "audio removal combined with a freeze hold is not supported yet".into(),
+        });
+    }
+    if lead_s > 0.0 || trail_s > 0.0 {
+        return Err(RenderTimelineError::AudioRemovalUnsupported {
+            clip_name: segment.clip_name.clone(),
+            reason:
+                "audio removal combined with a J/L split edit on the same clip is not supported yet"
+                    .into(),
+        });
+    }
+
+    let span_start = source_start_s;
+    let span_end = source_start_s + duration_s;
+
+    // Clip-local visible seconds → source seconds (unity speed), clamped
+    // to the segment span and normalized so start <= end.
+    let mut cuts: Vec<(f64, f64)> = segment
+        .audio_removed_ranges
+        .iter()
+        .map(|(a, b)| (span_start + a.min(*b), span_start + a.max(*b)))
+        .map(|(s, e)| (s.clamp(span_start, span_end), e.clamp(span_start, span_end)))
+        .filter(|(s, e)| e - s > 1e-9)
+        .collect();
+    cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (s, e) in cuts {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 + 1e-9 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+
+    let make_clip = |start_s: f64, dur: f64| {
+        AudioTrackItemPlan::Clip(AudioClipPlan {
+            asset_path: segment.asset_path.clone(),
+            start_s,
+            duration_s: dur,
+            volume: segment.volume,
+            volume_automation: segment.volume_automation.clone(),
+            speed: segment.speed,
+            fade_in_s: None,
+            fade_out_s: None,
+            audio_fx: segment.audio_fx.clone(),
+        })
+    };
+
+    let mut items = Vec::new();
+    let mut cursor = span_start;
+    for (s, e) in merged {
+        if s - cursor > 1e-9 {
+            items.push(make_clip(cursor, s - cursor));
+        }
+        items.push(AudioTrackItemPlan::Gap { duration_s: e - s });
+        cursor = e;
+    }
+    if span_end - cursor > 1e-9 {
+        items.push(make_clip(cursor, span_end - cursor));
+    }
+    // Whole-span removal collapses to silence covering the picture.
+    if items.is_empty() {
+        items.push(AudioTrackItemPlan::Gap { duration_s });
+    }
+    Ok(items)
 }
 
 fn segment_has_split_edit_audio(segment: &TimelineSegment) -> bool {
@@ -12690,7 +12866,7 @@ mod tests {
         b.source_available_end_s = Some(30.0);
         b.audio_lead_s = Some(0.5);
 
-        let tracks = synthesize_split_edit_audio_tracks(&[a, b]).unwrap();
+        let tracks = synthesize_audio_tracks(&[a, b]).unwrap();
         assert_eq!(tracks.len(), 2);
         let AudioTrackItemPlan::Clip(first) = &tracks[0].items[0] else {
             panic!("expected first clip")
@@ -12719,7 +12895,7 @@ mod tests {
         b.source_available_end_s = Some(30.0);
         b.audio_lead_s = Some(0.5);
         let segs = vec![a, b];
-        let audio_tracks = synthesize_split_edit_audio_tracks(&segs).unwrap();
+        let audio_tracks = synthesize_audio_tracks(&segs).unwrap();
         let argv = build_timeline_argv_with_audio_tracks(
             &segs,
             &[],
@@ -12740,6 +12916,222 @@ mod tests {
         assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=4.5"));
         assert!(filter.contains("atrim=19.5:25"));
         assert!(filter.contains("amix=inputs=2"));
+    }
+
+    #[test]
+    fn muted_clip_synthesizes_silence_and_keeps_picture() {
+        // Two clips; clip A is muted. The picture of both must stay (the
+        // video-only concat), A's audio becomes silence, B's audio is kept.
+        let mut a = seg("/tmp/a.mp4", 0.0, 5.0);
+        a.audio_muted = true;
+        let b = seg("/tmp/b.mp4", 0.0, 5.0);
+        let segs = vec![a, b];
+
+        let tracks = synthesize_audio_tracks(&segs).unwrap();
+        assert_eq!(tracks.len(), 2, "one synthesized audio track per segment");
+        assert!(
+            matches!(tracks[0].items.as_slice(), [AudioTrackItemPlan::Gap { .. }]),
+            "muted clip A must contribute only a silence gap, got {:?}",
+            tracks[0].items
+        );
+        assert!(
+            tracks[1]
+                .items
+                .iter()
+                .any(|i| matches!(i, AudioTrackItemPlan::Clip(_))),
+            "clip B audio must be preserved"
+        );
+
+        // End-to-end: picture kept (video-only concat), audio mixed, A silent.
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(
+            filter.contains("concat=n=2:v=1:a=0[vonly]"),
+            "both pictures kept on the video-only concat"
+        );
+        assert!(
+            filter.contains("anullsrc=r=48000:cl=stereo:d=5"),
+            "muted clip A renders 5s of silence"
+        );
+        assert!(filter.contains("atrim=0:5"), "clip B audio preserved");
+    }
+
+    #[test]
+    fn no_audio_override_or_split_edit_stays_coupled() {
+        // Regression: plain clips (no mute, no J/L) must NOT synthesize audio
+        // tracks, so render stays on the coupled muxed-audio concat path.
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 5.0)];
+        assert!(synthesize_audio_tracks(&segs).unwrap().is_empty());
+    }
+
+    #[test]
+    fn muted_clip_with_speed_change_silences_track_footprint() {
+        // A muted 10s source clip at 2x occupies 5s on the timeline. The
+        // silence gap must match that track footprint (5s), not the 10s
+        // source span, or the mixed audio would over-run the picture.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_muted = true;
+        a.speed = Some(SpeedPlan::new(2.0));
+        let tracks = synthesize_audio_tracks(&[a]).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[0].items[0] else {
+            panic!("expected a silence gap, got {:?}", tracks[0].items)
+        };
+        assert!(
+            (duration_s - 5.0).abs() < 1e-9,
+            "muted gap must be the 5s track footprint, got {duration_s}"
+        );
+    }
+
+    #[test]
+    fn muted_clip_with_freeze_silences_full_held_footprint() {
+        // A muted 10s clip with a 3s freeze hold occupies 13s on the timeline.
+        // The silence must cover all 13s, or the next track drifts 3s early.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_muted = true;
+        a.freeze = Some(FreezePlan {
+            freeze_at_source_s: 5.0,
+            duration_s: 3.0,
+        });
+        let tracks = synthesize_audio_tracks(&[a]).unwrap();
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[0].items[0] else {
+            panic!("expected a silence gap, got {:?}", tracks[0].items)
+        };
+        assert!(
+            (duration_s - 13.0).abs() < 1e-9,
+            "muted gap must cover the 13s held footprint, got {duration_s}"
+        );
+    }
+
+    #[test]
+    fn audio_removal_on_freeze_clip_is_unsupported() {
+        // segment_speed stays 1.0 with a freeze, but the freeze hold breaks
+        // the clip-local→source mapping, so removal must fail loud.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(2.0, 4.0)];
+        a.freeze = Some(FreezePlan {
+            freeze_at_source_s: 5.0,
+            duration_s: 3.0,
+        });
+        let err = synthesize_audio_tracks(&[a]).unwrap_err();
+        assert!(
+            matches!(err, RenderTimelineError::AudioRemovalUnsupported { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn audio_removal_on_reversed_clip_is_unsupported() {
+        // factor 1.0 + reverse keeps segment_speed at 1.0 but flips
+        // visible→source mapping, so removal must fail loud.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(0.0, 2.0)];
+        a.speed = Some(SpeedPlan {
+            factor: 1.0,
+            reverse: true,
+            ..SpeedPlan::new(1.0)
+        });
+        let err = synthesize_audio_tracks(&[a]).unwrap_err();
+        assert!(
+            matches!(err, RenderTimelineError::AudioRemovalUnsupported { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn removed_range_splits_audio_and_keeps_picture() {
+        // Clip 0..10; silence [3,6). Picture is held; audio becomes
+        // clip(0..3) + 3s silence + clip(6..10).
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(3.0, 6.0)];
+        let segs = vec![a];
+
+        let tracks = synthesize_audio_tracks(&segs).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let items = &tracks[0].items;
+        assert_eq!(
+            items.len(),
+            3,
+            "kept clip / silence / kept clip; got {items:?}"
+        );
+        let AudioTrackItemPlan::Clip(first) = &items[0] else {
+            panic!("expected leading kept clip")
+        };
+        assert_eq!((first.start_s, first.duration_s), (0.0, 3.0));
+        let AudioTrackItemPlan::Gap { duration_s } = items[1] else {
+            panic!("expected silence gap")
+        };
+        assert!((duration_s - 3.0).abs() < 1e-9);
+        let AudioTrackItemPlan::Clip(third) = &items[2] else {
+            panic!("expected trailing kept clip")
+        };
+        assert_eq!((third.start_s, third.duration_s), (6.0, 4.0));
+
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(
+            filter.contains("concat=n=1:v=1:a=0[vonly]"),
+            "picture kept on the video-only concat"
+        );
+        assert!(filter.contains("atrim=0:3"));
+        assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=3"));
+        assert!(filter.contains("atrim=6:10"));
+    }
+
+    #[test]
+    fn overlapping_removed_ranges_merge_into_one_gap() {
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(2.0, 5.0), (4.0, 7.0)];
+        let tracks = synthesize_audio_tracks(&[a]).unwrap();
+        let items = &tracks[0].items;
+        // Merged cut [2,7): clip(0..2) / gap(5) / clip(7..10).
+        assert_eq!(items.len(), 3, "got {items:?}");
+        let AudioTrackItemPlan::Gap { duration_s } = items[1] else {
+            panic!("expected merged silence gap")
+        };
+        assert!(
+            (duration_s - 5.0).abs() < 1e-9,
+            "overlapping cuts merge to a single 5s gap"
+        );
+    }
+
+    #[test]
+    fn audio_removal_with_speed_change_is_unsupported() {
+        // Fail loud rather than emit silently misaligned audio.
+        let mut a = seg("/tmp/a.mp4", 0.0, 10.0);
+        a.audio_removed_ranges = vec![(2.0, 4.0)];
+        a.speed = Some(SpeedPlan::new(2.0));
+        let err = synthesize_audio_tracks(&[a]).unwrap_err();
+        assert!(
+            matches!(err, RenderTimelineError::AudioRemovalUnsupported { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

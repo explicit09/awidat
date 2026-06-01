@@ -343,6 +343,37 @@ pub enum EdlOp {
         /// Linear gain multiplier. Must be finite and `>= 0.0`.
         value: f64,
     },
+    /// Mute a clip's audio while keeping its picture. Stamps
+    /// `ClipAudioOverride.muted` in the clip's awidat metadata; render
+    /// routes the timeline onto the decoupled audio path and emits
+    /// silence for this clip's slot. Unlike `Set Volume 0` (a mixable
+    /// level that still leaves the muxed stream present), this holds the
+    /// picture and removes the audio. Re-applying replaces the flag;
+    /// unmuting with no other override clears the override entirely.
+    MuteClip {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// `true` to mute, `false` to unmute.
+        muted: bool,
+    },
+    /// Remove (silence) a clip's audio over a clip-local span while keeping
+    /// its picture — the "cut the sound here, hold the image" edit. Appends
+    /// `[start_s, end_s)` (clip-local visible seconds) to
+    /// `ClipAudioOverride.removed_ranges`; render holds the picture on the
+    /// video track and fills the span with silence. Pass `clear: true` to
+    /// drop all removed ranges on the clip instead of adding one.
+    RemoveAudio {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Span start, clip-local visible seconds. Required unless `clear`.
+        start_s: Option<f64>,
+        /// Span end, clip-local visible seconds (exclusive). Required unless
+        /// `clear`; must be `> start_s`.
+        end_s: Option<f64>,
+        /// When true, clear all removed ranges on the clip and ignore the
+        /// span fields.
+        clear: bool,
+    },
     /// Set per-clip audio fades in seconds. Replaces the existing
     /// `awidat.audio_fade` effect on the clip.
     SetAudioFade {

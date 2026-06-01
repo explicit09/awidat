@@ -57,7 +57,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Time Remap, Set Freeze, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Mute Clip, Remove Audio, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Time Remap, Set Freeze, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
     )]
     UnknownOp {
         /// Line number.
@@ -241,6 +241,8 @@ enum OpKind {
     DeleteTransition,
     SetCutIntent,
     SetVolume,
+    MuteClip,
+    RemoveAudio,
     SetAudioFade,
     SetAudioLead,
     SetAudioTrail,
@@ -307,6 +309,8 @@ impl OpBuilder {
             "Delete Transition" => OpKind::DeleteTransition,
             "Set Cut Intent" => OpKind::SetCutIntent,
             "Set Volume" => OpKind::SetVolume,
+            "Mute Clip" => OpKind::MuteClip,
+            "Remove Audio" => OpKind::RemoveAudio,
             "Set Audio Fade" => OpKind::SetAudioFade,
             "Set Audio Lead" => OpKind::SetAudioLead,
             "Set Audio Trail" => OpKind::SetAudioTrail,
@@ -823,6 +827,31 @@ impl OpBuilder {
                     }
                 })?;
                 Ok(EdlOp::SetVolume { anchor, value })
+            }
+            OpKind::MuteClip => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                // `muted` defaults to true so `*** Mute Clip` with only an
+                // anchor mutes; pass `+ muted: false` to unmute.
+                let muted = take_field_bool(&mut fields, "muted").unwrap_or(true);
+                Ok(EdlOp::MuteClip { anchor, muted })
+            }
+            OpKind::RemoveAudio => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let clear = take_field_bool(&mut fields, "clear").unwrap_or(false);
+                let start_s = take_field_f64(&mut fields, "start_s");
+                let end_s = take_field_f64(&mut fields, "end_s");
+                Ok(EdlOp::RemoveAudio {
+                    anchor,
+                    start_s,
+                    end_s,
+                    clear,
+                })
             }
             OpKind::SetAudioFade => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
@@ -2737,6 +2766,83 @@ mod tests {
                 assert!((value - 0.5).abs() < 1e-9);
             }
             other => panic!("want SetVolume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_mute_clip_defaults_to_muted() {
+        let text = "\
+*** Begin EDL
+*** Mute Clip
+@@ anchor: clip_uuid=clip-1
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::MuteClip { anchor, muted } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-1"));
+                assert!(*muted, "mute defaults to true when the field is omitted");
+            }
+            other => panic!("want MuteClip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_mute_clip_unmute() {
+        let text = "\
+*** Begin EDL
+*** Mute Clip
+@@ anchor: clip_uuid=clip-1
++ muted: false
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::MuteClip { muted, .. } => assert!(!*muted, "explicit muted:false unmutes"),
+            other => panic!("want MuteClip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_remove_audio_span() {
+        let text = "\
+*** Begin EDL
+*** Remove Audio
+@@ anchor: clip_uuid=clip-1
++ start_s: 2.0
++ end_s: 4.5
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::RemoveAudio {
+                anchor,
+                start_s,
+                end_s,
+                clear,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-1"));
+                assert_eq!(*start_s, Some(2.0));
+                assert_eq!(*end_s, Some(4.5));
+                assert!(!*clear);
+            }
+            other => panic!("want RemoveAudio, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_remove_audio_clear() {
+        let text = "\
+*** Begin EDL
+*** Remove Audio
+@@ anchor: clip_uuid=clip-1
++ clear: true
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::RemoveAudio { clear, .. } => assert!(*clear),
+            other => panic!("want RemoveAudio, got {other:?}"),
         }
     }
 
