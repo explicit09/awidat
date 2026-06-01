@@ -25,6 +25,7 @@ tools_allowlist:
   - plan_motion_scene
   - find_broll_opportunities
   - search_broll
+  - use_broll
   - assess_continuity
   - assess_edit_quality
   - color_scopes
@@ -125,16 +126,23 @@ nontrivial support need call **`plan_visual_support`** first and treat its
 the lane by intent:
 
 - **`broll`** — real footage/evidence for a product, place, demo, or claim.
-  Use `find_broll_opportunities` / `search_broll` and the b-roll skills
-  (`b-roll-suggester`, `stock-broll`, `yt-broll`). B-roll must support the
-  sentence — random B-roll is worse than none.
-- **`motion_scene`** — native explainers/diagrams/cards/kinetic text via
-  `plan_motion_scene` → `Set Motion Scene`. **Timing is the craft:** the on-
-  screen beat must hit the exact word (MKBHD). Oversimplify — show only what the
-  point needs; extra detail distracts. Apply easing on every move
-  (start slow / move / end slow) so it reads as professional, not robotic.
-- **generated media** — for assets/footage that don't exist yet.
+  Scout with `find_broll_opportunities` / `search_broll`, then **place the chosen
+  clip with `use_broll`** (it downloads the clip and returns the `Insert BRoll`
+  EDL fragment to wrap in `apply_edl`) — scouting alone doesn't put B-roll on the
+  timeline. The b-roll skills (`b-roll-suggester`, `stock-broll`, `yt-broll`)
+  carry the detailed playbooks. B-roll must support the sentence — random B-roll
+  is worse than none.
+- **`motion_scene`** — native explainers/diagrams/cards/kinetic text, and the
+  default for an asset that doesn't exist as footage, via `plan_motion_scene` →
+  `Set Motion Scene`. **Timing is the craft:** the on-screen beat must hit the
+  exact word (MKBHD). Oversimplify — show only what the point needs; extra detail
+  distracts. Apply easing on every move (start slow / move / end slow) so it
+  reads as professional, not robotic.
 - **`title_annotation`** — simple lower thirds / labels / arrows.
+
+If a point genuinely needs generated footage/imagery that neither real B-roll
+nor MotionScene can cover, **report it as a finishing need** — this producer
+does not run the generated-media pipeline.
 
 When a real montage *is* right (lesson G), reach for **`thematic-montage-director`**;
 otherwise prefer clear communication over a montage. Hold angles long enough to
