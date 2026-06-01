@@ -94,28 +94,29 @@ export function JobCard({ item }: Props) {
   }
 
   return (
-    <article className={`item item-job item-job-${cls}`}>
+    <article className={`item item-job item-job-${cls} glass-content`}>
       <header className="job-header">
         <div className="item-meta">
           job · <code>{labelMap[item.job_kind]}</code>
+          <span className={`job-chip job-chip-${cls}`}>{jobChipLabel(cls)}</span>
         </div>
         {isRunning && (
           <Tooltip content="Stop this job">
-            <button className="job-cancel" onClick={cancel}>
+            <button className="job-cancel glass-ghost" onClick={cancel}>
               Cancel
             </button>
           </Tooltip>
         )}
         {showFinderButton && (
           <Tooltip content="Reveal the rendered file in Finder">
-            <button className="job-action" onClick={showInFinder}>
+            <button className="job-action glass-ghost" onClick={showInFinder}>
               Show in Finder
             </button>
           </Tooltip>
         )}
         {errorMessage && (
           <Tooltip content="Copy the error message to your clipboard">
-            <button className="job-action" onClick={copyLog}>
+            <button className="job-action glass-ghost" onClick={copyLog}>
               {copied ? "Copied" : "Copy Log"}
             </button>
           </Tooltip>
@@ -135,11 +136,14 @@ export function JobCard({ item }: Props) {
         <div className="approval-actions">
           {renderReview === "pending" ? (
             <>
-              <button onClick={() => setRenderReview("approved")}>
+              <button
+                className="glass-cta"
+                onClick={() => setRenderReview("approved")}
+              >
                 Looks good
               </button>
               <button
-                className="deny"
+                className="deny glass-ghost"
                 onClick={() => setRenderReview("changes_requested")}
               >
                 Needs changes
@@ -164,4 +168,18 @@ function resultClass(r: JobResult | null): string {
   if ("ok" in r) return "ok";
   if ("err" in r) return "err";
   return "running";
+}
+
+/** Short uppercase label for the status chip, keyed off resultClass. */
+function jobChipLabel(cls: string): string {
+  switch (cls) {
+    case "ok":
+      return "done";
+    case "err":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "running";
+  }
 }

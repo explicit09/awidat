@@ -70,7 +70,12 @@ export function createWelcomeStore(opts: CreateOpts = {}) {
   const storage: StorageAdapter | null = persist
     ? opts.storage ?? (typeof localStorage !== "undefined" ? localStorage : null)
     : null;
-  const initialShown = loadShown(storage);
+  // Dev-only: VITE_AWIDAT_SKIP_WELCOME=1 suppresses the first-run card
+  // (used for native screenshot tours). No effect in production builds.
+  const devSkip =
+    typeof import.meta !== "undefined" &&
+    import.meta.env?.VITE_AWIDAT_SKIP_WELCOME === "1";
+  const initialShown = devSkip || loadShown(storage);
 
   return create<WelcomeStore>((set, get) => ({
     isOpen: !initialShown,

@@ -7498,3 +7498,588 @@ button {
 .tx-surface {
   position: relative;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   OBSIDIAN GLASS 2026 — Inspector (.properties-*) + Vedit (.vedit-*)
+   Final wave. Scoped strictly to .properties-* / .vedit-* / .sidebar-pane.
+   Pushes these surfaces off the old flat charcoal/blue fills onto the
+   translucent glass tokens from glass.css so the drifting atmosphere
+   reads through. Visual-only — no markup/logic touched here.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ---- Inspector shell ---- */
+.properties-pane {
+  background: transparent;
+}
+
+.properties-header,
+.vedit-header {
+  background: transparent;
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+}
+
+.properties-body {
+  background: transparent;
+  gap: 10px;
+  padding: 10px;
+}
+
+/* Section header label — 11px uppercase tracked, muted. */
+.properties-label,
+.vedit-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.properties-header-meta {
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.properties-empty {
+  color: var(--color-text-muted);
+}
+
+/* ---- Section containers → translucent glass-content ---- */
+.properties-section {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--glass-content);
+  overflow: hidden;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.properties-section:hover {
+  border-color: var(--glass-border-strong);
+}
+
+.properties-section h3 {
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.properties-field {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* ---- Inputs / code chips on glass ---- */
+.properties-text-input,
+.properties-number-input,
+.properties-select {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.properties-text-input:focus,
+.properties-number-input:focus,
+.properties-select:focus {
+  border-color: var(--color-border-active);
+  outline: none;
+  box-shadow: var(--glow-cyan);
+}
+
+.properties-code {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-secondary);
+}
+
+.properties-stepper {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--glass-border);
+}
+.properties-stepper button {
+  background: transparent;
+  border-left-color: var(--glass-border);
+}
+.properties-stepper button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.properties-stepper-stack,
+.properties-stepper-stack button {
+  border-color: var(--glass-border);
+}
+
+/* ---- Slider: cyan active accent, muted at rest (refine to exact tokens) ---- */
+.properties-slider-pro::-webkit-slider-thumb,
+.properties-slider-pro::-moz-range-thumb {
+  background: #67E8F9;
+  border: 1px solid var(--color-border-active);
+}
+.properties-slider-pro:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(103, 232, 249, 0.20), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.properties-slider-pro:active::-webkit-slider-thumb {
+  box-shadow: 0 0 0 6px rgba(103, 232, 249, 0.26), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.properties-slider-pro:hover::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(103, 232, 249, 0.20), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* ---- Value badge → mono, right-aligned, muted ---- */
+.properties-value-badge {
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+.properties-value-badge[data-rest="true"] {
+  color: var(--color-text-muted);
+}
+
+/* ---- Buttons: secondary → glass-ghost, primary apply → glass-cta ---- */
+.properties-secondary,
+.properties-inline-apply {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.properties-secondary:hover:not(:disabled),
+.properties-inline-apply:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+.properties-apply {
+  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
+  border: 1px solid rgba(255, 180, 120, 0.55);
+  color: #1A0E04;
+  font-weight: 650;
+  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.30), 0 6px 20px rgba(255, 122, 24, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: box-shadow 0.2s ease, filter 0.2s ease;
+}
+.properties-apply:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
+  border-color: rgba(255, 180, 120, 0.55);
+  color: #1A0E04;
+  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 8px 28px rgba(255, 122, 24, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* ---- Mute / Solo / Duck chips → small glass toggles, orange when active ---- */
+.properties-chip-toggle {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-muted);
+}
+.properties-chip-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+.properties-chip-toggle[data-on="true"][data-tone="mute"],
+.properties-chip-toggle[data-on="true"][data-tone="solo"],
+.properties-chip-toggle[data-on="true"][data-tone="duck"] {
+  border-color: rgba(255, 138, 56, 0.55);
+  background: rgba(255, 122, 24, 0.18);
+  color: #FFC58A;
+}
+
+.properties-intent-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+}
+
+.properties-lut-swatch,
+.properties-stepper input {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Danger → red glass ---- */
+.properties-danger,
+.properties-danger-pro {
+  border: 1px solid rgba(220, 100, 95, 0.5);
+  background: rgba(220, 100, 95, 0.16);
+  color: #FCA5A5;
+}
+.properties-danger:hover:not(:disabled),
+.properties-danger-pro:hover:not(:disabled) {
+  border-color: rgba(220, 100, 95, 0.7);
+  background: rgba(220, 100, 95, 0.24);
+  color: #FECACA;
+}
+
+/* ---- Alerts / warnings keep semantic tint but lose the flat block ---- */
+.properties-alert {
+  border-radius: 10px;
+}
+.properties-warning {
+  border-radius: 10px;
+}
+
+/* ═══ Vedit rail ═══ */
+.sidebar-pane {
+  background: transparent;
+}
+
+.vedit-header strong,
+.vedit-current strong {
+  color: var(--color-text-primary);
+}
+
+.vedit-count {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.vedit-header button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.vedit-header button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* Current cut card + entries + diff/restore → glass-content surfaces. */
+.vedit-current,
+.vedit-entry,
+.vedit-diff,
+.vedit-restore-confirm {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--glass-content);
+}
+
+/* Current cut keeps a cyan accent to mark "you are here". */
+.vedit-current {
+  border-color: rgba(103, 232, 249, 0.42);
+  background:
+    linear-gradient(180deg, rgba(103, 232, 249, 0.10), transparent 65%),
+    var(--glass-content);
+  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.10);
+}
+.vedit-current .vedit-kicker {
+  color: #67E8F9;
+}
+
+.vedit-entry summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.vedit-entry code,
+.vedit-entry-meta code,
+.vedit-entry-body dd code {
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.vedit-entry-body {
+  border-top-color: var(--glass-border);
+}
+.vedit-entry-body dt {
+  color: var(--color-text-muted);
+}
+
+.vedit-entry-actions button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.vedit-entry-actions button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* Restore = destructive → red glass. */
+.vedit-restore-button {
+  border-color: rgba(220, 100, 95, 0.5) !important;
+  background: rgba(220, 100, 95, 0.16) !important;
+  color: #FCA5A5 !important;
+}
+.vedit-restore-button:hover:not(:disabled) {
+  border-color: rgba(220, 100, 95, 0.7) !important;
+  background: rgba(220, 100, 95, 0.24) !important;
+  color: #FECACA !important;
+}
+.vedit-restore-confirm {
+  border-color: rgba(220, 100, 95, 0.4);
+}
+.vedit-restore-confirm strong {
+  color: var(--color-text-primary);
+}
+
+.vedit-diff-row code,
+.vedit-diff pre,
+.vedit-diff-json pre {
+  font-family: var(--font-mono);
+}
+
+/* ============================================================
+   2026 "Obsidian Glass" — Transcript view + agent conversation
+   cards. Appended last so these rules win by source order over
+   the earlier editorial/charcoal blocks. Visual-only: no layout,
+   handler, or data-attribute changes. Cards opt into .glass-content
+   / .glass-cta / .glass-ghost in their TSX (see src/ui/glass.css).
+   ============================================================ */
+
+/* ---- Transcript: frost the pane so the panel atmosphere shows ---- */
+.transcript-pane {
+  background: transparent;
+}
+
+.transcript-meta {
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+/* meta header counts → mono muted */
+.transcript-meta-lang,
+.transcript-meta-counts {
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.transcript-segment {
+  border-top-color: rgba(255, 255, 255, 0.05);
+}
+
+.transcript-segment:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+/* speaker label → subtle frosted chip */
+.transcript-segment .transcript-speaker {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+
+/* Active / seek word highlight → soft cyan glow (kept, retinted from
+   the editorial blue to the glass cyan accent). Selection stays a
+   distinct soft cyan-teal wash. */
+.transcript-word:hover {
+  background: rgba(56, 189, 248, 0.16);
+}
+
+.transcript-word.transcript-word-active {
+  background: rgba(56, 189, 248, 0.26);
+  color: #e6f8ff;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55),
+    0 2px 14px rgba(56, 189, 248, 0.30);
+  font-weight: 500;
+}
+
+.transcript-word.transcript-word-selected {
+  background: rgba(94, 234, 212, 0.22);
+  color: #eafff9;
+}
+
+/* Whole-segment active cue → soft cyan ribbon + wash */
+.transcript-segment:has(.transcript-word-active),
+.transcript-segment.transcript-segment-active {
+  background: linear-gradient(
+    90deg,
+    rgba(56, 189, 248, 0.10),
+    rgba(56, 189, 248, 0.02) 60%,
+    transparent
+  );
+  border-left-color: rgba(56, 189, 248, 0.85);
+}
+
+.transcript-segment:has(.transcript-word-active) .transcript-time {
+  color: rgba(125, 211, 252, 0.95);
+}
+
+.transcript-segment:has(.transcript-word-active) .transcript-speaker {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: rgba(186, 230, 253, 0.95);
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.transcript-segment .transcript-speaker-button:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.transcript-segment .transcript-speaker-input {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+/* ---- Agent conversation cards: lean on .glass-content from the TSX,
+   strip the old flat solid fills + accent borders so the frost reads.
+   `.glass-content` already supplies translucent dark glass + 1px
+   border + radius 14; here we just remove conflicting per-kind
+   backgrounds/borders and quiet the inner blocks. ---- */
+.item-job.glass-content,
+.item-approval.glass-content,
+.item-input.glass-content {
+  background: var(--glass-content);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+/* per-kind accent stays as a left ribbon rather than a full border */
+.item-job.glass-content {
+  border-left: 3px solid var(--accent);
+}
+.item-job-ok.glass-content {
+  border-left-color: #5eead4;
+}
+.item-job-err.glass-content {
+  border-left-color: #fca5a5;
+}
+.item-job-cancelled.glass-content {
+  border-left-color: var(--text-muted);
+}
+.item-approval.glass-content {
+  border-left: 3px solid #ff9a45;
+}
+.item-input.glass-content {
+  border-left: 3px solid var(--accent);
+}
+
+/* approval summary block → faint inner glass instead of flat elev2 */
+.item-approval.glass-content .approval-summary {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+
+/* ---- Status / label glass chips — mono, uppercase, color-coded ---- */
+.job-chip,
+.approval-chip,
+.input-chip {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+}
+
+/* running / awaiting / input → orange glass */
+.job-chip-running,
+.approval-chip,
+.input-chip {
+  color: #ff9a45;
+  background: rgba(255, 154, 69, 0.14);
+}
+
+/* done / ok → mint glass */
+.job-chip-ok {
+  color: #5eead4;
+  background: rgba(94, 234, 212, 0.14);
+}
+
+/* failed → red glass */
+.job-chip-err {
+  color: #fca5a5;
+  background: rgba(220, 100, 95, 0.16);
+}
+
+/* cancelled → muted glass */
+.job-chip-cancelled {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Card buttons: glass-cta (approve/primary) + glass-ghost
+   (secondary). Deny / danger → red glass per the guide. These follow
+   the earlier editorial button block in source order, so they win.
+   Padding/radius preserved to keep the cards compact. ---- */
+.approval-actions button,
+.input-options button,
+.input-form button,
+.job-action,
+.job-cancel {
+  min-height: 28px;
+  border-radius: 10px;
+}
+
+/* primary CTA buttons that carry .glass-cta — let glass.css paint them;
+   only normalize the disabled state used by the cards. */
+.approval-actions button.glass-cta:disabled,
+.input-form button.glass-cta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* the "chosen" decision on an approval CTA keeps the filled look */
+.approval-actions button.glass-cta.chosen {
+  filter: brightness(1.04);
+}
+
+/* deny / danger button → red glass */
+.approval-actions button.deny,
+.job-cancel.glass-ghost,
+.deny.glass-ghost {
+  color: #fca5a5;
+  background: rgba(220, 100, 95, 0.16);
+  border: 1px solid rgba(220, 100, 95, 0.4);
+}
+.approval-actions button.deny:hover:not(:disabled),
+.job-cancel.glass-ghost:hover:not(:disabled),
+.deny.glass-ghost:hover:not(:disabled) {
+  color: #ffc4bd;
+  background: rgba(220, 100, 95, 0.24);
+  border-color: rgba(220, 100, 95, 0.6);
+}
+.approval-actions button.deny.chosen {
+  background: rgba(220, 100, 95, 0.32);
+  border-color: rgba(220, 100, 95, 0.7);
+  color: #fff;
+}
+
+/* user-input text field → frosted glass input */
+.input-form input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  border-radius: 10px;
+}
+.input-form input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+/* job progress bar → glass trough + color-coded fill */
+.item-job .job-progress {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+.item-job-ok .job-progress-fill {
+  background: #5eead4;
+}
+.item-job-err .job-progress-fill {
+  background: #fca5a5;
+}

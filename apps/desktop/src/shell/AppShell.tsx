@@ -53,7 +53,7 @@ export function AppShell({
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[auto_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
+    <div className="relative z-10 grid h-full w-full min-w-0 overflow-hidden grid-rows-[auto_1fr_var(--layout-footer-h)] bg-transparent text-[var(--color-text-primary)] font-sans">
       {/* Top chrome — redesigned in Task 8 (IdentityRow) + Task 9 (WorkspaceRow). */}
       <TopChrome />
 
@@ -156,7 +156,7 @@ export function AppShell({
       )}
 
       {/* Status footer */}
-      <footer className="min-w-0 overflow-hidden border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3 flex items-center justify-between">
+      <footer className="glass-soft min-w-0 overflow-hidden border-t border-[var(--glass-border)] px-3 flex items-center justify-between">
         {footer ?? (
           <>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">

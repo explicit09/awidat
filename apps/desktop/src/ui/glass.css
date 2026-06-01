@@ -1,0 +1,498 @@
+/*
+ * Awidat — "Obsidian Glass" 2026 design layer.
+ *
+ * A dark-first liquid-glass system layered on top of tokens.css. The
+ * editorial AI is presented as light moving through frosted glass: the
+ * orange brand becomes living ambient light (drifting orbs behind the
+ * UI) rather than flat button paint.
+ *
+ * Depth model (three planes):
+ *   z0 ATMOSPHERE  — animated gradient mesh + film grain. Never holds text.
+ *   z1 GLASS       — rails, chrome, modals. backdrop-blur + specular edge.
+ *   z2 CONTENT     — near-opaque cards INSIDE glass. Text lives here only,
+ *                    so legibility never fights a busy blurred backdrop
+ *                    (the core 2026 accessibility rule).
+ *
+ * Implementation notes pulled from 2026 dark-glassmorphism research:
+ *   - blur sweet spot 12–22px; saturate(150–180%) revives color through glass
+ *   - 1px top-edge specular highlight simulates glass thickness catching light
+ *   - shadow 0 8px 32px rgba(0,0,0,.4) separates planes
+ *   - GPU promote animated layers with translateZ(0)
+ *   - honor prefers-reduced-transparency / reduced-motion
+ */
+
+:root {
+  /* ---- glass surface tints (over the dark atmosphere) ----
+     Cool blue-grey, genuinely translucent so the colored atmosphere
+     reads THROUGH the frost. These are deliberately light + see-through
+     — a near-opaque charcoal panel just looks like the old flat UI. */
+  --glass-tint-1: rgba(30, 34, 48, 0.42);   /* primary panels / chrome */
+  --glass-tint-2: rgba(34, 38, 54, 0.55);   /* raised glass (modals)   */
+  --glass-tint-3: rgba(26, 30, 44, 0.30);   /* faint glass (overlays)  */
+  --glass-content: rgba(26, 30, 42, 0.66);  /* z2 content — tinted, still readable */
+  --glass-content-hover: rgba(38, 44, 60, 0.74);
+
+  /* ---- glass edges & light (brighter so the lip clearly catches light) ---- */
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-border-strong: rgba(255, 255, 255, 0.24);
+  --glass-specular: rgba(255, 255, 255, 0.55);  /* top-edge light catch */
+  --glass-inner-glow: rgba(255, 255, 255, 0.10);
+
+  /* ---- blur / saturation ---- */
+  --glass-blur: 26px;
+  --glass-blur-strong: 40px;
+  --glass-blur-soft: 14px;
+  --glass-sat: 180%;
+
+  /* ---- shadows (plane separation) ---- */
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.30);
+  --glass-shadow-lift: 0 16px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.34);
+
+  /* ---- brand light (orange as ambient, not paint) — vivid so it
+     actually bleeds through the frosted panels ---- */
+  --orb-warm: rgba(255, 122, 24, 0.95);   /* awidat orange */
+  --orb-amber: rgba(255, 184, 72, 0.75);
+  --orb-cool: rgba(20, 184, 166, 0.70);   /* teal counter-light for tension */
+  --orb-violet: rgba(139, 92, 246, 0.62); /* deep violet accent */
+  --glow-brand: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 0 24px rgba(255, 122, 24, 0.30);
+  --glow-cyan: 0 0 0 1px rgba(56, 189, 248, 0.40), 0 0 20px rgba(56, 189, 248, 0.22);
+  --glow-violet: 0 0 0 1px rgba(168, 85, 247, 0.40), 0 0 20px rgba(168, 85, 247, 0.22);
+
+  /* cursor-reactive sheen position (updated by useCursorGlass) */
+  --glass-mx: 50%;
+  --glass-my: 0%;
+}
+
+/* =====================================================================
+   z1 GLASS PANEL — the workhorse surface
+   ===================================================================== */
+.glass {
+  position: relative;
+  background: var(--glass-tint-1);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  /* edge lighting: brighter top-left where the light source sits */
+  background-image: linear-gradient(
+    135deg,
+    var(--glass-inner-glow) 0%,
+    transparent 38%
+  );
+  isolation: isolate;
+}
+
+/* specular top-edge highlight — the line of light along the glass lip */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--glass-specular) 28%,
+    var(--glass-specular) 72%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+.glass-strong {
+  background: var(--glass-tint-2);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  box-shadow: var(--glass-shadow-lift);
+}
+
+.glass-soft {
+  background: var(--glass-tint-3);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+}
+
+/* =====================================================================
+   CURSOR-REACTIVE SHEEN — "Liquid Glass reacts to movement"
+   A radial highlight tracks the pointer across the surface. Position fed
+   by useCursorGlass via --glass-mx / --glass-my custom props.
+   ===================================================================== */
+.glass-reactive::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    340px circle at var(--glass-mx) var(--glass-my),
+    rgba(255, 255, 255, 0.10),
+    rgba(255, 255, 255, 0.03) 40%,
+    transparent 70%
+  );
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.glass-reactive:hover::after { opacity: 1; }
+
+/* =====================================================================
+   z2 CONTENT CARD — opaque enough to hold text over glass
+   ===================================================================== */
+.glass-content {
+  background: var(--glass-content);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.glass-content:hover {
+  background: var(--glass-content-hover);
+  border-color: var(--glass-border-strong);
+}
+
+/* =====================================================================
+   GLOW ACCENTS — brand light leaking from interactive elements
+   ===================================================================== */
+.glow-brand { box-shadow: var(--glow-brand); }
+.glow-cyan { box-shadow: var(--glow-cyan); }
+.glow-violet { box-shadow: var(--glow-violet); }
+
+/* brand CTA: filled orange that radiates rather than sits flat */
+.glass-cta {
+  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
+  color: #1A0E04;
+  border: 1px solid rgba(255, 180, 120, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.30), 0 6px 20px rgba(255, 122, 24, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  font-weight: 650;
+  transition: box-shadow 0.2s ease, transform 0.12s ease, filter 0.2s ease;
+}
+.glass-cta:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 8px 28px rgba(255, 122, 24, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.glass-cta:active { transform: translateY(1px) scale(0.99); }
+
+/* ghost glass button: frosted, lights up on hover */
+.glass-ghost {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-secondary);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.glass-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* =====================================================================
+   ATMOSPHERE — animated gradient mesh + grain (z0, behind everything)
+   ===================================================================== */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  /* deep blue-charcoal base, not pure black, so the frost reads as glass */
+  background:
+    radial-gradient(ellipse at 22% 18%, #1a1530 0%, transparent 55%),
+    radial-gradient(ellipse at 82% 88%, #0c2230 0%, transparent 55%),
+    #0a0a12;
+  pointer-events: none;
+}
+.atmosphere__orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(72px);
+  will-change: transform;
+  transform: translateZ(0);
+  mix-blend-mode: screen;
+}
+.atmosphere__orb--warm {
+  width: 64vw; height: 64vw;
+  left: -10vw; top: -16vw;
+  background: radial-gradient(circle, var(--orb-warm), transparent 70%);
+  animation: orb-drift-a 34s ease-in-out infinite alternate;
+}
+.atmosphere__orb--amber {
+  width: 48vw; height: 48vw;
+  right: -8vw; top: 12vh;
+  background: radial-gradient(circle, var(--orb-amber), transparent 68%);
+  animation: orb-drift-b 41s ease-in-out infinite alternate;
+}
+.atmosphere__orb--cool {
+  width: 58vw; height: 58vw;
+  right: 4vw; bottom: -20vw;
+  background: radial-gradient(circle, var(--orb-cool), transparent 70%);
+  animation: orb-drift-c 47s ease-in-out infinite alternate;
+}
+.atmosphere__orb--violet {
+  width: 44vw; height: 44vw;
+  left: 8vw; bottom: -10vw;
+  background: radial-gradient(circle, var(--orb-violet), transparent 68%);
+  animation: orb-drift-d 53s ease-in-out infinite alternate;
+}
+
+/* film grain — kills gradient banding, adds physical texture */
+.atmosphere__grain {
+  position: absolute;
+  inset: -50%;
+  width: 200%; height: 200%;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grain-shift 8s steps(6) infinite;
+  pointer-events: none;
+}
+
+/* a faint vignette focuses the eye toward center content */
+.atmosphere__vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 42%, transparent 62%, rgba(0, 0, 0, 0.30) 100%);
+}
+
+@keyframes orb-drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(8vw, 6vh, 0) scale(1.12); }
+}
+@keyframes orb-drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.05); }
+  100% { transform: translate3d(-6vw, 10vh, 0) scale(0.92); }
+}
+@keyframes orb-drift-c {
+  0%   { transform: translate3d(0, 0, 0) scale(0.95); }
+  100% { transform: translate3d(-10vw, -8vh, 0) scale(1.15); }
+}
+@keyframes orb-drift-d {
+  0%   { transform: translate3d(0, 0, 0) scale(1.1); }
+  100% { transform: translate3d(7vw, -6vh, 0) scale(0.9); }
+}
+@keyframes grain-shift {
+  0%   { transform: translate(0, 0); }
+  20%  { transform: translate(-4%, 3%); }
+  40%  { transform: translate(3%, -5%); }
+  60%  { transform: translate(-2%, 4%); }
+  80%  { transform: translate(4%, 2%); }
+  100% { transform: translate(0, 0); }
+}
+
+/* =====================================================================
+   ACCESSIBILITY — respect user environment preferences
+   ===================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .atmosphere__orb,
+  .atmosphere__grain { animation: none; }
+  .glass-reactive::after { transition: none; }
+}
+
+/* Users who reduce transparency get solid surfaces — no blur, full opacity. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .glass-strong, .glass-soft {
+    background: var(--color-surface-panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .glass-ghost { background: var(--color-surface-card); backdrop-filter: none; }
+  .atmosphere__orb { opacity: 0.4; }
+}
+
+/* Fallback for engines without backdrop-filter (rare in 2026, but safe). */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass { background: rgba(18, 18, 22, 0.92); }
+  .glass-strong { background: rgba(22, 22, 27, 0.96); }
+  .glass-soft { background: rgba(16, 16, 20, 0.85); }
+}
+
+/* =====================================================================
+   LIVE-APP INTEGRATION — glassify the real cockpit
+   These bare (unlayered) rules override the @layer utilities defaults in
+   tokens.css by source order + layer precedence. Removing the glass.css
+   import cleanly reverts the app to flat charcoal.
+   ===================================================================== */
+
+/* Solid floor behind the fixed atmosphere plane. */
+html, body, #root { background: #0a0a12; }
+
+/* Re-point the core surface tokens to TRANSLUCENT tints so the colored
+   atmosphere bleeds through the ENTIRE UI stack — not just the outer
+   panels. This is what makes the dense editor read as glass instead of
+   flat charcoal: every card, input, row, and rail is now see-through
+   frost. Loaded after tokens.css, so these win. */
+:root {
+  --color-surface-app: rgba(20, 24, 36, 0.30);
+  --color-surface-panel: rgba(24, 28, 42, 0.34);
+  --color-surface-panel-hover: rgba(36, 42, 60, 0.46);
+  --color-surface-card: rgba(30, 35, 50, 0.50);
+  --color-surface-card-hover: rgba(42, 48, 66, 0.60);
+  --color-surface-input: rgba(16, 20, 32, 0.55);
+  --color-surface-input-hover: rgba(24, 30, 44, 0.62);
+  --color-surface-hover: rgba(42, 48, 66, 0.55);
+  --color-surface-selected: rgba(56, 64, 88, 0.62);
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-border-subtle: rgba(255, 255, 255, 0.07);
+}
+
+/* Surfaces that carry a translucent token also need the blur, or they
+   look like flat tinted glass with nothing behind. Blur the common
+   content surfaces so they frost whatever (atmosphere or panel) is
+   behind them. Scoped to elements that opt in via .aw-glass-surface,
+   plus the structural .panel. */
+.panel,
+[class*="surface-card"],
+[class*="surface-panel"] {
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+}
+
+/* Every cockpit region (.panel) becomes frosted glass. Atmosphere drifts
+   through the translucency + the grid gaps between panels. */
+.panel {
+  background: var(--glass-tint-1) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow);
+  background-image: linear-gradient(135deg, var(--glass-inner-glow) 0%, transparent 40%);
+  position: relative;
+  isolation: isolate;
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-specular) 30%, var(--glass-specular) 70%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Modal scrim picks up the stronger blur + the brand-lit base. */
+.modal-backdrop {
+  background: rgba(6, 6, 9, 0.55) !important;
+  backdrop-filter: blur(16px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(140%) !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .panel {
+    background: var(--color-surface-panel) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .panel { background: rgba(18, 18, 22, 0.94) !important; }
+}
+
+/* Stage timeline strip: hide TimelinePane's internal header (track count,
+   +Track, zoom) — the Stage wants a clean ribbon, not cockpit chrome. */
+.stage-timeline .timeline-header { display: none !important; }
+.stage-timeline > * { height: 100%; }
+
+/* Stage conversation panel: let ChatStream breathe inside the glass.
+   Strip its solid cockpit background so the frost shows through. */
+.stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
+.stage-convo .sticky-user-prompt { background: rgba(255,255,255,0.04); border-radius: 10px; }
+
+/* Stage tool side-panel: make reused cockpit surfaces (transcript, media,
+   inspector, index, vedit) FILL the panel instead of collapsing to their
+   intrinsic size. Their roots are flex:1 / panel-styled for the cockpit. */
+.stage-tool-body > * { flex: 1 1 auto; min-height: 0; height: 100%; width: 100%; }
+.stage-tool-body .transcript-pane,
+.stage-tool-body .media-empty,
+.stage-tool-body .properties-pane,
+.stage-tool-body .index-rail { background: transparent !important; }
+
+/* =====================================================================
+   GLASS CONTROL KIT — one canonical vocabulary for every surface so the
+   whole app reads consistent. Use these everywhere (modals, panels,
+   sheets, tools) instead of bespoke button/close/input/pill styles.
+   ===================================================================== */
+
+/* Universal close (×) button — frosted circle, brightens on hover. */
+.gk-close {
+  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-muted);
+  font-size: 13px; line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.gk-close:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: var(--glass-border-strong);
+  color: var(--color-text-primary);
+}
+
+/* Frosted input. */
+.gk-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  color: var(--color-text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.gk-input::placeholder { color: var(--color-text-muted); }
+.gk-input:focus {
+  outline: none;
+  border-color: var(--glass-border-strong);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+}
+
+/* Section label — 11px uppercase tracked muted. */
+.gk-label {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Raw pill (for chips not using the StatusPill primitive). */
+.gk-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px; border-radius: 7px;
+  font-family: var(--font-mono); font-size: 9px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+}
+.gk-pill--mint   { color: #5EEAD4; background: rgba(45, 212, 191, 0.16); }
+.gk-pill--amber  { color: #FCD34D; background: rgba(245, 158, 11, 0.16); }
+.gk-pill--red    { color: #FCA5A5; background: rgba(220, 100, 95, 0.16); }
+.gk-pill--orange { color: #FF9A45; background: rgba(255, 122, 24, 0.16); }
+.gk-pill--muted  { color: var(--color-text-muted); background: rgba(255, 255, 255, 0.06); }
+
+/* Consistent thin scrollbar inside glass surfaces. */
+.glass *::-webkit-scrollbar,
+.stage-tool-body *::-webkit-scrollbar,
+.modal *::-webkit-scrollbar { width: 8px; height: 8px; }
+.glass *::-webkit-scrollbar-thumb,
+.stage-tool-body *::-webkit-scrollbar-thumb,
+.modal *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14); border-radius: 8px;
+}
+.glass *::-webkit-scrollbar-track,
+.stage-tool-body *::-webkit-scrollbar-track,
+.modal *::-webkit-scrollbar-track { background: transparent; }
+
+/* Modal chrome → glass (covers SettingsModal, NewProject, URL import,
+   AgentsMd editor — they use .modal / .modal-header / .modal-footer). */
+.modal {
+  background: var(--glass-tint-2) !important;
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow-lift) !important;
+}
+.modal-header, .modal-footer { border-color: var(--glass-border) !important; }
+.modal-close { /* legacy close buttons inherit the gk-close look */
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 9px !important;
+  color: var(--color-text-muted) !important;
+}
+.modal-close:hover { background: rgba(255,255,255,0.10) !important; color: var(--color-text-primary) !important; }

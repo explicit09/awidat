@@ -38,7 +38,7 @@ export function GeneratedMediaPanel({
         </Button>
       </Inline>
       {error ? (
-        <Card padding="sm" tone="flat">
+        <Card padding="sm" tone="danger">
           <span className="text-[var(--text-caption)] text-[var(--color-danger)]">{error}</span>
         </Card>
       ) : null}
@@ -49,7 +49,7 @@ export function GeneratedMediaPanel({
           ))}
         </Stack>
       ) : (
-        <Card padding="sm" tone="flat">
+        <Card padding="sm">
           <Stack gap="1">
             <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
               {loading ? "Checking generated media" : "No generated media yet"}
@@ -87,7 +87,7 @@ function GeneratedMediaJobCard({
     !pendingInBrief;
   return (
     <div
-      className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+      className="glass-content px-3 py-2 text-left"
       title={entry.prompt_excerpt}
       draggable={usable}
       onDragStart={(event) => {
@@ -121,9 +121,9 @@ function GeneratedMediaJobCard({
         {pendingInBrief ? (
           <span
             className={cn(
-              "shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
-              "bg-[var(--color-surface-panel)] px-1.5 py-[1px]",
-              "text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]",
+              "shrink-0 rounded-full border px-2 py-[1px]",
+              "bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.3)]",
+              "font-mono text-[10px] font-semibold uppercase tracking-[0.06em] text-[#FCD34D]",
             )}
           >
             Pending review in Brief

@@ -1,4 +1,5 @@
 export { AppShell, type AppShellProps } from "./AppShell";
+export { StageShell, type StageShellProps } from "./StageShell";
 export { StageIndicator, type StageIndicatorProps } from "./StageIndicator";
 export {
   CommandRail,

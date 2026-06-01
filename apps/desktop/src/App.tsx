@@ -37,6 +37,7 @@ import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
 import {
   AppShell,
+  StageShell,
   CommandRail,
   DeliverySurface,
   DRAFT_METADATA_JOB_ID,
@@ -121,6 +122,8 @@ import {
 import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
 import "./ui/tokens.css";
 import "./App.css";
+import "./ui/glass.css";
+import { AmbientBackground } from "./ui/glass";
 
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
@@ -148,6 +151,10 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
+  // The Stage is THE app. The legacy cockpit stays as the ternary's else
+  // branch (compiles, keeps its consts live) but has no user-facing switch,
+  // so there's nothing confusing to flip between.
+  const STAGE_SHELL = true;
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
@@ -933,6 +940,9 @@ function App() {
   }, [demoMode, demoScreen.stage, setStage, stage]);
 
   useEffect(() => {
+    // Dev-only: when a stage is pinned via VITE_AWIDAT_STAGE (native
+    // screenshot tours), don't auto-route the stage back to "edit".
+    if (import.meta.env?.VITE_AWIDAT_STAGE) return;
     if (demoMode) {
       routedProjectRef.current = { project: null, mode: null };
       return;
@@ -1703,6 +1713,7 @@ function App() {
   };
   const realDeliveryWorkspace = (
     <DeliverySurface
+      variant="sheet"
       targets={effectiveDeliveryTargets}
       findings={realPreflightFindings}
       summary={realDeliverySummary}
@@ -1808,8 +1819,181 @@ function App() {
     realWorkspace
   );
 
+  // ---- Stage shell nodes (2026 UX) ----------------------------------
+  // A clean cinematic hero: the raw video slot + a minimal glass scrubber.
+  // Deliberately NOT the old PreviewSurface — no "Source review", no
+  // Before/After, no quality dropdown. Just the footage + transport.
+  const stageVideoSlot = isTimelinePreview ? (
+    <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
+  ) : realPreviewSrc && selectedPreviewMedia ? (
+    <RealMediaPreviewSlot
+      src={realPreviewSrc}
+      label={selectedPreviewMedia.label}
+      name={selectedPreviewMedia.name}
+      isPlaying={isPlaying}
+      volume={previewVolume}
+      rate={previewRate}
+      seekRequestId={sourceSeekRequestId}
+      seekTargetS={sourceSeekTargetS}
+      onTime={setSourceTime}
+      onDuration={setSourceDuration}
+      onPlaying={setMediaPlaying}
+      onFirstFrame={() => setHasProxyFrame(true)}
+    />
+  ) : null;
+  const stageProgress =
+    effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
+  const stagePreview = (
+    <div className="relative h-full w-full overflow-hidden bg-black/40">
+      {/* the footage — must FILL the hero (the player sizes to its box),
+          not sit centered at intrinsic size or it renders ~zero/black. */}
+      {stageVideoSlot ? (
+        <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
+      ) : (
+        <div className="absolute inset-0 grid place-items-center">
+          <div className="text-center">
+            <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
+              {slateIndexing ? "Indexing…" : "Preview"}
+            </div>
+            <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+              {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* minimal glass scrubber */}
+      <div
+        className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 py-3"
+        style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.55), transparent)" }}
+      >
+        <button
+          onClick={() => setMediaPlaying(!isPlaying)}
+          className="glass-ghost grid h-8 w-8 place-items-center rounded-full text-[12px]"
+        >
+          {isPlaying ? "❚❚" : "▶"}
+        </button>
+        <button onClick={() => jumpPreviewChange(-1)} className="text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">⤴</button>
+        <button onClick={() => jumpPreviewChange(1)} className="text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">⤵</button>
+        <div
+          className="group relative h-1.5 flex-1 cursor-pointer rounded-full bg-[rgba(255,255,255,0.16)]"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            const pct = (e.clientX - r.left) / r.width;
+            if (effectiveDuration > 0) seekPreview(Math.max(0, Math.min(1, pct)) * effectiveDuration);
+          }}
+        >
+          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#FF7A18", boxShadow: "0 0 10px #FF7A18" }} />
+        </div>
+        <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">
+          {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
+        </span>
+      </div>
+    </div>
+  );
+  // Bare timeline canvas — no Hybrid tab/zoom chrome in the Stage strip.
+  // `.stage-timeline` hides TimelinePane's internal header (track count /
+  // +Track / zoom) via glass.css so the strip reads as a clean ribbon.
+  const stageTimeline = (
+    <div className="stage-timeline h-full w-full overflow-hidden">
+      <TimelinePane />
+    </div>
+  );
+
+  // ── Shared cockpit tool nodes ──────────────────────────────────────────
+  // Defined ONCE here and reused by BOTH the Stage (summonable tool dock)
+  // and the legacy cockpit branch below (LeftWorkspaceRail / RightEditPanel).
+  // All referenced state/handlers are already in scope at this point.
+  const stageMedia = (
+    <ProjectMediaPanel
+      projectName={current ? projectName(current) : undefined}
+      sourceCount={sourceMediaCount}
+      media={realIndexingMedia}
+      ready={realIndexingReady}
+      episodes={episodeSummary}
+      onImport={() => void chooseAndImportFiles()}
+      onImportUrl={() => setShowUrlImport(true)}
+      onOpenProject={() => void chooseAndOpenProject()}
+      onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
+      onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
+      generatedMedia={generatedMedia}
+      generatedMediaLoading={generatedMediaLoading}
+      generatedMediaError={generatedMediaError}
+      onRefreshGeneratedMedia={() => void refreshGeneratedMedia()}
+      onPlaceGeneratedMedia={(entry) => void placeGeneratedMediaOnTimeline(entry)}
+    />
+  );
+  const stageInspector =
+    activeProposal || demoMode ? (
+      <ProposalInspector
+        data={effectiveInspector}
+        onAccept={acceptActiveProposal}
+        onReject={rejectActiveProposal}
+        onInspectDeeper={inspectActiveProposal}
+        onRevise={reviseActiveProposal}
+        onAgentRepair={() => {
+          void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
+        }}
+      />
+    ) : (
+      <ClipInspector />
+    );
+  const stageIndex = (
+    <IndexRail
+      tasks={realIndexingTasks}
+      structurePreview={realIndexingStructure}
+      episodes={episodeSummary}
+      indexerConfig={indexerConfig}
+      activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
+      ready={realIndexingReady}
+      onReviewIndexResults={() => {
+        void loadIndexerConfig();
+        void runIndexers();
+      }}
+      onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
+      onOpenConfigPath={openConfigPath}
+      onRevealConfigPath={revealConfigPath}
+    />
+  );
+  const stageTranscript = <TranscriptView stem={selectedStem} />;
+  const stageVedit = <VeditPanel />;
+
   return (
     <>
+    <AmbientBackground />
+    {STAGE_SHELL && !demoMode ? (
+      <StageShell
+        hasProject={hasProject}
+        landing={<Landing />}
+        preview={stagePreview}
+        timeline={stageTimeline}
+        trackCount={timelineSnapshot.tracks.length}
+        tools={{
+          media: stageMedia,
+          inspector: stageInspector,
+          index: stageIndex,
+          transcript: stageTranscript,
+          vedit: stageVedit,
+        }}
+        autoInspect={activeProposal !== null}
+        deliver={realDeliveryWorkspace}
+        skills={<SkillsSurface variant="sheet" />}
+        history={<HistorySurface variant="sheet" />}
+        stage={stage}
+        onStage={setStage}
+        onCommand={(text) => void runEngineCommand(text)}
+        running={running}
+        onCancel={() => {
+          if (!isTauri()) return;
+          invoke("cancel_turn").catch((e) => console.warn("cancel_turn failed", e));
+        }}
+        projectLabel={current ? projectName(current) : undefined}
+        agentRead={
+          hasProject
+            ? `${briefPendingCount} proposal${briefPendingCount === 1 ? "" : "s"} ready · ${realIndexingReady ? "indexed" : "indexing"}`
+            : undefined
+        }
+      />
+    ) : (
     <AppShell
       // Top chrome (brand, stage tabs, status, share/settings) now lives in
       // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;
@@ -1820,25 +2004,7 @@ function App() {
           active={leftPanel}
           onChange={setLeftPanel}
           agent={agentRail}
-          media={
-            <ProjectMediaPanel
-              projectName={current ? projectName(current) : undefined}
-              sourceCount={sourceMediaCount}
-              media={realIndexingMedia}
-              ready={realIndexingReady}
-              episodes={episodeSummary}
-              onImport={() => void chooseAndImportFiles()}
-              onImportUrl={() => setShowUrlImport(true)}
-              onOpenProject={() => void chooseAndOpenProject()}
-              onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
-              onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
-              generatedMedia={generatedMedia}
-              generatedMediaLoading={generatedMediaLoading}
-              generatedMediaError={generatedMediaError}
-              onRefreshGeneratedMedia={() => void refreshGeneratedMedia()}
-              onPlaceGeneratedMedia={(entry) => void placeGeneratedMediaOnTimeline(entry)}
-            />
-          }
+          media={stageMedia}
         />
       }
       preview={
@@ -2040,45 +2206,10 @@ function App() {
           <RightEditPanel
             active={rightPanel}
             onChange={setRightPanel}
-            inspector={
-              activeProposal || demoMode ? (
-                <ProposalInspector
-                  data={effectiveInspector}
-                  onAccept={acceptActiveProposal}
-                  onReject={rejectActiveProposal}
-                  onInspectDeeper={inspectActiveProposal}
-                  onRevise={reviseActiveProposal}
-                  onAgentRepair={() => {
-                    void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
-                  }}
-                  onMaximize={() => setInspectorCollapsed(false)}
-                  onCollapse={() => setInspectorCollapsed(true)}
-                />
-              ) : (
-                <ClipInspector />
-              )
-            }
-            index={
-              <IndexRail
-                tasks={realIndexingTasks}
-                structurePreview={realIndexingStructure}
-                episodes={episodeSummary}
-                indexerConfig={indexerConfig}
-                activeIndexingStatus={
-                  activeJobs.find((job) => job.job_kind === "indexing")?.status
-                }
-                ready={realIndexingReady}
-                onReviewIndexResults={() => {
-                  void loadIndexerConfig();
-                  void runIndexers();
-                }}
-                onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
-                onOpenConfigPath={openConfigPath}
-                onRevealConfigPath={revealConfigPath}
-              />
-            }
-            transcript={<TranscriptView stem={selectedStem} />}
-            vedit={<VeditPanel />}
+            inspector={stageInspector}
+            index={stageIndex}
+            transcript={stageTranscript}
+            vedit={stageVedit}
           />
         ) : (
           <span />
@@ -2087,6 +2218,7 @@ function App() {
       inspectorCollapsed={isEditStage && inspectorCollapsed}
       footer={<Footer demoMode={demoMode} />}
     />
+    )}
     {/* The bottom dock used to support a popout mode for transcript /
         vedit; now those panels live in the right rail, so the popout
         is gone. */}
@@ -2501,7 +2633,7 @@ function ProjectMediaPanel({
         </Button>
       </Inline>
       {episodes && episodes.total > 0 ? (
-        <Card padding="sm" tone="flat">
+        <Card padding="sm">
           <Stack gap="2">
             <Inline justify="between" align="baseline" gap="2">
               <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
@@ -2512,14 +2644,14 @@ function ProjectMediaPanel({
               </span>
             </Inline>
             <Inline gap="1" wrap="wrap">
-              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(74,200,130,0.16)] text-[#5EEAD4]">
+              <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(45,212,191,0.16)] border-[rgba(45,212,191,0.3)] text-[#5EEAD4]">
                 {episodes.accepted} accepted
               </span>
-              <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(217,165,75,0.16)] text-[#FCD34D]">
+              <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.3)] text-[#FCD34D]">
                 {episodes.reviewNeeded} review
               </span>
               {episodes.rejected > 0 ? (
-                <span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(220,100,95,0.16)] text-[#FCA5A5]">
+                <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] bg-[rgba(220,100,95,0.16)] border-[rgba(220,100,95,0.3)] text-[#FCA5A5]">
                   {episodes.rejected} rejected
                 </span>
               ) : null}
@@ -2560,7 +2692,7 @@ function ProjectMediaPanel({
               event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
-            className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+            className="glass-content cursor-pointer px-3 py-2 text-left"
             title={item.title}
             draggable={item.assetId !== undefined}
             onDragStart={(event) => {
@@ -2611,7 +2743,7 @@ function ProjectMediaPanel({
             ) : null}
           </div>
         )) : (
-          <Card padding="sm" tone="flat">
+          <Card padding="sm">
             <Stack gap="2">
               <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
                 No media yet

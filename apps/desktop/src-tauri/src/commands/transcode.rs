@@ -212,7 +212,13 @@ pub fn cleanup_orphaned_proxies_in(project_root: &Path) -> Result<(usize, u64), 
 /// transcodes into whichever project is current when the spawned task
 /// happens to wake up.
 pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
-    tokio::spawn(async move {
+    // Use the Tauri-managed runtime handle, not bare `tokio::spawn`: this is
+    // called from the `.setup()` thread (e.g. project preloaded via
+    // AWIDAT_DESKTOP_PROJECT or persisted state), which is NOT inside a Tokio
+    // runtime context, so `tokio::spawn` there aborts the process ("panic in a
+    // function that cannot unwind"). `tauri::async_runtime::spawn` resolves the
+    // handle explicitly and is safe from any caller.
+    tauri::async_runtime::spawn(async move {
         match tokio::task::spawn_blocking({
             let project_root = project_root.clone();
             move || cleanup_orphaned_proxies_in(&project_root)
@@ -297,7 +303,9 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
 /// timeline once at the end if at least one sidecar landed, which
 /// gives the canvas a chance to pick up the new artifacts.
 pub fn spawn_sidecar_backfill_on_load(app: AppHandle, project_root: PathBuf) {
-    tokio::spawn(async move {
+    // Runtime-aware spawn — see spawn_proxy_backfill_on_load: the `.setup()`
+    // caller is outside a Tokio runtime context, so bare `tokio::spawn` aborts.
+    tauri::async_runtime::spawn(async move {
         let raw_dir = project_root.join("raw");
         if !raw_dir.is_dir() {
             return;

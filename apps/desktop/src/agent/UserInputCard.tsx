@@ -30,14 +30,18 @@ export function UserInputCard({ item }: Props) {
   }
 
   return (
-    <article className="item item-input">
-      <div className="item-meta">awaiting input</div>
+    <article className="item item-input glass-content">
+      <div className="item-meta">
+        awaiting input
+        <span className="input-chip">input</span>
+      </div>
       <div className="item-body">{item.question}</div>
       {item.options ? (
         <div className="input-options">
           {item.options.map((opt, i) => (
             <button
               key={`${i}-${opt}`}
+              className="glass-ghost"
               onClick={() => send(opt)}
               disabled={submitted}
             >
@@ -61,7 +65,11 @@ export function UserInputCard({ item }: Props) {
             disabled={submitted}
             autoFocus
           />
-          <button type="submit" disabled={submitted || !reply.trim()}>
+          <button
+            type="submit"
+            className="glass-cta"
+            disabled={submitted || !reply.trim()}
+          >
             Send
           </button>
         </form>

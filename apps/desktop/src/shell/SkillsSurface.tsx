@@ -176,7 +176,20 @@ function useUserSkillsDir(): string | null {
   return dir;
 }
 
-export function SkillsSurface() {
+/**
+ * Render mode for the Skills surface:
+ *   - "cockpit" (default) — the dense two-pane list+detail layout used
+ *     by the legacy workspace. Unchanged.
+ *   - "sheet" — the calm glass-card grid for the 2026 Stage shell, where
+ *     Skills slides in as a frosted sheet over the dimmed stage.
+ */
+export type SkillsSurfaceVariant = "sheet" | "cockpit";
+
+export function SkillsSurface({
+  variant = "cockpit",
+}: {
+  variant?: SkillsSurfaceVariant;
+} = {}) {
   const { skills, loading, error, refresh } = useSkills();
   const userSkillsDir = useUserSkillsDir();
   const projectRoot = useProjectStore((s) => s.current);
@@ -218,6 +231,18 @@ export function SkillsSurface() {
       list?.find((p) => p.name === name) ?? null;
   }, [pinnedByProject, projectRoot]);
 
+  if (variant === "sheet") {
+    return (
+      <SkillsSheet
+        skills={skills}
+        loading={loading}
+        error={error}
+        isDisabled={isDisabled}
+        onToggle={(name) => toggle(projectRoot, name)}
+      />
+    );
+  }
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[2fr_3fr] gap-2 p-3">
       <SkillList
@@ -248,6 +273,237 @@ export function SkillsSurface() {
         />
       )}
     </div>
+  );
+}
+
+/* =====================================================================
+   SHEET VARIANT — glass-sheet-native Skills for the 2026 Stage shell.
+
+   A calm, responsive 2-col grid of `.glass-content` cards — the agent's
+   editorial "loadout" — replacing the dense list+detail cockpit split.
+   Each card carries the same REAL data the cockpit reads (`list_skills`
+   via `useSkills`, disabled state via `useSkillsStore`) and reuses the
+   same enable/disable handler. Selecting a card expands its one-line
+   "when to use" guidance inline; no separate detail pane.
+   ===================================================================== */
+
+type SkillsSheetProps = {
+  skills: SkillEntry[];
+  loading: boolean;
+  error: string | null;
+  isDisabled: (name: string) => boolean;
+  onToggle: (name: string) => void;
+};
+
+function SkillsSheet({
+  skills,
+  loading,
+  error,
+  isDisabled,
+  onToggle,
+}: SkillsSheetProps) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const enabledCount = useMemo(
+    () => skills.filter((s) => !isDisabled(s.name)).length,
+    [skills, isDisabled],
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">
+      <header className="flex shrink-0 items-baseline justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <Sparkles
+            className="h-5 w-5 text-[#67E8F9]"
+            strokeWidth={1.75}
+            aria-hidden
+          />
+          <h1 className="text-[18px] font-semibold text-[var(--color-text-primary)]">
+            Skills{" "}
+            <span className="text-[var(--color-text-muted)]">
+              · the agent&apos;s loadout
+            </span>
+          </h1>
+        </div>
+        <span className="shrink-0 font-mono text-[12px] text-[var(--color-text-secondary)]">
+          {error || loading ? (
+            <span className="text-[var(--color-text-muted)]">
+              {error ? "—" : "…"}
+            </span>
+          ) : (
+            <>
+              {enabledCount}
+              <span className="text-[var(--color-text-muted)]">
+                /{skills.length} on
+              </span>
+            </>
+          )}
+        </span>
+      </header>
+
+      {error ? (
+        <div className="flex flex-1 items-center justify-center text-center text-[13px] text-[var(--color-status-error)]">
+          <span>{error}</span>
+        </div>
+      ) : loading ? (
+        <div className="flex flex-1 items-center justify-center text-[13px] text-[var(--color-text-muted)]">
+          <span>Loading skills…</span>
+        </div>
+      ) : skills.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center px-8 text-center text-[13px] leading-relaxed text-[var(--color-text-muted)]">
+          <span>
+            No skills discovered yet. Add{" "}
+            <code className="rounded bg-[var(--color-surface-input)] px-1 font-mono">
+              SKILL.md
+            </code>{" "}
+            files under a{" "}
+            <code className="rounded bg-[var(--color-surface-input)] px-1 font-mono">
+              skills/
+            </code>{" "}
+            folder in your project or home directory.
+          </span>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {skills.map((skill) => (
+            <SkillSheetCard
+              key={skill.name}
+              skill={skill}
+              disabled={isDisabled(skill.name)}
+              expanded={expanded === skill.name}
+              onToggleExpand={() =>
+                setExpanded((cur) => (cur === skill.name ? null : skill.name))
+              }
+              onToggle={() => onToggle(skill.name)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SkillSheetCardProps = {
+  skill: SkillEntry;
+  disabled: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggle: () => void;
+};
+
+function SkillSheetCard({
+  skill,
+  disabled,
+  expanded,
+  onToggleExpand,
+  onToggle,
+}: SkillSheetCardProps) {
+  return (
+    <div
+      className={cn(
+        "glass-content flex flex-col gap-2.5 p-4 transition-opacity",
+        disabled && "opacity-55",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <span className="truncate text-[14px] font-bold text-[var(--color-text-primary)]">
+            {skill.display_name}
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <SheetProvenanceChip provenance={skill.provenance} />
+            {skill.version && (
+              <span className="shrink-0 rounded-full bg-[var(--color-surface-input)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-muted)]">
+                v{skill.version}
+              </span>
+            )}
+          </div>
+        </div>
+        {/* enable/disable pip — orange when on */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!disabled}
+          aria-label={`${disabled ? "Enable" : "Disable"} ${skill.display_name}`}
+          onClick={onToggle}
+          title={disabled ? "Enable skill" : "Disable skill"}
+          className={cn(
+            "mt-0.5 h-3 w-3 shrink-0 rounded-full border transition-all",
+            disabled
+              ? "border-[var(--glass-border)] bg-transparent hover:border-[var(--glass-border-strong)]"
+              : "border-[var(--color-brand)] bg-[var(--color-brand)] shadow-[0_0_10px_rgba(255,122,24,0.55)]",
+          )}
+        />
+      </div>
+
+      <p className="line-clamp-2 text-[12px] leading-snug text-[var(--color-text-secondary)]">
+        {skill.description}
+      </p>
+
+      {skill.when_to_use && (
+        <>
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-expanded={expanded}
+            className="self-start text-[11px] font-medium text-[#67E8F9] transition-opacity hover:opacity-80"
+          >
+            {expanded ? "Hide details" : "When to use →"}
+          </button>
+          {expanded && (
+            <p className="rounded-[10px] border-l-2 border-[#67E8F9] bg-[var(--color-surface-input)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+              {skill.when_to_use}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Provenance chip for the sheet variant — same semantics as the cockpit
+ * `ProvenanceChip`, retinted to the Stage's cyan/orange glass vocabulary
+ * (user = cyan accent, project = orange brand, bundled = neutral frost).
+ */
+function SheetProvenanceChip({
+  provenance,
+}: {
+  provenance: SkillProvenance;
+}) {
+  const palette: Record<
+    SkillProvenance,
+    { label: string; className: string; title: string }
+  > = {
+    bundled: {
+      label: "bundled",
+      className:
+        "border-[var(--glass-border)] bg-[var(--color-surface-input)] text-[var(--color-text-muted)]",
+      title: "Ships with Awidat",
+    },
+    user: {
+      label: "user",
+      className:
+        "border-[#67E8F9]/40 bg-[#67E8F9]/12 text-[#67E8F9]",
+      title: "Installed from your per-user skills folder",
+    },
+    project: {
+      label: "project",
+      className:
+        "border-[color:var(--color-brand)]/45 bg-[color:var(--color-brand)]/15 text-[var(--color-brand)]",
+      title: "Defined by this project — overrides user and bundled",
+    },
+  };
+  const { label, className, title } = palette[provenance];
+  return (
+    <span
+      title={title}
+      className={cn(
+        "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+        className,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 

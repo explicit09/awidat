@@ -5,12 +5,13 @@ import { cn } from "../cn";
 const iconBtn = cva(
   [
     "inline-flex items-center justify-center",
-    "rounded-[var(--radius-sm)] border border-transparent",
+    // Frosted translucent glass that brightens on hover (glass-ghost).
+    "glass-ghost rounded-[var(--radius-sm)]",
     "text-[var(--color-text-muted)]",
-    "transition-[background-color,color] duration-[120ms]",
+    "transition-[background-color,color,border-color] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
-    "hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
-    "active:bg-[var(--color-surface-card-active)]",
+    "hover:text-[var(--color-text-primary)]",
+    "active:bg-[rgba(255,255,255,0.12)]",
     "focus-visible:outline-none",
     "disabled:opacity-40 disabled:cursor-not-allowed",
   ],
