@@ -396,3 +396,12 @@ html, body, #root { background: #0a0a12; }
    Strip its solid cockpit background so the frost shows through. */
 .stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
 .stage-convo .sticky-user-prompt { background: rgba(255,255,255,0.04); border-radius: 10px; }
+
+/* Stage tool side-panel: make reused cockpit surfaces (transcript, media,
+   inspector, index, vedit) FILL the panel instead of collapsing to their
+   intrinsic size. Their roots are flex:1 / panel-styled for the cockpit. */
+.stage-tool-body > * { flex: 1 1 auto; min-height: 0; height: 100%; width: 100%; }
+.stage-tool-body .transcript-pane,
+.stage-tool-body .media-empty,
+.stage-tool-body .properties-pane,
+.stage-tool-body .index-rail { background: transparent !important; }

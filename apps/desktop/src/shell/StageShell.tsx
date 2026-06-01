@@ -132,7 +132,9 @@ export function StageShell(props: StageShellProps) {
   }, [running]);
 
   // Summonable tool side-panel — one open at a time.
-  const [tool, setTool] = useState<ToolKey | null>(null);
+  // Dev-only: VITE_AWIDAT_TOOL pre-opens a tool (native screenshot verify).
+  const devTool = (import.meta.env?.VITE_AWIDAT_TOOL as ToolKey | undefined) ?? null;
+  const [tool, setTool] = useState<ToolKey | null>(devTool);
   const toggleTool = (id: ToolKey) => setTool((t) => (t === id ? null : id));
 
   // Auto-open the Inspector on the rising edge of a selection — never fight
@@ -149,8 +151,10 @@ export function StageShell(props: StageShellProps) {
   const tracks = trackCount || storeTrackCount;
   const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
 
-  // Empty stage: a project is loaded but there's nothing to show yet.
-  const stageEmpty = pending.length === 0;
+  // Empty stage: a project is loaded but there's NO footage on the timeline
+  // yet (no tracks) AND nothing proposed. "No proposals" alone is not empty —
+  // the user may already have footage they're working with.
+  const stageEmpty = pending.length === 0 && tracks === 0;
   const node = tool ? toolNode(tool, tools) : null;
 
   const submit = () => {
@@ -244,22 +248,23 @@ export function StageShell(props: StageShellProps) {
 
       {/* tool side-panel — slides in from the right; the stage stays visible
           to its left (NOT a full sheet like the destinations). */}
-      {tools && onStage_ ? (
+      {tools && onStage_ && tool ? (
         <div
-          className="glass glass-strong absolute right-0 top-14 z-30 flex flex-col overflow-hidden transition-transform duration-300"
+          className="stage-tool-panel glass glass-strong z-30 flex flex-col overflow-hidden"
           style={{
-            width: 360,
-            bottom: 96,
-            borderTopLeftRadius: 18,
-            borderBottomLeftRadius: 18,
-            transform: tool ? "translateX(0)" : "translateX(110%)",
-            pointerEvents: tool ? "auto" : "none",
+            position: "absolute",
+            top: 64,
+            bottom: 88,
+            right: 12,
+            left: "auto",
+            width: 372,
+            borderRadius: 18,
           }}>
           <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2.5">
-            <span className="text-[13px] font-semibold capitalize text-[var(--color-text-primary)]">{tool ?? ""}</span>
+            <span className="text-[13px] font-semibold capitalize text-[var(--color-text-primary)]">{tool}</span>
             <button onClick={() => setTool(null)} className="glass-ghost ml-auto grid h-6 w-6 place-items-center rounded-md text-[12px]">×</button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto">{node}</div>
+          <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">{node}</div>
         </div>
       ) : null}
 
