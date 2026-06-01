@@ -4,6 +4,8 @@ import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposal
 import { useTimelineStore } from "../timeline/store";
 import type { Stage } from "../state/stages";
 import { ChatStream } from "../agent/ChatStream";
+import { useSettings } from "../state/settings";
+import { Settings as SettingsIcon } from "lucide-react";
 import mark from "../brand/awidat-mark.svg";
 
 /**
@@ -205,6 +207,9 @@ export function StageShell(props: StageShellProps) {
             {running ? "working" : "ready"}
           </span>
           {timecode ? <span className="font-mono text-[11px] text-[var(--color-text-muted)]">{timecode}</span> : null}
+          <button onClick={() => useSettings.getState().open()} className="gk-close" aria-label="Settings" title="Settings (⌘,)">
+            <SettingsIcon className="h-3.5 w-3.5 stroke-[1.75]" />
+          </button>
         </div>
       </div>
 
@@ -273,7 +278,7 @@ export function StageShell(props: StageShellProps) {
           }}>
           <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2.5">
             <span className="text-[13px] font-semibold capitalize text-[var(--color-text-primary)]">{tool}</span>
-            <button onClick={() => setTool(null)} className="glass-ghost ml-auto grid h-6 w-6 place-items-center rounded-md text-[12px]">×</button>
+            <button onClick={() => setTool(null)} className="gk-close ml-auto" aria-label="Close">×</button>
           </div>
           <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">{node}</div>
         </div>
