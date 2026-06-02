@@ -1870,6 +1870,21 @@ fn proposal_slug(anchor: &str) -> String {
     concise(&compact).replace(' ', "-")
 }
 
+/// Placement for a delayed layer inside a scene of `scene_duration_s`.
+///
+/// Returns `(from_s, duration_s)` guaranteeing `from_s > 0`, `duration_s > 0`,
+/// and `from_s + duration_s <= scene_duration_s`, which is what
+/// `MotionScene::validate` requires. Short scenes (or "make it faster"
+/// revisions) get a proportionally compressed entrance instead of the fixed
+/// 1s minimum that used to overflow the scene.
+fn delayed_layer(desired_from_s: f64, scene_duration_s: f64) -> (f64, f64) {
+    let scene = scene_duration_s.max(f64::EPSILON);
+    // Never start a layer at/after the scene end; leave a sliver to play.
+    let from_s = desired_from_s.clamp(0.0, scene * 0.5);
+    let duration_s = (scene - from_s).max(f64::EPSILON);
+    (from_s, duration_s)
+}
+
 fn motion_scene_json(
     artifact: ArtifactType,
     selection: &str,
@@ -1921,11 +1936,12 @@ fn motion_scene_json(
     ];
     if artifact == ArtifactType::AnimatedList {
         for (index, item) in list_items(selection).into_iter().enumerate() {
+            let (from_s, layer_duration) = delayed_layer(0.35 + index as f64 * 0.28, duration_s);
             layers.push(serde_json::json!({
                 "id": format!("step-{}", index + 1),
                 "kind": "text",
-                "from_s": 0.35 + index as f64 * 0.28,
-                "duration_s": (duration_s - 0.35 - index as f64 * 0.28).max(1.0),
+                "from_s": from_s,
+                "duration_s": layer_duration,
                 "z_index": 20 + index,
                 "params": {
                     "text": item,
@@ -1957,12 +1973,14 @@ fn motion_scene_json(
 }
 
 fn search_bar_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> {
+    let (shell_from_s, shell_duration) = delayed_layer(0.25, duration_s);
+    let (query_from_s, query_duration) = delayed_layer(0.55, duration_s);
     vec![
         serde_json::json!({
             "id": "search-shell",
             "kind": "shape",
-            "from_s": 0.25,
-            "duration_s": (duration_s - 0.25).max(1.0),
+            "from_s": shell_from_s,
+            "duration_s": shell_duration,
             "z_index": 18,
             "params": {
                 "shape": "rounded_rect",
@@ -1979,8 +1997,8 @@ fn search_bar_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> {
         serde_json::json!({
             "id": "search-query",
             "kind": "text",
-            "from_s": 0.55,
-            "duration_s": (duration_s - 0.55).max(1.0),
+            "from_s": query_from_s,
+            "duration_s": query_duration,
             "z_index": 22,
             "params": {
                 "text": concise(anchor),
@@ -1998,12 +2016,14 @@ fn search_bar_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> {
 fn counter_stat_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> {
     let value = number_or_concise(anchor);
     let label = counter_label(anchor, &value);
+    let (value_from_s, value_duration) = delayed_layer(0.2, duration_s);
+    let (label_from_s, label_duration) = delayed_layer(0.55, duration_s);
     vec![
         serde_json::json!({
             "id": "stat-value",
             "kind": "text",
-            "from_s": 0.2,
-            "duration_s": (duration_s - 0.2).max(1.0),
+            "from_s": value_from_s,
+            "duration_s": value_duration,
             "z_index": 24,
             "params": {
                 "text": value,
@@ -2018,8 +2038,8 @@ fn counter_stat_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> 
         serde_json::json!({
             "id": "stat-label",
             "kind": "text",
-            "from_s": 0.55,
-            "duration_s": (duration_s - 0.55).max(1.0),
+            "from_s": label_from_s,
+            "duration_s": label_duration,
             "z_index": 25,
             "params": {
                 "text": label,
@@ -2035,12 +2055,15 @@ fn counter_stat_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> 
 
 fn map_visualization_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Value> {
     let (origin, destination) = route_endpoints(anchor);
+    let (line_from_s, line_duration) = delayed_layer(0.35, duration_s);
+    let (origin_from_s, origin_duration) = delayed_layer(0.25, duration_s);
+    let (dest_from_s, dest_duration) = delayed_layer(0.55, duration_s);
     vec![
         serde_json::json!({
             "id": "route-line",
             "kind": "shape",
-            "from_s": 0.35,
-            "duration_s": (duration_s - 0.35).max(1.0),
+            "from_s": line_from_s,
+            "duration_s": line_duration,
             "z_index": 18,
             "params": {
                 "shape": "line",
@@ -2056,8 +2079,8 @@ fn map_visualization_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Va
         serde_json::json!({
             "id": "map-origin",
             "kind": "text",
-            "from_s": 0.25,
-            "duration_s": (duration_s - 0.25).max(1.0),
+            "from_s": origin_from_s,
+            "duration_s": origin_duration,
             "z_index": 22,
             "params": {
                 "text": origin,
@@ -2071,8 +2094,8 @@ fn map_visualization_layers(anchor: &str, duration_s: f64) -> Vec<serde_json::Va
         serde_json::json!({
             "id": "map-destination",
             "kind": "text",
-            "from_s": 0.55,
-            "duration_s": (duration_s - 0.55).max(1.0),
+            "from_s": dest_from_s,
+            "duration_s": dest_duration,
             "z_index": 22,
             "params": {
                 "text": destination,
@@ -4180,5 +4203,65 @@ mod tests {
         .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(report["passed"], true, "{report:#}");
+    }
+
+    #[test]
+    fn short_duration_list_scene_stays_within_scene_bounds() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "We will cover hooks, retention, export checks, and reviews.".into(),
+            request: "turn this into an animated list".into(),
+            anchor_transcript: Some("hooks, retention, export checks, and reviews".into()),
+            duration_s: Some(1.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "animated_list");
+        let scene = motion_scene_for(proposal);
+        assert!(
+            scene.validate().is_empty(),
+            "short-duration animated list produced an invalid scene: {:?}",
+            scene.validate()
+        );
+    }
+
+    #[test]
+    fn short_duration_search_scene_stays_within_scene_bounds() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "How does the funding round actually work?".into(),
+            request: "show this as a search bar".into(),
+            anchor_transcript: Some("how does the funding round actually work".into()),
+            duration_s: Some(1.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "search_bar");
+        let scene = motion_scene_for(proposal);
+        assert!(
+            scene.validate().is_empty(),
+            "short-duration search bar produced an invalid scene: {:?}",
+            scene.validate()
+        );
+    }
+
+    #[test]
+    fn short_duration_counter_scene_stays_within_scene_bounds() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "Revenue grew 240% last year.".into(),
+            request: "make a counter stat graphic".into(),
+            anchor_transcript: Some("revenue grew 240% last year".into()),
+            duration_s: Some(1.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "counter_stat_graphic");
+        let scene = motion_scene_for(proposal);
+        assert!(
+            scene.validate().is_empty(),
+            "short-duration counter produced an invalid scene: {:?}",
+            scene.validate()
+        );
     }
 }
