@@ -1553,6 +1553,12 @@ pub struct MotionTemplateFill {
 pub struct MotionScene {
     /// Stable scene id.
     pub id: String,
+    /// Absolute timeline second at which the scene begins. Layer `from_s`
+    /// values are relative to this offset, so a scene anchored to a moment
+    /// later in the program renders over that moment instead of at program
+    /// start. Defaults to 0 (program start) for back-compat.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub start_s: f64,
     /// Scene duration in seconds.
     pub duration_s: f64,
     /// Intended scene frame rate.
@@ -1577,6 +1583,12 @@ impl MotionScene {
             diagnostics.push(ProfessionalDiagnostic::error(
                 CapabilityArea::MotionGraphicsTemplates,
                 "motion scene has an empty id",
+            ));
+        }
+        if !self.start_s.is_finite() || self.start_s < 0.0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::MotionGraphicsTemplates,
+                format!("motion scene {} start_s must be non-negative", self.id),
             ));
         }
         if !self.duration_s.is_finite() || self.duration_s <= 0.0 {
@@ -1637,6 +1649,10 @@ impl MotionScene {
         }
         diagnostics
     }
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
 }
 
 /// One layer inside a procedural motion scene.

@@ -29,13 +29,17 @@
 
 use std::path::Path;
 
+use awidat_core::awidat_mcp::tools::plan_visual_support_proposals::{
+    PlanVisualSupportProposalArgs, merge_visual_support_defaults, plan_visual_support_proposals,
+};
 use awidat_core::edl::{ApplyError, EdlEnvelope, EdlOp, apply, parse};
 use awidat_core::tool::ApprovalDecision;
 use awidat_desktop_protocol::{
-    AdjustField, AppliedDiff, EditAdjustment, Id, Item, ItemLifecycle, ProposalSource, Side,
-    TimelineSnapshot,
+    AdjustField, AppliedDiff, ConfidenceTier, EditAdjustment, Id, Item, ItemLifecycle,
+    ProposalEvidence, ProposalEvidenceKind, ProposalSource, RiskLevel, Side, TimelineSnapshot,
 };
 use awidat_proto::otio::Timeline;
+use awidat_proto::professional::{EvidenceTrace, ReviewStatus};
 use awidat_proto::project::Project;
 use tauri::{AppHandle, State};
 
@@ -115,7 +119,11 @@ pub async fn build_proposal(
     let snapshot =
         crate::commands::timeline::flatten_timeline_public(&proposed_timeline, project_root);
     let diff_hints = build_diff_hints(&envelope, &applied, &original_timeline, &proposed_timeline);
-    let summary = summarize_envelope(&envelope);
+    let inspector_metadata = inspector_metadata_from_envelope(&envelope);
+    let summary = inspector_metadata
+        .as_ref()
+        .map(|metadata| metadata.summary.clone())
+        .unwrap_or_else(|| summarize_envelope(&envelope));
     let edl_text_for_item = edl_text.clone();
 
     let proposal = PendingProposal {
@@ -145,13 +153,22 @@ pub async fn build_proposal(
             diff_hints,
             summary,
             revision: 0,
-            // Inspector fields — populated by future producers; legacy
-            // call sites omit them and the frontend degrades gracefully.
-            intent: None,
-            explanation: None,
-            confidence: None,
-            risk: None,
-            evidence: vec![],
+            intent: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.intent.clone()),
+            explanation: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.explanation.clone()),
+            confidence: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.confidence),
+            risk: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.risk),
+            evidence: inspector_metadata
+                .as_ref()
+                .map(|metadata| metadata.evidence.clone())
+                .unwrap_or_default(),
             alternatives: vec![],
             // `rationale` is the agent's one-sentence justification
             // ("trimmed 0.42s silence per podcast defaults") that
@@ -443,7 +460,11 @@ pub async fn adjust_proposal(
         &proposal.original_timeline,
         &proposed_timeline,
     );
-    let summary = summarize_envelope(&proposal.envelope);
+    let inspector_metadata = inspector_metadata_from_envelope(&proposal.envelope);
+    let summary = inspector_metadata
+        .as_ref()
+        .map(|metadata| metadata.summary.clone())
+        .unwrap_or_else(|| summarize_envelope(&proposal.envelope));
     let edl_text = String::new(); // not re-serialized; Delta doesn't need it
 
     drop(map); // release before emit so the frontend's response can grab the lock again
@@ -459,11 +480,22 @@ pub async fn adjust_proposal(
             diff_hints,
             summary,
             revision,
-            intent: None,
-            explanation: None,
-            confidence: None,
-            risk: None,
-            evidence: vec![],
+            intent: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.intent.clone()),
+            explanation: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.explanation.clone()),
+            confidence: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.confidence),
+            risk: inspector_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.risk),
+            evidence: inspector_metadata
+                .as_ref()
+                .map(|metadata| metadata.evidence.clone())
+                .unwrap_or_default(),
             alternatives: vec![],
             // Delta phase: the frontend store preserves the rationale
             // from the prior phase when a Delta omits it (same pattern
@@ -512,6 +544,187 @@ pub async fn propose_user_edit(
     )
     .await?;
 
+    Ok(id)
+}
+
+#[derive(Debug, Clone)]
+struct VisualSupportProposalRequest {
+    selection_text: String,
+    request: String,
+    anchor_transcript: Option<String>,
+    anchor_timeline_start_s: Option<f64>,
+    artifact_type: Option<String>,
+    broll_asset: Option<String>,
+    duration_s: Option<f64>,
+    reference_assets: Vec<String>,
+}
+
+#[derive(Debug)]
+struct PlannedVisualSupportProposal {
+    summary: String,
+    edl_text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualSupportProposalPayload {
+    selection_text: String,
+    request: String,
+    anchor_transcript: Option<String>,
+    anchor_timeline_start_s: Option<f64>,
+    artifact_type: Option<String>,
+    broll_asset: Option<String>,
+    duration_s: Option<f64>,
+    reference_assets: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+fn visual_support_proposal_edl(
+    request: VisualSupportProposalRequest,
+) -> Result<PlannedVisualSupportProposal, String> {
+    visual_support_proposal_edls(request, None)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())
+}
+
+/// Pick the single planned proposal to open in the Proposal Inspector.
+///
+/// Sibling proposals from one planner call are all computed against the same
+/// pre-accept timeline, and `accept_proposal` writes a cached
+/// `proposed_timeline` wholesale — so opening more than one would let
+/// accepting the second drop the first's accepted changes. The planner
+/// already returns candidates highest-confidence first, so we take the head.
+fn first_proposal_to_open(
+    planned: Vec<PlannedVisualSupportProposal>,
+) -> Option<PlannedVisualSupportProposal> {
+    planned.into_iter().next()
+}
+
+fn visual_support_proposal_edls(
+    request: VisualSupportProposalRequest,
+    project_root: Option<&Path>,
+) -> Result<Vec<PlannedVisualSupportProposal>, String> {
+    let mut args = PlanVisualSupportProposalArgs {
+        selection_text: request.selection_text,
+        request: request.request,
+        anchor_transcript: request.anchor_transcript,
+        anchor_timeline_start_s: request.anchor_timeline_start_s,
+        broll_asset: request.broll_asset,
+        duration_s: request.duration_s,
+        reference_assets: request.reference_assets,
+        ..PlanVisualSupportProposalArgs::default()
+    };
+    // Mirror the MCP `run` wrapper so user-initiated transcript-selection
+    // proposals honour the editor's saved brand/aspect/safe-area/reference
+    // defaults instead of opening with a different export/style contract than
+    // agent-planned proposals.
+    if let Some(root) = project_root {
+        args = merge_visual_support_defaults(args, root);
+    }
+    let planned = plan_visual_support_proposals(args)?;
+    let proposals = planned["proposals"]
+        .as_array()
+        .ok_or_else(|| "visual support planner returned no proposals array".to_string())?;
+    let planned = proposals
+        .iter()
+        .filter_map(|proposal| {
+            let artifact_matches = request
+                .artifact_type
+                .as_deref()
+                .is_none_or(|artifact_type| {
+                    proposal["artifact_type"].as_str() == Some(artifact_type)
+                });
+            if !artifact_matches {
+                return None;
+            }
+            if proposal["missing_information"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+            {
+                return None;
+            }
+            let edl_text = proposal["apply_edl"]["edl"].as_str()?;
+            Some(PlannedVisualSupportProposal {
+                summary: proposal["title"]
+                    .as_str()
+                    .unwrap_or("Visual support proposal")
+                    .to_string(),
+                edl_text: edl_text.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if planned.is_empty() {
+        return Err({
+            let clarification = proposals
+                .iter()
+                .flat_map(|proposal| {
+                    proposal["missing_information"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                })
+                .find_map(|item| item["question"].as_str())
+                .unwrap_or("answer the proposal's missing information before opening it");
+            format!("visual support proposal needs clarification: {clarification}")
+        });
+    }
+    Ok(planned)
+}
+
+/// User-initiated visual-support proposal from selected transcript text.
+/// Plans through the editorial-skill planner, then opens the chosen
+/// apply-ready proposal through the standard Proposal Inspector flow.
+#[tauri::command]
+pub async fn propose_visual_support(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+    payload: VisualSupportProposalPayload,
+) -> Result<String, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+
+    let planned = visual_support_proposal_edls(
+        VisualSupportProposalRequest {
+            selection_text: payload.selection_text,
+            request: payload.request,
+            anchor_transcript: payload.anchor_transcript,
+            anchor_timeline_start_s: payload.anchor_timeline_start_s,
+            artifact_type: payload.artifact_type,
+            broll_asset: payload.broll_asset,
+            duration_s: payload.duration_s,
+            reference_assets: payload.reference_assets.unwrap_or_default(),
+        },
+        Some(project_root.as_path()),
+    )?;
+    // Open a single proposal at a time. `build_proposal` snapshots the
+    // current timeline and `accept_proposal` later writes that cached
+    // `proposed_timeline` wholesale, so opening every sibling here (each
+    // computed from the same pre-accept timeline) would let accepting the
+    // second one silently drop the first's accepted changes. The planner
+    // still ranks the candidates; we surface the highest-confidence one.
+    let proposal = first_proposal_to_open(planned)
+        .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())?;
+    let id = format!(
+        "visual-support-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let _ = &proposal.summary;
+    build_proposal(
+        &app,
+        &state,
+        id.clone(),
+        proposal.edl_text,
+        &project_root,
+        ProposalSource::User,
+        None,
+        None,
+    )
+    .await?;
     Ok(id)
 }
 
@@ -946,6 +1159,111 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
     }
 }
 
+#[derive(Clone, Debug)]
+struct InspectorMetadata {
+    summary: String,
+    intent: Option<String>,
+    explanation: Option<String>,
+    confidence: Option<f32>,
+    risk: Option<RiskLevel>,
+    evidence: Vec<ProposalEvidence>,
+}
+
+fn inspector_metadata_from_envelope(envelope: &EdlEnvelope) -> Option<InspectorMetadata> {
+    let package = envelope.ops.iter().find_map(|op| {
+        if let EdlOp::AddProposalPackage { package } = op {
+            Some(package)
+        } else {
+            None
+        }
+    })?;
+    let confidence = package
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.confidence)
+        .next()
+        .map(|confidence| confidence as f32);
+    let evidence = package
+        .evidence
+        .iter()
+        .map(proposal_evidence_from_trace)
+        .collect::<Vec<_>>();
+    let explanation = package
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.reason.as_deref())
+        .find(|reason| !reason.trim().is_empty())
+        .map(str::to_string);
+    Some(InspectorMetadata {
+        summary: package.summary.clone(),
+        intent: Some(package.summary.clone()),
+        explanation,
+        confidence,
+        risk: Some(risk_from_package_status(package.status, confidence)),
+        evidence,
+    })
+}
+
+fn proposal_evidence_from_trace(trace: &EvidenceTrace) -> ProposalEvidence {
+    let confidence = trace.confidence.map(|confidence| confidence as f32);
+    ProposalEvidence {
+        kind: proposal_evidence_kind(&trace.source),
+        label: trace
+            .reason
+            .clone()
+            .unwrap_or_else(|| evidence_label_from_trace(trace)),
+        confidence,
+        confidence_level: confidence.map(confidence_tier),
+    }
+}
+
+fn evidence_label_from_trace(trace: &EvidenceTrace) -> String {
+    if trace.refs.is_empty() {
+        trace.source.clone()
+    } else {
+        format!("{}: {}", trace.source, trace.refs.join(", "))
+    }
+}
+
+fn proposal_evidence_kind(source: &str) -> ProposalEvidenceKind {
+    match source {
+        "transcript" => ProposalEvidenceKind::Transcript,
+        "pacing" => ProposalEvidenceKind::Pacing,
+        "filler" => ProposalEvidenceKind::Filler,
+        "audio_energy" => ProposalEvidenceKind::AudioEnergy,
+        "speaker_handoff" => ProposalEvidenceKind::SpeakerHandoff,
+        "silence" => ProposalEvidenceKind::Silence,
+        "cut_boundary" => ProposalEvidenceKind::CutBoundary,
+        _ => ProposalEvidenceKind::Visual,
+    }
+}
+
+fn confidence_tier(confidence: f32) -> ConfidenceTier {
+    if confidence >= 0.80 {
+        ConfidenceTier::High
+    } else if confidence >= 0.55 {
+        ConfidenceTier::Medium
+    } else if confidence >= 0.30 {
+        ConfidenceTier::Low
+    } else {
+        ConfidenceTier::VeryLow
+    }
+}
+
+fn risk_from_package_status(status: ReviewStatus, confidence: Option<f32>) -> RiskLevel {
+    match status {
+        ReviewStatus::Rejected => RiskLevel::VeryHigh,
+        ReviewStatus::Superseded => RiskLevel::High,
+        ReviewStatus::Accepted => RiskLevel::Low,
+        ReviewStatus::Proposed => match confidence {
+            Some(value) if value < 0.30 => RiskLevel::VeryHigh,
+            Some(value) if value < 0.55 => RiskLevel::High,
+            Some(value) if value < 0.80 => RiskLevel::Medium,
+            _ => RiskLevel::Low,
+        },
+    }
+}
+
 fn summarize_envelope(envelope: &EdlEnvelope) -> String {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for op in &envelope.ops {
@@ -966,6 +1284,9 @@ mod tests {
     use awidat_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
+    };
+    use awidat_proto::professional::{
+        CapabilityArea, EvidenceTrace, ProposalPackage, ReviewStatus,
     };
 
     #[test]
@@ -988,6 +1309,165 @@ mod tests {
             ],
         };
         assert_eq!(summarize_envelope(&envelope), "1 DeleteClip, 2 TrimClip");
+    }
+
+    #[test]
+    fn proposal_package_populates_inspector_metadata() {
+        let envelope = EdlEnvelope {
+            ops: vec![EdlOp::AddProposalPackage {
+                package: ProposalPackage {
+                    id: "visual-support-quote".into(),
+                    area: CapabilityArea::EditorialIntentAndReview,
+                    status: ReviewStatus::Proposed,
+                    summary: "Quote highlight".into(),
+                    evidence: vec![EvidenceTrace {
+                        source: "transcript".into(),
+                        refs: vec!["transcript:quote that should land harder".into()],
+                        reason: Some(
+                            "Selected transcript anchor: quote that should land harder".into(),
+                        ),
+                        confidence: Some(0.92),
+                    }],
+                    rollback_refs: vec![],
+                },
+            }],
+        };
+
+        let metadata = inspector_metadata_from_envelope(&envelope).unwrap();
+
+        assert_eq!(metadata.summary, "Quote highlight");
+        assert_eq!(metadata.intent.as_deref(), Some("Quote highlight"));
+        assert_eq!(metadata.confidence, Some(0.92));
+        assert_eq!(metadata.risk, Some(RiskLevel::Low));
+        assert_eq!(metadata.evidence.len(), 1);
+        assert_eq!(metadata.evidence[0].kind, ProposalEvidenceKind::Transcript);
+        assert!(
+            metadata.evidence[0]
+                .label
+                .contains("quote that should land harder")
+        );
+    }
+
+    #[test]
+    fn visual_support_selection_plans_apply_ready_proposal_edl() {
+        let planned = visual_support_proposal_edl(VisualSupportProposalRequest {
+            selection_text: "This quote should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("quote should land harder".into()),
+            anchor_timeline_start_s: None,
+            artifact_type: Some("quote_highlight".into()),
+            broll_asset: None,
+            duration_s: Some(3.0),
+            reference_assets: vec![],
+        })
+        .unwrap();
+
+        assert_eq!(planned.summary, "Quote highlight");
+        assert!(planned.edl_text.contains("*** Add Proposal Package"));
+        assert!(planned.edl_text.contains("*** Set Motion Scene"));
+        assert!(planned.edl_text.contains("quote should land harder"));
+    }
+
+    #[test]
+    fn visual_support_selection_keeps_multiple_apply_ready_proposals() {
+        let planned = visual_support_proposal_edls(
+            VisualSupportProposalRequest {
+                selection_text: "This quote explains why the 42% growth matters.".into(),
+                request: "add visual support with a quote highlight and statistic counter".into(),
+                anchor_transcript: Some("42% growth matters".into()),
+                anchor_timeline_start_s: None,
+                artifact_type: None,
+                broll_asset: None,
+                duration_s: Some(3.0),
+                reference_assets: vec![],
+            },
+            None,
+        )
+        .unwrap();
+        let summaries = planned
+            .iter()
+            .map(|proposal| proposal.summary.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(summaries.contains(&"Quote highlight"));
+        assert!(summaries.contains(&"Counter/stat graphic"));
+        assert!(
+            planned
+                .iter()
+                .all(|proposal| proposal.edl_text.contains("*** Add Proposal Package"))
+        );
+    }
+
+    #[test]
+    fn visual_support_selection_opens_only_one_proposal() {
+        // The planner can return several apply-ready siblings, but only one
+        // may be opened: each is computed from the same pre-accept timeline,
+        // and accepting two would clobber the first's accepted changes.
+        let planned = visual_support_proposal_edls(
+            VisualSupportProposalRequest {
+                selection_text: "This quote explains why the 42% growth matters.".into(),
+                request: "add visual support with a quote highlight and statistic counter".into(),
+                anchor_transcript: Some("42% growth matters".into()),
+                anchor_timeline_start_s: None,
+                artifact_type: None,
+                broll_asset: None,
+                duration_s: Some(3.0),
+                reference_assets: vec![],
+            },
+            None,
+        )
+        .unwrap();
+        assert!(
+            planned.len() > 1,
+            "precondition: planner should offer multiple siblings here"
+        );
+        let first_edl = planned[0].edl_text.clone();
+
+        let chosen = first_proposal_to_open(planned).expect("one proposal to open");
+        assert_eq!(
+            chosen.edl_text, first_edl,
+            "must open the first (highest-confidence) planned proposal"
+        );
+    }
+
+    #[test]
+    fn visual_support_selection_applies_saved_project_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".awidat")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join(".awidat")
+                .join("visual_support_defaults.json"),
+            r#"{"reference_assets":["references/brand-style.png"]}"#,
+        )
+        .unwrap();
+
+        let request = VisualSupportProposalRequest {
+            selection_text: "This quote should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("quote should land harder".into()),
+            anchor_timeline_start_s: None,
+            artifact_type: Some("quote_highlight".into()),
+            broll_asset: None,
+            duration_s: Some(3.0),
+            reference_assets: vec![],
+        };
+
+        // Without a project root the saved default is not applied.
+        let without = visual_support_proposal_edls(request.clone(), None).unwrap();
+        assert!(
+            !without[0].edl_text.contains("references/brand-style.png"),
+            "baseline should not carry the saved reference default"
+        );
+
+        // With the project root, the saved reference default flows into the
+        // planned proposal just like the MCP `run` wrapper.
+        let with = visual_support_proposal_edls(request, Some(dir.path())).unwrap();
+        assert!(
+            with[0].edl_text.contains("references/brand-style.png"),
+            "desktop proposal should apply saved project defaults: {}",
+            with[0].edl_text
+        );
     }
 
     #[test]

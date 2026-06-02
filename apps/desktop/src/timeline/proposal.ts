@@ -2,12 +2,10 @@
 // `awidat://item` Tauri channel for `Item::ProposedEdit` deltas.
 // Drops Deltas with stale revisions (rapid-drag race protection).
 //
-// One active proposal at a time per AwidatState; if the agent
-// emits a new one before the user accepts/rejects the old, the
-// new one replaces the old in the store (the backend's
-// pending_proposals map is per-call_id, so concurrent proposals
-// from different sources can coexist there — but the canvas only
-// ever shows one ghost overlay, so we keep the latest).
+// The backend's pending_proposals map is per-call_id, so concurrent
+// proposals can coexist. The canvas still shows one ghost overlay at
+// a time, but the store keeps the rest available for inspector
+// selection instead of dropping them.
 
 import { create } from "zustand";
 import type {
@@ -49,87 +47,118 @@ export type ActiveProposal = {
 type ProposalState = {
   /** The single in-flight proposal, or null when none is open. */
   active: ActiveProposal | null;
+  /** All pending proposals known to the desktop, ordered by arrival. */
+  pending: ActiveProposal[];
   /** Apply an Item::ProposedEdit emission. Drops stale Deltas. */
   ingest: (item: Extract<Item, { kind: "proposed_edit" }>) => void;
+  /** Make one pending proposal the active canvas/inspector proposal. */
+  select: (callId: string) => void;
   /** Drop the active proposal. Called after Accept/Reject completes. */
   clear: () => void;
 };
 
 export const useProposalStore = create<ProposalState>((set) => ({
   active: null,
+  pending: [],
   ingest: (item) =>
     set((state) => {
       // Completed phase always wins — it ends the lifecycle.
       if (item.phase === "completed") {
-        // If the call_id doesn't match the active one, ignore
-        // (concurrent proposal cleanup; we keep the active one
-        // until its own Completed lands).
+        const pending = state.pending.filter(
+          (proposal) => proposal.callId !== item.id,
+        );
         if (state.active?.callId === item.id) {
-          return { active: null };
+          return { active: pending[pending.length - 1] ?? null, pending };
         }
-        return state;
+        return { pending };
       }
-      // Started always replaces — a new proposal can arrive even
-      // while another is already showing (e.g. agent fires a second
-      // apply_edl after the first was rejected).
       if (item.phase === "started") {
+        const proposal = proposalFromStartedItem(item);
         return {
-          active: {
-            callId: item.id,
-            phase: "started",
-            source: item.source,
-            edlText: item.edl_text,
-            snapshot: item.snapshot,
-            diffHints: item.diff_hints,
-            summary: item.summary,
-            revision: item.revision,
-            intent: item.intent ?? undefined,
-            explanation: item.explanation ?? undefined,
-            confidence: item.confidence ?? undefined,
-            risk: item.risk ?? undefined,
-            evidence: item.evidence ?? [],
-            alternatives: item.alternatives ?? [],
-            rationale: item.rationale ?? undefined,
-          },
+          active: proposal,
+          pending: upsertProposal(state.pending, proposal),
         };
       }
       // Delta: only apply if the call_id matches and revision is
       // newer than what we have. Stale-Delta drops protect against
       // rapid-drag races.
-      if (
-        state.active?.callId === item.id &&
-        item.revision > state.active.revision
-      ) {
-        return {
-          active: {
-            ...state.active,
-            phase: "delta",
-            edlText: item.edl_text || state.active.edlText,
-            snapshot: item.snapshot,
-            diffHints: item.diff_hints,
-            summary: item.summary,
-            revision: item.revision,
-            // Newer deltas can carry richer inspector fields; preserve
-            // the previous values if the delta omits them.
-            intent: item.intent ?? state.active.intent,
-            explanation: item.explanation ?? state.active.explanation,
-            confidence: item.confidence ?? state.active.confidence,
-            risk: item.risk ?? state.active.risk,
-            evidence: item.evidence?.length ? item.evidence : state.active.evidence,
-            alternatives: item.alternatives?.length
-              ? item.alternatives
-              : state.active.alternatives,
-            // Newer deltas can carry a rationale; preserve the prior
-            // value if the delta omits it (drag-adjust deltas don't
-            // re-emit the agent's rationale).
-            rationale: item.rationale ?? state.active.rationale,
-          },
-        };
+      const pending = state.pending.map((proposal) =>
+        proposal.callId === item.id
+          ? proposalFromDeltaItem(proposal, item)
+          : proposal,
+      );
+      if (state.active?.callId === item.id) {
+        const active = proposalFromDeltaItem(state.active, item);
+        return { active, pending: upsertProposal(pending, active) };
       }
-      return state;
+      return { pending };
     }),
-  clear: () => set({ active: null }),
+  select: (callId) =>
+    set((state) => ({
+      active:
+        state.pending.find((proposal) => proposal.callId === callId) ??
+        state.active,
+    })),
+  clear: () => set({ active: null, pending: [] }),
 }));
+
+function proposalFromStartedItem(
+  item: Extract<Item, { kind: "proposed_edit" }>,
+): ActiveProposal {
+  return {
+    callId: item.id,
+    phase: "started",
+    source: item.source,
+    edlText: item.edl_text,
+    snapshot: item.snapshot,
+    diffHints: item.diff_hints,
+    summary: item.summary,
+    revision: item.revision,
+    intent: item.intent ?? undefined,
+    explanation: item.explanation ?? undefined,
+    confidence: item.confidence ?? undefined,
+    risk: item.risk ?? undefined,
+    evidence: item.evidence ?? [],
+    alternatives: item.alternatives ?? [],
+    rationale: item.rationale ?? undefined,
+  };
+}
+
+function proposalFromDeltaItem(
+  existing: ActiveProposal,
+  item: Extract<Item, { kind: "proposed_edit" }>,
+): ActiveProposal {
+  if (item.revision <= existing.revision) return existing;
+  return {
+    ...existing,
+    phase: "delta",
+    edlText: item.edl_text || existing.edlText,
+    snapshot: item.snapshot,
+    diffHints: item.diff_hints,
+    summary: item.summary,
+    revision: item.revision,
+    intent: item.intent ?? existing.intent,
+    explanation: item.explanation ?? existing.explanation,
+    confidence: item.confidence ?? existing.confidence,
+    risk: item.risk ?? existing.risk,
+    evidence: item.evidence?.length ? item.evidence : existing.evidence,
+    alternatives: item.alternatives?.length
+      ? item.alternatives
+      : existing.alternatives,
+    rationale: item.rationale ?? existing.rationale,
+  };
+}
+
+function upsertProposal(
+  pending: readonly ActiveProposal[],
+  proposal: ActiveProposal,
+): ActiveProposal[] {
+  const index = pending.findIndex((item) => item.callId === proposal.callId);
+  if (index === -1) return [...pending, proposal];
+  return pending.map((item, itemIndex) =>
+    itemIndex === index ? proposal : item,
+  );
+}
 
 export function isProposedEditItem(
   item: Item,

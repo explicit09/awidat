@@ -194,6 +194,7 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
         }],
         motion_scenes: vec![MotionScene {
             id: "scene-a".into(),
+            start_s: 0.0,
             duration_s: 4.0,
             fps: 30.0,
             width: 1920,
@@ -1169,6 +1170,7 @@ fn substrate_validation_catches_cross_stage_pipeline_issues() {
         }],
         motion_scenes: vec![MotionScene {
             id: "scene-bad".into(),
+            start_s: 0.0,
             duration_s: 3.0,
             fps: 30.0,
             width: 1920,

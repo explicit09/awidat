@@ -108,6 +108,133 @@ fn audio_separation_skill_is_graph_native() {
 }
 
 #[test]
+fn visual_support_editorial_skills_are_loadable_and_proposal_driven() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    for name in [
+        "retention-list-opener",
+        "quote-highlight",
+        "search-bar-sequence",
+        "source-backed-broll",
+        "route-map",
+        "statistic-counter",
+        "podcast-hook",
+        "chapter-intro",
+        "short-form-reframing",
+    ] {
+        let skill = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("missing bundled skill {name}"));
+        for tool in [
+            "plan_visual_support_proposals",
+            "revise_visual_support_proposal",
+            "apply_edl",
+            "start_render",
+            "verify_render",
+        ] {
+            assert!(
+                skill.meta.tools_allowlist.iter().any(|t| t == tool),
+                "{name} must allow {tool}"
+            );
+        }
+        for required in [
+            "Proposal-to-Visual-Support",
+            "evidence",
+            "apply_edl",
+            "revise_visual_support_proposal",
+            "verify_render",
+        ] {
+            assert!(
+                skill.body.contains(required),
+                "{name} must mention {required:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn visual_support_editorial_skills_ship_inspectable_examples() {
+    let root = workspace_root().join("skills");
+    for (name, artifact_type) in [
+        ("retention-list-opener", "animated_list"),
+        ("quote-highlight", "quote_highlight"),
+        ("search-bar-sequence", "search_bar"),
+        ("source-backed-broll", "broll_package"),
+        ("route-map", "map_visualization"),
+        ("statistic-counter", "counter_stat_graphic"),
+        ("podcast-hook", "quote_highlight"),
+        ("chapter-intro", "title_card"),
+        ("short-form-reframing", "title_card"),
+    ] {
+        let path = root
+            .join(name)
+            .join("examples")
+            .join("visual-support-proposal.json");
+        let bytes = std::fs::read(&path).unwrap_or_else(|err| {
+            panic!("missing example for {name} at {}: {err}", path.display())
+        });
+        let example: serde_json::Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|err| panic!("invalid example JSON for {name}: {err}"));
+        assert_eq!(
+            example["workflow"], "proposal_to_visual_support",
+            "{name} example must document the proposal workflow"
+        );
+        assert_eq!(
+            example["artifact_type"], artifact_type,
+            "{name} example must use the registered artifact type"
+        );
+        assert!(
+            example["evidence"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "{name} example must include evidence"
+        );
+        assert!(
+            example["verification"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "{name} example must include verification checks"
+        );
+    }
+}
+
+#[test]
+fn podcast_episode_producer_routes_visual_polish_through_proposals() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("podcast-episode-producer")
+        .expect("podcast-episode-producer exists");
+    for tool in [
+        "plan_visual_support_proposals",
+        "revise_visual_support_proposal",
+        "apply_edl",
+        "start_render",
+        "verify_render",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "podcast-episode-producer must allow {tool}"
+        );
+    }
+    for required in [
+        "Proposal-to-Visual-Support",
+        "evidence",
+        "revise_visual_support_proposal",
+        "apply_edl",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "podcast-episode-producer must mention {required:?}"
+        );
+    }
+}
+
+#[test]
 fn cut_and_split_directors_expose_first_class_edit_grammar() {
     let root = workspace_root().join("skills");
     let (registry, errors) = SkillRegistry::discover(Some(&root), None);

@@ -1,0 +1,16 @@
+{
+  "workflow": "proposal_to_visual_support",
+  "artifact_type": "counter_stat_graphic",
+  "selection_text": "Retention improved by 42 percent.",
+  "request": "Create a statistic counter graphic.",
+  "evidence": [
+    {
+      "kind": "transcript",
+      "text": "42 percent"
+    }
+  ],
+  "verification": [
+    "verify_visual_support_artifact checks count-up stat-value slot",
+    "start_render and verify_render pass before delivery"
+  ]
+}

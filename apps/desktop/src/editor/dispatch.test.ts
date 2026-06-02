@@ -85,6 +85,33 @@ describe("createEditorDispatch", () => {
     ]);
   });
 
+  it("routes transcript visual-support selections through the proposal command", async () => {
+    const { calls, invoke } = recorder("visual-support-1");
+    const dispatch = createEditorDispatch(invoke);
+
+    const id = await dispatch.proposeVisualSupport({
+      selectionText: "This quote should land harder.",
+      request: "make this quote pop visually",
+      anchorTranscript: "quote should land harder",
+      artifactType: "quote_highlight",
+    });
+
+    assert.equal(id, "visual-support-1");
+    assert.deepEqual(calls, [
+      {
+        command: "propose_visual_support",
+        args: {
+          payload: {
+            selectionText: "This quote should land harder.",
+            request: "make this quote pop visually",
+            anchorTranscript: "quote should land harder",
+            artifactType: "quote_highlight",
+          },
+        },
+      },
+    ]);
+  });
+
   it("rejects empty user edit envelopes before invoking Tauri", async () => {
     const { calls, invoke } = recorder();
     const dispatch = createEditorDispatch(invoke);

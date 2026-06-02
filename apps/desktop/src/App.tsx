@@ -186,6 +186,8 @@ function App() {
   );
 
   const activeProposal = useProposalStore((s) => s.active);
+  const pendingProposals = useProposalStore((s) => s.pending);
+  const selectProposal = useProposalStore((s) => s.select);
   const inspectorData = useProposalInspectorData();
 
   // Wave 3 B1: Brief / Source / Timeline center-pane toggle. The store
@@ -1924,16 +1926,46 @@ function App() {
   );
   const stageInspector =
     activeProposal || demoMode ? (
-      <ProposalInspector
-        data={effectiveInspector}
-        onAccept={acceptActiveProposal}
-        onReject={rejectActiveProposal}
-        onInspectDeeper={inspectActiveProposal}
-        onRevise={reviseActiveProposal}
-        onAgentRepair={() => {
-          void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
-        }}
-      />
+      <div className="proposal-review-stack">
+        {!demoMode && pendingProposals.length > 1 ? (
+          <div className="proposal-picker" aria-label="Pending proposals">
+            <div className="proposal-picker-header">
+              <span>Pending proposals</span>
+              <span>{pendingProposals.length}</span>
+            </div>
+            <div className="proposal-picker-list">
+              {pendingProposals.map((proposal, index) => (
+                <button
+                  key={proposal.callId}
+                  type="button"
+                  className={
+                    proposal.callId === activeProposal?.callId
+                      ? "proposal-picker-item is-active"
+                      : "proposal-picker-item"
+                  }
+                  onClick={() => selectProposal(proposal.callId)}
+                  title={proposal.summary}
+                >
+                  <span>{index + 1}</span>
+                  <strong>{proposal.summary}</strong>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <ProposalInspector
+          data={effectiveInspector}
+          onAccept={acceptActiveProposal}
+          onReject={rejectActiveProposal}
+          onInspectDeeper={inspectActiveProposal}
+          onRevise={reviseActiveProposal}
+          onAgentRepair={() => {
+            void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
+          }}
+          onMaximize={() => setInspectorCollapsed(false)}
+          onCollapse={() => setInspectorCollapsed(true)}
+        />
+      </div>
     ) : (
       <ClipInspector />
     );

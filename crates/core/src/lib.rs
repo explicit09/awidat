@@ -56,6 +56,7 @@ pub mod clip_candidates;
 pub mod context;
 pub mod continuity;
 pub mod dismissal;
+pub mod editorial_skills;
 pub mod edl;
 pub mod episode_map;
 pub mod error;

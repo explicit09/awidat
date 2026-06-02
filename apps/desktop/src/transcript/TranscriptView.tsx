@@ -84,6 +84,54 @@ type ComposedRow = {
 
 type ComposedPlayback = { rowIdx: number; sourceTime: number | null };
 
+/** A user text-selection inside the composed timeline transcript:
+ *  the selected text plus the absolute timeline second where it begins
+ *  (resolved from the word span the selection starts in). */
+type ComposedSelection = {
+  text: string;
+  timelineStartS: number | undefined;
+};
+
+/** Read the browser's current selection inside the composed transcript
+ *  and resolve it to selected text + anchored timeline-time. Returns
+ *  null for an empty/collapsed selection. The timeline-time comes from
+ *  the `data-word-start` source time of the word the selection starts
+ *  in, mapped through that row's clip placement; `undefined` when the
+ *  start node isn't a resolvable word (the proposal still works, just
+ *  unanchored). */
+function readComposedSelection(rows: ComposedRow[]): ComposedSelection | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return null;
+  const text = selection.toString().replace(/\s+/g, " ").trim();
+  if (!text) return null;
+
+  let node: Node | null = selection.anchorNode;
+  let wordEl: HTMLElement | null = null;
+  while (node) {
+    if (node instanceof HTMLElement) {
+      wordEl = node.closest("[data-word-start]") as HTMLElement | null;
+      if (wordEl) break;
+      const rowEl = node.closest("[data-row-idx]");
+      if (rowEl) break;
+    }
+    node = node.parentNode;
+  }
+
+  let timelineStartS: number | undefined;
+  if (wordEl) {
+    const rowEl = wordEl.closest("[data-row-idx]");
+    const rowIdx = rowEl ? Number(rowEl.getAttribute("data-row-idx")) : NaN;
+    const sourceStart = Number(wordEl.getAttribute("data-word-start"));
+    const row = rows[rowIdx];
+    if (row && Number.isFinite(sourceStart)) {
+      timelineStartS =
+        row.playSegment.timelineStart +
+        (sourceStart - row.playSegment.sourceStart);
+    }
+  }
+  return { text, timelineStartS };
+}
+
 function TimelineComposedTranscript({
   playSegments,
 }: {
@@ -91,6 +139,14 @@ function TimelineComposedTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+
+  // Text-selection-driven Visual support. The composed list is
+  // virtualized across multiple stems, so rather than a custom
+  // word-range model we read the browser's native selection on
+  // mouse-up and resolve the anchored timeline-time from the word span
+  // the selection starts in. `null` hides the action button.
+  const [composedSelection, setComposedSelection] =
+    useState<ComposedSelection | null>(null);
 
   // Ensure every stem on the timeline is loaded into the transcript
   // store. The store already de-dupes in-flight loads and caches
@@ -222,17 +278,46 @@ function TimelineComposedTranscript({
         <span className="transcript-meta-lang">
           Timeline · {rows.length} segments · {stems.length} sources
         </span>
-        <span className="transcript-meta-counts">
-          {pendingStems.length > 0
-            ? `loading ${pendingStems.length}…`
-            : missingStems.length > 0
-              ? `${missingStems.length} missing transcript`
-              : ""}
+        <span className="transcript-meta-right">
+          {composedSelection ? (
+            <button
+              type="button"
+              className="transcript-action-button"
+              onClick={() => {
+                editorDispatch
+                  .proposeVisualSupport({
+                    selectionText: composedSelection.text,
+                    request: "request visual support",
+                    anchorTranscript: composedSelection.text,
+                    anchorTimelineStartS: composedSelection.timelineStartS,
+                  })
+                  .catch((err: unknown) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                      "propose_visual_support (composed transcript) failed",
+                      err,
+                    );
+                  });
+                window.getSelection()?.removeAllRanges();
+                setComposedSelection(null);
+              }}
+            >
+              Visual support
+            </button>
+          ) : null}
+          <span className="transcript-meta-counts">
+            {pendingStems.length > 0
+              ? `loading ${pendingStems.length}…`
+              : missingStems.length > 0
+                ? `${missingStems.length} missing transcript`
+                : ""}
+          </span>
         </span>
       </header>
       <div
         ref={scrollRef}
         className="transcript-scroll"
+        onMouseUp={() => setComposedSelection(readComposedSelection(rows))}
         onClick={(e) => {
           // Click on a word or segment: seek the timeline playhead to
           // the corresponding timeline-time.
@@ -706,6 +791,15 @@ function LoadedTranscript({
     selection && selection.stem === stem ? selection.startWordIdx : -1;
   const selectionEnd =
     selection && selection.stem === stem ? selection.endWordIdx : -1;
+  const selectedTranscriptText = useMemo(() => {
+    if (selectionStart < 0 || selectionEnd < 0) return "";
+    return t.words
+      .slice(selectionStart, selectionEnd + 1)
+      .map((word) => word.text)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }, [selectionStart, selectionEnd, t.words]);
   useEffect(() => {
     const scope = scrollRef.current;
     if (!scope) return;
@@ -759,6 +853,26 @@ function LoadedTranscript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionStart, selectionEnd, snapshot, stem, t.words]);
 
+  function requestVisualSupportForSelection() {
+    if (!selectedTranscriptText) return;
+    const startWord = t.words[selectionStart];
+    const anchorTimelineStartS = startWord
+      ? sourceTimeToTimeline(snapshot, stem, startWord.start_s)
+      : undefined;
+    editorDispatch
+      .proposeVisualSupport({
+        selectionText: selectedTranscriptText,
+        request: "request visual support",
+        anchorTranscript: selectedTranscriptText,
+        anchorTimelineStartS,
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn("propose_visual_support (transcript selection) failed", err);
+      });
+    setSelection(null);
+  }
+
   return (
     <div className="transcript-pane">
       <header className="transcript-meta">
@@ -766,8 +880,19 @@ function LoadedTranscript({
           {t.language || "—"}
           {t.diarized ? " · diarized" : ""}
         </span>
-        <span className="transcript-meta-counts">
-          {t.segments.length} segments · {t.words.length} words
+        <span className="transcript-meta-right">
+          {selectedTranscriptText ? (
+            <button
+              type="button"
+              className="transcript-action-button"
+              onClick={requestVisualSupportForSelection}
+            >
+              Visual support
+            </button>
+          ) : null}
+          <span className="transcript-meta-counts">
+            {t.segments.length} segments · {t.words.length} words
+          </span>
         </span>
       </header>
       <div
@@ -1056,6 +1181,33 @@ function wordIdxFromTarget(target: HTMLElement | null): number {
  * which now spans `[start, end]` in source-time. Step 8.1's
  * uuid-stamping path keeps the anchors unique.
  */
+/** Map an asset-local source second to its absolute timeline second by
+ *  finding the clip on a video track that references this stem and contains
+ *  the source time: `track_start_s + (sourceS - clip source_start_s)`.
+ *  Returns undefined when the source time isn't placed on the timeline (e.g.
+ *  the selection sits in trimmed-out media), so callers can omit the anchor
+ *  rather than guess program-start. */
+function sourceTimeToTimeline(
+  snapshot: TimelineSnapshot,
+  stem: string,
+  sourceS: number,
+): number | undefined {
+  for (const track of snapshot.tracks) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      if (item.proxy_path === null) continue;
+      if (stemOf(item.proxy_path) !== stem) continue;
+      const clipStart = item.source_start_s ?? 0;
+      const clipEnd = clipStart + item.duration_s;
+      if (sourceS >= clipStart - 0.01 && sourceS <= clipEnd + 0.01) {
+        return item.track_start_s + (sourceS - clipStart);
+      }
+    }
+  }
+  return undefined;
+}
+
 function buildDeleteRangeOps(args: {
   snapshot: TimelineSnapshot;
   stem: string;

@@ -8,14 +8,32 @@ export type EditorInvoke = <T = unknown>(
 export type EditorDispatch = {
   proposeUserEdit: (ops: EdlOp[]) => Promise<string>;
   proposeUserEditText: (edlText: string) => Promise<string>;
+  proposeVisualSupport: (selection: VisualSupportSelection) => Promise<string>;
   acceptProposal: (callId: string) => Promise<void>;
   rejectProposal: (callId: string) => Promise<void>;
+};
+
+export type VisualSupportSelection = {
+  selectionText: string;
+  request: string;
+  anchorTranscript?: string;
+  /**
+   * Absolute timeline second where the selected words play. Lets the
+   * generated MotionScene anchor itself to that moment instead of rendering
+   * at program start.
+   */
+  anchorTimelineStartS?: number;
+  artifactType?: string;
+  brollAsset?: string;
+  durationS?: number;
+  referenceAssets?: string[];
 };
 
 export function createEditorDispatch(invoke: EditorInvoke): EditorDispatch {
   return {
     proposeUserEdit: (ops) => proposeUserEdit(invoke, ops),
     proposeUserEditText: (edlText) => proposeUserEditText(invoke, edlText),
+    proposeVisualSupport: (selection) => proposeVisualSupport(invoke, selection),
     acceptProposal: (callId) => invoke<void>("accept_proposal", { callId }),
     rejectProposal: (callId) => invoke<void>("reject_proposal", { callId }),
   };
@@ -39,4 +57,17 @@ async function proposeUserEditText(
     throw new Error("proposeUserEditText requires non-empty EDL text");
   }
   return invoke<string>("propose_user_edit", { edlText });
+}
+
+async function proposeVisualSupport(
+  invoke: EditorInvoke,
+  selection: VisualSupportSelection,
+): Promise<string> {
+  if (selection.selectionText.trim().length === 0) {
+    throw new Error("proposeVisualSupport requires selected transcript text");
+  }
+  if (selection.request.trim().length === 0) {
+    throw new Error("proposeVisualSupport requires a visual-support request");
+  }
+  return invoke<string>("propose_visual_support", { payload: selection });
 }
