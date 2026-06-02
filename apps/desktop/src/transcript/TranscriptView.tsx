@@ -770,11 +770,16 @@ function LoadedTranscript({
 
   function requestVisualSupportForSelection() {
     if (!selectedTranscriptText) return;
+    const startWord = t.words[selectionStart];
+    const anchorTimelineStartS = startWord
+      ? sourceTimeToTimeline(snapshot, stem, startWord.start_s)
+      : undefined;
     editorDispatch
       .proposeVisualSupport({
         selectionText: selectedTranscriptText,
         request: "request visual support",
         anchorTranscript: selectedTranscriptText,
+        anchorTimelineStartS,
       })
       .catch((err: unknown) => {
         // eslint-disable-next-line no-console
@@ -1091,6 +1096,33 @@ function wordIdxFromTarget(target: HTMLElement | null): number {
  * which now spans `[start, end]` in source-time. Step 8.1's
  * uuid-stamping path keeps the anchors unique.
  */
+/** Map an asset-local source second to its absolute timeline second by
+ *  finding the clip on a video track that references this stem and contains
+ *  the source time: `track_start_s + (sourceS - clip source_start_s)`.
+ *  Returns undefined when the source time isn't placed on the timeline (e.g.
+ *  the selection sits in trimmed-out media), so callers can omit the anchor
+ *  rather than guess program-start. */
+function sourceTimeToTimeline(
+  snapshot: TimelineSnapshot,
+  stem: string,
+  sourceS: number,
+): number | undefined {
+  for (const track of snapshot.tracks) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      if (item.proxy_path === null) continue;
+      if (stemOf(item.proxy_path) !== stem) continue;
+      const clipStart = item.source_start_s ?? 0;
+      const clipEnd = clipStart + item.duration_s;
+      if (sourceS >= clipStart - 0.01 && sourceS <= clipEnd + 0.01) {
+        return item.track_start_s + (sourceS - clipStart);
+      }
+    }
+  }
+  return undefined;
+}
+
 function buildDeleteRangeOps(args: {
   snapshot: TimelineSnapshot;
   stem: string;

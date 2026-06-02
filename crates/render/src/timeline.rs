@@ -1966,8 +1966,8 @@ fn collect_motion_scene_title_plans(
                     };
                     titles.push(TitlePlan {
                         text,
-                        start_s: layer.from_s,
-                        end_s: layer.from_s + layer.duration_s,
+                        start_s: scene.start_s + layer.from_s,
+                        end_s: scene.start_s + layer.from_s + layer.duration_s,
                         position: layer_title_position(layer),
                         font_size: layer_u32_param(layer, "font_size").unwrap_or(64),
                         color: layer_string_param(layer, "color")
@@ -2046,8 +2046,8 @@ fn collect_motion_scene_image_plans(
             let asset_path = project_root.join(asset);
             images.push(MotionImagePlan {
                 asset_path,
-                start_s: layer.from_s,
-                end_s: layer.from_s + layer.duration_s,
+                start_s: scene.start_s + layer.from_s,
+                end_s: scene.start_s + layer.from_s + layer.duration_s,
                 transform: MotionSceneTransform::from_layer_params(&layer.params),
                 animations: motion_scene_layer_animations_for_render(layer),
             });
@@ -2094,8 +2094,8 @@ fn motion_scene_rect_annotation(
         .clamp(0.0, 1.0);
     Some(AnnotationPlan {
         kind: AnnotationKind::Rectangle,
-        start_s: layer.from_s,
-        end_s: layer.from_s + layer.duration_s,
+        start_s: scene.start_s + layer.from_s,
+        end_s: scene.start_s + layer.from_s + layer.duration_s,
         x: layer_f64_param(layer, "x").unwrap_or(0.0),
         y: layer_f64_param(layer, "y").unwrap_or(0.0),
         width: layer_f64_param(layer, "width").unwrap_or(1.0),
@@ -11559,6 +11559,7 @@ mod tests {
             .motion_scenes
             .push(MotionScene {
                 id: "scene-a".into(),
+                start_s: 0.0,
                 duration_s: 2.0,
                 fps: 24.0,
                 width: 1920,
@@ -11694,6 +11695,41 @@ mod tests {
                 .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
             "text layer should not emit unsupported limitation: {:?}",
             spec.limitations
+        );
+    }
+
+    #[test]
+    fn motion_scene_start_offset_shifts_layers_to_the_anchored_timeline_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio_path = write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.25,
+                duration_s: 1.5,
+                z_index: 10,
+                params: [("text".to_string(), serde_json::json!("Anchored"))]
+                    .into_iter()
+                    .collect(),
+            }],
+        );
+        // Anchor the scene 5s into the program.
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        tl.metadata.awidat.as_mut().unwrap().motion_scenes[0].start_s = 5.0;
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // The text must be enabled over [5.25, 6.75], not [0.25, 1.75].
+        assert!(
+            cmd.contains("between(t\\,5.25\\,6.75)"),
+            "anchored motion scene text should render over the offset window: {cmd}"
+        );
+        assert!(
+            !cmd.contains("between(t\\,0.25\\,1.75)"),
+            "anchored motion scene must not render at program start: {cmd}"
         );
     }
 

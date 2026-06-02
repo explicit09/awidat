@@ -17,6 +17,12 @@ export type VisualSupportSelection = {
   selectionText: string;
   request: string;
   anchorTranscript?: string;
+  /**
+   * Absolute timeline second where the selected words play. Lets the
+   * generated MotionScene anchor itself to that moment instead of rendering
+   * at program start.
+   */
+  anchorTimelineStartS?: number;
   artifactType?: string;
   brollAsset?: string;
   durationS?: number;

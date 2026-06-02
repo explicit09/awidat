@@ -103,6 +103,7 @@ pub fn plan_motion_scene_request(
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| stable_scene_id(request)),
+        start_s: 0.0,
         duration_s,
         fps,
         width,

@@ -24,6 +24,11 @@ pub struct PlanVisualSupportProposalArgs {
     /// Transcript phrase used by apply_edl to anchor generated timeline objects.
     #[serde(default)]
     pub anchor_transcript: Option<String>,
+    /// Absolute timeline second where the anchored moment begins. When set, a
+    /// generated MotionScene records it as its `start_s` so the graphic
+    /// renders over the selected words instead of at program start.
+    #[serde(default)]
+    pub anchor_timeline_start_s: Option<f64>,
     /// Optional project-relative B-roll asset. When omitted, the B-roll package
     /// is returned as a generation package with missing information instead of
     /// an apply-ready Insert BRoll envelope.
@@ -635,10 +640,17 @@ fn convert_proposal_to_artifact(
     let anchor = transcript_evidence_anchor(proposal)
         .or_else(|| proposal["review"]["rationale"].as_str().map(concise))
         .unwrap_or_else(|| "selected transcript moment".to_string());
+    // Preserve the existing scene's timeline anchor across a revision so a
+    // "make it faster" / artifact-swap revise doesn't snap the graphic back
+    // to program start.
+    let existing_start_s = motion_scene_from_proposal(proposal)
+        .map(|scene| scene.start_s)
+        .filter(|value| *value > 0.0);
     let args = PlanVisualSupportProposalArgs {
         selection_text: anchor.clone(),
         request: instruction.to_string(),
         anchor_transcript: Some(anchor.clone()),
+        anchor_timeline_start_s: existing_start_s,
         broll_asset: None,
         duration_s: proposal["export_intent"]["duration_s"].as_f64(),
         reference_assets: proposal_reference_assets(proposal),
@@ -1645,7 +1657,18 @@ fn motion_scene_proposal(
         .duration_s
         .unwrap_or_else(|| artifact.default_duration_s());
     let scene_id = motion_scene_id(artifact, anchor, selection);
-    let scene_json = motion_scene_json(artifact, selection, anchor, duration_s, &scene_id);
+    let scene_start_s = args
+        .anchor_timeline_start_s
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(0.0);
+    let scene_json = motion_scene_json(
+        artifact,
+        selection,
+        anchor,
+        scene_start_s,
+        duration_s,
+        &scene_id,
+    );
     let skill = editorial_skill_json_for_artifact(artifact, instance);
     let missing_information = motion_scene_missing_information(artifact, selection, anchor);
     let supported_preview = missing_information.is_empty();
@@ -1945,6 +1968,7 @@ fn motion_scene_json(
     artifact: ArtifactType,
     selection: &str,
     anchor: &str,
+    start_s: f64,
     duration_s: f64,
     scene_id: &str,
 ) -> String {
@@ -2018,6 +2042,7 @@ fn motion_scene_json(
     }
     serde_json::json!({
         "id": scene_id,
+        "start_s": start_s,
         "duration_s": duration_s,
         "fps": 30.0,
         "width": 1920,
@@ -3203,6 +3228,7 @@ mod tests {
             selection_text: "We will cover hooks, retention, and export checks.".into(),
             request: "make this a faster retention opener with transparent background".into(),
             anchor_transcript: Some("hooks retention export checks".into()),
+            anchor_timeline_start_s: None,
             broll_asset: None,
             duration_s: Some(4.0),
             reference_assets: vec!["references/pill-buttons.png".into()],
@@ -4448,6 +4474,30 @@ mod tests {
                 .any(|proposal| proposal["artifact_type"] != "broll_package"),
             "generic request must offer a non-B-roll apply-ready proposal: {:?}",
             proposal_titles(&value)
+        );
+    }
+
+    #[test]
+    fn anchor_timeline_start_is_recorded_on_the_motion_scene() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "This is the quote that should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("quote that should land harder".into()),
+            anchor_timeline_start_s: Some(42.5),
+            duration_s: Some(4.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let scene = motion_scene_for(proposal_by_type(&value, "quote_highlight"));
+        assert_eq!(
+            scene.start_s, 42.5,
+            "scene must record the anchor's timeline start so it renders over the selected words"
+        );
+        assert!(
+            scene.validate().is_empty(),
+            "anchored scene must still validate: {:?}",
+            scene.validate()
         );
     }
 

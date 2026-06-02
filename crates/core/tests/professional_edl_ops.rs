@@ -49,6 +49,7 @@ fn professional_timeline_ops_roundtrip_through_edl_json() {
         EdlOp::SetMotionScene {
             scene: MotionScene {
                 id: "scene-a".into(),
+                start_s: 0.0,
                 duration_s: 4.0,
                 fps: 30.0,
                 width: 1920,

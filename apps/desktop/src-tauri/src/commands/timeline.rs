@@ -1338,6 +1338,7 @@ mod tests {
         timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
+                start_s: 0.0,
                 duration_s: 3.0,
                 fps: 24.0,
                 width: 1920,
@@ -1388,6 +1389,7 @@ mod tests {
         timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
+                start_s: 0.0,
                 duration_s: 3.0,
                 fps: 24.0,
                 width: 1920,
@@ -1422,6 +1424,7 @@ mod tests {
         timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
+                start_s: 0.0,
                 duration_s: 3.0,
                 fps: 24.0,
                 width: 1920,
@@ -1496,6 +1499,7 @@ mod tests {
         timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
+                start_s: 0.0,
                 duration_s: 3.0,
                 fps: 24.0,
                 width: 1920,
