@@ -1,15 +1,20 @@
 import { CalendarClock, CheckCircle2, Sparkles } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryTargetKey } from "../../app/deliveryTargets";
 import type { RenderQueueEntry } from "../../app/renderQueue";
 import { approvalSummary, type CampaignType } from "../../campaign/manifest";
 import { planCampaignFromDelivery } from "../../campaign/planner";
+import {
+  campaignUploadRequests,
+  startCampaignUploads,
+} from "../../campaign/publisher";
 import { useCampaignStore } from "../../campaign/store";
 import { Button, Card, Inline, Stack, StatusPill, cn } from "../../ui";
 import { TARGET_META } from "./targetMeta";
 
 type CampaignApprovalPanelProps = {
-  sourceAssetId: string;
+  sourceAssetId: string | null;
   selectedTargets: DeliveryTargetKey[];
   renderEntries: RenderQueueEntry[];
 };
@@ -19,16 +24,25 @@ export function CampaignApprovalPanel({
   selectedTargets,
   renderEntries,
 }: CampaignApprovalPanelProps) {
+  const [campaignType, setCampaignType] = useState<CampaignType>("podcast");
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
   const campaigns = useCampaignStore((state) => state.campaigns);
   const upsertCampaign = useCampaignStore((state) => state.upsertCampaign);
   const approveItem = useCampaignStore((state) => state.approveItem);
   const requestChanges = useCampaignStore((state) => state.requestChanges);
   const approveVariant = useCampaignStore((state) => state.approveVariant);
+  const setVariantPublishJob = useCampaignStore(
+    (state) => state.setVariantPublishJob,
+  );
   const active = useMemo(
     () =>
+      sourceAssetId
+        ?
       campaigns
         .filter((campaign) => campaign.sourceAssetId === sourceAssetId)
-        .sort((a, b) => b.updatedAt - a.updatedAt)[0],
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+        : undefined,
     [campaigns, sourceAssetId],
   );
   const readyEntries = useMemo(
@@ -41,17 +55,21 @@ export function CampaignApprovalPanel({
       ),
     [renderEntries],
   );
-  const campaignType: CampaignType = selectedTargets.includes("youtube")
-    ? "podcast"
-    : "shorts";
-  const canCreate = readyEntries.length > 0 && selectedTargets.length > 0;
+  const canCreate =
+    sourceAssetId !== null &&
+    readyEntries.length > 0 &&
+    selectedTargets.length > 0;
   const summary = useMemo(
     () => (active ? approvalSummary(active) : undefined),
     [active],
   );
+  const uploadRequests = useMemo(
+    () => (active ? campaignUploadRequests(active, renderEntries) : []),
+    [active, renderEntries],
+  );
 
   function createLocalCampaign() {
-    if (!canCreate) return;
+    if (!canCreate || !sourceAssetId) return;
     const campaign = planCampaignFromDelivery({
       campaignType,
       sourceAssetId,
@@ -63,6 +81,26 @@ export function CampaignApprovalPanel({
       renderEntries,
     });
     upsertCampaign(campaign);
+  }
+
+  async function publishApproved() {
+    if (!active || uploadRequests.length === 0) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const started = await startCampaignUploads(active, renderEntries, invoke);
+      for (const request of started) {
+        setVariantPublishJob(
+          active.campaignId,
+          request.variantId,
+          request.jobId,
+        );
+      }
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPublishing(false);
+    }
   }
 
   return (
@@ -156,12 +194,45 @@ export function CampaignApprovalPanel({
                 </button>
               ))}
             </Inline>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void publishApproved()}
+              disabled={uploadRequests.length === 0 || publishing}
+            >
+              {publishing
+                ? "Publishing..."
+                : `Publish approved (${uploadRequests.length})`}
+            </Button>
+            {publishError ? (
+              <p className="text-[var(--text-caption)] text-[var(--color-job-failed-text)]">
+                {publishError}
+              </p>
+            ) : null}
           </Stack>
         ) : (
           <Stack gap="2">
+            <Inline gap="2" wrap="wrap">
+              {(["podcast", "shorts"] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setCampaignType(type)}
+                  className={cn(
+                    "rounded-[var(--radius-sm)] border px-2 py-1 text-[var(--text-caption)]",
+                    campaignType === type
+                      ? "border-[var(--color-brand-secondary)] bg-[rgba(56,189,248,0.12)] text-[var(--color-text-primary)]"
+                      : "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-secondary)]",
+                  )}
+                >
+                  {type === "podcast" ? "Podcast campaign" : "Shorts campaign"}
+                </button>
+              ))}
+            </Inline>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              Render at least one video target, then create a local campaign for
-              approval.
+              {sourceAssetId
+                ? "Render at least one video target, then create a local campaign for approval."
+                : "Load a project before creating a campaign."}
             </span>
             <Button
               size="sm"

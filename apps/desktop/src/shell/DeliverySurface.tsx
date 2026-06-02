@@ -18,6 +18,7 @@ import {
   type PreflightSeverity,
 } from "../ui";
 import { useMode } from "../state/mode";
+import { useProjectStore } from "../app/state";
 import { useUploadPrefs } from "../state/uploadPrefs";
 import {
   useRenderQueueStore,
@@ -110,6 +111,7 @@ function DeliveryCockpit({
   const [severityFilter, setSeverityFilter] = useState<"all" | PreflightSeverity>("all");
   const [confirmExportOpen, setConfirmExportOpen] = useState(false);
   const queueEntries = useRenderQueueStore((s) => s.entries);
+  const projectRoot = useProjectStore((s) => s.current);
   const uploadAfterRender = useUploadPrefs((s) => s.enabled);
   const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
 
@@ -232,7 +234,7 @@ function DeliveryCockpit({
             <RightColumnDetails mode={mode}>
               {summary ? <RenderSummary summary={summary} /> : null}
               <CampaignApprovalPanel
-                sourceAssetId="active-project"
+                sourceAssetId={projectRoot}
                 selectedTargets={activeTargetKeys}
                 renderEntries={queueEntries}
               />
@@ -314,6 +316,7 @@ function DeliverySheet({
   const uploadAfterRender = useUploadPrefs((s) => s.enabled);
   const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
   const queueEntries = useRenderQueueStore((s) => s.entries);
+  const projectRoot = useProjectStore((s) => s.current);
 
   const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
     const provided = targets.find((t) => t.key === key);
@@ -460,7 +463,7 @@ function DeliverySheet({
         <section className="flex flex-col gap-3">
           <SheetSectionLabel>Campaign</SheetSectionLabel>
           <CampaignApprovalPanel
-            sourceAssetId="active-project"
+            sourceAssetId={projectRoot}
             selectedTargets={activeTargetKeys}
             renderEntries={queueEntries}
           />

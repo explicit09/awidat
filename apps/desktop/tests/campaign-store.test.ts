@@ -48,6 +48,13 @@ saved = useCampaignStore.getState().campaigns[0];
 assert.equal(saved.platformVariants[0].status, "approved");
 assert.equal(saved.approvalState, "approved");
 
+useCampaignStore
+  .getState()
+  .setVariantPublishJob("campaign-store-1", "variant-youtube", "render-job-1");
+saved = useCampaignStore.getState().campaigns[0];
+assert.equal(saved.platformVariants[0].status, "uploading");
+assert.equal(saved.platformVariants[0].publishJobId, "render-job-1");
+
 useCampaignStore.getState().requestChanges("campaign-store-1", "item-long");
 saved = useCampaignStore.getState().campaigns[0];
 assert.equal(saved.items[0].approvalState, "changes_requested");

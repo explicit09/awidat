@@ -1,5 +1,6 @@
 import { DELIVERY_TARGETS, type DeliveryTargetKey } from "../app/deliveryTargets.ts";
 import type { RenderQueueEntry } from "../app/renderQueue.ts";
+import type { UploadMetadata } from "../state/uploadMetadata.ts";
 import {
   createCampaignManifest,
   createPlatformVariant,
@@ -70,6 +71,20 @@ function bestItemForPlatform(
   );
 }
 
+function platformFieldsForMetadata(
+  metadata: UploadMetadata | undefined,
+): Record<string, string | number | boolean | undefined> {
+  if (!metadata) return {};
+  const fields: Record<string, string | number | boolean | undefined> = {
+    title: metadata.title,
+    description: metadata.description,
+    tags: metadata.tags.join(","),
+    visibility: metadata.visibility,
+  };
+  if (metadata.thumbnailPath) fields.thumbnailPath = metadata.thumbnailPath;
+  return fields;
+}
+
 export function planCampaignFromDelivery(input: PlanCampaignInput): CampaignManifest {
   const doneVideoEntries = input.renderEntries.filter(
     (entry) =>
@@ -102,12 +117,14 @@ export function planCampaignFromDelivery(input: PlanCampaignInput): CampaignMani
     .filter((platform): platform is CampaignPlatform => platform !== undefined)
     .map((platform) => {
       const entry = bestItemForPlatform(platform, doneVideoEntries);
+      const metadata = entry?.uploadMetadata?.[platform];
       return entry
         ? createPlatformVariant({
             variantId: `variant-${entry.id}-${platform}`,
             itemId: `item-${entry.id}`,
             platform,
-            platformFields: {},
+            scheduledFor: metadata?.scheduledAt,
+            platformFields: platformFieldsForMetadata(metadata),
           })
         : undefined;
     })

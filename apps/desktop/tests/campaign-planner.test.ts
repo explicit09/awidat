@@ -23,6 +23,15 @@ const entries: RenderQueueEntry[] = [
     outputPath: "/tmp/tiktok.mp4",
     reviewStatus: "pending",
     enqueuedAt: 2,
+    uploadMetadata: {
+      tiktok: {
+        title: "TikTok title",
+        description: "TikTok caption",
+        tags: ["ai", "workflow"],
+        visibility: "public",
+        scheduledAt: 1_782_686_400,
+      },
+    },
   },
 ];
 
@@ -54,5 +63,15 @@ const instagramVariant = campaign.platformVariants.find((variant) => variant.pla
 assert.ok(instagramVariant);
 assert.equal(instagramVariant.status, "draft");
 assert.equal(instagramVariant.itemId, "item-render-tiktok");
+
+const tiktokVariant = campaign.platformVariants.find((variant) => variant.platform === "tiktok");
+assert.ok(tiktokVariant);
+assert.equal(tiktokVariant.scheduledFor, 1_782_686_400);
+assert.deepEqual(tiktokVariant.platformFields, {
+  title: "TikTok title",
+  description: "TikTok caption",
+  tags: "ai,workflow",
+  visibility: "public",
+});
 
 console.log("campaign-planner: OK");
