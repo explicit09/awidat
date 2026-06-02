@@ -1,5 +1,5 @@
-import { DELIVERY_TARGETS, type DeliveryTargetKey } from "../app/deliveryTargets";
-import type { RenderQueueEntry } from "../app/renderQueue";
+import { DELIVERY_TARGETS, type DeliveryTargetKey } from "../app/deliveryTargets.ts";
+import type { RenderQueueEntry } from "../app/renderQueue.ts";
 import {
   createCampaignManifest,
   createPlatformVariant,
@@ -8,7 +8,7 @@ import {
   type CampaignPlatform,
   type CampaignType,
   type PublishableItemKind,
-} from "./manifest";
+} from "./manifest.ts";
 
 const PUBLISHING_TARGETS = new Set<DeliveryTargetKey>(["youtube", "tiktok", "instagram"]);
 
