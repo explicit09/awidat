@@ -586,6 +586,19 @@ fn visual_support_proposal_edl(
         .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())
 }
 
+/// Pick the single planned proposal to open in the Proposal Inspector.
+///
+/// Sibling proposals from one planner call are all computed against the same
+/// pre-accept timeline, and `accept_proposal` writes a cached
+/// `proposed_timeline` wholesale — so opening more than one would let
+/// accepting the second drop the first's accepted changes. The planner
+/// already returns candidates highest-confidence first, so we take the head.
+fn first_proposal_to_open(
+    planned: Vec<PlannedVisualSupportProposal>,
+) -> Option<PlannedVisualSupportProposal> {
+    planned.into_iter().next()
+}
+
 fn visual_support_proposal_edls(
     request: VisualSupportProposalRequest,
     project_root: Option<&Path>,
@@ -684,36 +697,31 @@ pub async fn propose_visual_support(
         },
         Some(project_root.as_path()),
     )?;
-    let base_id = format!(
+    // Open a single proposal at a time. `build_proposal` snapshots the
+    // current timeline and `accept_proposal` later writes that cached
+    // `proposed_timeline` wholesale, so opening every sibling here (each
+    // computed from the same pre-accept timeline) would let accepting the
+    // second one silently drop the first's accepted changes. The planner
+    // still ranks the candidates; we surface the highest-confidence one.
+    let proposal = first_proposal_to_open(planned)
+        .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())?;
+    let id = format!(
         "visual-support-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let mut ids = Vec::new();
-
-    for (index, proposal) in planned.into_iter().enumerate() {
-        let id = if index == 0 {
-            base_id.clone()
-        } else {
-            format!("{base_id}-{index}")
-        };
-        let _ = &proposal.summary;
-        build_proposal(
-            &app,
-            &state,
-            id.clone(),
-            proposal.edl_text,
-            &project_root,
-            ProposalSource::User,
-            None,
-            None,
-        )
-        .await?;
-        ids.push(id);
-    }
-
-    ids.into_iter()
-        .next()
-        .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())
+    let _ = &proposal.summary;
+    build_proposal(
+        &app,
+        &state,
+        id.clone(),
+        proposal.edl_text,
+        &project_root,
+        ProposalSource::User,
+        None,
+        None,
+    )
+    .await?;
+    Ok(id)
 }
 
 // --- internal: diff hints + summary + adjust application ----------
@@ -1381,6 +1389,37 @@ mod tests {
             planned
                 .iter()
                 .all(|proposal| proposal.edl_text.contains("*** Add Proposal Package"))
+        );
+    }
+
+    #[test]
+    fn visual_support_selection_opens_only_one_proposal() {
+        // The planner can return several apply-ready siblings, but only one
+        // may be opened: each is computed from the same pre-accept timeline,
+        // and accepting two would clobber the first's accepted changes.
+        let planned = visual_support_proposal_edls(
+            VisualSupportProposalRequest {
+                selection_text: "This quote explains why the 42% growth matters.".into(),
+                request: "add visual support with a quote highlight and statistic counter".into(),
+                anchor_transcript: Some("42% growth matters".into()),
+                artifact_type: None,
+                broll_asset: None,
+                duration_s: Some(3.0),
+                reference_assets: vec![],
+            },
+            None,
+        )
+        .unwrap();
+        assert!(
+            planned.len() > 1,
+            "precondition: planner should offer multiple siblings here"
+        );
+        let first_edl = planned[0].edl_text.clone();
+
+        let chosen = first_proposal_to_open(planned).expect("one proposal to open");
+        assert_eq!(
+            chosen.edl_text, first_edl,
+            "must open the first (highest-confidence) planned proposal"
         );
     }
 
