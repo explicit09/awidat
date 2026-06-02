@@ -1639,7 +1639,7 @@ fn motion_scene_proposal(
     let duration_s = args
         .duration_s
         .unwrap_or_else(|| artifact.default_duration_s());
-    let scene_id = format!("visual-support-{}", artifact.as_str().replace('_', "-"));
+    let scene_id = motion_scene_id(artifact, anchor, selection);
     let scene_json = motion_scene_json(artifact, selection, anchor, duration_s, &scene_id);
     let skill = editorial_skill_json_for_artifact(artifact, instance);
     let missing_information = motion_scene_missing_information(artifact, selection, anchor);
@@ -1866,6 +1866,38 @@ fn evidence_trace_from_row(row: serde_json::Value) -> EvidenceTrace {
         reason: row["label"].as_str().map(str::to_string),
         confidence: row["confidence"].as_f64(),
     }
+}
+
+/// Scene id for a MotionScene proposal.
+///
+/// Applying `Set Motion Scene` stores scenes with `replace_by_id`, so two
+/// proposals of the same artifact type need distinct ids — otherwise a
+/// second quote highlight / list / title overwrites the first accepted one.
+/// Bind the id to the transcript moment (anchor, falling back to selection)
+/// so distinct moments yield distinct scenes while the same moment stays
+/// stable across re-plans.
+fn motion_scene_id(artifact: ArtifactType, anchor: &str, selection: &str) -> String {
+    let artifact_slug = artifact.as_str().replace('_', "-");
+    let moment = if anchor.trim().is_empty() {
+        selection
+    } else {
+        anchor
+    };
+    let fingerprint = stable_short_hash(moment);
+    format!("visual-support-{artifact_slug}-{fingerprint}")
+}
+
+/// Deterministic short hex fingerprint of `value`, stable across runs (unlike
+/// `DefaultHasher`, whose seed is randomized) so re-planning the same moment
+/// reproduces the same scene id.
+fn stable_short_hash(value: &str) -> String {
+    // FNV-1a 64-bit over the normalized moment text.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in normalize_for_match(value).bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn proposal_slug(anchor: &str) -> String {
@@ -4373,6 +4405,34 @@ mod tests {
         .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(report["passed"], true, "{report:#}");
+    }
+
+    #[test]
+    fn motion_scene_ids_are_unique_per_anchor() {
+        let first = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "This is the first quote that should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("first quote that should land harder".into()),
+            duration_s: Some(4.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+        let second = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "Here is a completely different second highlight moment.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("completely different second highlight moment".into()),
+            duration_s: Some(4.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let first_scene = motion_scene_for(proposal_by_type(&first, "quote_highlight"));
+        let second_scene = motion_scene_for(proposal_by_type(&second, "quote_highlight"));
+        assert_ne!(
+            first_scene.id, second_scene.id,
+            "two distinct anchors must produce distinct scene ids so accepting \
+             both does not overwrite the first via replace_by_id"
+        );
     }
 
     #[test]
