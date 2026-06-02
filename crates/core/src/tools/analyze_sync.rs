@@ -99,7 +99,8 @@ impl ToolHandler for AnalyzeSyncTool {
             FunctionCallError::RespondToModel(format!(
                 "analyze_sync: waveform reference failed: {e}"
             ))
-        })?;
+        })?
+        .buckets;
         let reference_duration_s = reference_probe.duration_s.unwrap_or(bucket_count as f64);
 
         let candidates = args.candidate_assets.unwrap_or_else(|| {
@@ -135,7 +136,7 @@ impl ToolHandler for AnalyzeSyncTool {
             )
             .await
             {
-                Ok(w) if !w.is_empty() => w,
+                Ok(w) if !w.buckets.is_empty() => w.buckets,
                 Ok(_) => {
                     blockers.push(
                         serde_json::json!({ "asset": candidate, "reason": "empty audio waveform" }),

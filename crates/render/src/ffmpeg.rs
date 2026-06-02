@@ -1260,13 +1260,32 @@ pub async fn generate_thumbnails(
 ///
 /// `cancel` kills ffmpeg and returns `Err(NonZero { stderr_tail:
 /// "cancelled" })`, mirroring [`transcode_proxy`].
+/// Sample rate (Hz) ffmpeg resamples audio to before bucketing. The
+/// decoded sample count divided by this is the exact audio duration the
+/// peak buckets cover — used to slice the buckets for trimmed clips.
+const WAVEFORM_SAMPLE_RATE: usize = 8000;
+
+/// Peak buckets plus the audio duration they span. `duration_s` is
+/// derived from the decoded sample count (`samples / 8000`), so it is
+/// exactly the span the buckets represent — the correct denominator for
+/// mapping a trimmed clip's source range onto the bucket array.
+#[derive(Debug, Clone, Default)]
+pub struct Waveform {
+    /// Peak amplitudes in `[0.0, 1.0]`, one per bucket. Empty when the
+    /// asset has no audio stream.
+    pub buckets: Vec<f32>,
+    /// Total audio duration in seconds the buckets span. `0.0` when the
+    /// asset has no audio.
+    pub duration_s: f64,
+}
+
 pub async fn generate_waveform(
     asset_path: &Path,
     bucket_count: usize,
     cancel: tokio_util::sync::CancellationToken,
-) -> Result<Vec<f32>, FfmpegError> {
+) -> Result<Waveform, FfmpegError> {
     if bucket_count == 0 {
-        return Ok(Vec::new());
+        return Ok(Waveform::default());
     }
     let bin = ffmpeg_path()?;
 
@@ -1281,7 +1300,7 @@ pub async fn generate_waveform(
         .arg("-ac")
         .arg("1")
         .arg("-ar")
-        .arg("8000")
+        .arg(WAVEFORM_SAMPLE_RATE.to_string())
         .arg("-f")
         .arg("f32le")
         .arg("-")
@@ -1365,10 +1384,14 @@ pub async fn generate_waveform(
     // No audio stream (or `-map 0:a:0?` matched nothing). The desktop
     // wrapper treats this as "asset has no audio; skip the sidecar".
     if samples.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Waveform::default());
     }
 
-    Ok(bucket_peaks(&samples, bucket_count))
+    let duration_s = samples.len() as f64 / WAVEFORM_SAMPLE_RATE as f64;
+    Ok(Waveform {
+        buckets: bucket_peaks(&samples, bucket_count),
+        duration_s,
+    })
 }
 
 /// Reduce a sample stream to `bucket_count` peak amplitudes. Each
@@ -1955,7 +1978,7 @@ mod tests {
             .expect("synth ffmpeg spawn");
         assert!(status.success(), "synth wav exit: {status}");
 
-        let buckets = tokio::runtime::Builder::new_current_thread()
+        let wave = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
@@ -1964,19 +1987,27 @@ mod tests {
             })
             .expect("generate_waveform");
 
-        assert_eq!(buckets.len(), 256);
+        assert_eq!(wave.buckets.len(), 256);
+        // The synth source is exactly 2s; duration is derived from the
+        // decoded sample count, so it should land within one resample
+        // frame of 2.0s.
+        assert!(
+            (wave.duration_s - 2.0).abs() < 0.05,
+            "expected ~2.0s duration, got {}",
+            wave.duration_s,
+        );
         // ffmpeg's lavfi `sine=` defaults to ~0.125 amplitude (-18
         // dBFS); we just need to confirm a real signal landed, not
         // any specific level. The bucket-peak max should be well
         // above the noise floor.
-        let max_peak = buckets.iter().fold(0f32, |acc, &p| acc.max(p));
+        let max_peak = wave.buckets.iter().fold(0f32, |acc, &p| acc.max(p));
         assert!(
             max_peak > 0.05,
             "expected a real signal in the buckets, max was {max_peak}",
         );
         // Sanity: every bucket of a continuous sine should have a
         // non-zero peak — a sine never goes silent.
-        let zero_buckets = buckets.iter().filter(|p| **p < 1e-6).count();
+        let zero_buckets = wave.buckets.iter().filter(|p| **p < 1e-6).count();
         assert!(
             zero_buckets < 5,
             "too many zero buckets: {zero_buckets}/256",

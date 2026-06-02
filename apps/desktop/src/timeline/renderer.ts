@@ -12,7 +12,7 @@ import {
 import type { PendingProposal } from "./pendingProposals.ts";
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
 import { getStrip } from "./thumbnailCache.ts";
-import { getBuckets } from "./waveformCache.ts";
+import { getWaveform } from "./waveformCache.ts";
 
 // Canvas needs literal colors but every value mirrors a token from
 // `ui/tokens.css`. Keep them in sync — if a token shifts, update its
@@ -553,14 +553,25 @@ function drawClipWaveform(
   selected: boolean,
 ): boolean {
   if (!item.waveform_path) return false;
-  const buckets = getBuckets(item.waveform_path);
-  if (!buckets || buckets.length === 0) return false;
+  const wave = getWaveform(item.waveform_path);
+  if (!wave || wave.buckets.length === 0) return false;
+  const buckets = wave.buckets;
 
+  // The bucket array spans the WHOLE asset [0, assetDuration]. Slice out
+  // only the source span this clip uses. The clip plays source seconds
+  // [sourceStart, sourceStart + sourceSpan), where sourceSpan is the
+  // timeline duration scaled by playback speed (a 2x clip consumes 2s of
+  // source per 1s on the timeline). assetDuration comes from the sidecar
+  // (decoded sample count / sample rate); fall back to the old
+  // approximation only when it's unknown (legacy sidecar).
   const sourceStart = item.source_start_s ?? 0;
-  const approxAssetEnd = sourceStart + item.duration_s;
-  const approxAssetDuration = Math.max(1e-3, approxAssetEnd);
-  const startFrac = sourceStart / approxAssetDuration;
-  const endFrac = approxAssetEnd / approxAssetDuration;
+  const speed = item.speed && item.speed > 0 ? item.speed : 1;
+  const sourceSpan = item.duration_s * speed;
+  const assetDuration =
+    wave.durationS > 1e-3 ? wave.durationS : sourceStart + sourceSpan;
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const startFrac = clamp01(sourceStart / assetDuration);
+  const endFrac = clamp01((sourceStart + sourceSpan) / assetDuration);
 
   const startBucket = Math.max(0, Math.floor(buckets.length * startFrac));
   const endBucket = Math.min(buckets.length, Math.ceil(buckets.length * endFrac));
