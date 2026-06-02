@@ -205,7 +205,7 @@ impl ArtifactType {
 }
 
 pub fn run(args: PlanVisualSupportProposalArgs, ctx: McpToolCtx) -> Result<String, String> {
-    let args = merge_project_defaults(args, &ctx.project_root);
+    let args = merge_visual_support_defaults(args, &ctx.project_root);
     let body = plan_visual_support_proposals(args)?;
     serde_json::to_string_pretty(&body)
         .map_err(|e| format!("plan_visual_support_proposals: serialize failed: {e}"))
@@ -362,7 +362,12 @@ impl PlanVisualSupportProposalArgs {
     }
 }
 
-fn merge_project_defaults(
+/// Merge the project's saved `.awidat/visual_support_defaults.json` into
+/// `args`, filling only fields the caller left unset. Both the MCP `run`
+/// wrapper and the desktop transcript-selection path call this so
+/// agent-planned and user-initiated proposals share the same brand / aspect /
+/// safe-area / reference contract.
+pub fn merge_visual_support_defaults(
     mut args: PlanVisualSupportProposalArgs,
     project_root: &Path,
 ) -> PlanVisualSupportProposalArgs {
@@ -4405,6 +4410,45 @@ mod tests {
         .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(report["passed"], true, "{report:#}");
+    }
+
+    #[test]
+    fn generic_visual_support_request_yields_an_apply_ready_proposal() {
+        // The desktop "Visual support" button submits a generic request with
+        // no B-roll asset. It must not collapse to a B-roll-only plan (which
+        // is missing its asset and gets filtered out), leaving the user with
+        // no openable proposal.
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "The team rebuilt the onboarding flow from scratch.".into(),
+            request: "request visual support".into(),
+            anchor_transcript: Some("rebuilt the onboarding flow from scratch".into()),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposals = value["proposals"].as_array().unwrap();
+        let apply_ready: Vec<&serde_json::Value> = proposals
+            .iter()
+            .filter(|proposal| {
+                proposal["missing_information"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+                    && proposal["apply_edl"]["edl"].as_str().is_some()
+            })
+            .collect();
+        assert!(
+            !apply_ready.is_empty(),
+            "generic visual-support request must produce at least one apply-ready proposal: {:?}",
+            proposal_titles(&value)
+        );
+        // And it must not be only a B-roll package.
+        assert!(
+            apply_ready
+                .iter()
+                .any(|proposal| proposal["artifact_type"] != "broll_package"),
+            "generic request must offer a non-B-roll apply-ready proposal: {:?}",
+            proposal_titles(&value)
+        );
     }
 
     #[test]

@@ -292,14 +292,14 @@ fn score_definition(
         "source-backed-broll"
             if contains_any(
                 combined,
-                &[
-                    "b-roll",
-                    "broll",
-                    "footage",
-                    "cutaway",
-                    "show this",
-                    "visual support",
-                ],
+                // NB: the generic phrase "visual support" is intentionally
+                // excluded. The desktop button submits "request visual
+                // support" with no asset; treating that as a B-roll request
+                // produced a B-roll-only plan that was then filtered out for
+                // missing its asset, leaving the user with no openable
+                // proposal. Generic requests now fall through to the
+                // apply-ready quote-highlight fallback instead.
+                &["b-roll", "broll", "footage", "cutaway", "show this"],
             ) =>
         {
             0.80
