@@ -30,7 +30,7 @@
 use std::path::Path;
 
 use awidat_core::awidat_mcp::tools::plan_visual_support_proposals::{
-    PlanVisualSupportProposalArgs, plan_visual_support_proposals,
+    PlanVisualSupportProposalArgs, merge_visual_support_defaults, plan_visual_support_proposals,
 };
 use awidat_core::edl::{ApplyError, EdlEnvelope, EdlOp, apply, parse};
 use awidat_core::tool::ApprovalDecision;
@@ -547,7 +547,7 @@ pub async fn propose_user_edit(
     Ok(id)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct VisualSupportProposalRequest {
     selection_text: String,
     request: String,
@@ -580,7 +580,7 @@ pub struct VisualSupportProposalPayload {
 fn visual_support_proposal_edl(
     request: VisualSupportProposalRequest,
 ) -> Result<PlannedVisualSupportProposal, String> {
-    visual_support_proposal_edls(request)?
+    visual_support_proposal_edls(request, None)?
         .into_iter()
         .next()
         .ok_or_else(|| "visual support planner returned no apply-ready proposal".to_string())
@@ -588,8 +588,9 @@ fn visual_support_proposal_edl(
 
 fn visual_support_proposal_edls(
     request: VisualSupportProposalRequest,
+    project_root: Option<&Path>,
 ) -> Result<Vec<PlannedVisualSupportProposal>, String> {
-    let planned = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+    let mut args = PlanVisualSupportProposalArgs {
         selection_text: request.selection_text,
         request: request.request,
         anchor_transcript: request.anchor_transcript,
@@ -597,7 +598,15 @@ fn visual_support_proposal_edls(
         duration_s: request.duration_s,
         reference_assets: request.reference_assets,
         ..PlanVisualSupportProposalArgs::default()
-    })?;
+    };
+    // Mirror the MCP `run` wrapper so user-initiated transcript-selection
+    // proposals honour the editor's saved brand/aspect/safe-area/reference
+    // defaults instead of opening with a different export/style contract than
+    // agent-planned proposals.
+    if let Some(root) = project_root {
+        args = merge_visual_support_defaults(args, root);
+    }
+    let planned = plan_visual_support_proposals(args)?;
     let proposals = planned["proposals"]
         .as_array()
         .ok_or_else(|| "visual support planner returned no proposals array".to_string())?;
@@ -663,15 +672,18 @@ pub async fn propose_visual_support(
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
 
-    let planned = visual_support_proposal_edls(VisualSupportProposalRequest {
-        selection_text: payload.selection_text,
-        request: payload.request,
-        anchor_transcript: payload.anchor_transcript,
-        artifact_type: payload.artifact_type,
-        broll_asset: payload.broll_asset,
-        duration_s: payload.duration_s,
-        reference_assets: payload.reference_assets.unwrap_or_default(),
-    })?;
+    let planned = visual_support_proposal_edls(
+        VisualSupportProposalRequest {
+            selection_text: payload.selection_text,
+            request: payload.request,
+            anchor_transcript: payload.anchor_transcript,
+            artifact_type: payload.artifact_type,
+            broll_asset: payload.broll_asset,
+            duration_s: payload.duration_s,
+            reference_assets: payload.reference_assets.unwrap_or_default(),
+        },
+        Some(project_root.as_path()),
+    )?;
     let base_id = format!(
         "visual-support-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
@@ -1345,15 +1357,18 @@ mod tests {
 
     #[test]
     fn visual_support_selection_keeps_multiple_apply_ready_proposals() {
-        let planned = visual_support_proposal_edls(VisualSupportProposalRequest {
-            selection_text: "This quote explains why the 42% growth matters.".into(),
-            request: "add visual support with a quote highlight and statistic counter".into(),
-            anchor_transcript: Some("42% growth matters".into()),
-            artifact_type: None,
-            broll_asset: None,
-            duration_s: Some(3.0),
-            reference_assets: vec![],
-        })
+        let planned = visual_support_proposal_edls(
+            VisualSupportProposalRequest {
+                selection_text: "This quote explains why the 42% growth matters.".into(),
+                request: "add visual support with a quote highlight and statistic counter".into(),
+                anchor_transcript: Some("42% growth matters".into()),
+                artifact_type: None,
+                broll_asset: None,
+                duration_s: Some(3.0),
+                reference_assets: vec![],
+            },
+            None,
+        )
         .unwrap();
         let summaries = planned
             .iter()
@@ -1366,6 +1381,45 @@ mod tests {
             planned
                 .iter()
                 .all(|proposal| proposal.edl_text.contains("*** Add Proposal Package"))
+        );
+    }
+
+    #[test]
+    fn visual_support_selection_applies_saved_project_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".awidat")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join(".awidat")
+                .join("visual_support_defaults.json"),
+            r#"{"reference_assets":["references/brand-style.png"]}"#,
+        )
+        .unwrap();
+
+        let request = VisualSupportProposalRequest {
+            selection_text: "This quote should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            anchor_transcript: Some("quote should land harder".into()),
+            artifact_type: Some("quote_highlight".into()),
+            broll_asset: None,
+            duration_s: Some(3.0),
+            reference_assets: vec![],
+        };
+
+        // Without a project root the saved default is not applied.
+        let without = visual_support_proposal_edls(request.clone(), None).unwrap();
+        assert!(
+            !without[0].edl_text.contains("references/brand-style.png"),
+            "baseline should not carry the saved reference default"
+        );
+
+        // With the project root, the saved reference default flows into the
+        // planned proposal just like the MCP `run` wrapper.
+        let with = visual_support_proposal_edls(request, Some(dir.path())).unwrap();
+        assert!(
+            with[0].edl_text.contains("references/brand-style.png"),
+            "desktop proposal should apply saved project defaults: {}",
+            with[0].edl_text
         );
     }
 
