@@ -1735,7 +1735,7 @@ fn broll_package_proposal(
         format!(
             "*** Begin EDL\n{}*** Insert BRoll\n@@ anchor: transcript_snippet=\"{}\"\n+ asset: {}\n+ duration_s: {}\n+ position: overlay\n*** End EDL\n",
             package_edl,
-            escape_edl_string(anchor),
+            snippet_for_edl(anchor),
             asset,
             duration_s
         )
@@ -2631,8 +2631,20 @@ fn concise(value: &str) -> String {
     out
 }
 
-fn escape_edl_string(value: &str) -> String {
-    value.replace('"', "\\\"")
+/// Serialize a transcript anchor for a quoted `transcript_snippet="..."`
+/// EDL field.
+///
+/// The EDL parser uses the surrounding ASCII double quotes as the field
+/// delimiter and strips only that outer pair without unescaping inner
+/// sequences, so an embedded ASCII `"` cannot round-trip — escaping it as
+/// `\"` leaves a literal backslash in the parsed snippet that then fails to
+/// resolve against the transcript. Map embedded ASCII double quotes to
+/// typographic quotes instead: those carry through the parser untouched, and
+/// anchor resolution's `UnicodeNorm` tier folds `\u{201c}`/`\u{201d}` back to
+/// `"`, so the snippet still matches transcripts written with either quote
+/// style.
+fn snippet_for_edl(value: &str) -> String {
+    value.replace('"', "\u{201c}")
 }
 
 pub const DESCRIPTION: &str = "\
@@ -2924,6 +2936,55 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn broll_quoted_anchor_round_trips_through_edl_parser() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "She said \"stripe is great\" on stage.".into(),
+            request: "add a b-roll package here".into(),
+            anchor_transcript: Some("she said \"stripe is great\"".into()),
+            broll_asset: Some("raw/generated/crowded-market.mp4".into()),
+            duration_s: Some(3.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "broll_package");
+        let envelope = parse(proposal_edl(proposal)).unwrap();
+        let anchor = envelope
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                EdlOp::InsertBRoll { anchor, .. } => Some(anchor),
+                _ => None,
+            })
+            .expect("InsertBRoll op");
+        let crate::edl::Anchor::TranscriptSnippet { text } = anchor else {
+            panic!("expected transcript snippet anchor, got {anchor:?}");
+        };
+        assert!(
+            !text.contains('\\'),
+            "parsed B-roll anchor still carries an escape backslash: {text:?}"
+        );
+        assert_eq!(text, "she said \u{201c}stripe is great\u{201c}");
+
+        // The serialized snippet still resolves against a transcript written
+        // with ASCII quotes, because the UnicodeNorm tier folds typographic
+        // quotes back to ASCII before matching.
+        use crate::edl::anchor::{AnchorContext, resolve};
+        use awidat_proto::otio::{StackChild, Timeline, Track, TrackChild, TrackKind};
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip(
+            "clip-q",
+            "raw/source.mp4",
+            "before she said \"stripe is great\" on stage after",
+            4.0,
+        )));
+        let mut timeline = Timeline::empty("timeline");
+        timeline.tracks.children.push(StackChild::Track(track));
+        resolve(&timeline, anchor, &AnchorContext::empty())
+            .expect("quote-free anchor should resolve against the quoted transcript");
     }
 
     #[test]
