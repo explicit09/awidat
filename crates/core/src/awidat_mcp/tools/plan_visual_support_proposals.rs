@@ -1337,7 +1337,7 @@ fn broll_package_checks(
     ];
     if require_project_asset_exists {
         let exists = project_root
-            .map(|root| root.join(asset).is_file())
+            .map(|root| asset_is_file_under_root(root, asset))
             .unwrap_or(false);
         checks.push(check_bool(
             "broll_asset_exists",
@@ -1348,6 +1348,20 @@ fn broll_package_checks(
         ));
     }
     checks
+}
+
+/// True only when `asset` resolves to an existing file that stays inside
+/// `root`. An absolute path or a `../` traversal can make `root.join(asset)`
+/// land on a file outside the project, which would otherwise pass the
+/// "exists under the project root" check; canonicalizing both sides and
+/// requiring the asset to remain below the root closes that gap.
+fn asset_is_file_under_root(root: &Path, asset: &str) -> bool {
+    let candidate = root.join(asset);
+    let (Ok(canonical_root), Ok(canonical_asset)) = (root.canonicalize(), candidate.canonicalize())
+    else {
+        return false;
+    };
+    canonical_asset.starts_with(&canonical_root) && canonical_asset.is_file()
 }
 
 fn broll_has_source_provenance(
@@ -3729,6 +3743,46 @@ mod tests {
         assert!(report["checks"].as_array().unwrap().iter().any(|check| {
             check["id"] == "broll_has_disclosure_policy" && check["status"] == "pass"
         }));
+    }
+
+    #[test]
+    fn verify_broll_asset_exists_rejects_paths_outside_project_root() {
+        let dir = project_with_media();
+
+        // A real file that lives OUTSIDE the project root.
+        let outside = tempfile::tempdir().unwrap();
+        let escaping_asset = outside.path().join("crowded-market.mp4");
+        std::fs::write(&escaping_asset, b"not a project asset").unwrap();
+
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "The founder describes a crowded market.".into(),
+            request: "add a b-roll package here".into(),
+            anchor_transcript: Some("crowded market".into()),
+            broll_asset: Some(escaping_asset.to_string_lossy().into_owned()),
+            duration_s: Some(3.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+        let proposal = proposal_by_type(&value, "broll_package").clone();
+
+        let report = verify_visual_support_artifact(
+            VerifyVisualSupportArtifactArgs {
+                proposal,
+                require_project_asset_exists: true,
+                render_frame_report: None,
+            },
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["id"] == "broll_asset_exists" && check["status"] == "fail"),
+            "absolute path outside the project must not pass broll_asset_exists: {report:#}"
+        );
     }
 
     #[test]
