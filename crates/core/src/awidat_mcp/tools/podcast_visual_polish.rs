@@ -222,16 +222,100 @@ fn visual_polish_opportunities(
             4.0,
         ));
     }
+    let placements = asset_timeline_placements(project);
     signals.extend(timeline_marker_story_signals(project));
-    signals.extend(topic_index_story_signals(project_root));
-    signals.extend(editorial_moment_story_signals(project_root));
-    signals.extend(whisper_transcript_story_signals(project_root));
-    signals.extend(weak_shot_story_signals(project_root));
+    signals.extend(topic_index_story_signals(project_root, &placements));
+    signals.extend(editorial_moment_story_signals(project_root, &placements));
+    signals.extend(whisper_transcript_story_signals(project_root, &placements));
+    signals.extend(weak_shot_story_signals(project_root, &placements));
     EditorialSkillRegistry::bundled()
         .story_opportunities(deduplicated_story_signals(signals))
         .iter()
         .map(opportunity_json)
         .collect()
+}
+
+/// Where one clip of an asset sits on the timeline: the clip's source-media
+/// slice `[source_start_s, source_end_s)` and the timeline second at which
+/// that slice begins.
+#[derive(Clone, Copy)]
+struct ClipPlacement {
+    source_start_s: f64,
+    source_end_s: f64,
+    timeline_offset_s: f64,
+}
+
+/// Map every external asset id to the clip placements that reference it.
+/// Sidecars index source media, so their times are asset-local; this lets us
+/// translate them into timeline times. One asset can appear in several clips
+/// (different trims / positions), so each maps to a list.
+fn asset_timeline_placements(
+    project: &Project,
+) -> std::collections::HashMap<String, Vec<ClipPlacement>> {
+    let mut placements: std::collections::HashMap<String, Vec<ClipPlacement>> =
+        std::collections::HashMap::new();
+    for stack_child in &project.timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        let mut track_cursor_s = 0.0_f64;
+        for tc in &track.children {
+            match tc {
+                TrackChild::Clip(clip) => {
+                    let Some(range) = clip.source_range.as_ref() else {
+                        continue;
+                    };
+                    let duration_s = range.duration.to_seconds();
+                    if let MediaReference::External(ext) = &clip.media_reference {
+                        let source_start_s = range.start_time.to_seconds();
+                        placements
+                            .entry(ext.target_url.clone())
+                            .or_default()
+                            .push(ClipPlacement {
+                                source_start_s,
+                                source_end_s: source_start_s + duration_s,
+                                timeline_offset_s: track_cursor_s,
+                            });
+                    }
+                    track_cursor_s += duration_s;
+                }
+                TrackChild::Gap(gap) => {
+                    track_cursor_s += gap.source_range.duration.to_seconds();
+                }
+                TrackChild::Transition(_) | TrackChild::Stack(_) => {}
+            }
+        }
+    }
+    placements
+}
+
+/// Translate an asset-local `[source_start_s, source_end_s]` range into
+/// timeline seconds using the clip placements for `asset`.
+///
+/// Returns one `(timeline_start_s, timeline_end_s)` per clip whose source
+/// slice overlaps the range (the same asset can be cut into the timeline more
+/// than once). When the asset is not on the timeline at all, falls back to the
+/// raw source times so opportunities are still surfaced — they just can't be
+/// timeline-anchored without a placement.
+fn translate_to_timeline(
+    placements: &std::collections::HashMap<String, Vec<ClipPlacement>>,
+    asset: &str,
+    source_start_s: f64,
+    source_end_s: f64,
+) -> Vec<(f64, f64)> {
+    let Some(clips) = placements.get(asset) else {
+        return vec![(source_start_s, source_end_s)];
+    };
+    let mut out = Vec::new();
+    for clip in clips {
+        if source_end_s <= clip.source_start_s || source_start_s >= clip.source_end_s {
+            continue;
+        }
+        let start = clip.timeline_offset_s + (source_start_s - clip.source_start_s);
+        let end = clip.timeline_offset_s + (source_end_s - clip.source_start_s);
+        out.push((start, end));
+    }
+    out
 }
 
 fn deduplicated_story_signals(
@@ -277,12 +361,15 @@ fn time_ranges_overlap(a_start: f64, a_end: f64, b_start: f64, b_end: f64) -> bo
     end > start
 }
 
-fn editorial_moment_story_signals(project_root: &Path) -> Vec<(&'static str, String, f64, f64)> {
+fn editorial_moment_story_signals(
+    project_root: &Path,
+    placements: &std::collections::HashMap<String, Vec<ClipPlacement>>,
+) -> Vec<(&'static str, String, f64, f64)> {
     let Ok(sidecars) = walk_indexer(project_root, "editorial-moments") else {
         return Vec::new();
     };
     let mut signals = Vec::new();
-    for (_asset, sidecar) in sidecars {
+    for (asset, sidecar) in sidecars {
         let Some(moments) = sidecar_array(&sidecar, "moments") else {
             continue;
         };
@@ -319,18 +406,25 @@ fn editorial_moment_story_signals(project_root: &Path) -> Vec<(&'static str, Str
                 .and_then(serde_json::Value::as_str)
                 .map(moment_story_signal_kind)
                 .unwrap_or_else(|| transcript_story_signal_kind(label).unwrap_or("beat"));
-            signals.push((kind, label.to_string(), start_s, end_s));
+            for (timeline_start_s, timeline_end_s) in
+                translate_to_timeline(placements, &asset, start_s, end_s)
+            {
+                signals.push((kind, label.to_string(), timeline_start_s, timeline_end_s));
+            }
         }
     }
     signals
 }
 
-fn whisper_transcript_story_signals(project_root: &Path) -> Vec<(&'static str, String, f64, f64)> {
+fn whisper_transcript_story_signals(
+    project_root: &Path,
+    placements: &std::collections::HashMap<String, Vec<ClipPlacement>>,
+) -> Vec<(&'static str, String, f64, f64)> {
     let Ok(sidecars) = walk_indexer(project_root, "whisper") else {
         return Vec::new();
     };
     let mut signals = Vec::new();
-    for (_asset, sidecar) in sidecars {
+    for (asset, sidecar) in sidecars {
         let Some(segments) = sidecar_array(&sidecar, "segments") else {
             continue;
         };
@@ -351,18 +445,25 @@ fn whisper_transcript_story_signals(project_root: &Path) -> Vec<(&'static str, S
             let end_s = json_f64(segment, &["end_s", "end"])
                 .filter(|end_s| end_s.is_finite() && *end_s > start_s)
                 .unwrap_or(start_s + 4.0);
-            signals.push((kind, text.to_string(), start_s, end_s));
+            for (timeline_start_s, timeline_end_s) in
+                translate_to_timeline(placements, &asset, start_s, end_s)
+            {
+                signals.push((kind, text.to_string(), timeline_start_s, timeline_end_s));
+            }
         }
     }
     signals
 }
 
-fn weak_shot_story_signals(project_root: &Path) -> Vec<(&'static str, String, f64, f64)> {
+fn weak_shot_story_signals(
+    project_root: &Path,
+    placements: &std::collections::HashMap<String, Vec<ClipPlacement>>,
+) -> Vec<(&'static str, String, f64, f64)> {
     let Ok(sidecars) = walk_indexer(project_root, "shot") else {
         return Vec::new();
     };
     let mut signals = Vec::new();
-    for (_asset, sidecar) in sidecars {
+    for (asset, sidecar) in sidecars {
         let Some(shots) = sidecar_array(&sidecar, "shots") else {
             continue;
         };
@@ -381,23 +482,30 @@ fn weak_shot_story_signals(project_root: &Path) -> Vec<(&'static str, String, f6
                 .unwrap_or(start_s + 4.0);
             let label = json_string(shot, &["label", "description", "type"])
                 .unwrap_or_else(|| "low-value shot".to_string());
-            signals.push((
-                "weak_visual",
-                format!("Weak visual shot: {label}"),
-                start_s,
-                end_s,
-            ));
+            for (timeline_start_s, timeline_end_s) in
+                translate_to_timeline(placements, &asset, start_s, end_s)
+            {
+                signals.push((
+                    "weak_visual",
+                    format!("Weak visual shot: {label}"),
+                    timeline_start_s,
+                    timeline_end_s,
+                ));
+            }
         }
     }
     signals
 }
 
-fn topic_index_story_signals(project_root: &Path) -> Vec<(&'static str, String, f64, f64)> {
+fn topic_index_story_signals(
+    project_root: &Path,
+    placements: &std::collections::HashMap<String, Vec<ClipPlacement>>,
+) -> Vec<(&'static str, String, f64, f64)> {
     let Ok(sidecars) = walk_indexer(project_root, "topic") else {
         return Vec::new();
     };
     let mut signals = Vec::new();
-    for (_asset, sidecar) in sidecars {
+    for (asset, sidecar) in sidecars {
         let Some(topics) = sidecar
             .get("data")
             .and_then(|data| data.get("topics"))
@@ -425,7 +533,16 @@ fn topic_index_story_signals(project_root: &Path) -> Vec<(&'static str, String, 
                 .and_then(serde_json::Value::as_f64)
                 .filter(|end_s| end_s.is_finite() && *end_s > start_s)
                 .unwrap_or(start_s + 4.0);
-            signals.push(("topic_shift", label.to_string(), start_s, end_s));
+            for (timeline_start_s, timeline_end_s) in
+                translate_to_timeline(placements, &asset, start_s, end_s)
+            {
+                signals.push((
+                    "topic_shift",
+                    label.to_string(),
+                    timeline_start_s,
+                    timeline_end_s,
+                ));
+            }
         }
     }
     signals
@@ -981,6 +1098,77 @@ mod tests {
                         && opportunity["timeline_end_s"] == 24.0
                         && opportunity["primary_skill_id"] == "statistic-counter"
                 })
+        );
+    }
+
+    #[test]
+    fn whisper_signal_times_are_translated_to_timeline_for_trimmed_clips() {
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
+            TrackChild, TrackKind,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+
+        // Place raw/episode.mov on the timeline starting 10s into the source
+        // media (a trim) at timeline offset 0. A whisper segment at source
+        // time 18s therefore sits at timeline 8s.
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/episode.mov".to_string()));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(10.0 * 30.0, 30.0),
+            RationalTime::new(30.0 * 30.0, 30.0),
+        ));
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(dir.path()).unwrap();
+
+        let whisper_dir = dir.path().join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        std::fs::write(
+            whisper_dir.join("episode.mov.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "data": {
+                    "segments": [
+                        {
+                            "text": "Retention improved by 42 percent after the transcript pipeline became stable.",
+                            "start_s": 18.0,
+                            "end_s": 24.0
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let body = run(
+            PodcastVisualPolishArgs {},
+            McpToolCtx {
+                project_root: dir.path().to_path_buf(),
+            },
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert!(
+            body["editorial_skill_opportunities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|opportunity| {
+                    opportunity["trigger_kind"] == "stat"
+                        && opportunity["timeline_start_s"] == 8.0
+                        && opportunity["timeline_end_s"] == 14.0
+                }),
+            "whisper sidecar source times must be translated to timeline times: {body:#}"
         );
     }
 
