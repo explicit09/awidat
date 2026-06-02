@@ -84,6 +84,54 @@ type ComposedRow = {
 
 type ComposedPlayback = { rowIdx: number; sourceTime: number | null };
 
+/** A user text-selection inside the composed timeline transcript:
+ *  the selected text plus the absolute timeline second where it begins
+ *  (resolved from the word span the selection starts in). */
+type ComposedSelection = {
+  text: string;
+  timelineStartS: number | undefined;
+};
+
+/** Read the browser's current selection inside the composed transcript
+ *  and resolve it to selected text + anchored timeline-time. Returns
+ *  null for an empty/collapsed selection. The timeline-time comes from
+ *  the `data-word-start` source time of the word the selection starts
+ *  in, mapped through that row's clip placement; `undefined` when the
+ *  start node isn't a resolvable word (the proposal still works, just
+ *  unanchored). */
+function readComposedSelection(rows: ComposedRow[]): ComposedSelection | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return null;
+  const text = selection.toString().replace(/\s+/g, " ").trim();
+  if (!text) return null;
+
+  let node: Node | null = selection.anchorNode;
+  let wordEl: HTMLElement | null = null;
+  while (node) {
+    if (node instanceof HTMLElement) {
+      wordEl = node.closest("[data-word-start]") as HTMLElement | null;
+      if (wordEl) break;
+      const rowEl = node.closest("[data-row-idx]");
+      if (rowEl) break;
+    }
+    node = node.parentNode;
+  }
+
+  let timelineStartS: number | undefined;
+  if (wordEl) {
+    const rowEl = wordEl.closest("[data-row-idx]");
+    const rowIdx = rowEl ? Number(rowEl.getAttribute("data-row-idx")) : NaN;
+    const sourceStart = Number(wordEl.getAttribute("data-word-start"));
+    const row = rows[rowIdx];
+    if (row && Number.isFinite(sourceStart)) {
+      timelineStartS =
+        row.playSegment.timelineStart +
+        (sourceStart - row.playSegment.sourceStart);
+    }
+  }
+  return { text, timelineStartS };
+}
+
 function TimelineComposedTranscript({
   playSegments,
 }: {
@@ -91,6 +139,14 @@ function TimelineComposedTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+
+  // Text-selection-driven Visual support. The composed list is
+  // virtualized across multiple stems, so rather than a custom
+  // word-range model we read the browser's native selection on
+  // mouse-up and resolve the anchored timeline-time from the word span
+  // the selection starts in. `null` hides the action button.
+  const [composedSelection, setComposedSelection] =
+    useState<ComposedSelection | null>(null);
 
   // Ensure every stem on the timeline is loaded into the transcript
   // store. The store already de-dupes in-flight loads and caches
@@ -222,17 +278,46 @@ function TimelineComposedTranscript({
         <span className="transcript-meta-lang">
           Timeline · {rows.length} segments · {stems.length} sources
         </span>
-        <span className="transcript-meta-counts">
-          {pendingStems.length > 0
-            ? `loading ${pendingStems.length}…`
-            : missingStems.length > 0
-              ? `${missingStems.length} missing transcript`
-              : ""}
+        <span className="transcript-meta-right">
+          {composedSelection ? (
+            <button
+              type="button"
+              className="transcript-action-button"
+              onClick={() => {
+                editorDispatch
+                  .proposeVisualSupport({
+                    selectionText: composedSelection.text,
+                    request: "request visual support",
+                    anchorTranscript: composedSelection.text,
+                    anchorTimelineStartS: composedSelection.timelineStartS,
+                  })
+                  .catch((err: unknown) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                      "propose_visual_support (composed transcript) failed",
+                      err,
+                    );
+                  });
+                window.getSelection()?.removeAllRanges();
+                setComposedSelection(null);
+              }}
+            >
+              Visual support
+            </button>
+          ) : null}
+          <span className="transcript-meta-counts">
+            {pendingStems.length > 0
+              ? `loading ${pendingStems.length}…`
+              : missingStems.length > 0
+                ? `${missingStems.length} missing transcript`
+                : ""}
+          </span>
         </span>
       </header>
       <div
         ref={scrollRef}
         className="transcript-scroll"
+        onMouseUp={() => setComposedSelection(readComposedSelection(rows))}
         onClick={(e) => {
           // Click on a word or segment: seek the timeline playhead to
           // the corresponding timeline-time.
