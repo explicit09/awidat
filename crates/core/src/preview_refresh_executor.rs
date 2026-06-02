@@ -6,8 +6,9 @@
 //! - `thumbnails`→ `awidat_render::generate_thumbnails`
 //! - `waveform`  → `awidat_render::generate_waveform` + JSON sidecar write
 //!
-//! The waveform sidecar shape (`{ "buckets": [f32, ...] }`) matches the
-//! desktop's `WaveformSidecar` schema so existing readers do not change.
+//! The waveform sidecar shape (`{ "buckets": [f32, ...], "duration_s": f64 }`)
+//! matches the desktop's `WaveformSidecar` schema so existing readers do not
+//! change (`duration_s` is optional/defaulted for back-compat).
 
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,9 @@ impl FfmpegPreviewRefreshExecutor {
 #[derive(Debug, Serialize)]
 struct WaveformSidecar<'a> {
     buckets: &'a [f32],
+    /// Audio duration the buckets span, in seconds. Lets the timeline
+    /// slice the buckets correctly for trimmed clips.
+    duration_s: f64,
 }
 
 #[async_trait::async_trait]
@@ -84,7 +88,7 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
                     })
             }
             "waveform" => {
-                let buckets = awidat_render::generate_waveform(
+                let wave = awidat_render::generate_waveform(
                     &source,
                     self.waveform_bucket_count,
                     self.cancel.clone(),
@@ -97,13 +101,14 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
                 if let Some(parent) = artifact.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                let body =
-                    serde_json::to_vec(&WaveformSidecar { buckets: &buckets }).map_err(|e| {
-                        PreviewRefreshError::Executor {
-                            task_id: task.task_id.clone(),
-                            message: format!("serialize waveform sidecar: {e}"),
-                        }
-                    })?;
+                let body = serde_json::to_vec(&WaveformSidecar {
+                    buckets: &wave.buckets,
+                    duration_s: wave.duration_s,
+                })
+                .map_err(|e| PreviewRefreshError::Executor {
+                    task_id: task.task_id.clone(),
+                    message: format!("serialize waveform sidecar: {e}"),
+                })?;
                 tokio::fs::write(artifact, body).await?;
                 Ok(())
             }

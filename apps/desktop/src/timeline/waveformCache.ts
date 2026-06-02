@@ -1,11 +1,13 @@
 // Per-asset waveform cache. Step 11.3.
 //
 // Each entry is keyed by the absolute `waveform_path` we get on
-// TimelineItem::Clip. Values hold the f32 bucket array we read from
-// the JSON sidecar via the `read_waveform` Tauri command.
+// TimelineItem::Clip. Values hold the f32 bucket array plus the audio
+// duration those buckets span, read from the JSON sidecar via the
+// `read_waveform` Tauri command. The duration lets the timeline map a
+// trimmed clip's source range onto the bucket array correctly.
 //
-// The canvas calls `getBuckets(path)` during paint and gets back the
-// cached array, kicking off an async fetch on the first call (returns
+// The canvas calls `getWaveform(path)` during paint and gets back the
+// cached entry, kicking off an async fetch on the first call (returns
 // `null` while the read is in flight). Once the read resolves,
 // subscribers via `onWaveformDecoded` re-paint.
 //
@@ -14,7 +16,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-const cache = new Map<string, Float32Array | "pending">();
+/** A decoded waveform: peak buckets plus the audio span they cover. */
+export interface Waveform {
+  buckets: Float32Array;
+  /** Audio duration (seconds) the buckets span. `0` ⇒ unknown (legacy
+   *  sidecar); callers fall back to an approximation. */
+  durationS: number;
+}
+
+const cache = new Map<string, Waveform | "pending">();
 const onLoadedHooks = new Set<() => void>();
 
 /** Subscribe to "a new waveform finished loading." */
@@ -29,11 +39,11 @@ function notifyDecoded() {
   for (const cb of onLoadedHooks) cb();
 }
 
-/** Returns the bucket array for `path`, or null while the initial
+/** Returns the decoded waveform for `path`, or null while the initial
  *  fetch is still in flight. The canvas calls this on every paint;
  *  the first call fires the async read, subsequent calls hit the
  *  cache. */
-export function getBuckets(path: string): Float32Array | null {
+export function getWaveform(path: string): Waveform | null {
   const cached = cache.get(path);
   if (cached === "pending") return null;
   if (cached) return cached;
@@ -41,11 +51,17 @@ export function getBuckets(path: string): Float32Array | null {
   cache.set(path, "pending");
   void (async () => {
     try {
-      const buckets = await invoke<number[]>("read_waveform", { path });
+      const data = await invoke<{ buckets: number[]; duration_s: number }>(
+        "read_waveform",
+        { path },
+      );
       // Float32Array beats Array<number> for canvas drawing — tighter
       // memory, faster numeric iteration on V8.
-      const arr = Float32Array.from(buckets);
-      cache.set(path, arr);
+      const wave: Waveform = {
+        buckets: Float32Array.from(data.buckets),
+        durationS: data.duration_s ?? 0,
+      };
+      cache.set(path, wave);
       notifyDecoded();
     } catch {
       // Failed read — drop the pending sentinel so a future paint

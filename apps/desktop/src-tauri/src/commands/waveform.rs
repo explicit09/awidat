@@ -7,12 +7,13 @@
 //! stale sidecar is "looks slightly off", not "wrong cut" — we don't
 //! sha-the-source on every import.
 //!
-//! Format: a top-level JSON object `{ "buckets": [f32, ...] }`. We
-//! wrap the array in an object so future-us can add fields
-//! (`bucket_count`, `sample_rate`, etc.) without breaking the
-//! frontend's deserializer. Empty `buckets: []` means "asset has
-//! no audio stream"; the frontend treats it the same as a missing
-//! sidecar.
+//! Format: a top-level JSON object
+//! `{ "buckets": [f32, ...], "duration_s": f64 }`. We wrap the array in
+//! an object so future-us can add fields without breaking the frontend's
+//! deserializer; `duration_s` (the audio span the buckets cover) is
+//! `#[serde(default)]` so sidecars written before it existed still parse.
+//! Empty `buckets: []` means "asset has no audio stream"; the frontend
+//! treats it the same as a missing sidecar.
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,12 @@ pub struct WaveformSidecar {
     /// Peak amplitudes in `[0.0, 1.0]`, one per bucket. Empty when
     /// the asset has no audio stream.
     pub buckets: Vec<f32>,
+    /// Total audio duration (seconds) the buckets span. The timeline
+    /// uses this to map a trimmed clip's source range onto the bucket
+    /// array. Optional + defaulted so sidecars written before this field
+    /// existed still parse (the frontend falls back when it's missing).
+    #[serde(default)]
+    pub duration_s: f64,
 }
 
 /// Default bucket count per asset. ~4 KB JSON; resampled to display
@@ -89,7 +96,7 @@ async fn run_one(
     unregister_job(state, &job_id).await;
 
     match result {
-        Ok(buckets) => {
+        Ok(wave) => {
             // Write the sidecar even when buckets is empty — the
             // empty case is "asset has no audio" and the mtime-fresh
             // path needs *some* file to skip on next import.
@@ -100,8 +107,10 @@ async fn run_one(
                     return Err(msg);
                 }
             }
+            let is_empty = wave.buckets.is_empty();
             let payload = WaveformSidecar {
-                buckets: buckets.clone(),
+                buckets: wave.buckets,
+                duration_s: wave.duration_s,
             };
             let json = match serde_json::to_string(&payload) {
                 Ok(s) => s,
@@ -116,7 +125,7 @@ async fn run_one(
                 emitter.err(msg.clone());
                 return Err(msg);
             }
-            if buckets.is_empty() {
+            if is_empty {
                 emitter.ok(Some(format!("no audio in {asset_label}")));
                 Ok(None)
             } else {
@@ -171,16 +180,30 @@ fn has_buckets(sidecar: &Path) -> bool {
     !compact.contains("\"buckets\":[]")
 }
 
-/// Read the waveform sidecar at `path` and return the bucket array.
-/// Errors when the path doesn't exist or isn't valid JSON.
+/// Frontend-facing waveform payload: peaks plus the duration they span.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaveformData {
+    pub buckets: Vec<f32>,
+    /// Audio duration (seconds) the buckets cover. `0.0` for legacy
+    /// sidecars written before the field existed — the frontend treats
+    /// non-positive as "unknown" and falls back.
+    pub duration_s: f64,
+}
+
+/// Read the waveform sidecar at `path` and return the buckets plus the
+/// audio duration they span. Errors when the path doesn't exist or isn't
+/// valid JSON.
 #[tauri::command]
-pub async fn read_waveform(path: String) -> Result<Vec<f32>, String> {
+pub async fn read_waveform(path: String) -> Result<WaveformData, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read waveform sidecar: {e}"))?;
     let parsed: WaveformSidecar =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse waveform sidecar: {e}"))?;
-    Ok(parsed.buckets)
+    Ok(WaveformData {
+        buckets: parsed.buckets,
+        duration_s: parsed.duration_s,
+    })
 }
 
 async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
@@ -235,5 +258,22 @@ mod tests {
         let p = dir.path().join("a.json");
         std::fs::write(&p, br#"{"buckets":[0.1,0.2,0.3]}"#).unwrap();
         assert!(has_buckets(&p));
+    }
+
+    #[test]
+    fn sidecar_parses_with_duration() {
+        let parsed: WaveformSidecar =
+            serde_json::from_str(r#"{"buckets":[0.1,0.2],"duration_s":12.5}"#).unwrap();
+        assert_eq!(parsed.buckets.len(), 2);
+        assert!((parsed.duration_s - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn legacy_sidecar_without_duration_still_parses() {
+        // Sidecars written before duration_s existed must still load;
+        // duration defaults to 0.0 (the frontend treats that as unknown).
+        let parsed: WaveformSidecar = serde_json::from_str(r#"{"buckets":[0.1,0.2,0.3]}"#).unwrap();
+        assert_eq!(parsed.buckets.len(), 3);
+        assert_eq!(parsed.duration_s, 0.0);
     }
 }

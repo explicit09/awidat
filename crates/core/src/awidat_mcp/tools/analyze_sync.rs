@@ -50,7 +50,8 @@ pub async fn run(args: AnalyzeSyncArgs, ctx: McpToolCtx) -> Result<String, Strin
     let reference_wave =
         awidat_render::generate_waveform(&reference_path, bucket_count, CancellationToken::new())
             .await
-            .map_err(|e| format!("analyze_sync: waveform reference failed: {e}"))?;
+            .map_err(|e| format!("analyze_sync: waveform reference failed: {e}"))?
+            .buckets;
     let reference_duration_s = reference_probe.duration_s.unwrap_or(bucket_count as f64);
 
     let candidates = args.candidate_assets.unwrap_or_else(|| {
@@ -85,7 +86,7 @@ pub async fn run(args: AnalyzeSyncArgs, ctx: McpToolCtx) -> Result<String, Strin
         )
         .await
         {
-            Ok(w) if !w.is_empty() => w,
+            Ok(w) if !w.buckets.is_empty() => w.buckets,
             Ok(_) => {
                 blockers.push(
                     serde_json::json!({ "asset": candidate, "reason": "empty audio waveform" }),
