@@ -30,6 +30,7 @@ import { IssueInspector } from "./delivery/IssueInspector";
 import { RenderSummary, KV } from "./delivery/RenderSummary";
 import { RenderQueuePanel } from "./delivery/RenderQueue";
 import { UploadMetadataForm } from "./delivery/UploadMetadataForm";
+import { CampaignApprovalPanel } from "./delivery/CampaignApprovalPanel";
 import { TARGET_META, targetKeyForKind } from "./delivery/targetMeta";
 import {
   ALL_TARGETS,
@@ -118,6 +119,9 @@ function DeliveryCockpit({
     return provided ?? { key, active: false };
   });
   const activeTargetCount = resolvedTargets.filter((target) => target.active).length;
+  const activeTargetKeys = resolvedTargets
+    .filter((target) => target.active)
+    .map((target) => target.key);
   const runningRender = [...queueEntries]
     .reverse()
     .find((entry) => entry.status === "running" || entry.status === "pending");
@@ -227,6 +231,11 @@ function DeliveryCockpit({
             ) : null}
             <RightColumnDetails mode={mode}>
               {summary ? <RenderSummary summary={summary} /> : null}
+              <CampaignApprovalPanel
+                sourceAssetId="active-project"
+                selectedTargets={activeTargetKeys}
+                renderEntries={queueEntries}
+              />
               <RenderQueuePanel />
             </RightColumnDetails>
             <Stack gap="2">
@@ -311,6 +320,7 @@ function DeliverySheet({
     return provided ?? { key, active: false };
   });
   const activeTargetCount = resolvedTargets.filter((t) => t.active).length;
+  const activeTargetKeys = resolvedTargets.filter((t) => t.active).map((t) => t.key);
   const counts = countBySeverity(findings);
   const blockingCount = counts.warning + counts.error + counts.failure;
 
@@ -446,6 +456,15 @@ function DeliverySheet({
             <RenderSummaryCard summary={summary} outputs={activeTargetCount} />
           </section>
         ) : null}
+
+        <section className="flex flex-col gap-3">
+          <SheetSectionLabel>Campaign</SheetSectionLabel>
+          <CampaignApprovalPanel
+            sourceAssetId="active-project"
+            selectedTargets={activeTargetKeys}
+            renderEntries={queueEntries}
+          />
+        </section>
 
         {/* Render queue — appears once there's something rendering/queued so
             the sheet stays calm when idle. Same panel the cockpit uses. */}
