@@ -958,7 +958,10 @@ fn quote_highlight_checks(proposal: &serde_json::Value) -> Vec<serde_json::Value
         )];
     };
     let normalized_scene = normalize_for_match(&scene_text);
-    let normalized_anchor = normalize_for_match(&anchor);
+    // The MotionScene renders `concise()`-truncated display text, so compare
+    // against that same truncated form rather than the full anchor — a long
+    // selection would otherwise never appear verbatim in the scene.
+    let normalized_anchor = normalize_for_match(&concise(&anchor));
     vec![
         check_bool(
             "quote_matches_transcript_anchor",
@@ -1251,7 +1254,9 @@ fn title_card_checks(proposal: &serde_json::Value) -> Vec<serde_json::Value> {
         )];
     };
     let normalized_scene = normalize_for_match(&scene_text);
-    let normalized_anchor = normalize_for_match(&anchor);
+    // The title card renders `concise()`-truncated text, so compare against
+    // the same truncated form rather than the full anchor.
+    let normalized_anchor = normalize_for_match(&concise(&anchor));
     vec![check_bool(
         "title_text_matches_transcript_anchor",
         !normalized_anchor.is_empty() && normalized_scene.contains(&normalized_anchor),
@@ -3598,6 +3603,56 @@ mod tests {
                 .any(|check| check["id"] == "motion_scene_contains_quote_text"
                     && check["status"] == "pass")
         );
+    }
+
+    #[test]
+    fn verify_quote_and_title_pass_for_long_truncated_anchors() {
+        // A selection longer than `concise()`'s 12-word window: the planner
+        // renders the truncated display text, so verification must compare
+        // against what is actually drawn, not the full anchor.
+        let long = "the first second third fourth fifth sixth seventh eighth ninth \
+                    tenth eleventh twelfth thirteenth fourteenth point";
+
+        for artifact in ["quote_highlight", "title_card"] {
+            let request = if artifact == "quote_highlight" {
+                "make this quote pop visually"
+            } else {
+                "turn this into a title card"
+            };
+            let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+                selection_text: long.into(),
+                request: request.into(),
+                anchor_transcript: Some(long.into()),
+                duration_s: Some(4.0),
+                ..PlanVisualSupportProposalArgs::default()
+            })
+            .unwrap();
+            let proposal = proposal_by_type(&value, artifact).clone();
+
+            let report = verify_visual_support_artifact(
+                VerifyVisualSupportArtifactArgs {
+                    proposal,
+                    require_project_asset_exists: false,
+                    render_frame_report: None,
+                },
+                None,
+            )
+            .unwrap();
+
+            let check_id = if artifact == "quote_highlight" {
+                "quote_matches_transcript_anchor"
+            } else {
+                "title_text_matches_transcript_anchor"
+            };
+            assert!(
+                report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["id"] == check_id && check["status"] == "pass"),
+                "{artifact} long-anchor verification should pass: {report:#}"
+            );
+        }
     }
 
     #[test]
