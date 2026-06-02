@@ -54,6 +54,28 @@ const TOKEN = {
   warning: "#F59E0B",
 } as const;
 
+/// DaVinci-style per-track clip palette, tuned for the Obsidian Glass
+/// shell: clip bodies are *translucent* (rgba alpha) so the frosted
+/// stage reads through them, but each track type carries a distinct hue
+/// the way Resolve colours video / audio / title clips. `accent` is the
+/// 2px top stripe (Resolve's clip-colour bar); `body` is the fill.
+const CLIP_STYLE = {
+  /** Video clips — cool blue-grey, Resolve's default video colour. */
+  video: { body: "rgba(56, 78, 104, 0.55)", accent: "rgba(125, 170, 222, 0.90)" },
+  /** Audio clips — teal, matching the teal waveform envelope. */
+  audio: { body: "rgba(28, 74, 70, 0.55)", accent: "rgba(45, 196, 170, 0.90)" },
+  /** Title / generator clips — amber. */
+  title: { body: "rgba(92, 68, 24, 0.55)", accent: "rgba(245, 179, 64, 0.90)" },
+} as const;
+
+/// Selection accent — DaVinci's signature red-orange clip outline,
+/// replacing the old cyan ring. Kept with a soft outer glow so it still
+/// reads on the translucent glass surfaces.
+const SELECTION = {
+  ring: "rgba(255, 96, 64, 0.95)",
+  glow: "rgba(255, 96, 64, 0.20)",
+} as const;
+
 const FONT_SANS = '"Inter", ui-sans-serif, system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
 
@@ -297,10 +319,15 @@ function drawItem(
   const radius = 4;
   if (item.kind === "clip") {
     const isTitleClip = isTitlesRow && item.title !== null && item.title !== undefined;
-    // Card fill — Studio Pro spec calls for `--color-surface-card`
-    // on every clip; the title/audio/video variants then layer their
-    // overlay (text, waveform, filmstrip) on top.
-    ctx.fillStyle = TOKEN.surfaceCard;
+    // Card fill — DaVinci-style per-track clip colour (translucent so the
+    // glass stage reads through), then the title/audio/video overlay
+    // (text, waveform, filmstrip) layers on top.
+    const clipStyle = isTitleClip
+      ? CLIP_STYLE.title
+      : trackKind === "audio"
+        ? CLIP_STYLE.audio
+        : CLIP_STYLE.video;
+    ctx.fillStyle = clipStyle.body;
     fillRoundedRect(ctx, x, y, w, h, radius);
     let drewOverlay = false;
     if (isTitleClip) {
@@ -317,10 +344,21 @@ function drawItem(
     if (drewOverlay && trackKind !== "audio" && !isTitleClip) {
       drawClipBottomVignette(ctx, x, y, w, h, radius);
     }
+    // DaVinci clip-colour stripe — a 2px accent bar along the clip's top
+    // edge, clipped to the rounded corners. The per-track hue that reads
+    // even when the body is heavily translucent over the glass stage.
+    if (w > 6) {
+      ctx.save();
+      pathRoundedRect(ctx, x, y, w, h, radius);
+      ctx.clip();
+      ctx.fillStyle = clipStyle.accent;
+      ctx.fillRect(x, y, w, 2);
+      ctx.restore();
+    }
     // Border — inactive clips use the subtle hairline; highlighted
     // (diff) clips lift to the cyan brand; deleted use danger red.
     // The selected ring is drawn separately *outside* the card so it
-    // sits above the cyan/border edges below.
+    // sits above the border edges below.
     const stroke =
       flag === "deleted"
         ? TOKEN.danger
@@ -380,13 +418,13 @@ function drawItem(
       ctx.lineWidth = 1;
     }
     if (selected) {
-      // 2px cyan border + soft outer glow per Studio Pro spec. The
-      // glow is faked by drawing a wider, semi-transparent stroke just
-      // outside the card, then the crisp 2px ring on top.
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.18)";
+      // DaVinci's red-orange selection outline + soft outer glow. The
+      // glow is a wider, semi-transparent stroke just outside the card,
+      // then the crisp 2px ring on top — both glass-friendly.
+      ctx.strokeStyle = SELECTION.glow;
       ctx.lineWidth = 6;
       strokeRoundedRect(ctx, x - 2.5, y - 2.5, w + 5, h + 5, radius + 3);
-      ctx.strokeStyle = TOKEN.brandSecondary;
+      ctx.strokeStyle = SELECTION.ring;
       ctx.lineWidth = 2;
       strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
       ctx.lineWidth = 1;
@@ -405,7 +443,9 @@ function drawItem(
     // hold the label.
     drawTransitionCard(ctx, item, x, y, w, h, radius);
     if (selected) {
-      ctx.strokeStyle = TOKEN.brandSecondary;
+      // Same red-orange selection ring as clips, for a uniform
+      // "this is selected" signal across item kinds.
+      ctx.strokeStyle = SELECTION.ring;
       ctx.lineWidth = 2;
       strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
       ctx.lineWidth = 1;
