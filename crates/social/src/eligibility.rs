@@ -21,7 +21,9 @@ pub fn youtube_eligibility(
     provider_account_id: impl Into<String>,
     display_name: impl Into<String>,
     handle: Option<&str>,
+    scopes: &[&str],
 ) -> ProviderEligibilityReport {
+    let has_upload_scope = scopes.contains(&"https://www.googleapis.com/auth/youtube.upload");
     ProviderEligibilityReport {
         profile: ProviderAccountProfile {
             provider: Provider::YouTube,
@@ -34,12 +36,16 @@ pub fn youtube_eligibility(
         capabilities: ProviderCapabilities {
             native_scheduling: true,
             queue_scheduling: true,
-            upload_video: true,
+            upload_video: has_upload_scope,
             upload_thumbnail: true,
-            public_posting: true,
+            public_posting: has_upload_scope,
             requires_user_consent: false,
         },
-        eligibility: AccountEligibility::eligible(),
+        eligibility: if has_upload_scope {
+            AccountEligibility::eligible()
+        } else {
+            AccountEligibility::blocked("missing_youtube_upload_scope")
+        },
     }
 }
 
@@ -117,11 +123,28 @@ mod tests {
 
     #[test]
     fn youtube_channel_profile_is_upload_eligible() {
-        let report = youtube_eligibility("channel_1", "Awidat", Some("@awidat"));
+        let report = youtube_eligibility(
+            "channel_1",
+            "Awidat",
+            Some("@awidat"),
+            &["https://www.googleapis.com/auth/youtube.upload"],
+        );
         assert!(report.eligibility.eligible);
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.native_scheduling);
         assert_eq!(report.profile.account_kind, AccountKind::Channel);
+    }
+
+    #[test]
+    fn youtube_missing_upload_scope_is_ineligible() {
+        let report = youtube_eligibility("channel_1", "Awidat", Some("@awidat"), &[]);
+        assert!(!report.eligibility.eligible);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["missing_youtube_upload_scope"]
+        );
+        assert!(!report.capabilities.upload_video);
+        assert!(!report.capabilities.public_posting);
     }
 
     #[test]
