@@ -653,9 +653,10 @@ fn account_owner(
 fn authorize_read(actor: &ApiActor, owner: &OwnerRef) -> Result<(), SocialApiError> {
     let allowed = match owner {
         OwnerRef::User(user_id) => *user_id == actor.user_id,
-        OwnerRef::Workspace(workspace_id) => actor.workspace_roles.iter().any(|role| {
-            role.workspace_id == *workspace_id && role.user_id == actor.user_id
-        }),
+        OwnerRef::Workspace(workspace_id) => actor
+            .workspace_roles
+            .iter()
+            .any(|role| role.workspace_id == *workspace_id && role.user_id == actor.user_id),
     };
     if allowed {
         Ok(())
@@ -805,8 +806,14 @@ mod tests {
             ))
             .unwrap_or_else(|err| panic!("save other account: {err}"));
 
-        let accounts = SocialApi::accounts(&store, &user_actor(), &ApiOwner { owner: user_owner() })
-            .unwrap_or_else(|err| panic!("list accounts: {err}"));
+        let accounts = SocialApi::accounts(
+            &store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+        )
+        .unwrap_or_else(|err| panic!("list accounts: {err}"));
 
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "acct_1");
@@ -822,7 +829,13 @@ mod tests {
     fn account_api_lists_accounts_rejects_foreign_user() {
         let store = InMemorySocialStore::default();
         assert_eq!(
-            SocialApi::accounts(&store, &other_user_actor(), &ApiOwner { owner: user_owner() }),
+            SocialApi::accounts(
+                &store,
+                &other_user_actor(),
+                &ApiOwner {
+                    owner: user_owner()
+                }
+            ),
             Err(SocialApiError::Unauthorized)
         );
     }
@@ -889,7 +902,9 @@ mod tests {
             SocialApi::disconnect_account(
                 &mut store,
                 &other_user_actor(),
-                &ApiOwner { owner: user_owner() },
+                &ApiOwner {
+                    owner: user_owner()
+                },
                 "acct_1",
                 2_000,
             ),
@@ -906,7 +921,9 @@ mod tests {
         let disabled = SocialApi::disconnect_account(
             &mut store,
             &user_actor(),
-            &ApiOwner { owner: user_owner() },
+            &ApiOwner {
+                owner: user_owner(),
+            },
             "acct_1",
             2_000,
         )
@@ -1063,7 +1080,9 @@ mod tests {
         let looked_up = SocialApi::publish_job(
             &store,
             &user_actor(),
-            &ApiOwner { owner: user_owner() },
+            &ApiOwner {
+                owner: user_owner(),
+            },
             "job_1",
         )
         .unwrap_or_else(|err| panic!("publish job lookup: {err}"));
@@ -1115,7 +1134,9 @@ mod tests {
             SocialApi::cancel_job(
                 &mut store,
                 &other_user_actor(),
-                &ApiOwner { owner: user_owner() },
+                &ApiOwner {
+                    owner: user_owner()
+                },
                 "job_1",
                 2_200,
             ),
@@ -1125,7 +1146,9 @@ mod tests {
         let cancelled = SocialApi::cancel_job(
             &mut store,
             &user_actor(),
-            &ApiOwner { owner: user_owner() },
+            &ApiOwner {
+                owner: user_owner(),
+            },
             "job_1",
             2_200,
         )
@@ -1137,7 +1160,9 @@ mod tests {
             SocialApi::retry_job(
                 &mut store,
                 &user_actor(),
-                &ApiOwner { owner: user_owner() },
+                &ApiOwner {
+                    owner: user_owner()
+                },
                 "job_1",
                 2_300,
             ),
@@ -1153,8 +1178,7 @@ mod tests {
         let registry = ProviderRegistry::default_multi_platform();
         let job = schedule_job(&mut store, &registry, &user_actor(), user_owner());
 
-        let json =
-            serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        let json = serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
         assert!(!json.contains("encrypted"));
@@ -1335,7 +1359,10 @@ mod tests {
             job.provider_post_url.as_deref(),
             Some("https://www.youtube.com/watch?v=yt_video_1")
         );
-        assert_eq!(job.events.last().map(|e| &e.event_type), Some(&PublishJobEventType::Uploaded));
+        assert_eq!(
+            job.events.last().map(|e| &e.event_type),
+            Some(&PublishJobEventType::Uploaded)
+        );
     }
 
     #[test]
@@ -1402,11 +1429,167 @@ mod tests {
         let job = SocialApi::execute_claimed_upload_job(&mut store, &adapter, execute_request())
             .unwrap_or_else(|err| panic!("execute upload: {err}"));
 
-        let json =
-            serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        let json = serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
         assert!(!json.contains("access-secret"));
         assert!(!json.contains("refresh-secret"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
+    }
+
+    // --- SQLite / in-memory parity --------------------------------------------
+
+    use crate::sqlite_store::SqliteSocialStore;
+
+    #[test]
+    fn api_round_trips_account_routes_with_sqlite_store() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+        let key_provider = TestKeyProvider::new("test-key-1", "local-key");
+
+        SocialApi::oauth_start(&mut store, &user_actor(), start_request())
+            .unwrap_or_else(|err| panic!("oauth start: {err}"));
+        let complete =
+            SocialApi::oauth_complete(&mut store, &key_provider, &user_actor(), complete_request())
+                .unwrap_or_else(|err| panic!("oauth complete: {err}"));
+        assert_eq!(complete.account.id, "acct_1");
+
+        let accounts = SocialApi::accounts(
+            &store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+        )
+        .unwrap_or_else(|err| panic!("list accounts: {err}"));
+        assert_eq!(accounts.len(), 1);
+
+        let json = serde_json::to_string(&accounts)
+            .unwrap_or_else(|err| panic!("serialize accounts: {err}"));
+        assert!(!json.contains("access-secret"));
+        assert!(!json.contains("refresh-secret"));
+
+        let disabled = SocialApi::disconnect_account(
+            &mut store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "acct_1",
+            2_000,
+        )
+        .unwrap_or_else(|err| panic!("disconnect: {err}"));
+        assert_eq!(disabled.status, ConnectedAccountStatus::Disabled);
+    }
+
+    #[test]
+    fn api_round_trips_publish_routes_with_sqlite_store() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+        let registry = ProviderRegistry::default_multi_platform();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+
+        SocialApi::bind_target(&mut store, &user_actor(), bind_request("acct_1"))
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+        let validated = SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+        assert_eq!(validated.validation_state, ValidationState::Valid);
+
+        let job = SocialApi::schedule_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ScheduleTargetRequest {
+                target_id: "target_1".into(),
+                job_id: "job_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"));
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+
+        let looked_up = SocialApi::publish_job(
+            &store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "job_1",
+        )
+        .unwrap_or_else(|err| panic!("publish job lookup: {err}"));
+        assert_eq!(looked_up, job);
+
+        let cancelled = SocialApi::cancel_job(
+            &mut store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "job_1",
+            2_200,
+        )
+        .unwrap_or_else(|err| panic!("cancel job: {err}"));
+        assert_eq!(cancelled.status, PublishJobStatus::Cancelled);
+
+        let json =
+            serde_json::to_string(&cancelled).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
+    }
+
+    #[test]
+    fn api_round_trips_worker_routes_with_sqlite_store() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        store
+            .save_token_secret(token_secret("acct_1"))
+            .unwrap_or_else(|err| panic!("save token secret: {err}"));
+        let claimed = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        )
+        .claim_for_upload(1_900);
+        store
+            .save_publish_job(claimed)
+            .unwrap_or_else(|err| panic!("save claimed job: {err}"));
+
+        // Upload to processing, then poll to published.
+        let processing_adapter = MockUploadAdapter::published(
+            Provider::YouTube,
+            "yt_video_1",
+            "https://www.youtube.com/watch?v=yt_video_1",
+        );
+        let uploaded = SocialApi::execute_claimed_upload_job(
+            &mut store,
+            &processing_adapter,
+            execute_request(),
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+        assert_eq!(uploaded.status, PublishJobStatus::Published);
+
+        let json =
+            serde_json::to_string(&uploaded).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access-secret"));
+        assert!(!json.contains("refresh-secret"));
     }
 }
