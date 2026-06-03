@@ -440,6 +440,13 @@ impl SocialApi {
         request: OAuthCompleteRequest,
     ) -> Result<OAuthCompleteResponse, SocialApiError> {
         actor.authorize(&request.owner, TeamAction::ConnectAccount)?;
+        // The account is persisted under the stored connection's owner (bound,
+        // and actor-gated, at oauth_start). Reject a callback whose claimed
+        // owner does not match it, so the authorization above is meaningful.
+        let connection = store.oauth_connection(&request.oauth_connection_id)?;
+        if connection.owner != request.owner {
+            return Err(SocialApiError::Unauthorized);
+        }
         let account = SocialAccountService::complete_oauth(
             store,
             key_provider,
@@ -888,6 +895,36 @@ mod tests {
             Err(SocialApiError::Unauthorized)
         );
         assert!(store.oauth_connection("oauth_1").is_err());
+    }
+
+    #[test]
+    fn account_api_oauth_complete_rejects_owner_not_matching_stored_connection() {
+        let mut store = InMemorySocialStore::default();
+        let key_provider = TestKeyProvider::new("test-key-1", "local-key");
+        // Connection is started (and persisted) under user_1.
+        SocialApi::oauth_start(&mut store, &user_actor(), start_request())
+            .unwrap_or_else(|err| panic!("oauth start: {err}"));
+
+        // A workspace where the caller is an admin: the actor *is* authorized
+        // for that owner, but it is not the owner the connection was bound to.
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        let workspace_actor = ApiActor::new(
+            "user_1",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "user_1",
+                TeamRole::Admin,
+            )],
+        );
+        let mut request = complete_request();
+        request.owner = workspace_owner;
+
+        assert_eq!(
+            SocialApi::oauth_complete(&mut store, &key_provider, &workspace_actor, request),
+            Err(SocialApiError::Unauthorized)
+        );
+        // No account was persisted.
+        assert!(store.connected_account("acct_1").is_err());
     }
 
     #[test]
