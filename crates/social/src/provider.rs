@@ -1,5 +1,5 @@
 use crate::eligibility::{
-    instagram_eligibility, tiktok_eligibility, youtube_eligibility, ProviderEligibilityReport,
+    ProviderEligibilityReport, instagram_eligibility, tiktok_eligibility, youtube_eligibility,
 };
 use crate::model::{AccountEligibility, Provider, ProviderCapabilities};
 use std::collections::BTreeMap;
@@ -276,7 +276,10 @@ mod tests {
         let report = adapter.fetch_capabilities(&[]);
 
         assert!(!report.eligibility.eligible);
-        assert_eq!(report.eligibility.reasons, vec!["missing_video_publish_scope"]);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["missing_video_publish_scope"]
+        );
         assert!(report.capabilities.requires_user_consent);
     }
 
