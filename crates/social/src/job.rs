@@ -104,6 +104,29 @@ impl PublishJob {
         self
     }
 
+    pub fn processing(mut self, provider_post_id: impl Into<String>, now: i64) -> Self {
+        self.status = PublishJobStatus::Processing;
+        self.provider_post_id = Some(provider_post_id.into());
+        self.updated_at = now;
+        self
+    }
+
+    pub fn publish(
+        mut self,
+        provider_post_id: impl Into<String>,
+        provider_post_url: impl Into<String>,
+        now: i64,
+    ) -> Self {
+        self.status = PublishJobStatus::Published;
+        self.provider_post_id = Some(provider_post_id.into());
+        self.provider_post_url = Some(provider_post_url.into());
+        self.normalized_error = None;
+        self.raw_error_ref = None;
+        self.requires_action_reason = None;
+        self.updated_at = now;
+        self
+    }
+
     pub fn cancel(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Cancelled;
         self.updated_at = now;
@@ -315,6 +338,53 @@ mod tests {
         assert_eq!(job.normalized_error, None);
         assert_eq!(job.raw_error_ref, None);
         assert_eq!(job.requires_action_reason, None);
+    }
+
+    #[test]
+    fn publish_job_can_move_to_processing_and_published() {
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        )
+        .schedule(2_000)
+        .claim_for_upload(2_100)
+        .fail("temporary_provider_error", "errors/job_1.json", 2_150)
+        .requires_action("youtube_reauth_required", 2_175)
+        .claim_for_upload(2_190)
+        .processing("video_123", 2_200);
+
+        assert_eq!(job.status, PublishJobStatus::Processing);
+        assert_eq!(job.provider_post_id.as_deref(), Some("video_123"));
+        assert_eq!(job.provider_post_url, None);
+        assert_eq!(
+            job.normalized_error.as_deref(),
+            Some("temporary_provider_error")
+        );
+        assert_eq!(job.raw_error_ref.as_deref(), Some("errors/job_1.json"));
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("youtube_reauth_required")
+        );
+        assert_eq!(job.updated_at, 2_200);
+
+        let job = job.publish("video_123", "https://youtube.com/watch?v=video_123", 2_300);
+
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(job.provider_post_id.as_deref(), Some("video_123"));
+        assert_eq!(
+            job.provider_post_url.as_deref(),
+            Some("https://youtube.com/watch?v=video_123")
+        );
+        assert_eq!(job.normalized_error, None);
+        assert_eq!(job.raw_error_ref, None);
+        assert_eq!(job.requires_action_reason, None);
+        assert_eq!(job.updated_at, 2_300);
     }
 
     #[test]
