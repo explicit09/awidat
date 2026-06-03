@@ -220,6 +220,34 @@ pub struct WorkspaceMemberRole {
     pub role: TeamRole,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountPublishDefaults {
+    pub connected_account_id: String,
+    pub default_privacy: Option<String>,
+    pub default_tags: Vec<String>,
+    pub title_prefix: Option<String>,
+    pub description_suffix: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishJobStatusCounts {
+    pub scheduled: usize,
+    pub processing: usize,
+    pub published: usize,
+    pub failed: usize,
+    pub requires_action: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUsageAudit {
+    pub connected_account_id: String,
+    pub owner: OwnerRef,
+    pub jobs: Vec<PublishJob>,
+    pub events: Vec<PublishJobEvent>,
+    pub status_counts: PublishJobStatusCounts,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

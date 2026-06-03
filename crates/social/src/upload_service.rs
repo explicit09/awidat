@@ -228,9 +228,10 @@ fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
 mod tests {
     use super::*;
     use crate::model::{
-        AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
-        ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob,
-        PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
+        AccountEligibility, AccountKind, AccountPublishDefaults, CampaignVariantTarget,
+        ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities,
+        PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
+        WorkspaceMemberRole,
     };
     use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
     use crate::store::{InMemorySocialStore, SocialStore};
@@ -654,6 +655,13 @@ mod tests {
             self.inner.publish_job(id)
         }
 
+        fn publish_jobs_for_account(
+            &self,
+            connected_account_id: &str,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.publish_jobs_for_account(connected_account_id)
+        }
+
         fn claim_due_publish_jobs(
             &mut self,
             now: i64,
@@ -674,6 +682,34 @@ mod tests {
             publish_job_id: &str,
         ) -> Result<Vec<PublishJobEvent>, SocialStoreError> {
             self.inner.publish_job_events(publish_job_id)
+        }
+
+        fn save_account_publish_defaults(
+            &mut self,
+            defaults: AccountPublishDefaults,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_account_publish_defaults(defaults)
+        }
+
+        fn account_publish_defaults(
+            &self,
+            connected_account_id: &str,
+        ) -> Result<AccountPublishDefaults, SocialStoreError> {
+            self.inner.account_publish_defaults(connected_account_id)
+        }
+
+        fn save_workspace_member_role(
+            &mut self,
+            role: WorkspaceMemberRole,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_workspace_member_role(role)
+        }
+
+        fn workspace_member_roles(
+            &self,
+            workspace_id: &str,
+        ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+            self.inner.workspace_member_roles(workspace_id)
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::model::{
-    CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
-    PublishJobEvent, PublishJobStatus,
+    AccountPublishDefaults, CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus,
+    OwnerRef, PublishJob, PublishJobEvent, PublishJobStatus, WorkspaceMemberRole,
 };
 use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
 use crate::token::TokenSecret;
@@ -65,6 +65,11 @@ pub trait SocialStore {
 
     fn publish_job(&self, id: &str) -> Result<PublishJob, SocialStoreError>;
 
+    fn publish_jobs_for_account(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<Vec<PublishJob>, SocialStoreError>;
+
     fn claim_due_publish_jobs(
         &mut self,
         now: i64,
@@ -77,6 +82,26 @@ pub trait SocialStore {
         &self,
         publish_job_id: &str,
     ) -> Result<Vec<PublishJobEvent>, SocialStoreError>;
+
+    fn save_account_publish_defaults(
+        &mut self,
+        defaults: AccountPublishDefaults,
+    ) -> Result<(), SocialStoreError>;
+
+    fn account_publish_defaults(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<AccountPublishDefaults, SocialStoreError>;
+
+    fn save_workspace_member_role(
+        &mut self,
+        role: WorkspaceMemberRole,
+    ) -> Result<(), SocialStoreError>;
+
+    fn workspace_member_roles(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -87,6 +112,8 @@ pub struct InMemorySocialStore {
     campaign_variant_targets: BTreeMap<String, CampaignVariantTarget>,
     publish_jobs: BTreeMap<String, PublishJob>,
     publish_job_events: BTreeMap<String, Vec<PublishJobEvent>>,
+    account_publish_defaults: BTreeMap<String, AccountPublishDefaults>,
+    workspace_member_roles: BTreeMap<(String, String), WorkspaceMemberRole>,
 }
 
 impl SocialStore for InMemorySocialStore {
@@ -215,6 +242,18 @@ impl SocialStore for InMemorySocialStore {
             .ok_or(SocialStoreError::NotFound)
     }
 
+    fn publish_jobs_for_account(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<Vec<PublishJob>, SocialStoreError> {
+        Ok(self
+            .publish_jobs
+            .values()
+            .filter(|job| job.connected_account_id == connected_account_id)
+            .cloned()
+            .collect())
+    }
+
     fn claim_due_publish_jobs(
         &mut self,
         now: i64,
@@ -263,6 +302,46 @@ impl SocialStore for InMemorySocialStore {
             .get(publish_job_id)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn save_account_publish_defaults(
+        &mut self,
+        defaults: AccountPublishDefaults,
+    ) -> Result<(), SocialStoreError> {
+        self.account_publish_defaults
+            .insert(defaults.connected_account_id.clone(), defaults);
+        Ok(())
+    }
+
+    fn account_publish_defaults(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<AccountPublishDefaults, SocialStoreError> {
+        self.account_publish_defaults
+            .get(connected_account_id)
+            .cloned()
+            .ok_or(SocialStoreError::NotFound)
+    }
+
+    fn save_workspace_member_role(
+        &mut self,
+        role: WorkspaceMemberRole,
+    ) -> Result<(), SocialStoreError> {
+        self.workspace_member_roles
+            .insert((role.workspace_id.clone(), role.user_id.clone()), role);
+        Ok(())
+    }
+
+    fn workspace_member_roles(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        Ok(self
+            .workspace_member_roles
+            .values()
+            .filter(|role| role.workspace_id == workspace_id)
+            .cloned()
+            .collect())
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::model::{
-    CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
-    PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus, ValidationState,
+    AccountPublishDefaults, CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus,
+    OwnerRef, PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType,
+    PublishJobStatus, ValidationState, WorkspaceMemberRole,
 };
 use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
 use crate::store::{SocialStore, SocialStoreError};
@@ -92,6 +93,19 @@ impl SqliteSocialStore {
 
                 CREATE INDEX IF NOT EXISTS publish_job_events_job
                     ON publish_job_events (publish_job_id, created_at, id);
+
+                CREATE TABLE IF NOT EXISTS account_publish_defaults (
+                    connected_account_id TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS workspace_member_roles (
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, user_id)
+                );
                 "#,
             )
             .map_err(storage_error)
@@ -396,6 +410,32 @@ impl SocialStore for SqliteSocialStore {
             .and_then(|payload_json| from_json(&payload_json))
     }
 
+    fn publish_jobs_for_account(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM publish_jobs
+                WHERE connected_account_id = ?1
+                ORDER BY scheduled_for, id
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![connected_account_id], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            jobs.push(from_json(&payload_json)?);
+        }
+        Ok(jobs)
+    }
+
     fn claim_due_publish_jobs(
         &mut self,
         now: i64,
@@ -492,6 +532,99 @@ impl SocialStore for SqliteSocialStore {
             events.push(from_json(&payload_json)?);
         }
         Ok(events)
+    }
+
+    fn save_account_publish_defaults(
+        &mut self,
+        defaults: AccountPublishDefaults,
+    ) -> Result<(), SocialStoreError> {
+        let payload_json = to_json(&defaults)?;
+        self.connection
+            .execute(
+                r#"
+                INSERT INTO account_publish_defaults (
+                    connected_account_id,
+                    payload_json,
+                    updated_at
+                )
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT(connected_account_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![
+                    defaults.connected_account_id,
+                    payload_json,
+                    defaults.updated_at
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn account_publish_defaults(
+        &self,
+        connected_account_id: &str,
+    ) -> Result<AccountPublishDefaults, SocialStoreError> {
+        self.connection
+            .query_row(
+                "SELECT payload_json FROM account_publish_defaults WHERE connected_account_id = ?1",
+                params![connected_account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(SocialStoreError::NotFound)
+            .and_then(|payload_json| from_json(&payload_json))
+    }
+
+    fn save_workspace_member_role(
+        &mut self,
+        role: WorkspaceMemberRole,
+    ) -> Result<(), SocialStoreError> {
+        let payload_json = to_json(&role)?;
+        self.connection
+            .execute(
+                r#"
+                INSERT INTO workspace_member_roles (
+                    workspace_id,
+                    user_id,
+                    payload_json
+                )
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT(workspace_id, user_id) DO UPDATE SET
+                    payload_json = excluded.payload_json
+                "#,
+                params![role.workspace_id, role.user_id, payload_json],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn workspace_member_roles(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM workspace_member_roles
+                WHERE workspace_id = ?1
+                ORDER BY user_id
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![workspace_id], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut roles = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            roles.push(from_json(&payload_json)?);
+        }
+        Ok(roles)
     }
 }
 
@@ -641,10 +774,10 @@ fn is_constraint_error(err: &RusqliteError) -> bool {
 mod tests {
     use super::*;
     use crate::model::{
-        AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
-        ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob,
-        PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
-        ValidationState,
+        AccountEligibility, AccountKind, AccountPublishDefaults, CampaignVariantTarget,
+        ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities,
+        PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
+        TeamRole, ValidationState, WorkspaceMemberRole,
     };
     use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
     use crate::store::{SocialStore, SocialStoreError};
@@ -837,6 +970,40 @@ mod tests {
                 "duplicate publish job idempotency key".into()
             ))
         );
+    }
+
+    #[test]
+    fn sqlite_persists_account_defaults_roles_and_account_jobs() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("create sqlite social store: {err}"));
+        let account = connected_account("acct_1");
+        let defaults = AccountPublishDefaults {
+            connected_account_id: "acct_1".into(),
+            default_privacy: Some("unlisted".into()),
+            default_tags: vec!["awidat".into()],
+            title_prefix: Some("Awidat: ".into()),
+            description_suffix: Some("Built with Awidat.".into()),
+            updated_at: 2_000,
+        };
+        let role = WorkspaceMemberRole::new("workspace_1", "user_1", TeamRole::Publisher);
+        let job = publish_job("job_1", 2_000);
+
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        store
+            .save_account_publish_defaults(defaults.clone())
+            .unwrap_or_else(|err| panic!("save defaults: {err}"));
+        store
+            .save_workspace_member_role(role.clone())
+            .unwrap_or_else(|err| panic!("save role: {err}"));
+        store
+            .save_publish_job(job.clone())
+            .unwrap_or_else(|err| panic!("save job: {err}"));
+
+        assert_eq!(store.account_publish_defaults("acct_1"), Ok(defaults));
+        assert_eq!(store.workspace_member_roles("workspace_1"), Ok(vec![role]));
+        assert_eq!(store.publish_jobs_for_account("acct_1"), Ok(vec![job]));
     }
 
     #[test]
