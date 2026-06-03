@@ -9,6 +9,7 @@ pub mod model;
 pub mod oauth;
 pub mod oauth_url;
 pub mod provider;
+pub mod sqlite_store;
 pub mod store;
 pub mod token;
 pub mod token_bundle;
