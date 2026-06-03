@@ -11,7 +11,7 @@
 
 use crate::account_service::{AccountServiceError, CompleteOAuthInput, SocialAccountService};
 use crate::model::{
-    AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
+    AccountEligibility, AccountKind, AccountUsageAudit, CampaignVariantTarget, ConnectedAccount,
     ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob, PublishJobEvent,
     PublishJobEventType, PublishJobStatus, TeamAction, WorkspaceMemberRole,
 };
@@ -21,7 +21,7 @@ use crate::publish_service::{
     BindTargetInput, PublishService, PublishServiceError, ScheduleTargetInput,
 };
 use crate::store::{SocialStore, SocialStoreError};
-use crate::team_service::TeamPolicy;
+use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
 use crate::upload_adapter::UploadAdapter;
@@ -138,6 +138,15 @@ impl From<UploadStatusServiceError> for SocialApiError {
         match error {
             UploadStatusServiceError::Store(store) => SocialApiError::Store(store),
             other => SocialApiError::Status(other.to_string()),
+        }
+    }
+}
+
+impl From<TeamServiceError> for SocialApiError {
+    fn from(error: TeamServiceError) -> Self {
+        match error {
+            TeamServiceError::Store(store) => SocialApiError::Store(store),
+            other => SocialApiError::Team(other.to_string()),
         }
     }
 }
@@ -595,6 +604,28 @@ impl SocialApi {
         authorize_job_owner(store, actor, owner, job_id, TeamAction::RetryPublish)?;
         let job = PublishService::retry_job(store, &owner.owner, job_id, now)?;
         job_response(store, job)
+    }
+
+    /// `GET /social/accounts/:id/audit`: per-account jobs, events, and status
+    /// counts for an owner. Read-gated; never includes token material.
+    pub fn account_usage_audit(
+        store: &impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        connected_account_id: &str,
+    ) -> Result<AccountUsageAudit, SocialApiError> {
+        // The requested owner must actually own the account, and the actor must
+        // be permitted to read for that owner.
+        let resolved = account_owner(store, connected_account_id)?;
+        if resolved != owner.owner {
+            return Err(SocialApiError::Unauthorized);
+        }
+        authorize_read(actor, &owner.owner)?;
+        Ok(TeamService::account_usage_audit(
+            store,
+            &owner.owner,
+            connected_account_id,
+        )?)
     }
 
     /// Worker entrypoint: execute an already-claimed upload job.
@@ -1260,6 +1291,48 @@ mod tests {
                 },
                 "acct_1",
                 2_300,
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn account_audit_returns_owner_scoped_jobs_token_safe() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        let audit = SocialApi::account_usage_audit(
+            &store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "acct_1",
+        )
+        .unwrap_or_else(|err| panic!("audit: {err}"));
+        assert_eq!(audit.connected_account_id, "acct_1");
+        assert_eq!(audit.jobs.len(), 1);
+
+        let json = serde_json::to_string(&audit).unwrap_or_else(|err| panic!("serialize: {err}"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
+    }
+
+    #[test]
+    fn account_audit_rejects_wrong_owner() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        assert_eq!(
+            SocialApi::account_usage_audit(
+                &store,
+                &user_actor(),
+                &ApiOwner {
+                    owner: OwnerRef::Workspace("workspace_1".into())
+                },
+                "acct_1",
             ),
             Err(SocialApiError::Unauthorized)
         );
