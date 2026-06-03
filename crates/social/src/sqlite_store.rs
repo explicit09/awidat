@@ -1,6 +1,6 @@
 use crate::model::{
     CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
-    PublishJobEvent,
+    PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus, ValidationState,
 };
 use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
 use crate::store::{SocialStore, SocialStoreError};
@@ -46,6 +46,52 @@ impl SqliteSocialStore {
                     connected_account_id TEXT PRIMARY KEY,
                     payload_json TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS campaign_variant_targets (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    variant_id TEXT NOT NULL,
+                    connected_account_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    validation_state TEXT NOT NULL,
+                    scheduled_for INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS campaign_variant_targets_variant
+                    ON campaign_variant_targets (campaign_id, variant_id);
+
+                CREATE TABLE IF NOT EXISTS publish_jobs (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    variant_id TEXT NOT NULL,
+                    connected_account_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    scheduled_for INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS publish_jobs_idempotency_key
+                    ON publish_jobs (idempotency_key);
+
+                CREATE INDEX IF NOT EXISTS publish_jobs_due
+                    ON publish_jobs (status, scheduled_for, id);
+
+                CREATE TABLE IF NOT EXISTS publish_job_events (
+                    id TEXT PRIMARY KEY,
+                    publish_job_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS publish_job_events_job
+                    ON publish_job_events (publish_job_id, created_at, id);
                 "#,
             )
             .map_err(storage_error)
@@ -229,46 +275,229 @@ impl SocialStore for SqliteSocialStore {
 
     fn save_campaign_variant_target(
         &mut self,
-        _target: CampaignVariantTarget,
+        target: CampaignVariantTarget,
     ) -> Result<(), SocialStoreError> {
-        Err(publish_storage_pending_error())
+        let payload_json = to_json(&target)?;
+        self.connection
+            .execute(
+                r#"
+                INSERT INTO campaign_variant_targets (
+                    id,
+                    campaign_id,
+                    variant_id,
+                    connected_account_id,
+                    provider,
+                    validation_state,
+                    scheduled_for,
+                    payload_json,
+                    updated_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ON CONFLICT(id) DO UPDATE SET
+                    campaign_id = excluded.campaign_id,
+                    variant_id = excluded.variant_id,
+                    connected_account_id = excluded.connected_account_id,
+                    provider = excluded.provider,
+                    validation_state = excluded.validation_state,
+                    scheduled_for = excluded.scheduled_for,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![
+                    target.id,
+                    target.campaign_id,
+                    target.variant_id,
+                    target.connected_account_id,
+                    target.provider.as_str(),
+                    validation_state_as_str(&target.validation_state),
+                    target.scheduled_for,
+                    payload_json,
+                    target.updated_at,
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
     }
 
-    fn campaign_variant_target(
-        &self,
-        _id: &str,
-    ) -> Result<CampaignVariantTarget, SocialStoreError> {
-        Err(publish_storage_pending_error())
+    fn campaign_variant_target(&self, id: &str) -> Result<CampaignVariantTarget, SocialStoreError> {
+        self.connection
+            .query_row(
+                "SELECT payload_json FROM campaign_variant_targets WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(SocialStoreError::NotFound)
+            .and_then(|payload_json| from_json(&payload_json))
     }
 
-    fn save_publish_job(&mut self, _job: PublishJob) -> Result<(), SocialStoreError> {
-        Err(publish_storage_pending_error())
+    fn save_publish_job(&mut self, job: PublishJob) -> Result<(), SocialStoreError> {
+        let payload_json = to_json(&job)?;
+        let result = self.connection.execute(
+            r#"
+            INSERT INTO publish_jobs (
+                id,
+                campaign_id,
+                variant_id,
+                connected_account_id,
+                provider,
+                idempotency_key,
+                scheduled_for,
+                status,
+                payload_json,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(id) DO UPDATE SET
+                campaign_id = excluded.campaign_id,
+                variant_id = excluded.variant_id,
+                connected_account_id = excluded.connected_account_id,
+                provider = excluded.provider,
+                idempotency_key = excluded.idempotency_key,
+                scheduled_for = excluded.scheduled_for,
+                status = excluded.status,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                job.id,
+                job.campaign_id,
+                job.variant_id,
+                job.connected_account_id,
+                job.provider.as_str(),
+                job.idempotency_key,
+                job.scheduled_for,
+                publish_job_status_as_str(&job.status),
+                payload_json,
+                job.updated_at,
+            ],
+        );
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if is_constraint_error(&err) => Err(SocialStoreError::Storage(
+                "duplicate publish job idempotency key".into(),
+            )),
+            Err(err) => Err(storage_error(err)),
+        }
     }
 
-    fn publish_job(&self, _id: &str) -> Result<PublishJob, SocialStoreError> {
-        Err(publish_storage_pending_error())
+    fn publish_job(&self, id: &str) -> Result<PublishJob, SocialStoreError> {
+        self.connection
+            .query_row(
+                "SELECT payload_json FROM publish_jobs WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(SocialStoreError::NotFound)
+            .and_then(|payload_json| from_json(&payload_json))
     }
 
     fn claim_due_publish_jobs(
         &mut self,
-        _now: i64,
-        _limit: usize,
+        now: i64,
+        limit: usize,
     ) -> Result<Vec<PublishJob>, SocialStoreError> {
-        Err(publish_storage_pending_error())
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM publish_jobs
+                WHERE status = ?1 AND scheduled_for <= ?2
+                ORDER BY scheduled_for, id
+                LIMIT ?3
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    publish_job_status_as_str(&PublishJobStatus::Scheduled),
+                    now,
+                    limit as i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        let mut due_jobs = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            due_jobs.push(from_json::<PublishJob>(&payload_json)?);
+        }
+        drop(statement);
+
+        let mut claimed = Vec::with_capacity(due_jobs.len());
+        for job in due_jobs {
+            let updated = job.claim_for_upload(now);
+            self.save_publish_job(updated.clone())?;
+            claimed.push(updated);
+        }
+
+        Ok(claimed)
     }
 
-    fn append_publish_job_event(
-        &mut self,
-        _event: PublishJobEvent,
-    ) -> Result<(), SocialStoreError> {
-        Err(publish_storage_pending_error())
+    fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
+        let payload_json = to_json(&event)?;
+        self.connection
+            .execute(
+                r#"
+                INSERT INTO publish_job_events (
+                    id,
+                    publish_job_id,
+                    event_type,
+                    actor_type,
+                    payload_json,
+                    created_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(id) DO UPDATE SET
+                    publish_job_id = excluded.publish_job_id,
+                    event_type = excluded.event_type,
+                    actor_type = excluded.actor_type,
+                    payload_json = excluded.payload_json,
+                    created_at = excluded.created_at
+                "#,
+                params![
+                    event.id,
+                    event.publish_job_id,
+                    publish_job_event_type_as_str(&event.event_type),
+                    publish_job_actor_type_as_str(&event.actor_type),
+                    payload_json,
+                    event.created_at,
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
     }
 
     fn publish_job_events(
         &self,
-        _publish_job_id: &str,
+        publish_job_id: &str,
     ) -> Result<Vec<PublishJobEvent>, SocialStoreError> {
-        Err(publish_storage_pending_error())
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM publish_job_events
+                WHERE publish_job_id = ?1
+                ORDER BY created_at, id
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![publish_job_id], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut events = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            events.push(from_json(&payload_json)?);
+        }
+        Ok(events)
     }
 }
 
@@ -347,6 +576,51 @@ fn connected_account_status_as_str(status: &ConnectedAccountStatus) -> &'static 
     }
 }
 
+fn validation_state_as_str(state: &ValidationState) -> &'static str {
+    match state {
+        ValidationState::Pending => "pending",
+        ValidationState::Valid => "valid",
+        ValidationState::Invalid => "invalid",
+        ValidationState::RequiresAction => "requires_action",
+    }
+}
+
+fn publish_job_status_as_str(status: &PublishJobStatus) -> &'static str {
+    match status {
+        PublishJobStatus::Draft => "draft",
+        PublishJobStatus::Validated => "validated",
+        PublishJobStatus::Scheduled => "scheduled",
+        PublishJobStatus::Uploading => "uploading",
+        PublishJobStatus::Processing => "processing",
+        PublishJobStatus::Published => "published",
+        PublishJobStatus::Failed => "failed",
+        PublishJobStatus::RequiresAction => "requires_action",
+        PublishJobStatus::Cancelled => "cancelled",
+    }
+}
+
+fn publish_job_event_type_as_str(event_type: &PublishJobEventType) -> &'static str {
+    match event_type {
+        PublishJobEventType::TargetBound => "target_bound",
+        PublishJobEventType::Validated => "validated",
+        PublishJobEventType::Scheduled => "scheduled",
+        PublishJobEventType::Claimed => "claimed",
+        PublishJobEventType::Cancelled => "cancelled",
+        PublishJobEventType::RetryQueued => "retry_queued",
+        PublishJobEventType::RequiresAction => "requires_action",
+        PublishJobEventType::Failed => "failed",
+    }
+}
+
+fn publish_job_actor_type_as_str(actor_type: &PublishJobActorType) -> &'static str {
+    match actor_type {
+        PublishJobActorType::User => "user",
+        PublishJobActorType::System => "system",
+        PublishJobActorType::Worker => "worker",
+        PublishJobActorType::Provider => "provider",
+    }
+}
+
 fn to_json<T: Serialize>(value: &T) -> Result<String, SocialStoreError> {
     serde_json::to_string(value).map_err(|err| SocialStoreError::Storage(err.to_string()))
 }
@@ -367,16 +641,14 @@ fn is_constraint_error(err: &RusqliteError) -> bool {
     )
 }
 
-fn publish_storage_pending_error() -> SocialStoreError {
-    SocialStoreError::Storage("sqlite publish storage is pending Task 3".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{
-        AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef,
-        Provider, ProviderCapabilities,
+        AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
+        ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob,
+        PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
+        ValidationState,
     };
     use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
     use crate::store::{SocialStore, SocialStoreError};
@@ -434,6 +706,46 @@ mod tests {
         .unwrap_or_else(|err| panic!("encrypt token secret: {err}"))
     }
 
+    fn campaign_variant_target(id: &str) -> CampaignVariantTarget {
+        CampaignVariantTarget::new(
+            id,
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            serde_json::json!({"privacy": "private"}),
+            2_000,
+            1_000,
+        )
+        .mark_validation(ValidationState::Valid, 1_100)
+    }
+
+    fn publish_job(id: &str, scheduled_for: i64) -> PublishJob {
+        PublishJob::new(
+            id,
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            format!("render://{id}"),
+            scheduled_for,
+            "user_1",
+        )
+        .schedule(1_000)
+    }
+
+    fn publish_job_event(id: &str, publish_job_id: &str, created_at: i64) -> PublishJobEvent {
+        PublishJobEvent::new(
+            id,
+            publish_job_id,
+            PublishJobEventType::Scheduled,
+            PublishJobActorType::User,
+            "scheduled",
+            serde_json::json!({}),
+            created_at,
+        )
+    }
+
     #[test]
     fn sqlite_round_trips_oauth_account_and_token_records() {
         let mut store = SqliteSocialStore::new_in_memory()
@@ -459,6 +771,107 @@ mod tests {
             Ok(vec![account])
         );
         assert_eq!(store.token_secret_for_account("acct_1"), Ok(secret));
+    }
+
+    #[test]
+    fn sqlite_persists_targets_jobs_and_events() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("create sqlite social store: {err}"));
+        let target = campaign_variant_target("target_1");
+        let job = publish_job("job_1", 2_000);
+        let event_1 = publish_job_event("event_1", "job_1", 1_000);
+        let event_2 = publish_job_event("event_2", "job_1", 1_100);
+
+        store
+            .save_campaign_variant_target(target.clone())
+            .unwrap_or_else(|err| panic!("save target: {err}"));
+        store
+            .save_publish_job(job.clone())
+            .unwrap_or_else(|err| panic!("save publish job: {err}"));
+        store
+            .append_publish_job_event(event_2.clone())
+            .unwrap_or_else(|err| panic!("append second event: {err}"));
+        store
+            .append_publish_job_event(event_1.clone())
+            .unwrap_or_else(|err| panic!("append first event: {err}"));
+
+        assert_eq!(store.campaign_variant_target("target_1"), Ok(target));
+        assert_eq!(
+            store.campaign_variant_target("missing_target"),
+            Err(SocialStoreError::NotFound)
+        );
+        assert_eq!(store.publish_job("job_1"), Ok(job));
+        assert_eq!(
+            store.publish_job("missing_job"),
+            Err(SocialStoreError::NotFound)
+        );
+        assert_eq!(
+            store.publish_job_events("job_1"),
+            Ok(vec![event_1, event_2])
+        );
+
+        let duplicate_idempotency_key = PublishJob::new(
+            "job_2",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://job_1",
+            2_000,
+            "user_1",
+        )
+        .schedule(1_000);
+        assert_eq!(
+            store.save_publish_job(duplicate_idempotency_key),
+            Err(SocialStoreError::Storage(
+                "duplicate publish job idempotency key".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn sqlite_claims_due_scheduled_jobs_once() {
+        let mut store = SqliteSocialStore::new_in_memory()
+            .unwrap_or_else(|err| panic!("create sqlite social store: {err}"));
+        let later_by_schedule_first_by_id = publish_job("job_a", 1_900);
+        let earlier_by_schedule_second_by_id = publish_job("job_b", 1_000);
+        let future = publish_job("job_c", 2_600);
+
+        for job in [
+            later_by_schedule_first_by_id.clone(),
+            earlier_by_schedule_second_by_id,
+            future.clone(),
+        ] {
+            store
+                .save_publish_job(job)
+                .unwrap_or_else(|err| panic!("save publish job: {err}"));
+        }
+
+        let claimed = store
+            .claim_due_publish_jobs(2_500, 1)
+            .unwrap_or_else(|err| panic!("claim due jobs: {err}"));
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, "job_b");
+        assert_eq!(claimed[0].status, PublishJobStatus::Uploading);
+        assert_eq!(claimed[0].attempt_count, 1);
+        assert_eq!(claimed[0].updated_at, 2_500);
+        assert_eq!(store.publish_job("job_b"), Ok(claimed[0].clone()));
+        assert_eq!(
+            store.publish_job("job_a"),
+            Ok(later_by_schedule_first_by_id)
+        );
+        assert_eq!(store.publish_job("job_c"), Ok(future));
+
+        let claimed_again = store
+            .claim_due_publish_jobs(2_500, 10)
+            .unwrap_or_else(|err| panic!("claim due jobs again: {err}"));
+        assert_eq!(claimed_again.len(), 1);
+        assert_eq!(claimed_again[0].id, "job_a");
+
+        let claimed_third = store
+            .claim_due_publish_jobs(2_500, 10)
+            .unwrap_or_else(|err| panic!("claim due jobs third time: {err}"));
+        assert!(claimed_third.is_empty());
     }
 
     #[test]
