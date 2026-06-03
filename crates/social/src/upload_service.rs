@@ -585,11 +585,7 @@ mod tests {
                 .unwrap_or_else(|err| panic!("save account: {err}"));
             let adapter = RecordingUploadAdapter::published();
 
-            let result = UploadService::execute_claimed_job(
-                &mut store,
-                &adapter,
-                execute_input(),
-            );
+            let result = UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
 
             assert!(
                 matches!(result, Err(UploadServiceError::AccountNotPublishable(_))),
@@ -620,8 +616,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("save account: {err}"));
         let adapter = RecordingUploadAdapter::published();
 
-        let result =
-            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+        let result = UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
 
         assert_eq!(
             result,
@@ -642,8 +637,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("save account: {err}"));
         let adapter = RecordingUploadAdapter::published();
 
-        let result =
-            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+        let result = UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
 
         assert_eq!(
             result,
@@ -686,8 +680,7 @@ mod tests {
         let mut store = CancelMidUploadStore::new(store_with_claimed_job());
         let adapter = RecordingUploadAdapter::published();
 
-        let result =
-            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+        let result = UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
 
         assert_eq!(result, Err(UploadServiceError::JobCancelledDuringUpload));
         assert_eq!(adapter.call_count(), 1, "adapter ran before cancel landed");
@@ -700,10 +693,12 @@ mod tests {
             .inner
             .publish_job_events("job_1")
             .unwrap_or_else(|err| panic!("load events: {err}"));
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == PublishJobEventType::Cancelled
-                && event.actor_type == PublishJobActorType::Worker));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == PublishJobEventType::Cancelled
+                    && event.actor_type == PublishJobActorType::Worker)
+        );
     }
 
     fn execute_input() -> ExecuteUploadInput {
