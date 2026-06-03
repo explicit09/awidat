@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Provider {
+    #[serde(rename = "youtube")]
     YouTube,
+    #[serde(rename = "tiktok")]
     TikTok,
+    #[serde(rename = "instagram")]
     Instagram,
 }
 
@@ -104,9 +106,11 @@ mod tests {
 
     #[test]
     fn provider_keys_are_stable() {
-        assert_eq!(Provider::YouTube.as_str(), "youtube");
-        assert_eq!(Provider::TikTok.as_str(), "tiktok");
-        assert_eq!(Provider::Instagram.as_str(), "instagram");
+        for provider in [Provider::YouTube, Provider::TikTok, Provider::Instagram] {
+            let json = serde_json::to_value(&provider)
+                .unwrap_or_else(|err| panic!("serialize provider: {err}"));
+            assert_eq!(json, serde_json::Value::String(provider.as_str().into()));
+        }
     }
 
     #[test]
