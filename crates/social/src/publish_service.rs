@@ -212,9 +212,10 @@ impl PublishService {
         }
 
         let retry = job.retry(now);
+        let retry_event_id = retry_event_id(store, &retry.id)?;
         store.save_publish_job(retry.clone())?;
         store.append_publish_job_event(PublishJobEvent::new(
-            format!("event_{}_retry_{}", retry.id, now),
+            retry_event_id,
             retry.id.clone(),
             PublishJobEventType::RetryQueued,
             PublishJobActorType::User,
@@ -276,6 +277,15 @@ fn target_validation_state(
     } else {
         (ValidationState::Valid, Vec::new())
     }
+}
+
+fn retry_event_id(store: &impl SocialStore, job_id: &str) -> Result<String, PublishServiceError> {
+    let retry_count = store
+        .publish_job_events(job_id)?
+        .into_iter()
+        .filter(|event| event.event_type == PublishJobEventType::RetryQueued)
+        .count();
+    Ok(format!("event_{job_id}_retry_{}", retry_count + 1))
 }
 
 #[cfg(test)]
@@ -610,14 +620,14 @@ mod tests {
         store
             .save_publish_job(failed_again)
             .unwrap_or_else(|err| panic!("save failed job again: {err}"));
-        PublishService::retry_job(&mut store, &owner(), "job_1", 2_400)
+        PublishService::retry_job(&mut store, &owner(), "job_1", 2_300)
             .unwrap_or_else(|err| panic!("retry job again: {err}"));
 
         let events = store
             .publish_job_events("job_1")
             .unwrap_or_else(|err| panic!("events: {err}"));
-        assert_eq!(events[1].id, "event_job_1_retry_2300");
-        assert_eq!(events[2].id, "event_job_1_retry_2400");
+        assert_eq!(events[1].id, "event_job_1_retry_1");
+        assert_eq!(events[2].id, "event_job_1_retry_2");
     }
 
     fn owner() -> OwnerRef {
