@@ -271,6 +271,11 @@ pub fn run() {
             commands::publishing::set_provider_client_credentials,
             commands::publishing::get_provider_client_credentials,
             commands::publishing::get_publishing_credentials_path,
+            commands::social::social_providers,
+            commands::social::social_accounts,
+            commands::social::social_oauth_start,
+            commands::social::social_oauth_complete,
+            commands::social::social_disconnect_account,
         ])
         .build(tauri::generate_context!());
 
