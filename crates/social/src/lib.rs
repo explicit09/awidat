@@ -16,3 +16,4 @@ pub mod store;
 pub mod token;
 pub mod token_bundle;
 pub mod upload_adapter;
+pub mod youtube_upload;
