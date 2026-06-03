@@ -100,6 +100,65 @@ pub struct ConnectedAccount {
     pub updated_at: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignVariantTarget {
+    pub id: String,
+    pub campaign_id: String,
+    pub variant_id: String,
+    pub connected_account_id: String,
+    pub provider: Provider,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub validation_state: ValidationState,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationState {
+    Pending,
+    Valid,
+    Invalid,
+    RequiresAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishJobStatus {
+    Draft,
+    Validated,
+    Scheduled,
+    Uploading,
+    Processing,
+    Published,
+    Failed,
+    RequiresAction,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishJob {
+    pub id: String,
+    pub campaign_id: String,
+    pub variant_id: String,
+    pub connected_account_id: String,
+    pub provider: Provider,
+    pub artifact_ref: String,
+    pub idempotency_key: String,
+    pub scheduled_for: i64,
+    pub status: PublishJobStatus,
+    pub attempt_count: u32,
+    pub provider_post_id: Option<String>,
+    pub provider_post_url: Option<String>,
+    pub normalized_error: Option<String>,
+    pub raw_error_ref: Option<String>,
+    pub requires_action_reason: Option<String>,
+    pub created_by: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
