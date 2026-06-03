@@ -67,6 +67,8 @@ pub enum UploadStatusServiceError {
     ProviderMismatch,
     #[error("processing job does not have a provider post id")]
     MissingProviderPostId,
+    #[error("provider status response post id does not match processing job")]
+    ProviderPostIdMismatch,
     #[error("published provider status did not include a provider post url")]
     MissingProviderPostUrl,
 }
@@ -101,17 +103,18 @@ impl UploadStatusService {
             job_id: job.id.clone(),
             provider: job.provider.clone(),
             connected_account_id: account.id.clone(),
-            provider_post_id,
+            provider_post_id: provider_post_id.clone(),
             access_token_ref: format!("token_secret:{}", account.id),
         };
         let result = adapter
             .poll_status(&request)
             .map_err(status_adapter_error)?;
+        if result.provider_post_id != provider_post_id {
+            return Err(UploadStatusServiceError::ProviderPostIdMismatch);
+        }
 
         let next = match result.status {
-            UploadProcessingStatus::Processing => {
-                job.processing(result.provider_post_id.clone(), input.now)
-            }
+            UploadProcessingStatus::Processing => job.processing(provider_post_id, input.now),
             UploadProcessingStatus::Published => job.publish(
                 result.provider_post_id.clone(),
                 result
@@ -332,6 +335,42 @@ mod tests {
         assert_eq!(job.provider_post_id.as_deref(), Some("yt_video_1"));
         assert_eq!(job.provider_post_url, None);
         assert_eq!(job.updated_at, 2_500);
+    }
+
+    #[test]
+    fn poll_processing_job_rejects_mismatched_provider_post_id() {
+        let mut store = store_with_processing_job();
+        let adapter = RecordingStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_other".into(),
+            provider_post_url: None,
+            status: UploadProcessingStatus::Processing,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let error = match UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        ) {
+            Ok(job) => panic!("expected provider post id mismatch, got {job:?}"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, UploadStatusServiceError::ProviderPostIdMismatch);
+        let job = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("job: {err}"));
+        assert_eq!(job.status, PublishJobStatus::Processing);
+        assert_eq!(job.provider_post_id.as_deref(), Some("yt_video_1"));
+        assert_eq!(job.updated_at, 2_200);
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("events: {err}"));
+        assert!(events.is_empty());
     }
 
     #[test]
