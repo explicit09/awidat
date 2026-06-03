@@ -6,5 +6,6 @@
 pub mod job;
 pub mod model;
 pub mod oauth;
+pub mod oauth_url;
 pub mod provider;
 pub mod token;
