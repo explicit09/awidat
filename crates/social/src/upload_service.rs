@@ -216,6 +216,7 @@ fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
         PublishJobEventType::Scheduled => "scheduled",
         PublishJobEventType::Claimed => "claimed",
         PublishJobEventType::Uploaded => "uploaded",
+        PublishJobEventType::StatusPolled => "status_polled",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
         PublishJobEventType::RequiresAction => "requires_action",

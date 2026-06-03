@@ -167,6 +167,7 @@ pub enum PublishJobEventType {
     Scheduled,
     Claimed,
     Uploaded,
+    StatusPolled,
     Cancelled,
     RetryQueued,
     RequiresAction,
