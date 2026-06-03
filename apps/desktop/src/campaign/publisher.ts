@@ -68,6 +68,15 @@ function metadataFor(
   };
 }
 
+/** True when the render already has a terminal `published` upload state for
+ *  this provider — re-uploading it would create a duplicate provider post. */
+function alreadyPublished(
+  entry: RenderQueueEntry,
+  provider: CampaignPlatform,
+): boolean {
+  return entry.uploadStates?.[provider]?.state === "published";
+}
+
 export function campaignUploadRequests(
   campaign: CampaignManifest,
   entries: RenderQueueEntry[],
@@ -88,6 +97,12 @@ export function campaignUploadRequests(
     ) {
       continue;
     }
+    // Skip targets whose render already published to this provider — the
+    // auto-upload path may have handled it, and re-registering would risk a
+    // duplicate provider post.
+    if (alreadyPublished(entry, variant.platform)) {
+      continue;
+    }
     requests.push({
       campaignId: campaign.campaignId,
       itemId: item.itemId,
@@ -102,11 +117,46 @@ export function campaignUploadRequests(
   return requests;
 }
 
+/** Per-target upload entry returned by `poll_upload_states`. Mirrors the
+ *  backend `UploadJobEntry` (same shape the render-queue worker polls). */
+type UploadJobEntryWire = {
+  job_id: string;
+  upload_targets: string[];
+  upload_states: Record<string, { state: string } & Record<string, unknown>>;
+  published_urls: Record<string, string>;
+};
+
+export type StartCampaignUploadsOptions = {
+  /** When true (default), stamp the computed AI disclosure onto the upload so
+   *  generated-media cuts carry the platform flag. Mirrors the render-queue
+   *  worker's default-on behavior; pass false for the power-user opt-out. */
+  autoDisclose?: boolean;
+  /** Poll cadence for upload outcomes, in ms. Default 800ms. */
+  pollIntervalMs?: number;
+  /** Max poll ticks before returning (the backend keeps running). */
+  maxPollTicks?: number;
+  /** Sleep hook — injectable so tests don't wait on real timers. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Invoked with the started requests immediately after uploads kick off,
+   *  before polling begins. Lets the caller record variant→job mappings right
+   *  away rather than waiting for the poll loop to drain. */
+  onStarted?: (requests: CampaignUploadRequest[]) => void;
+};
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function startCampaignUploads(
   campaign: CampaignManifest,
   entries: RenderQueueEntry[],
   invoke: InvokeFn,
+  options: StartCampaignUploadsOptions = {},
 ): Promise<CampaignUploadRequest[]> {
+  const autoDisclose = options.autoDisclose ?? true;
+  const pollIntervalMs = options.pollIntervalMs ?? 800;
+  const maxPollTicks = options.maxPollTicks ?? 750;
+  const sleep = options.sleep ?? defaultSleep;
+
   const requests = campaignUploadRequests(campaign, entries);
   const byJob = new Map<string, CampaignUploadRequest[]>();
   for (const request of requests) {
@@ -128,11 +178,70 @@ export async function startCampaignUploads(
         }),
       ),
     );
+    // Compute + stamp the AI disclosure BEFORE starting uploads, matching the
+    // render-queue worker. Without this, campaign-approved uploads of
+    // generated-media cuts would reach providers with `ai_disclosure: None`,
+    // bypassing the default-on disclosure. Failures are non-fatal — the
+    // backend command logs and the upload chain stays alive.
+    try {
+      await invoke<unknown>("compute_ai_disclosure", { jobId, autoDisclose });
+    } catch {
+      // Disclosure compute is best-effort; proceed with the upload.
+    }
     await invoke<void>("start_uploads_for_job", {
       jobId,
       filePath: jobRequests[0].filePath,
       title: jobRequests[0].title,
     });
   }
+
+  // Surface the started requests before the (potentially slow) poll loop so
+  // the caller can record variant→job mappings immediately.
+  options.onStarted?.(requests);
+
+  // Poll each started job to terminal so campaign variants transition to
+  // published/failed and capture provider URLs — the campaign path has no
+  // other poller (the render-queue worker only polls its own auto-uploads).
+  await Promise.all(
+    [...byJob.keys()].map((jobId) =>
+      pollCampaignUploadStates(jobId, invoke, {
+        pollIntervalMs,
+        maxPollTicks,
+        sleep,
+      }),
+    ),
+  );
+
   return requests;
+}
+
+/** Polls `poll_upload_states` for one job until every target is terminal
+ *  (`published`/`failed`) or the tick budget is exhausted. */
+async function pollCampaignUploadStates(
+  jobId: string,
+  invoke: InvokeFn,
+  opts: {
+    pollIntervalMs: number;
+    maxPollTicks: number;
+    sleep: (ms: number) => Promise<void>;
+  },
+): Promise<void> {
+  for (let tick = 0; tick < opts.maxPollTicks; tick++) {
+    await opts.sleep(opts.pollIntervalMs);
+    let snapshot: UploadJobEntryWire | null;
+    try {
+      snapshot = await invoke<UploadJobEntryWire | null>("poll_upload_states", {
+        jobId,
+      });
+    } catch {
+      // Transient IPC error — retry next tick.
+      continue;
+    }
+    if (!snapshot) continue;
+    const states = Object.values(snapshot.upload_states);
+    const allTerminal =
+      states.length > 0 &&
+      states.every((s) => s.state === "published" || s.state === "failed");
+    if (allTerminal) return;
+  }
 }

@@ -79,8 +79,13 @@ impl PublishJob {
             raw_error_ref: None,
             requires_action_reason: None,
             created_by,
-            created_at: scheduled_for,
-            updated_at: scheduled_for,
+            // A freshly-built job has no real creation timestamp yet — the
+            // caller stamps it via `schedule(now)` (the Draft -> Scheduled
+            // transition). Until then `created_at` is a sentinel `0`, never the
+            // future `scheduled_for`, which would otherwise corrupt
+            // creation-time audit/sorting for jobs scheduled in the future.
+            created_at: 0,
+            updated_at: 0,
         }
     }
 
@@ -92,6 +97,13 @@ impl PublishJob {
     }
 
     pub fn schedule(mut self, now: i64) -> Self {
+        // The first schedule (from a freshly-built Draft) is also the job's
+        // creation moment — stamp `created_at` with the real wall-clock `now`,
+        // not the (possibly future) `scheduled_for`. Re-scheduling an existing
+        // job leaves its original `created_at` intact.
+        if self.created_at == 0 {
+            self.created_at = now;
+        }
         self.status = PublishJobStatus::Scheduled;
         self.updated_at = now;
         self
@@ -344,6 +356,34 @@ mod tests {
         assert_eq!(job.normalized_error, None);
         assert_eq!(job.raw_error_ref, None);
         assert_eq!(job.requires_action_reason, None);
+    }
+
+    #[test]
+    fn publish_job_created_at_reflects_schedule_time_not_future_due_time() {
+        // Job scheduled for the future (scheduled_for = 9_000) but created now
+        // (schedule(now=2_000)). created_at must be the creation moment, not
+        // the future due time, so creation-time audit/sorting stays correct.
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            9_000,
+            "user_1",
+        )
+        .schedule(2_000);
+
+        assert_eq!(job.scheduled_for, 9_000);
+        assert_eq!(job.created_at, 2_000, "created_at = creation time");
+        assert_eq!(job.updated_at, 2_000);
+
+        // Re-scheduling (e.g. after a retry path) preserves the original
+        // creation timestamp.
+        let rescheduled = job.retry(2_500).schedule(2_600);
+        assert_eq!(rescheduled.created_at, 2_000, "creation time is sticky");
+        assert_eq!(rescheduled.updated_at, 2_600);
     }
 
     #[test]

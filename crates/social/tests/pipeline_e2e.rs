@@ -282,6 +282,7 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
             description: Some("End-to-end pipeline test".into()),
             tags: vec!["awidat".into(), "e2e".into()],
             thumbnail_ref: Some("render://thumb_e2e".into()),
+            privacy: None,
             now: 5_100,
         },
     )

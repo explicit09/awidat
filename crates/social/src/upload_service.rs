@@ -1,5 +1,6 @@
 use crate::model::{
-    PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
+    ConnectedAccountStatus, PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType,
+    PublishJobStatus,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use crate::upload_adapter::{UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest};
@@ -12,6 +13,9 @@ pub struct ExecuteUploadInput {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
+    /// Resolved visibility for this upload, derived upstream from the campaign
+    /// target / account defaults. The worker no longer hard-codes `Private`.
+    pub privacy: UploadPrivacy,
     pub now: i64,
 }
 
@@ -23,6 +27,16 @@ pub enum UploadServiceError {
     JobNotUploading,
     #[error("upload provider does not match publish job")]
     ProviderMismatch,
+    /// The connected account is no longer usable for publishing — it was
+    /// disconnected, made ineligible, or lacks the upload capability since the
+    /// job was scheduled. Re-checked immediately before the provider call so a
+    /// stale scheduled job can't publish from a since-revoked account.
+    #[error("connected account is not eligible for upload: {0}")]
+    AccountNotPublishable(String),
+    /// The job was cancelled (by the user) while the provider upload was in
+    /// flight. The provider result is discarded so the cancellation stands.
+    #[error("publish job was cancelled during upload")]
+    JobCancelledDuringUpload,
 }
 
 pub struct UploadService;
@@ -45,6 +59,33 @@ impl UploadService {
         if account.provider != job.provider {
             return Err(UploadServiceError::ProviderMismatch);
         }
+        // Re-check the account is still publishable right before we touch the
+        // token / call the provider. A job scheduled while the account was
+        // healthy may be claimed long after the user disconnected, revoked, or
+        // lost eligibility for it — without this, a stale job would publish
+        // from an account the user no longer controls.
+        if account.status != ConnectedAccountStatus::Connected {
+            return Err(UploadServiceError::AccountNotPublishable(format!(
+                "status:{}",
+                account_status_slug(&account.status)
+            )));
+        }
+        if !account.eligibility.eligible {
+            let reason = account
+                .eligibility
+                .reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "ineligible".into());
+            return Err(UploadServiceError::AccountNotPublishable(format!(
+                "eligibility:{reason}"
+            )));
+        }
+        if !account.capabilities.upload_video {
+            return Err(UploadServiceError::AccountNotPublishable(
+                "capability:upload_video".into(),
+            ));
+        }
         let _token_secret = store.token_secret_for_account(&account.id)?;
         let request = UploadRequest {
             job_id: job.id.clone(),
@@ -55,7 +96,7 @@ impl UploadService {
             description: input.description,
             tags: input.tags,
             thumbnail_ref: input.thumbnail_ref,
-            privacy: UploadPrivacy::Private,
+            privacy: input.privacy,
             scheduled_for: Some(job.scheduled_for),
             access_token_ref: format!("token_secret:{}", account.id),
         };
@@ -73,6 +114,26 @@ impl UploadService {
         store.save_publish_job(upload_in_progress.clone())?;
 
         let result = adapter.upload(&request);
+        // The provider call can take a while (multi-GB uploads). A user may
+        // have cancelled the job in the meantime; the cancel writes
+        // `Cancelled` to the store while we hold an older clone. Re-read the
+        // persisted status before saving a terminal success so a slow upload
+        // can't resurrect a cancelled job as `Published`.
+        if result.is_ok() {
+            let current = store.publish_job(&upload_in_progress.id)?;
+            if current.status == PublishJobStatus::Cancelled {
+                append_event(
+                    store,
+                    &upload_in_progress.id,
+                    PublishJobEventType::Cancelled,
+                    PublishJobActorType::Worker,
+                    "provider upload completed after cancellation; result discarded",
+                    serde_json::json!({"provider": upload_in_progress.provider.as_str()}),
+                    input.now,
+                )?;
+                return Err(UploadServiceError::JobCancelledDuringUpload);
+            }
+        }
         let next = match result {
             Ok(result) => {
                 let status = if result.processing {
@@ -209,6 +270,17 @@ fn next_event_id(
     ))
 }
 
+fn account_status_slug(status: &ConnectedAccountStatus) -> &'static str {
+    match status {
+        ConnectedAccountStatus::Connected => "connected",
+        ConnectedAccountStatus::NeedsReauth => "needs_reauth",
+        ConnectedAccountStatus::MissingScope => "missing_scope",
+        ConnectedAccountStatus::Ineligible => "ineligible",
+        ConnectedAccountStatus::Disabled => "disabled",
+        ConnectedAccountStatus::Revoked => "revoked",
+    }
+}
+
 fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
     match event_type {
         PublishJobEventType::TargetBound => "target_bound",
@@ -297,6 +369,7 @@ mod tests {
                 description: Some("Description".into()),
                 tags: vec!["awidat".into()],
                 thumbnail_ref: Some("render://thumb_1".into()),
+                privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
         )
@@ -360,6 +433,7 @@ mod tests {
                 description: None,
                 tags: Vec::new(),
                 thumbnail_ref: None,
+                privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
         )
@@ -401,6 +475,7 @@ mod tests {
                     description: None,
                     tags: Vec::new(),
                     thumbnail_ref: None,
+                    privacy: UploadPrivacy::Private,
                     now: 2_000,
                 },
             ),
@@ -429,6 +504,7 @@ mod tests {
                 description: None,
                 tags: Vec::new(),
                 thumbnail_ref: None,
+                privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
         )
@@ -476,6 +552,7 @@ mod tests {
                     description: None,
                     tags: Vec::new(),
                     thumbnail_ref: None,
+                    privacy: UploadPrivacy::Private,
                     now: 2_000,
                 },
             ),
@@ -490,6 +567,155 @@ mod tests {
             .unwrap_or_else(|err| panic!("load job: {err}"));
         assert_eq!(persisted.status, PublishJobStatus::Processing);
         assert_eq!(persisted.provider_post_id, None);
+    }
+
+    #[test]
+    fn execute_upload_rejects_disconnected_account_before_provider_call() {
+        for status in [
+            ConnectedAccountStatus::Revoked,
+            ConnectedAccountStatus::Disabled,
+            ConnectedAccountStatus::NeedsReauth,
+            ConnectedAccountStatus::Ineligible,
+        ] {
+            let mut store = store_with_claimed_job();
+            let mut account = connected_account();
+            account.status = status.clone();
+            store
+                .save_connected_account(account)
+                .unwrap_or_else(|err| panic!("save account: {err}"));
+            let adapter = RecordingUploadAdapter::published();
+
+            let result = UploadService::execute_claimed_job(
+                &mut store,
+                &adapter,
+                execute_input(),
+            );
+
+            assert!(
+                matches!(result, Err(UploadServiceError::AccountNotPublishable(_))),
+                "status {status:?} should block upload, got {result:?}"
+            );
+            assert_eq!(adapter.call_count(), 0, "adapter must not be called");
+            // Nothing should have been persisted as in-flight.
+            assert_eq!(
+                store.publish_job("job_1").map(|job| job.status),
+                Ok(PublishJobStatus::Uploading)
+            );
+            assert_eq!(
+                store
+                    .publish_job_events("job_1")
+                    .unwrap_or_else(|err| panic!("load events: {err}")),
+                Vec::new()
+            );
+        }
+    }
+
+    #[test]
+    fn execute_upload_rejects_ineligible_account_before_provider_call() {
+        let mut store = store_with_claimed_job();
+        let mut account = connected_account();
+        account.eligibility = AccountEligibility::blocked("monetization_review");
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let adapter = RecordingUploadAdapter::published();
+
+        let result =
+            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+
+        assert_eq!(
+            result,
+            Err(UploadServiceError::AccountNotPublishable(
+                "eligibility:monetization_review".into()
+            ))
+        );
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    #[test]
+    fn execute_upload_rejects_account_without_upload_capability() {
+        let mut store = store_with_claimed_job();
+        let mut account = connected_account();
+        account.capabilities.upload_video = false;
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let adapter = RecordingUploadAdapter::published();
+
+        let result =
+            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+
+        assert_eq!(
+            result,
+            Err(UploadServiceError::AccountNotPublishable(
+                "capability:upload_video".into()
+            ))
+        );
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    #[test]
+    fn execute_upload_propagates_requested_privacy_to_adapter() {
+        let mut store = store_with_claimed_job();
+        let adapter = RecordingUploadAdapter::published();
+
+        UploadService::execute_claimed_job(
+            &mut store,
+            &adapter,
+            ExecuteUploadInput {
+                privacy: UploadPrivacy::Public,
+                ..execute_input()
+            },
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        let request = adapter
+            .requests
+            .borrow()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected adapter request"));
+        assert_eq!(request.privacy, UploadPrivacy::Public);
+    }
+
+    #[test]
+    fn execute_upload_discards_result_when_job_cancelled_mid_upload() {
+        // The store flips the job to Cancelled the moment the adapter is asked
+        // to upload — modeling a user cancel landing while the provider call is
+        // in flight. The worker must not overwrite that with Published.
+        let mut store = CancelMidUploadStore::new(store_with_claimed_job());
+        let adapter = RecordingUploadAdapter::published();
+
+        let result =
+            UploadService::execute_claimed_job(&mut store, &adapter, execute_input());
+
+        assert_eq!(result, Err(UploadServiceError::JobCancelledDuringUpload));
+        assert_eq!(adapter.call_count(), 1, "adapter ran before cancel landed");
+        assert!(
+            !store.published_after_cancel.get(),
+            "worker must not persist Published/Processing after a cancel"
+        );
+        // A discard event was recorded for the audit trail.
+        let events = store
+            .inner
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("load events: {err}"));
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == PublishJobEventType::Cancelled
+                && event.actor_type == PublishJobActorType::Worker));
+    }
+
+    fn execute_input() -> ExecuteUploadInput {
+        ExecuteUploadInput {
+            job_id: "job_1".into(),
+            title: "Launch clip".into(),
+            description: None,
+            tags: Vec::new(),
+            thumbnail_ref: None,
+            privacy: UploadPrivacy::Private,
+            now: 2_000,
+        }
     }
 
     fn store_with_claimed_job() -> InMemorySocialStore {
@@ -653,6 +879,185 @@ mod tests {
 
         fn publish_job(&self, id: &str) -> Result<PublishJob, SocialStoreError> {
             self.inner.publish_job(id)
+        }
+
+        fn publish_jobs_for_account(
+            &self,
+            connected_account_id: &str,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.publish_jobs_for_account(connected_account_id)
+        }
+
+        fn claim_due_publish_jobs(
+            &mut self,
+            now: i64,
+            limit: usize,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.claim_due_publish_jobs(now, limit)
+        }
+
+        fn append_publish_job_event(
+            &mut self,
+            event: PublishJobEvent,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.append_publish_job_event(event)
+        }
+
+        fn publish_job_events(
+            &self,
+            publish_job_id: &str,
+        ) -> Result<Vec<PublishJobEvent>, SocialStoreError> {
+            self.inner.publish_job_events(publish_job_id)
+        }
+
+        fn save_account_publish_defaults(
+            &mut self,
+            defaults: AccountPublishDefaults,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_account_publish_defaults(defaults)
+        }
+
+        fn account_publish_defaults(
+            &self,
+            connected_account_id: &str,
+        ) -> Result<AccountPublishDefaults, SocialStoreError> {
+            self.inner.account_publish_defaults(connected_account_id)
+        }
+
+        fn save_workspace_member_role(
+            &mut self,
+            role: WorkspaceMemberRole,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_workspace_member_role(role)
+        }
+
+        fn workspace_member_roles(
+            &self,
+            workspace_id: &str,
+        ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+            self.inner.workspace_member_roles(workspace_id)
+        }
+    }
+
+    /// Store that simulates a user cancellation landing *during* the provider
+    /// upload: the first `publish_job` read (the worker's initial load) returns
+    /// the real claimed job, but the next read (the post-upload re-check)
+    /// reports the job as `Cancelled` — and persists that into `inner` so the
+    /// assertion can confirm the cancellation stood.
+    struct CancelMidUploadStore {
+        inner: InMemorySocialStore,
+        reads: std::cell::Cell<usize>,
+        /// Set if the worker ever tried to persist a `Published` status after
+        /// the cancellation was observed — the bug this test guards against.
+        published_after_cancel: std::cell::Cell<bool>,
+    }
+
+    impl CancelMidUploadStore {
+        fn new(inner: InMemorySocialStore) -> Self {
+            Self {
+                inner,
+                reads: std::cell::Cell::new(0),
+                published_after_cancel: std::cell::Cell::new(false),
+            }
+        }
+    }
+
+    impl SocialStore for CancelMidUploadStore {
+        fn save_oauth_connection(
+            &mut self,
+            connection: OAuthConnection,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_oauth_connection(connection)
+        }
+
+        fn oauth_connection(&self, id: &str) -> Result<OAuthConnection, SocialStoreError> {
+            self.inner.oauth_connection(id)
+        }
+
+        fn update_oauth_status(
+            &mut self,
+            id: &str,
+            status: OAuthConnectionStatus,
+        ) -> Result<OAuthConnection, SocialStoreError> {
+            self.inner.update_oauth_status(id, status)
+        }
+
+        fn save_connected_account(
+            &mut self,
+            account: ConnectedAccount,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_connected_account(account)
+        }
+
+        fn connected_account(&self, id: &str) -> Result<ConnectedAccount, SocialStoreError> {
+            self.inner.connected_account(id)
+        }
+
+        fn connected_accounts_for_owner(
+            &self,
+            owner: &OwnerRef,
+        ) -> Result<Vec<ConnectedAccount>, SocialStoreError> {
+            self.inner.connected_accounts_for_owner(owner)
+        }
+
+        fn disable_connected_account(
+            &mut self,
+            id: &str,
+            owner: &OwnerRef,
+            now: i64,
+        ) -> Result<ConnectedAccount, SocialStoreError> {
+            self.inner.disable_connected_account(id, owner, now)
+        }
+
+        fn save_token_secret(&mut self, secret: TokenSecret) -> Result<(), SocialStoreError> {
+            self.inner.save_token_secret(secret)
+        }
+
+        fn token_secret_for_account(
+            &self,
+            account_id: &str,
+        ) -> Result<TokenSecret, SocialStoreError> {
+            self.inner.token_secret_for_account(account_id)
+        }
+
+        fn save_campaign_variant_target(
+            &mut self,
+            target: CampaignVariantTarget,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_campaign_variant_target(target)
+        }
+
+        fn campaign_variant_target(
+            &self,
+            id: &str,
+        ) -> Result<CampaignVariantTarget, SocialStoreError> {
+            self.inner.campaign_variant_target(id)
+        }
+
+        fn save_publish_job(&mut self, job: PublishJob) -> Result<(), SocialStoreError> {
+            // The worker should never persist a terminal success once the
+            // cancellation has been observed (reads >= 2).
+            if self.reads.get() >= 2
+                && matches!(
+                    job.status,
+                    PublishJobStatus::Published | PublishJobStatus::Processing
+                )
+            {
+                self.published_after_cancel.set(true);
+            }
+            self.inner.save_publish_job(job)
+        }
+
+        fn publish_job(&self, id: &str) -> Result<PublishJob, SocialStoreError> {
+            let count = self.reads.get() + 1;
+            self.reads.set(count);
+            let job = self.inner.publish_job(id)?;
+            if count >= 2 {
+                // Second read = the worker's post-upload re-check. Report the
+                // job as cancelled, modeling a concurrent user cancel.
+                return Ok(job.cancel(1_950));
+            }
+            Ok(job)
         }
 
         fn publish_jobs_for_account(

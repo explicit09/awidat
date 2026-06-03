@@ -88,14 +88,17 @@ export function CampaignApprovalPanel({
     setPublishing(true);
     setPublishError(null);
     try {
-      const started = await startCampaignUploads(active, renderEntries, invoke);
-      for (const request of started) {
-        setVariantPublishJob(
-          active.campaignId,
-          request.variantId,
-          request.jobId,
-        );
-      }
+      await startCampaignUploads(active, renderEntries, invoke, {
+        onStarted: (started) => {
+          for (const request of started) {
+            setVariantPublishJob(
+              active.campaignId,
+              request.variantId,
+              request.jobId,
+            );
+          }
+        },
+      });
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : String(err));
     } finally {

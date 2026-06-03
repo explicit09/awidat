@@ -24,7 +24,7 @@ use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
-use crate::upload_adapter::UploadAdapter;
+use crate::upload_adapter::{UploadAdapter, UploadPrivacy};
 use crate::upload_service::{ExecuteUploadInput, UploadService, UploadServiceError};
 use crate::upload_status::{
     PollUploadStatusInput, UploadStatusAdapter, UploadStatusService, UploadStatusServiceError,
@@ -384,6 +384,10 @@ pub struct ExecuteUploadRequest {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
+    /// Resolved visibility the caller already derived from the campaign target.
+    /// When `None`, [`SocialApi::execute_claimed_upload_job`] falls back to the
+    /// connected account's `default_privacy`, then to `Private`.
+    pub privacy: Option<UploadPrivacy>,
     pub now: i64,
 }
 
@@ -409,9 +413,13 @@ impl SocialApi {
         actor: &ApiActor,
         owner: &ApiOwner,
     ) -> Result<Vec<AccountSummary>, SocialApiError> {
-        // Listing is a read; the same identity gate used for management applies
-        // so that only the owning user or a workspace member can enumerate.
-        actor.authorize(&owner.owner, TeamAction::ConnectAccount)?;
+        // Listing is a read, not account management. Gate it like other reads
+        // (any workspace membership role), so a Publisher — who can bind and
+        // schedule publishes — can enumerate the accounts needed to pick a
+        // `connected_account_id`. The `ConnectAccount` gate previously used here
+        // is owner/admin-only and blocked publishers before their allowed
+        // workflow.
+        authorize_read(actor, &owner.owner)?;
         let accounts = SocialAccountService::list_accounts(store, &owner.owner)?;
         Ok(accounts.into_iter().map(AccountSummary::from).collect())
     }
@@ -638,6 +646,14 @@ impl SocialApi {
         adapter: &impl UploadAdapter,
         request: ExecuteUploadRequest,
     ) -> Result<PublishJobResponse, SocialApiError> {
+        // Resolve the upload's visibility: the caller's explicit value wins,
+        // otherwise fall back to the connected account's `default_privacy`,
+        // then `Private`. Without this the worker would publish every job as
+        // private even when the account / target asked for public/unlisted.
+        let privacy = match request.privacy {
+            Some(privacy) => privacy,
+            None => resolve_account_default_privacy(store, &request.job_id)?,
+        };
         let job = UploadService::execute_claimed_job(
             store,
             adapter,
@@ -647,6 +663,7 @@ impl SocialApi {
                 description: request.description,
                 tags: request.tags,
                 thumbnail_ref: request.thumbnail_ref,
+                privacy,
                 now: request.now,
             },
         )?;
@@ -683,6 +700,31 @@ fn account_owner(
     connected_account_id: &str,
 ) -> Result<OwnerRef, SocialApiError> {
     Ok(store.connected_account(connected_account_id)?.owner)
+}
+
+/// Resolves the fallback upload privacy for a job from its connected account's
+/// publish defaults. Missing defaults (or an unrecognized value) collapse to
+/// the safe `Private` default.
+fn resolve_account_default_privacy(
+    store: &impl SocialStore,
+    job_id: &str,
+) -> Result<UploadPrivacy, SocialApiError> {
+    let job = store.publish_job(job_id)?;
+    let default = store
+        .account_publish_defaults(&job.connected_account_id)
+        .ok()
+        .and_then(|defaults| defaults.default_privacy)
+        .map(|raw| parse_privacy(&raw))
+        .unwrap_or(UploadPrivacy::Private);
+    Ok(default)
+}
+
+fn parse_privacy(raw: &str) -> UploadPrivacy {
+    match raw {
+        "public" => UploadPrivacy::Public,
+        "unlisted" => UploadPrivacy::Unlisted,
+        _ => UploadPrivacy::Private,
+    }
 }
 
 /// Authorizes a read for the given owner. User-owned reads require the matching
@@ -1297,6 +1339,58 @@ mod tests {
     }
 
     #[test]
+    fn account_api_workspace_publisher_can_list_accounts() {
+        let mut store = InMemorySocialStore::default();
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        store
+            .save_connected_account(connected_account("acct_1", workspace_owner.clone()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let publisher = ApiActor::new(
+            "publisher_user",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "publisher_user",
+                TeamRole::Publisher,
+            )],
+        );
+
+        // A publisher needs to enumerate accounts to pick a
+        // connected_account_id for their allowed publish workflow.
+        let accounts = SocialApi::accounts(
+            &store,
+            &publisher,
+            &ApiOwner {
+                owner: workspace_owner,
+            },
+        )
+        .unwrap_or_else(|err| panic!("publisher list accounts: {err}"));
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "acct_1");
+    }
+
+    #[test]
+    fn account_api_non_member_cannot_list_workspace_accounts() {
+        let mut store = InMemorySocialStore::default();
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        store
+            .save_connected_account(connected_account("acct_1", workspace_owner.clone()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        // Actor with no role in workspace_1.
+        let outsider = ApiActor::new("outsider", Vec::new());
+
+        assert_eq!(
+            SocialApi::accounts(
+                &store,
+                &outsider,
+                &ApiOwner {
+                    owner: workspace_owner,
+                },
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+    }
+
+    #[test]
     fn account_audit_returns_owner_scoped_jobs_token_safe() {
         let mut store = InMemorySocialStore::default();
         let registry = ProviderRegistry::default_multi_platform();
@@ -1447,6 +1541,7 @@ mod tests {
             description: Some("Description".into()),
             tags: vec!["awidat".into()],
             thumbnail_ref: Some("render://thumb_1".into()),
+            privacy: None,
             now: 2_000,
         }
     }

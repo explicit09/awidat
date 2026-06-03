@@ -45,6 +45,8 @@ pub enum PublishServiceError {
     JobNotCancellable,
     #[error("publish job cannot be retried from this state")]
     JobNotRetryable,
+    #[error("publish job id is already used by a different target")]
+    JobIdConflict,
 }
 
 pub struct PublishService;
@@ -122,13 +124,6 @@ impl PublishService {
             store.save_campaign_variant_target(target.mark_validation(current_state, input.now))?;
             return Err(PublishServiceError::TargetNotValid);
         }
-        if let Some(existing) = existing_job(store, &input.job_id)? {
-            let existing_account = store.connected_account(&existing.connected_account_id)?;
-            if existing_account.owner != *owner {
-                return Err(PublishServiceError::OwnerMismatch);
-            }
-        }
-
         let job = PublishJob::new(
             input.job_id,
             target.campaign_id,
@@ -140,6 +135,22 @@ impl PublishService {
             input.created_by,
         )
         .schedule(input.now);
+
+        if let Some(existing) = existing_job(store, &job.id)? {
+            let existing_account = store.connected_account(&existing.connected_account_id)?;
+            if existing_account.owner != *owner {
+                return Err(PublishServiceError::OwnerMismatch);
+            }
+            // Reusing a job id is only allowed as an idempotent retry of the
+            // *same* publish — same campaign/variant/account/artifact. If the
+            // id is reused for a different target, rejecting it protects an
+            // existing (possibly already-published) job from being silently
+            // overwritten by the upsert below.
+            if existing.idempotency_key != job.idempotency_key {
+                return Err(PublishServiceError::JobIdConflict);
+            }
+        }
+
         store.save_publish_job(job.clone())?;
         store.append_publish_job_event(PublishJobEvent::new(
             format!("event_{}_scheduled", job.id),
@@ -479,6 +490,91 @@ mod tests {
             Err(PublishServiceError::OwnerMismatch)
         );
         assert_eq!(store.publish_job("job_1"), Ok(original));
+    }
+
+    #[test]
+    fn schedule_target_rejects_reused_job_id_for_different_target() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target_1: {err}"));
+        let original = PublishService::schedule_target(
+            &mut store,
+            &owner(),
+            ScheduleTargetInput {
+                job_id: "job_1".into(),
+                target_id: "target_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target_1: {err}"));
+
+        // A second target owned by the SAME owner, different campaign/variant.
+        PublishService::bind_target(
+            &mut store,
+            &owner(),
+            BindTargetInput {
+                id: "target_2".into(),
+                campaign_id: "campaign_2".into(),
+                variant_id: "variant_2".into(),
+                connected_account_id: "acct_1".into(),
+                platform_fields: serde_json::json!({"privacy": "private"}),
+                scheduled_for: 2_500,
+                now: 1_000,
+            },
+        )
+        .unwrap_or_else(|err| panic!("bind target_2: {err}"));
+        PublishService::validate_target(&mut store, &owner(), "target_2", 1_100)
+            .unwrap_or_else(|err| panic!("validate target_2: {err}"));
+
+        // Reusing job_1 for the different target must be rejected, not upsert
+        // over the existing job.
+        assert_eq!(
+            PublishService::schedule_target(
+                &mut store,
+                &owner(),
+                ScheduleTargetInput {
+                    job_id: "job_1".into(),
+                    target_id: "target_2".into(),
+                    artifact_ref: "render://artifact_2".into(),
+                    created_by: "user_1".into(),
+                    now: 1_300,
+                },
+            ),
+            Err(PublishServiceError::JobIdConflict)
+        );
+        // The original job is untouched.
+        assert_eq!(store.publish_job("job_1"), Ok(original));
+    }
+
+    #[test]
+    fn schedule_target_allows_idempotent_reschedule_of_same_target() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+        let input = || ScheduleTargetInput {
+            job_id: "job_1".into(),
+            target_id: "target_1".into(),
+            artifact_ref: "render://artifact_1".into(),
+            created_by: "user_1".into(),
+            now: 1_200,
+        };
+        PublishService::schedule_target(&mut store, &owner(), input())
+            .unwrap_or_else(|err| panic!("schedule target: {err}"));
+
+        // Same id + same target/artifact = idempotent retry, still allowed.
+        let again = PublishService::schedule_target(&mut store, &owner(), input())
+            .unwrap_or_else(|err| panic!("reschedule target: {err}"));
+        assert_eq!(again.status, PublishJobStatus::Scheduled);
     }
 
     #[test]
