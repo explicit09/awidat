@@ -1,3 +1,6 @@
+use crate::eligibility::{
+    instagram_eligibility, tiktok_eligibility, youtube_eligibility, ProviderEligibilityReport,
+};
 use crate::model::{AccountEligibility, Provider, ProviderCapabilities};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -15,6 +18,87 @@ pub struct ProviderDescriptor {
     pub display_name: &'static str,
     pub scopes: Vec<&'static str>,
     pub capabilities: ProviderCapabilities,
+}
+
+pub trait SocialProviderAdapter {
+    fn provider(&self) -> Provider;
+
+    fn fetch_capabilities(&self, scopes: &[&str]) -> ProviderEligibilityReport;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockProviderAdapter {
+    provider: Provider,
+    provider_account_id: String,
+    display_name: String,
+    handle: Option<String>,
+    is_professional: bool,
+}
+
+impl MockProviderAdapter {
+    pub fn youtube(
+        provider_account_id: impl Into<String>,
+        display_name: impl Into<String>,
+        handle: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: Provider::YouTube,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: Some(handle.into()),
+            is_professional: false,
+        }
+    }
+
+    pub fn tiktok(provider_account_id: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            provider: Provider::TikTok,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: None,
+            is_professional: false,
+        }
+    }
+
+    pub fn instagram(
+        provider_account_id: impl Into<String>,
+        display_name: impl Into<String>,
+        is_professional: bool,
+    ) -> Self {
+        Self {
+            provider: Provider::Instagram,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: None,
+            is_professional,
+        }
+    }
+}
+
+impl SocialProviderAdapter for MockProviderAdapter {
+    fn provider(&self) -> Provider {
+        self.provider.clone()
+    }
+
+    fn fetch_capabilities(&self, scopes: &[&str]) -> ProviderEligibilityReport {
+        match self.provider {
+            Provider::YouTube => youtube_eligibility(
+                &self.provider_account_id,
+                &self.display_name,
+                self.handle.as_deref(),
+                scopes,
+            ),
+            Provider::TikTok => {
+                tiktok_eligibility(&self.provider_account_id, &self.display_name, scopes)
+            }
+            Provider::Instagram => instagram_eligibility(
+                &self.provider_account_id,
+                &self.display_name,
+                self.is_professional,
+                scopes.contains(&"instagram_content_publish"),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -156,5 +240,66 @@ mod tests {
             registry.get(&Provider::YouTube),
             Err(ProviderRegistryError::UnknownProvider("youtube".into()))
         );
+    }
+
+    #[test]
+    fn youtube_adapter_reports_profile_and_capabilities() {
+        let adapter = MockProviderAdapter::youtube("channel_1", "Awidat", "@awidat");
+        let report =
+            adapter.fetch_capabilities(&["https://www.googleapis.com/auth/youtube.upload"]);
+
+        assert_eq!(adapter.provider(), Provider::YouTube);
+        assert_eq!(report.profile.provider, Provider::YouTube);
+        assert_eq!(report.profile.provider_account_id, "channel_1");
+        assert_eq!(report.profile.display_name, "Awidat");
+        assert_eq!(report.profile.handle, Some("@awidat".into()));
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
+    }
+
+    #[test]
+    fn youtube_adapter_blocks_missing_upload_scope() {
+        let adapter = MockProviderAdapter::youtube("channel_1", "Awidat", "@awidat");
+        let report = adapter.fetch_capabilities(&[]);
+
+        assert!(!report.eligibility.eligible);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["missing_youtube_upload_scope"]
+        );
+    }
+
+    #[test]
+    fn tiktok_adapter_reports_missing_publish_scope() {
+        let adapter = MockProviderAdapter::tiktok("open_id_1", "Creator");
+        let report = adapter.fetch_capabilities(&[]);
+
+        assert!(!report.eligibility.eligible);
+        assert_eq!(report.eligibility.reasons, vec!["missing_video_publish_scope"]);
+        assert!(report.capabilities.requires_user_consent);
+    }
+
+    #[test]
+    fn instagram_adapter_reports_professional_requirement() {
+        let adapter = MockProviderAdapter::instagram("ig_1", "Creator", false);
+        let report = adapter.fetch_capabilities(&["instagram_content_publish"]);
+
+        assert!(!report.eligibility.eligible);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["instagram_professional_account_required"]
+        );
+    }
+
+    #[test]
+    fn instagram_adapter_allows_professional_publish_scope() {
+        let adapter = MockProviderAdapter::instagram("ig_1", "Creator", true);
+        let report = adapter.fetch_capabilities(&["instagram_content_publish"]);
+
+        assert_eq!(adapter.provider(), Provider::Instagram);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
     }
 }
