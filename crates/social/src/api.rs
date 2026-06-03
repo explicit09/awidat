@@ -24,6 +24,11 @@ use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::TeamPolicy;
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
+use crate::upload_adapter::UploadAdapter;
+use crate::upload_service::{ExecuteUploadInput, UploadService, UploadServiceError};
+use crate::upload_status::{
+    PollUploadStatusInput, UploadStatusAdapter, UploadStatusService, UploadStatusServiceError,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -115,6 +120,24 @@ impl From<PublishServiceError> for SocialApiError {
             // authorization failure from the caller's perspective.
             PublishServiceError::OwnerMismatch => SocialApiError::Unauthorized,
             other => SocialApiError::Publish(other.to_string()),
+        }
+    }
+}
+
+impl From<UploadServiceError> for SocialApiError {
+    fn from(error: UploadServiceError) -> Self {
+        match error {
+            UploadServiceError::Store(store) => SocialApiError::Store(store),
+            other => SocialApiError::Upload(other.to_string()),
+        }
+    }
+}
+
+impl From<UploadStatusServiceError> for SocialApiError {
+    fn from(error: UploadStatusServiceError) -> Self {
+        match error {
+            UploadStatusServiceError::Store(store) => SocialApiError::Store(store),
+            other => SocialApiError::Status(other.to_string()),
         }
     }
 }
@@ -340,6 +363,21 @@ impl From<PublishJobEvent> for PublishJobEventResponse {
     }
 }
 
+/// Worker request to execute a claimed upload job.
+///
+/// This is the server worker boundary, not a public user route. The worker
+/// supplies the resolved publish metadata (title/description/tags/thumbnail)
+/// it composed from campaign and account defaults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecuteUploadRequest {
+    pub job_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub thumbnail_ref: Option<String>,
+    pub now: i64,
+}
+
 /// Static, framework-neutral API facade.
 ///
 /// Like the existing domain services, `SocialApi` is not an instantiated server
@@ -549,6 +587,53 @@ impl SocialApi {
     ) -> Result<PublishJobResponse, SocialApiError> {
         authorize_job_owner(store, actor, owner, job_id, TeamAction::RetryPublish)?;
         let job = PublishService::retry_job(store, &owner.owner, job_id, now)?;
+        job_response(store, job)
+    }
+
+    /// Worker entrypoint: execute an already-claimed upload job.
+    ///
+    /// Not a public user route, so it takes no [`ApiActor`]. It delegates to
+    /// [`UploadService::execute_claimed_job`], preserving the Phase 4B upload
+    /// lifecycle protections, and returns only a sanitized job response.
+    pub fn execute_claimed_upload_job(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadAdapter,
+        request: ExecuteUploadRequest,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = UploadService::execute_claimed_job(
+            store,
+            adapter,
+            ExecuteUploadInput {
+                job_id: request.job_id,
+                title: request.title,
+                description: request.description,
+                tags: request.tags,
+                thumbnail_ref: request.thumbnail_ref,
+                now: request.now,
+            },
+        )?;
+        job_response(store, job)
+    }
+
+    /// Worker entrypoint: poll a processing job's provider status.
+    ///
+    /// Not a public user route, so it takes no [`ApiActor`]. It delegates to
+    /// [`UploadStatusService::poll_processing_job`], preserving the provider
+    /// post-id mismatch guard, and returns only a sanitized job response.
+    pub fn poll_upload_status(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadStatusAdapter,
+        job_id: &str,
+        now: i64,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = UploadStatusService::poll_processing_job(
+            store,
+            adapter,
+            PollUploadStatusInput {
+                job_id: job_id.into(),
+                now,
+            },
+        )?;
         job_response(store, job)
     }
 }
@@ -1117,5 +1202,211 @@ mod tests {
             ),
             Err(SocialApiError::Unauthorized)
         );
+    }
+
+    // --- Worker route facade --------------------------------------------------
+
+    use crate::token::TokenSecret;
+    use crate::upload_adapter::MockUploadAdapter;
+    use crate::upload_status::{
+        UploadProcessingStatus, UploadStatusAdapterError, UploadStatusRequest, UploadStatusResult,
+    };
+    use std::cell::RefCell;
+
+    struct StubStatusAdapter {
+        result: Result<UploadStatusResult, UploadStatusAdapterError>,
+        calls: RefCell<usize>,
+    }
+
+    impl StubStatusAdapter {
+        fn new(result: UploadStatusResult) -> Self {
+            Self {
+                result: Ok(result),
+                calls: RefCell::new(0),
+            }
+        }
+    }
+
+    impl UploadStatusAdapter for StubStatusAdapter {
+        fn provider(&self) -> Provider {
+            Provider::YouTube
+        }
+
+        fn poll_status(
+            &self,
+            _request: &UploadStatusRequest,
+        ) -> Result<UploadStatusResult, UploadStatusAdapterError> {
+            *self.calls.borrow_mut() += 1;
+            self.result.clone()
+        }
+    }
+
+    fn token_secret(account_id: &str) -> TokenSecret {
+        TokenSecret::encrypt(
+            account_id,
+            "access-secret",
+            Some("refresh-secret"),
+            &TestKeyProvider::new("test-key-1", "local-key"),
+            100,
+        )
+        .unwrap_or_else(|err| panic!("encrypt token secret: {err}"))
+    }
+
+    /// Store with an account, token secret, and a job in the `Uploading` state.
+    fn store_with_claimed_job() -> InMemorySocialStore {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        store
+            .save_token_secret(token_secret("acct_1"))
+            .unwrap_or_else(|err| panic!("save token secret: {err}"));
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        )
+        .claim_for_upload(1_900);
+        store
+            .save_publish_job(job)
+            .unwrap_or_else(|err| panic!("save claimed job: {err}"));
+        store
+    }
+
+    /// Store with an account, token secret, and a job in the `Processing` state.
+    fn store_with_processing_job() -> InMemorySocialStore {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        store
+            .save_token_secret(token_secret("acct_1"))
+            .unwrap_or_else(|err| panic!("save token secret: {err}"));
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            2_000,
+            "user_1",
+        )
+        .schedule(2_000)
+        .claim_for_upload(2_100)
+        .processing("yt_video_1", 2_200);
+        store
+            .save_publish_job(job)
+            .unwrap_or_else(|err| panic!("save processing job: {err}"));
+        store
+    }
+
+    fn execute_request() -> ExecuteUploadRequest {
+        ExecuteUploadRequest {
+            job_id: "job_1".into(),
+            title: "Launch clip".into(),
+            description: Some("Description".into()),
+            tags: vec!["awidat".into()],
+            thumbnail_ref: Some("render://thumb_1".into()),
+            now: 2_000,
+        }
+    }
+
+    #[test]
+    fn worker_api_executes_claimed_upload_job() {
+        let mut store = store_with_claimed_job();
+        let adapter = MockUploadAdapter::published(
+            Provider::YouTube,
+            "yt_video_1",
+            "https://www.youtube.com/watch?v=yt_video_1",
+        );
+
+        let job = SocialApi::execute_claimed_upload_job(&mut store, &adapter, execute_request())
+            .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(job.provider_post_id.as_deref(), Some("yt_video_1"));
+        assert_eq!(
+            job.provider_post_url.as_deref(),
+            Some("https://www.youtube.com/watch?v=yt_video_1")
+        );
+        assert_eq!(job.events.last().map(|e| &e.event_type), Some(&PublishJobEventType::Uploaded));
+    }
+
+    #[test]
+    fn worker_api_polls_processing_job_to_published() {
+        let mut store = store_with_processing_job();
+        let adapter = StubStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_1".into(),
+            provider_post_url: Some("https://www.youtube.com/watch?v=yt_video_1".into()),
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let job = SocialApi::poll_upload_status(&mut store, &adapter, "job_1", 2_500)
+            .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(*adapter.calls.borrow(), 1);
+        assert_eq!(
+            job.events.last().map(|e| &e.event_type),
+            Some(&PublishJobEventType::StatusPolled)
+        );
+    }
+
+    #[test]
+    fn worker_api_rejects_status_post_id_mismatch() {
+        let mut store = store_with_processing_job();
+        let adapter = StubStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_other".into(),
+            provider_post_url: None,
+            status: UploadProcessingStatus::Processing,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        assert_eq!(
+            SocialApi::poll_upload_status(&mut store, &adapter, "job_1", 2_500),
+            Err(SocialApiError::Status(
+                UploadStatusServiceError::ProviderPostIdMismatch.to_string()
+            ))
+        );
+        // Guard preserved: job stays processing, no event written.
+        let job = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("job: {err}"));
+        assert_eq!(job.status, PublishJobStatus::Processing);
+        assert!(
+            store
+                .publish_job_events("job_1")
+                .unwrap_or_else(|err| panic!("events: {err}"))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn worker_api_events_do_not_include_raw_token_material() {
+        let mut store = store_with_claimed_job();
+        let adapter = MockUploadAdapter::published(
+            Provider::YouTube,
+            "yt_video_1",
+            "https://www.youtube.com/watch?v=yt_video_1",
+        );
+
+        let job = SocialApi::execute_claimed_upload_job(&mut store, &adapter, execute_request())
+            .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        let json =
+            serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access-secret"));
+        assert!(!json.contains("refresh-secret"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
     }
 }
