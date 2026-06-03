@@ -61,9 +61,18 @@ fn idempotency_key(
     connected_account_id: &str,
     artifact_ref: &str,
 ) -> String {
-    let raw = format!("{campaign_id}:{variant_id}:{connected_account_id}:{artifact_ref}");
-    let digest = Sha256::digest(raw.as_bytes());
+    let mut hasher = Sha256::new();
+    hash_part(&mut hasher, campaign_id);
+    hash_part(&mut hasher, variant_id);
+    hash_part(&mut hasher, connected_account_id);
+    hash_part(&mut hasher, artifact_ref);
+    let digest = hasher.finalize();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn hash_part(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_be_bytes());
+    hasher.update(value.as_bytes());
 }
 
 #[cfg(test)]
@@ -95,6 +104,32 @@ mod tests {
 
         assert_eq!(a.idempotency_key, b.idempotency_key);
         assert_eq!(a.status, PublishJobStatus::Draft);
+    }
+
+    #[test]
+    fn publish_job_idempotency_key_preserves_field_boundaries() {
+        let a = PublishJob::new(
+            "job_1",
+            "campaign:1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        );
+        let b = PublishJob::new(
+            "job_2",
+            "campaign",
+            "1:variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        );
+
+        assert_ne!(a.idempotency_key, b.idempotency_key);
     }
 
     #[test]
