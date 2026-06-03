@@ -187,7 +187,7 @@ pub struct PublishJobEvent {
     pub publish_job_id: String,
     pub event_type: PublishJobEventType,
     pub actor_type: PublishJobActorType,
-    pub message: Option<String>,
+    pub message: String,
     pub metadata: serde_json::Value,
     pub created_at: i64,
 }

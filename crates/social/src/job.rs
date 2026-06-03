@@ -84,9 +84,10 @@ impl PublishJob {
         }
     }
 
-    pub fn requires_action(mut self, reason: impl Into<String>) -> Self {
+    pub fn requires_action(mut self, reason: impl Into<String>, now: i64) -> Self {
         self.status = PublishJobStatus::RequiresAction;
         self.requires_action_reason = Some(reason.into());
+        self.updated_at = now;
         self
     }
 
@@ -112,12 +113,12 @@ impl PublishJob {
     pub fn fail(
         mut self,
         normalized_error: impl Into<String>,
-        raw_error_ref: Option<String>,
+        raw_error_ref: impl Into<String>,
         now: i64,
     ) -> Self {
         self.status = PublishJobStatus::Failed;
         self.normalized_error = Some(normalized_error.into());
-        self.raw_error_ref = raw_error_ref;
+        self.raw_error_ref = Some(raw_error_ref.into());
         self.updated_at = now;
         self
     }
@@ -138,7 +139,7 @@ impl PublishJobEvent {
         publish_job_id: impl Into<String>,
         event_type: PublishJobEventType,
         actor_type: PublishJobActorType,
-        message: Option<String>,
+        message: impl Into<String>,
         metadata: serde_json::Value,
         created_at: i64,
     ) -> Self {
@@ -147,7 +148,7 @@ impl PublishJobEvent {
             publish_job_id: publish_job_id.into(),
             event_type,
             actor_type,
-            message,
+            message: message.into(),
             metadata,
             created_at,
         }
@@ -243,9 +244,10 @@ mod tests {
             1_800,
             "user_1",
         )
-        .requires_action("tiktok_direct_post_permission_required");
+        .requires_action("tiktok_direct_post_permission_required", 2_100);
 
         assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(job.updated_at, 2_100);
         assert_eq!(
             job.requires_action_reason.as_deref(),
             Some("tiktok_direct_post_permission_required")
@@ -303,12 +305,8 @@ mod tests {
         )
         .schedule(2_000)
         .claim_for_upload(2_100)
-        .fail(
-            "provider_rate_limited",
-            Some("errors/job_1.json".into()),
-            2_200,
-        )
-        .requires_action("tiktok_reauth_required")
+        .fail("provider_rate_limited", "errors/job_1.json", 2_200)
+        .requires_action("tiktok_reauth_required", 2_250)
         .retry(2_300);
 
         assert_eq!(job.status, PublishJobStatus::Scheduled);
@@ -326,7 +324,7 @@ mod tests {
             "job_1",
             PublishJobEventType::RetryQueued,
             PublishJobActorType::Worker,
-            Some("retry queued after provider timeout".into()),
+            "retry queued after provider timeout",
             serde_json::json!({
                 "safe_ref": "errors/job_1.json",
                 "note": "token storage remains server side"
