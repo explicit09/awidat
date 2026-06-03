@@ -30,10 +30,8 @@ pub trait SocialStore {
         status: OAuthConnectionStatus,
     ) -> Result<OAuthConnection, SocialStoreError>;
 
-    fn save_connected_account(
-        &mut self,
-        account: ConnectedAccount,
-    ) -> Result<(), SocialStoreError>;
+    fn save_connected_account(&mut self, account: ConnectedAccount)
+    -> Result<(), SocialStoreError>;
 
     fn connected_account(&self, id: &str) -> Result<ConnectedAccount, SocialStoreError>;
 
