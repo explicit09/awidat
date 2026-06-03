@@ -45,7 +45,10 @@ pub fn begin_provider_oauth(
 
 fn scopes_for(provider: &Provider) -> Vec<&'static str> {
     match provider {
-        Provider::YouTube => vec!["https://www.googleapis.com/auth/youtube.upload"],
+        Provider::YouTube => vec![
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly",
+        ],
         Provider::TikTok => vec!["user.info.basic", "video.publish"],
         Provider::Instagram => vec!["instagram_basic", "instagram_content_publish"],
     }
@@ -148,10 +151,16 @@ mod tests {
                 .starts_with("https://accounts.google.com/o/oauth2/v2/auth?")
         );
         assert!(request.authorization_url.contains("client_id=client_123"));
+        // Both upload and readonly scopes must be present (space-separated, percent-encoded).
         assert!(
             request
                 .authorization_url
-                .contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.upload")
+                .contains("https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.upload")
+        );
+        assert!(
+            request
+                .authorization_url
+                .contains("https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.readonly")
         );
         assert!(request.authorization_url.contains("access_type=offline"));
         assert!(request.authorization_url.contains("prompt=consent"));

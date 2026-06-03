@@ -932,6 +932,13 @@ mod tests {
         ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
             self.inner.workspace_member_roles(workspace_id)
         }
+
+        fn token_secrets_due_refresh(
+            &self,
+            deadline: i64,
+        ) -> Result<Vec<TokenSecret>, SocialStoreError> {
+            self.inner.token_secrets_due_refresh(deadline)
+        }
     }
 
     /// Store that simulates a user cancellation landing *during* the provider
@@ -1110,6 +1117,13 @@ mod tests {
             workspace_id: &str,
         ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
             self.inner.workspace_member_roles(workspace_id)
+        }
+
+        fn token_secrets_due_refresh(
+            &self,
+            deadline: i64,
+        ) -> Result<Vec<TokenSecret>, SocialStoreError> {
+            self.inner.token_secrets_due_refresh(deadline)
         }
     }
 }

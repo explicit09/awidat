@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 awidat-social = { workspace = true }
 # Axum: workspace dep is default-features=false; we add the features we need (G1).
-axum = { workspace = true, features = ["http1", "tokio", "json"] }
+axum = { workspace = true, features = ["http1", "tokio", "json", "query"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_postgres = { workspace = true }
 postgres = { workspace = true }
+constant_time_eq = { workspace = true }
 
 [lints]
 workspace = true

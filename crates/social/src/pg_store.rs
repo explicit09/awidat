@@ -708,4 +708,23 @@ impl SocialStore for PgSocialStore {
             .map_err(pg_error)?;
         rows.iter().map(|row| from_json(row.get(0))).collect()
     }
+
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<crate::token::TokenSecret>, SocialStoreError> {
+        let mut client = self
+            .pool
+            .get()
+            .map_err(|e| SocialStoreError::Storage(e.to_string()))?;
+        let rows = client
+            .query(
+                "SELECT payload_json FROM oauth_token_secrets
+                 WHERE access_token_expires_at IS NOT NULL
+                   AND access_token_expires_at <= $1",
+                &[&deadline],
+            )
+            .map_err(pg_error)?;
+        rows.iter().map(|row| from_json(row.get(0))).collect()
+    }
 }

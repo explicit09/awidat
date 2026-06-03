@@ -102,6 +102,13 @@ pub trait SocialStore {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
+
+    /// Return all token secrets whose access token expires before `deadline`.
+    /// Used by the token-refresh sweep to pro-actively refresh near-expiry tokens.
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<TokenSecret>, SocialStoreError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -340,6 +347,18 @@ impl SocialStore for InMemorySocialStore {
             .workspace_member_roles
             .values()
             .filter(|role| role.workspace_id == workspace_id)
+            .cloned()
+            .collect())
+    }
+
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<TokenSecret>, SocialStoreError> {
+        Ok(self
+            .token_secrets
+            .values()
+            .filter(|s| s.access_token_expires_at.is_some_and(|exp| exp <= deadline))
             .cloned()
             .collect())
     }

@@ -171,9 +171,11 @@ fly logs --app awidat-social
 | `SUPABASE_URL` | Yes | 1 | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Yes | 1 | service_role key |
 | `STORAGE_BUCKET` | No | 1 | Default `artifacts` |
-| `GOOGLE_CLIENT_ID` | Phase 2 | 2 | OAuth app credentials |
-| `GOOGLE_CLIENT_SECRET` | Phase 2 | 2 | OAuth app credentials |
-| `TOKEN_ENCRYPTION_KEY` | Phase 2 | 2 | AEAD key for token storage |
+| `GOOGLE_CLIENT_ID` | Phase 2 | 2 | Google OAuth app client ID |
+| `GOOGLE_CLIENT_SECRET` | Phase 2 | 2 | Google OAuth client secret (server-only, never in desktop) |
+| `SOCIAL_TOKEN_AEAD_KEY` | Phase 2 | 2 | 64 hex chars = 32-byte ChaCha20-Poly1305 key |
+| `SOCIAL_TOKEN_KEY_ID` | Phase 2 | 2 | Key identifier stored alongside every token (e.g. "k1") |
+| `OAUTH_REDIRECT_BASE` | Phase 2 | 2 | Base URL for OAuth redirect URIs |
 
 ---
 
@@ -202,3 +204,64 @@ code changes.
       Instagram instagram_content_publish) — on the critical path for Phases 3/6
 
 Next: Phase 2 — server-side OAuth exchange + AEAD token storage.
+
+---
+
+## Phase 2 setup
+
+### 1. Generate the AEAD key
+
+```bash
+# 32 random bytes → 64 hex chars.
+openssl rand -hex 32
+```
+
+Store the output as `SOCIAL_TOKEN_AEAD_KEY`.  Pick a short key ID, e.g. `"k1"`.
+
+### 2. Set Phase 2 secrets
+
+```bash
+fly secrets set --app awidat-social \
+  GOOGLE_CLIENT_ID="<client_id_from_google_console>" \
+  GOOGLE_CLIENT_SECRET="<client_secret_from_google_console>" \
+  SOCIAL_TOKEN_AEAD_KEY="<64_hex_chars_from_step_1>" \
+  SOCIAL_TOKEN_KEY_ID="k1" \
+  OAUTH_REDIRECT_BASE="https://awidat-social.fly.dev"
+```
+
+`GOOGLE_CLIENT_SECRET` stays on the server.  The desktop app never sees it.
+
+### 3. Configure the Google Cloud OAuth consent screen
+
+1. Google Cloud Console → APIs & Services → Credentials → Create OAuth 2.0 Client ID.
+2. Authorized redirect URIs: `https://awidat-social.fly.dev/oauth/callback/youtube`
+3. Enable the YouTube Data API v3 in the project.
+4. In the OAuth consent screen, add the scopes:
+   - `https://www.googleapis.com/auth/youtube.upload`
+   - `https://www.googleapis.com/auth/youtube.readonly`
+
+### 4. OAuth flow (desktop initiates, server completes)
+
+```
+Desktop                          social-server                     Google
+──────                           ─────────────                     ──────
+POST /oauth/begin/youtube  ──►  save OAuthConnection
+                           ◄──  {authorization_url}
+                           ──►  open URL in browser
+                                                              ──►  grant
+GET /oauth/callback/youtube  ◄──                              ◄──  redirect
+                                POST oauth2.googleapis.com/token
+                                GET  youtube/v3/channels?mine=true
+                                encrypt tokens (ChaCha20-Poly1305)
+                                save ConnectedAccount + TokenSecret
+                           ◄──  {status: "ok", account_id}
+```
+
+### Phase 2 done checklist
+
+- [ ] `SOCIAL_TOKEN_AEAD_KEY` generated and set as Fly secret
+- [ ] `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` set as Fly secrets
+- [ ] `OAUTH_REDIRECT_BASE` set as Fly secret
+- [ ] Redirect URI registered in Google Cloud Console
+- [ ] YouTube Data API v3 enabled
+- [ ] End-to-end OAuth flow tested with a real Google account

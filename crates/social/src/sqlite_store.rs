@@ -634,6 +634,31 @@ impl SocialStore for SqliteSocialStore {
         }
         Ok(roles)
     }
+
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<crate::token::TokenSecret>, SocialStoreError> {
+        let mut stmt = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM oauth_token_secrets
+                WHERE access_token_expires_at IS NOT NULL
+                  AND access_token_expires_at <= ?1
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map(params![deadline], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut secrets = Vec::new();
+        for row in rows {
+            secrets.push(from_json(&row.map_err(storage_error)?)?);
+        }
+        Ok(secrets)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
