@@ -15,3 +15,4 @@ pub mod sqlite_store;
 pub mod store;
 pub mod token;
 pub mod token_bundle;
+pub mod upload_adapter;
