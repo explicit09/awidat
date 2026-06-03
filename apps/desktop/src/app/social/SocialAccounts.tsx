@@ -30,9 +30,16 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/** A connect run needs a per-attempt id and CSRF state; both are opaque here. */
+/**
+ * A connect run needs a per-attempt connection id and an OAuth `state` value.
+ * The `state` is the CSRF guard for the OAuth handshake, so it must be
+ * cryptographically random — never `Math.random()`. 128 bits of entropy.
+ */
 function randomToken(prefix: string): string {
-  return `${prefix}-${nowSeconds()}-${Math.floor(Math.random() * 1_000_000)}`;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${prefix}-${hex}`;
 }
 
 export function SocialAccounts() {

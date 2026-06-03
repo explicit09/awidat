@@ -36,7 +36,12 @@ function nowSeconds(): number {
 }
 
 function randomId(prefix: string): string {
-  return `${prefix}-${nowSeconds()}-${Math.floor(Math.random() * 1_000_000)}`;
+  // Target/job ids aren't security tokens, but use a secure RNG for collision
+  // resistance and consistency with the OAuth state generation.
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${prefix}-${hex}`;
 }
 
 export function SocialSchedule({
