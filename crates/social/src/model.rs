@@ -159,6 +159,39 @@ pub struct PublishJob {
     pub updated_at: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishJobEventType {
+    TargetBound,
+    Validated,
+    Scheduled,
+    Claimed,
+    Cancelled,
+    RetryQueued,
+    RequiresAction,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishJobActorType {
+    User,
+    System,
+    Worker,
+    Provider,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishJobEvent {
+    pub id: String,
+    pub publish_job_id: String,
+    pub event_type: PublishJobEventType,
+    pub actor_type: PublishJobActorType,
+    pub message: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
