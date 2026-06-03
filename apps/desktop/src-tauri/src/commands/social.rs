@@ -413,9 +413,6 @@ pub async fn social_execute_upload(
                 description: args.description,
                 tags: args.tags,
                 thumbnail_ref: args.thumbnail_ref,
-                // No per-call override from the desktop worker yet; resolve
-                // from the account's publish defaults inside the facade.
-                privacy: None,
                 now: args.now,
             },
         )
