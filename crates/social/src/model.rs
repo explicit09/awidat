@@ -194,6 +194,32 @@ pub struct PublishJobEvent {
     pub created_at: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamRole {
+    Owner,
+    Admin,
+    Publisher,
+    Viewer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamAction {
+    ConnectAccount,
+    DisconnectAccount,
+    SchedulePublish,
+    CancelPublish,
+    RetryPublish,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceMemberRole {
+    pub workspace_id: String,
+    pub user_id: String,
+    pub role: TeamRole,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

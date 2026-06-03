@@ -13,6 +13,7 @@ pub mod provider;
 pub mod publish_service;
 pub mod sqlite_store;
 pub mod store;
+pub mod team_service;
 pub mod token;
 pub mod token_bundle;
 pub mod upload_adapter;
