@@ -1,6 +1,6 @@
 use crate::model::{
-    CampaignVariantTarget, ConnectedAccountStatus, OwnerRef, PublishJob, PublishJobActorType,
-    PublishJobEvent, PublishJobEventType, PublishJobStatus, ValidationState,
+    CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
+    PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus, ValidationState,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use thiserror::Error;
@@ -59,6 +59,12 @@ impl PublishService {
         if account.owner != *owner {
             return Err(PublishServiceError::OwnerMismatch);
         }
+        if let Some(existing) = existing_target(store, &input.id)? {
+            let existing_account = store.connected_account(&existing.connected_account_id)?;
+            if existing_account.owner != *owner {
+                return Err(PublishServiceError::OwnerMismatch);
+            }
+        }
 
         let target = CampaignVariantTarget::new(
             input.id,
@@ -89,29 +95,7 @@ impl PublishService {
             return Err(PublishServiceError::ProviderMismatch);
         }
 
-        let (state, reasons) = if account.status != ConnectedAccountStatus::Connected {
-            (
-                ValidationState::RequiresAction,
-                vec!["account_not_connected".to_string()],
-            )
-        } else if !account.eligibility.eligible {
-            (
-                ValidationState::RequiresAction,
-                vec!["account_not_eligible".to_string()],
-            )
-        } else if !account.capabilities.upload_video || !account.capabilities.public_posting {
-            (
-                ValidationState::RequiresAction,
-                vec!["missing_publish_capability".to_string()],
-            )
-        } else if target.scheduled_for <= now {
-            (
-                ValidationState::Invalid,
-                vec!["scheduled_time_invalid".to_string()],
-            )
-        } else {
-            (ValidationState::Valid, Vec::new())
-        };
+        let (state, reasons) = target_validation_state(&target, &account, now);
 
         store.save_campaign_variant_target(target.mark_validation(state.clone(), now))?;
         Ok(TargetValidationReport { state, reasons })
@@ -127,8 +111,22 @@ impl PublishService {
         if account.owner != *owner {
             return Err(PublishServiceError::OwnerMismatch);
         }
+        if account.provider != target.provider {
+            return Err(PublishServiceError::ProviderMismatch);
+        }
         if target.validation_state != ValidationState::Valid {
             return Err(PublishServiceError::TargetNotValid);
+        }
+        let (current_state, _) = target_validation_state(&target, &account, input.now);
+        if current_state != ValidationState::Valid {
+            store.save_campaign_variant_target(target.mark_validation(current_state, input.now))?;
+            return Err(PublishServiceError::TargetNotValid);
+        }
+        if let Some(existing) = existing_job(store, &input.job_id)? {
+            let existing_account = store.connected_account(&existing.connected_account_id)?;
+            if existing_account.owner != *owner {
+                return Err(PublishServiceError::OwnerMismatch);
+            }
         }
 
         let job = PublishJob::new(
@@ -228,6 +226,58 @@ impl PublishService {
     }
 }
 
+fn existing_target(
+    store: &impl SocialStore,
+    target_id: &str,
+) -> Result<Option<CampaignVariantTarget>, PublishServiceError> {
+    match store.campaign_variant_target(target_id) {
+        Ok(target) => Ok(Some(target)),
+        Err(SocialStoreError::NotFound) => Ok(None),
+        Err(err) => Err(PublishServiceError::Store(err)),
+    }
+}
+
+fn existing_job(
+    store: &impl SocialStore,
+    job_id: &str,
+) -> Result<Option<PublishJob>, PublishServiceError> {
+    match store.publish_job(job_id) {
+        Ok(job) => Ok(Some(job)),
+        Err(SocialStoreError::NotFound) => Ok(None),
+        Err(err) => Err(PublishServiceError::Store(err)),
+    }
+}
+
+fn target_validation_state(
+    target: &CampaignVariantTarget,
+    account: &ConnectedAccount,
+    now: i64,
+) -> (ValidationState, Vec<String>) {
+    if account.status != ConnectedAccountStatus::Connected {
+        (
+            ValidationState::RequiresAction,
+            vec!["account_not_connected".to_string()],
+        )
+    } else if !account.eligibility.eligible {
+        (
+            ValidationState::RequiresAction,
+            vec!["account_not_eligible".to_string()],
+        )
+    } else if !account.capabilities.upload_video || !account.capabilities.public_posting {
+        (
+            ValidationState::RequiresAction,
+            vec!["missing_publish_capability".to_string()],
+        )
+    } else if target.scheduled_for <= now {
+        (
+            ValidationState::Invalid,
+            vec!["scheduled_time_invalid".to_string()],
+        )
+    } else {
+        (ValidationState::Valid, Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +311,49 @@ mod tests {
 
         assert_eq!(target.validation_state, ValidationState::Pending);
         assert_eq!(store.campaign_variant_target("target_1"), Ok(target));
+    }
+
+    #[test]
+    fn bind_target_does_not_overwrite_existing_target_for_other_owner() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save owner account: {err}"));
+        store
+            .save_connected_account(connected_account("acct_2", other_owner(), true))
+            .unwrap_or_else(|err| panic!("save other account: {err}"));
+        let original = PublishService::bind_target(
+            &mut store,
+            &owner(),
+            BindTargetInput {
+                id: "target_1".into(),
+                campaign_id: "campaign_1".into(),
+                variant_id: "variant_1".into(),
+                connected_account_id: "acct_1".into(),
+                platform_fields: serde_json::json!({"privacy": "private"}),
+                scheduled_for: 2_000,
+                now: 1_000,
+            },
+        )
+        .unwrap_or_else(|err| panic!("bind original target: {err}"));
+
+        assert_eq!(
+            PublishService::bind_target(
+                &mut store,
+                &other_owner(),
+                BindTargetInput {
+                    id: "target_1".into(),
+                    campaign_id: "campaign_2".into(),
+                    variant_id: "variant_2".into(),
+                    connected_account_id: "acct_2".into(),
+                    platform_fields: serde_json::json!({"privacy": "public"}),
+                    scheduled_for: 3_000,
+                    now: 1_100,
+                },
+            ),
+            Err(PublishServiceError::OwnerMismatch)
+        );
+        assert_eq!(store.campaign_variant_target("target_1"), Ok(original));
     }
 
     #[test]
@@ -318,6 +411,105 @@ mod tests {
             events[0].metadata,
             serde_json::json!({"target_id": "target_1"})
         );
+    }
+
+    #[test]
+    fn schedule_target_does_not_overwrite_existing_job_for_other_owner() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save owner account: {err}"));
+        store
+            .save_connected_account(connected_account("acct_2", other_owner(), true))
+            .unwrap_or_else(|err| panic!("save other account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate owner target: {err}"));
+        let original = PublishService::schedule_target(
+            &mut store,
+            &owner(),
+            ScheduleTargetInput {
+                job_id: "job_1".into(),
+                target_id: "target_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule owner target: {err}"));
+        PublishService::bind_target(
+            &mut store,
+            &other_owner(),
+            BindTargetInput {
+                id: "target_2".into(),
+                campaign_id: "campaign_2".into(),
+                variant_id: "variant_2".into(),
+                connected_account_id: "acct_2".into(),
+                platform_fields: serde_json::json!({"privacy": "private"}),
+                scheduled_for: 2_500,
+                now: 1_000,
+            },
+        )
+        .unwrap_or_else(|err| panic!("bind other target: {err}"));
+        PublishService::validate_target(&mut store, &other_owner(), "target_2", 1_100)
+            .unwrap_or_else(|err| panic!("validate other target: {err}"));
+
+        assert_eq!(
+            PublishService::schedule_target(
+                &mut store,
+                &other_owner(),
+                ScheduleTargetInput {
+                    job_id: "job_1".into(),
+                    target_id: "target_2".into(),
+                    artifact_ref: "render://artifact_2".into(),
+                    created_by: "user_2".into(),
+                    now: 1_200,
+                },
+            ),
+            Err(PublishServiceError::OwnerMismatch)
+        );
+        assert_eq!(store.publish_job("job_1"), Ok(original));
+    }
+
+    #[test]
+    fn schedule_target_rechecks_current_account_publishability() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+        let mut account = store
+            .connected_account("acct_1")
+            .unwrap_or_else(|err| panic!("account: {err}"));
+        account.status = ConnectedAccountStatus::Disabled;
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("disable account: {err}"));
+
+        assert_eq!(
+            PublishService::schedule_target(
+                &mut store,
+                &owner(),
+                ScheduleTargetInput {
+                    job_id: "job_1".into(),
+                    target_id: "target_1".into(),
+                    artifact_ref: "render://artifact_1".into(),
+                    created_by: "user_1".into(),
+                    now: 1_200,
+                },
+            ),
+            Err(PublishServiceError::TargetNotValid)
+        );
+        assert_eq!(
+            store
+                .campaign_variant_target("target_1")
+                .unwrap_or_else(|err| panic!("target: {err}"))
+                .validation_state,
+            ValidationState::RequiresAction
+        );
+        assert_eq!(store.publish_job("job_1"), Err(SocialStoreError::NotFound));
     }
 
     #[test]
@@ -419,6 +611,10 @@ mod tests {
 
     fn owner() -> OwnerRef {
         OwnerRef::User("user_1".into())
+    }
+
+    fn other_owner() -> OwnerRef {
+        OwnerRef::User("user_2".into())
     }
 
     fn connected_account(id: &str, account_owner: OwnerRef, eligible: bool) -> ConnectedAccount {
