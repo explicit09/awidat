@@ -16,6 +16,7 @@ members = [
     "crates/config",
     "crates/secrets",
     "crates/auth",
+    "crates/social",
     "crates/index",
     "crates/desktop-protocol",
     "crates/codex-bridge",
@@ -214,6 +215,7 @@ awidat-lut = { path = "crates/lut" }
 awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-auth = { path = "crates/auth" }
+awidat-social = { path = "crates/social" }
 awidat-index = { path = "crates/index" }
 awidat-desktop-protocol = { path = "crates/desktop-protocol" }
 awidat-codex-bridge = { path = "crates/codex-bridge" }

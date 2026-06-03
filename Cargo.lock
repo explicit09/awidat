@@ -928,6 +928,7 @@ dependencies = [
  "awidat-render",
  "awidat-render-gpu",
  "awidat-secrets",
+ "awidat-social",
  "base64 0.22.1",
  "chrono",
  "dirs",
@@ -1068,6 +1069,18 @@ dependencies = [
  "keyring",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "awidat-social"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -32,6 +32,7 @@ pub mod review;
 pub mod silence;
 pub mod skill_config;
 pub mod skills;
+pub mod social;
 pub mod still_export;
 pub mod thumbnail;
 pub mod timeline;
