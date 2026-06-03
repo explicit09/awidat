@@ -276,6 +276,15 @@ pub fn run() {
             commands::social::social_oauth_start,
             commands::social::social_oauth_complete,
             commands::social::social_disconnect_account,
+            commands::social::social_bind_target,
+            commands::social::social_validate_target,
+            commands::social::social_schedule_target,
+            commands::social::social_publish_job,
+            commands::social::social_cancel_job,
+            commands::social::social_retry_job,
+            commands::social::social_account_audit,
+            commands::social::social_execute_upload,
+            commands::social::social_poll_status,
         ])
         .build(tauri::generate_context!());
 

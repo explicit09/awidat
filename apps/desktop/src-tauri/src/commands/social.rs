@@ -8,18 +8,26 @@
 //! later unchanged.
 
 use awidat_social::api::{
-    AccountSummary, ApiActor, ApiOwner, OAuthCompleteRequest, OAuthCompleteResponse,
-    OAuthStartRequest, OAuthStartResponse, ProviderSummary, SocialApi, SocialApiError,
+    AccountSummary, ApiActor, ApiOwner, BindTargetRequest, ExecuteUploadRequest,
+    OAuthCompleteRequest, OAuthCompleteResponse, OAuthStartRequest, OAuthStartResponse,
+    ProviderSummary, PublishJobResponse, ScheduleTargetRequest, SocialApi, SocialApiError,
+    ValidateTargetRequest,
 };
 use awidat_social::model::{
-    AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider,
-    ProviderCapabilities,
+    AccountEligibility, AccountKind, AccountUsageAudit, CampaignVariantTarget, ConnectedAccount,
+    ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities,
 };
 use awidat_social::oauth_url::OAuthProviderConfig;
 use awidat_social::provider::ProviderRegistry;
+use awidat_social::publish_service::PublishService;
 use awidat_social::sqlite_store::SqliteSocialStore;
 use awidat_social::token::TestKeyProvider;
 use awidat_social::token_bundle::ProviderTokenBundle;
+use awidat_social::upload_adapter::MockUploadAdapter;
+use awidat_social::upload_status::{
+    UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError, UploadStatusRequest,
+    UploadStatusResult,
+};
 use tauri::State;
 
 use crate::state::AwidatState;
@@ -197,6 +205,230 @@ pub async fn social_disconnect_account(
     let owner = owner();
     with_store(&state, |store| {
         SocialApi::disconnect_account(store, &actor, &owner, &account_id, now)
+    })
+    .await
+}
+
+// --- Publish routes ---------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindArgs {
+    pub target_id: String,
+    pub campaign_id: String,
+    pub variant_id: String,
+    pub connected_account_id: String,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
+#[tauri::command]
+pub async fn social_bind_target(
+    state: State<'_, AwidatState>,
+    args: BindArgs,
+) -> Result<CampaignVariantTarget, String> {
+    let actor = actor();
+    with_store(&state, |store| {
+        SocialApi::bind_target(
+            store,
+            &actor,
+            BindTargetRequest {
+                target_id: args.target_id,
+                campaign_id: args.campaign_id,
+                variant_id: args.variant_id,
+                connected_account_id: args.connected_account_id,
+                platform_fields: args.platform_fields,
+                scheduled_for: args.scheduled_for,
+                now: args.now,
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_validate_target(
+    state: State<'_, AwidatState>,
+    target_id: String,
+    now: i64,
+) -> Result<CampaignVariantTarget, String> {
+    let actor = actor();
+    let registry = ProviderRegistry::default_multi_platform();
+    with_store(&state, |store| {
+        SocialApi::validate_target(
+            store,
+            &registry,
+            &actor,
+            ValidateTargetRequest { target_id, now },
+        )
+    })
+    .await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleArgs {
+    pub target_id: String,
+    pub job_id: String,
+    pub artifact_ref: String,
+    pub now: i64,
+}
+
+#[tauri::command]
+pub async fn social_schedule_target(
+    state: State<'_, AwidatState>,
+    args: ScheduleArgs,
+) -> Result<PublishJobResponse, String> {
+    let actor = actor();
+    let registry = ProviderRegistry::default_multi_platform();
+    with_store(&state, |store| {
+        SocialApi::schedule_target(
+            store,
+            &registry,
+            &actor,
+            ScheduleTargetRequest {
+                target_id: args.target_id,
+                job_id: args.job_id,
+                artifact_ref: args.artifact_ref,
+                created_by: LOCAL_USER_ID.into(),
+                now: args.now,
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_publish_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<PublishJobResponse, String> {
+    let actor = actor();
+    let owner = owner();
+    with_store(&state, |store| {
+        SocialApi::publish_job(store, &actor, &owner, &job_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_cancel_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    now: i64,
+) -> Result<PublishJobResponse, String> {
+    let actor = actor();
+    let owner = owner();
+    with_store(&state, |store| {
+        SocialApi::cancel_job(store, &actor, &owner, &job_id, now)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_retry_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    now: i64,
+) -> Result<PublishJobResponse, String> {
+    let actor = actor();
+    let owner = owner();
+    with_store(&state, |store| {
+        SocialApi::retry_job(store, &actor, &owner, &job_id, now)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_account_audit(
+    state: State<'_, AwidatState>,
+    account_id: String,
+) -> Result<AccountUsageAudit, String> {
+    let actor = actor();
+    let owner = owner();
+    with_store(&state, |store| {
+        SocialApi::account_usage_audit(store, &actor, &owner, &account_id)
+    })
+    .await
+}
+
+// --- Worker routes (mock adapters this pass) --------------------------------
+
+/// Mock status adapter: reports the provider finished processing. Replaced by a
+/// live client in the provider sub-project.
+struct MockReadyStatus;
+
+impl UploadStatusAdapter for MockReadyStatus {
+    fn provider(&self) -> Provider {
+        Provider::YouTube
+    }
+
+    fn poll_status(
+        &self,
+        request: &UploadStatusRequest,
+    ) -> Result<UploadStatusResult, UploadStatusAdapterError> {
+        Ok(UploadStatusResult {
+            provider_post_id: request.provider_post_id.clone(),
+            provider_post_url: Some(format!("https://youtu.be/{}", request.provider_post_id)),
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        })
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteUploadArgs {
+    pub job_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub thumbnail_ref: Option<String>,
+    pub now: i64,
+}
+
+/// Claim any due jobs, then execute the named upload via the mock adapter.
+#[tauri::command]
+pub async fn social_execute_upload(
+    state: State<'_, AwidatState>,
+    args: ExecuteUploadArgs,
+) -> Result<PublishJobResponse, String> {
+    let adapter = MockUploadAdapter::published(
+        Provider::YouTube,
+        format!("yt_{}", args.job_id),
+        format!("https://youtu.be/yt_{}", args.job_id),
+    );
+    with_store(&state, |store| {
+        // Move Scheduled -> Uploading if still due.
+        PublishService::claim_due_jobs(store, args.now, 50)
+            .map_err(|err| SocialApiError::Publish(err.to_string()))?;
+        SocialApi::execute_claimed_upload_job(
+            store,
+            &adapter,
+            ExecuteUploadRequest {
+                job_id: args.job_id,
+                title: args.title,
+                description: args.description,
+                tags: args.tags,
+                thumbnail_ref: args.thumbnail_ref,
+                now: args.now,
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn social_poll_status(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    now: i64,
+) -> Result<PublishJobResponse, String> {
+    let adapter = MockReadyStatus;
+    with_store(&state, |store| {
+        SocialApi::poll_upload_status(store, &adapter, &job_id, now)
     })
     .await
 }
