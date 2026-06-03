@@ -20,15 +20,21 @@ pub enum TokenError {
     EmptyKey,
     #[error("encrypted token payload is not valid base64")]
     InvalidEncoding,
+    #[error("decrypted token payload is not valid UTF-8")]
+    InvalidPlaintext,
 }
 
-pub trait TokenKeyProvider {
+/// Supplies raw key material for this module's local XOR envelope.
+///
+/// This is a local/test boundary only. A production token vault should replace
+/// this module or use a backend that performs real envelope encryption or KMS
+/// operations without exposing raw key bytes through this trait.
+pub trait LocalTokenKeyProvider {
     fn key_id(&self) -> &str;
     fn key_material(&self) -> &[u8];
 }
 
-// Local/unit-test key provider boundary. Production code should supply a real
-// envelope or KMS-backed provider through the same trait.
+// Local/unit-test key provider for the XOR envelope above.
 #[derive(Clone, Debug)]
 pub struct TestKeyProvider {
     key_id: String,
@@ -44,7 +50,7 @@ impl TestKeyProvider {
     }
 }
 
-impl TokenKeyProvider for TestKeyProvider {
+impl LocalTokenKeyProvider for TestKeyProvider {
     fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -59,7 +65,7 @@ impl TokenSecret {
         connected_account_id: impl Into<String>,
         access_token: &str,
         refresh_token: Option<&str>,
-        key_provider: &impl TokenKeyProvider,
+        key_provider: &impl LocalTokenKeyProvider,
         now: i64,
     ) -> Result<Self, TokenError> {
         Ok(Self {
@@ -78,7 +84,7 @@ impl TokenSecret {
 
     pub fn decrypt_access_token(
         &self,
-        key_provider: &impl TokenKeyProvider,
+        key_provider: &impl LocalTokenKeyProvider,
     ) -> Result<String, TokenError> {
         decode_with_key(&self.encrypted_access_token, key_provider)
     }
@@ -86,7 +92,7 @@ impl TokenSecret {
 
 fn encode_with_key(
     value: &str,
-    key_provider: &impl TokenKeyProvider,
+    key_provider: &impl LocalTokenKeyProvider,
 ) -> Result<String, TokenError> {
     let bytes = xor(value.as_bytes(), key_provider.key_material())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
@@ -94,13 +100,13 @@ fn encode_with_key(
 
 fn decode_with_key(
     value: &str,
-    key_provider: &impl TokenKeyProvider,
+    key_provider: &impl LocalTokenKeyProvider,
 ) -> Result<String, TokenError> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(value.as_bytes())
         .map_err(|_err| TokenError::InvalidEncoding)?;
     let plain = xor(&decoded, key_provider.key_material())?;
-    Ok(String::from_utf8_lossy(&plain).into_owned())
+    String::from_utf8(plain).map_err(|_err| TokenError::InvalidPlaintext)
 }
 
 fn xor(input: &[u8], key: &[u8]) -> Result<Vec<u8>, TokenError> {
@@ -183,6 +189,26 @@ mod tests {
         assert_eq!(
             secret.decrypt_access_token(&provider),
             Err(TokenError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn decrypt_rejects_invalid_plaintext_utf8() {
+        let provider = TestKeyProvider::new("test-key-1", "k");
+        let secret = TokenSecret {
+            connected_account_id: "acct_1".to_string(),
+            encrypted_access_token: "lA==".to_string(),
+            encrypted_refresh_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            token_version: 1,
+            kms_key_id: "test-key-1".to_string(),
+            last_refreshed_at: Some(100),
+        };
+
+        assert_eq!(
+            secret.decrypt_access_token(&provider),
+            Err(TokenError::InvalidPlaintext)
         );
     }
 }
