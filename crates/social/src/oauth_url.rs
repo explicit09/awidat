@@ -1,7 +1,8 @@
 use crate::model::{OwnerRef, Provider};
 use crate::oauth::OAuthConnection;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthProviderConfig {
     pub client_id: String,
     pub redirect_uri: String,

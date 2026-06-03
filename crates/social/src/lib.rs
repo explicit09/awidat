@@ -4,6 +4,7 @@
 //! contracts. It does not perform live platform HTTP calls.
 
 pub mod account_service;
+pub mod api;
 pub mod eligibility;
 pub mod job;
 pub mod model;
