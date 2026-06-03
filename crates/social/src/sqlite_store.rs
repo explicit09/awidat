@@ -21,6 +21,14 @@ impl SqliteSocialStore {
         Ok(store)
     }
 
+    /// Opens (creating if absent) a file-backed store and ensures the schema.
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SocialStoreError> {
+        let connection = Connection::open(path).map_err(storage_error)?;
+        let store = Self { connection };
+        store.create_schema()?;
+        Ok(store)
+    }
+
     fn create_schema(&self) -> Result<(), SocialStoreError> {
         self.connection
             .execute_batch(
@@ -1140,5 +1148,30 @@ mod tests {
 
         assert_eq!(updated.status, OAuthConnectionStatus::Completed);
         assert_eq!(store.oauth_connection("oauth_1"), Ok(updated));
+    }
+
+    #[test]
+    fn open_persists_account_across_reopen() {
+        let dir = std::env::temp_dir().join(format!("awidat_social_open_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("create temp dir: {err}"));
+        let path = dir.join("social.sqlite");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut store =
+                SqliteSocialStore::open(&path).unwrap_or_else(|err| panic!("open store: {err}"));
+            store
+                .save_connected_account(connected_account("acct_open"))
+                .unwrap_or_else(|err| panic!("save account: {err}"));
+        }
+
+        let reopened =
+            SqliteSocialStore::open(&path).unwrap_or_else(|err| panic!("reopen store: {err}"));
+        let loaded = reopened
+            .connected_account("acct_open")
+            .unwrap_or_else(|err| panic!("load account: {err}"));
+        assert_eq!(loaded.id, "acct_open");
+
+        let _ = std::fs::remove_file(&path);
     }
 }
