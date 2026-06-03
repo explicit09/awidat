@@ -66,9 +66,13 @@ fn authorization_url(
         Provider::TikTok => "https://www.tiktok.com/v2/auth/authorize/",
         Provider::Instagram => "https://www.facebook.com/v24.0/dialog/oauth",
     };
+    let client_key = match provider {
+        Provider::TikTok => "client_key",
+        Provider::YouTube | Provider::Instagram => "client_id",
+    };
 
     let mut params = vec![
-        ("client_id", config.client_id.as_str()),
+        (client_key, config.client_id.as_str()),
         ("redirect_uri", config.redirect_uri.as_str()),
         ("response_type", "code"),
         ("scope", scope.as_str()),
@@ -177,6 +181,8 @@ mod tests {
                 .authorization_url
                 .contains("scope=user.info.basic%2Cvideo.publish")
         );
+        assert!(request.authorization_url.contains("client_key=client_123"));
+        assert!(!request.authorization_url.contains("client_id=client_123"));
         assert!(request.authorization_url.contains("response_type=code"));
         assert!(request.authorization_url.contains("state=state-secret"));
     }
@@ -204,6 +210,7 @@ mod tests {
                 .authorization_url
                 .contains("scope=instagram_basic%2Cinstagram_content_publish")
         );
+        assert!(request.authorization_url.contains("client_id=client_123"));
         assert!(
             request
                 .authorization_url
