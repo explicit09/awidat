@@ -22,6 +22,8 @@ pub enum AccountServiceError {
     Store(#[from] SocialStoreError),
     #[error("invalid oauth callback")]
     InvalidOAuthCallback,
+    #[error("oauth account does not match stored connection")]
+    OAuthAccountMismatch,
 }
 
 pub struct SocialAccountService;
@@ -57,6 +59,13 @@ impl SocialAccountService {
             .is_err()
         {
             return Err(AccountServiceError::InvalidOAuthCallback);
+        }
+        if input.connected_account.owner != connection.owner
+            || input.connected_account.provider != connection.provider
+            || input.token_bundle.provider != connection.provider
+            || input.connected_account.provider_account_id != input.token_bundle.provider_account_id
+        {
+            return Err(AccountServiceError::OAuthAccountMismatch);
         }
 
         let mut account = input.connected_account;
@@ -170,6 +179,20 @@ mod tests {
             access_token: "access-secret".into(),
             refresh_token: Some("refresh-secret".into()),
             now: 1_000,
+        }
+    }
+
+    fn complete_oauth_error(
+        store: &mut InMemorySocialStore,
+        input: CompleteOAuthInput,
+    ) -> AccountServiceError {
+        match SocialAccountService::complete_oauth(
+            store,
+            &TestKeyProvider::new("test-key-1", "local-key"),
+            input,
+        ) {
+            Ok(account) => panic!("expected oauth completion error, got account: {account:?}"),
+            Err(err) => err,
         }
     }
 
@@ -312,5 +335,53 @@ mod tests {
         };
 
         assert_eq!(err, AccountServiceError::InvalidOAuthCallback);
+    }
+
+    #[test]
+    fn complete_oauth_rejects_account_owner_mismatch() {
+        let mut store = InMemorySocialStore::default();
+        start_oauth(&mut store);
+        let mut input = complete_input("state-secret");
+        input.connected_account.owner = other_owner();
+
+        let err = complete_oauth_error(&mut store, input);
+
+        assert_eq!(err, AccountServiceError::OAuthAccountMismatch);
+    }
+
+    #[test]
+    fn complete_oauth_rejects_account_provider_mismatch() {
+        let mut store = InMemorySocialStore::default();
+        start_oauth(&mut store);
+        let mut input = complete_input("state-secret");
+        input.connected_account.provider = Provider::TikTok;
+
+        let err = complete_oauth_error(&mut store, input);
+
+        assert_eq!(err, AccountServiceError::OAuthAccountMismatch);
+    }
+
+    #[test]
+    fn complete_oauth_rejects_token_bundle_provider_mismatch() {
+        let mut store = InMemorySocialStore::default();
+        start_oauth(&mut store);
+        let mut input = complete_input("state-secret");
+        input.token_bundle.provider = Provider::Instagram;
+
+        let err = complete_oauth_error(&mut store, input);
+
+        assert_eq!(err, AccountServiceError::OAuthAccountMismatch);
+    }
+
+    #[test]
+    fn complete_oauth_rejects_account_provider_account_id_mismatch_with_token_bundle() {
+        let mut store = InMemorySocialStore::default();
+        start_oauth(&mut store);
+        let mut input = complete_input("state-secret");
+        input.token_bundle.provider_account_id = "other_channel".into();
+
+        let err = complete_oauth_error(&mut store, input);
+
+        assert_eq!(err, AccountServiceError::OAuthAccountMismatch);
     }
 }
