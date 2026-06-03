@@ -454,12 +454,6 @@ impl SocialStore for SqliteSocialStore {
                     created_at
                 )
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                ON CONFLICT(id) DO UPDATE SET
-                    publish_job_id = excluded.publish_job_id,
-                    event_type = excluded.event_type,
-                    actor_type = excluded.actor_type,
-                    payload_json = excluded.payload_json,
-                    created_at = excluded.created_at
                 "#,
                 params![
                     event.id,
@@ -805,6 +799,20 @@ mod tests {
             store.publish_job("missing_job"),
             Err(SocialStoreError::NotFound)
         );
+        assert_eq!(
+            store.publish_job_events("job_1"),
+            Ok(vec![event_1.clone(), event_2.clone()])
+        );
+        let duplicate_event = PublishJobEvent::new(
+            "event_1",
+            "job_1",
+            PublishJobEventType::RetryQueued,
+            PublishJobActorType::Worker,
+            "retry queued",
+            serde_json::json!({"attempt": 2}),
+            1_200,
+        );
+        assert!(store.append_publish_job_event(duplicate_event).is_err());
         assert_eq!(
             store.publish_job_events("job_1"),
             Ok(vec![event_1, event_2])

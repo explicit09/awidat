@@ -214,7 +214,7 @@ impl PublishService {
         let retry = job.retry(now);
         store.save_publish_job(retry.clone())?;
         store.append_publish_job_event(PublishJobEvent::new(
-            format!("event_{}_retry", retry.id),
+            format!("event_{}_retry_{}", retry.id, now),
             retry.id.clone(),
             PublishJobEventType::RetryQueued,
             PublishJobActorType::User,
@@ -603,10 +603,21 @@ mod tests {
         assert_eq!(retry.normalized_error, None);
         assert_eq!(retry.raw_error_ref, None);
 
+        let failed_again = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("job after retry: {err}"))
+            .fail("provider_error_again", "errors/job_1_again.json", 2_350);
+        store
+            .save_publish_job(failed_again)
+            .unwrap_or_else(|err| panic!("save failed job again: {err}"));
+        PublishService::retry_job(&mut store, &owner(), "job_1", 2_400)
+            .unwrap_or_else(|err| panic!("retry job again: {err}"));
+
         let events = store
             .publish_job_events("job_1")
             .unwrap_or_else(|err| panic!("events: {err}"));
-        assert_eq!(events[1].id, "event_job_1_retry");
+        assert_eq!(events[1].id, "event_job_1_retry_2300");
+        assert_eq!(events[2].id, "event_job_1_retry_2400");
     }
 
     fn owner() -> OwnerRef {
