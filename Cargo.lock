@@ -928,6 +928,7 @@ dependencies = [
  "awidat-render",
  "awidat-render-gpu",
  "awidat-secrets",
+ "awidat-social",
  "base64 0.22.1",
  "chrono",
  "dirs",

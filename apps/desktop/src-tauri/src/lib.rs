@@ -110,6 +110,23 @@ pub fn run() {
                     project_root,
                 );
             }
+
+            // Open the server-backed social publishing store under the app data
+            // dir and park it in AwidatState for the `social_*` commands. The
+            // setup closure is sync, so use `blocking_lock()` like the
+            // `project_root` block above.
+            {
+                let data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|err| format!("resolve app data dir: {err}"))?;
+                std::fs::create_dir_all(&data_dir)
+                    .map_err(|err| format!("create app data dir: {err}"))?;
+                let social_path = data_dir.join("social.sqlite");
+                let store = awidat_social::sqlite_store::SqliteSocialStore::open(&social_path)
+                    .map_err(|err| format!("open social store: {err}"))?;
+                *app.state::<AwidatState>().social.blocking_lock() = Some(store);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

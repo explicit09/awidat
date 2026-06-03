@@ -38,6 +38,7 @@ awidat-mcp = { path = "../../../crates/mcp" }
 awidat-render = { workspace = true }
 awidat-render-gpu = { workspace = true }
 awidat-secrets = { workspace = true }
+awidat-social = { workspace = true }
 base64 = "0.22"
 
 serde = { workspace = true }
