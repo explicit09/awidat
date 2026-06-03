@@ -14,6 +14,10 @@ serde_json = { workspace = true }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# Sync Postgres client + blocking pool for PgSocialStore (D1 — NOT async sqlx).
+postgres = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_postgres = { workspace = true }
 
 [lints]
 workspace = true

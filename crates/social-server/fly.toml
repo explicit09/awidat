@@ -1,0 +1,54 @@
+# Fly.io deployment manifest for awidat-social-server.
+#
+# Set the region to match your Supabase project's region to minimise latency
+# between pg_net HTTP calls and this service.  Common Supabase regions:
+#   us-east-1 → iad  (Ashburn, VA)
+#   ap-southeast-1 → sin (Singapore)
+#   eu-west-1 → lhr  (London)
+#
+# Apply via: fly deploy --config crates/social-server/fly.toml
+
+app = "awidat-social"
+primary_region = "iad"  # ← change to match your Supabase region
+
+[build]
+  dockerfile = "crates/social-server/Dockerfile"
+
+[env]
+  BIND_ADDR = "0.0.0.0:3000"
+  SOCIAL_FIRING_ENABLED = "false"   # Phase 4 flips this to "true"
+  STORAGE_BUCKET = "artifacts"
+
+# Secrets (set via `fly secrets set`, never committed):
+#   DATABASE_URL         — Supavisor session-pooler URL
+#   SERVICE_SHARED_SECRET — bearer token pg_net sends to /internal/tick
+#   SUPABASE_URL         — project URL (https://<ref>.supabase.co)
+#   SUPABASE_SERVICE_KEY — service_role key
+#   (Phase 2 adds: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, TOKEN_ENCRYPTION_KEY)
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    tls_skip_verify = false
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

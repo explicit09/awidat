@@ -10,6 +10,7 @@ pub mod job;
 pub mod model;
 pub mod oauth;
 pub mod oauth_url;
+pub mod pg_store;
 pub mod provider;
 pub mod publish_service;
 pub mod sqlite_store;
