@@ -1,4 +1,7 @@
-use crate::model::{ConnectedAccount, ConnectedAccountStatus, OwnerRef};
+use crate::model::{
+    CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
+    PublishJobEvent,
+};
 use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
 use crate::store::{SocialStore, SocialStoreError};
 use crate::token::TokenSecret;
@@ -223,6 +226,50 @@ impl SocialStore for SqliteSocialStore {
             .ok_or(SocialStoreError::NotFound)
             .and_then(|payload_json| from_json(&payload_json))
     }
+
+    fn save_campaign_variant_target(
+        &mut self,
+        _target: CampaignVariantTarget,
+    ) -> Result<(), SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn campaign_variant_target(
+        &self,
+        _id: &str,
+    ) -> Result<CampaignVariantTarget, SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn save_publish_job(&mut self, _job: PublishJob) -> Result<(), SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn publish_job(&self, _id: &str) -> Result<PublishJob, SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn claim_due_publish_jobs(
+        &mut self,
+        _now: i64,
+        _limit: usize,
+    ) -> Result<Vec<PublishJob>, SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn append_publish_job_event(
+        &mut self,
+        _event: PublishJobEvent,
+    ) -> Result<(), SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
+
+    fn publish_job_events(
+        &self,
+        _publish_job_id: &str,
+    ) -> Result<Vec<PublishJobEvent>, SocialStoreError> {
+        Err(publish_storage_pending_error())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -318,6 +365,10 @@ fn is_constraint_error(err: &RusqliteError) -> bool {
         RusqliteError::SqliteFailure(error, _)
             if error.code == ErrorCode::ConstraintViolation
     )
+}
+
+fn publish_storage_pending_error() -> SocialStoreError {
+    SocialStoreError::Storage("sqlite publish storage is pending Task 3".into())
 }
 
 #[cfg(test)]
