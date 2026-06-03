@@ -11,6 +11,7 @@ use awidat_desktop_protocol::Transcript;
 use awidat_proto::otio::Timeline;
 use awidat_render::JobManager;
 use awidat_render_gpu::{GpuTransitionRenderer, TransitionShader};
+use awidat_social::sqlite_store::SqliteSocialStore;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +44,10 @@ pub struct AwidatState {
     /// Defaulted from `AWIDAT_DESKTOP_PROJECT` env var on startup so
     /// dev runs work without configuring.
     pub project_root: Mutex<Option<PathBuf>>,
+    /// Server-backed social publishing store (file-backed SQLite under the
+    /// app data dir). `None` until initialized in the Tauri `.setup()` hook.
+    /// Guards all `SocialApi` calls from the `social_*` commands.
+    pub social: Mutex<Option<SqliteSocialStore>>,
     /// In-flight long jobs (yt-dlp / indexing) keyed by job-item id,
     /// so a `cancel_job` command can find them. Tracking by id rather
     /// than a single global slot lets concurrent jobs run (e.g. an

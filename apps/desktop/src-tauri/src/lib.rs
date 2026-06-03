@@ -110,6 +110,23 @@ pub fn run() {
                     project_root,
                 );
             }
+
+            // Open the server-backed social publishing store under the app data
+            // dir and park it in AwidatState for the `social_*` commands. The
+            // setup closure is sync, so use `blocking_lock()` like the
+            // `project_root` block above.
+            {
+                let data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|err| format!("resolve app data dir: {err}"))?;
+                std::fs::create_dir_all(&data_dir)
+                    .map_err(|err| format!("create app data dir: {err}"))?;
+                let social_path = data_dir.join("social.sqlite");
+                let store = awidat_social::sqlite_store::SqliteSocialStore::open(&social_path)
+                    .map_err(|err| format!("open social store: {err}"))?;
+                *app.state::<AwidatState>().social.blocking_lock() = Some(store);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -254,6 +271,20 @@ pub fn run() {
             commands::publishing::set_provider_client_credentials,
             commands::publishing::get_provider_client_credentials,
             commands::publishing::get_publishing_credentials_path,
+            commands::social::social_providers,
+            commands::social::social_accounts,
+            commands::social::social_oauth_start,
+            commands::social::social_oauth_complete,
+            commands::social::social_disconnect_account,
+            commands::social::social_bind_target,
+            commands::social::social_validate_target,
+            commands::social::social_schedule_target,
+            commands::social::social_publish_job,
+            commands::social::social_cancel_job,
+            commands::social::social_retry_job,
+            commands::social::social_account_audit,
+            commands::social::social_execute_upload,
+            commands::social::social_poll_status,
         ])
         .build(tauri::generate_context!());
 

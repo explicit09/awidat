@@ -1,56 +1,50 @@
 import { CalendarClock, CheckCircle2, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { DeliveryTargetKey } from "../../app/deliveryTargets";
 import type { RenderQueueEntry } from "../../app/renderQueue";
+import { approvalSummary, type CampaignType } from "../../campaign/manifest";
+import { planCampaignFromDelivery } from "../../campaign/planner";
+import {
+  campaignUploadRequests,
+  startCampaignUploads,
+} from "../../campaign/publisher";
+import { useCampaignStore } from "../../campaign/store";
 import { Button, Card, Inline, Stack, StatusPill, cn } from "../../ui";
 import { TARGET_META } from "./targetMeta";
-import type { DeliveryTargetKey } from "./types";
 
 type CampaignApprovalPanelProps = {
-  sourceAssetId: string;
+  sourceAssetId: string | null;
   selectedTargets: DeliveryTargetKey[];
   renderEntries: RenderQueueEntry[];
 };
-
-// Session-local fallback until the campaign manifest/store/planner modules land.
-type CampaignApprovalState = "draft" | "approved" | "changes_requested";
-type CampaignPlatform = Extract<DeliveryTargetKey, "youtube" | "tiktok" | "instagram">;
-
-type LocalCampaignItem = {
-  itemId: string;
-  title: string;
-  kind: "long_form" | "short";
-  approvalState: CampaignApprovalState;
-};
-
-type LocalCampaignVariant = {
-  variantId: string;
-  itemId: string;
-  platform: CampaignPlatform;
-  status: "draft" | "approved";
-};
-
-type LocalCampaign = {
-  campaignId: string;
-  sourceAssetId: string;
-  campaignType: "podcast" | "shorts";
-  title: string;
-  items: LocalCampaignItem[];
-  platformVariants: LocalCampaignVariant[];
-  approvalState: CampaignApprovalState;
-};
-
-const PUBLISHING_TARGETS = new Set<DeliveryTargetKey>([
-  "youtube",
-  "tiktok",
-  "instagram",
-]);
 
 export function CampaignApprovalPanel({
   sourceAssetId,
   selectedTargets,
   renderEntries,
 }: CampaignApprovalPanelProps) {
-  const [campaign, setCampaign] = useState<LocalCampaign | null>(null);
+  const [campaignType, setCampaignType] = useState<CampaignType>("podcast");
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const campaigns = useCampaignStore((state) => state.campaigns);
+  const upsertCampaign = useCampaignStore((state) => state.upsertCampaign);
+  const approveItem = useCampaignStore((state) => state.approveItem);
+  const requestChanges = useCampaignStore((state) => state.requestChanges);
+  const approveVariant = useCampaignStore((state) => state.approveVariant);
+  const setVariantPublishJob = useCampaignStore(
+    (state) => state.setVariantPublishJob,
+  );
+  const active = useMemo(
+    () =>
+      sourceAssetId
+        ?
+      campaigns
+        .filter((campaign) => campaign.sourceAssetId === sourceAssetId)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+        : undefined,
+    [campaigns, sourceAssetId],
+  );
   const readyEntries = useMemo(
     () =>
       renderEntries.filter(
@@ -61,60 +55,55 @@ export function CampaignApprovalPanel({
       ),
     [renderEntries],
   );
-  const publishingTargets = useMemo(
-    () =>
-      selectedTargets.filter((target): target is CampaignPlatform =>
-        PUBLISHING_TARGETS.has(target),
-      ),
-    [selectedTargets],
+  const canCreate =
+    sourceAssetId !== null &&
+    readyEntries.length > 0 &&
+    selectedTargets.length > 0;
+  const summary = useMemo(
+    () => (active ? approvalSummary(active) : undefined),
+    [active],
   );
-  const canCreate = readyEntries.length > 0 && publishingTargets.length > 0;
-  const summary = useMemo(() => summarizeCampaign(campaign), [campaign]);
+  const uploadRequests = useMemo(
+    () => (active ? campaignUploadRequests(active, renderEntries) : []),
+    [active, renderEntries],
+  );
 
   function createLocalCampaign() {
-    if (!canCreate) return;
-    setCampaign(createCampaignDraft(sourceAssetId, publishingTargets, readyEntries));
+    if (!canCreate || !sourceAssetId) return;
+    const campaign = planCampaignFromDelivery({
+      campaignType,
+      sourceAssetId,
+      title:
+        campaignType === "podcast"
+          ? "Podcast rollout campaign"
+          : "Shorts campaign",
+      selectedTargets,
+      renderEntries,
+    });
+    upsertCampaign(campaign);
   }
 
-  function approveItem(itemId: string) {
-    setCampaign((current) =>
-      current
-        ? refreshCampaignApproval({
-            ...current,
-            items: current.items.map((item) =>
-              item.itemId === itemId ? { ...item, approvalState: "approved" } : item,
-            ),
-          })
-        : current,
-    );
-  }
-
-  function requestChanges(itemId: string) {
-    setCampaign((current) =>
-      current
-        ? refreshCampaignApproval({
-            ...current,
-            items: current.items.map((item) =>
-              item.itemId === itemId
-                ? { ...item, approvalState: "changes_requested" }
-                : item,
-            ),
-          })
-        : current,
-    );
-  }
-
-  function approveVariant(variantId: string) {
-    setCampaign((current) =>
-      current
-        ? refreshCampaignApproval({
-            ...current,
-            platformVariants: current.platformVariants.map((variant) =>
-              variant.variantId === variantId ? { ...variant, status: "approved" } : variant,
-            ),
-          })
-        : current,
-    );
+  async function publishApproved() {
+    if (!active || uploadRequests.length === 0) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      await startCampaignUploads(active, renderEntries, invoke, {
+        onStarted: (started) => {
+          for (const request of started) {
+            setVariantPublishJob(
+              active.campaignId,
+              request.variantId,
+              request.jobId,
+            );
+          }
+        },
+      });
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPublishing(false);
+    }
   }
 
   return (
@@ -127,17 +116,17 @@ export function CampaignApprovalPanel({
               Campaign
             </span>
           </Inline>
-          {campaign ? (
+          {active ? (
             <StatusPill
               family="proposal"
-              state={campaign.approvalState === "approved" ? "accepted" : "proposed"}
+              state={active.approvalState === "approved" ? "accepted" : "proposed"}
               size="sm"
-              label={campaign.approvalState === "approved" ? "Approved" : "Draft"}
+              label={active.approvalState === "approved" ? "Approved" : "Draft"}
             />
           ) : null}
         </Inline>
 
-        {campaign && summary ? (
+        {active && summary ? (
           <Stack gap="2">
             <Inline
               gap="2"
@@ -147,11 +136,12 @@ export function CampaignApprovalPanel({
               <CalendarClock size={14} aria-hidden="true" />
               <span>
                 {summary.totalItems} item{summary.totalItems === 1 ? "" : "s"} ·{" "}
-                {summary.totalVariants} platform variant{summary.totalVariants === 1 ? "" : "s"}
+                {summary.totalVariants} platform variant
+                {summary.totalVariants === 1 ? "" : "s"}
               </span>
             </Inline>
             <Stack gap="2">
-              {campaign.items.map((item) => (
+              {active.items.map((item) => (
                 <div
                   key={item.itemId}
                   className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2 text-[var(--text-caption)]"
@@ -167,14 +157,16 @@ export function CampaignApprovalPanel({
                   <Inline gap="2" className="mt-2">
                     <button
                       type="button"
-                      onClick={() => approveItem(item.itemId)}
+                      onClick={() => approveItem(active.campaignId, item.itemId)}
                       className="rounded-[var(--radius-sm)] border border-[rgba(32,201,151,0.45)] bg-[rgba(32,201,151,0.12)] px-2 py-1 text-[var(--color-success)] hover:bg-[rgba(32,201,151,0.18)]"
                     >
                       Approve item
                     </button>
                     <button
                       type="button"
-                      onClick={() => requestChanges(item.itemId)}
+                      onClick={() =>
+                        requestChanges(active.campaignId, item.itemId)
+                      }
                       className="rounded-[var(--radius-sm)] border border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.1)] px-2 py-1 text-[var(--color-warning)] hover:bg-[rgba(245,158,11,0.16)]"
                     >
                       Needs changes
@@ -184,11 +176,13 @@ export function CampaignApprovalPanel({
               ))}
             </Stack>
             <Inline gap="2" wrap="wrap">
-              {campaign.platformVariants.map((variant) => (
+              {active.platformVariants.map((variant) => (
                 <button
                   key={variant.variantId}
                   type="button"
-                  onClick={() => approveVariant(variant.variantId)}
+                  onClick={() =>
+                    approveVariant(active.campaignId, variant.variantId)
+                  }
                   className={cn(
                     "inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1 text-[var(--text-caption)] hover:border-[var(--color-border-strong)]",
                     variant.status === "approved"
@@ -203,11 +197,45 @@ export function CampaignApprovalPanel({
                 </button>
               ))}
             </Inline>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void publishApproved()}
+              disabled={uploadRequests.length === 0 || publishing}
+            >
+              {publishing
+                ? "Publishing..."
+                : `Publish approved (${uploadRequests.length})`}
+            </Button>
+            {publishError ? (
+              <p className="text-[var(--text-caption)] text-[var(--color-job-failed-text)]">
+                {publishError}
+              </p>
+            ) : null}
           </Stack>
         ) : (
           <Stack gap="2">
+            <Inline gap="2" wrap="wrap">
+              {(["podcast", "shorts"] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setCampaignType(type)}
+                  className={cn(
+                    "rounded-[var(--radius-sm)] border px-2 py-1 text-[var(--text-caption)]",
+                    campaignType === type
+                      ? "border-[var(--color-brand-secondary)] bg-[rgba(56,189,248,0.12)] text-[var(--color-text-primary)]"
+                      : "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-secondary)]",
+                  )}
+                >
+                  {type === "podcast" ? "Podcast campaign" : "Shorts campaign"}
+                </button>
+              ))}
+            </Inline>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              Render at least one video target, then create a local campaign for approval.
+              {sourceAssetId
+                ? "Render at least one video target, then create a local campaign for approval."
+                : "Load a project before creating a campaign."}
             </span>
             <Button
               size="sm"
@@ -222,60 +250,4 @@ export function CampaignApprovalPanel({
       </Stack>
     </Card>
   );
-}
-
-function createCampaignDraft(
-  sourceAssetId: string,
-  selectedTargets: CampaignPlatform[],
-  renderEntries: RenderQueueEntry[],
-): LocalCampaign {
-  const campaignType = selectedTargets.includes("youtube") ? "podcast" : "shorts";
-  const items = renderEntries.map((entry): LocalCampaignItem => ({
-    itemId: `${entry.id}:item`,
-    title: entry.label,
-    kind: entry.kind === "video_master" ? "long_form" : "short",
-    approvalState: "draft",
-  }));
-  return {
-    campaignId: `${sourceAssetId}:local-campaign`,
-    sourceAssetId,
-    campaignType,
-    title: campaignType === "podcast" ? "Podcast rollout campaign" : "Shorts campaign",
-    items,
-    platformVariants: items.flatMap((item) =>
-      selectedTargets.map((platform): LocalCampaignVariant => ({
-        variantId: `${item.itemId}:${platform}`,
-        itemId: item.itemId,
-        platform,
-        status: "draft",
-      })),
-    ),
-    approvalState: "draft",
-  };
-}
-
-function refreshCampaignApproval(campaign: LocalCampaign): LocalCampaign {
-  const allItemsApproved = campaign.items.every((item) => item.approvalState === "approved");
-  const allVariantsApproved = campaign.platformVariants.every(
-    (variant) => variant.status === "approved",
-  );
-  const anyChangesRequested = campaign.items.some(
-    (item) => item.approvalState === "changes_requested",
-  );
-  return {
-    ...campaign,
-    approvalState: anyChangesRequested
-      ? "changes_requested"
-      : allItemsApproved && allVariantsApproved
-        ? "approved"
-        : "draft",
-  };
-}
-
-function summarizeCampaign(campaign: LocalCampaign | null) {
-  if (!campaign) return null;
-  return {
-    totalItems: campaign.items.length,
-    totalVariants: campaign.platformVariants.length,
-  };
 }
