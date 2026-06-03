@@ -11,11 +11,15 @@
 
 use crate::account_service::{AccountServiceError, CompleteOAuthInput, SocialAccountService};
 use crate::model::{
-    AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider,
-    ProviderCapabilities, TeamAction, WorkspaceMemberRole,
+    AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
+    ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob, PublishJobEvent,
+    PublishJobEventType, PublishJobStatus, TeamAction, WorkspaceMemberRole,
 };
 use crate::oauth_url::OAuthProviderConfig;
 use crate::provider::{ProviderRegistry, ProviderState};
+use crate::publish_service::{
+    BindTargetInput, PublishService, PublishServiceError, ScheduleTargetInput,
+};
 use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::TeamPolicy;
 use crate::token::LocalTokenKeyProvider;
@@ -99,6 +103,18 @@ impl From<AccountServiceError> for SocialApiError {
         match error {
             AccountServiceError::Store(store) => SocialApiError::Store(store),
             other => SocialApiError::Account(other.to_string()),
+        }
+    }
+}
+
+impl From<PublishServiceError> for SocialApiError {
+    fn from(error: PublishServiceError) -> Self {
+        match error {
+            PublishServiceError::Store(store) => SocialApiError::Store(store),
+            // An owner mismatch detected by the domain service is an
+            // authorization failure from the caller's perspective.
+            PublishServiceError::OwnerMismatch => SocialApiError::Unauthorized,
+            other => SocialApiError::Publish(other.to_string()),
         }
     }
 }
@@ -219,6 +235,111 @@ pub struct OAuthCompleteResponse {
     pub account: AccountSummary,
 }
 
+/// `POST /campaigns/:campaign_id/variants/:variant_id/target` body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindTargetRequest {
+    pub target_id: String,
+    pub campaign_id: String,
+    pub variant_id: String,
+    pub connected_account_id: String,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
+/// `POST /campaigns/:campaign_id/variants/:variant_id/validate` body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidateTargetRequest {
+    pub target_id: String,
+    pub now: i64,
+}
+
+/// `POST /campaigns/:campaign_id/variants/:variant_id/schedule` body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleTargetRequest {
+    pub target_id: String,
+    pub job_id: String,
+    pub artifact_ref: String,
+    pub created_by: String,
+    pub now: i64,
+}
+
+/// Publish job state, safe to serialize to clients.
+///
+/// Carries only public job fields: never token rows. The `raw_error_ref` is a
+/// pointer to a server-side error blob, not the raw provider error body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishJobResponse {
+    pub id: String,
+    pub campaign_id: String,
+    pub variant_id: String,
+    pub connected_account_id: String,
+    pub provider: Provider,
+    pub status: PublishJobStatus,
+    pub attempt_count: u32,
+    pub scheduled_for: i64,
+    pub provider_post_id: Option<String>,
+    pub provider_post_url: Option<String>,
+    pub normalized_error: Option<String>,
+    pub raw_error_ref: Option<String>,
+    pub requires_action_reason: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub events: Vec<PublishJobEventResponse>,
+}
+
+impl PublishJobResponse {
+    fn from_job(job: PublishJob, events: Vec<PublishJobEvent>) -> Self {
+        Self {
+            id: job.id,
+            campaign_id: job.campaign_id,
+            variant_id: job.variant_id,
+            connected_account_id: job.connected_account_id,
+            provider: job.provider,
+            status: job.status,
+            attempt_count: job.attempt_count,
+            scheduled_for: job.scheduled_for,
+            provider_post_id: job.provider_post_id,
+            provider_post_url: job.provider_post_url,
+            normalized_error: job.normalized_error,
+            raw_error_ref: job.raw_error_ref,
+            requires_action_reason: job.requires_action_reason,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            events: events
+                .into_iter()
+                .map(PublishJobEventResponse::from)
+                .collect(),
+        }
+    }
+}
+
+/// Public audit-event summary, safe to serialize to clients.
+///
+/// Event `metadata` is forwarded as produced by the domain services, which
+/// already keep provider token material out of event payloads (see the upload
+/// and status service token-safety tests).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishJobEventResponse {
+    pub id: String,
+    pub event_type: PublishJobEventType,
+    pub message: String,
+    pub metadata: serde_json::Value,
+    pub created_at: i64,
+}
+
+impl From<PublishJobEvent> for PublishJobEventResponse {
+    fn from(event: PublishJobEvent) -> Self {
+        Self {
+            id: event.id,
+            event_type: event.event_type,
+            message: event.message,
+            metadata: event.metadata,
+            created_at: event.created_at,
+        }
+    }
+}
+
 /// Static, framework-neutral API facade.
 ///
 /// Like the existing domain services, `SocialApi` is not an instantiated server
@@ -312,6 +433,176 @@ impl SocialApi {
             SocialAccountService::disconnect_account(store, account_id, &owner.owner, now)?;
         Ok(account.into())
     }
+
+    /// `POST /campaigns/:campaign_id/variants/:variant_id/target`: bind a
+    /// connected account to a campaign variant.
+    pub fn bind_target(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        request: BindTargetRequest,
+    ) -> Result<CampaignVariantTarget, SocialApiError> {
+        let owner = account_owner(store, &request.connected_account_id)?;
+        actor.authorize(&owner, TeamAction::SchedulePublish)?;
+        let target = PublishService::bind_target(
+            store,
+            &owner,
+            BindTargetInput {
+                id: request.target_id,
+                campaign_id: request.campaign_id,
+                variant_id: request.variant_id,
+                connected_account_id: request.connected_account_id,
+                platform_fields: request.platform_fields,
+                scheduled_for: request.scheduled_for,
+                now: request.now,
+            },
+        )?;
+        Ok(target)
+    }
+
+    /// `POST /campaigns/:campaign_id/variants/:variant_id/validate`: run the
+    /// provider capability/eligibility validation rules for a bound target.
+    pub fn validate_target(
+        store: &mut impl SocialStore,
+        registry: &ProviderRegistry,
+        actor: &ApiActor,
+        request: ValidateTargetRequest,
+    ) -> Result<CampaignVariantTarget, SocialApiError> {
+        let target = store.campaign_variant_target(&request.target_id)?;
+        // Reject unknown providers before mutating any state.
+        registry
+            .get(&target.provider)
+            .map_err(|err| SocialApiError::Publish(err.to_string()))?;
+        let owner = account_owner(store, &target.connected_account_id)?;
+        actor.authorize(&owner, TeamAction::SchedulePublish)?;
+        PublishService::validate_target(store, &owner, &request.target_id, request.now)?;
+        let validated = store.campaign_variant_target(&request.target_id)?;
+        Ok(validated)
+    }
+
+    /// `POST /campaigns/:campaign_id/variants/:variant_id/schedule`: create a
+    /// scheduled publish job for a validated target.
+    pub fn schedule_target(
+        store: &mut impl SocialStore,
+        registry: &ProviderRegistry,
+        actor: &ApiActor,
+        request: ScheduleTargetRequest,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let target = store.campaign_variant_target(&request.target_id)?;
+        registry
+            .get(&target.provider)
+            .map_err(|err| SocialApiError::Publish(err.to_string()))?;
+        let owner = account_owner(store, &target.connected_account_id)?;
+        actor.authorize(&owner, TeamAction::SchedulePublish)?;
+        let job = PublishService::schedule_target(
+            store,
+            &owner,
+            ScheduleTargetInput {
+                job_id: request.job_id,
+                target_id: request.target_id,
+                artifact_ref: request.artifact_ref,
+                created_by: request.created_by,
+                now: request.now,
+            },
+        )?;
+        job_response(store, job)
+    }
+
+    /// `GET /publish-jobs/:id`: read a publish job and its audit trail.
+    pub fn publish_job(
+        store: &impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = store.publish_job(job_id)?;
+        let account_owner = account_owner(store, &job.connected_account_id)?;
+        // The requested owner must match the job's account owner, and the actor
+        // must be permitted to read for that owner.
+        if account_owner != owner.owner {
+            return Err(SocialApiError::Unauthorized);
+        }
+        authorize_read(actor, &owner.owner)?;
+        let events = store.publish_job_events(job_id)?;
+        Ok(PublishJobResponse::from_job(job, events))
+    }
+
+    /// `POST /publish-jobs/:id/cancel`: cancel a publish job.
+    pub fn cancel_job(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+        now: i64,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        authorize_job_owner(store, actor, owner, job_id, TeamAction::CancelPublish)?;
+        let job = PublishService::cancel_job(store, &owner.owner, job_id, now)?;
+        job_response(store, job)
+    }
+
+    /// `POST /publish-jobs/:id/retry`: retry a failed or action-required job.
+    pub fn retry_job(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+        now: i64,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        authorize_job_owner(store, actor, owner, job_id, TeamAction::RetryPublish)?;
+        let job = PublishService::retry_job(store, &owner.owner, job_id, now)?;
+        job_response(store, job)
+    }
+}
+
+/// Returns the owner of the connected account, mapping a missing account to a
+/// store not-found error.
+fn account_owner(
+    store: &impl SocialStore,
+    connected_account_id: &str,
+) -> Result<OwnerRef, SocialApiError> {
+    Ok(store.connected_account(connected_account_id)?.owner)
+}
+
+/// Authorizes a read for the given owner. User-owned reads require the matching
+/// user; workspace-owned reads require any membership role (Owner, Admin,
+/// Publisher, or Viewer) in that workspace.
+fn authorize_read(actor: &ApiActor, owner: &OwnerRef) -> Result<(), SocialApiError> {
+    let allowed = match owner {
+        OwnerRef::User(user_id) => *user_id == actor.user_id,
+        OwnerRef::Workspace(workspace_id) => actor.workspace_roles.iter().any(|role| {
+            role.workspace_id == *workspace_id && role.user_id == actor.user_id
+        }),
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(SocialApiError::Unauthorized)
+    }
+}
+
+/// Confirms the job belongs to the requested owner, then authorizes the actor
+/// to perform `action` for that owner.
+fn authorize_job_owner(
+    store: &impl SocialStore,
+    actor: &ApiActor,
+    owner: &ApiOwner,
+    job_id: &str,
+    action: TeamAction,
+) -> Result<(), SocialApiError> {
+    let job = store.publish_job(job_id)?;
+    let job_owner = account_owner(store, &job.connected_account_id)?;
+    if job_owner != owner.owner {
+        return Err(SocialApiError::Unauthorized);
+    }
+    actor.authorize(&owner.owner, action)
+}
+
+/// Builds a [`PublishJobResponse`] by loading the job's audit events.
+fn job_response(
+    store: &impl SocialStore,
+    job: PublishJob,
+) -> Result<PublishJobResponse, SocialApiError> {
+    let events = store.publish_job_events(&job.id)?;
+    Ok(PublishJobResponse::from_job(job, events))
 }
 
 #[cfg(test)]
@@ -319,7 +610,8 @@ mod tests {
     use super::*;
     use crate::model::{
         AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef,
-        Provider, ProviderCapabilities, TeamRole, WorkspaceMemberRole,
+        Provider, ProviderCapabilities, PublishJobEventType, PublishJobStatus, TeamRole,
+        ValidationState, WorkspaceMemberRole,
     };
     use crate::oauth::OAuthConnectionStatus;
     use crate::provider::ProviderRegistry;
@@ -586,5 +878,244 @@ mod tests {
         )
         .unwrap_or_else(|err| panic!("admin disconnect: {err}"));
         assert_eq!(disabled.status, ConnectedAccountStatus::Disabled);
+    }
+
+    // --- Publish route facade -------------------------------------------------
+
+    fn bind_request(account_id: &str) -> BindTargetRequest {
+        BindTargetRequest {
+            target_id: "target_1".into(),
+            campaign_id: "campaign_1".into(),
+            variant_id: "variant_1".into(),
+            connected_account_id: account_id.into(),
+            platform_fields: serde_json::json!({"privacy": "private"}),
+            scheduled_for: 2_000,
+            now: 1_000,
+        }
+    }
+
+    /// Bind, validate, and schedule a job for `owner`'s `acct_1`, returning the
+    /// scheduled job response.
+    fn schedule_job(
+        store: &mut InMemorySocialStore,
+        registry: &ProviderRegistry,
+        actor: &ApiActor,
+        owner: OwnerRef,
+    ) -> PublishJobResponse {
+        store
+            .save_connected_account(connected_account("acct_1", owner))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        SocialApi::bind_target(store, actor, bind_request("acct_1"))
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+        SocialApi::validate_target(
+            store,
+            registry,
+            actor,
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+        SocialApi::schedule_target(
+            store,
+            registry,
+            actor,
+            ScheduleTargetRequest {
+                target_id: "target_1".into(),
+                job_id: "job_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"))
+    }
+
+    #[test]
+    fn publish_api_binds_validates_and_schedules_target() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+
+        let target = SocialApi::bind_target(&mut store, &user_actor(), bind_request("acct_1"))
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+        assert_eq!(target.validation_state, ValidationState::Pending);
+
+        let validated = SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+        assert_eq!(validated.validation_state, ValidationState::Valid);
+
+        let job = SocialApi::schedule_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ScheduleTargetRequest {
+                target_id: "target_1".into(),
+                job_id: "job_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"));
+
+        assert_eq!(job.id, "job_1");
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.events.len(), 1);
+        assert_eq!(job.events[0].event_type, PublishJobEventType::Scheduled);
+
+        let looked_up = SocialApi::publish_job(
+            &store,
+            &user_actor(),
+            &ApiOwner { owner: user_owner() },
+            "job_1",
+        )
+        .unwrap_or_else(|err| panic!("publish job lookup: {err}"));
+        assert_eq!(looked_up, job);
+    }
+
+    #[test]
+    fn publish_api_bind_rejects_foreign_user() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+
+        assert_eq!(
+            SocialApi::bind_target(&mut store, &other_user_actor(), bind_request("acct_1")),
+            Err(SocialApiError::Unauthorized)
+        );
+        assert!(store.campaign_variant_target("target_1").is_err());
+    }
+
+    #[test]
+    fn publish_api_publish_job_rejects_wrong_owner() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        // Same actor but asking under the wrong owner key is rejected.
+        assert_eq!(
+            SocialApi::publish_job(
+                &store,
+                &user_actor(),
+                &ApiOwner {
+                    owner: OwnerRef::Workspace("workspace_1".into())
+                },
+                "job_1",
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn publish_api_cancel_and_retry_are_authorized() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        // Foreign user cannot cancel.
+        assert_eq!(
+            SocialApi::cancel_job(
+                &mut store,
+                &other_user_actor(),
+                &ApiOwner { owner: user_owner() },
+                "job_1",
+                2_200,
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+
+        let cancelled = SocialApi::cancel_job(
+            &mut store,
+            &user_actor(),
+            &ApiOwner { owner: user_owner() },
+            "job_1",
+            2_200,
+        )
+        .unwrap_or_else(|err| panic!("cancel job: {err}"));
+        assert_eq!(cancelled.status, PublishJobStatus::Cancelled);
+
+        // Cancelled job is not retryable; surfaced as a publish error.
+        assert_eq!(
+            SocialApi::retry_job(
+                &mut store,
+                &user_actor(),
+                &ApiOwner { owner: user_owner() },
+                "job_1",
+                2_300,
+            ),
+            Err(SocialApiError::Publish(
+                PublishServiceError::JobNotRetryable.to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn publish_api_returns_job_without_token_material() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        let job = schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        let json =
+            serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
+        assert!(!json.contains("encrypted"));
+    }
+
+    #[test]
+    fn publish_api_workspace_publisher_can_schedule_but_not_disconnect_accounts() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        let publisher = ApiActor::new(
+            "publisher_user",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "publisher_user",
+                TeamRole::Publisher,
+            )],
+        );
+
+        let job = schedule_job(&mut store, &registry, &publisher, workspace_owner.clone());
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+
+        let cancelled = SocialApi::cancel_job(
+            &mut store,
+            &publisher,
+            &ApiOwner {
+                owner: workspace_owner.clone(),
+            },
+            "job_1",
+            2_200,
+        )
+        .unwrap_or_else(|err| panic!("publisher cancel: {err}"));
+        assert_eq!(cancelled.status, PublishJobStatus::Cancelled);
+
+        // A publisher cannot manage accounts.
+        assert_eq!(
+            SocialApi::disconnect_account(
+                &mut store,
+                &publisher,
+                &ApiOwner {
+                    owner: workspace_owner,
+                },
+                "acct_1",
+                2_300,
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
     }
 }
