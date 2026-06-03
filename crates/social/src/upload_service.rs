@@ -69,6 +69,8 @@ impl UploadService {
             serde_json::json!({"provider": job.provider.as_str()}),
             input.now,
         )?;
+        let upload_in_progress = job.start_provider_processing(input.now);
+        store.save_publish_job(upload_in_progress.clone())?;
 
         let result = adapter.upload(&request);
         let next = match result {
@@ -79,9 +81,9 @@ impl UploadService {
                     "published"
                 };
                 let next = if result.processing {
-                    job.processing(result.provider_post_id.clone(), input.now)
+                    upload_in_progress.processing(result.provider_post_id.clone(), input.now)
                 } else {
-                    job.publish(
+                    upload_in_progress.publish(
                         result.provider_post_id.clone(),
                         result.provider_post_url.clone(),
                         input.now,
@@ -91,7 +93,7 @@ impl UploadService {
                 append_event(
                     store,
                     &next.id,
-                    PublishJobEventType::Claimed,
+                    PublishJobEventType::Uploaded,
                     PublishJobActorType::Provider,
                     "provider upload completed",
                     serde_json::json!({
@@ -113,7 +115,7 @@ impl UploadService {
                     UploadAdapterError::MissingUploadToken => "missing_upload_token".into(),
                     _ => unreachable!("matched requires action upload errors"),
                 };
-                let next = job.requires_action(reason.clone(), input.now);
+                let next = upload_in_progress.requires_action(reason.clone(), input.now);
                 store.save_publish_job(next.clone())?;
                 append_event(
                     store,
@@ -130,7 +132,11 @@ impl UploadService {
                 next
             }
             Err(UploadAdapterError::MediaConstraintFailed { reason }) => {
-                let next = job.fail(reason.clone(), "provider_error_ref_unavailable", input.now);
+                let next = upload_in_progress.fail(
+                    reason.clone(),
+                    "provider_error_ref_unavailable",
+                    input.now,
+                );
                 store.save_publish_job(next.clone())?;
                 append_event(
                     store,
@@ -147,7 +153,8 @@ impl UploadService {
                 next
             }
             Err(UploadAdapterError::NetworkOrServer { message }) => {
-                let next = job.fail("network_or_server_error", message.clone(), input.now);
+                let next =
+                    upload_in_progress.fail("network_or_server_error", message.clone(), input.now);
                 store.save_publish_job(next.clone())?;
                 append_event(
                     store,
@@ -208,6 +215,7 @@ fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
         PublishJobEventType::Validated => "validated",
         PublishJobEventType::Scheduled => "scheduled",
         PublishJobEventType::Claimed => "claimed",
+        PublishJobEventType::Uploaded => "uploaded",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
         PublishJobEventType::RequiresAction => "requires_action",
@@ -219,10 +227,11 @@ fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
 mod tests {
     use super::*;
     use crate::model::{
-        AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef,
-        Provider, ProviderCapabilities, PublishJob, PublishJobActorType, PublishJobEventType,
-        PublishJobStatus,
+        AccountEligibility, AccountKind, CampaignVariantTarget, ConnectedAccount,
+        ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob,
+        PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus,
     };
+    use crate::oauth::{OAuthConnection, OAuthConnectionStatus};
     use crate::store::{InMemorySocialStore, SocialStore};
     use crate::token::{TestKeyProvider, TokenSecret};
     use crate::upload_adapter::{UploadAdapter, UploadAdapterError, UploadRequest, UploadResult};
@@ -322,6 +331,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event_type, PublishJobEventType::Claimed);
         assert_eq!(events[0].actor_type, PublishJobActorType::Worker);
+        assert_eq!(events[1].event_type, PublishJobEventType::Uploaded);
         assert_eq!(events[1].actor_type, PublishJobActorType::Provider);
         assert_eq!(events[1].metadata["provider_post_id"], "yt_video_1");
         assert_eq!(
@@ -449,6 +459,37 @@ mod tests {
         assert!(!events_json.contains("refresh_token"));
     }
 
+    #[test]
+    fn execute_upload_persists_processing_before_provider_success_can_fail() {
+        let mut store = FaultyStore::new(store_with_claimed_job(), 2);
+        let adapter = RecordingUploadAdapter::published();
+
+        assert_eq!(
+            UploadService::execute_claimed_job(
+                &mut store,
+                &adapter,
+                ExecuteUploadInput {
+                    job_id: "job_1".into(),
+                    title: "Launch clip".into(),
+                    description: None,
+                    tags: Vec::new(),
+                    thumbnail_ref: None,
+                    now: 2_000,
+                },
+            ),
+            Err(UploadServiceError::Store(SocialStoreError::Storage(
+                "publish save failed".into()
+            )))
+        );
+        assert_eq!(adapter.call_count(), 1);
+        let persisted = store
+            .inner
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("load job: {err}"));
+        assert_eq!(persisted.status, PublishJobStatus::Processing);
+        assert_eq!(persisted.provider_post_id, None);
+    }
+
     fn store_with_claimed_job() -> InMemorySocialStore {
         let mut store = InMemorySocialStore::default();
         store
@@ -510,5 +551,128 @@ mod tests {
             1_800,
             "user_1",
         )
+    }
+
+    struct FaultyStore {
+        inner: InMemorySocialStore,
+        fail_on_publish_save_call: usize,
+        publish_save_calls: usize,
+    }
+
+    impl FaultyStore {
+        fn new(inner: InMemorySocialStore, fail_on_publish_save_call: usize) -> Self {
+            Self {
+                inner,
+                fail_on_publish_save_call,
+                publish_save_calls: 0,
+            }
+        }
+    }
+
+    impl SocialStore for FaultyStore {
+        fn save_oauth_connection(
+            &mut self,
+            connection: OAuthConnection,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_oauth_connection(connection)
+        }
+
+        fn oauth_connection(&self, id: &str) -> Result<OAuthConnection, SocialStoreError> {
+            self.inner.oauth_connection(id)
+        }
+
+        fn update_oauth_status(
+            &mut self,
+            id: &str,
+            status: OAuthConnectionStatus,
+        ) -> Result<OAuthConnection, SocialStoreError> {
+            self.inner.update_oauth_status(id, status)
+        }
+
+        fn save_connected_account(
+            &mut self,
+            account: ConnectedAccount,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_connected_account(account)
+        }
+
+        fn connected_account(&self, id: &str) -> Result<ConnectedAccount, SocialStoreError> {
+            self.inner.connected_account(id)
+        }
+
+        fn connected_accounts_for_owner(
+            &self,
+            owner: &OwnerRef,
+        ) -> Result<Vec<ConnectedAccount>, SocialStoreError> {
+            self.inner.connected_accounts_for_owner(owner)
+        }
+
+        fn disable_connected_account(
+            &mut self,
+            id: &str,
+            owner: &OwnerRef,
+            now: i64,
+        ) -> Result<ConnectedAccount, SocialStoreError> {
+            self.inner.disable_connected_account(id, owner, now)
+        }
+
+        fn save_token_secret(&mut self, secret: TokenSecret) -> Result<(), SocialStoreError> {
+            self.inner.save_token_secret(secret)
+        }
+
+        fn token_secret_for_account(
+            &self,
+            account_id: &str,
+        ) -> Result<TokenSecret, SocialStoreError> {
+            self.inner.token_secret_for_account(account_id)
+        }
+
+        fn save_campaign_variant_target(
+            &mut self,
+            target: CampaignVariantTarget,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.save_campaign_variant_target(target)
+        }
+
+        fn campaign_variant_target(
+            &self,
+            id: &str,
+        ) -> Result<CampaignVariantTarget, SocialStoreError> {
+            self.inner.campaign_variant_target(id)
+        }
+
+        fn save_publish_job(&mut self, job: PublishJob) -> Result<(), SocialStoreError> {
+            self.publish_save_calls += 1;
+            if self.publish_save_calls == self.fail_on_publish_save_call {
+                return Err(SocialStoreError::Storage("publish save failed".into()));
+            }
+            self.inner.save_publish_job(job)
+        }
+
+        fn publish_job(&self, id: &str) -> Result<PublishJob, SocialStoreError> {
+            self.inner.publish_job(id)
+        }
+
+        fn claim_due_publish_jobs(
+            &mut self,
+            now: i64,
+            limit: usize,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.claim_due_publish_jobs(now, limit)
+        }
+
+        fn append_publish_job_event(
+            &mut self,
+            event: PublishJobEvent,
+        ) -> Result<(), SocialStoreError> {
+            self.inner.append_publish_job_event(event)
+        }
+
+        fn publish_job_events(
+            &self,
+            publish_job_id: &str,
+        ) -> Result<Vec<PublishJobEvent>, SocialStoreError> {
+            self.inner.publish_job_events(publish_job_id)
+        }
     }
 }

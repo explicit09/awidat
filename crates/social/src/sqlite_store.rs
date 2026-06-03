@@ -599,6 +599,7 @@ fn publish_job_event_type_as_str(event_type: &PublishJobEventType) -> &'static s
         PublishJobEventType::Validated => "validated",
         PublishJobEventType::Scheduled => "scheduled",
         PublishJobEventType::Claimed => "claimed",
+        PublishJobEventType::Uploaded => "uploaded",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
         PublishJobEventType::RequiresAction => "requires_action",

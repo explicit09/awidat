@@ -111,6 +111,12 @@ impl PublishJob {
         self
     }
 
+    pub fn start_provider_processing(mut self, now: i64) -> Self {
+        self.status = PublishJobStatus::Processing;
+        self.updated_at = now;
+        self
+    }
+
     pub fn publish(
         mut self,
         provider_post_id: impl Into<String>,
