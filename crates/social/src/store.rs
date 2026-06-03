@@ -220,15 +220,16 @@ impl SocialStore for InMemorySocialStore {
         now: i64,
         limit: usize,
     ) -> Result<Vec<PublishJob>, SocialStoreError> {
-        let due_ids: Vec<String> = self
+        let mut due_jobs: Vec<(i64, String)> = self
             .publish_jobs
             .iter()
             .filter(|(_, job)| {
                 job.status == PublishJobStatus::Scheduled && job.scheduled_for <= now
             })
-            .take(limit)
-            .map(|(id, _)| id.clone())
+            .map(|(id, job)| (job.scheduled_for, id.clone()))
             .collect();
+        due_jobs.sort();
+        let due_ids: Vec<String> = due_jobs.into_iter().take(limit).map(|(_, id)| id).collect();
 
         let mut claimed = Vec::with_capacity(due_ids.len());
         for id in due_ids {
@@ -418,10 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn claims_due_scheduled_publish_jobs_once_in_id_order() {
+    fn claims_due_scheduled_publish_jobs_once_in_schedule_order() {
         let mut store = InMemorySocialStore::default();
         let due_b = publish_job("job_b", 1_900);
-        let due_a = publish_job("job_a", 1_800);
+        let due_a = publish_job("job_a", 1_000);
         let future = publish_job("job_c", 2_100);
 
         for job in [due_b, due_a, future.clone()] {
@@ -450,6 +451,33 @@ mod tests {
                 .claim_due_publish_jobs(2_000, 10)
                 .unwrap_or_else(|err| panic!("claim due publish jobs again: {err}")),
             Vec::<PublishJob>::new()
+        );
+    }
+
+    #[test]
+    fn claim_limit_respects_schedule_before_job_id_order() {
+        let mut store = InMemorySocialStore::default();
+        let later_by_schedule_first_by_id = publish_job("job_a", 1_900);
+        let earlier_by_schedule_second_by_id = publish_job("job_b", 1_000);
+
+        for job in [
+            later_by_schedule_first_by_id.clone(),
+            earlier_by_schedule_second_by_id,
+        ] {
+            store
+                .save_publish_job(job)
+                .unwrap_or_else(|err| panic!("save publish job: {err}"));
+        }
+
+        let claimed = store
+            .claim_due_publish_jobs(2_000, 1)
+            .unwrap_or_else(|err| panic!("claim due publish jobs: {err}"));
+
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, "job_b");
+        assert_eq!(
+            store.publish_job("job_a"),
+            Ok(later_by_schedule_first_by_id)
         );
     }
 
