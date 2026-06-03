@@ -2,6 +2,10 @@ use crate::model::Provider;
 use crate::upload_adapter::{
     UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest, UploadResult,
 };
+use crate::upload_status::{
+    UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError, UploadStatusRequest,
+    UploadStatusResult,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct YouTubeUploadRequest {
@@ -35,12 +39,55 @@ pub trait YouTubeUploadClient {
     ) -> Result<YouTubeUploadResponse, YouTubeUploadClientError>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YouTubeStatusRequest {
+    pub provider_post_id: String,
+    pub access_token_ref: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YouTubeStatusResponse {
+    pub video_id: String,
+    pub state: YouTubeProcessingState,
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum YouTubeProcessingState {
+    Processing,
+    Processed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum YouTubeStatusClientError {
+    NetworkOrServer(String),
+}
+
+pub trait YouTubeStatusClient {
+    fn poll_status(
+        &self,
+        request: &YouTubeStatusRequest,
+    ) -> Result<YouTubeStatusResponse, YouTubeStatusClientError>;
+}
+
 #[derive(Clone, Debug)]
 pub struct YouTubeUploadAdapter<C> {
     client: C,
 }
 
 impl<C> YouTubeUploadAdapter<C> {
+    pub fn new(client: C) -> Self {
+        Self { client }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct YouTubeStatusAdapter<C> {
+    client: C,
+}
+
+impl<C> YouTubeStatusAdapter<C> {
     pub fn new(client: C) -> Self {
         Self { client }
     }
@@ -87,11 +134,82 @@ impl<C: YouTubeUploadClient> UploadAdapter for YouTubeUploadAdapter<C> {
     }
 }
 
+impl<C: YouTubeStatusClient> UploadStatusAdapter for YouTubeStatusAdapter<C> {
+    fn provider(&self) -> Provider {
+        Provider::YouTube
+    }
+
+    fn poll_status(
+        &self,
+        request: &UploadStatusRequest,
+    ) -> Result<UploadStatusResult, UploadStatusAdapterError> {
+        if request.provider != Provider::YouTube {
+            return Err(UploadStatusAdapterError::ProviderMismatch);
+        }
+        let provider_post_id = request.provider_post_id.trim();
+        if provider_post_id.is_empty() {
+            return Err(UploadStatusAdapterError::MissingProviderPostId);
+        }
+
+        let youtube_request = YouTubeStatusRequest {
+            provider_post_id: provider_post_id.to_string(),
+            access_token_ref: request.access_token_ref.clone(),
+        };
+        let response = self
+            .client
+            .poll_status(&youtube_request)
+            .map_err(youtube_status_client_error)?;
+
+        Ok(match response.state {
+            YouTubeProcessingState::Processing => UploadStatusResult {
+                provider_post_id: response.video_id,
+                provider_post_url: None,
+                status: UploadProcessingStatus::Processing,
+                normalized_error: None,
+                raw_error_ref: None,
+            },
+            YouTubeProcessingState::Processed => UploadStatusResult {
+                provider_post_url: Some(format!(
+                    "https://www.youtube.com/watch?v={}",
+                    response.video_id
+                )),
+                provider_post_id: response.video_id,
+                status: UploadProcessingStatus::Published,
+                normalized_error: None,
+                raw_error_ref: None,
+            },
+            YouTubeProcessingState::Failed => {
+                let failure_reason = response
+                    .failure_reason
+                    .unwrap_or_else(|| "unknown".to_string());
+                UploadStatusResult {
+                    raw_error_ref: Some(format!(
+                        "youtube/status/{}/{}",
+                        response.video_id, failure_reason
+                    )),
+                    provider_post_id: response.video_id,
+                    provider_post_url: None,
+                    status: UploadProcessingStatus::Failed,
+                    normalized_error: Some("platform_processing_failed".into()),
+                }
+            }
+        })
+    }
+}
+
 fn youtube_privacy(privacy: &UploadPrivacy) -> &'static str {
     match privacy {
         UploadPrivacy::Private => "private",
         UploadPrivacy::Unlisted => "unlisted",
         UploadPrivacy::Public => "public",
+    }
+}
+
+fn youtube_status_client_error(error: YouTubeStatusClientError) -> UploadStatusAdapterError {
+    match error {
+        YouTubeStatusClientError::NetworkOrServer(message) => {
+            UploadStatusAdapterError::NetworkOrServer { message }
+        }
     }
 }
 
@@ -272,6 +390,131 @@ mod tests {
             privacy: UploadPrivacy::Private,
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
+        }
+    }
+
+    mod youtube_status {
+        use super::*;
+        use crate::upload_status::{
+            UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError,
+            UploadStatusRequest,
+        };
+
+        #[derive(Clone, Debug, Default)]
+        struct RecordingYouTubeStatusClient {
+            response: Option<YouTubeStatusResponse>,
+            error: Option<YouTubeStatusClientError>,
+        }
+
+        impl YouTubeStatusClient for RecordingYouTubeStatusClient {
+            fn poll_status(
+                &self,
+                request: &YouTubeStatusRequest,
+            ) -> Result<YouTubeStatusResponse, YouTubeStatusClientError> {
+                assert_eq!(request.provider_post_id, "yt_video_1");
+                assert_eq!(request.access_token_ref, "token-secret-ref");
+                if let Some(error) = self.error.clone() {
+                    return Err(error);
+                }
+                Ok(self
+                    .response
+                    .clone()
+                    .unwrap_or_else(|| YouTubeStatusResponse {
+                        video_id: "yt_video_1".into(),
+                        state: YouTubeProcessingState::Processed,
+                        failure_reason: None,
+                    }))
+            }
+        }
+
+        #[test]
+        fn maps_processing_status() {
+            let adapter = YouTubeStatusAdapter::new(RecordingYouTubeStatusClient {
+                response: Some(YouTubeStatusResponse {
+                    video_id: "yt_video_1".into(),
+                    state: YouTubeProcessingState::Processing,
+                    failure_reason: None,
+                }),
+                error: None,
+            });
+
+            let result = adapter
+                .poll_status(&status_request())
+                .unwrap_or_else(|err| panic!("poll youtube status: {err:?}"));
+
+            assert_eq!(result.status, UploadProcessingStatus::Processing);
+            assert_eq!(result.provider_post_id, "yt_video_1");
+            assert_eq!(result.provider_post_url, None);
+        }
+
+        #[test]
+        fn maps_processed_status_to_published_url() {
+            let adapter = YouTubeStatusAdapter::new(RecordingYouTubeStatusClient::default());
+
+            let result = adapter
+                .poll_status(&status_request())
+                .unwrap_or_else(|err| panic!("poll youtube status: {err:?}"));
+
+            assert_eq!(result.status, UploadProcessingStatus::Published);
+            assert_eq!(
+                result.provider_post_url.as_deref(),
+                Some("https://www.youtube.com/watch?v=yt_video_1")
+            );
+        }
+
+        #[test]
+        fn maps_failed_status_to_provider_failure() {
+            let adapter = YouTubeStatusAdapter::new(RecordingYouTubeStatusClient {
+                response: Some(YouTubeStatusResponse {
+                    video_id: "yt_video_1".into(),
+                    state: YouTubeProcessingState::Failed,
+                    failure_reason: Some("copyright_claim".into()),
+                }),
+                error: None,
+            });
+
+            let result = adapter
+                .poll_status(&status_request())
+                .unwrap_or_else(|err| panic!("poll youtube status: {err:?}"));
+
+            assert_eq!(result.status, UploadProcessingStatus::Failed);
+            assert_eq!(
+                result.normalized_error.as_deref(),
+                Some("platform_processing_failed")
+            );
+            assert_eq!(
+                result.raw_error_ref.as_deref(),
+                Some("youtube/status/yt_video_1/copyright_claim")
+            );
+        }
+
+        #[test]
+        fn rejects_wrong_provider_and_missing_post_id() {
+            let adapter = YouTubeStatusAdapter::new(RecordingYouTubeStatusClient::default());
+            let mut request = status_request();
+            request.provider = Provider::TikTok;
+
+            assert_eq!(
+                adapter.poll_status(&request),
+                Err(UploadStatusAdapterError::ProviderMismatch)
+            );
+
+            request.provider = Provider::YouTube;
+            request.provider_post_id = "   ".into();
+            assert_eq!(
+                adapter.poll_status(&request),
+                Err(UploadStatusAdapterError::MissingProviderPostId)
+            );
+        }
+
+        fn status_request() -> UploadStatusRequest {
+            UploadStatusRequest {
+                job_id: "job_1".into(),
+                provider: Provider::YouTube,
+                connected_account_id: "acct_1".into(),
+                provider_post_id: "yt_video_1".into(),
+                access_token_ref: "token-secret-ref".into(),
+            }
         }
     }
 }
