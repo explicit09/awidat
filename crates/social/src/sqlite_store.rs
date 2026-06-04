@@ -664,6 +664,32 @@ impl SocialStore for SqliteSocialStore {
         Ok(roles)
     }
 
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM workspace_member_roles
+                WHERE user_id = ?1
+                ORDER BY workspace_id
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![user_id], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut roles = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            roles.push(from_json(&payload_json)?);
+        }
+        Ok(roles)
+    }
+
     fn token_secrets_due_refresh(
         &self,
         deadline: i64,

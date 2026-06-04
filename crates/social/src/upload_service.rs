@@ -1403,6 +1403,13 @@ mod tests {
             self.inner.workspace_member_roles(workspace_id)
         }
 
+        fn workspace_member_roles_for_user(
+            &self,
+            user_id: &str,
+        ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+            self.inner.workspace_member_roles_for_user(user_id)
+        }
+
         fn token_secrets_due_refresh(
             &self,
             deadline: i64,
@@ -1602,6 +1609,13 @@ mod tests {
             workspace_id: &str,
         ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
             self.inner.workspace_member_roles(workspace_id)
+        }
+
+        fn workspace_member_roles_for_user(
+            &self,
+            user_id: &str,
+        ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+            self.inner.workspace_member_roles_for_user(user_id)
         }
 
         fn token_secrets_due_refresh(

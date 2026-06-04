@@ -724,6 +724,25 @@ impl SocialStore for PgSocialStore {
         rows.iter().map(|row| from_json(row.get(0))).collect()
     }
 
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        let mut client = self
+            .pool
+            .get()
+            .map_err(|e| SocialStoreError::Storage(e.to_string()))?;
+        let rows = client
+            .query(
+                "SELECT payload_json FROM workspace_member_roles
+                 WHERE user_id = $1
+                 ORDER BY workspace_id",
+                &[&user_id],
+            )
+            .map_err(pg_error)?;
+        rows.iter().map(|row| from_json(row.get(0))).collect()
+    }
+
     fn token_secrets_due_refresh(
         &self,
         deadline: i64,

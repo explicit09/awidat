@@ -151,6 +151,15 @@ impl From<TeamServiceError> for SocialApiError {
     }
 }
 
+impl From<crate::auth_context::AuthContextError> for SocialApiError {
+    /// Any auth-context failure (missing/expired/invalid/malformed token) maps to
+    /// the existing `Unauthorized` variant, preserving the redaction + HTTP-status
+    /// contract from earlier phases.
+    fn from(_error: crate::auth_context::AuthContextError) -> Self {
+        SocialApiError::Unauthorized
+    }
+}
+
 /// Provider slot summary, safe to serialize to clients.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSummary {

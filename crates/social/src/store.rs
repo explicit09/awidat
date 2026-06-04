@@ -108,6 +108,15 @@ pub trait SocialStore {
         workspace_id: &str,
     ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
 
+    /// Return every workspace role for a given user — the by-user variant the
+    /// Phase 7 auth middleware needs to build an `ApiActor` that can authorize
+    /// against any workspace the user belongs to. (The workspace-keyed variant
+    /// above answers a different question.)
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
+
     /// Return all token secrets whose access token expires before `deadline`.
     /// Used by the token-refresh sweep to pro-actively refresh near-expiry tokens.
     fn token_secrets_due_refresh(
@@ -373,6 +382,18 @@ impl SocialStore for InMemorySocialStore {
             .workspace_member_roles
             .values()
             .filter(|role| role.workspace_id == workspace_id)
+            .cloned()
+            .collect())
+    }
+
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        Ok(self
+            .workspace_member_roles
+            .values()
+            .filter(|role| role.user_id == user_id)
             .cloned()
             .collect())
     }
@@ -670,6 +691,35 @@ mod tests {
 
         assert_eq!(updated.status, OAuthConnectionStatus::Completed);
         assert_eq!(store.oauth_connection("oauth_1"), Ok(updated));
+    }
+
+    #[test]
+    fn workspace_member_roles_for_user_returns_all_their_workspaces() {
+        use crate::model::{TeamRole, WorkspaceMemberRole};
+        let mut store = InMemorySocialStore::default();
+        for (ws, user, role) in [
+            ("ws_1", "user_a", TeamRole::Publisher),
+            ("ws_2", "user_a", TeamRole::Admin),
+            ("ws_1", "user_b", TeamRole::Viewer),
+        ] {
+            store
+                .save_workspace_member_role(WorkspaceMemberRole {
+                    workspace_id: ws.into(),
+                    user_id: user.into(),
+                    role,
+                })
+                .unwrap_or_else(|err| panic!("save role: {err}"));
+        }
+
+        let mut roles = store
+            .workspace_member_roles_for_user("user_a")
+            .unwrap_or_else(|err| panic!("roles for user: {err}"));
+        roles.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+        assert_eq!(roles.len(), 2, "only user_a's two workspaces");
+        assert_eq!(roles[0].workspace_id, "ws_1");
+        assert_eq!(roles[0].role, TeamRole::Publisher);
+        assert_eq!(roles[1].workspace_id, "ws_2");
+        assert_eq!(roles[1].role, TeamRole::Admin);
     }
 
     #[test]

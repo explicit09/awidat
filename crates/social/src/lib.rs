@@ -5,6 +5,7 @@
 
 pub mod account_service;
 pub mod api;
+pub mod auth_context;
 pub mod eligibility;
 pub mod instagram_upload;
 pub mod job;
