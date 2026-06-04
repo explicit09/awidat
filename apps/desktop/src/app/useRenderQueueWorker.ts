@@ -439,6 +439,33 @@ async function computeAiDisclosure(
  * Kicks the backend and starts a fresh poll loop. Errors land in the
  * target's `failed` state via the standard polling path.
  */
+/**
+ * Cancel a running render. Kills the backend ffmpeg child via the matching
+ * cancel command (timeline vs reframe), then marks the entry cancelled so the
+ * UI reflects it immediately. No-op if the entry has no backend job id yet
+ * (still spinning up) — in that case we still mark it cancelled so the worker's
+ * poll loop sees a terminal state and stops.
+ */
+export async function cancelRender(entry: RenderQueueEntry): Promise<void> {
+  const store = useRenderQueueStore.getState();
+  const jobId = entry.jobId;
+  if (jobId) {
+    const command =
+      entry.kind === "video_reframe"
+        ? "cancel_reframe_render"
+        : "cancel_timeline_render";
+    try {
+      await invoke<void>(command, { jobId });
+    } catch (err) {
+      // Best-effort: even if the kill races (job already finishing), still
+      // mark cancelled so the UI isn't stuck "running".
+      // eslint-disable-next-line no-console
+      console.warn(`${command} failed`, err);
+    }
+  }
+  store.markCancelled(entry.id);
+}
+
 export async function retryUploadForTarget(
   entry: RenderQueueEntry,
   jobId: string,

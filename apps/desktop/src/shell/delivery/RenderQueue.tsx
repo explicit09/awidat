@@ -9,7 +9,10 @@ import {
   type RenderQueueEntry,
   type RenderUploadState,
 } from "../../app/renderQueue";
-import { retryUploadForTarget } from "../../app/useRenderQueueWorker";
+import {
+  cancelRender,
+  retryUploadForTarget,
+} from "../../app/useRenderQueueWorker";
 import { summarizeCredit } from "../../state/aiDisclosure";
 import { TARGET_META } from "./targetMeta";
 import type { DeliveryTargetKey } from "./types";
@@ -142,6 +145,16 @@ function RenderQueueRow({
         </Inline>
         <Inline gap="2" align="center" className="shrink-0">
           {queueStatusPill(entry)}
+          {entry.status === "running" || entry.status === "pending" ? (
+            <button
+              type="button"
+              onClick={() => void cancelRender(entry)}
+              className="rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-muted)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              title="Cancel render"
+            >
+              Cancel
+            </button>
+          ) : null}
           {entry.status === "done" || entry.status === "failed" || entry.status === "cancelled" ? (
             <button
               type="button"
