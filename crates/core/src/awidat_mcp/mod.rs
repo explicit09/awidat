@@ -1128,15 +1128,17 @@ applied separately with apply_edl only after inspection.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
-    /// `plan_captions` — format-aware, read-only caption planner.
+    /// `plan_captions` — format-aware, read-only caption planner (long_form|accessibility).
     #[tool(
         description = "\
 Build a read-only, format-aware caption plan for one clip from its transcript \
-index. Segments transcript words to a <=17 CPS reading ceiling with per-format \
-characters-per-line targets (short_form|long_form|accessibility), applies a \
-(format, mood) style, and returns caption recommendations, a readability lint, \
-and a reviewable Insert Caption EDL fragment. Apply with apply_edl after \
-inspection. Never burns captions into the picture.",
+index. Supports long_form and accessibility formats only (use \
+plan_scene_aware_short_form for vertical short-form). Segments transcript words \
+to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
+applies a (format, mood) style, and returns caption recommendations, a \
+readability lint, and a reviewable Insert Caption EDL fragment. Note: \
+accessibility uses whole-cue reveal regardless of mood. Apply with apply_edl \
+after inspection. Never burns captions into the picture.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_captions(

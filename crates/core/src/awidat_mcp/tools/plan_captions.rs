@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::caption::edl::build_caption_edl_lines;
 use crate::caption::planner::{plan, LowerSafeZoneStrategy};
-use crate::caption::readability::{lint, segment, CaptionFormatProfile, InputWord};
+use crate::caption::readability::{lint, segment, words_from_transcript, CaptionFormatProfile};
 use crate::caption::styles::{resolve_style, CaptionFormat, CaptionMood};
 
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -32,6 +32,9 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
         return Err("plan_captions: asset_id must be non-empty.".into());
     }
     let format = parse_format(&args.format)?;
+    if format == CaptionFormat::ShortForm {
+        return Err("plan_captions: short_form is not supported here; use plan_scene_aware_short_form for scene-aware vertical short-form captioning.".into());
+    }
     let mood = parse_mood(&args.mood)?;
     let profile = match format {
         CaptionFormat::ShortForm => CaptionFormatProfile::short_form(),
@@ -99,51 +102,15 @@ fn parse_mood(s: &str) -> Result<CaptionMood, String> {
     }
 }
 
-fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
-    let mut out = Vec::new();
-    let Some(segments) = transcript.pointer("/segments").and_then(|v| v.as_array()) else {
-        return out;
-    };
-    for seg in segments {
-        let seg_start = num(seg, "start_s", num(seg, "start", 0.0));
-        let seg_end = num(seg, "end_s", num(seg, "end", seg_start));
-        match seg.get("words").and_then(|v| v.as_array()) {
-            Some(ws) if !ws.is_empty() => {
-                for w in ws {
-                    let text = w.get("text").or_else(|| w.get("word")).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-                    if text.is_empty() {
-                        continue;
-                    }
-                    out.push(InputWord {
-                        text,
-                        start_s: num(w, "start_s", num(w, "start", seg_start)),
-                        end_s: num(w, "end_s", num(w, "end", seg_end)),
-                    });
-                }
-            }
-            _ => {
-                let text = seg.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-                if !text.is_empty() {
-                    out.push(InputWord { text, start_s: seg_start, end_s: seg_end });
-                }
-            }
-        }
-    }
-    out
-}
-
-fn num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
-    v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
-}
-
 pub const DESCRIPTION: &str = "\
 Build a read-only, format-aware caption plan for one clip from its transcript \
-index. Segments transcript words to a reading-speed ceiling (<=17 CPS) and the \
-per-format characters-per-line / line-count targets (short_form, long_form, or \
-accessibility), applies a (format, mood) style, and returns caption \
-recommendations, a readability lint, and a reviewable Insert Caption EDL \
-fragment. Apply separately with apply_edl after inspection. Never burns captions \
-into the picture.";
+index. Supports long_form and accessibility formats only (use \
+plan_scene_aware_short_form for vertical short-form). Segments transcript words \
+to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
+applies a (format, mood) style, and returns caption recommendations, a \
+readability lint, and a reviewable Insert Caption EDL fragment. Note: \
+accessibility uses whole-cue reveal regardless of mood. Apply with apply_edl \
+after inspection. Never burns captions into the picture.";
 
 #[cfg(test)]
 mod tests {
@@ -205,5 +172,16 @@ mod tests {
             format: "square".into(), mood: "minimal_cinematic".into(),
         }, ctx).unwrap_err();
         assert!(err.contains("format"));
+    }
+
+    #[test]
+    fn short_form_is_rejected_pointing_to_scene_aware() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = McpToolCtx { project_root: dir.path().to_path_buf() };
+        let err = run(PlanCaptionsArgs {
+            asset_id: "raw/x.mp4".into(), clip_id: "c".into(),
+            format: "short_form".into(), mood: "minimal_cinematic".into(),
+        }, ctx).unwrap_err();
+        assert!(err.contains("plan_scene_aware_short_form"), "should point to the short-form tool: {err}");
     }
 }

@@ -142,7 +142,7 @@ fn flush(words: &[InputWord], profile: &CaptionFormatProfile) -> Cue {
 }
 
 /// Greedily pack words into up to `max_lines` lines of `max_chars_per_line`.
-/// For 2-line cues, keep the bottom line no longer than the top.
+/// Greedy left-fill: the first line is packed before spilling to the next (no bottom/top rebalancing pass).
 fn wrap_lines(words: &[InputWord], max_chars_per_line: usize, max_lines: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut line = String::new();
@@ -300,6 +300,62 @@ fn split_point(c: &Cue) -> f64 {
         .unwrap_or(mid)
 }
 
+/// Flatten a Whisper-style transcript JSON into segmentation input words.
+///
+/// Walks `/segments[*]/words[*]`, accepting `text`|`word` for the token and
+/// `start_s`|`start` / `end_s`|`end` for timing. Skips words with empty text,
+/// non-finite timings, or `end_s <= start_s`. Falls back to the segment-level
+/// text+timing when a segment has no usable words. Timings are rounded to 3
+/// decimals. This is the single source of truth for both the short-form planner
+/// and the general `plan_captions` tool.
+pub fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
+    let mut out = Vec::new();
+    let Some(segments) = transcript.pointer("/segments").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for seg in segments {
+        let seg_start = wft_num(seg, "start_s", wft_num(seg, "start", 0.0));
+        let seg_end = wft_num(seg, "end_s", wft_num(seg, "end", seg_start));
+        let mut pushed_any = false;
+        if let Some(ws) = seg.get("words").and_then(|v| v.as_array()) {
+            for w in ws {
+                let text = w
+                    .get("text")
+                    .or_else(|| w.get("word"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if text.is_empty() {
+                    continue;
+                }
+                let start_s = wft_num(w, "start_s", wft_num(w, "start", seg_start));
+                let end_s = wft_num(w, "end_s", wft_num(w, "end", seg_end));
+                if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
+                    continue;
+                }
+                out.push(InputWord { text, start_s: wft_round3(start_s), end_s: wft_round3(end_s) });
+                pushed_any = true;
+            }
+        }
+        if !pushed_any {
+            let text = seg.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if !text.is_empty() && seg_start.is_finite() && seg_end.is_finite() && seg_end > seg_start {
+                out.push(InputWord { text, start_s: wft_round3(seg_start), end_s: wft_round3(seg_end) });
+            }
+        }
+    }
+    out
+}
+
+fn wft_num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
+    v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
+}
+
+fn wft_round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +486,22 @@ mod tests {
         let c = cue(0.0, 5.0, "this is a very long single line that clearly exceeds the limit!!");
         let proposals = lint(&[c], &CaptionFormatProfile::long_form());
         assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Reflow { .. })));
+    }
+
+    #[test]
+    fn words_from_transcript_skips_bad_words_and_falls_back_to_segment_text() {
+        let t = serde_json::json!({
+            "segments": [
+                { "start_s": 0.0, "end_s": 1.0, "text": "hi there", "words": [
+                    {"text": "hi", "start_s": 0.0, "end_s": 0.5},
+                    {"text": "bad", "start_s": 0.8, "end_s": 0.7},   // end<=start: skipped
+                    {"text": "there", "start_s": 0.5, "end_s": 1.0}
+                ]},
+                { "start_s": 1.0, "end_s": 2.0, "text": "no words here", "words": [] }
+            ]
+        });
+        let words = words_from_transcript(&t);
+        let texts: Vec<_> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, vec!["hi", "there", "no words here"]);
     }
 }

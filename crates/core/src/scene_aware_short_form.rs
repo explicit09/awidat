@@ -278,22 +278,10 @@ fn plan_captions(
     shots: &[SceneShotAnalysis],
 ) -> Vec<CaptionRecommendation> {
     use crate::caption::planner::{plan, CaptionPlanStrategy, CuePlan};
-    use crate::caption::readability::{segment, CaptionFormatProfile, Cue, InputWord};
+    use crate::caption::readability::{segment, words_from_transcript, CaptionFormatProfile, Cue};
 
-    // Flatten transcript word timings into the readability model's input.
-    let words: Vec<InputWord> = transcript_segments(&input.transcript)
-        .into_iter()
-        .flat_map(|seg| {
-            if seg.word_timings.is_empty() {
-                vec![InputWord { text: seg.text, start_s: seg.start_s, end_s: seg.end_s }]
-            } else {
-                seg.word_timings
-                    .into_iter()
-                    .map(|w| InputWord { text: w.text, start_s: w.start_s, end_s: w.end_s })
-                    .collect()
-            }
-        })
-        .collect();
+    // Flatten transcript word timings via the shared guarded helper.
+    let words = words_from_transcript(&input.transcript);
 
     let cues = segment(&words, &CaptionFormatProfile::short_form());
 
@@ -616,6 +604,9 @@ fn build_edl_fragment(
         use crate::caption::edl::build_caption_edl_lines;
         use crate::caption::readability::RevealMode;
         use crate::caption::styles::CaptionStyleSpec;
+        // Short-form caption look is pinned here (not via caption::styles::resolve_style)
+        // to preserve the exact prior render; the styles registry serves the general
+        // plan_captions path. See the caption spec's regression-parity note.
         let spec = CaptionStyleSpec {
             font_size: 56,
             color: "#FFFFFF".into(),
@@ -773,7 +764,6 @@ struct TranscriptSegment {
     start_s: f64,
     end_s: f64,
     text: String,
-    word_timings: Vec<CaptionWordTiming>,
 }
 
 fn transcript_segments(transcript: &serde_json::Value) -> Vec<TranscriptSegment> {
@@ -791,37 +781,6 @@ fn transcript_segments(transcript: &serde_json::Value) -> Vec<TranscriptSegment>
                 .unwrap_or("")
                 .trim()
                 .to_string(),
-            word_timings: word_timings(segment),
-        })
-        .collect()
-}
-
-fn word_timings(segment: &serde_json::Value) -> Vec<CaptionWordTiming> {
-    segment
-        .get("words")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|word| {
-            let text = word
-                .get("text")
-                .or_else(|| word.get("word"))
-                .and_then(|value| value.as_str())?
-                .trim()
-                .to_string();
-            if text.is_empty() {
-                return None;
-            }
-            let start_s = number_field(word, "start_s", number_field(word, "start", f64::NAN));
-            let end_s = number_field(word, "end_s", number_field(word, "end", f64::NAN));
-            if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
-                return None;
-            }
-            Some(CaptionWordTiming {
-                text,
-                start_s: round3(start_s),
-                end_s: round3(end_s),
-            })
         })
         .collect()
 }
