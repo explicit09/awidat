@@ -25,8 +25,8 @@
 //! and `+ end: <new>` are accepted; we use the `+` value as authoritative.
 
 use awidat_proto::awidat_meta::{
-    AudioRelation, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, CutType,
-    SemanticCutSpec, SplitEditSpec,
+    AudioRelation, BrandKit, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry,
+    CutType, SemanticCutSpec, SplitEditSpec,
 };
 use awidat_proto::professional::{
     AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
@@ -284,6 +284,7 @@ enum OpKind {
     AddPreflightReport,
     SetWorkflowLens,
     SetPipelineReadiness,
+    SetBrandKit,
 }
 
 impl OpBuilder {
@@ -354,6 +355,7 @@ impl OpBuilder {
             "Add Preflight Report" => OpKind::AddPreflightReport,
             "Set Workflow Lens" => OpKind::SetWorkflowLens,
             "Set Pipeline Readiness" => OpKind::SetPipelineReadiness,
+            "Set Brand Kit" => OpKind::SetBrandKit,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -1585,6 +1587,9 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or_default(),
+            }),
+            OpKind::SetBrandKit => Ok(EdlOp::SetBrandKit {
+                kit: take_required_json::<BrandKit>(&mut fields, "kit_json", head)?,
             }),
         }
     }
@@ -3461,6 +3466,31 @@ mod tests {
                 assert_eq!(config.topics[0].text, "Opening");
             }
             _ => panic!("want SetBroadcastOverlay"),
+        }
+    }
+
+    #[test]
+    fn set_brand_kit_parses_kit_json() {
+        let text = r##"*** Begin EDL
+*** Set Brand Kit
++ kit_json: {"logo_path":"branding/logo.png","font_primary_path":"branding/primary.ttf","palette":["#FFD700","#00CED1"],"music_path":"branding/theme.wav","social_handles":[{"platform":"youtube","handle":"@awidat","url":"https://youtube.com/@awidat"}]}
+*** End EDL
+"##;
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetBrandKit { kit } => {
+                assert_eq!(kit.logo_path.as_deref(), Some("branding/logo.png"));
+                assert_eq!(
+                    kit.font_primary_path.as_deref(),
+                    Some("branding/primary.ttf")
+                );
+                assert_eq!(kit.palette, vec!["#FFD700", "#00CED1"]);
+                assert_eq!(kit.music_path.as_deref(), Some("branding/theme.wav"));
+                assert_eq!(kit.social_handles.len(), 1);
+                assert_eq!(kit.social_handles[0].platform, "youtube");
+                assert_eq!(kit.social_handles[0].handle, "@awidat");
+            }
+            _ => panic!("want SetBrandKit"),
         }
     }
 

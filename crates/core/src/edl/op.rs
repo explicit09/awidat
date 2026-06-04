@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
+use awidat_proto::awidat_meta::{BrandKit, BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
 use awidat_proto::professional::{
     AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, MotionScene, ParameterAnimation, PipelineReadinessReport,
@@ -892,6 +892,13 @@ pub enum EdlOp {
         /// Planner pass contracts.
         #[serde(default)]
         planner_passes: Vec<PlannerPassContract>,
+    },
+    /// Store or replace the project-wide reusable brand kit (logo, fonts,
+    /// palette, music, social handles). Titles and overlays read shared
+    /// brand values from this kit.
+    SetBrandKit {
+        /// Complete brand kit.
+        kit: BrandKit,
     },
 }
 
