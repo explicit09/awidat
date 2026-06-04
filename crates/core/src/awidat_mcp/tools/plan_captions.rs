@@ -136,8 +136,6 @@ fn num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
     v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
 }
 
-// consumed by the MCP router in the next task
-#[allow(dead_code)]
 pub const DESCRIPTION: &str = "\
 Build a read-only, format-aware caption plan for one clip from its transcript \
 index. Segments transcript words to a reading-speed ceiling (<=17 CPS) and the \

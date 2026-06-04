@@ -105,6 +105,7 @@ use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
 use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
 use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
+use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
@@ -1124,6 +1125,25 @@ applied separately with apply_edl only after inspection.",
         args: Parameters<PlanSceneAwareShortFormArgs>,
     ) -> Result<String, ErrorData> {
         plan_scene_aware_short_form::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_captions` — format-aware, read-only caption planner.
+    #[tool(
+        description = "\
+Build a read-only, format-aware caption plan for one clip from its transcript \
+index. Segments transcript words to a <=17 CPS reading ceiling with per-format \
+characters-per-line targets (short_form|long_form|accessibility), applies a \
+(format, mood) style, and returns caption recommendations, a readability lint, \
+and a reviewable Insert Caption EDL fragment. Apply with apply_edl after \
+inspection. Never burns captions into the picture.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_captions(
+        &self,
+        args: Parameters<PlanCaptionsArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_captions::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
