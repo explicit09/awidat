@@ -160,13 +160,44 @@ impl From<crate::auth_context::AuthContextError> for SocialApiError {
     }
 }
 
+/// Capabilities in camelCase for the wire/clients.
+///
+/// A DTO mirror of [`ProviderCapabilities`] so the client/frontend can read
+/// camelCase (`uploadVideo`, …) WITHOUT changing how `ProviderCapabilities`
+/// serializes into the store's `payload_json` (which must stay snake_case to
+/// preserve existing rows + the store round-trip tests).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilitiesDto {
+    pub native_scheduling: bool,
+    pub queue_scheduling: bool,
+    pub upload_video: bool,
+    pub upload_thumbnail: bool,
+    pub public_posting: bool,
+    pub requires_user_consent: bool,
+}
+
+impl From<ProviderCapabilities> for CapabilitiesDto {
+    fn from(c: ProviderCapabilities) -> Self {
+        Self {
+            native_scheduling: c.native_scheduling,
+            queue_scheduling: c.queue_scheduling,
+            upload_video: c.upload_video,
+            upload_thumbnail: c.upload_thumbnail,
+            public_posting: c.public_posting,
+            requires_user_consent: c.requires_user_consent,
+        }
+    }
+}
+
 /// Provider slot summary, safe to serialize to clients.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderSummary {
     pub provider: Provider,
     pub display_name: String,
     pub scopes: Vec<String>,
-    pub capabilities: ProviderCapabilities,
+    pub capabilities: CapabilitiesDto,
     pub eligibility: AccountEligibility,
 }
 
@@ -181,7 +212,7 @@ impl ProviderSummary {
                 .iter()
                 .map(|scope| (*scope).to_string())
                 .collect(),
-            capabilities: state.descriptor.capabilities.clone(),
+            capabilities: state.descriptor.capabilities.clone().into(),
             eligibility: state.eligibility.clone(),
         }
     }
@@ -192,6 +223,7 @@ impl ProviderSummary {
 /// This deliberately mirrors only the non-secret fields of
 /// [`ConnectedAccount`]; it never carries token rows, KMS ids, or OAuth state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountSummary {
     pub id: String,
     pub owner: OwnerRef,
@@ -203,7 +235,7 @@ pub struct AccountSummary {
     pub account_kind: AccountKind,
     pub status: ConnectedAccountStatus,
     pub scopes: Vec<String>,
-    pub capabilities: ProviderCapabilities,
+    pub capabilities: CapabilitiesDto,
     pub eligibility: AccountEligibility,
     pub last_verified_at: Option<i64>,
     pub created_at: i64,
@@ -223,7 +255,7 @@ impl From<ConnectedAccount> for AccountSummary {
             account_kind: account.account_kind,
             status: account.status,
             scopes: account.scopes,
-            capabilities: account.capabilities,
+            capabilities: account.capabilities.into(),
             eligibility: account.eligibility,
             last_verified_at: account.last_verified_at,
             created_at: account.created_at,
@@ -247,6 +279,7 @@ pub struct OAuthStartRequest {
 
 /// Response after a provider OAuth start, carrying the authorization URL.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthStartResponse {
     pub oauth_connection_id: String,
     pub provider: Provider,
@@ -272,6 +305,7 @@ pub struct OAuthCompleteRequest {
 
 /// Response after completing OAuth, carrying only sanitized account data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthCompleteResponse {
     pub account: AccountSummary,
 }
@@ -310,6 +344,7 @@ pub struct ScheduleTargetRequest {
 /// Carries only public job fields: never token rows. The `raw_error_ref` is a
 /// pointer to a server-side error blob, not the raw provider error body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishJobResponse {
     pub id: String,
     pub campaign_id: String,
@@ -361,6 +396,7 @@ impl PublishJobResponse {
 /// already keep provider token material out of event payloads (see the upload
 /// and status service token-safety tests).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishJobEventResponse {
     pub id: String,
     pub event_type: PublishJobEventType,

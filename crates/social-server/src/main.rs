@@ -448,8 +448,11 @@ async fn oauth_begin_handler(
 #[derive(Deserialize)]
 struct OAuthCallbackQuery {
     code: String,
+    // The provider returns only `code` + `state`. We embed the connection id
+    // into `state` at start (`<connection_id>~<random>`) and recover it here —
+    // the provider has no knowledge of our connection_id, so it cannot be a
+    // separate query param.
     state: String,
-    connection_id: String,
 }
 
 /// `GET /oauth/callback/{provider}` — exchange the code, store encrypted tokens.
@@ -508,8 +511,20 @@ async fn oauth_callback_handler(
     let refresh_token = output.refresh_token;
     // SECURITY: server-authoritative timestamp; never trust a client-supplied clock.
     let now = now_secs();
-    let connection_id = q.connection_id.clone();
     let raw_state = q.state.clone();
+    // Recover the connection id embedded in `state` at oauth-start
+    // (`<connection_id>~<random>`). complete_oauth re-validates the full
+    // `raw_state` against the stored connection's hash, so a forged state can't
+    // match — splitting here only locates which connection to validate against.
+    let connection_id = raw_state
+        .split_once('~')
+        .map(|(id, _)| id.to_string())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "malformed oauth state"})),
+            )
+        })?;
     let provider_account_id = token_response.provider_account_id.clone();
     let pool = state.pool.clone();
     let provider_for_blocking = provider.clone();
@@ -521,6 +536,9 @@ async fn oauth_callback_handler(
                 Json(serde_json::json!({"error": format!("token bundle: {e:?}")})),
             )
         })?;
+
+    // Granted scopes — used to derive the account's capabilities/eligibility.
+    let granted_scopes = bundle.scopes.clone();
 
     let account = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -546,6 +564,7 @@ async fn oauth_callback_handler(
             provider_for_blocking,
             provider_account_id,
             display_name,
+            &granted_scopes,
             now,
         );
 
@@ -1072,25 +1091,41 @@ fn build_connected_account(
     provider: Provider,
     provider_account_id: String,
     display_name: String,
+    scopes: &[String],
     now: i64,
 ) -> ConnectedAccount {
-    use awidat_social::model::{
-        AccountEligibility, AccountKind, ConnectedAccountStatus, ProviderCapabilities,
+    use awidat_social::eligibility::youtube_eligibility;
+    use awidat_social::model::ConnectedAccountStatus;
+
+    // Derive capabilities + eligibility from the GRANTED scopes (not defaults),
+    // so an account that holds youtube.upload is actually marked upload-capable.
+    // Without this the account connects but shows upload_video=false and can't
+    // publish. complete_oauth also persists account.scopes from the token bundle.
+    let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+    let report = match provider {
+        Provider::YouTube => {
+            youtube_eligibility(&provider_account_id, &display_name, None, &scope_refs)
+        }
+        // TikTok/Instagram connect via their own callbacks (Phase 6); their
+        // eligibility is derived there. Until then, fall through to YouTube's
+        // shape is wrong — but only YouTube reaches this path today.
+        _ => youtube_eligibility(&provider_account_id, &display_name, None, &scope_refs),
     };
+
     ConnectedAccount {
         id,
         owner,
         provider,
         provider_account_id,
         display_name,
-        handle: None,
+        handle: report.profile.handle,
         avatar_url: None,
-        account_kind: AccountKind::Channel,
+        account_kind: report.profile.account_kind,
         status: ConnectedAccountStatus::Connected,
-        scopes: Vec::new(),
-        capabilities: ProviderCapabilities::default(),
-        eligibility: AccountEligibility::eligible(),
-        last_verified_at: None,
+        scopes: scopes.to_vec(),
+        capabilities: report.capabilities,
+        eligibility: report.eligibility,
+        last_verified_at: Some(now),
         created_at: now,
         updated_at: now,
     }

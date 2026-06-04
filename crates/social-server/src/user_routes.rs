@@ -168,9 +168,16 @@ pub(crate) async fn oauth_start_handler(
     // Server owns the connection id + CSRF state — the desktop never supplies
     // them. SECURITY: both carry CSPRNG entropy (not a guessable timestamp) so
     // the OAuth `state` is unforgeable and the connection handle is unguessable.
+    //
+    // The `state` round-trips through the provider verbatim and is the ONLY
+    // correlation handle we get back on the callback (Google sends just
+    // ?code&state). So we embed the connection id into `state` as
+    // `<connection_id>~<random>` and recover it in the callback. The random
+    // suffix keeps `state` unguessable; complete_oauth still validates the full
+    // `state` against the stored hash.
     let now = now_secs();
     let connection_id = format!("oauthconn-{provider_str}-{}", random_token());
-    let raw_state = format!("st-{}", random_token());
+    let raw_state = format!("{connection_id}~{}", random_token());
     let config = OAuthProviderConfig {
         client_id,
         redirect_uri,
