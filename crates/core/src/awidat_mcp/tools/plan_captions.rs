@@ -60,7 +60,14 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
     let lint_proposals = lint(&cues, &profile);
     let recs = plan(&cues, &LowerSafeZoneStrategy);
     let spec = resolve_style(format, mood);
-    let safe_area = if format == CaptionFormat::ShortForm { "mobile" } else { "standard" };
+    // Opportunistic placement: a busy bottom region (e.g. a burned-in lower-third)
+    // raises captions clear of it; absent composition data, the standard band is
+    // the floor. (short_form is rejected earlier in run().)
+    let safe_area = if composition_bottom_busy(&ctx.project_root, &asset) {
+        "lower_third"
+    } else {
+        "standard"
+    };
 
     let mut lines = vec!["*** Begin EDL".to_string()];
     lines.extend(build_caption_edl_lines(&recs, &spec, safe_area));
@@ -83,6 +90,24 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
         ],
     });
     serde_json::to_string_pretty(&body).map_err(|e| format!("plan_captions: serialization failed: {e}"))
+}
+
+fn composition_bottom_busy(project_root: &std::path::Path, asset: &AssetId) -> bool {
+    use crate::scene_aware_short_form::{caption_placement_from_str, composition_zones};
+    let composition = match read_sidecar(project_root, "composition", asset) {
+        Ok(s) => s.get("data").cloned().unwrap_or(serde_json::Value::Null),
+        Err(_) => return false,
+    };
+    let busy = composition_zones(
+        &composition,
+        0.0,
+        f64::MAX,
+        &["busy_regions", "unsafe_text_zones", "protected_regions"],
+    );
+    match caption_placement_from_str("bottom") {
+        Some(bottom) => busy.contains(&bottom),
+        None => false,
+    }
 }
 
 fn parse_format(s: &str) -> Result<CaptionFormat, String> {
@@ -123,6 +148,49 @@ mod tests {
         std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({
             "indexer": "whisper", "asset_id": asset, "data": data,
         })).unwrap()).unwrap();
+    }
+
+    fn write_composition(root: &std::path::Path, asset: &str, data: serde_json::Value) {
+        let path = root.join("index").join("composition").join(format!("{asset}.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({
+            "indexer": "composition", "asset_id": asset, "data": data,
+        })).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn busy_bottom_region_raises_safe_area_to_lower_third() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "raw/ep.mp4";
+        write_whisper(dir.path(), asset, serde_json::json!({
+            "words": [{"text": "hello", "start_s": 0.0, "end_s": 1.0}],
+            "segments": [{"text": "hello", "start_s": 0.0, "end_s": 1.0}]
+        }));
+        write_composition(dir.path(), asset, serde_json::json!({
+            "regions": [{"start_s": 0.0, "end_s": 60.0, "busy_regions": ["bottom"]}]
+        }));
+        let ctx = McpToolCtx { project_root: dir.path().to_path_buf() };
+        let out = run(PlanCaptionsArgs { asset_id: asset.into(), clip_id: "c".into(),
+            format: "long_form".into(), mood: "minimal_cinematic".into() }, ctx).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(body["edl_fragment"].as_str().unwrap().contains("+ safe_area: lower_third"),
+            "busy bottom must raise captions: {}", body["edl_fragment"]);
+    }
+
+    #[test]
+    fn no_composition_defaults_to_standard_safe_area() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "raw/ep.mp4";
+        write_whisper(dir.path(), asset, serde_json::json!({
+            "words": [{"text": "hello", "start_s": 0.0, "end_s": 1.0}],
+            "segments": [{"text": "hello", "start_s": 0.0, "end_s": 1.0}]
+        }));
+        let ctx = McpToolCtx { project_root: dir.path().to_path_buf() };
+        let out = run(PlanCaptionsArgs { asset_id: asset.into(), clip_id: "c".into(),
+            format: "long_form".into(), mood: "minimal_cinematic".into() }, ctx).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(body["edl_fragment"].as_str().unwrap().contains("+ safe_area: standard"),
+            "no composition sidecar must default to standard: {}", body["edl_fragment"]);
     }
 
     #[test]
