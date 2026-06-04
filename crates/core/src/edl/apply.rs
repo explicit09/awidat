@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
-    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
-    BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType, SemanticCutSpec,
-    SplitEditSpec, cut_boundary_key,
+    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BrandKit,
+    BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType,
+    SemanticCutSpec, SplitEditSpec, cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
@@ -980,6 +980,7 @@ fn apply_one(
                 readiness.stages.len()
             ))
         }
+        EdlOp::SetBrandKit { kit } => apply_set_brand_kit(working, index, kit),
     }
 }
 
@@ -1062,6 +1063,7 @@ fn resolve_locator_for_op(
         | EdlOp::AddPreflightReport { .. }
         | EdlOp::SetWorkflowLens { .. }
         | EdlOp::SetPipelineReadiness { .. }
+        | EdlOp::SetBrandKit { .. }
         | EdlOp::TrimTrackTail { .. }
         | EdlOp::InsertTrack { .. }
         | EdlOp::DeleteTrack { .. } => return Ok(None),
@@ -8624,6 +8626,10 @@ fn apply_set_broadcast_overlay(
 ) -> Result<String, ApplyError> {
     validate_broadcast_overlay_config(index, config)?;
     let meta = timeline_awidat_metadata(working);
+    let mut config = config.clone();
+    if let Some(kit) = &meta.brand_kit {
+        config.apply_brand_kit(kit);
+    }
     meta.broadcast_overlay = Some(config.clone());
     Ok(format!(
         "set broadcast overlay enabled={}, title={:?}, topics={}, chapters={}",
@@ -8632,6 +8638,39 @@ fn apply_set_broadcast_overlay(
         config.topics.len(),
         config.chapters.len(),
     ))
+}
+
+fn apply_set_brand_kit(
+    working: &mut Timeline,
+    index: usize,
+    kit: &BrandKit,
+) -> Result<String, ApplyError> {
+    validate_brand_kit(index, kit)?;
+    let meta = timeline_awidat_metadata(working);
+    meta.brand_kit = Some(kit.clone());
+    // Backfill an already-stored overlay so an existing overlay also picks
+    // up newly-set shared brand identity, not just overlays set afterwards.
+    if let Some(overlay) = meta.broadcast_overlay.as_mut() {
+        overlay.apply_brand_kit(kit);
+    }
+    Ok(format!(
+        "set brand kit (logo={}, palette={}, social_handles={})",
+        kit.logo_path.is_some(),
+        kit.palette.len(),
+        kit.social_handles.len(),
+    ))
+}
+
+fn validate_brand_kit(index: usize, kit: &BrandKit) -> Result<(), ApplyError> {
+    validate_optional_project_path(index, "logo_path", kit.logo_path.as_deref())?;
+    validate_optional_project_path(index, "font_primary_path", kit.font_primary_path.as_deref())?;
+    validate_optional_project_path(
+        index,
+        "font_secondary_path",
+        kit.font_secondary_path.as_deref(),
+    )?;
+    validate_optional_project_path(index, "music_path", kit.music_path.as_deref())?;
+    Ok(())
 }
 
 fn validate_broadcast_overlay_config(
@@ -15324,6 +15363,119 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
+        );
+    }
+
+    #[test]
+    fn apply_set_brand_kit_stores_timeline_metadata() {
+        use awidat_proto::awidat_meta::SocialHandle;
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("branding/logo.png".into()),
+            font_primary_path: Some("branding/primary.ttf".into()),
+            palette: vec!["#FFD700".into(), "#00CED1".into()],
+            music_path: Some("branding/theme.wav".into()),
+            social_handles: vec![SocialHandle {
+                platform: "youtube".into(),
+                handle: "@awidat".into(),
+                url: Some("https://youtube.com/@awidat".into()),
+            }],
+            ..BrandKit::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetBrandKit { kit: kit.clone() }],
+        };
+        let (new_tl, applied) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(applied.applied.len(), 1);
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.brand_kit.as_ref())
+            .expect("brand kit should be stored");
+        assert_eq!(stored.logo_path.as_deref(), Some("branding/logo.png"));
+        assert_eq!(stored.palette, vec!["#FFD700", "#00CED1"]);
+        assert_eq!(stored.social_handles[0].handle, "@awidat");
+    }
+
+    #[test]
+    fn apply_set_brand_kit_rejects_unsafe_paths() {
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("../secret.png".into()),
+            ..BrandKit::default()
+        };
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBrandKit { kit }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
+        );
+    }
+
+    #[test]
+    fn broadcast_overlay_reads_brand_logo_from_kit_when_unset() {
+        let tl = timeline_with_three_clips();
+        // Store the brand kit first, then an overlay with no local logo.
+        let kit = BrandKit {
+            logo_path: Some("branding/logo.png".into()),
+            palette: vec!["#112233".into()],
+            ..BrandKit::default()
+        };
+        let overlay = BroadcastOverlayConfig {
+            episode_title: "Episode 1".into(),
+            ..BroadcastOverlayConfig::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetBrandKit { kit },
+                EdlOp::SetBroadcastOverlay { config: overlay },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .expect("overlay should be stored");
+        // Logo and primary accent fell back to the brand kit.
+        assert_eq!(stored.brand_logo_path.as_deref(), Some("branding/logo.png"));
+        assert_eq!(stored.style.gold_hex, "#112233");
+    }
+
+    #[test]
+    fn broadcast_overlay_keeps_local_logo_over_brand_kit() {
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("branding/kit_logo.png".into()),
+            ..BrandKit::default()
+        };
+        let overlay = BroadcastOverlayConfig {
+            brand_logo_path: Some("branding/local_logo.png".into()),
+            ..BroadcastOverlayConfig::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetBrandKit { kit },
+                EdlOp::SetBroadcastOverlay { config: overlay },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .unwrap();
+        assert_eq!(
+            stored.brand_logo_path.as_deref(),
+            Some("branding/local_logo.png")
         );
     }
 
