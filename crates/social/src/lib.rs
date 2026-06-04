@@ -6,6 +6,7 @@
 pub mod account_service;
 pub mod api;
 pub mod eligibility;
+pub mod instagram_upload;
 pub mod job;
 pub mod model;
 pub mod oauth;
@@ -17,6 +18,7 @@ pub mod publish_service;
 pub mod sqlite_store;
 pub mod store;
 pub mod team_service;
+pub mod tiktok_upload;
 pub mod token;
 pub mod token_bundle;
 pub mod token_refresh;

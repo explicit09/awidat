@@ -177,4 +177,28 @@ mod tests {
             vec!["missing_instagram_content_publish_scope"]
         );
     }
+
+    #[test]
+    fn tiktok_with_publish_scope_is_upload_eligible_and_public_capable() {
+        // A TikTok account that carries video.publish flips to eligible and
+        // exposes upload_video + public_posting — the adapter threads
+        // public_posting into its privacy clamp (Phase 6 Task 2).
+        let report = tiktok_eligibility("open_id_1", "Creator", &["video.publish"]);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(
+            report.capabilities.public_posting,
+            "public_posting drives the adapter's eligible_for_public clamp"
+        );
+        assert_eq!(report.profile.account_kind, AccountKind::Creator);
+    }
+
+    #[test]
+    fn instagram_professional_with_publish_scope_is_upload_eligible() {
+        let report = instagram_eligibility("ig_1", "Creator", true, true);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
+        assert_eq!(report.profile.account_kind, AccountKind::Professional);
+    }
 }
