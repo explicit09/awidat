@@ -302,13 +302,23 @@ fn split_point(c: &Cue) -> f64 {
 
 /// Flatten a Whisper-style transcript JSON into segmentation input words.
 ///
-/// Walks `/segments[*]/words[*]`, accepting `text`|`word` for the token and
-/// `start_s`|`start` / `end_s`|`end` for timing. Skips words with empty text,
-/// non-finite timings, or `end_s <= start_s`. Falls back to the segment-level
-/// text+timing when a segment has no usable words. Timings are rounded to 3
-/// decimals. This is the single source of truth for both the short-form planner
-/// and the general `plan_captions` tool.
+/// Prefers the canonical **top-level `/words[]`** array — awidat's whisper
+/// sidecar puts every word there, with `/segments[*]` carrying only
+/// text+timing (no nested words). Falls back to per-segment
+/// `/segments[*]/words[*]`, then to segment-level text when no word timings
+/// exist. Accepts `text`|`word` for the token and `start_s`|`start` /
+/// `end_s`|`end` for timing; skips empty text, non-finite timings, or
+/// `end_s <= start_s`; rounds timings to 3 decimals. Single source of truth for
+/// the short-form planner and the general `plan_captions` tool.
 pub fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
+    // Canonical shape: a flat top-level words array with per-word timings.
+    if let Some(ws) = transcript.pointer("/words").and_then(|v| v.as_array()) {
+        let out: Vec<InputWord> = ws.iter().filter_map(|w| parse_word(w, 0.0, 0.0)).collect();
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    // Fallbacks: per-segment words, then segment-level text.
     let mut out = Vec::new();
     let Some(segments) = transcript.pointer("/segments").and_then(|v| v.as_array()) else {
         return out;
@@ -316,29 +326,11 @@ pub fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
     for seg in segments {
         let seg_start = wft_num(seg, "start_s", wft_num(seg, "start", 0.0));
         let seg_end = wft_num(seg, "end_s", wft_num(seg, "end", seg_start));
-        let mut pushed_any = false;
+        let before = out.len();
         if let Some(ws) = seg.get("words").and_then(|v| v.as_array()) {
-            for w in ws {
-                let text = w
-                    .get("text")
-                    .or_else(|| w.get("word"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if text.is_empty() {
-                    continue;
-                }
-                let start_s = wft_num(w, "start_s", wft_num(w, "start", seg_start));
-                let end_s = wft_num(w, "end_s", wft_num(w, "end", seg_end));
-                if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
-                    continue;
-                }
-                out.push(InputWord { text, start_s: wft_round3(start_s), end_s: wft_round3(end_s) });
-                pushed_any = true;
-            }
+            out.extend(ws.iter().filter_map(|w| parse_word(w, seg_start, seg_end)));
         }
-        if !pushed_any {
+        if out.len() == before {
             let text = seg.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
             if !text.is_empty() && seg_start.is_finite() && seg_end.is_finite() && seg_end > seg_start {
                 out.push(InputWord { text, start_s: wft_round3(seg_start), end_s: wft_round3(seg_end) });
@@ -346,6 +338,28 @@ pub fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
         }
     }
     out
+}
+
+/// Parse one word object into an `InputWord`, applying guards. `def_start`/
+/// `def_end` are fallback timings (e.g. the enclosing segment's) used only when
+/// the word omits its own.
+fn parse_word(w: &serde_json::Value, def_start: f64, def_end: f64) -> Option<InputWord> {
+    let text = w
+        .get("text")
+        .or_else(|| w.get("word"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let start_s = wft_num(w, "start_s", wft_num(w, "start", def_start));
+    let end_s = wft_num(w, "end_s", wft_num(w, "end", def_end));
+    if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
+        return None;
+    }
+    Some(InputWord { text, start_s: wft_round3(start_s), end_s: wft_round3(end_s) })
 }
 
 fn wft_num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
@@ -486,6 +500,25 @@ mod tests {
         let c = cue(0.0, 5.0, "this is a very long single line that clearly exceeds the limit!!");
         let proposals = lint(&[c], &CaptionFormatProfile::long_form());
         assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Reflow { .. })));
+    }
+
+    #[test]
+    fn words_from_transcript_prefers_top_level_words_array() {
+        // awidat's real whisper sidecar shape: words at the top level, segments
+        // carry only text+timing (no nested words).
+        let t = serde_json::json!({
+            "words": [
+                {"text": "rise", "start_s": 0.0, "end_s": 0.4},
+                {"text": "of", "start_s": 0.4, "end_s": 0.6},
+                {"text": "solo", "start_s": 0.6, "end_s": 1.0}
+            ],
+            "segments": [
+                {"text": "rise of solo", "start_s": 0.0, "end_s": 1.0}
+            ]
+        });
+        let words = words_from_transcript(&t);
+        let texts: Vec<_> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, vec!["rise", "of", "solo"], "should use the top-level words, not the whole-segment fallback");
     }
 
     #[test]

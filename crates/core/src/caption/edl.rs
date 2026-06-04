@@ -18,7 +18,12 @@ pub fn build_caption_edl_lines(
         lines.push("*** Insert Caption".to_string());
         lines.push(format!("+ start_s: {}", fmt_seconds(caption.start_s)));
         lines.push(format!("+ end_s: {}", fmt_seconds(caption.end_s)));
-        lines.push(format!("+ text: {}", json_string(&caption.text)));
+        // The line-based EDL cannot carry a real newline and the parser does not
+        // JSON-decode `\n`, so a multi-line cue's break is flattened to a space
+        // here and left to the renderer to word-wrap. (Hard two-line breaks await
+        // the parser text-decode fix.) Short-form cues are single-line already.
+        let text = caption.text.replace('\n', " ");
+        lines.push(format!("+ text: {}", json_string(&text)));
         lines.push(format!("+ position: {}", edl_position(caption.placement)));
         lines.push(format!("+ font_size: {}", spec.font_size));
         lines.push(format!("+ color: {}", spec.color));
@@ -69,6 +74,16 @@ mod tests {
             placement: CaptionPlacement::Bottom, style: CaptionStyle::Plain,
             transcript_reason: "t".into(), visual_reason: "v".into(), safety_reason: "s".into(), confidence: 0.7,
         }
+    }
+
+    #[test]
+    fn multiline_cue_text_is_flattened_to_a_single_line() {
+        let mut r = rec();
+        r.text = "the rise of solar\nentrepreneurs.".into();
+        let spec = CaptionStyleSpec { font_size: 44, color: "#FFFFFF".into(), reveal: RevealMode::WholeCue };
+        let blob = build_caption_edl_lines(&[r], &spec, "standard").join("\n");
+        assert!(blob.contains("the rise of solar entrepreneurs."), "newline should flatten to a space: {blob}");
+        assert!(!blob.contains("solar\\nentrepreneurs"), "must not emit a literal backslash-n");
     }
 
     #[test]
