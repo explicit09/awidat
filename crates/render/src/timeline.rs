@@ -10269,6 +10269,17 @@ fn plan_one_audio_track(
                     filter.push_str(&format!("{label}afade=t=out:st={st}:d={fade_out}{fade};"));
                     label = fade;
                 }
+                // Normalize every clip's audio to a uniform layout/rate/format
+                // BEFORE it meets concat/amix. Source audio is often mono (e.g.
+                // a podcast .mov), while gap fillers are anullsrc stereo — mixing
+                // mismatched channel layouts makes the downstream AAC encoder
+                // fail with `-22 Invalid argument` / "received no packets". Force
+                // stereo/48k/fltp so concat + amix always see consistent inputs.
+                let norm = format!("[anorm{track_index}_{item_index}]");
+                filter.push_str(&format!(
+                    "{label}aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo{norm};"
+                ));
+                label = norm;
                 item_labels.push(label);
             }
         }
