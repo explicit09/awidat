@@ -32,6 +32,7 @@ import { RenderSummary, KV } from "./delivery/RenderSummary";
 import { RenderQueuePanel } from "./delivery/RenderQueue";
 import { UploadMetadataForm } from "./delivery/UploadMetadataForm";
 import { CampaignApprovalPanel } from "./delivery/CampaignApprovalPanel";
+import { SocialPublish } from "../app/social/SocialPublish";
 import { TARGET_META, targetKeyForKind } from "./delivery/targetMeta";
 import {
   ALL_TARGETS,
@@ -239,6 +240,9 @@ function DeliveryCockpit({
                 renderEntries={queueEntries}
               />
               <RenderQueuePanel />
+              {/* Server-backed publishing: connect an account + schedule a
+                  finished render to it (social_bind/validate/schedule/upload). */}
+              <SocialPublish />
             </RightColumnDetails>
             <Stack gap="2">
               <Button
