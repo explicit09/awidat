@@ -4,3 +4,4 @@
 
 pub mod readability;
 pub mod styles;
+pub mod types;

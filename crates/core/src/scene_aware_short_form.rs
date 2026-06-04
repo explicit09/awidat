@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::caption::types::{CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneAwareShortFormInput {
     pub asset_id: String,
@@ -111,60 +113,11 @@ pub struct ClipMatchCandidate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CaptionPlacement {
-    Bottom,
-    Upper,
-    Left,
-    Right,
-}
-
-impl CaptionPlacement {
-    fn edl_value(self) -> &'static str {
-        match self {
-            Self::Bottom => "bottom",
-            Self::Upper => "top",
-            Self::Left => "left",
-            Self::Right => "right",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum FramingQuality {
     Strong,
     Usable,
     Weak,
     Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptionRecommendation {
-    pub start_s: f64,
-    pub end_s: f64,
-    pub text: String,
-    pub word_timings: Vec<CaptionWordTiming>,
-    pub placement: CaptionPlacement,
-    pub style: CaptionStyle,
-    pub transcript_reason: String,
-    pub visual_reason: String,
-    pub safety_reason: String,
-    pub confidence: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptionWordTiming {
-    pub text: String,
-    pub start_s: f64,
-    pub end_s: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptionStyle {
-    Plain,
-    Boxed,
-    Minimal,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
