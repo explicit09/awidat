@@ -571,9 +571,12 @@ ignored = [
 ]
 
 [profile.dev]
-# Keep line tables/backtraces while avoiding expensive full variable
-# debug info across local dev builds. Matches codex's default.
-debug = "limited"
+# Disk-constrained machines: this monorepo vendors all of codex-rs (~1484
+# crates), so a debug `target/` runs 14G+ and repeatedly fills the disk. Drop
+# debug info entirely + strip symbols to cut target/debug by ~30-50%. Trade-off:
+# backtraces lose line numbers (use the `profiling` profile when you need them).
+debug = "none"
+strip = "symbols"
 
 [profile.dev-small]
 # Codex's "fast iterate" dev profile.

@@ -5,8 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@10.12.3",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "mcp-server": "cargo build -p awidat-cli --bin awidat-mcp-server",
+    "dev": "pnpm mcp-server && vite",
+    "build": "pnpm mcp-server && tsc && vite build",
     "test:tokens": "node tests/tokens-presence.mjs",
     "test:status-pill": "node --experimental-strip-types tests/status-pill.test.ts",
     "test:social-model": "node --experimental-strip-types tests/social-model.test.ts",
