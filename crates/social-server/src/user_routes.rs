@@ -17,6 +17,7 @@ use awidat_social::{
         OAuthStartResponse, PublishJobResponse, ScheduleTargetRequest, SocialApi, SocialApiError,
         ValidateTargetRequest,
     },
+    auth_context::JwtVerifier,
     model::AccountUsageAudit,
     oauth_url::OAuthProviderConfig,
     pg_store::PgSocialStore,
@@ -34,27 +35,65 @@ type HttpResult<T> = Result<Json<T>, HttpError>;
 
 // ── Auth + error mapping ────────────────────────────────────────────────────
 
-/// Authenticate the desktop dev bearer and return the single-user actor+owner.
+/// Authenticate a request and return its per-user actor + self-owner.
 ///
-/// Fails closed if `DESKTOP_AUTH_TOKEN` is unset (empty), so a misconfigured
-/// deployment never accepts an empty bearer.
+/// Two modes (Phase 7):
+/// - **Supabase Auth (when `SUPABASE_JWT_SECRET` is set):** verify the bearer as
+///   a Supabase JWT → real per-user `user_id`. This is the multi-user path.
+/// - **Dev bearer (fallback):** compare the bearer to `DESKTOP_AUTH_TOKEN` →
+///   the single fixed `DESKTOP_USER_ID`. Pre-Supabase single-user dev.
+///
+/// Workspace roles are left empty: the desktop only targets the caller's own
+/// resources (`OwnerRef::User`), and `TeamPolicy` grants the owner self-access
+/// without any workspace role. A future workspace-admin surface would load roles
+/// via `workspace_member_roles_for_user` and pass an `OwnerRef::Workspace`.
 fn desktop_auth(
     state: &SharedState,
     headers: &HeaderMap,
 ) -> Result<(ApiActor, ApiOwner), HttpError> {
-    if !desktop_token_ok(&state.config.desktop_auth_token, headers) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "unauthorized"})),
-        ));
-    }
-    let user_id = state.config.desktop_user_id.clone();
-    // Single-user pre-Phase-7: no workspace roles; everything is owned by the
-    // user directly.
+    let user_id = authenticated_user_id(state, headers)?;
     Ok((
         ApiActor::new(user_id.clone(), Vec::new()),
         ApiOwner::user(user_id),
     ))
+}
+
+/// Resolve the authenticated user id from the request, or `Unauthorized`.
+fn authenticated_user_id(state: &SharedState, headers: &HeaderMap) -> Result<String, HttpError> {
+    let bearer = bearer_token(headers);
+
+    // Supabase Auth path: verify the JWT into a real user id.
+    if !state.config.supabase_jwt_secret.is_empty() {
+        let bearer = bearer.ok_or_else(unauthorized)?;
+        let verifier =
+            crate::supabase_jwt::SupabaseJwtVerifier::new_hs256(&state.config.supabase_jwt_secret);
+        let claims = verifier
+            .verify(&bearer, crate::now_secs())
+            .map_err(|_| unauthorized())?;
+        return Ok(claims.user_id);
+    }
+
+    // Dev-bearer fallback (single user). Fails closed if unconfigured.
+    if desktop_token_ok(&state.config.desktop_auth_token, headers) {
+        return Ok(state.config.desktop_user_id.clone());
+    }
+    Err(unauthorized())
+}
+
+fn unauthorized() -> HttpError {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"error": "unauthorized"})),
+    )
+}
+
+/// Extract the raw bearer value from the `Authorization` header, if present.
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string)
 }
 
 /// Pure predicate for the dev-bearer check. Fails closed on an empty configured

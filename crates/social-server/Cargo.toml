@@ -30,6 +30,8 @@ postgres = { workspace = true }
 constant_time_eq = { workspace = true }
 # CSPRNG for unguessable OAuth CSRF state + connection ids.
 rand = { workspace = true }
+# Supabase Auth JWT verification (Phase 7).
+jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1100,6 +1100,7 @@ dependencies = [
  "awidat-social",
  "axum",
  "constant_time_eq 0.3.1",
+ "jsonwebtoken",
  "postgres",
  "r2d2",
  "r2d2_postgres",

@@ -8,6 +8,9 @@
 //!          and production AccessTokenResolver + ArtifactSource.
 //! Phase 4: poll-processing + token-refresh cron routes, server TokenRefresher,
 //!          and the pg_cron schedules (migration 0004) that drive all three.
+//! Phase 5: user-facing /social/* routes (desktop dev bearer).
+//! Phase 7: Supabase Auth — /social/* verify a Supabase JWT (HS256) when
+//!          SUPABASE_JWT_SECRET is set, else fall back to the dev bearer.
 //!
 //! Environment variables (all required at runtime):
 //!   DATABASE_URL            — Supavisor session-pooler URL
@@ -24,8 +27,12 @@
 //!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://awidat-social.fly.dev"
 //!   YOUTUBE_FORCE_PRIVATE   — "false" allows non-private uploads (default "true"; keep true pre-audit)
 //!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/awidat-artifacts")
+//!   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
+//!   DESKTOP_USER_ID         — (Phase 5) fixed user id the dev bearer maps to (default "desktop-user")
+//!   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs; server-only
 
 mod artifact_source;
+mod supabase_jwt;
 mod token_refresher;
 mod token_resolver;
 mod user_routes;
@@ -94,6 +101,11 @@ pub(crate) struct ServerConfig {
     // Phase 7 replaces this with real Supabase Auth.
     pub(crate) desktop_auth_token: String,
     pub(crate) desktop_user_id: String,
+    // Phase 7: Supabase Auth. When set, the /social/* routes verify the bearer
+    // as a Supabase JWT (HS256) and build a per-user actor with loaded workspace
+    // roles. When empty, the routes fall back to the single-user dev bearer
+    // above. Server-only; never shipped to the desktop.
+    pub(crate) supabase_jwt_secret: String,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -139,6 +151,7 @@ async fn main() {
     let desktop_auth_token = std::env::var("DESKTOP_AUTH_TOKEN").unwrap_or_default();
     let desktop_user_id =
         std::env::var("DESKTOP_USER_ID").unwrap_or_else(|_| "desktop-user".into());
+    let supabase_jwt_secret = std::env::var("SUPABASE_JWT_SECRET").unwrap_or_default();
 
     info!(
         social_firing_enabled,
@@ -184,6 +197,7 @@ async fn main() {
             artifact_base_dir,
             desktop_auth_token,
             desktop_user_id,
+            supabase_jwt_secret,
         },
     });
 
@@ -1124,6 +1138,7 @@ mod tests {
             artifact_base_dir: String::new(),
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
+            supabase_jwt_secret: String::new(),
         };
         assert_eq!(
             redirect_uri(&config, &Provider::YouTube),

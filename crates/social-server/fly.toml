@@ -31,6 +31,9 @@ primary_region = "iad"  # ← change to match your Supabase region
 #   OAUTH_REDIRECT_BASE     — (Phase 2) base URL for OAuth callbacks (e.g. https://awidat-social.fly.dev)
 #   YOUTUBE_FORCE_PRIVATE   — (Phase 3) "false" allows non-private uploads (default true; keep true pre-audit)
 #   ARTIFACT_BASE_DIR       — (Phase 3) root dir for file:// artifact refs (default /var/lib/awidat-artifacts)
+#   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
+#   DESKTOP_USER_ID         — (Phase 5) user id the dev bearer maps to (default desktop-user)
+#   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs (server-only)
 
 [[services]]
   internal_port = 3000
