@@ -741,8 +741,35 @@ async fn internal_tick_handler(
                     }
                 }
                 Provider::TikTok | Provider::Instagram => {
-                    // TODO(phase-6): wire TikTok/Instagram adapters.
-                    tracing::info!(job_id = %job.id, provider = ?job.provider, "provider not yet live — skipping");
+                    // Phase 6 domain adapters exist, but the live HTTP clients
+                    // (Tasks 3/6) need sandbox creds + app-review, so route these
+                    // through the BlockedUploadAdapter for now. This gives the job
+                    // a real FSM transition to RequiresAction with a clear reason
+                    // (instead of leaving it stuck Uploading after claim). When a
+                    // live client is wired, swap in the real adapter for eligible
+                    // accounts and keep this as the ineligible/pre-audit fallback.
+                    use awidat_social::upload_adapter::BlockedUploadAdapter;
+                    let reason = match job.provider {
+                        Provider::TikTok => "tiktok_live_client_pending",
+                        Provider::Instagram => "instagram_live_client_pending",
+                        Provider::YouTube => unreachable!(),
+                    };
+                    let adapter = BlockedUploadAdapter::new(job.provider.clone(), reason);
+                    if let Err(e) = SocialApi::execute_claimed_upload_job(
+                        &mut store,
+                        &adapter,
+                        ExecuteUploadRequest {
+                            job_id: job.id.clone(),
+                            title: String::new(),
+                            description: None,
+                            tags: Vec::new(),
+                            thumbnail_ref: None,
+                            privacy: None,
+                            now,
+                        },
+                    ) {
+                        tracing::warn!(job_id = %job.id, provider = ?job.provider, "blocked-adapter execute failed: {e}");
+                    }
                 }
             }
         }
