@@ -49,6 +49,13 @@ impl CaptionLayoutProfile {
                 margin_v_top: 80,
                 max_chars_per_line: 18,
             },
+            Some("lower_third") => Self {
+                margin_l: 80,
+                margin_r: 80,
+                margin_v_bottom: 300, // ~28% of the 1080 reference: clears a typical lower-third banner
+                margin_v_top: 54,
+                max_chars_per_line: 32,
+            },
             _ => Self {
                 margin_l: 80,
                 margin_r: 80,
@@ -740,5 +747,17 @@ mod tests {
         assert_eq!(dialogues.len(), 1, "exactly one whole-cue dialogue, got: {dialogues:?}");
         assert!(doc.contains("rise") && doc.contains("entrepreneurs"));
         assert!(!dialogues[0].contains("\\k"), "whole-cue must not emit karaoke \\k tags");
+    }
+
+    #[test]
+    fn lower_third_safe_area_raises_bottom_margin() {
+        let mut t = caption_title("x", vec![]);
+        t.safe_area = Some("lower_third".into());
+        let raised = CaptionLayoutProfile::for_title(&t);
+        t.safe_area = Some("standard".into());
+        let standard = CaptionLayoutProfile::for_title(&t);
+        assert_eq!(raised.margin_v_bottom, 300, "lower_third clears the banner band");
+        assert_eq!(standard.margin_v_bottom, 162, "standard unchanged");
+        assert!(raised.margin_v_bottom > standard.margin_v_bottom);
     }
 }
