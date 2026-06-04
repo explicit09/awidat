@@ -721,6 +721,9 @@ pub enum EdlOp {
         /// Optional transcript word timings for per-word caption reveal.
         #[serde(default)]
         word_timings: Vec<CaptionWordTiming>,
+        /// Optional resolved caption style (from `style_json`); None for legacy captions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style_json: Option<serde_json::Value>,
     },
     /// Insert a first-class annotation overlay such as a rectangle,
     /// circle, arrow, bracket, or blur region. Coordinates are

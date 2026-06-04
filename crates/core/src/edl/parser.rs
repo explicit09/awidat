@@ -1313,6 +1313,11 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or_default();
+                let style_json = take_field_json::<serde_json::Value>(
+                    &mut fields,
+                    "style_json",
+                    head,
+                )?;
                 Ok(EdlOp::InsertCaption {
                     start_s,
                     end_s,
@@ -1322,6 +1327,7 @@ impl OpBuilder {
                     color,
                     safe_area,
                     word_timings,
+                    style_json,
                 })
             }
             OpKind::InsertAnnotation => {
@@ -3366,6 +3372,7 @@ mod tests {
                 color,
                 safe_area,
                 word_timings,
+                style_json,
             } => {
                 assert!((start_s - 1.0).abs() < 1e-9);
                 assert!((end_s - 2.4).abs() < 1e-9);
@@ -3375,6 +3382,7 @@ mod tests {
                 assert_eq!(color, "#FFFFFF");
                 assert_eq!(safe_area, "mobile");
                 assert!(word_timings.is_empty());
+                assert!(style_json.is_none());
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }
@@ -3397,6 +3405,38 @@ mod tests {
                 assert_eq!(word_timings.len(), 2);
                 assert_eq!(word_timings[0].text, "This");
                 assert!((word_timings[1].start_s - 1.24).abs() < 1e-9);
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_caption_style_json() {
+        let edl = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.0
++ text: \"hi\"
++ position: bottom
++ font_size: 64
++ color: #FFFFFF
++ safe_area: mobile
++ style_json: {\"reveal\":\"active_word_pop\",\"highlight_color\":\"#FFE000\"}
+*** End EDL
+";
+        let env = parse(edl).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption { style_json, .. } => {
+                let sj = style_json.as_ref().expect("style_json should be Some");
+                assert_eq!(
+                    sj.get("reveal").and_then(|v| v.as_str()),
+                    Some("active_word_pop")
+                );
+                assert_eq!(
+                    sj.get("highlight_color").and_then(|v| v.as_str()),
+                    Some("#FFE000")
+                );
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }

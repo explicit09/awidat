@@ -786,6 +786,7 @@ fn apply_one(
             color,
             safe_area,
             word_timings,
+            style_json: _style_json,
         } => apply_insert_caption(
             working,
             index,
@@ -15032,6 +15033,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 safe_area: "mobile".into(),
                 word_timings: Vec::new(),
+                style_json: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -15082,6 +15084,7 @@ mod tests {
                         end_s: 1.5,
                     },
                 ],
+                style_json: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
