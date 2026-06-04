@@ -28,6 +28,7 @@
 mod artifact_source;
 mod token_refresher;
 mod token_resolver;
+mod user_routes;
 
 use awidat_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
@@ -66,12 +67,12 @@ use tracing::info;
 // ── Server config ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct ServerConfig {
+pub(crate) struct ServerConfig {
     service_shared_secret: String,
-    social_firing_enabled: bool,
-    supabase_url: String,
-    supabase_service_key: String,
-    storage_bucket: String,
+    pub(crate) social_firing_enabled: bool,
+    pub(crate) supabase_url: String,
+    pub(crate) supabase_service_key: String,
+    pub(crate) storage_bucket: String,
     oauth_redirect_base: String,
     // Phase 2: Google OAuth credentials.
     google_client_id: String,
@@ -87,6 +88,12 @@ struct ServerConfig {
     // directory (path-traversal defense). Phase 5 replaces local files with
     // Supabase Storage signed URLs.
     artifact_base_dir: String,
+    // Phase 5: desktop client auth (pre-Phase-7 single-user dev bearer).
+    // The desktop sends `Authorization: Bearer <desktop_auth_token>` to the
+    // user-facing `/social/*` routes; it maps to the fixed `desktop_user_id`.
+    // Phase 7 replaces this with real Supabase Auth.
+    pub(crate) desktop_auth_token: String,
+    pub(crate) desktop_user_id: String,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -94,13 +101,13 @@ struct ServerConfig {
 /// All routes share this state.
 /// `spawn_blocking` moves a clone of the pool so the sync domain layer runs
 /// on the blocking thread pool without holding any async lock across awaits.
-struct AppState {
-    pool: Pool<PostgresConnectionManager<NoTls>>,
-    registry: ProviderRegistry,
-    config: ServerConfig,
+pub(crate) struct AppState {
+    pub(crate) pool: Pool<PostgresConnectionManager<NoTls>>,
+    pub(crate) registry: ProviderRegistry,
+    pub(crate) config: ServerConfig,
 }
 
-type SharedState = Arc<AppState>;
+pub(crate) type SharedState = Arc<AppState>;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -128,6 +135,10 @@ async fn main() {
         .unwrap_or(true);
     let artifact_base_dir =
         std::env::var("ARTIFACT_BASE_DIR").unwrap_or_else(|_| "/var/lib/awidat-artifacts".into());
+    // Phase 5 desktop dev bearer (single-user until Phase 7 Supabase Auth).
+    let desktop_auth_token = std::env::var("DESKTOP_AUTH_TOKEN").unwrap_or_default();
+    let desktop_user_id =
+        std::env::var("DESKTOP_USER_ID").unwrap_or_else(|_| "desktop-user".into());
 
     info!(
         social_firing_enabled,
@@ -171,6 +182,8 @@ async fn main() {
             token_key_hex,
             youtube_force_private,
             artifact_base_dir,
+            desktop_auth_token,
+            desktop_user_id,
         },
     });
 
@@ -180,6 +193,49 @@ async fn main() {
         .route("/artifacts/upload-url", post(artifacts_upload_url_handler))
         .route("/oauth/begin/{provider}", post(oauth_begin_handler))
         .route("/oauth/callback/{provider}", get(oauth_callback_handler))
+        // Phase 5 user-facing routes (desktop dev-bearer auth).
+        .route("/social/accounts", get(user_routes::accounts_handler))
+        .route(
+            "/social/oauth/start/{provider}",
+            post(user_routes::oauth_start_handler),
+        )
+        .route(
+            "/social/accounts/{account_id}/disconnect",
+            post(user_routes::disconnect_handler),
+        )
+        .route(
+            "/social/accounts/{account_id}/audit",
+            get(user_routes::account_audit_handler),
+        )
+        .route(
+            "/social/targets/bind",
+            post(user_routes::bind_target_handler),
+        )
+        .route(
+            "/social/targets/validate",
+            post(user_routes::validate_target_handler),
+        )
+        .route(
+            "/social/targets/schedule",
+            post(user_routes::schedule_target_handler),
+        )
+        .route("/social/jobs/{job_id}", get(user_routes::job_handler))
+        .route(
+            "/social/jobs/{job_id}/cancel",
+            post(user_routes::cancel_job_handler),
+        )
+        .route(
+            "/social/jobs/{job_id}/retry",
+            post(user_routes::retry_job_handler),
+        )
+        .route(
+            "/social/jobs/{job_id}/upload-url",
+            post(user_routes::upload_url_handler),
+        )
+        .route(
+            "/social/jobs/{job_id}/upload-complete",
+            post(user_routes::upload_complete_handler),
+        )
         .route("/internal/tick", post(internal_tick_handler))
         .route(
             "/internal/cron/poll-processing",
@@ -213,7 +269,7 @@ fn env_required(key: &str) -> String {
 
 /// Clone an `Aead256Key` by re-parsing its hex representation.
 /// `Aead256Key` is not `Clone`; this helper is used to move a copy into a closure.
-fn aead_key_clone(key: &Aead256Key) -> Aead256Key {
+pub(crate) fn aead_key_clone(key: &Aead256Key) -> Aead256Key {
     // Encode the 32 raw bytes back to hex and re-parse.
     // We use the key_id "k" as a placeholder — the resolver only uses the bytes.
     let bytes: &[u8] = key.key_material();
@@ -222,7 +278,7 @@ fn aead_key_clone(key: &Aead256Key) -> Aead256Key {
         .unwrap_or_else(|_| panic!("aead_key_clone: key material is not 32 bytes"))
 }
 
-fn aead_key_from_state(
+pub(crate) fn aead_key_from_state(
     config: &ServerConfig,
 ) -> Result<Aead256Key, (StatusCode, Json<serde_json::Value>)> {
     if config.token_key_hex.is_empty() {
@@ -239,7 +295,7 @@ fn aead_key_from_state(
     })
 }
 
-fn bearer_auth(headers: &HeaderMap, secret: &str) -> bool {
+pub(crate) fn bearer_auth(headers: &HeaderMap, secret: &str) -> bool {
     let auth = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -877,7 +933,7 @@ async fn internal_refresh_tokens_handler(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn parse_provider(s: &str) -> Result<Provider, (StatusCode, Json<serde_json::Value>)> {
+pub(crate) fn parse_provider(s: &str) -> Result<Provider, (StatusCode, Json<serde_json::Value>)> {
     match s {
         "youtube" => Ok(Provider::YouTube),
         "tiktok" => Ok(Provider::TikTok),
@@ -900,7 +956,7 @@ fn parse_owner(kind: &str, id: &str) -> Result<OwnerRef, (StatusCode, Json<serde
     }
 }
 
-fn provider_client_id(
+pub(crate) fn provider_client_id(
     config: &ServerConfig,
     provider: &Provider,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
@@ -922,7 +978,7 @@ fn provider_client_id(
     }
 }
 
-fn provider_slug(provider: &Provider) -> &'static str {
+pub(crate) fn provider_slug(provider: &Provider) -> &'static str {
     match provider {
         Provider::YouTube => "youtube",
         Provider::TikTok => "tiktok",
@@ -930,7 +986,7 @@ fn provider_slug(provider: &Provider) -> &'static str {
     }
 }
 
-fn redirect_uri(config: &ServerConfig, provider: &Provider) -> String {
+pub(crate) fn redirect_uri(config: &ServerConfig, provider: &Provider) -> String {
     format!(
         "{}/oauth/callback/{}",
         config.oauth_redirect_base,
@@ -942,7 +998,7 @@ fn redirect_uri(config: &ServerConfig, provider: &Provider) -> String {
 ///
 /// Used everywhere a timestamp influences a security decision (token expiry,
 /// OAuth completion) so a client can never supply its own clock.
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -1039,6 +1095,8 @@ mod tests {
             token_key_hex: String::new(),
             youtube_force_private: true,
             artifact_base_dir: String::new(),
+            desktop_auth_token: String::new(),
+            desktop_user_id: "desktop-user".into(),
         };
         assert_eq!(
             redirect_uri(&config, &Provider::YouTube),
