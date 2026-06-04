@@ -65,14 +65,26 @@ mod tests {
     use super::*;
     use crate::caption::readability::RevealMode;
     use crate::caption::styles::CaptionStyleSpec;
-    use crate::caption::types::{CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming};
+    use crate::caption::types::{
+        CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
+    };
 
     fn rec() -> CaptionRecommendation {
         CaptionRecommendation {
-            start_s: 1.0, end_s: 2.0, text: "hello".into(),
-            word_timings: vec![CaptionWordTiming { text: "hello".into(), start_s: 1.0, end_s: 2.0 }],
-            placement: CaptionPlacement::Bottom, style: CaptionStyle::Plain,
-            transcript_reason: "t".into(), visual_reason: "v".into(), safety_reason: "s".into(), confidence: 0.7,
+            start_s: 1.0,
+            end_s: 2.0,
+            text: "hello".into(),
+            word_timings: vec![CaptionWordTiming {
+                text: "hello".into(),
+                start_s: 1.0,
+                end_s: 2.0,
+            }],
+            placement: CaptionPlacement::Bottom,
+            style: CaptionStyle::Plain,
+            transcript_reason: "t".into(),
+            visual_reason: "v".into(),
+            safety_reason: "s".into(),
+            confidence: 0.7,
         }
     }
 
@@ -80,35 +92,63 @@ mod tests {
     fn multiline_cue_text_is_flattened_to_a_single_line() {
         let mut r = rec();
         r.text = "the rise of solar\nentrepreneurs.".into();
-        let spec = CaptionStyleSpec { font_size: 44, color: "#FFFFFF".into(), reveal: RevealMode::WholeCue };
+        let spec = CaptionStyleSpec {
+            font_size: 44,
+            color: "#FFFFFF".into(),
+            reveal: RevealMode::WholeCue,
+        };
         let blob = build_caption_edl_lines(&[r], &spec, "standard").join("\n");
-        assert!(blob.contains("the rise of solar entrepreneurs."), "newline should flatten to a space: {blob}");
-        assert!(!blob.contains("solar\\nentrepreneurs"), "must not emit a literal backslash-n");
+        assert!(
+            blob.contains("the rise of solar entrepreneurs."),
+            "newline should flatten to a space: {blob}"
+        );
+        assert!(
+            !blob.contains("solar\\nentrepreneurs"),
+            "must not emit a literal backslash-n"
+        );
     }
 
     #[test]
     fn whole_cue_spec_omits_word_timings() {
-        let spec = CaptionStyleSpec { font_size: 44, color: "#FFFFFF".into(), reveal: RevealMode::WholeCue };
+        let spec = CaptionStyleSpec {
+            font_size: 44,
+            color: "#FFFFFF".into(),
+            reveal: RevealMode::WholeCue,
+        };
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
         assert!(blob.contains("*** Insert Caption"));
         assert!(blob.contains("+ font_size: 44"));
         assert!(blob.contains("+ position: bottom"));
-        assert!(!blob.contains("word_timings_json"), "whole-cue must not emit per-word timings");
+        assert!(
+            !blob.contains("word_timings_json"),
+            "whole-cue must not emit per-word timings"
+        );
     }
 
     #[test]
     fn word_by_word_spec_emits_word_timings() {
-        let spec = CaptionStyleSpec { font_size: 56, color: "#FFFFFF".into(), reveal: RevealMode::WordByWord };
+        let spec = CaptionStyleSpec {
+            font_size: 56,
+            color: "#FFFFFF".into(),
+            reveal: RevealMode::WordByWord,
+        };
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
         assert!(blob.contains("word_timings_json"));
-        assert!(blob.contains("\"hello\""), "word timings JSON should contain the word text");
+        assert!(
+            blob.contains("\"hello\""),
+            "word timings JSON should contain the word text"
+        );
     }
 
     #[test]
     fn position_maps_to_a_parser_valid_vertical_band() {
-        let spec = CaptionStyleSpec { font_size: 44, color: "#FFFFFF".into(), reveal: RevealMode::WholeCue };
+        let spec = CaptionStyleSpec {
+            font_size: 44,
+            color: "#FFFFFF".into(),
+            reveal: RevealMode::WholeCue,
+        };
         for (placement, expected) in [
             (CaptionPlacement::Bottom, "bottom"),
             (CaptionPlacement::Upper, "top"),
@@ -118,7 +158,10 @@ mod tests {
             let mut r = rec();
             r.placement = placement;
             let blob = build_caption_edl_lines(&[r], &spec, "standard").join("\n");
-            assert!(blob.contains(&format!("+ position: {expected}")), "{placement:?} should map to {expected}");
+            assert!(
+                blob.contains(&format!("+ position: {expected}")),
+                "{placement:?} should map to {expected}"
+            );
         }
     }
 }

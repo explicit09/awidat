@@ -36,17 +36,33 @@ pub struct CaptionStyleSpec {
 /// Resolve the style for a (format, mood), enforcing the legibility floor.
 pub fn resolve_style(format: CaptionFormat, mood: CaptionMood) -> CaptionStyleSpec {
     let (mut font_size, color, reveal) = match (format, mood) {
-        (CaptionFormat::ShortForm, CaptionMood::MinimalCinematic) => (52, "#FFFFFF", RevealMode::WholeCue),
-        (CaptionFormat::ShortForm, CaptionMood::ActivePop) => (64, "#FFFFFF", RevealMode::WordByWord),
-        (CaptionFormat::LongForm, CaptionMood::MinimalCinematic) => (44, "#FFFFFF", RevealMode::WholeCue),
-        (CaptionFormat::LongForm, CaptionMood::ActivePop) => (56, "#FFFFFF", RevealMode::WordByWord),
+        (CaptionFormat::ShortForm, CaptionMood::MinimalCinematic) => {
+            (52, "#FFFFFF", RevealMode::WholeCue)
+        }
+        (CaptionFormat::ShortForm, CaptionMood::ActivePop) => {
+            (64, "#FFFFFF", RevealMode::WordByWord)
+        }
+        (CaptionFormat::LongForm, CaptionMood::MinimalCinematic) => {
+            (44, "#FFFFFF", RevealMode::WholeCue)
+        }
+        (CaptionFormat::LongForm, CaptionMood::ActivePop) => {
+            (56, "#FFFFFF", RevealMode::WordByWord)
+        }
         (CaptionFormat::Accessibility, _) => (44, "#FFFFFF", RevealMode::WholeCue),
     };
     if font_size < MIN_LEGIBLE_FONT_SIZE {
         font_size = MIN_LEGIBLE_FONT_SIZE;
     }
-    let color = if color.starts_with('#') && color.len() == 7 { color.to_string() } else { "#FFFFFF".to_string() };
-    CaptionStyleSpec { font_size, color, reveal }
+    let color = if color.starts_with('#') && color.len() == 7 {
+        color.to_string()
+    } else {
+        "#FFFFFF".to_string()
+    };
+    CaptionStyleSpec {
+        font_size,
+        color,
+        reveal,
+    }
 }
 
 #[cfg(test)]
@@ -56,11 +72,21 @@ mod tests {
 
     #[test]
     fn every_mood_meets_the_legibility_floor() {
-        for format in [CaptionFormat::ShortForm, CaptionFormat::LongForm, CaptionFormat::Accessibility] {
+        for format in [
+            CaptionFormat::ShortForm,
+            CaptionFormat::LongForm,
+            CaptionFormat::Accessibility,
+        ] {
             for mood in [CaptionMood::MinimalCinematic, CaptionMood::ActivePop] {
                 let spec = resolve_style(format, mood);
-                assert!(spec.font_size >= MIN_LEGIBLE_FONT_SIZE, "{format:?}/{mood:?} font too small");
-                assert!(spec.color.starts_with('#') && spec.color.len() == 7, "{format:?}/{mood:?} bad color");
+                assert!(
+                    spec.font_size >= MIN_LEGIBLE_FONT_SIZE,
+                    "{format:?}/{mood:?} font too small"
+                );
+                assert!(
+                    spec.color.starts_with('#') && spec.color.len() == 7,
+                    "{format:?}/{mood:?} bad color"
+                );
             }
         }
     }

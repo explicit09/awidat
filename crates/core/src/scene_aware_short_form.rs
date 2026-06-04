@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::caption::types::{CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming};
+pub use crate::caption::types::{
+    CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneAwareShortFormInput {
@@ -277,8 +279,8 @@ fn plan_captions(
     input: &SceneAwareShortFormInput,
     shots: &[SceneShotAnalysis],
 ) -> Vec<CaptionRecommendation> {
-    use crate::caption::planner::{plan, CaptionPlanStrategy, CuePlan};
-    use crate::caption::readability::{segment, words_from_transcript, CaptionFormatProfile, Cue};
+    use crate::caption::planner::{CaptionPlanStrategy, CuePlan, plan};
+    use crate::caption::readability::{CaptionFormatProfile, Cue, segment, words_from_transcript};
 
     // Flatten transcript word timings via the shared guarded helper.
     let words = words_from_transcript(&input.transcript);
@@ -307,7 +309,10 @@ fn plan_captions(
             let safety_reason = if shot.is_some_and(|s| s.face_box.is_some()) {
                 format!(
                     "placement avoids detected face/eye/mouth regions; bottom_safe={}",
-                    !shot.is_some_and(|s| placement_overlaps_face(CaptionPlacement::Bottom, s.face_box))
+                    !shot.is_some_and(|s| placement_overlaps_face(
+                        CaptionPlacement::Bottom,
+                        s.face_box
+                    ))
                 )
             } else {
                 "no face region detected in this shot".into()
@@ -1382,7 +1387,10 @@ mod tests {
             );
             assert!(matches!(
                 cue.placement,
-                CaptionPlacement::Bottom | CaptionPlacement::Upper | CaptionPlacement::Left | CaptionPlacement::Right
+                CaptionPlacement::Bottom
+                    | CaptionPlacement::Upper
+                    | CaptionPlacement::Left
+                    | CaptionPlacement::Right
             ));
         }
     }

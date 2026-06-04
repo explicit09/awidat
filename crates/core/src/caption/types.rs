@@ -12,7 +12,6 @@ pub enum CaptionPlacement {
     Right,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptionRecommendation {
     pub start_s: f64,

@@ -220,7 +220,9 @@ pub enum ReadabilityProposal {
 impl ReadabilityProposal {
     pub fn rationale(&self) -> &str {
         match self {
-            Self::Split { rationale, .. } | Self::Extend { rationale, .. } | Self::Reflow { rationale } => rationale,
+            Self::Split { rationale, .. }
+            | Self::Extend { rationale, .. }
+            | Self::Reflow { rationale } => rationale,
         }
     }
 }
@@ -331,9 +333,22 @@ pub fn words_from_transcript(transcript: &serde_json::Value) -> Vec<InputWord> {
             out.extend(ws.iter().filter_map(|w| parse_word(w, seg_start, seg_end)));
         }
         if out.len() == before {
-            let text = seg.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-            if !text.is_empty() && seg_start.is_finite() && seg_end.is_finite() && seg_end > seg_start {
-                out.push(InputWord { text, start_s: wft_round3(seg_start), end_s: wft_round3(seg_end) });
+            let text = seg
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !text.is_empty()
+                && seg_start.is_finite()
+                && seg_end.is_finite()
+                && seg_end > seg_start
+            {
+                out.push(InputWord {
+                    text,
+                    start_s: wft_round3(seg_start),
+                    end_s: wft_round3(seg_end),
+                });
             }
         }
     }
@@ -359,7 +374,11 @@ fn parse_word(w: &serde_json::Value, def_start: f64, def_end: f64) -> Option<Inp
     if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
         return None;
     }
-    Some(InputWord { text, start_s: wft_round3(start_s), end_s: wft_round3(end_s) })
+    Some(InputWord {
+        text,
+        start_s: wft_round3(start_s),
+        end_s: wft_round3(end_s),
+    })
 }
 
 fn wft_num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
@@ -377,7 +396,11 @@ mod tests {
     fn words(pairs: &[(&str, f64, f64)]) -> Vec<InputWord> {
         pairs
             .iter()
-            .map(|(t, s, e)| InputWord { text: (*t).into(), start_s: *s, end_s: *e })
+            .map(|(t, s, e)| InputWord {
+                text: (*t).into(),
+                start_s: *s,
+                end_s: *e,
+            })
             .collect()
     }
 
@@ -393,15 +416,25 @@ mod tests {
             ("sixsix", 2.5, 3.0),
         ]);
         let cues = segment(&w, &profile);
-        assert!(cues.len() >= 2, "should split across the char budget, got {}", cues.len());
+        assert!(
+            cues.len() >= 2,
+            "should split across the char budget, got {}",
+            cues.len()
+        );
         for cue in &cues {
             assert!(cue.lines.len() <= profile.max_lines);
             for line in &cue.lines {
-                assert!(line.chars().count() <= profile.max_chars_per_line, "line too long: {line:?}");
+                assert!(
+                    line.chars().count() <= profile.max_chars_per_line,
+                    "line too long: {line:?}"
+                );
             }
         }
         for pair in cues.windows(2) {
-            assert!(pair[0].end_s <= pair[1].start_s + 1e-6, "cues must not overlap: {pair:?}");
+            assert!(
+                pair[0].end_s <= pair[1].start_s + 1e-6,
+                "cues must not overlap: {pair:?}"
+            );
         }
     }
 
@@ -416,9 +449,15 @@ mod tests {
             ("jumps", 1.5, 1.9),
         ]);
         let cues = segment(&w, &profile);
-        assert!(cues.len() >= 2, "continuous speech over the budget should split");
+        assert!(
+            cues.len() >= 2,
+            "continuous speech over the budget should split"
+        );
         for pair in cues.windows(2) {
-            assert!((pair[1].start_s - pair[0].end_s).abs() < 1e-6, "must be zero-gap (no gap, no overlap): {pair:?}");
+            assert!(
+                (pair[1].start_s - pair[0].end_s).abs() < 1e-6,
+                "must be zero-gap (no gap, no overlap): {pair:?}"
+            );
         }
     }
 
@@ -429,7 +468,8 @@ mod tests {
         assert_eq!(cues.len(), 1);
         assert!(
             cues[0].end_s - cues[0].start_s >= profile.min_cue_s - 1e-6,
-            "the final short cue should extend toward the readable minimum: {:?}", cues[0]
+            "the final short cue should extend toward the readable minimum: {:?}",
+            cues[0]
         );
     }
 
@@ -447,13 +487,19 @@ mod tests {
         let cues = segment(&w, &profile);
         assert_eq!(cues[0].start_s, 0.0, "starts must stay synced to audio");
         for pair in cues.windows(2) {
-            assert!(pair[0].end_s <= pair[1].start_s + 1e-6, "cues must not overlap: {pair:?}");
+            assert!(
+                pair[0].end_s <= pair[1].start_s + 1e-6,
+                "cues must not overlap: {pair:?}"
+            );
         }
     }
 
     #[test]
     fn segment_returns_empty_for_no_words() {
-        assert_eq!(segment(&[], &CaptionFormatProfile::long_form()), Vec::<Cue>::new());
+        assert_eq!(
+            segment(&[], &CaptionFormatProfile::long_form()),
+            Vec::<Cue>::new()
+        );
     }
 
     #[test]
@@ -462,12 +508,24 @@ mod tests {
         let profile = CaptionFormatProfile::short_form(); // budget 15
         let w = words(&[("supercalifragilistic", 0.0, 1.0)]);
         let cues = segment(&w, &profile);
-        let joined: String = cues.iter().flat_map(|c| c.lines.iter().cloned()).collect::<Vec<_>>().join(" ");
-        assert!(joined.contains("supercalifragilistic"), "overlong word was dropped: {joined:?}");
+        let joined: String = cues
+            .iter()
+            .flat_map(|c| c.lines.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("supercalifragilistic"),
+            "overlong word was dropped: {joined:?}"
+        );
     }
 
     fn cue(start_s: f64, end_s: f64, text: &str) -> Cue {
-        Cue { start_s, end_s, lines: vec![text.into()], word_timings: vec![] }
+        Cue {
+            start_s,
+            end_s,
+            lines: vec![text.into()],
+            word_timings: vec![],
+        }
     }
 
     #[test]
@@ -475,31 +533,57 @@ mod tests {
         // 40 chars in 1.0s = 40 CPS.
         let cues = vec![cue(0.0, 1.0, "an extraordinarily dense caption line!!")];
         let proposals = lint(&cues, &CaptionFormatProfile::long_form());
-        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Split { .. })));
-        let p = proposals.iter().find(|p| matches!(p, ReadabilityProposal::Split { .. })).unwrap();
-        assert!(p.rationale().contains("CPS"), "rationale must explain the CPS overrun: {}", p.rationale());
+        assert!(
+            proposals
+                .iter()
+                .any(|p| matches!(p, ReadabilityProposal::Split { .. }))
+        );
+        let p = proposals
+            .iter()
+            .find(|p| matches!(p, ReadabilityProposal::Split { .. }))
+            .unwrap();
+        assert!(
+            p.rationale().contains("CPS"),
+            "rationale must explain the CPS overrun: {}",
+            p.rationale()
+        );
     }
 
     #[test]
     fn lint_flags_sub_minimum_duration_with_extend_proposal() {
         let cues = vec![cue(0.0, 0.2, "hi")]; // 0.2s < 0.5s minimum
         let proposals = lint(&cues, &CaptionFormatProfile::long_form());
-        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Extend { .. })));
+        assert!(
+            proposals
+                .iter()
+                .any(|p| matches!(p, ReadabilityProposal::Extend { .. }))
+        );
     }
 
     #[test]
     fn lint_is_silent_on_clean_cues() {
         let cues = vec![cue(0.0, 2.0, "a calm, readable line")];
         let proposals = lint(&cues, &CaptionFormatProfile::long_form());
-        assert!(proposals.is_empty(), "clean cue should not be flagged: {proposals:?}");
+        assert!(
+            proposals.is_empty(),
+            "clean cue should not be flagged: {proposals:?}"
+        );
     }
 
     #[test]
     fn lint_flags_overlong_line_with_reflow_proposal() {
         // 64 chars on one line exceeds long_form()'s 42-char limit.
-        let c = cue(0.0, 5.0, "this is a very long single line that clearly exceeds the limit!!");
+        let c = cue(
+            0.0,
+            5.0,
+            "this is a very long single line that clearly exceeds the limit!!",
+        );
         let proposals = lint(&[c], &CaptionFormatProfile::long_form());
-        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Reflow { .. })));
+        assert!(
+            proposals
+                .iter()
+                .any(|p| matches!(p, ReadabilityProposal::Reflow { .. }))
+        );
     }
 
     #[test]
@@ -518,7 +602,11 @@ mod tests {
         });
         let words = words_from_transcript(&t);
         let texts: Vec<_> = words.iter().map(|w| w.text.as_str()).collect();
-        assert_eq!(texts, vec!["rise", "of", "solo"], "should use the top-level words, not the whole-segment fallback");
+        assert_eq!(
+            texts,
+            vec!["rise", "of", "solo"],
+            "should use the top-level words, not the whole-segment fallback"
+        );
     }
 
     #[test]

@@ -9229,7 +9229,15 @@ fn drawtext_escape(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\\' => "\\\\".to_string(),
-            '\'' => "\\'".to_string(),
+            // Text is emitted as `text='<escaped>'`. ffmpeg's filtergraph
+            // quoting cannot hold a literal `'` inside single quotes — the
+            // first `'` always closes the quote, even when backslash-prefixed
+            // (`\'` inside quotes is NOT an escape). A bare `\'` therefore
+            // desyncs every downstream quote (including the `enable='...'`),
+            // folding the chain's output label into the last enable
+            // expression and aborting the render. The only correct embedding
+            // is close-quote / escaped-literal-quote / reopen-quote.
+            '\'' => "'\\''".to_string(),
             ':' => "\\:".to_string(),
             ',' => "\\,".to_string(),
             '\n' => "\\n".to_string(),
@@ -16708,9 +16716,131 @@ font_family: None,
     fn drawtext_escape_handles_special_chars() {
         let s = drawtext_escape("text: with 'quote', backslash\\");
         assert!(s.contains("\\:"));
-        assert!(s.contains("\\'"));
         assert!(s.contains("\\\\"));
         assert!(s.contains("\\,"));
+    }
+
+    #[test]
+    fn drawtext_escape_breaks_out_of_single_quotes_for_apostrophe() {
+        // drawtext text is always emitted as `text='<escaped>'`. ffmpeg's
+        // filtergraph quoting cannot contain a literal `'` inside a
+        // single-quoted value — the first `'` always *closes* the quote,
+        // even if backslash-prefixed. So a bare `\'` desyncs every
+        // downstream quote (including the `enable='...'`), folding the
+        // chain's `[titled_v]` output label into the last enable
+        // expression. The only correct embedding is close-quote /
+        // escaped-literal-quote / reopen-quote: `'\''`.
+        assert_eq!(drawtext_escape("don't"), "don'\\''t");
+    }
+
+    /// Walk a filtergraph string the way ffmpeg does and assert its
+    /// single quotes are balanced. Outside a quote, `\` escapes the next
+    /// char (so `\'` is a literal quote that does not toggle); a bare `'`
+    /// opens a quote. Inside a quote, `\` is literal and the next `'`
+    /// closes the quote. A well-formed graph ends outside any quote.
+    fn assert_balanced_filtergraph_quotes(fc: &str) {
+        let bytes = fc.as_bytes();
+        let mut in_quote = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' if !in_quote => {
+                    i += 2; // skip the escaped char
+                    continue;
+                }
+                b'\'' => in_quote = !in_quote,
+                _ => {}
+            }
+            i += 1;
+        }
+        assert!(
+            !in_quote,
+            "filter_complex has unbalanced single quotes (a `'` in caption text \
+             desynced the quoting): {fc}"
+        );
+    }
+
+    #[test]
+    fn multi_caption_filter_complex_keeps_quotes_balanced_with_apostrophes() {
+        // Regression: a Titles track full of whole-cue captions lowered to
+        // drawtext. A caption containing an apostrophe used to break the
+        // `text='...'` quote, corrupting the `enable='between(...)'` of the
+        // last filter so `[titled_v]` folded into the expression and ffmpeg
+        // aborted. The emitted graph must stay quote-balanced regardless.
+        let s0 = seg("/tmp/a.mp4", 0.0, 60.0);
+        let captions: Vec<TitlePlan> = (0..12)
+            .map(|i| {
+                let mut t = title(TitleAnimation::None, TitlePosition::Bottom);
+                t.role = "caption".into();
+                t.start_s = i as f64 * 0.5;
+                t.end_s = t.start_s + 0.5;
+                // Mix in apostrophes — ubiquitous in real speech captions.
+                t.text = if i % 2 == 0 {
+                    format!("we're on cue {i}, don't blink")
+                } else {
+                    format!("plain cue {i}")
+                };
+                t
+            })
+            .collect();
+        let plan = FilterPlanner::with_titles(&[s0], &[], &captions).plan();
+        assert!(
+            plan.filter_complex.contains("[titled_v]"),
+            "expected a titled video output label: {}",
+            plan.filter_complex,
+        );
+        assert_balanced_filtergraph_quotes(&plan.filter_complex);
+    }
+
+    #[test]
+    fn ffmpeg_parses_multi_caption_drawtext_filter_complex() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let probe = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-filters"])
+            .output();
+        let has_drawtext = probe
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("drawtext"))
+            .unwrap_or(false);
+        if !has_drawtext {
+            eprintln!("ffmpeg lacks drawtext; skipping caption parse test");
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let synth = dir.path().join("clip.mp4");
+        write_synthetic_video(&ffmpeg, &synth, "blue");
+
+        let s0 = seg(&synth.to_string_lossy(), 0.0, 1.0);
+        let captions: Vec<TitlePlan> = (0..10)
+            .map(|i| {
+                let mut t = title(TitleAnimation::None, TitlePosition::Bottom);
+                t.role = "caption".into();
+                t.start_s = i as f64 * 0.08;
+                t.end_s = t.start_s + 0.08;
+                t.text = format!("cue {i}: we're sure it's fine, don't worry");
+                t
+            })
+            .collect();
+        let plan = FilterPlanner::with_titles(&[s0], &[], &captions).plan();
+
+        let output = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&synth)
+            .arg("-filter_complex")
+            .arg(&plan.filter_complex)
+            .args(["-map", &plan.video_out_label, "-map", &plan.audio_out_label])
+            .args(["-frames:v", "1", "-f", "null", "-"])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg rejected the multi-caption filter_complex\nfilter_complex:\n{}\nstderr:\n{}",
+            plan.filter_complex,
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     #[test]

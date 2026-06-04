@@ -1994,7 +1994,17 @@ fn parse_field(
     if let Ok(n) = raw.parse::<f64>() {
         return Ok((key, FieldValue::Number(n)));
     }
-    // Strip optional surrounding quotes for string values.
+    // String values may be JSON-encoded (the emitters write quoted text via
+    // `json_string()`), so a well-formed JSON string literal is decoded in
+    // full — this round-trips embedded quotes and escapes faithfully rather
+    // than leaking backslashes onto the screen. Anything that merely looks
+    // quoted but isn't valid JSON (or is unquoted) falls back to stripping at
+    // most one surrounding quote pair.
+    if raw.starts_with('"') {
+        if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+            return Ok((key, FieldValue::String(decoded)));
+        }
+    }
     let s = raw
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
@@ -3183,6 +3193,29 @@ mod tests {
                 assert_eq!(color, "#FFAA00");
                 assert_eq!(*font_weight, TitleWeight::Bold);
                 assert_eq!(*animation, TitleAnimation::FadeInOut);
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_text_with_embedded_quotes() {
+        // The emitters write `+ text:` via full JSON encoding, so embedded
+        // double-quotes arrive escaped. The parser must JSON-decode the
+        // field rather than strip a single quote pair, or the backslashes
+        // leak onto the screen. Pre-existing round-trip bug.
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"she said \\\"go\\\"\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle { text, .. } => {
+                assert_eq!(text, "she said \"go\"");
             }
             other => panic!("want InsertTitle, got {other:?}"),
         }

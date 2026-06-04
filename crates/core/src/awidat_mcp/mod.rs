@@ -99,13 +99,13 @@ use crate::awidat_mcp::tools::manage_assets::{
     self, CreateBinArgs, MarkSelectArgs, MoveToBinArgs, RateAssetArgs, RenameAssetArgs,
     TagAssetArgs,
 };
+use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
 use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
 use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
-use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};

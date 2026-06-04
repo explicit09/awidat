@@ -318,7 +318,9 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         let wrapped = wrap_caption_text(&escape_ass_text(text), layout.max_chars_per_line);
         let start = format_ass_time(title.start_s.max(0.0));
         let end = format_ass_time(title.end_s.max(title.start_s));
-        return vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}")];
+        return vec![format!(
+            "Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}"
+        )];
     }
     let start = format_ass_time(title.start_s.max(0.0));
     let end = format_ass_time(title.end_s.max(title.start_s));
@@ -595,7 +597,10 @@ mod tests {
         // render via the plain Dialogue branch rather than karaoke.
         title.role = "caption".into();
         title.word_timings.clear();
-        assert!(is_libass_eligible(&title), "whole-cue caption must still use libass");
+        assert!(
+            is_libass_eligible(&title),
+            "whole-cue caption must still use libass"
+        );
     }
 
     #[test]
@@ -736,7 +741,10 @@ mod tests {
     #[test]
     fn caption_without_word_timings_is_libass_eligible() {
         let t = caption_title("hello world", vec![]);
-        assert!(is_libass_eligible(&t), "whole-cue captions must use libass, not drawtext");
+        assert!(
+            is_libass_eligible(&t),
+            "whole-cue captions must use libass, not drawtext"
+        );
     }
 
     #[test]
@@ -744,9 +752,16 @@ mod tests {
         let t = caption_title("the rise of solo entrepreneurs", vec![]);
         let doc = build_ass_document(&t);
         let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
-        assert_eq!(dialogues.len(), 1, "exactly one whole-cue dialogue, got: {dialogues:?}");
+        assert_eq!(
+            dialogues.len(),
+            1,
+            "exactly one whole-cue dialogue, got: {dialogues:?}"
+        );
         assert!(doc.contains("rise") && doc.contains("entrepreneurs"));
-        assert!(!dialogues[0].contains("\\k"), "whole-cue must not emit karaoke \\k tags");
+        assert!(
+            !dialogues[0].contains("\\k"),
+            "whole-cue must not emit karaoke \\k tags"
+        );
     }
 
     #[test]
@@ -756,7 +771,10 @@ mod tests {
         let raised = CaptionLayoutProfile::for_title(&t);
         t.safe_area = Some("standard".into());
         let standard = CaptionLayoutProfile::for_title(&t);
-        assert_eq!(raised.margin_v_bottom, 300, "lower_third clears the banner band");
+        assert_eq!(
+            raised.margin_v_bottom, 300,
+            "lower_third clears the banner band"
+        );
         assert_eq!(standard.margin_v_bottom, 162, "standard unchanged");
         assert!(raised.margin_v_bottom > standard.margin_v_bottom);
     }

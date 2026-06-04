@@ -4,7 +4,9 @@
 //! `scene_aware_short_form`; `LowerSafeZoneStrategy` here is the general default.
 
 use crate::caption::readability::Cue;
-use crate::caption::types::{CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming};
+use crate::caption::types::{
+    CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
+};
 
 /// Per-cue placement + style decision plus the reasons that justify it.
 pub struct CuePlan {
@@ -24,8 +26,7 @@ pub trait CaptionPlanStrategy {
 
 /// Build CaptionRecommendations from cues using the given strategy.
 pub fn plan(cues: &[Cue], strategy: &dyn CaptionPlanStrategy) -> Vec<CaptionRecommendation> {
-    cues
-        .iter()
+    cues.iter()
         .filter(|c| !c.lines.join(" ").trim().is_empty())
         .map(|c| {
             let decision = strategy.plan_cue(c);
@@ -36,11 +37,16 @@ pub fn plan(cues: &[Cue], strategy: &dyn CaptionPlanStrategy) -> Vec<CaptionReco
                 word_timings: c
                     .word_timings
                     .iter()
-                    .map(|w| CaptionWordTiming { text: w.text.clone(), start_s: w.start_s, end_s: w.end_s })
+                    .map(|w| CaptionWordTiming {
+                        text: w.text.clone(),
+                        start_s: w.start_s,
+                        end_s: w.end_s,
+                    })
                     .collect(),
                 placement: decision.placement,
                 style: decision.style,
-                transcript_reason: "readability-segmented transcript cue with source timings".into(),
+                transcript_reason: "readability-segmented transcript cue with source timings"
+                    .into(),
                 visual_reason: decision.visual_reason,
                 safety_reason: decision.safety_reason,
                 confidence: decision.confidence,
@@ -70,7 +76,16 @@ mod tests {
     use crate::caption::readability::{Cue, InputWord};
 
     fn cue(text: &str) -> Cue {
-        Cue { start_s: 1.0, end_s: 2.5, lines: vec![text.into()], word_timings: vec![InputWord { text: text.into(), start_s: 1.0, end_s: 2.5 }] }
+        Cue {
+            start_s: 1.0,
+            end_s: 2.5,
+            lines: vec![text.into()],
+            word_timings: vec![InputWord {
+                text: text.into(),
+                start_s: 1.0,
+                end_s: 2.5,
+            }],
+        }
     }
 
     #[test]
@@ -78,7 +93,10 @@ mod tests {
         let cues = vec![cue("hello world")];
         let recs = plan(&cues, &LowerSafeZoneStrategy);
         assert_eq!(recs.len(), 1);
-        assert_eq!(recs[0].placement, crate::caption::types::CaptionPlacement::Bottom);
+        assert_eq!(
+            recs[0].placement,
+            crate::caption::types::CaptionPlacement::Bottom
+        );
         assert_eq!(recs[0].text, "hello world");
         assert_eq!(recs[0].start_s, 1.0);
         assert_eq!(recs[0].word_timings.len(), 1);
@@ -86,8 +104,16 @@ mod tests {
 
     #[test]
     fn plan_skips_blank_cues() {
-        let cues = vec![Cue { start_s: 0.0, end_s: 1.0, lines: vec!["   ".into()], word_timings: vec![] }];
+        let cues = vec![Cue {
+            start_s: 0.0,
+            end_s: 1.0,
+            lines: vec!["   ".into()],
+            word_timings: vec![],
+        }];
         let recs = plan(&cues, &LowerSafeZoneStrategy);
-        assert!(recs.is_empty(), "blank cues should not produce recommendations");
+        assert!(
+            recs.is_empty(),
+            "blank cues should not produce recommendations"
+        );
     }
 }
