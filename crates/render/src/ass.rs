@@ -193,7 +193,12 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         } else {
             0i32
         };
-        (bold, hex_to_ass_color(&title.color), 1i32, "&H80000000".to_string())
+        (
+            bold,
+            hex_to_ass_color(&title.color),
+            1i32,
+            "&H80000000".to_string(),
+        )
     };
 
     // Karaoke fill secondary colour: the "unread" word state.
@@ -357,8 +362,10 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
     //   If any condition is absent, fall through to the whole-cue path below.
     let style = title.caption_style.as_ref();
     let active_pop_style = style.filter(|s| {
-        matches!(s.reveal, crate::timeline::CaptionRenderReveal::ActiveWordPop)
-            && s.highlight_color.is_some()
+        matches!(
+            s.reveal,
+            crate::timeline::CaptionRenderReveal::ActiveWordPop
+        ) && s.highlight_color.is_some()
             && !words.is_empty()
     });
     if let Some(s) = active_pop_style {
@@ -509,11 +516,7 @@ pub(crate) fn hex_to_ass_color(hex: &str) -> String {
 /// `caption_style` is absent or casing is `AsIs`, returns the input
 /// unchanged. When casing is `Upper`, uppercases the whole string.
 fn apply_casing(text: &str, title: &TitlePlan) -> String {
-    match title
-        .caption_style
-        .as_ref()
-        .map(|s| &s.casing)
-    {
+    match title.caption_style.as_ref().map(|s| &s.casing) {
         Some(CaptionRenderCasing::Upper) => text.to_uppercase(),
         _ => text.to_owned(),
     }
@@ -913,7 +916,10 @@ mod tests {
             background: CaptionRenderBackground::None,
         };
         let doc = build_ass_document(&styled(spec, "rise of solo", vec![]));
-        assert!(doc.contains("RISE OF SOLO"), "Upper casing must uppercase text: {doc}");
+        assert!(
+            doc.contains("RISE OF SOLO"),
+            "Upper casing must uppercase text: {doc}"
+        );
     }
 
     #[test]
@@ -926,13 +932,25 @@ mod tests {
             primary_color: "#FFFFFF".into(),
             highlight_color: None,
             reveal: CaptionRenderReveal::WholeCue,
-            background: CaptionRenderBackground::Box { color: "#000000".into(), opacity: 153 },
+            background: CaptionRenderBackground::Box {
+                color: "#000000".into(),
+                opacity: 153,
+            },
         };
         let doc = build_ass_document(&styled(spec, "hi", vec![]));
-        let style_line = doc.lines().find(|l| l.starts_with("Style: Caption")).expect("style row");
-        let fields: Vec<&str> = style_line.trim_start_matches("Style: ").split(',').collect();
+        let style_line = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .expect("style row");
+        let fields: Vec<&str> = style_line
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
         // fields[0]="Caption"; BorderStyle is the 16th field => index 15.
-        assert_eq!(fields[15], "3", "boxed background must set BorderStyle=3: {style_line}");
+        assert_eq!(
+            fields[15], "3",
+            "boxed background must set BorderStyle=3: {style_line}"
+        );
     }
 
     #[test]
@@ -971,8 +989,16 @@ mod tests {
             background: CaptionRenderBackground::None,
         };
         let wt = vec![
-            CaptionWordTiming { text: "five".into(), start_s: 1.0, end_s: 1.4 },
-            CaptionWordTiming { text: "ten".into(),  start_s: 1.4, end_s: 2.0 },
+            CaptionWordTiming {
+                text: "five".into(),
+                start_s: 1.0,
+                end_s: 1.4,
+            },
+            CaptionWordTiming {
+                text: "ten".into(),
+                start_s: 1.4,
+                end_s: 2.0,
+            },
         ];
         let doc = build_ass_document(&styled(spec, "five ten", wt));
         let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
@@ -981,11 +1007,19 @@ mod tests {
         assert!(dialogues[0].contains("FIVE") && dialogues[0].contains("TEN"));
         // exactly one highlight color override marker per dialogue line
         let hi = hex_to_ass_color("#FFE000");
-        assert_eq!(dialogues[0].matches(&hi).count(), 1, "exactly one highlighted word: {}", dialogues[0]);
+        assert_eq!(
+            dialogues[0].matches(&hi).count(),
+            1,
+            "exactly one highlighted word: {}",
+            dialogues[0]
+        );
         // the highlighted word in dialogue[0] is the first word; dialogue[1] highlights the second
         assert_eq!(dialogues[1].matches(&hi).count(), 1);
         // timing spans the word window
-        assert!(dialogues[0].contains(&format_ass_time(1.0)) && dialogues[0].contains(&format_ass_time(1.4)));
+        assert!(
+            dialogues[0].contains(&format_ass_time(1.0))
+                && dialogues[0].contains(&format_ass_time(1.4))
+        );
     }
 
     #[test]

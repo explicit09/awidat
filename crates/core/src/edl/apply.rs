@@ -15153,10 +15153,7 @@ mod tests {
             Some("active_word_pop"),
             "reveal must be stored as snake_case string"
         );
-        assert_eq!(
-            style.get("weight").and_then(|v| v.as_str()),
-            Some("bold"),
-        );
+        assert_eq!(style.get("weight").and_then(|v| v.as_str()), Some("bold"),);
         assert_eq!(
             style.get("highlight_color").and_then(|v| v.as_str()),
             Some("#FFD700"),

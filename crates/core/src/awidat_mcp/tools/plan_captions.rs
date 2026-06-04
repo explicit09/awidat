@@ -201,15 +201,36 @@ mod tests {
     fn explicit_preset_drives_style_json() {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
-        write_whisper(dir.path(), asset, serde_json::json!({
-            "words": [{"text":"hi","start_s":0.0,"end_s":1.0}], "segments":[{"text":"hi","start_s":0.0,"end_s":1.0}]
-        }));
-        let ctx = McpToolCtx { project_root: dir.path().to_path_buf() };
-        let out = run(PlanCaptionsArgs { asset_id: asset.into(), clip_id: "c".into(),
-            format: "long_form".into(), mood: "minimal_cinematic".into(), preset: Some("word_pop".into()) }, ctx).unwrap();
+        write_whisper(
+            dir.path(),
+            asset,
+            serde_json::json!({
+                "words": [{"text":"hi","start_s":0.0,"end_s":1.0}], "segments":[{"text":"hi","start_s":0.0,"end_s":1.0}]
+            }),
+        );
+        let ctx = McpToolCtx {
+            project_root: dir.path().to_path_buf(),
+        };
+        let out = run(
+            PlanCaptionsArgs {
+                asset_id: asset.into(),
+                clip_id: "c".into(),
+                format: "long_form".into(),
+                mood: "minimal_cinematic".into(),
+                preset: Some("word_pop".into()),
+            },
+            ctx,
+        )
+        .unwrap();
         let body: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert!(body["edl_fragment"].as_str().unwrap().contains("\"reveal\":\"active_word_pop\""),
-            "explicit preset must drive style_json: {}", body["edl_fragment"]);
+        assert!(
+            body["edl_fragment"]
+                .as_str()
+                .unwrap()
+                .contains("\"reveal\":\"active_word_pop\""),
+            "explicit preset must drive style_json: {}",
+            body["edl_fragment"]
+        );
     }
 
     #[test]

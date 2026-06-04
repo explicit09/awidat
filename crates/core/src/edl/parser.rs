@@ -1313,11 +1313,8 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or_default();
-                let style_json = take_field_json::<serde_json::Value>(
-                    &mut fields,
-                    "style_json",
-                    head,
-                )?;
+                let style_json =
+                    take_field_json::<serde_json::Value>(&mut fields, "style_json", head)?;
                 Ok(EdlOp::InsertCaption {
                     start_s,
                     end_s,

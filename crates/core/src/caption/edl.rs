@@ -31,8 +31,10 @@ pub fn build_caption_edl_lines(
         let style_json = serde_json::to_string(spec).unwrap_or_else(|_| "{}".into());
         lines.push(format!("+ style_json: {style_json}"));
         lines.push(format!("+ safe_area: {safe_area}"));
-        if matches!(spec.reveal, RevealMode::WordByWord | RevealMode::ActiveWordPop)
-            && !caption.word_timings.is_empty()
+        if matches!(
+            spec.reveal,
+            RevealMode::WordByWord | RevealMode::ActiveWordPop
+        ) && !caption.word_timings.is_empty()
         {
             lines.push(format!(
                 "+ word_timings_json: {}",
@@ -68,7 +70,7 @@ fn json_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::caption::styles::{resolve_preset, CaptionBackground, CaptionCasing, CaptionWeight};
+    use crate::caption::styles::{CaptionBackground, CaptionCasing, CaptionWeight, resolve_preset};
     use crate::caption::types::{
         CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
     };
@@ -157,7 +159,10 @@ mod tests {
         use crate::caption::styles::resolve_preset;
         let spec = resolve_preset("word_pop").unwrap();
         let blob = build_caption_edl_lines(&[rec()], &spec, "mobile").join("\n");
-        assert!(blob.contains("+ style_json:"), "must emit style_json: {blob}");
+        assert!(
+            blob.contains("+ style_json:"),
+            "must emit style_json: {blob}"
+        );
         assert!(blob.contains("\"reveal\":\"active_word_pop\""));
         assert!(blob.contains("\"highlight_color\":\"#FFE000\""));
     }

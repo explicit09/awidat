@@ -160,12 +160,18 @@ mod tests {
     #[test]
     fn presets_resolve_with_expected_shapes() {
         let clean = resolve_preset("clean_white").expect("clean_white");
-        assert!(matches!(clean.reveal, crate::caption::readability::RevealMode::WholeCue));
+        assert!(matches!(
+            clean.reveal,
+            crate::caption::readability::RevealMode::WholeCue
+        ));
         assert!(clean.highlight_color.is_none());
         assert!(matches!(clean.background, CaptionBackground::None));
 
         let pop = resolve_preset("word_pop").expect("word_pop");
-        assert!(matches!(pop.reveal, crate::caption::readability::RevealMode::ActiveWordPop));
+        assert!(matches!(
+            pop.reveal,
+            crate::caption::readability::RevealMode::ActiveWordPop
+        ));
         assert_eq!(pop.highlight_color.as_deref(), Some("#FFE000"));
         assert!(matches!(pop.weight, CaptionWeight::Bold));
         assert!(matches!(pop.casing, CaptionCasing::Upper));

@@ -610,8 +610,9 @@ fn build_edl_fragment(
     {
         use crate::caption::edl::build_caption_edl_lines;
         use crate::caption::styles::{CaptionFormat, CaptionMood};
-        let spec = crate::caption::styles::resolve_preset("word_pop")
-            .unwrap_or_else(|| crate::caption::styles::resolve_style(CaptionFormat::ShortForm, CaptionMood::ActivePop));
+        let spec = crate::caption::styles::resolve_preset("word_pop").unwrap_or_else(|| {
+            crate::caption::styles::resolve_style(CaptionFormat::ShortForm, CaptionMood::ActivePop)
+        });
         lines.extend(build_caption_edl_lines(captions, &spec, "mobile"));
     }
 

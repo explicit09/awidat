@@ -17761,10 +17761,18 @@ caption_style: None,
             "background": { "kind": "box", "color": "#000000", "opacity": 128 }
         });
         let mut effect = Effect::new("awidat.title");
-        effect.metadata.insert("text".into(), serde_json::json!("Hello"));
-        effect.metadata.insert("start_s".into(), serde_json::json!(1.0));
-        effect.metadata.insert("end_s".into(), serde_json::json!(3.0));
-        effect.metadata.insert("role".into(), serde_json::json!("caption"));
+        effect
+            .metadata
+            .insert("text".into(), serde_json::json!("Hello"));
+        effect
+            .metadata
+            .insert("start_s".into(), serde_json::json!(1.0));
+        effect
+            .metadata
+            .insert("end_s".into(), serde_json::json!(3.0));
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
         effect.metadata.insert("caption_style".into(), style_value);
 
         let mut clip = Clip::empty("caption-test");
