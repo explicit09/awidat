@@ -10,6 +10,11 @@
 # re-enable the deployed cron schedules. To exercise the worker by hand, POST
 # /internal/tick yourself (see the curl at the bottom).
 #
+# DATABASE_URL must use the Supabase SESSION pooler (port 5432), NOT transaction
+# mode (6543): the sync `postgres` crate uses named prepared statements, which
+# collide under transaction pooling (42P05 "prepared statement s0 already
+# exists"). Verified working end-to-end on 5432. See .env.local.
+#
 # Fill in the two <PLACEHOLDER>s, or copy this to .env.local (gitignored) and
 # source it. Secrets must never be committed.
 set -euo pipefail
