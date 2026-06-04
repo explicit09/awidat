@@ -58,6 +58,7 @@ pub mod plan_emphasis;
 pub mod plan_generated_media;
 pub mod plan_look_regions;
 pub mod plan_motion_scene;
+pub mod plan_captions;
 pub mod plan_multicam;
 pub mod plan_reframe;
 pub mod plan_scene_aware_short_form;
