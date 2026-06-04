@@ -691,6 +691,8 @@ fn apply_one(
             font_weight,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_insert_title(
             working,
             index,
@@ -703,6 +705,8 @@ fn apply_one(
             *font_weight,
             *animation,
             *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
         ),
         EdlOp::InsertRichTitle {
             start_s,
@@ -712,8 +716,20 @@ fn apply_one(
             font_size,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_insert_rich_title(
-            working, index, *start_s, *end_s, segments, *position, *font_size, *animation, *phases,
+            working,
+            index,
+            *start_s,
+            *end_s,
+            segments,
+            *position,
+            *font_size,
+            *animation,
+            *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
         ),
         EdlOp::InstantiateMotionTemplate {
             template_id,
@@ -741,6 +757,8 @@ fn apply_one(
             font_weight,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_set_title(
             working,
             index,
@@ -754,6 +772,8 @@ fn apply_one(
             *font_weight,
             *animation,
             *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
             ctx,
             locator,
         ),
@@ -8106,6 +8126,8 @@ fn apply_insert_title(
     font_weight: super::op::TitleWeight,
     animation: super::op::TitleAnimation,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
 ) -> Result<String, ApplyError> {
     apply_insert_text_overlay(
         working,
@@ -8113,7 +8135,7 @@ fn apply_insert_title(
         "title",
         None,
         None,
-        None,
+        font_overlay_metadata(font_family, font_path),
         start_s,
         end_s,
         text,
@@ -8137,6 +8159,8 @@ fn apply_insert_rich_title(
     font_size: u32,
     animation: super::op::TitleAnimation,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
 ) -> Result<String, ApplyError> {
     if segments.is_empty() || segments.iter().all(|segment| segment.text.is_empty()) {
         return Err(ApplyError::Invalid {
@@ -8148,7 +8172,7 @@ fn apply_insert_rich_title(
         .iter()
         .map(|segment| segment.text.as_str())
         .collect::<String>();
-    let mut extra_metadata = serde_json::Map::new();
+    let mut extra_metadata = font_overlay_metadata(font_family, font_path).unwrap_or_default();
     extra_metadata.insert(
         "rich_segments".into(),
         serde_json::to_value(segments).map_err(|error| ApplyError::Invalid {
@@ -8369,6 +8393,27 @@ fn annotation_kind_str(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Arrow => "arrow",
         AnnotationKind::Bracket => "bracket",
         AnnotationKind::Blur => "blur",
+    }
+}
+
+/// Build optional `font_family` / `font_path` effect metadata for a
+/// title overlay. Returns `None` when neither is set so the render
+/// layer falls back to its system-font probe (unchanged behavior).
+fn font_overlay_metadata(
+    font_family: Option<&str>,
+    font_path: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut metadata = serde_json::Map::new();
+    if let Some(family) = font_family.filter(|s| !s.trim().is_empty()) {
+        metadata.insert("font_family".to_string(), serde_json::json!(family));
+    }
+    if let Some(path) = font_path.filter(|s| !s.trim().is_empty()) {
+        metadata.insert("font_path".to_string(), serde_json::json!(path));
+    }
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
     }
 }
 
@@ -8770,6 +8815,8 @@ fn apply_set_title(
     font_weight: Option<super::op::TitleWeight>,
     animation: Option<super::op::TitleAnimation>,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
@@ -8845,6 +8892,16 @@ fn apply_set_title(
             message: format!("set_title: phases could not serialize: {error}"),
         })?;
         effect.metadata.insert("phases".to_string(), serialized);
+    }
+    if let Some(family) = font_family.filter(|s| !s.trim().is_empty()) {
+        effect
+            .metadata
+            .insert("font_family".to_string(), serde_json::json!(family));
+    }
+    if let Some(path) = font_path.filter(|s| !s.trim().is_empty()) {
+        effect
+            .metadata
+            .insert("font_path".to_string(), serde_json::json!(path));
     }
 
     // start_s / end_s require both the effect metadata AND the
@@ -14840,6 +14897,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Bold,
                 animation: super::super::op::TitleAnimation::FadeInOut,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -14882,6 +14941,42 @@ mod tests {
         assert_eq!(
             effect.metadata.get("font_size").and_then(|v| v.as_u64()),
             Some(72),
+        );
+    }
+
+    #[test]
+    fn apply_insert_title_stamps_custom_font_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Brand".into(),
+                position: super::super::op::TitlePosition::Top,
+                font_size: 72,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+                phases: None,
+                font_family: Some("Brand Sans".into()),
+                font_path: Some("/fonts/Brand.ttf".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track at index 1")
+        };
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!("expected title clip on titles track")
+        };
+        let effect = &title_clip.effects[0];
+        assert_eq!(
+            effect.metadata.get("font_path").and_then(|v| v.as_str()),
+            Some("/fonts/Brand.ttf"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_family").and_then(|v| v.as_str()),
+            Some("Brand Sans"),
         );
     }
 
@@ -15036,6 +15131,8 @@ mod tests {
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
                     phases: None,
+                    font_family: None,
+                    font_path: None,
                 },
                 EdlOp::InsertTitle {
                     start_s: 5.0,
@@ -15047,6 +15144,8 @@ mod tests {
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
                     phases: None,
+                    font_family: None,
+                    font_path: None,
                 },
             ],
         };
@@ -15095,6 +15194,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -15117,6 +15218,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -15140,6 +15243,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
@@ -15172,6 +15277,8 @@ mod tests {
                 font_weight: Some(super::super::op::TitleWeight::Bold),
                 animation: None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
@@ -15220,6 +15327,8 @@ mod tests {
                 font_weight: None,
                 animation: None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
