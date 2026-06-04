@@ -69,9 +69,9 @@ impl CaptionLayoutProfile {
 ///
 /// All other titles continue to fall through to drawtext.
 pub(crate) fn is_libass_eligible(title: &TitlePlan) -> bool {
-    if title.word_timings.is_empty() {
-        return false;
-    }
+    // Captions/subtitles always render via libass — the industry-standard
+    // subtitle engine — whether word-timed (karaoke) or whole-cue. Plain
+    // `title` overlays keep the drawtext path.
     matches!(
         title.role.as_str(),
         "caption" | "captions" | "subtitle" | "subtitles"
@@ -244,6 +244,27 @@ fn push_subtitle_track_events(out: &mut String, track: &SubtitleTrack) {
     }
 }
 
+/// Word-wrap already-escaped caption text to <= max_chars_per_line per visible
+/// line, inserting ASS `\N` hard breaks. Honors the layout width (unlike the
+/// fixed-32 wrap_plain_subtitle_text).
+fn wrap_caption_text(escaped: &str, max_chars_per_line: usize) -> String {
+    let mut out = String::new();
+    let mut visible = 0usize;
+    for word in escaped.split_whitespace() {
+        let n = word.chars().count();
+        if visible > 0 && visible + 1 + n > max_chars_per_line {
+            out.push_str("\\N");
+            visible = 0;
+        } else if visible > 0 {
+            out.push(' ');
+            visible += 1;
+        }
+        out.push_str(word);
+        visible += n;
+    }
+    out
+}
+
 fn wrap_plain_subtitle_text(input: &str) -> String {
     let mut out = String::new();
     let mut visible_line_chars = 0usize;
@@ -285,7 +306,15 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         })
         .collect();
     if words.is_empty() {
-        return Vec::new();
+        let text = title.text.trim();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let layout = CaptionLayoutProfile::for_title(title);
+        let wrapped = wrap_caption_text(&escape_ass_text(text), layout.max_chars_per_line);
+        let start = format_ass_time(title.start_s.max(0.0));
+        let end = format_ass_time(title.end_s.max(title.start_s));
+        return vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}")];
     }
     let start = format_ass_time(title.start_s.max(0.0));
     let end = format_ass_time(title.end_s.max(title.start_s));
@@ -497,6 +526,28 @@ mod tests {
         CaptionWordTiming, TextReveal, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
     };
 
+    fn caption_title(text: &str, word_timings: Vec<CaptionWordTiming>) -> TitlePlan {
+        TitlePlan {
+            text: text.into(),
+            start_s: 1.0,
+            end_s: 3.0,
+            position: TitlePosition::Bottom,
+            font_size: 44,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            phases: None,
+            reveal: TextReveal::None,
+            role: "caption".into(),
+            safe_area: Some("standard".into()),
+            rich_segments: Vec::new(),
+            word_timings,
+            animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+        }
+    }
+
     fn caption_with_words() -> TitlePlan {
         TitlePlan {
             text: "hello world".into(),
@@ -531,14 +582,16 @@ mod tests {
     }
 
     #[test]
-    fn eligibility_requires_caption_role_and_word_timings() {
+    fn eligibility_requires_caption_role() {
         let mut title = caption_with_words();
         assert!(is_libass_eligible(&title));
         title.role = "title".into();
         assert!(!is_libass_eligible(&title));
+        // Whole-cue captions (no word timings) are still eligible — they
+        // render via the plain Dialogue branch rather than karaoke.
         title.role = "caption".into();
         title.word_timings.clear();
-        assert!(!is_libass_eligible(&title));
+        assert!(is_libass_eligible(&title), "whole-cue caption must still use libass");
     }
 
     #[test]
@@ -674,5 +727,21 @@ mod tests {
         assert!(path.extension().and_then(|e| e.to_str()) == Some("ass"));
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("\\k"));
+    }
+
+    #[test]
+    fn caption_without_word_timings_is_libass_eligible() {
+        let t = caption_title("hello world", vec![]);
+        assert!(is_libass_eligible(&t), "whole-cue captions must use libass, not drawtext");
+    }
+
+    #[test]
+    fn whole_cue_caption_emits_one_dialogue_with_full_text() {
+        let t = caption_title("the rise of solo entrepreneurs", vec![]);
+        let doc = build_ass_document(&t);
+        let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
+        assert_eq!(dialogues.len(), 1, "exactly one whole-cue dialogue, got: {dialogues:?}");
+        assert!(doc.contains("rise") && doc.contains("entrepreneurs"));
+        assert!(!dialogues[0].contains("\\k"), "whole-cue must not emit karaoke \\k tags");
     }
 }
