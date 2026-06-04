@@ -28,6 +28,8 @@ r2d2 = { workspace = true }
 r2d2_postgres = { workspace = true }
 postgres = { workspace = true }
 constant_time_eq = { workspace = true }
+# CSPRNG for unguessable OAuth CSRF state + connection ids.
+rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1103,6 +1103,7 @@ dependencies = [
  "postgres",
  "r2d2",
  "r2d2_postgres",
+ "rand 0.9.3",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

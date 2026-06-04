@@ -126,10 +126,12 @@ pub(crate) async fn oauth_start_handler(
     let redirect_uri = redirect_uri(&state.config, &provider);
     let return_to = body.map(|b| b.0.return_to).unwrap_or_default();
 
-    // Server owns the connection id + CSRF state — the desktop never supplies them.
+    // Server owns the connection id + CSRF state — the desktop never supplies
+    // them. SECURITY: both carry CSPRNG entropy (not a guessable timestamp) so
+    // the OAuth `state` is unforgeable and the connection handle is unguessable.
     let now = now_secs();
-    let connection_id = format!("oauthconn-{provider_str}-{now}");
-    let raw_state = format!("st-{connection_id}-{now}");
+    let connection_id = format!("oauthconn-{provider_str}-{}", random_token());
+    let raw_state = format!("st-{}", random_token());
     let config = OAuthProviderConfig {
         client_id,
         redirect_uri,
@@ -358,7 +360,7 @@ pub(crate) async fn upload_url_handler(
     }
 
     let bucket = state.config.storage_bucket.clone();
-    let object_path = format!("jobs/{job_id}/artifact.mp4");
+    let object_path = artifact_object_path(&job_id);
     let api_url = format!(
         "{}/storage/v1/object/upload/sign/{bucket}/{object_path}",
         state.config.supabase_url
@@ -397,7 +399,7 @@ pub(crate) async fn upload_url_handler(
     })?;
     let signed_path = json["url"].as_str().unwrap_or("").to_string();
     let url = format!("{}/storage/v1{signed_path}", state.config.supabase_url);
-    let storage_ref = format!("supabase-storage://{bucket}/{object_path}");
+    let storage_ref = artifact_storage_ref(&bucket, &job_id);
 
     Ok(Json(UploadUrlResponse {
         url,
@@ -407,29 +409,28 @@ pub(crate) async fn upload_url_handler(
     }))
 }
 
-#[derive(Deserialize)]
-pub(crate) struct UploadCompleteBody {
-    pub storage_ref: String,
-}
-
-/// `POST /social/jobs/{id}/upload-complete` — record the staged storage ref on
-/// the job so the worker reads the right artifact when it fires.
+/// `POST /social/jobs/{id}/upload-complete` — mark the staged artifact ready.
+///
+/// SECURITY: the storage ref is regenerated server-side from `(bucket, job_id)`
+/// — never taken from the request body. The worker later reads `artifact_ref`
+/// as a file/storage path, so accepting a client-supplied value would be an
+/// arbitrary-file-read sink (e.g. `file:///etc/passwd`). No body is accepted.
 pub(crate) async fn upload_complete_handler(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(job_id): Path<String>,
-    Json(body): Json<UploadCompleteBody>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers)?;
     let pool = state.pool.clone();
-    let storage_ref = body.storage_ref;
+    let bucket = state.config.storage_bucket.clone();
 
     let job = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
         // Authorize via the read path before mutating anything.
         SocialApi::publish_job(&store, &actor, &owner, &job_id)?;
         let mut job = store.publish_job(&job_id)?;
-        job.artifact_ref = storage_ref;
+        // Regenerated server-side — the client cannot influence this path.
+        job.artifact_ref = artifact_storage_ref(&bucket, &job_id);
         store.save_publish_job(job)?;
         // Return the refreshed public response (re-reads + re-authorizes).
         SocialApi::publish_job(&store, &actor, &owner, &job_id)
@@ -445,6 +446,36 @@ pub(crate) async fn upload_complete_handler(
 /// into every blocking closure.
 fn state_registry() -> awidat_social::provider::ProviderRegistry {
     awidat_social::provider::ProviderRegistry::default_multi_platform()
+}
+
+/// 32 bytes (256 bits) of CSPRNG entropy, hex-encoded. Used for the OAuth CSRF
+/// `state` and the connection handle so neither is guessable.
+fn random_token() -> String {
+    use rand::TryRngCore;
+    let mut buf = [0u8; 32];
+    // OsRng pulls directly from the OS CSPRNG. try_fill_bytes only errors if the
+    // OS entropy source is unavailable, which is fatal — fail loudly.
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut buf)
+        .unwrap_or_else(|e| panic!("OS CSPRNG unavailable: {e}"));
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The storage object path for a job's artifact. Derived solely from
+/// `(bucket, job_id)` — never from client input — so the worker can only ever
+/// read the artifact the server itself staged.
+fn artifact_object_path(job_id: &str) -> String {
+    format!("jobs/{job_id}/artifact.mp4")
+}
+
+/// The opaque storage ref recorded on the job. Regenerated server-side from
+/// `(bucket, job_id)` so a client can never point the worker at an arbitrary
+/// path (e.g. `file:///etc/passwd`).
+fn artifact_storage_ref(bucket: &str, job_id: &str) -> String {
+    format!(
+        "supabase-storage://{bucket}/{}",
+        artifact_object_path(job_id)
+    )
 }
 
 #[cfg(test)]
@@ -485,6 +516,23 @@ mod tests {
         // Empty configured token must never accept any bearer, even empty.
         assert!(!desktop_token_ok("", &headers_with_auth("Bearer ")));
         assert!(!desktop_token_ok("", &HeaderMap::new()));
+    }
+
+    #[test]
+    fn random_token_is_long_and_unique() {
+        let a = random_token();
+        let b = random_token();
+        assert_eq!(a.len(), 64, "32 bytes hex-encoded");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "two draws must differ (CSPRNG)");
+    }
+
+    #[test]
+    fn artifact_storage_ref_is_derived_from_bucket_and_job() {
+        assert_eq!(
+            artifact_storage_ref("renders", "job-9"),
+            "supabase-storage://renders/jobs/job-9/artifact.mp4"
+        );
     }
 
     #[test]
