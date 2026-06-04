@@ -28,6 +28,8 @@ pub fn build_caption_edl_lines(
         lines.push(format!("+ position: {}", edl_position(caption.placement)));
         lines.push(format!("+ font_size: {}", spec.font_size));
         lines.push(format!("+ color: {}", spec.primary_color));
+        let style_json = serde_json::to_string(spec).unwrap_or_else(|_| "{}".into());
+        lines.push(format!("+ style_json: {style_json}"));
         lines.push(format!("+ safe_area: {safe_area}"));
         if matches!(spec.reveal, RevealMode::WordByWord | RevealMode::ActiveWordPop)
             && !caption.word_timings.is_empty()
@@ -148,6 +150,16 @@ mod tests {
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
         assert!(blob.contains("word_timings_json"));
+    }
+
+    #[test]
+    fn emits_style_json_with_spec_fields() {
+        use crate::caption::styles::resolve_preset;
+        let spec = resolve_preset("word_pop").unwrap();
+        let blob = build_caption_edl_lines(&[rec()], &spec, "mobile").join("\n");
+        assert!(blob.contains("+ style_json:"), "must emit style_json: {blob}");
+        assert!(blob.contains("\"reveal\":\"active_word_pop\""));
+        assert!(blob.contains("\"highlight_color\":\"#FFE000\""));
     }
 
     #[test]
