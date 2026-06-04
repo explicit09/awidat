@@ -225,41 +225,79 @@ impl ReadabilityProposal {
     }
 }
 
-/// Inspect existing cues and emit split/extend/reflow proposals where a cue
-/// violates the profile. Never mutates the cues.
+/// Inspect existing cues and emit non-destructive proposals where a cue violates
+/// the profile. Timing proposals are mutually exclusive: a too-short cue is
+/// Extended (a longer hold also lowers CPS), and only a long-enough but text-dense
+/// cue is Split. A layout (Reflow) proposal is independent of timing. Never mutates.
 pub fn lint(cues: &[Cue], profile: &CaptionFormatProfile) -> Vec<ReadabilityProposal> {
     let mut out = Vec::new();
     for c in cues {
         let dur = c.end_s - c.start_s;
-        if c.cps() > profile.max_cps {
-            let mid = c.start_s + dur / 2.0;
-            out.push(ReadabilityProposal::Split {
-                at_s: mid,
-                rationale: format!(
-                    "Split at {mid:.1}s — {} chars/{:.1}s = {:.0} CPS exceeded {:.0} CPS reading ceiling.",
-                    c.char_count(), dur, c.cps(), profile.max_cps
-                ),
-            });
-        }
-        if dur < profile.min_cue_s {
+        // Timing fix (at most one): extend a too-short cue, else split a too-dense one.
+        if dur + 1e-9 < profile.min_cue_s {
             let to = c.start_s + profile.min_cue_s;
             out.push(ReadabilityProposal::Extend {
                 to_s: to,
-                rationale: format!("Extend to {to:.1}s — cue is {dur:.2}s, under the {:.1}s minimum.", profile.min_cue_s),
+                rationale: format!(
+                    "Extend to {to:.1}s — cue is {dur:.2}s, under the {:.1}s minimum.",
+                    profile.min_cue_s
+                ),
+            });
+        } else if c.cps() > profile.max_cps + 1e-9 {
+            let at = split_point(c);
+            out.push(ReadabilityProposal::Split {
+                at_s: at,
+                rationale: format!(
+                    "Split at {at:.1}s — {} chars/{:.1}s = {:.0} CPS exceeded {:.0} CPS reading ceiling.",
+                    c.char_count(),
+                    dur,
+                    c.cps(),
+                    profile.max_cps
+                ),
             });
         }
-        if c.lines.len() > profile.max_lines
-            || c.lines.iter().any(|l| l.chars().count() > profile.max_chars_per_line)
-        {
-            out.push(ReadabilityProposal::Reflow {
-                rationale: format!(
-                    "Reflow — cue exceeds {} line(s) of {} chars.",
+        // Layout fix (independent of timing).
+        let too_many_lines = c.lines.len() > profile.max_lines;
+        let line_too_long = c
+            .lines
+            .iter()
+            .any(|l| l.chars().count() > profile.max_chars_per_line);
+        if too_many_lines || line_too_long {
+            let detail = match (too_many_lines, line_too_long) {
+                (true, true) => format!(
+                    "more than {} line(s) and a line over {} chars",
                     profile.max_lines, profile.max_chars_per_line
                 ),
+                (true, false) => format!("more than {} line(s)", profile.max_lines),
+                (false, true) => format!("a line over {} chars", profile.max_chars_per_line),
+                (false, false) => unreachable!(),
+            };
+            out.push(ReadabilityProposal::Reflow {
+                rationale: format!("Reflow — cue has {detail}."),
             });
         }
     }
     out
+}
+
+/// Best split time for a too-dense cue: the inter-word boundary nearest the cue's
+/// time midpoint when word timings are available, else the plain midpoint.
+fn split_point(c: &Cue) -> f64 {
+    let mid = c.start_s + (c.end_s - c.start_s) / 2.0;
+    if c.word_timings.len() < 2 {
+        return mid;
+    }
+    c.word_timings
+        .iter()
+        .skip(1)
+        .map(|w| w.start_s)
+        .min_by(|a, b| {
+            (a - mid)
+                .abs()
+                .partial_cmp(&(b - mid).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(mid)
 }
 
 #[cfg(test)]
@@ -384,5 +422,13 @@ mod tests {
         let cues = vec![cue(0.0, 2.0, "a calm, readable line")];
         let proposals = lint(&cues, &CaptionFormatProfile::long_form());
         assert!(proposals.is_empty(), "clean cue should not be flagged: {proposals:?}");
+    }
+
+    #[test]
+    fn lint_flags_overlong_line_with_reflow_proposal() {
+        // 64 chars on one line exceeds long_form()'s 42-char limit.
+        let c = cue(0.0, 5.0, "this is a very long single line that clearly exceeds the limit!!");
+        let proposals = lint(&[c], &CaptionFormatProfile::long_form());
+        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Reflow { .. })));
     }
 }
