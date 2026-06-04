@@ -898,7 +898,7 @@ fn best_negative_space(
         .max_by(|left, right| left.score.total_cmp(&right.score))
 }
 
-fn composition_zones(
+pub(crate) fn composition_zones(
     composition: &serde_json::Value,
     start_s: f64,
     end_s: f64,
@@ -952,7 +952,7 @@ fn collect_placements(value: Option<&serde_json::Value>, zones: &mut Vec<Caption
     }
 }
 
-fn caption_placement_from_str(label: &str) -> Option<CaptionPlacement> {
+pub(crate) fn caption_placement_from_str(label: &str) -> Option<CaptionPlacement> {
     match label.to_lowercase().as_str() {
         "top" | "upper" | "upper_third" => Some(CaptionPlacement::Upper),
         "left" | "left_third" => Some(CaptionPlacement::Left),
