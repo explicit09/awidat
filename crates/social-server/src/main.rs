@@ -4,7 +4,9 @@
 //! /internal/tick endpoint code-guarded by SOCIAL_FIRING_ENABLED=false.
 //! Phase 2: server-side OAuth exchange (Google/YouTube), AEAD token storage,
 //!          and the /oauth/callback/{provider} handler.
-//! Phases 3/4 replace the mock adapters with real provider clients.
+//! Phase 3: real YouTube resumable-upload adapter, status client, quota gate,
+//!          and production AccessTokenResolver + ArtifactSource.
+//! Phase 4 will add pg_cron scheduler + token-refresh sweep.
 //!
 //! Environment variables (all required at runtime):
 //!   DATABASE_URL            — Supavisor session-pooler URL
@@ -19,6 +21,11 @@
 //!   SOCIAL_TOKEN_AEAD_KEY   — 64 hex chars = 32-byte ChaCha20-Poly1305 key (Phase 2)
 //!   SOCIAL_TOKEN_KEY_ID     — key identifier stored alongside every token (Phase 2)
 //!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://awidat-social.fly.dev"
+//!   YOUTUBE_FORCE_PRIVATE   — "false" allows non-private uploads (default "true"; keep true pre-audit)
+//!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/awidat-artifacts")
+
+mod artifact_source;
+mod token_resolver;
 
 use awidat_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
@@ -31,9 +38,9 @@ use awidat_social::{
     pg_store::PgSocialStore,
     provider::ProviderRegistry,
     store::SocialStore,
-    token::Aead256Key,
+    token::{Aead256Key, LocalTokenKeyProvider},
     token_bundle::ProviderTokenBundle,
-    upload_adapter::MockUploadAdapter,
+    youtube_upload::{YouTubeClientConfig, YouTubeUploadAdapter, live::LiveYouTubeUploadClient},
 };
 use axum::{
     Json, Router,
@@ -47,6 +54,7 @@ use r2d2_postgres::PostgresConnectionManager;
 use r2d2_postgres::postgres::NoTls;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use token_resolver::ServerAccessTokenResolver;
 use tracing::info;
 
 // ── Server config ─────────────────────────────────────────────────────────────
@@ -65,6 +73,14 @@ struct ServerConfig {
     // Phase 2: AEAD token encryption.
     token_key_id: String,
     token_key_hex: String,
+    // Phase 3: YouTube upload config.
+    // When true, forces all uploads to private regardless of job privacy setting.
+    // Must be true until the YouTube TOS audit clears.
+    youtube_force_private: bool,
+    // Phase 3: artifact root. `file://` artifact refs are confined to this
+    // directory (path-traversal defense). Phase 5 replaces local files with
+    // Supabase Storage signed URLs.
+    artifact_base_dir: String,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -100,6 +116,12 @@ async fn main() {
     let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
     let token_key_hex = std::env::var("SOCIAL_TOKEN_AEAD_KEY").unwrap_or_default();
     let token_key_id = std::env::var("SOCIAL_TOKEN_KEY_ID").unwrap_or_else(|_| "k1".into());
+    // Default true: force private until the YouTube TOS audit clears.
+    let youtube_force_private = std::env::var("YOUTUBE_FORCE_PRIVATE")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    let artifact_base_dir =
+        std::env::var("ARTIFACT_BASE_DIR").unwrap_or_else(|_| "/var/lib/awidat-artifacts".into());
 
     info!(
         social_firing_enabled,
@@ -141,6 +163,8 @@ async fn main() {
             google_client_secret,
             token_key_id,
             token_key_hex,
+            youtube_force_private,
+            artifact_base_dir,
         },
     });
 
@@ -162,8 +186,22 @@ async fn main() {
         .unwrap_or_else(|e| panic!("serve: {e}"));
 }
 
+/// Maximum YouTube Data API uploads per day per project (hard Google quota).
+const YOUTUBE_DAILY_QUOTA: usize = 100;
+
 fn env_required(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("required env var {key} not set"))
+}
+
+/// Clone an `Aead256Key` by re-parsing its hex representation.
+/// `Aead256Key` is not `Clone`; this helper is used to move a copy into a closure.
+fn aead_key_clone(key: &Aead256Key) -> Aead256Key {
+    // Encode the 32 raw bytes back to hex and re-parse.
+    // We use the key_id "k" as a placeholder — the resolver only uses the bytes.
+    let bytes: &[u8] = key.key_material();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Aead256Key::from_hex(key.key_id(), &hex)
+        .unwrap_or_else(|_| panic!("aead_key_clone: key material is not 32 bytes"))
 }
 
 fn aead_key_from_state(
@@ -291,16 +329,19 @@ async fn oauth_begin_handler(
 
 // ── OAuth callback ────────────────────────────────────────────────────────────
 
+/// OAuth callback query parameters.
+///
+/// SECURITY: only the standard OAuth fields (`code`, `state`) plus our
+/// `connection_id` handle are accepted from the client. Owner identity,
+/// account id, display name, and `now` are all derived server-side from the
+/// stored `OAuthConnection` and the provider response — never trusted from the
+/// query string. Accepting owner/account from the client would be an IDOR /
+/// account-takeover vector.
 #[derive(Deserialize)]
 struct OAuthCallbackQuery {
     code: String,
     state: String,
     connection_id: String,
-    owner_id: String,
-    owner_kind: String,
-    account_id: String,
-    display_name: String,
-    now: i64,
 }
 
 /// `GET /oauth/callback/{provider}` — exchange the code, store encrypted tokens.
@@ -357,14 +398,13 @@ async fn oauth_callback_handler(
     let token_response = output.token_response;
     let access_token = output.access_token;
     let refresh_token = output.refresh_token;
-    let now = q.now;
-    let owner = parse_owner(&q.owner_kind, &q.owner_id)?;
-    let account_id = q.account_id.clone();
-    let display_name = q.display_name.clone();
+    // SECURITY: server-authoritative timestamp; never trust a client-supplied clock.
+    let now = now_secs();
     let connection_id = q.connection_id.clone();
     let raw_state = q.state.clone();
     let provider_account_id = token_response.provider_account_id.clone();
     let pool = state.pool.clone();
+    let provider_for_blocking = provider.clone();
 
     let bundle = ProviderTokenBundle::from_oauth_response(provider.clone(), token_response, now)
         .map_err(|e| {
@@ -374,17 +414,33 @@ async fn oauth_callback_handler(
             )
         })?;
 
-    let account = build_connected_account(
-        account_id.clone(),
-        owner.clone(),
-        provider.clone(),
-        provider_account_id,
-        display_name,
-        now,
-    );
-
     let account = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
+
+        // SECURITY: derive owner from the stored connection, validated by the
+        // unguessable `state` handle — not from the query string. A forged
+        // callback can't produce a `state` matching another owner's connection.
+        let connection = store
+            .oauth_connection(&connection_id)
+            .map_err(|e| format!("connection lookup: {e}"))?;
+        let owner = connection.owner;
+
+        // SECURITY: account id + display name are server-derived from the
+        // provider's own account id, not client input.
+        let account_id = format!(
+            "{}:{provider_account_id}",
+            provider_slug(&provider_for_blocking)
+        );
+        let display_name = provider_account_id.clone();
+        let account = build_connected_account(
+            account_id,
+            owner,
+            provider_for_blocking,
+            provider_account_id,
+            display_name,
+            now,
+        );
+
         SocialAccountService::complete_oauth(
             &mut store,
             &key,
@@ -398,6 +454,7 @@ async fn oauth_callback_handler(
                 now,
             },
         )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| {
@@ -409,7 +466,7 @@ async fn oauth_callback_handler(
     .map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e.to_string()})),
+            Json(serde_json::json!({ "error": e })),
         )
     })?;
 
@@ -550,39 +607,69 @@ async fn internal_tick_handler(
         ));
     }
 
-    // Claim due jobs and execute each through the mock adapter (Phase 1).
-    // Phases 3/4 replace the mock adapter with real provider adapters.
+    // Resolve AEAD key — needed for token decryption in the resolver.
+    let aead_key = aead_key_from_state(&state.config)?;
     let pool = state.pool.clone();
+    let force_private = state.config.youtube_force_private;
+    let artifact_base_dir = state.config.artifact_base_dir.clone();
+
     let claimed_count = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = PgSocialStore::new(pool.clone());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| format!("clock error: {e}"))?
             .as_secs() as i64;
+
+        // Quota gate: enforce 100 YouTube uploads/day/project before claiming.
+        let today_count = store
+            .youtube_upload_quota_today(now)
+            .map_err(|e| format!("quota check: {e}"))?;
+        let youtube_quota_remaining = YOUTUBE_DAILY_QUOTA.saturating_sub(today_count);
+
         let claimed = store
             .claim_due_publish_jobs(now, 10)
             .map_err(|e| format!("claim: {e}"))?;
+
         let count = claimed.len();
+        let mut youtube_used = 0usize;
+
         for job in claimed {
-            let adapter = MockUploadAdapter::published(
-                job.provider.clone(),
-                "mock-post-id",
-                "https://example.com/mock",
-            );
-            if let Err(e) = SocialApi::execute_claimed_upload_job(
-                &mut store,
-                &adapter,
-                ExecuteUploadRequest {
-                    job_id: job.id,
-                    title: "Mock upload".into(),
-                    description: None,
-                    tags: Vec::new(),
-                    thumbnail_ref: None,
-                    privacy: None,
-                    now,
-                },
-            ) {
-                tracing::warn!("execute job failed: {e}");
+            use awidat_social::model::Provider;
+            match &job.provider {
+                Provider::YouTube => {
+                    if youtube_used >= youtube_quota_remaining {
+                        tracing::warn!(job_id = %job.id, "YouTube daily quota reached, leaving job Scheduled");
+                        continue;
+                    }
+                    let resolver = ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                    let artifact_source =
+                        artifact_source::FileArtifactSource::new(artifact_base_dir.clone());
+                    let yt_config = YouTubeClientConfig { force_private, ..Default::default() };
+                    let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
+                    let adapter = YouTubeUploadAdapter::new(client);
+                    if let Err(e) = SocialApi::execute_claimed_upload_job(
+                        &mut store,
+                        &adapter,
+                        ExecuteUploadRequest {
+                            job_id: job.id.clone(),
+                            title: String::new(),
+                            description: None,
+                            tags: Vec::new(),
+                            thumbnail_ref: None,
+                            privacy: None,
+                            now,
+                        },
+                    ) {
+                        tracing::warn!(job_id = %job.id, "YouTube execute failed: {e}");
+                    } else {
+                        youtube_used += 1;
+                        let _ = store.increment_youtube_quota(now);
+                    }
+                }
+                Provider::TikTok | Provider::Instagram => {
+                    // TODO(phase-6): wire TikTok/Instagram adapters.
+                    tracing::info!(job_id = %job.id, provider = ?job.provider, "provider not yet live — skipping");
+                }
             }
         }
         Ok::<usize, String>(count)
@@ -654,13 +741,31 @@ fn provider_client_id(
     }
 }
 
-fn redirect_uri(config: &ServerConfig, provider: &Provider) -> String {
-    let slug = match provider {
+fn provider_slug(provider: &Provider) -> &'static str {
+    match provider {
         Provider::YouTube => "youtube",
         Provider::TikTok => "tiktok",
         Provider::Instagram => "instagram",
-    };
-    format!("{}/oauth/callback/{slug}", config.oauth_redirect_base)
+    }
+}
+
+fn redirect_uri(config: &ServerConfig, provider: &Provider) -> String {
+    format!(
+        "{}/oauth/callback/{}",
+        config.oauth_redirect_base,
+        provider_slug(provider)
+    )
+}
+
+/// Server-authoritative current Unix time in seconds.
+///
+/// Used everywhere a timestamp influences a security decision (token expiry,
+/// OAuth completion) so a client can never supply its own clock.
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn build_connected_account(

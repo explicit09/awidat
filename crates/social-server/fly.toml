@@ -29,6 +29,8 @@ primary_region = "iad"  # ← change to match your Supabase region
 #   SOCIAL_TOKEN_AEAD_KEY   — (Phase 2) 64 hex chars = 32-byte ChaCha20-Poly1305 key
 #   SOCIAL_TOKEN_KEY_ID     — (Phase 2) key identifier (e.g. "k1")
 #   OAUTH_REDIRECT_BASE     — (Phase 2) base URL for OAuth callbacks (e.g. https://awidat-social.fly.dev)
+#   YOUTUBE_FORCE_PRIVATE   — (Phase 3) "false" allows non-private uploads (default true; keep true pre-audit)
+#   ARTIFACT_BASE_DIR       — (Phase 3) root dir for file:// artifact refs (default /var/lib/awidat-artifacts)
 
 [[services]]
   internal_port = 3000
