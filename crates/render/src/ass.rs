@@ -12,10 +12,9 @@
 //! to materialize the subtitle file on disk.
 //!
 //! Coexistence: drawtext stays the default for plain titles,
-//! reveal modes, rich text, and anything without WhisperX-style
-//! word timings. Only role=="caption" + non-empty word_timings
-//! switches the renderer to libass — that's the slice where
-//! karaoke unlocks real value.
+//! reveal modes, and rich text. All caption-role overlays
+//! (role == "caption" | "subtitle") use libass — both
+//! word-timed (karaoke `\k` tags) and whole-cue (plain Dialogue).
 
 use std::fs;
 use std::io;
@@ -61,13 +60,13 @@ impl CaptionLayoutProfile {
     }
 }
 
-/// Auto-detect: a [`TitlePlan`] is rendered via libass when
-/// (a) it has at least one transcript word timing, and
-/// (b) its role is "caption" (or anything caption-shaped — we
-/// don't ASS-render plain `title` overlays since they have no
-/// karaoke timing to gain from libass).
+/// A [`TitlePlan`] is rendered via libass when its role is
+/// "caption" (or any caption-shaped alias: "captions", "subtitle",
+/// "subtitles"). That covers both whole-cue and word-timed karaoke
+/// captions — the industry-standard subtitle engine handles both.
+/// Plain `title` overlays keep the `drawtext` path.
 ///
-/// All other titles continue to fall through to drawtext.
+/// All other roles continue to fall through to drawtext.
 pub(crate) fn is_libass_eligible(title: &TitlePlan) -> bool {
     // Captions/subtitles always render via libass — the industry-standard
     // subtitle engine — whether word-timed (karaoke) or whole-cue. Plain
@@ -115,11 +114,9 @@ pub(crate) fn render_subtitle_track_ass_file(
 /// Layout:
 /// - One global `[Script Info]` header at 1920x1080.
 /// - One `[V4+ Styles]` row matching the title's font/weight/color.
-/// - One `Dialogue:` line per captioned step. Each Dialogue line
-///   carries karaoke `\k<centiseconds>` tags so libass reveals
-///   words in sync with their transcript timestamps — same
-///   semantics as the cumulative-prefix drawtext fallback, but
-///   without re-drawing the whole frame every word.
+/// - One or more `Dialogue:` lines. Word-timed captions carry
+///   karaoke `\k<centiseconds>` tags for libass reveal; whole-cue
+///   captions emit a single plain Dialogue covering the full span.
 pub(crate) fn build_ass_document(title: &TitlePlan) -> String {
     let mut out = String::new();
     push_script_info(&mut out);
