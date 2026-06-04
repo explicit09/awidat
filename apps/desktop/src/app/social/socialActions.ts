@@ -11,6 +11,9 @@
 
 import type { Provider } from "./socialModel";
 
+// camelCase: the server's API DTOs now carry #[serde(rename_all = "camelCase")],
+// so the Tauri command returns camelCase fields (matching the rest of the
+// frontend's convention in socialModel.ts).
 export type OAuthStartResponse = {
   oauthConnectionId: string;
   provider: Provider;

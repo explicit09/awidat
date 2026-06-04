@@ -289,23 +289,32 @@ mod tests {
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    // The server's AccountSummary DTO is camelCase (#[serde(rename_all)]); the
+    // wire fixtures must match (incl. the camelCase CapabilitiesDto).
     fn account_json() -> serde_json::Value {
         serde_json::json!({
             "id": "acct_1",
             "owner": { "user": "local-user" },
             "provider": "youtube",
-            "provider_account_id": "channel_1",
-            "display_name": "Awidat Channel",
+            "providerAccountId": "channel_1",
+            "displayName": "Awidat Channel",
             "handle": "@awidat",
-            "avatar_url": null,
-            "account_kind": "channel",
+            "avatarUrl": null,
+            "accountKind": "channel",
             "status": "connected",
             "scopes": ["youtube.upload"],
-            "capabilities": ProviderCapabilities::default(),
+            "capabilities": {
+                "nativeScheduling": true,
+                "queueScheduling": true,
+                "uploadVideo": true,
+                "uploadThumbnail": true,
+                "publicPosting": true,
+                "requiresUserConsent": false
+            },
             "eligibility": AccountEligibility::eligible(),
-            "last_verified_at": null,
-            "created_at": 1,
-            "updated_at": 1,
+            "lastVerifiedAt": null,
+            "createdAt": 1,
+            "updatedAt": 1,
         })
     }
 
@@ -339,9 +348,9 @@ mod tests {
             .and(match_path("/social/oauth/start/youtube"))
             .and(header("authorization", "Bearer dev-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "oauth_connection_id": "oauthconn-youtube-1",
+                "oauthConnectionId": "oauthconn-youtube-1",
                 "provider": "youtube",
-                "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+                "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth?x=1",
             })))
             .mount(&server)
             .await;
