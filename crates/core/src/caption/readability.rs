@@ -19,6 +19,7 @@ pub struct InputWord {
 pub enum RevealMode {
     WholeCue,
     WordByWord,
+    ActiveWordPop,
 }
 
 /// Per-format readability constraints.

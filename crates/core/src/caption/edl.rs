@@ -7,7 +7,8 @@ use crate::caption::types::CaptionRecommendation;
 
 /// Emit `*** Insert Caption` EDL lines for each recommendation, applying the
 /// style spec. `safe_area` is the profile string (e.g. "mobile" / "standard").
-/// Per-word timings are emitted only when the spec's reveal mode is word-by-word.
+/// Per-word timings are emitted when the spec's reveal mode is word-by-word or
+/// active_word_pop.
 pub fn build_caption_edl_lines(
     recs: &[CaptionRecommendation],
     spec: &CaptionStyleSpec,
@@ -26,9 +27,11 @@ pub fn build_caption_edl_lines(
         lines.push(format!("+ text: {}", json_string(&text)));
         lines.push(format!("+ position: {}", edl_position(caption.placement)));
         lines.push(format!("+ font_size: {}", spec.font_size));
-        lines.push(format!("+ color: {}", spec.color));
+        lines.push(format!("+ color: {}", spec.primary_color));
         lines.push(format!("+ safe_area: {safe_area}"));
-        if spec.reveal == RevealMode::WordByWord && !caption.word_timings.is_empty() {
+        if matches!(spec.reveal, RevealMode::WordByWord | RevealMode::ActiveWordPop)
+            && !caption.word_timings.is_empty()
+        {
             lines.push(format!(
                 "+ word_timings_json: {}",
                 serde_json::to_string(&caption.word_timings).unwrap_or_else(|_| "[]".into())
@@ -63,8 +66,7 @@ fn json_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::caption::readability::RevealMode;
-    use crate::caption::styles::CaptionStyleSpec;
+    use crate::caption::styles::{resolve_preset, CaptionBackground, CaptionCasing, CaptionWeight};
     use crate::caption::types::{
         CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
     };
@@ -92,11 +94,7 @@ mod tests {
     fn multiline_cue_text_is_flattened_to_a_single_line() {
         let mut r = rec();
         r.text = "the rise of solar\nentrepreneurs.".into();
-        let spec = CaptionStyleSpec {
-            font_size: 44,
-            color: "#FFFFFF".into(),
-            reveal: RevealMode::WholeCue,
-        };
+        let spec = resolve_preset("clean_white").unwrap();
         let blob = build_caption_edl_lines(&[r], &spec, "standard").join("\n");
         assert!(
             blob.contains("the rise of solar entrepreneurs."),
@@ -110,11 +108,7 @@ mod tests {
 
     #[test]
     fn whole_cue_spec_omits_word_timings() {
-        let spec = CaptionStyleSpec {
-            font_size: 44,
-            color: "#FFFFFF".into(),
-            reveal: RevealMode::WholeCue,
-        };
+        let spec = resolve_preset("clean_white").unwrap();
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
         assert!(blob.contains("*** Insert Caption"));
@@ -128,10 +122,16 @@ mod tests {
 
     #[test]
     fn word_by_word_spec_emits_word_timings() {
+        use crate::caption::readability::RevealMode;
+        use crate::caption::styles::{CaptionStyleSpec, MIN_LEGIBLE_FONT_SIZE};
         let spec = CaptionStyleSpec {
-            font_size: 56,
-            color: "#FFFFFF".into(),
+            font_size: MIN_LEGIBLE_FONT_SIZE.max(56),
+            weight: CaptionWeight::Normal,
+            casing: CaptionCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
             reveal: RevealMode::WordByWord,
+            background: CaptionBackground::None,
         };
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
@@ -143,12 +143,16 @@ mod tests {
     }
 
     #[test]
+    fn active_word_pop_spec_emits_word_timings() {
+        let spec = resolve_preset("word_pop").unwrap();
+        let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
+        let blob = lines.join("\n");
+        assert!(blob.contains("word_timings_json"));
+    }
+
+    #[test]
     fn position_maps_to_a_parser_valid_vertical_band() {
-        let spec = CaptionStyleSpec {
-            font_size: 44,
-            color: "#FFFFFF".into(),
-            reveal: RevealMode::WholeCue,
-        };
+        let spec = resolve_preset("clean_white").unwrap();
         for (placement, expected) in [
             (CaptionPlacement::Bottom, "bottom"),
             (CaptionPlacement::Upper, "top"),

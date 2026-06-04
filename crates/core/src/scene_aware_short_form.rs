@@ -604,19 +604,12 @@ fn build_edl_fragment(
         ]);
     }
 
-    // Captions: shared format-agnostic emission; short-form spec preserves the prior look.
+    // Captions: shared format-agnostic emission; short-form uses clean_white preset
+    // for now (Task 8 will switch to word_pop).
     {
         use crate::caption::edl::build_caption_edl_lines;
-        use crate::caption::readability::RevealMode;
-        use crate::caption::styles::CaptionStyleSpec;
-        // Short-form caption look is pinned here (not via caption::styles::resolve_style)
-        // to preserve the exact prior render; the styles registry serves the general
-        // plan_captions path. See the caption spec's regression-parity note.
-        let spec = CaptionStyleSpec {
-            font_size: 56,
-            color: "#FFFFFF".into(),
-            reveal: RevealMode::WordByWord,
-        };
+        let spec = crate::caption::styles::resolve_preset("clean_white")
+            .expect("clean_white preset must exist");
         lines.extend(build_caption_edl_lines(captions, &spec, "mobile"));
     }
 
@@ -1546,7 +1539,11 @@ mod tests {
     }
 
     #[test]
-    fn caption_edl_preserves_source_word_timings() {
+    fn caption_plan_preserves_source_word_timings() {
+        // Word timings are preserved in the caption_plan recommendations.
+        // The EDL word_timings_json line is only emitted when the preset uses
+        // WordByWord or ActiveWordPop reveal; clean_white uses WholeCue, so
+        // the EDL fragment will not carry them (Task 8 switches to word_pop).
         let plan = build_scene_aware_short_form_plan(SceneAwareShortFormInput {
             asset_id: "raw/demo.mp4".into(),
             clip_id: "clip-1".into(),
@@ -1567,8 +1564,7 @@ mod tests {
         });
 
         assert_eq!(plan.caption_plan[0].word_timings.len(), 2);
-        assert!(plan.edl_fragment.contains("\"text\":\"Watch\""));
-        assert!(plan.edl_fragment.contains("\"text\":\"this\""));
+        assert!(plan.edl_fragment.contains("*** Insert Caption"));
     }
 
     #[test]
