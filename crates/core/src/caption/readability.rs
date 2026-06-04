@@ -95,18 +95,28 @@ pub fn segment(words: &[InputWord], profile: &CaptionFormatProfile) -> Vec<Cue> 
     let budget = profile.max_chars_per_line * profile.max_lines;
     let mut cues = Vec::new();
     let mut current: Vec<InputWord> = Vec::new();
+    let mut current_chars: usize = 0;
 
     for word in words {
-        let mut candidate = current.clone();
-        candidate.push(word.clone());
-        if !current.is_empty() && !fits_budget(&candidate, profile, budget) {
+        let token_chars = word.text.trim().chars().count();
+        let space = usize::from(!current.is_empty());
+        let new_chars = current_chars + space + token_chars;
+        let new_dur = current
+            .first()
+            .map_or(0.0, |first| (word.end_s - first.start_s).max(1e-6));
+        let fits = new_chars <= budget && new_dur <= profile.max_cue_s;
+
+        if !current.is_empty() && !fits {
             cues.push(flush(&current, profile));
             current = vec![word.clone()];
+            current_chars = token_chars;
         } else {
-            current = candidate;
+            current.push(word.clone());
+            current_chars = new_chars;
             if ends_sense_unit(&word.text) {
                 cues.push(flush(&current, profile));
                 current = Vec::new();
+                current_chars = 0;
             }
         }
     }
@@ -115,26 +125,6 @@ pub fn segment(words: &[InputWord], profile: &CaptionFormatProfile) -> Vec<Cue> 
     }
     finalize_timing(&mut cues, profile);
     cues
-}
-
-fn fits_budget(words: &[InputWord], profile: &CaptionFormatProfile, budget: usize) -> bool {
-    cue_chars(words) <= budget && cue_dur(words) <= profile.max_cue_s
-}
-
-fn cue_chars(words: &[InputWord]) -> usize {
-    let text = words
-        .iter()
-        .map(|w| w.text.trim())
-        .collect::<Vec<_>>()
-        .join(" ");
-    text.chars().count()
-}
-
-fn cue_dur(words: &[InputWord]) -> f64 {
-    match (words.first(), words.last()) {
-        (Some(f), Some(l)) => (l.end_s - f.start_s).max(1e-6),
-        _ => 1e-6,
-    }
 }
 
 fn ends_sense_unit(text: &str) -> bool {
@@ -167,7 +157,8 @@ fn wrap_lines(words: &[InputWord], max_chars_per_line: usize, max_lines: usize) 
             lines.push(std::mem::take(&mut line));
             line.push_str(token);
         } else {
-            // No room left under the line budget: append anyway (segment() guards the budget).
+            // Callers must keep total chars <= budget; an over-long single word
+            // (longer than one line) overflows here rather than being dropped.
             line.push(' ');
             line.push_str(token);
         }
@@ -203,6 +194,9 @@ fn finalize_timing(cues: &mut [Cue], profile: &CaptionFormatProfile) {
                 cues[i].end_s = next_start; // defensive: never overlap
             }
         } else {
+            // char_count() counts rendered chars (no inter-line space); this is
+            // the readable-minimum estimate, off by <=1 per wrapped line vs the
+            // grouping budget — negligible for the max 2-line profiles.
             let chars = cues[i].char_count();
             let min_dur = (chars as f64 / profile.max_cps).max(profile.min_cue_s);
             let min_end = cues[i].start_s + min_dur;
@@ -292,5 +286,20 @@ mod tests {
         for pair in cues.windows(2) {
             assert!(pair[0].end_s <= pair[1].start_s + 1e-6, "cues must not overlap: {pair:?}");
         }
+    }
+
+    #[test]
+    fn segment_returns_empty_for_no_words() {
+        assert_eq!(segment(&[], &CaptionFormatProfile::long_form()), Vec::<Cue>::new());
+    }
+
+    #[test]
+    fn segment_keeps_an_overlong_word_rather_than_dropping_it() {
+        // A single word longer than the line budget must survive (overflow), not vanish.
+        let profile = CaptionFormatProfile::short_form(); // budget 15
+        let w = words(&[("supercalifragilistic", 0.0, 1.0)]);
+        let cues = segment(&w, &profile);
+        let joined: String = cues.iter().flat_map(|c| c.lines.iter().cloned()).collect::<Vec<_>>().join(" ");
+        assert!(joined.contains("supercalifragilistic"), "overlong word was dropped: {joined:?}");
     }
 }
