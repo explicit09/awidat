@@ -6,7 +6,8 @@
 //!          and the /oauth/callback/{provider} handler.
 //! Phase 3: real YouTube resumable-upload adapter, status client, quota gate,
 //!          and production AccessTokenResolver + ArtifactSource.
-//! Phase 4 will add pg_cron scheduler + token-refresh sweep.
+//! Phase 4: poll-processing + token-refresh cron routes, server TokenRefresher,
+//!          and the pg_cron schedules (migration 0004) that drive all three.
 //!
 //! Environment variables (all required at runtime):
 //!   DATABASE_URL            — Supavisor session-pooler URL
@@ -25,6 +26,7 @@
 //!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/awidat-artifacts")
 
 mod artifact_source;
+mod token_refresher;
 mod token_resolver;
 
 use awidat_social::{
@@ -40,7 +42,11 @@ use awidat_social::{
     store::SocialStore,
     token::{Aead256Key, LocalTokenKeyProvider},
     token_bundle::ProviderTokenBundle,
-    youtube_upload::{YouTubeClientConfig, YouTubeUploadAdapter, live::LiveYouTubeUploadClient},
+    token_refresh::{TokenRefreshError, TokenRefresher},
+    youtube_upload::{
+        YouTubeClientConfig, YouTubeStatusAdapter, YouTubeUploadAdapter,
+        live::{LiveYouTubeStatusClient, LiveYouTubeUploadClient},
+    },
 };
 use axum::{
     Json, Router,
@@ -175,6 +181,14 @@ async fn main() {
         .route("/oauth/begin/{provider}", post(oauth_begin_handler))
         .route("/oauth/callback/{provider}", get(oauth_callback_handler))
         .route("/internal/tick", post(internal_tick_handler))
+        .route(
+            "/internal/cron/poll-processing",
+            post(internal_poll_processing_handler),
+        )
+        .route(
+            "/internal/cron/refresh-tokens",
+            post(internal_refresh_tokens_handler),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
@@ -188,6 +202,10 @@ async fn main() {
 
 /// Maximum YouTube Data API uploads per day per project (hard Google quota).
 const YOUTUBE_DAILY_QUOTA: usize = 100;
+
+/// The refresh sweep refreshes any token expiring within this window (15 min),
+/// chosen larger than the cron interval so no due upload finds a dead token.
+const TOKEN_REFRESH_SWEEP_SKEW_SECS: i64 = 900;
 
 fn env_required(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("required env var {key} not set"))
@@ -694,6 +712,169 @@ async fn internal_tick_handler(
     ))
 }
 
+/// `POST /internal/cron/poll-processing` — advance `Processing` jobs.
+///
+/// YouTube's resumable upload returns `processing=true` until the video is
+/// transcoded; this sweep polls the status API and moves jobs to
+/// `Published`/`Failed`. Protected by `SERVICE_SHARED_SECRET`, code-guarded by
+/// `SOCIAL_FIRING_ENABLED`.
+async fn internal_poll_processing_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !bearer_auth(&headers, &state.config.service_shared_secret) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        ));
+    }
+    if !state.config.social_firing_enabled {
+        return Ok(Json(
+            serde_json::json!({"status": "noop", "reason": "firing disabled"}),
+        ));
+    }
+
+    let aead_key = aead_key_from_state(&state.config)?;
+    let pool = state.pool.clone();
+
+    let polled = tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool.clone());
+        let now = now_secs();
+        let jobs = store
+            .processing_publish_jobs(25)
+            .map_err(|e| format!("processing query: {e}"))?;
+        let mut advanced = 0usize;
+        for job in jobs {
+            use awidat_social::model::Provider;
+            match &job.provider {
+                Provider::YouTube => {
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveYouTubeStatusClient::new(resolver);
+                    let adapter = YouTubeStatusAdapter::new(client);
+                    match SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now) {
+                        Ok(_) => advanced += 1,
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "poll status failed: {e}");
+                        }
+                    }
+                }
+                Provider::TikTok | Provider::Instagram => {}
+            }
+        }
+        Ok::<usize, String>(advanced)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("join error: {e}")})),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({"status": "ok", "polled": polled})))
+}
+
+/// `POST /internal/cron/refresh-tokens` — pro-actively refresh near-expiry tokens.
+///
+/// Runs independently of firing so a due post never finds a dead access token.
+/// On `invalid_grant` (revoked / expired refresh token) the account is flipped
+/// to `NeedsReauth`. Protected by `SERVICE_SHARED_SECRET`.
+async fn internal_refresh_tokens_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !bearer_auth(&headers, &state.config.service_shared_secret) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        ));
+    }
+    if state.config.google_client_id.is_empty() || state.config.google_client_secret.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Google OAuth not configured"})),
+        ));
+    }
+
+    let aead_key = aead_key_from_state(&state.config)?;
+    let pool = state.pool.clone();
+    let client_id = state.config.google_client_id.clone();
+    let client_secret = state.config.google_client_secret.clone();
+
+    let summary = tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool);
+        let now = now_secs();
+        // Refresh anything expiring within the sweep skew window.
+        let deadline = now.saturating_add(TOKEN_REFRESH_SWEEP_SKEW_SECS);
+        let due = store
+            .token_secrets_due_refresh(deadline)
+            .map_err(|e| format!("due query: {e}"))?;
+
+        let refresher =
+            token_refresher::ServerTokenRefresher::new(client_id, client_secret, aead_key);
+
+        let mut refreshed = 0usize;
+        let mut needs_reauth = 0usize;
+        let mut failed = 0usize;
+        for secret in due {
+            let account_id = secret.connected_account_id.clone();
+            match refresher.refresh(&account_id, &secret, now) {
+                Ok(fresh) => {
+                    if store.save_token_secret(fresh).is_ok() {
+                        refreshed += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+                Err(TokenRefreshError::InvalidGrant(_)) => {
+                    if let Ok(mut account) = store.connected_account(&account_id) {
+                        account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                        account.updated_at = now;
+                        let _ = store.save_connected_account(account);
+                    }
+                    needs_reauth += 1;
+                }
+                Err(TokenRefreshError::Transient(msg)) => {
+                    tracing::warn!(account_id, "token refresh transient error: {msg}");
+                    failed += 1;
+                }
+            }
+        }
+        Ok::<(usize, usize, usize), String>((refreshed, needs_reauth, failed))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("join error: {e}")})),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    let (refreshed, needs_reauth, failed) = summary;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "refreshed": refreshed,
+        "needs_reauth": needs_reauth,
+        "failed": failed,
+    })))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_provider(s: &str) -> Result<Provider, (StatusCode, Json<serde_json::Value>)> {
@@ -795,5 +976,73 @@ fn build_connected_account(
         last_verified_at: None,
         created_at: now,
         updated_at: now,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    fn headers_with_auth(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("authorization", value.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn bearer_auth_accepts_matching_secret() {
+        let h = headers_with_auth("Bearer s3cret");
+        assert!(bearer_auth(&h, "s3cret"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_wrong_secret() {
+        let h = headers_with_auth("Bearer wrong");
+        assert!(!bearer_auth(&h, "s3cret"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_missing_header() {
+        assert!(!bearer_auth(&HeaderMap::new(), "s3cret"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_missing_bearer_prefix() {
+        let h = headers_with_auth("s3cret");
+        assert!(
+            !bearer_auth(&h, "s3cret"),
+            "raw token without Bearer prefix"
+        );
+    }
+
+    #[test]
+    fn provider_slug_round_trips() {
+        assert_eq!(provider_slug(&Provider::YouTube), "youtube");
+        assert_eq!(provider_slug(&Provider::TikTok), "tiktok");
+        assert_eq!(provider_slug(&Provider::Instagram), "instagram");
+    }
+
+    #[test]
+    fn redirect_uri_is_built_from_base_and_slug() {
+        let config = ServerConfig {
+            service_shared_secret: String::new(),
+            social_firing_enabled: false,
+            supabase_url: String::new(),
+            supabase_service_key: String::new(),
+            storage_bucket: String::new(),
+            oauth_redirect_base: "https://app.example".into(),
+            google_client_id: String::new(),
+            google_client_secret: String::new(),
+            token_key_id: String::new(),
+            token_key_hex: String::new(),
+            youtube_force_private: true,
+            artifact_base_dir: String::new(),
+        };
+        assert_eq!(
+            redirect_uri(&config, &Provider::YouTube),
+            "https://app.example/oauth/callback/youtube"
+        );
     }
 }

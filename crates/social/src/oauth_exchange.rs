@@ -20,6 +20,9 @@ pub enum OAuthExchangeError {
     Http(String),
     InvalidResponse(String),
     ChannelResolutionFailed(String),
+    /// The refresh token was revoked or expired (`invalid_grant`). The account
+    /// must be flipped to `NeedsReauth`; do not retry.
+    InvalidGrant(String),
 }
 
 impl std::fmt::Display for OAuthExchangeError {
@@ -30,6 +33,7 @@ impl std::fmt::Display for OAuthExchangeError {
             Self::ChannelResolutionFailed(msg) => {
                 write!(f, "failed to resolve channel identity: {msg}")
             }
+            Self::InvalidGrant(msg) => write!(f, "refresh token rejected (invalid_grant): {msg}"),
         }
     }
 }
@@ -69,6 +73,79 @@ impl GoogleOAuthExchange {
             client: reqwest::Client::new(),
         }
     }
+
+    /// Exchange a stored refresh token for a new access token
+    /// (`grant_type=refresh_token`). Used by the at-fire-time refresh and the
+    /// token-refresh sweep — never resolves the channel again (the account id
+    /// is already known). A new refresh token is returned only if Google
+    /// rotates it; otherwise the caller keeps the existing one.
+    ///
+    /// Maps Google's `invalid_grant` (revoked / expired refresh token) to
+    /// [`OAuthExchangeError::InvalidGrant`] so the caller can flip the account
+    /// to `NeedsReauth` rather than retrying.
+    pub async fn refresh_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<RefreshedTokens, OAuthExchangeError> {
+        let params = [
+            ("refresh_token", refresh_token),
+            ("client_id", self.config.client_id.as_str()),
+            ("client_secret", self.config.client_secret.as_str()),
+            ("grant_type", "refresh_token"),
+        ];
+        let resp = self
+            .client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| OAuthExchangeError::Http(e.to_string()))?;
+
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+
+        if !status.is_success() {
+            // Google returns 400 with {"error":"invalid_grant"} when the refresh
+            // token is revoked or expired.
+            if body.contains("invalid_grant") {
+                return Err(OAuthExchangeError::InvalidGrant(body));
+            }
+            return Err(OAuthExchangeError::Http(format!(
+                "token endpoint {}: {body}",
+                status.as_u16()
+            )));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+        let access_token = json["access_token"]
+            .as_str()
+            .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing access_token".into()))?
+            .to_string();
+        let expires_in = json["expires_in"]
+            .as_i64()
+            .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing expires_in".into()))?;
+        // Google usually omits a new refresh token; keep the old one if so.
+        let refresh_token = json["refresh_token"].as_str().map(ToOwned::to_owned);
+
+        Ok(RefreshedTokens {
+            access_token,
+            refresh_token,
+            expires_in,
+        })
+    }
+}
+
+/// Result of a `grant_type=refresh_token` exchange.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshedTokens {
+    pub access_token: String,
+    /// Present only if the provider rotated the refresh token.
+    pub refresh_token: Option<String>,
+    pub expires_in: i64,
 }
 
 impl OAuthTokenExchange for GoogleOAuthExchange {
