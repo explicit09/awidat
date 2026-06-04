@@ -72,8 +72,8 @@ fn project_with_volume_effect_emits_volume_filter() {
         "expected hard-cut smoothing after [av0] for seg 0: {cmd}",
     );
     assert!(
-        cmd.contains("[0:v:0][bfade0]"),
-        "expected concat to consume [bfade0] for seg 0: {cmd}",
+        cmd.contains("[cf0][bfade0]"),
+        "expected concat to consume the conformed video + [bfade0] for seg 0: {cmd}",
     );
     // Total duration is unaffected by volume (15.4 wires speed which
     // does affect duration).
