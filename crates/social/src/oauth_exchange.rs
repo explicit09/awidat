@@ -163,6 +163,7 @@ impl OAuthTokenExchange for GoogleOAuthExchange {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod tests {
     use super::*;
 

@@ -109,6 +109,13 @@ pub trait SocialStore {
         &self,
         deadline: i64,
     ) -> Result<Vec<TokenSecret>, SocialStoreError>;
+
+    /// Return today's YouTube upload count for the default project key.
+    /// `now` is a Unix-second timestamp used to derive today's epoch-day.
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError>;
+
+    /// Increment today's YouTube upload count by one.
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -121,6 +128,8 @@ pub struct InMemorySocialStore {
     publish_job_events: BTreeMap<String, Vec<PublishJobEvent>>,
     account_publish_defaults: BTreeMap<String, AccountPublishDefaults>,
     workspace_member_roles: BTreeMap<(String, String), WorkspaceMemberRole>,
+    // key: epoch_day, value: count
+    youtube_quota: BTreeMap<i64, usize>,
 }
 
 impl SocialStore for InMemorySocialStore {
@@ -361,6 +370,17 @@ impl SocialStore for InMemorySocialStore {
             .filter(|s| s.access_token_expires_at.is_some_and(|exp| exp <= deadline))
             .cloned()
             .collect())
+    }
+
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+        let day = now / 86_400;
+        Ok(*self.youtube_quota.get(&day).unwrap_or(&0))
+    }
+
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+        let day = now / 86_400;
+        *self.youtube_quota.entry(day).or_insert(0) += 1;
+        Ok(())
     }
 }
 

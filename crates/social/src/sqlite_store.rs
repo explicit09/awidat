@@ -659,6 +659,33 @@ impl SocialStore for SqliteSocialStore {
         }
         Ok(secrets)
     }
+
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+        let day = now / 86_400;
+        let count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(count,0) FROM provider_upload_quota
+                 WHERE project_key='default' AND day_epoch=?1",
+                rusqlite::params![day],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(count as usize)
+    }
+
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+        let day = now / 86_400;
+        self.connection
+            .execute(
+                "INSERT INTO provider_upload_quota (project_key, day_epoch, count)
+                 VALUES ('default', ?1, 1)
+                 ON CONFLICT(project_key, day_epoch) DO UPDATE SET count = count + 1",
+                rusqlite::params![day],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]

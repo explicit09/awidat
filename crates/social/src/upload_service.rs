@@ -939,6 +939,14 @@ mod tests {
         ) -> Result<Vec<TokenSecret>, SocialStoreError> {
             self.inner.token_secrets_due_refresh(deadline)
         }
+
+        fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+            self.inner.youtube_upload_quota_today(now)
+        }
+
+        fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+            self.inner.increment_youtube_quota(now)
+        }
     }
 
     /// Store that simulates a user cancellation landing *during* the provider
@@ -1124,6 +1132,14 @@ mod tests {
             deadline: i64,
         ) -> Result<Vec<TokenSecret>, SocialStoreError> {
             self.inner.token_secrets_due_refresh(deadline)
+        }
+
+        fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+            self.inner.youtube_upload_quota_today(now)
+        }
+
+        fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+            self.inner.increment_youtube_quota(now)
         }
     }
 }

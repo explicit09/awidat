@@ -36,6 +36,7 @@ impl TokenRefreshService {
     /// provider's OAuth endpoint and write the updated `TokenSecret` back to the
     /// store.  Returns `Ok(true)` if a refresh was performed, `Ok(false)` if the
     /// token was still fresh.
+    #[allow(clippy::too_many_arguments)]
     pub async fn ensure_fresh_access_token<E: OAuthTokenExchange>(
         store: &mut impl SocialStore,
         key_provider: &impl LocalTokenKeyProvider,
@@ -158,6 +159,7 @@ impl TokenRefreshService {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::{

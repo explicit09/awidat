@@ -99,9 +99,9 @@ fn token_secret(account_id: &str) -> TokenSecret {
 fn campaign_variant_target(id: &str) -> CampaignVariantTarget {
     CampaignVariantTarget::new(
         id,
-        &uid("campaign"),
-        &uid("variant"),
-        &uid("acct"),
+        uid("campaign"),
+        uid("variant"),
+        uid("acct"),
         Provider::YouTube,
         serde_json::json!({"privacy": "private"}),
         2_000,
@@ -113,9 +113,9 @@ fn campaign_variant_target(id: &str) -> CampaignVariantTarget {
 fn publish_job(id: &str, scheduled_for: i64) -> PublishJob {
     PublishJob::new(
         id,
-        &uid("campaign"),
-        &uid("variant"),
-        &uid("acct"),
+        uid("campaign"),
+        uid("variant"),
+        uid("acct"),
         Provider::YouTube,
         format!("render://{id}"),
         scheduled_for,
@@ -162,7 +162,7 @@ fn pg_round_trips_oauth_account_and_token_records() {
         .unwrap_or_else(|e| panic!("save token secret: {e}"));
 
     assert_eq!(store.oauth_connection(&conn_id), Ok(connection));
-    assert_eq!(store.connected_account(&acct_id), Ok(account.clone()));
+    assert_eq!(store.connected_account(&acct_id), Ok(account));
     let listed = store
         .connected_accounts_for_owner(&owner())
         .unwrap_or_else(|e| panic!("list accounts: {e}"));
@@ -253,11 +253,7 @@ fn pg_claims_due_scheduled_jobs_once_in_schedule_order() {
         j
     };
 
-    for job in [
-        later_by_schedule.clone(),
-        earlier_by_schedule,
-        future.clone(),
-    ] {
+    for job in [later_by_schedule, earlier_by_schedule, future.clone()] {
         store
             .save_publish_job(job)
             .unwrap_or_else(|e| panic!("save job: {e}"));
@@ -515,8 +511,6 @@ fn pg_concurrent_claim_does_not_double_claim() {
     assert_eq!(
         s1_claimed + s2_claimed,
         1,
-        "job was claimed {} times by s1 and {} times by s2",
-        s1_claimed,
-        s2_claimed
+        "job was claimed {s1_claimed} times by s1 and {s2_claimed} times by s2"
     );
 }

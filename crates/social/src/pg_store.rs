@@ -65,7 +65,7 @@ impl PgSocialStore {
         let mut entries: Vec<_> = std::fs::read_dir(migrations_dir)
             .map_err(|e| SocialStoreError::Storage(e.to_string()))?
             .filter_map(std::result::Result::ok)
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "sql"))
             .collect();
         entries.sort_by_key(std::fs::DirEntry::file_name);
 
@@ -726,5 +726,38 @@ impl SocialStore for PgSocialStore {
             )
             .map_err(pg_error)?;
         rows.iter().map(|row| from_json(row.get(0))).collect()
+    }
+
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+        let day = now / 86_400;
+        let mut client = self
+            .pool
+            .get()
+            .map_err(|e| SocialStoreError::Storage(e.to_string()))?;
+        let row = client
+            .query_opt(
+                "SELECT count FROM provider_upload_quota
+                 WHERE project_key = 'default' AND day_epoch = $1",
+                &[&day],
+            )
+            .map_err(pg_error)?;
+        Ok(row.map(|r| r.get::<_, i32>(0) as usize).unwrap_or(0))
+    }
+
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+        let day = now / 86_400;
+        let mut client = self
+            .pool
+            .get()
+            .map_err(|e| SocialStoreError::Storage(e.to_string()))?;
+        client
+            .execute(
+                "INSERT INTO provider_upload_quota (project_key, day_epoch, count)
+                 VALUES ('default', $1, 1)
+                 ON CONFLICT (project_key, day_epoch) DO UPDATE SET count = provider_upload_quota.count + 1",
+                &[&day],
+            )
+            .map_err(pg_error)?;
+        Ok(())
     }
 }
