@@ -12,16 +12,6 @@ pub enum CaptionPlacement {
     Right,
 }
 
-impl CaptionPlacement {
-    pub fn edl_value(self) -> &'static str {
-        match self {
-            Self::Bottom => "bottom",
-            Self::Upper => "top",
-            Self::Left => "left",
-            Self::Right => "right",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptionRecommendation {
