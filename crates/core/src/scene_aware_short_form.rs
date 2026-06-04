@@ -1401,11 +1401,30 @@ mod tests {
         let plan = build_scene_aware_short_form_plan(input);
         assert!(!plan.caption_plan.is_empty(), "should produce captions");
         let profile = CaptionFormatProfile::short_form();
+        let budget = profile.max_chars_per_line * profile.max_lines;
+        // The old whole-segment path emitted ONE 40-char cue; readability
+        // segmentation must split it into multiple short, budget-fitting cues.
+        assert!(
+            plan.caption_plan.len() >= 2,
+            "readability segmentation should split the segment into multiple cues, got {}",
+            plan.caption_plan.len()
+        );
         for cue in &plan.caption_plan {
-            let chars = cue.text.replace('\n', " ").chars().count() as f64;
+            let rendered = cue.text.replace('\n', " ");
+            let chars = rendered.chars().count();
             let dur = (cue.end_s - cue.start_s).max(1e-6);
-            assert!(chars / dur <= profile.max_cps + 1e-6, "short-form cue over CPS ceiling: {:?}", cue.text);
-            assert!(matches!(cue.placement, CaptionPlacement::Bottom | CaptionPlacement::Upper | CaptionPlacement::Left | CaptionPlacement::Right));
+            assert!(
+                chars <= budget,
+                "cue exceeds the {budget}-char short-form budget: {rendered:?} ({chars} chars)"
+            );
+            assert!(
+                chars as f64 / dur <= profile.max_cps + 1e-6,
+                "short-form cue over CPS ceiling: {rendered:?}"
+            );
+            assert!(matches!(
+                cue.placement,
+                CaptionPlacement::Bottom | CaptionPlacement::Upper | CaptionPlacement::Left | CaptionPlacement::Right
+            ));
         }
     }
 
