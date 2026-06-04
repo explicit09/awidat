@@ -7,8 +7,11 @@
 //! Modes:
 //! - `--import <URL>` — yt-dlp downloads the video into `raw/`.
 //! - `--import <PATH>` — copies (or symlinks) the local file into `raw/`.
-//! - omit `--import` — same as `awidat init`, but with the friendlier
-//!   next-step output and a starter AGENTS.md.
+//! - `--import-channel <URL>` — yt-dlp downloads the latest N items
+//!   from a playlist/channel into `raw/`. Bound with `--limit <N>`
+//!   and/or `--after <YYYY-MM-DD>`.
+//! - omit `--import`/`--import-channel` — same as `awidat init`, but
+//!   with the friendlier next-step output and a starter AGENTS.md.
 //!
 //! Default behavior runs `awidat index` synchronously after the
 //! source lands, so the user sees the wall time honestly. Pass
@@ -34,6 +37,15 @@ pub struct NewArgs {
     pub name: String,
     /// Optional URL or local path to import as the first source.
     pub import: Option<String>,
+    /// Optional playlist/channel URL to batch-import the latest items
+    /// from. Mutually exclusive with `import`.
+    pub import_channel: Option<String>,
+    /// Max number of items to import in channel mode (yt-dlp
+    /// `--playlist-end`). Defaults applied in the importer.
+    pub limit: Option<u32>,
+    /// Only import items uploaded on/after this date (`YYYY-MM-DD` or
+    /// `YYYYMMDD`). Channel mode only.
+    pub after: Option<String>,
     /// Where to create the project dir. Defaults to the current
     /// working directory.
     pub at: Option<PathBuf>,
@@ -92,12 +104,25 @@ pub fn run(args: NewArgs) -> Result<()> {
         println!("  ✓ Wrote starter AGENTS.md (delete or edit to taste)");
     }
 
-    let imported_asset = match args.import.as_deref() {
-        Some(src) if is_url(src) => Some(import_url(src, &project_dir)?),
-        Some(src) => Some(import_local(Path::new(src), &project_dir, args.link)?),
-        None => None,
+    if args.import.is_some() && args.import_channel.is_some() {
+        bail!("pass either --import or --import-channel, not both");
+    }
+    if args.import_channel.is_none() && (args.limit.is_some() || args.after.is_some()) {
+        bail!("--limit/--after only apply to --import-channel");
+    }
+
+    // Channel mode can yield many assets; single import yields one.
+    let imported_assets: Vec<PathBuf> = match (&args.import, &args.import_channel) {
+        (Some(src), _) if is_url(src) => vec![import_url(src, &project_dir)?],
+        (Some(src), _) => vec![import_local(Path::new(src), &project_dir, args.link)?],
+        (None, Some(channel)) => {
+            import_channel(channel, args.limit, args.after.as_deref(), &project_dir)?
+        }
+        (None, None) => Vec::new(),
     };
-    if let Some(p) = &imported_asset {
+    // The first imported asset is attached to V1 so the timeline opens
+    // with content; the rest land in raw/ for the user to arrange.
+    if let Some(p) = imported_assets.first() {
         attach_imported_asset_to_timeline(&project_dir, p)?;
         println!(
             "  ✓ Imported source: {} ({})",
@@ -105,15 +130,27 @@ pub fn run(args: NewArgs) -> Result<()> {
             human_size(p)
         );
         println!("  ✓ Added imported source to timeline track V1");
+        for extra in imported_assets.iter().skip(1) {
+            println!(
+                "  ✓ Imported source: {} ({})",
+                extra.file_name().unwrap_or_default().to_string_lossy(),
+                human_size(extra)
+            );
+        }
+        if imported_assets.len() > 1 {
+            println!(
+                "  ✓ Imported {} sources from channel into raw/",
+                imported_assets.len()
+            );
+        }
     }
-
     println!();
     println!("Project ready: {}", project.root.display());
 
-    if args.no_index || imported_asset.is_none() {
+    if args.no_index || imported_assets.is_empty() {
         println!();
         println!("Next:");
-        if imported_asset.is_none() {
+        if imported_assets.is_empty() {
             println!("  • Drop source media under {}/raw/", project_dir.display());
         }
         println!(
@@ -134,13 +171,8 @@ pub fn run(args: NewArgs) -> Result<()> {
         project_dir.display()
     );
     println!();
-    let assets = vec![
-        imported_asset
-            .as_ref()
-            .expect("import path is some when we reach here")
-            .clone(),
-    ];
-    crate::index_cmd::run(&project_dir, assets, Vec::new(), 4).context("indexing failed")?;
+    crate::index_cmd::run(&project_dir, imported_assets, Vec::new(), 4)
+        .context("indexing failed")?;
 
     println!();
     println!("All done. Open the editor:");
@@ -170,22 +202,9 @@ fn import_url(url: &str, project_dir: &Path) -> Result<PathBuf> {
     let output_template = raw_dir.join("yt-%(id)s.%(ext)s");
     println!("  → Downloading {url} via yt-dlp (1080p max, mp4 merge)...");
 
-    // `--print after_move:filepath` makes yt-dlp print the final
-    // resolved path on its own stdout line, which is the only
-    // reliable way to know what filename it landed on (id-derived
-    // names have unpredictable extensions before merge).
+    let argv = build_new_yt_dlp_argv(&output_template.to_string_lossy(), url, &None);
     let out = Command::new("yt-dlp")
-        .args([
-            "--print",
-            "after_move:filepath",
-            "-f",
-            "bv*[height<=1080]+ba/b[height<=1080]",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            &output_template.to_string_lossy(),
-            url,
-        ])
+        .args(&argv)
         .output()
         .context("failed to spawn yt-dlp")?;
     if !out.status.success() {
@@ -202,6 +221,148 @@ fn import_url(url: &str, project_dir: &Path) -> Result<PathBuf> {
         bail!("yt-dlp reported {path_str} but file is not on disk");
     }
     Ok(path)
+}
+
+/// Bounds for a channel/playlist import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelBounds {
+    /// Max items to import (yt-dlp `--playlist-end`).
+    limit: u32,
+    /// Optional `--dateafter` value, normalized to `YYYYMMDD`.
+    dateafter: Option<String>,
+}
+
+/// Default cap when no `--limit` is supplied in channel mode, so a
+/// huge channel does not download in full by accident.
+pub const DEFAULT_CHANNEL_LIMIT: u32 = 10;
+
+/// Import the latest N items from a playlist/channel URL. Returns the
+/// resolved paths in playlist order. Shares format/merge defaults with
+/// single-URL import via [`build_new_yt_dlp_argv`].
+fn import_channel(
+    url: &str,
+    limit: Option<u32>,
+    after: Option<&str>,
+    project_dir: &Path,
+) -> Result<Vec<PathBuf>> {
+    if which_yt_dlp().is_none() {
+        bail!(
+            "yt-dlp is not installed. Install it (`brew install yt-dlp` or \
+             `pip install -U yt-dlp`) and rerun."
+        );
+    }
+    let bounds = channel_bounds(limit, after)?;
+    let raw_dir = project_dir.join("raw");
+    std::fs::create_dir_all(&raw_dir).context("failed to create raw/ dir")?;
+    let output_template = raw_dir.join("yt-%(id)s.%(ext)s");
+    match &bounds.dateafter {
+        Some(d) => println!(
+            "  → Downloading up to {} item(s) from channel {url} (after {d}) via yt-dlp...",
+            bounds.limit
+        ),
+        None => println!(
+            "  → Downloading up to {} item(s) from channel {url} via yt-dlp...",
+            bounds.limit
+        ),
+    }
+
+    let argv = build_new_yt_dlp_argv(&output_template.to_string_lossy(), url, &Some(bounds));
+    let out = Command::new("yt-dlp")
+        .args(&argv)
+        .output()
+        .context("failed to spawn yt-dlp")?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        bail!("yt-dlp failed: {stderr}");
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let paths = parse_channel_filepaths(&stdout);
+    if paths.is_empty() {
+        bail!(
+            "yt-dlp succeeded but reported no downloaded files; check the channel URL / date bound"
+        );
+    }
+    for p in &paths {
+        if !p.exists() {
+            bail!("yt-dlp reported {} but file is not on disk", p.display());
+        }
+    }
+    Ok(paths)
+}
+
+/// Validate `--limit`/`--after` and normalize into [`ChannelBounds`].
+fn channel_bounds(limit: Option<u32>, after: Option<&str>) -> Result<ChannelBounds> {
+    if let Some(0) = limit {
+        bail!("--limit must be >= 1");
+    }
+    let dateafter = match after {
+        Some(raw) => Some(
+            normalize_date_yyyymmdd(raw)
+                .ok_or_else(|| anyhow!("--after must be YYYY-MM-DD or YYYYMMDD"))?,
+        ),
+        None => None,
+    };
+    Ok(ChannelBounds {
+        limit: limit.unwrap_or(DEFAULT_CHANNEL_LIMIT),
+        dateafter,
+    })
+}
+
+/// Normalize a date to yt-dlp's `YYYYMMDD`. Accepts `YYYY-MM-DD` or
+/// `YYYYMMDD`; `None` if not a plausible 8-digit date.
+fn normalize_date_yyyymmdd(raw: &str) -> Option<String> {
+    if raw.chars().any(|c| !c.is_ascii_digit() && c != '-') {
+        return None;
+    }
+    let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() == 8).then_some(digits)
+}
+
+/// Build the yt-dlp argv shared by single and channel imports. Pure /
+/// deterministic for unit testing. `--print after_move:filepath` makes
+/// yt-dlp emit one final resolved path per item. Single mode pins
+/// `--no-playlist`; channel mode opts into `--yes-playlist` plus the
+/// bound flags.
+pub fn build_new_yt_dlp_argv(
+    output_template: &str,
+    url: &str,
+    channel: &Option<ChannelBounds>,
+) -> Vec<String> {
+    let mut argv = vec![
+        "--print".to_string(),
+        "after_move:filepath".to_string(),
+        "-f".to_string(),
+        "bv*[height<=1080]+ba/b[height<=1080]".to_string(),
+        "--merge-output-format".to_string(),
+        "mp4".to_string(),
+    ];
+    match channel {
+        Some(bounds) => {
+            argv.push("--yes-playlist".to_string());
+            argv.push("--playlist-end".to_string());
+            argv.push(bounds.limit.to_string());
+            if let Some(dateafter) = &bounds.dateafter {
+                argv.push("--dateafter".to_string());
+                argv.push(dateafter.clone());
+            }
+        }
+        None => argv.push("--no-playlist".to_string()),
+    }
+    argv.push("-o".to_string());
+    argv.push(output_template.to_string());
+    argv.push(url.to_string());
+    argv
+}
+
+/// Parse the per-item filepaths from `--print after_move:filepath`
+/// stdout (one path per non-empty line), preserving order.
+fn parse_channel_filepaths(stdout: &str) -> Vec<PathBuf> {
+    stdout
+        .lines()
+        .map(|line| line.trim_end_matches('\r').trim())
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Bring a local file into the project's raw/ dir. Symlink when
@@ -425,3 +586,67 @@ scope.
 - Master: 1080p, ProRes 422 (or full-quality H.264 if no ProRes pipeline)
 - Social: 1080×1920 (vertical) crops of standalone moments
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_argv_keeps_no_playlist_and_format() {
+        let argv = build_new_yt_dlp_argv("raw/yt-%(id)s.%(ext)s", "https://x/v", &None);
+        assert!(argv.contains(&"--no-playlist".to_string()));
+        assert!(!argv.contains(&"--yes-playlist".to_string()));
+        assert!(!argv.iter().any(|a| a == "--playlist-end"));
+        assert!(argv.contains(&"bv*[height<=1080]+ba/b[height<=1080]".to_string()));
+        assert_eq!(argv.last().unwrap(), "https://x/v");
+        let print_idx = argv.iter().position(|a| a == "--print").unwrap();
+        assert_eq!(argv[print_idx + 1], "after_move:filepath");
+    }
+
+    #[test]
+    fn channel_argv_has_playlist_end_and_dateafter() {
+        let bounds = channel_bounds(Some(3), Some("2025-02-01")).unwrap();
+        let argv = build_new_yt_dlp_argv("raw/yt-%(id)s.%(ext)s", "https://x/chan", &Some(bounds));
+        assert!(argv.contains(&"--yes-playlist".to_string()));
+        assert!(!argv.contains(&"--no-playlist".to_string()));
+        let pe_idx = argv.iter().position(|a| a == "--playlist-end").unwrap();
+        assert_eq!(argv[pe_idx + 1], "3");
+        let da_idx = argv.iter().position(|a| a == "--dateafter").unwrap();
+        assert_eq!(argv[da_idx + 1], "20250201");
+        assert_eq!(argv.last().unwrap(), "https://x/chan");
+    }
+
+    #[test]
+    fn channel_bounds_defaults_limit_and_validates() {
+        let b = channel_bounds(None, None).unwrap();
+        assert_eq!(b.limit, DEFAULT_CHANNEL_LIMIT);
+        assert_eq!(b.dateafter, None);
+        assert!(channel_bounds(Some(0), None).is_err());
+        assert!(channel_bounds(Some(2), Some("garbage")).is_err());
+        assert!(channel_bounds(Some(2), Some("2025/02/01")).is_err());
+    }
+
+    #[test]
+    fn normalize_date_accepts_both_forms() {
+        assert_eq!(
+            normalize_date_yyyymmdd("2025-06-03").as_deref(),
+            Some("20250603")
+        );
+        assert_eq!(
+            normalize_date_yyyymmdd("20250603").as_deref(),
+            Some("20250603")
+        );
+        assert_eq!(normalize_date_yyyymmdd("2025-6-3"), None);
+        assert_eq!(normalize_date_yyyymmdd("nope"), None);
+    }
+
+    #[test]
+    fn parse_channel_filepaths_preserves_order_and_skips_blanks() {
+        let stdout = "raw/yt-a.mp4\n\nraw/yt-b.mp4\r\n";
+        let paths = parse_channel_filepaths(stdout);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("raw/yt-a.mp4"), PathBuf::from("raw/yt-b.mp4")]
+        );
+    }
+}

@@ -60,6 +60,18 @@ enum Command {
         /// with `--link`) into `raw/`.
         #[arg(long)]
         import: Option<String>,
+        /// Playlist/channel URL: batch-import the latest items via
+        /// yt-dlp. Bound with `--limit` and/or `--after`. Mutually
+        /// exclusive with `--import`.
+        #[arg(long, conflicts_with = "import")]
+        import_channel: Option<String>,
+        /// Max items to import in `--import-channel` mode.
+        #[arg(long, requires = "import_channel")]
+        limit: Option<u32>,
+        /// Only import channel items uploaded on/after this date
+        /// (`YYYY-MM-DD` or `YYYYMMDD`).
+        #[arg(long, requires = "import_channel")]
+        after: Option<String>,
         /// Where to create the project dir. Defaults to the current
         /// working directory.
         #[arg(long)]
@@ -413,6 +425,9 @@ fn main() -> ExitCode {
         Command::New {
             name,
             import,
+            import_channel,
+            limit,
+            after,
             at,
             no_index,
             no_md,
@@ -420,6 +435,9 @@ fn main() -> ExitCode {
         } => new_cmd::run(new_cmd::NewArgs {
             name,
             import,
+            import_channel,
+            limit,
+            after,
             at,
             no_index,
             no_md,
