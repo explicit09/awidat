@@ -551,6 +551,7 @@ mod tests {
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }
     }
 
@@ -584,6 +585,7 @@ mod tests {
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }
     }
 

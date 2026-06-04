@@ -53,6 +53,7 @@ fn caption_fixture() -> TitlePlan {
         animations: Vec::new(),
         font_path: None,
         font_family: None,
+        caption_style: None,
     }
 }
 

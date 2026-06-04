@@ -786,7 +786,7 @@ fn apply_one(
             color,
             safe_area,
             word_timings,
-            style_json: _style_json,
+            style_json,
         } => apply_insert_caption(
             working,
             index,
@@ -798,6 +798,7 @@ fn apply_one(
             color,
             safe_area,
             word_timings,
+            style_json.as_ref(),
         ),
         EdlOp::InsertAnnotation {
             start_s,
@@ -8218,6 +8219,7 @@ fn apply_insert_caption(
     color: &str,
     safe_area: &str,
     word_timings: &[super::op::CaptionWordTiming],
+    style_json: Option<&serde_json::Value>,
 ) -> Result<String, ApplyError> {
     if safe_area.trim().is_empty() {
         return Err(ApplyError::Invalid {
@@ -8239,17 +8241,22 @@ fn apply_insert_caption(
             });
         }
     }
-    let extra_metadata = if word_timings.is_empty() {
+    let extra_metadata = if word_timings.is_empty() && style_json.is_none() {
         None
     } else {
         let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            "word_timings".to_string(),
-            serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
-                index,
-                message: format!("insert_caption: failed to serialize word_timings: {e}"),
-            })?,
-        );
+        if !word_timings.is_empty() {
+            metadata.insert(
+                "word_timings".to_string(),
+                serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
+                    index,
+                    message: format!("insert_caption: failed to serialize word_timings: {e}"),
+                })?,
+            );
+        }
+        if let Some(style) = style_json {
+            metadata.insert("caption_style".to_string(), style.clone());
+        }
         Some(metadata)
     };
     apply_insert_text_overlay(
@@ -15103,6 +15110,56 @@ mod tests {
         assert_eq!(
             timings[0].get("text").and_then(|value| value.as_str()),
             Some("This")
+        );
+    }
+
+    #[test]
+    fn insert_caption_stores_style_json_on_the_caption_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertCaption {
+                start_s: 1.0,
+                end_s: 2.5,
+                text: "AI changed everything".into(),
+                position: super::super::op::TitlePosition::Bottom,
+                font_size: 52,
+                color: "#FFFFFF".into(),
+                safe_area: "mobile".into(),
+                word_timings: Vec::new(),
+                style_json: Some(serde_json::json!({
+                    "font_size": 52,
+                    "weight": "bold",
+                    "casing": "upper",
+                    "primary_color": "#FFFFFF",
+                    "highlight_color": "#FFD700",
+                    "reveal": "active_word_pop",
+                    "background": { "kind": "none" }
+                })),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track")
+        };
+        let TrackChild::Clip(caption_clip) = &titles.children[0] else {
+            panic!("expected caption clip")
+        };
+        let style = caption_clip.effects[0]
+            .metadata
+            .get("caption_style")
+            .expect("caption_style metadata must be present");
+        assert_eq!(
+            style.get("reveal").and_then(|v| v.as_str()),
+            Some("active_word_pop"),
+            "reveal must be stored as snake_case string"
+        );
+        assert_eq!(
+            style.get("weight").and_then(|v| v.as_str()),
+            Some("bold"),
+        );
+        assert_eq!(
+            style.get("highlight_color").and_then(|v| v.as_str()),
+            Some("#FFD700"),
         );
     }
 

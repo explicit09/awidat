@@ -2086,6 +2086,7 @@ fn collect_motion_scene_title_plans(
                         animations: Vec::new(),
                         font_path: layer_string_param(layer, "font_path"),
                         font_family: layer_string_param(layer, "font_family"),
+                        caption_style: None,
                     });
                 }
                 MotionSceneLayerKind::Shape
@@ -3682,6 +3683,9 @@ fn parse_title_plan(
         .get("word_timings")
         .and_then(|value| serde_json::from_value::<Vec<CaptionWordTiming>>(value.clone()).ok())
         .unwrap_or_default();
+    let caption_style = m
+        .get("caption_style")
+        .and_then(|value| serde_json::from_value::<CaptionRenderStyle>(value.clone()).ok());
     let font_path = m
         .get("font_path")
         .and_then(|v| v.as_str())
@@ -3714,6 +3718,7 @@ fn parse_title_plan(
         animations,
         font_path,
         font_family,
+        caption_style,
     };
     Some((plan, animation_selection))
 }
@@ -4386,6 +4391,10 @@ pub struct TitlePlan {
     /// when `font_path` is not set; otherwise the renderer falls back
     /// to its system-font probe.
     pub font_family: Option<String>,
+    /// Optional caption style parsed from the EDL `style_json` block.
+    /// When `Some`, the renderer can use these values to override the
+    /// default drawtext / ASS styling for caption overlays.
+    pub caption_style: Option<CaptionRenderStyle>,
 }
 
 /// One transcript word timing attached to a caption title.
@@ -4397,6 +4406,53 @@ pub struct CaptionWordTiming {
     pub start_s: f64,
     /// Word end in master-timeline seconds.
     pub end_s: f64,
+}
+
+/// Font weight for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderWeight {
+    Normal,
+    Bold,
+}
+
+/// Text casing for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderCasing {
+    AsIs,
+    Upper,
+}
+
+/// Background style for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaptionRenderBackground {
+    None,
+    Box { color: String, opacity: u8 },
+}
+
+/// Word reveal mode for caption render style.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderReveal {
+    WholeCue,
+    WordByWord,
+    ActiveWordPop,
+}
+
+/// Parsed caption styling carried through from the EDL `style_json` block.
+/// Field names mirror `CaptionStyleSpec` in `awidat-core` so the same JSON
+/// deserializes on both sides without a conversion layer.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CaptionRenderStyle {
+    pub font_size: u32,
+    pub weight: CaptionRenderWeight,
+    pub casing: CaptionRenderCasing,
+    pub primary_color: String,
+    pub highlight_color: Option<String>,
+    pub reveal: CaptionRenderReveal,
+    pub background: CaptionRenderBackground,
 }
 
 /// One styled inline run inside a rich title.
@@ -15144,6 +15200,7 @@ mod tests {
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -15197,6 +15254,7 @@ mod tests {
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
         let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
@@ -15248,6 +15306,7 @@ mod tests {
                 animations: Vec::new(),
                 font_path: None,
                 font_family: None,
+                caption_style: None,
             },
             TitlePlan {
                 text: "Two".into(),
@@ -15267,6 +15326,7 @@ mod tests {
                 animations: Vec::new(),
                 font_path: None,
                 font_family: None,
+                caption_style: None,
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -15300,6 +15360,7 @@ word_timings: Vec::new(),
 animations: Vec::new(),
 font_path: None,
 font_family: None,
+caption_style: None,
         };
 
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -15405,6 +15466,7 @@ font_family: None,
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -15566,6 +15628,7 @@ font_family: None,
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }];
 
         let argv = build_timeline_argv_full_with_annotations(
@@ -15849,6 +15912,7 @@ font_family: None,
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         };
         let overlay = BroadcastOverlayPlan {
             config: BroadcastOverlayConfig {
@@ -17271,6 +17335,7 @@ font_family: None,
             animations: Vec::new(),
             font_path: None,
             font_family: None,
+            caption_style: None,
         }
     }
 
@@ -17656,6 +17721,61 @@ font_family: None,
         assert!(
             filter.contains("[cf0][bfade0][cf1][bfade1][cf2][bfade2]concat=n=3:v=1:a=1"),
             "concat should consume the anti-pop fade labels: {filter}"
+        );
+    }
+
+    // ── CaptionRenderStyle round-trip tests ───────────────────────────────────
+
+    #[test]
+    fn caption_render_style_deserializes_from_json() {
+        let json = serde_json::json!({
+            "font_size": 52,
+            "weight": "bold",
+            "casing": "upper",
+            "primary_color": "#FFFFFF",
+            "highlight_color": "#FFD700",
+            "reveal": "active_word_pop",
+            "background": { "kind": "none" }
+        });
+        let style: CaptionRenderStyle = serde_json::from_value(json).expect("should deserialize");
+        assert_eq!(style.font_size, 52);
+        assert_eq!(style.weight, CaptionRenderWeight::Bold);
+        assert_eq!(style.casing, CaptionRenderCasing::Upper);
+        assert_eq!(style.primary_color, "#FFFFFF");
+        assert_eq!(style.highlight_color, Some("#FFD700".to_string()));
+        assert_eq!(style.reveal, CaptionRenderReveal::ActiveWordPop);
+        assert!(matches!(style.background, CaptionRenderBackground::None));
+    }
+
+    #[test]
+    fn parse_title_plan_reads_caption_style_from_metadata() {
+        // Build a minimal awidat.title clip whose metadata includes a
+        // caption_style blob (as apply_insert_caption now stores it).
+        let style_value = serde_json::json!({
+            "font_size": 52,
+            "weight": "bold",
+            "casing": "upper",
+            "primary_color": "#FFFFFF",
+            "highlight_color": null,
+            "reveal": "word_by_word",
+            "background": { "kind": "box", "color": "#000000", "opacity": 128 }
+        });
+        let mut effect = Effect::new("awidat.title");
+        effect.metadata.insert("text".into(), serde_json::json!("Hello"));
+        effect.metadata.insert("start_s".into(), serde_json::json!(1.0));
+        effect.metadata.insert("end_s".into(), serde_json::json!(3.0));
+        effect.metadata.insert("role".into(), serde_json::json!("caption"));
+        effect.metadata.insert("caption_style".into(), style_value);
+
+        let mut clip = Clip::empty("caption-test");
+        clip.effects.push(effect);
+
+        let (plan, _) = parse_title_plan(&clip, &[]).expect("parse_title_plan should succeed");
+        let style = plan.caption_style.expect("caption_style must be Some");
+        assert_eq!(style.reveal, CaptionRenderReveal::WordByWord);
+        assert!(
+            matches!(&style.background, CaptionRenderBackground::Box { color, opacity } if color == "#000000" && *opacity == 128),
+            "background should be Box with correct fields"
         );
     }
 }
