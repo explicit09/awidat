@@ -19,7 +19,7 @@ pub fn build_caption_edl_lines(
         lines.push(format!("+ start_s: {}", fmt_seconds(caption.start_s)));
         lines.push(format!("+ end_s: {}", fmt_seconds(caption.end_s)));
         lines.push(format!("+ text: {}", json_string(&caption.text)));
-        lines.push(format!("+ position: {}", caption.placement.edl_value()));
+        lines.push(format!("+ position: {}", edl_position(caption.placement)));
         lines.push(format!("+ font_size: {}", spec.font_size));
         lines.push(format!("+ color: {}", spec.color));
         lines.push(format!("+ safe_area: {safe_area}"));
@@ -31,6 +31,17 @@ pub fn build_caption_edl_lines(
         }
     }
     lines
+}
+
+/// The EDL caption `position` field is a vertical band; the parser accepts only
+/// `top|center|bottom`. Map any placement (incl. the horizontal Left/Right hints)
+/// to a valid vertical value so the emitted EDL always re-parses.
+fn edl_position(placement: crate::caption::types::CaptionPlacement) -> &'static str {
+    use crate::caption::types::CaptionPlacement;
+    match placement {
+        CaptionPlacement::Upper => "top",
+        CaptionPlacement::Bottom | CaptionPlacement::Left | CaptionPlacement::Right => "bottom",
+    }
 }
 
 fn fmt_seconds(value: f64) -> String {
@@ -77,5 +88,22 @@ mod tests {
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
         assert!(blob.contains("word_timings_json"));
+        assert!(blob.contains("\"hello\""), "word timings JSON should contain the word text");
+    }
+
+    #[test]
+    fn position_maps_to_a_parser_valid_vertical_band() {
+        let spec = CaptionStyleSpec { font_size: 44, color: "#FFFFFF".into(), reveal: RevealMode::WholeCue };
+        for (placement, expected) in [
+            (CaptionPlacement::Bottom, "bottom"),
+            (CaptionPlacement::Upper, "top"),
+            (CaptionPlacement::Left, "bottom"),
+            (CaptionPlacement::Right, "bottom"),
+        ] {
+            let mut r = rec();
+            r.placement = placement;
+            let blob = build_caption_edl_lines(&[r], &spec, "standard").join("\n");
+            assert!(blob.contains(&format!("+ position: {expected}")), "{placement:?} should map to {expected}");
+        }
     }
 }
