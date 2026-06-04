@@ -113,15 +113,21 @@ tests keep compiling). `CaptionPlacement` gains no new variants for v1.
 
 ### 3.3 `caption_styles` (gap #3)
 
-Registry keyed by `(format, mood)` returning a `CaptionStyle` + concrete style params,
-with a **hard legibility floor**: outline or shadow is always on, high contrast, weight
-that survives compression. Two mood registers implemented for v1:
+Registry keyed by `(format, mood)` returning a `CaptionStyleSpec` — the knobs the
+`InsertCaption` EDL op actually carries: `font_size`, `color`, and `reveal`
+(whole-cue vs per-word/karaoke, which controls whether word timings are emitted).
+Two mood registers for v1:
 
-- `minimal_cinematic` — clean static lower-third, whole-cue, subtle.
-- `active_pop` — energetic word-by-word / karaoke highlight, bolder.
+- `minimal_cinematic` — clean static lower-third, whole-cue, neutral, moderate size.
+- `active_pop` — energetic word-by-word / karaoke reveal, bolder/larger.
 
-The legibility floor is enforced in code (a style can never disable both
-outline and shadow), so "mood" can never override readability.
+**Legibility floor (refined from initial spec):** `InsertCaption` cannot carry
+outline/shadow, and the ASS renderer (`crates/render/src/ass.rs`) *always* draws an
+opaque outline + shadow (`ScaledBorderAndShadow: yes`) — so outline/shadow is a
+guaranteed render invariant, not a per-style choice. The in-code floor that
+`caption_styles` enforces is therefore: `font_size >= MIN_LEGIBLE_FONT_SIZE` and a
+valid high-contrast hex color for every `(format, mood)`. Mood can never drop below it.
+No changes to the render crate.
 
 ### 3.4 Rewiring + new entry point
 
