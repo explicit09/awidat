@@ -214,11 +214,19 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         TitlePosition::Center => 0,
         TitlePosition::Bottom => layout.margin_v_bottom,
     };
+    // caption_style.font_size is authoritative when a style is present;
+    // fall back to title.font_size for the legacy path.
+    let size = title
+        .caption_style
+        .as_ref()
+        .map(|s| s.font_size)
+        .unwrap_or(title.font_size);
+
     out.push_str(&format!(
         "Style: Caption,{font},{size},{primary},{secondary},{outline},{back},\
          {bold},0,0,0,100,100,0,0,{border_style},3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
         font = default_caption_font_name(),
-        size = title.font_size,
+        size = size,
         primary = primary,
         secondary = secondary,
         outline = outline,
@@ -354,7 +362,17 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
             && !words.is_empty()
     });
     if let Some(s) = active_pop_style {
-        let hi_hex = s.highlight_color.as_deref().unwrap_or_default();
+        // SAFETY: the filter above requires `highlight_color.is_some()`.
+        // Fall back to primary so the caption is still visible if the
+        // invariant is ever violated; this branch should never execute.
+        let hi_hex_owned;
+        let hi_hex: &str = match s.highlight_color.as_deref() {
+            Some(c) => c,
+            None => {
+                hi_hex_owned = s.primary_color.clone();
+                &hi_hex_owned
+            }
+        };
         let primary_col = hex_to_ass_color(&s.primary_color);
         let hi_col = hex_to_ass_color(hi_hex);
         let mut dialogues = Vec::with_capacity(words.len());
@@ -985,5 +1003,34 @@ mod tests {
         let doc = build_ass_document(&styled(spec, "hello world", vec![]));
         let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
         assert_eq!(n, 1, "no word timings -> single whole-cue dialogue");
+    }
+
+    #[test]
+    fn caption_style_font_size_overrides_title_font_size() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 72,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let mut t = styled(spec, "hi", vec![]);
+        t.font_size = 30; // top-level differs; style must win
+        let doc = build_ass_document(&t);
+        let fields: Vec<&str> = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .unwrap()
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
+        // Format: Name, Fontname, Fontsize, ... => index 0=Name, 1=Fontname, 2=Fontsize
+        assert_eq!(
+            fields[2], "72",
+            "caption_style.font_size must drive the Style row: {fields:?}"
+        );
     }
 }
