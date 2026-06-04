@@ -93,15 +93,42 @@ fly apps create awidat-social
 
 # Set deployment secrets — never committed to the repo.
 fly secrets set --app awidat-social \
-  DATABASE_URL="postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres" \
+  DATABASE_URL="postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres?options=-c%20search_path%3Dawidat_social,public" \
   SERVICE_SHARED_SECRET="$(openssl rand -hex 32)" \
   SUPABASE_URL="https://<ref>.supabase.co" \
   SUPABASE_SERVICE_KEY="<service_role_key>" \
+  SUPABASE_JWT_SECRET="<project_jwt_secret>" \
   STORAGE_BUCKET="artifacts"
 ```
 
 The `DATABASE_URL` above uses the **Supavisor session-pooler** (port 6543, not 5432).
 Find it in Supabase → Settings → Database → Connection string → Session pooler.
+
+### Multi-tenant: the `awidat_social` schema (IMPORTANT)
+
+Awidat shares a single Supabase project (`technologia-builder-network`) with other
+products to keep costs down (one DB / auth / compute). Awidat's tables live in a
+dedicated **`awidat_social` Postgres schema**, isolated from the host app's
+`public` tables. Because `PgSocialStore` issues unqualified table names, the
+`DATABASE_URL` **must** pin the connection's search_path to that schema:
+
+```
+?options=-c%20search_path%3Dawidat_social,public
+```
+
+(`%20` = space, `%3D` = `=`.) Do NOT `ALTER ROLE ... SET search_path` — the
+`postgres`/service role is shared with the host app, which needs `public`. The
+per-connection `options` param scopes the search_path to the Awidat server only.
+
+For the **current shared project** (`technologia-builder-network`,
+ref `vgkocfbtkzmpklruqmsx`, region `us-east-1`):
+- `SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co`
+- Schema `awidat_social` + all 9 tables + `pg_cron`/`pg_net` are already applied.
+- RLS is enabled deny-all on every `awidat_social` table; the service-role
+  connection bypasses it (the server is the trusted authorization point).
+- `SUPABASE_JWT_SECRET`: Supabase → Settings → API → JWT Settings → JWT Secret
+  (HS256). Enables Phase 7 per-user auth on `/social/*`; omit it to keep the
+  single-user dev bearer.
 
 ---
 
