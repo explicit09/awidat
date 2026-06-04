@@ -50,6 +50,68 @@ use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
 const TIMELINE_RENDER_WIDTH: u32 = 1920;
 const TIMELINE_RENDER_HEIGHT: u32 = 1080;
+
+/// Output canvas (width × height in px) every segment is conformed to
+/// before `concat`. Derived from the timeline's `output_format` aspect
+/// ratio — written into `Timeline.metadata.awidat.extra["output_format"]`
+/// by the `set_output_format` EDL op — so a 9:16 short-form project
+/// renders vertical instead of being letterboxed into the 16:9 default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderCanvas {
+    /// Canvas width in pixels.
+    pub width: u32,
+    /// Canvas height in pixels.
+    pub height: u32,
+}
+
+impl Default for RenderCanvas {
+    /// Legacy 16:9 1920×1080 master — the canvas used when a timeline
+    /// carries no `output_format`.
+    fn default() -> Self {
+        Self {
+            width: TIMELINE_RENDER_WIDTH,
+            height: TIMELINE_RENDER_HEIGHT,
+        }
+    }
+}
+
+impl RenderCanvas {
+    /// Map a `set_output_format` aspect-ratio label to a canvas. The
+    /// long edge is pinned to 1920 for 16:9 and to 1080-wide for the
+    /// vertical/square families so pixel density matches the legacy
+    /// 1080p master. Unknown labels fall back to the 16:9 default —
+    /// `apply_set_output_format` already rejects unsupported ratios, so
+    /// this only guards forward-compat metadata.
+    fn from_aspect_ratio(aspect_ratio: &str) -> Self {
+        match aspect_ratio.trim() {
+            "9:16" => Self {
+                width: 1080,
+                height: 1920,
+            },
+            "1:1" => Self {
+                width: 1080,
+                height: 1080,
+            },
+            "4:5" => Self {
+                width: 1080,
+                height: 1350,
+            },
+            // "16:9" and anything unrecognized.
+            _ => Self::default(),
+        }
+    }
+}
+
+/// Read the conform canvas from a timeline's `output_format` metadata,
+/// defaulting to the 16:9 1920×1080 master when absent or malformed.
+fn timeline_render_canvas(metadata: Option<&AwidatTimelineMetadata>) -> RenderCanvas {
+    metadata
+        .and_then(|m| m.extra.get("output_format"))
+        .and_then(|format| format.get("aspect_ratio"))
+        .and_then(|ratio| ratio.as_str())
+        .map(RenderCanvas::from_aspect_ratio)
+        .unwrap_or_default()
+}
 /// Output frame rate the timeline renderer conforms every segment to
 /// before `concat`. Matches [`timeline_frame_rate`]'s default fallback
 /// (30 fps) — the render argv builder does not pass an explicit `-r`,
@@ -68,13 +130,18 @@ const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
 /// Idempotent: the emitted label is `[cf<i>]`; if `video_label` is
 /// already a conform output we return it untouched so callers that stage
 /// a segment twice never double-conform.
-fn append_segment_conform_filter(filter: &mut String, video_label: &str, i: usize) -> String {
+fn append_segment_conform_filter(
+    filter: &mut String,
+    video_label: &str,
+    i: usize,
+    canvas: RenderCanvas,
+) -> String {
     let conform_label = format!("[cf{i}]");
     if video_label == conform_label {
         return conform_label;
     }
-    let w = TIMELINE_RENDER_WIDTH;
-    let h = TIMELINE_RENDER_HEIGHT;
+    let w = canvas.width;
+    let h = canvas.height;
     let fps = TIMELINE_RENDER_FPS;
     filter.push_str(&format!(
         "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
@@ -1493,6 +1560,7 @@ type TimelineFullPlan = (
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
     Vec<RenderPlanLimitation>,
+    RenderCanvas,
 );
 
 /// Read-only timeline render preflight result.
@@ -1532,7 +1600,7 @@ pub struct TimelineRenderPreflight {
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -1548,7 +1616,8 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _, _, _, _) =
+        collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -1568,6 +1637,7 @@ pub fn analyze_timeline_render_preflight(
         audio_tracks,
         loudness_target,
         render_limitations,
+        _canvas,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
@@ -1954,6 +2024,7 @@ pub fn collect_timeline_full_plan(
         .awidat
         .as_ref()
         .and_then(read_timeline_loudness_target);
+    let canvas = timeline_render_canvas(timeline.metadata.awidat.as_ref());
     if audio_tracks.is_empty() {
         audio_tracks = synthesize_audio_tracks(&segs)?;
     }
@@ -1975,6 +2046,7 @@ pub fn collect_timeline_full_plan(
         audio_tracks,
         loudness_target,
         render_limitations,
+        canvas,
     ))
 }
 
@@ -4528,6 +4600,11 @@ pub struct FilterPlanner<'a> {
     /// the drawtext fallback. When `None`, every title goes through
     /// drawtext — that's the legacy path callers default to.
     ass_workdir: Option<PathBuf>,
+    /// Output canvas every segment is conformed (scaled + padded) to
+    /// before `concat`. Defaults to the 16:9 1920×1080 master; the
+    /// timeline-render spec builder overrides it from the project's
+    /// `output_format` so 9:16 / 1:1 / 4:5 projects render natively.
+    canvas: RenderCanvas,
 }
 
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
@@ -4594,6 +4671,7 @@ impl<'a> FilterPlanner<'a> {
             editable_subtitle_tracks: &[],
             broadcast_overlay: None,
             ass_workdir: None,
+            canvas: RenderCanvas::default(),
         }
     }
 
@@ -4612,6 +4690,7 @@ impl<'a> FilterPlanner<'a> {
             editable_subtitle_tracks: &[],
             broadcast_overlay,
             ass_workdir: None,
+            canvas: RenderCanvas::default(),
         }
     }
 
@@ -4630,6 +4709,15 @@ impl<'a> FilterPlanner<'a> {
     /// timings, or non-caption role) keep the drawtext path.
     pub(crate) fn with_ass_workdir(mut self, workdir: PathBuf) -> Self {
         self.ass_workdir = Some(workdir);
+        self
+    }
+
+    /// Override the output conform canvas (default 16:9 1920×1080).
+    /// The timeline-render spec builder derives this from the project's
+    /// `output_format` so vertical / square deliveries conform to the
+    /// requested frame instead of the landscape default.
+    pub(crate) fn with_canvas(mut self, canvas: RenderCanvas) -> Self {
+        self.canvas = canvas;
         self
     }
 
@@ -4811,7 +4899,7 @@ impl<'a> FilterPlanner<'a> {
         // 15.4) prepend their filter chain before the concat. Each
         // call returns the (video, audio) labels to feed into concat.
         let inputs: Vec<(String, String)> = (0..n)
-            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i], self.canvas))
             .collect();
         let inputs: Vec<(String, String)> = inputs
             .into_iter()
@@ -4852,7 +4940,7 @@ impl<'a> FilterPlanner<'a> {
         // resulting [av<i>] label in place of [i:a:0]. Speed runs
         // through a parallel setpts pass on video + atempo on audio.
         let inputs: Vec<(String, String)> = (0..n)
-            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i], self.canvas))
             .collect();
         let inputs: Vec<(String, String)> = inputs
             .into_iter()
@@ -6222,7 +6310,12 @@ fn stage_overlay_video_input(
 ///
 /// Returns the `(video_label, audio_label)` pair to feed into the
 /// next filter graph node.
-fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) -> (String, String) {
+fn stage_segment_inputs(
+    filter: &mut String,
+    i: usize,
+    seg: &TimelineSegment,
+    canvas: RenderCanvas,
+) -> (String, String) {
     let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
 
@@ -6408,7 +6501,7 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     // (or xfade) matches every other segment's width/height/SAR/fps/
     // pixfmt. Without this, mixing e.g. a 1280x720 source with 1080p
     // sources crashes ffmpeg's concat.
-    video_label = append_segment_conform_filter(filter, &video_label, i);
+    video_label = append_segment_conform_filter(filter, &video_label, i, canvas);
     (video_label, audio_label)
 }
 
@@ -9724,6 +9817,7 @@ pub fn build_timeline_argv_full_with_annotations(
         loudness_target,
         output_path,
         None,
+        RenderCanvas::default(),
     )
 }
 
@@ -9747,6 +9841,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
     ass_workdir: Option<&Path>,
+    canvas: RenderCanvas,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
@@ -9785,7 +9880,9 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
             argv.extend(["-i".into(), mask_source.to_string_lossy().into_owned()]);
         }
     }
-    let base = FilterPlanner::new(&segs, transitions).plan();
+    let base = FilterPlanner::new(&segs, transitions)
+        .with_canvas(canvas)
+        .plan();
     let media = append_video_overlays(base, &video_overlays, segs.len());
     let images = append_motion_images(media, motion_images, first_motion_image_input);
     let annotated = append_annotations(images, annotations);
@@ -9958,6 +10055,7 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         audio_tracks,
         output_path,
         None,
+        RenderCanvas::default(),
     )
 }
 
@@ -9981,6 +10079,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     audio_tracks: &[AudioTrackPlan],
     output_path: &Path,
     ass_workdir: Option<&Path>,
+    canvas: RenderCanvas,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
@@ -10039,7 +10138,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         .iter()
         .map(audio_track_duration)
         .fold(0.1_f64, f64::max);
-    let mut filter = plan_video_only_filter(&segs, transitions, fallback_video_duration);
+    let mut filter = plan_video_only_filter(&segs, transitions, fallback_video_duration, canvas);
     let base_video_label = "[vonly]";
     let media = append_video_overlays(
         FilterPlan {
@@ -10128,16 +10227,18 @@ fn plan_video_only_filter(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     fallback_duration_s: f64,
+    canvas: RenderCanvas,
 ) -> String {
     let mut filter = String::new();
     if segs.is_empty() {
         filter.push_str(&format!(
-            "color=c=black:s=1280x720:r=30:d={fallback_duration_s}[vonly];"
+            "color=c=black:s={}x{}:r=30:d={fallback_duration_s}[vonly];",
+            canvas.width, canvas.height
         ));
         return filter;
     }
     let video_inputs: Vec<String> = (0..segs.len())
-        .map(|i| stage_segment_video_input(&mut filter, i, &segs[i]))
+        .map(|i| stage_segment_video_input(&mut filter, i, &segs[i], canvas))
         .collect();
     if transitions.is_empty() {
         for v in &video_inputs {
@@ -10206,7 +10307,12 @@ fn audio_track_duration(track: &AudioTrackPlan) -> f64 {
         .sum()
 }
 
-fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegment) -> String {
+fn stage_segment_video_input(
+    filter: &mut String,
+    i: usize,
+    seg: &TimelineSegment,
+    canvas: RenderCanvas,
+) -> String {
     let mut video_label = format!("[{i}:v:0]");
     if let Some(color) = seg.color_correction.as_ref()
         && let Some(chain) = color_filter_chain(color)
@@ -10292,7 +10398,7 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
     // Conform to the output canvas before concat — see
     // `append_segment_conform_filter`. The video-only path joins these
     // labels with the same `concat` requirement as the A/V path.
-    append_segment_conform_filter(filter, &video_label, i)
+    append_segment_conform_filter(filter, &video_label, i, canvas)
 }
 
 fn plan_audio_mix_filter(
@@ -10529,6 +10635,7 @@ fn build_timeline_render_spec_inner(
         audio_tracks,
         loudness_target,
         render_limitations,
+        canvas,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
@@ -10668,6 +10775,7 @@ fn build_timeline_render_spec_inner(
             loudness_target,
             &output_path,
             ass_workdir.as_deref(),
+            canvas,
         )
     } else {
         build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
@@ -10684,6 +10792,7 @@ fn build_timeline_render_spec_inner(
             &audio_tracks,
             &output_path,
             ass_workdir.as_deref(),
+            canvas,
         )
     };
     let backend_evidence = crate::select_timeline_render_backend_evidence(
@@ -12675,7 +12784,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, _, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -12917,7 +13026,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, _, _, audio_tracks, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -12951,7 +13060,7 @@ mod tests {
             },
         );
 
-        let (segments, _, _, _, _, _, _, _, _, _, limitations) =
+        let (segments, _, _, _, _, _, _, _, _, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -13469,13 +13578,77 @@ mod tests {
     }
 
     #[test]
+    fn render_canvas_maps_output_format_aspect_ratios() {
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("9:16"),
+            RenderCanvas {
+                width: 1080,
+                height: 1920
+            }
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("1:1"),
+            RenderCanvas {
+                width: 1080,
+                height: 1080
+            }
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("4:5"),
+            RenderCanvas {
+                width: 1080,
+                height: 1350
+            }
+        );
+        // 16:9 and unknown labels fall back to the landscape default.
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("16:9"),
+            RenderCanvas::default()
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("cinemascope"),
+            RenderCanvas::default()
+        );
+        assert_eq!(
+            RenderCanvas::default(),
+            RenderCanvas {
+                width: 1920,
+                height: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_render_canvas_reads_output_format_metadata() {
+        let mut meta = AwidatTimelineMetadata::default();
+        meta.extra.insert(
+            "output_format".into(),
+            serde_json::json!({ "aspect_ratio": "9:16" }),
+        );
+        assert_eq!(
+            timeline_render_canvas(Some(&meta)),
+            RenderCanvas {
+                width: 1080,
+                height: 1920
+            }
+        );
+        // Absent metadata -> landscape default.
+        assert_eq!(timeline_render_canvas(None), RenderCanvas::default());
+        assert_eq!(
+            timeline_render_canvas(Some(&AwidatTimelineMetadata::default())),
+            RenderCanvas::default()
+        );
+    }
+
+    #[test]
     fn append_segment_conform_filter_is_idempotent() {
         let mut filter = String::new();
-        let first = append_segment_conform_filter(&mut filter, "[0:v:0]", 0);
+        let canvas = RenderCanvas::default();
+        let first = append_segment_conform_filter(&mut filter, "[0:v:0]", 0, canvas);
         assert_eq!(first, "[cf0]");
         let before = filter.clone();
         // Re-conforming an already-conformed label is a no-op.
-        let second = append_segment_conform_filter(&mut filter, &first, 0);
+        let second = append_segment_conform_filter(&mut filter, &first, 0, canvas);
         assert_eq!(second, "[cf0]");
         assert_eq!(
             filter, before,
