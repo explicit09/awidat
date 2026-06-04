@@ -603,6 +603,16 @@ pub enum EdlOp {
         /// [`TitlePhases::from_legacy`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phases: Option<TitlePhases>,
+        /// Optional brand font family name. When set and `font_path` is
+        /// not, render resolves it to a font file; otherwise the
+        /// renderer falls back to its system-font probe.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
+        /// Optional absolute path to a font file (`.ttf`/`.otf`/`.ttc`).
+        /// Takes precedence over `font_family` at render time, lowered
+        /// to ffmpeg `drawtext`'s `fontfile=`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_path: Option<String>,
     },
     /// Insert a title with multiple inline style runs. This keeps the
     /// common single-string title path simple while giving agents a
@@ -624,6 +634,15 @@ pub enum EdlOp {
         /// `animation` at render time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phases: Option<TitlePhases>,
+        /// Optional brand font family name. When set and `font_path` is
+        /// not, render resolves it to a font file; otherwise the
+        /// renderer falls back to its system-font probe.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
+        /// Optional absolute path to a font file. Takes precedence over
+        /// `font_family`, lowered to ffmpeg `drawtext`'s `fontfile=`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_path: Option<String>,
     },
     /// Instantiate a reusable motion graphics template into concrete title
     /// clips and runtime parameter animations. This is the agent-facing
@@ -670,6 +689,12 @@ pub enum EdlOp {
         /// over `animation` when both are present.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phases: Option<TitlePhases>,
+        /// New brand font family name, if changing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_family: Option<String>,
+        /// New font file path, if changing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_path: Option<String>,
     },
     /// Insert a burned-in caption overlay on the project's Titles
     /// track. Captions are represented as graph nodes, not a render

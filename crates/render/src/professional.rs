@@ -2740,6 +2740,8 @@ fn title_plan(
         rich_segments: Vec::new(),
         word_timings: Vec::new(),
         animations: Vec::new(),
+        font_path: None,
+        font_family: None,
     }
 }
 

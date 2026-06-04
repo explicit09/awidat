@@ -1142,6 +1142,8 @@ impl OpBuilder {
                 )?
                 .unwrap_or(TitleAnimation::None);
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::InsertTitle {
                     start_s,
                     end_s,
@@ -1152,6 +1154,8 @@ impl OpBuilder {
                     font_weight,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InsertRichTitle => {
@@ -1183,6 +1187,8 @@ impl OpBuilder {
                 )?
                 .unwrap_or(TitleAnimation::None);
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::InsertRichTitle {
                     start_s,
                     end_s,
@@ -1191,6 +1197,8 @@ impl OpBuilder {
                     font_size,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InstantiateMotionTemplate => {
@@ -1249,6 +1257,8 @@ impl OpBuilder {
                     head,
                 )?;
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::SetTitle {
                     anchor,
                     start_s,
@@ -1260,6 +1270,8 @@ impl OpBuilder {
                     font_weight,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InsertCaption => {
@@ -3156,6 +3168,7 @@ mod tests {
                 font_weight,
                 animation,
                 phases: _,
+                ..
             } => {
                 assert!((start_s - 0.0).abs() < 1e-9);
                 assert!((end_s - 3.0).abs() < 1e-9);
@@ -3165,6 +3178,58 @@ mod tests {
                 assert_eq!(color, "#FFAA00");
                 assert_eq!(*font_weight, TitleWeight::Bold);
                 assert_eq!(*animation, TitleAnimation::FadeInOut);
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_with_custom_font_path() {
+        // A `+ font_path:` line round-trips into the InsertTitle op.
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"Brand\"
++ font_path: /fonts/Brand.ttf
++ font_family: Brand Sans
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                font_path,
+                font_family,
+                ..
+            } => {
+                assert_eq!(font_path.as_deref(), Some("/fonts/Brand.ttf"));
+                assert_eq!(font_family.as_deref(), Some("Brand Sans"));
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_without_font_fields_defaults_to_none() {
+        // Absent font lines leave both fields None (backward-compatible).
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"Plain\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                font_path,
+                font_family,
+                ..
+            } => {
+                assert!(font_path.is_none());
+                assert!(font_family.is_none());
             }
             other => panic!("want InsertTitle, got {other:?}"),
         }
@@ -3225,6 +3290,7 @@ mod tests {
                 color,
                 font_weight,
                 phases: _,
+                ..
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
                 assert_eq!(text.as_deref(), Some("Updated"));

@@ -1981,6 +1981,8 @@ fn collect_motion_scene_title_plans(
                         rich_segments: Vec::new(),
                         word_timings: Vec::new(),
                         animations: Vec::new(),
+                        font_path: layer_string_param(layer, "font_path"),
+                        font_family: layer_string_param(layer, "font_family"),
                     });
                 }
                 MotionSceneLayerKind::Shape
@@ -3577,6 +3579,16 @@ fn parse_title_plan(
         .get("word_timings")
         .and_then(|value| serde_json::from_value::<Vec<CaptionWordTiming>>(value.clone()).ok())
         .unwrap_or_default();
+    let font_path = m
+        .get("font_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let font_family = m
+        .get("font_family")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -3597,6 +3609,8 @@ fn parse_title_plan(
         rich_segments,
         word_timings,
         animations,
+        font_path,
+        font_family,
     };
     Some((plan, animation_selection))
 }
@@ -4262,6 +4276,13 @@ pub struct TitlePlan {
     pub word_timings: Vec<CaptionWordTiming>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+    /// Optional absolute path to a custom font file. When set, the
+    /// drawtext filter uses `fontfile=<path>` directly.
+    pub font_path: Option<String>,
+    /// Optional brand font family name. Used to resolve a font file
+    /// when `font_path` is not set; otherwise the renderer falls back
+    /// to its system-font probe.
+    pub font_family: Option<String>,
 }
 
 /// One transcript word timing attached to a caption title.
@@ -7566,7 +7587,7 @@ fn format_drawtext_filter_with_text(
     };
     let resting_x = "(w-text_w)/2".to_string();
     let weight_attr = title_weight_drawtext_attr(t.font_weight);
-    let fontfile = pick_fontfile_attr();
+    let fontfile = title_fontfile_attr(t);
     let anim = apply_title_animation(t, &resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
         format!(
@@ -7699,7 +7720,7 @@ fn format_drawtext_filter_with_position(
         TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
     };
     let weight_attr = title_weight_drawtext_attr(t.font_weight);
-    let fontfile = pick_fontfile_attr();
+    let fontfile = title_fontfile_attr(t);
     let anim = apply_title_animation(t, resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
         format!(
@@ -9176,6 +9197,70 @@ fn drawtext_escape(s: &str) -> String {
 /// Best-effort condensed font lookup for broadcast labels. Returns
 /// either an empty string or a `:fontfile=<path>` segment ready to
 /// splice into the filter args.
+/// Resolve the `:fontfile=<path>` attribute for a title overlay.
+///
+/// Precedence:
+/// 1. An explicit `font_path` (used verbatim as `fontfile=`).
+/// 2. A `font_family` resolved to a file via [`resolve_font_family`].
+/// 3. The existing system-font probe ([`pick_fontfile_attr`]).
+///
+/// When neither custom field is set this returns exactly what
+/// `pick_fontfile_attr()` did before, keeping legacy titles byte-for-byte
+/// identical.
+fn title_fontfile_attr(t: &TitlePlan) -> String {
+    if let Some(path) = t.font_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        return format!(":fontfile={path}");
+    }
+    if let Some(family) = t.font_family.as_deref().filter(|s| !s.trim().is_empty())
+        && let Some(path) = resolve_font_family(family)
+    {
+        return format!(":fontfile={path}");
+    }
+    pick_fontfile_attr()
+}
+
+/// Best-effort resolution of a font family name to a file on disk.
+/// Probes common system font directories for a file whose stem matches
+/// the family (case-insensitive, ignoring spaces). Returns `None` when
+/// nothing matches so the caller can fall back to the system probe.
+fn resolve_font_family(family: &str) -> Option<String> {
+    const FONT_DIRS: &[&str] = &[
+        "/System/Library/Fonts",
+        "/System/Library/Fonts/Supplemental",
+        "/Library/Fonts",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/TTF",
+    ];
+    const FONT_EXTS: &[&str] = &["ttf", "otf", "ttc"];
+    let normalize = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let wanted = normalize(family).to_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    for dir in FONT_DIRS {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !FONT_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if normalize(stem).to_lowercase() == wanted {
+                return path.to_str().map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
 fn pick_fontfile_attr() -> String {
     const CANDIDATES: &[&str] = &[
         "/System/Library/Fonts/Avenir Next Condensed.ttc",
@@ -14714,6 +14799,8 @@ mod tests {
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -14765,6 +14852,8 @@ mod tests {
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
         let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
@@ -14814,6 +14903,8 @@ mod tests {
                 rich_segments: Vec::new(),
                 word_timings: Vec::new(),
                 animations: Vec::new(),
+                font_path: None,
+                font_family: None,
             },
             TitlePlan {
                 text: "Two".into(),
@@ -14831,6 +14922,8 @@ mod tests {
                 rich_segments: Vec::new(),
                 word_timings: Vec::new(),
                 animations: Vec::new(),
+                font_path: None,
+                font_family: None,
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -14862,6 +14955,8 @@ mod tests {
 rich_segments: Vec::new(),
 word_timings: Vec::new(),
 animations: Vec::new(),
+font_path: None,
+font_family: None,
         };
 
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -14965,6 +15060,8 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -15076,6 +15173,8 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
         }];
 
         let argv = build_timeline_argv_full_with_annotations(
@@ -15357,6 +15456,8 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
         };
         let overlay = BroadcastOverlayPlan {
             config: BroadcastOverlayConfig {
@@ -16655,6 +16756,40 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+        }
+    }
+
+    #[test]
+    fn custom_font_path_drives_drawtext_fontfile() {
+        let mut t = title(TitleAnimation::None, TitlePosition::Center);
+        t.font_path = Some("/fonts/Brand.ttf".into());
+        let filter = format_drawtext_filter(&t, None);
+        assert!(
+            filter.contains("fontfile=/fonts/Brand.ttf"),
+            "expected custom fontfile in drawtext, got: {filter}"
+        );
+    }
+
+    #[test]
+    fn absent_font_falls_back_to_system_probe() {
+        // With no font_path / font_family the title path delegates to
+        // pick_fontfile_attr(), so the emitted attribute must match the
+        // probe exactly (unchanged legacy behavior).
+        let t = title(TitleAnimation::None, TitlePosition::Center);
+        let filter = format_drawtext_filter(&t, None);
+        let probe = pick_fontfile_attr();
+        if probe.is_empty() {
+            assert!(
+                !filter.contains("fontfile="),
+                "no system font found, so no fontfile attr expected: {filter}"
+            );
+        } else {
+            assert!(
+                filter.contains(probe.trim_start_matches(':')),
+                "expected probe fontfile {probe:?} in drawtext, got: {filter}"
+            );
         }
     }
 
