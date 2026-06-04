@@ -117,6 +117,113 @@ export function campaignUploadRequests(
   return requests;
 }
 
+// ── Server-backed publishing (Phase 5 path) ────────────────────────────────
+//
+// Publishes campaign variants through the awidat-social SERVER instead of the
+// legacy desktop-local render-queue path. Per request: resolve the connected
+// account for the provider, then
+//   social_bind_target → social_validate_target → social_schedule_target
+//     → social_upload_artifact
+// The server worker fires the upload. Returns the per-variant job id (or an
+// error) so the caller can record variant→job mappings + surface failures.
+
+type AccountSummaryLite = {
+  id: string;
+  provider: string;
+  capabilities: { uploadVideo: boolean };
+};
+
+export type ServerPublishResult = {
+  variantId: string;
+  jobId?: string;
+  error?: string;
+};
+
+function randomId(prefix: string): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${prefix}-${hex}`;
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Publish the campaign's approved variants via the server. `scheduledFor`
+ * defaults to "now" (fire on the next worker tick).
+ */
+export async function publishCampaignViaServer(
+  campaign: CampaignManifest,
+  entries: RenderQueueEntry[],
+  invoke: InvokeFn,
+  options: { scheduledFor?: number } = {},
+): Promise<ServerPublishResult[]> {
+  const requests = campaignUploadRequests(campaign, entries);
+  if (requests.length === 0) return [];
+
+  const accounts = await invoke<AccountSummaryLite[]>("social_accounts");
+  // First upload-capable account per provider.
+  const accountFor = (provider: string): AccountSummaryLite | undefined =>
+    accounts.find((a) => a.provider === provider && a.capabilities.uploadVideo);
+
+  const scheduledFor = options.scheduledFor ?? nowSeconds();
+  const results: ServerPublishResult[] = [];
+
+  for (const req of requests) {
+    const account = accountFor(req.provider);
+    if (!account) {
+      results.push({
+        variantId: req.variantId,
+        error: `No upload-capable ${req.provider} account connected`,
+      });
+      continue;
+    }
+    try {
+      const targetId = randomId("target");
+      await invoke("social_bind_target", {
+        args: {
+          targetId,
+          campaignId: req.campaignId,
+          variantId: req.variantId,
+          connectedAccountId: account.id,
+          platformFields: {
+            privacy: req.metadata.visibility ?? "private",
+            title: req.title,
+            description: req.metadata.description ?? "",
+          },
+          scheduledFor,
+          now: nowSeconds(),
+        },
+      });
+      const validated = await invoke<{ validationState: string }>(
+        "social_validate_target",
+        { targetId, now: nowSeconds() },
+      );
+      if (validated.validationState !== "valid") {
+        results.push({
+          variantId: req.variantId,
+          error: `Not valid: ${validated.validationState}`,
+        });
+        continue;
+      }
+      const jobId = randomId("job");
+      const job = await invoke<{ id: string }>("social_schedule_target", {
+        args: { targetId, jobId, artifactRef: "", now: nowSeconds() },
+      });
+      await invoke("social_upload_artifact", {
+        jobId: job.id,
+        filePath: req.filePath,
+      });
+      results.push({ variantId: req.variantId, jobId: job.id });
+    } catch (e) {
+      results.push({ variantId: req.variantId, error: String(e) });
+    }
+  }
+  return results;
+}
+
 /** Per-target upload entry returned by `poll_upload_states`. Mirrors the
  *  backend `UploadJobEntry` (same shape the render-queue worker polls). */
 type UploadJobEntryWire = {
