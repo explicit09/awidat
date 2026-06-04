@@ -1136,9 +1136,11 @@ index. Supports long_form and accessibility formats only (use \
 plan_scene_aware_short_form for vertical short-form). Segments transcript words \
 to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
 applies a (format, mood) style, and returns caption recommendations, a \
-readability lint, and a reviewable Insert Caption EDL fragment. Note: \
-accessibility uses whole-cue reveal regardless of mood. Apply with apply_edl \
-after inspection. Never burns captions into the picture.",
+readability lint, and a reviewable Insert Caption EDL fragment. Pass the \
+optional `preset` field (values: clean_white | word_pop | boxed) to override \
+the (format, mood) style with a named preset. Note: accessibility uses \
+whole-cue reveal regardless of mood. Apply with apply_edl after inspection. \
+Never burns captions into the picture.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_captions(

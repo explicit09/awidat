@@ -13,7 +13,7 @@ use crate::awidat_mcp::context::McpToolCtx;
 use crate::caption::edl::build_caption_edl_lines;
 use crate::caption::planner::{LowerSafeZoneStrategy, plan};
 use crate::caption::readability::{CaptionFormatProfile, lint, segment, words_from_transcript};
-use crate::caption::styles::{CaptionFormat, CaptionMood, resolve_style};
+use crate::caption::styles::{CaptionFormat, CaptionMood, resolve_preset, resolve_style};
 
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct PlanCaptionsArgs {
@@ -25,6 +25,10 @@ pub struct PlanCaptionsArgs {
     pub format: String,
     /// Mood register: "minimal_cinematic" | "active_pop".
     pub mood: String,
+    /// Optional named style preset; overrides (format, mood) when set.
+    /// Values: clean_white | word_pop | boxed.
+    #[serde(default)]
+    pub preset: Option<String>,
 }
 
 pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
@@ -68,7 +72,10 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
     let cues = segment(&words, &profile);
     let lint_proposals = lint(&cues, &profile);
     let recs = plan(&cues, &LowerSafeZoneStrategy);
-    let spec = resolve_style(format, mood);
+    let spec = match args.preset.as_deref().and_then(resolve_preset) {
+        Some(s) => s,
+        None => resolve_style(format, mood),
+    };
     // Opportunistic placement: a busy bottom region (e.g. a burned-in lower-third)
     // raises captions clear of it; absent composition data, the standard band is
     // the floor. (short_form is rejected earlier in run().)
@@ -147,9 +154,11 @@ index. Supports long_form and accessibility formats only (use \
 plan_scene_aware_short_form for vertical short-form). Segments transcript words \
 to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
 applies a (format, mood) style, and returns caption recommendations, a \
-readability lint, and a reviewable Insert Caption EDL fragment. Note: \
-accessibility uses whole-cue reveal regardless of mood. Apply with apply_edl \
-after inspection. Never burns captions into the picture.";
+readability lint, and a reviewable Insert Caption EDL fragment. Pass the \
+optional `preset` field (values: clean_white | word_pop | boxed) to override \
+the (format, mood) style with a named preset. Note: accessibility uses \
+whole-cue reveal regardless of mood. Apply with apply_edl after inspection. \
+Never burns captions into the picture.";
 
 #[cfg(test)]
 mod tests {
@@ -189,6 +198,21 @@ mod tests {
     }
 
     #[test]
+    fn explicit_preset_drives_style_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "raw/ep.mp4";
+        write_whisper(dir.path(), asset, serde_json::json!({
+            "words": [{"text":"hi","start_s":0.0,"end_s":1.0}], "segments":[{"text":"hi","start_s":0.0,"end_s":1.0}]
+        }));
+        let ctx = McpToolCtx { project_root: dir.path().to_path_buf() };
+        let out = run(PlanCaptionsArgs { asset_id: asset.into(), clip_id: "c".into(),
+            format: "long_form".into(), mood: "minimal_cinematic".into(), preset: Some("word_pop".into()) }, ctx).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(body["edl_fragment"].as_str().unwrap().contains("\"reveal\":\"active_word_pop\""),
+            "explicit preset must drive style_json: {}", body["edl_fragment"]);
+    }
+
+    #[test]
     fn busy_bottom_region_raises_safe_area_to_lower_third() {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
@@ -216,6 +240,7 @@ mod tests {
                 clip_id: "c".into(),
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )
@@ -252,6 +277,7 @@ mod tests {
                 clip_id: "c".into(),
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )
@@ -296,6 +322,7 @@ mod tests {
                 clip_id: "clip-1".into(),
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )
@@ -326,6 +353,7 @@ mod tests {
                 clip_id: "c".into(),
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )
@@ -345,6 +373,7 @@ mod tests {
                 clip_id: "c".into(),
                 format: "square".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )
@@ -364,6 +393,7 @@ mod tests {
                 clip_id: "c".into(),
                 format: "short_form".into(),
                 mood: "minimal_cinematic".into(),
+                preset: None,
             },
             ctx,
         )

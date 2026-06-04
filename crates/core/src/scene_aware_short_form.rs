@@ -604,12 +604,14 @@ fn build_edl_fragment(
         ]);
     }
 
-    // Captions: shared format-agnostic emission; short-form uses clean_white preset
-    // for now (Task 8 will switch to word_pop).
+    // Captions: short-form uses the word_pop preset (energetic word-by-word
+    // active reveal). Falls back to resolve_style(ShortForm, ActivePop) which
+    // also maps to word_pop, keeping the path sound if the registry ever shifts.
     {
         use crate::caption::edl::build_caption_edl_lines;
-        let spec = crate::caption::styles::resolve_preset("clean_white")
-            .expect("clean_white preset must exist");
+        use crate::caption::styles::{CaptionFormat, CaptionMood};
+        let spec = crate::caption::styles::resolve_preset("word_pop")
+            .unwrap_or_else(|| crate::caption::styles::resolve_style(CaptionFormat::ShortForm, CaptionMood::ActivePop));
         lines.extend(build_caption_edl_lines(captions, &spec, "mobile"));
     }
 
@@ -1750,6 +1752,33 @@ mod tests {
                 .ops
                 .iter()
                 .any(|op| matches!(op, crate::edl::EdlOp::TrimClip { .. }))
+        );
+    }
+
+    #[test]
+    fn short_form_uses_word_pop_caption_preset() {
+        // build a scene-aware plan with a transcript and assert that the
+        // caption EDL carries "active_word_pop" reveal (word_pop preset).
+        let mut input = SceneAwareShortFormInput::default();
+        input.source_width = 1080;
+        input.source_height = 1920;
+        input.transcript = serde_json::json!({
+            "segments": [{
+                "start_s": 0.0, "end_s": 4.0,
+                "text": "absolutely incredible breakthrough today",
+                "words": [
+                    {"text": "absolutely", "start_s": 0.0, "end_s": 1.0},
+                    {"text": "incredible", "start_s": 1.0, "end_s": 2.0},
+                    {"text": "breakthrough", "start_s": 2.0, "end_s": 3.0},
+                    {"text": "today", "start_s": 3.0, "end_s": 4.0}
+                ]
+            }]
+        });
+        let plan = build_scene_aware_short_form_plan(input);
+        assert!(
+            plan.edl_fragment.contains("\"reveal\":\"active_word_pop\""),
+            "short-form EDL must use word_pop preset (active_word_pop reveal): {}",
+            plan.edl_fragment
         );
     }
 
