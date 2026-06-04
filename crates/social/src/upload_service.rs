@@ -4,8 +4,31 @@ use crate::model::{
     PublishJobStatus,
 };
 use crate::store::{SocialStore, SocialStoreError};
+use crate::token::TokenSecret;
+use crate::token_refresh::{TokenRefreshError, TokenRefresher};
 use crate::upload_adapter::{UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest};
 use thiserror::Error;
+
+/// Default lead time for the at-fire-time refresh: refresh a token that expires
+/// within this many seconds so a due upload never races the expiry boundary.
+pub const TOKEN_REFRESH_SKEW_SECS: i64 = 120;
+
+/// A no-op refresher for callers that don't supply one (e.g. the desktop mock
+/// path). It never claims a token is expiring, so behaviour is unchanged.
+pub struct NoopTokenRefresher;
+
+impl TokenRefresher for NoopTokenRefresher {
+    fn refresh(
+        &self,
+        _account_id: &str,
+        secret: &TokenSecret,
+        _now: i64,
+    ) -> Result<TokenSecret, TokenRefreshError> {
+        // Never called: execute_claimed_job only refreshes when is_access_expiring
+        // AND a real refresher is wired. Returning the secret unchanged is safe.
+        Ok(secret.clone())
+    }
+}
 
 /// Bounded-retry policy for retryable provider failures (transient network /
 /// 5xx). Held by the server worker, NOT on the domain `ExecuteUploadInput`
@@ -84,11 +107,35 @@ impl UploadService {
     /// spent), leaving a durable, next-tick-evaluable row. All pre-existing
     /// safety guards — account re-check, cancel-race re-read, privacy
     /// resolution — are unchanged; only the retryable arm's transition differs.
+    ///
+    /// Uses a no-op refresher with zero skew, so token refresh is never
+    /// triggered — identical behaviour to before Phase 4 Step 3 for callers that
+    /// don't need fire-time refresh.
     pub fn execute_claimed_job_with_policy(
         store: &mut impl SocialStore,
         adapter: &impl UploadAdapter,
         input: ExecuteUploadInput,
         policy: RetryPolicy,
+    ) -> Result<PublishJob, UploadServiceError> {
+        Self::execute_claimed_job_full(store, adapter, &NoopTokenRefresher, input, policy, 0)
+    }
+
+    /// Execute a claimed upload with fire-time token refresh.
+    ///
+    /// Before touching the provider, if the account's access token expires
+    /// within `refresh_skew_secs` the injected `refresher` is driven:
+    /// - success → the new secret is persisted and the upload proceeds;
+    /// - `invalid_grant` or an exhausted refresh token → the account is flipped
+    ///   to `NeedsReauth`, a `RequiresAction` event is appended, the adapter is
+    ///   never called, and the job becomes `RequiresAction` (stop hammering);
+    /// - transient refresh error → treated as a retryable failure (backoff).
+    pub fn execute_claimed_job_full(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadAdapter,
+        refresher: &impl TokenRefresher,
+        input: ExecuteUploadInput,
+        policy: RetryPolicy,
+        refresh_skew_secs: i64,
     ) -> Result<PublishJob, UploadServiceError> {
         let job = store.publish_job(&input.job_id)?;
         if job.status != PublishJobStatus::Uploading {
@@ -129,7 +176,49 @@ impl UploadService {
                 "capability:upload_video".into(),
             ));
         }
-        let _token_secret = store.token_secret_for_account(&account.id)?;
+        // Ensure a fresh access token before firing. A scheduled post may be
+        // claimed long after the user went offline; the access token can have
+        // expired while the (longer-lived) refresh token is still valid.
+        let token_secret = store.token_secret_for_account(&account.id)?;
+        if token_secret.is_access_expiring(input.now, refresh_skew_secs) {
+            if token_secret.refresh_token_exhausted(input.now) {
+                return Self::flip_needs_reauth(
+                    store,
+                    job,
+                    &account.id,
+                    "refresh_token_expired",
+                    input.now,
+                );
+            }
+            match refresher.refresh(&account.id, &token_secret, input.now) {
+                Ok(fresh) => {
+                    store.save_token_secret(fresh)?;
+                }
+                Err(TokenRefreshError::InvalidGrant(_)) => {
+                    return Self::flip_needs_reauth(
+                        store,
+                        job,
+                        &account.id,
+                        "refresh_invalid_grant",
+                        input.now,
+                    );
+                }
+                Err(TokenRefreshError::Transient(message)) => {
+                    // Treat like a retryable provider failure: requeue with
+                    // backoff (or fail terminally once exhausted). The job is
+                    // still `Uploading` here, so attempt_count is already bumped.
+                    return Self::requeue_or_fail_retryable(
+                        store,
+                        job,
+                        &policy,
+                        "token_refresh_transient",
+                        &message,
+                        input.now,
+                    );
+                }
+            }
+        }
+
         let request = UploadRequest {
             job_id: job.id.clone(),
             provider: job.provider.clone(),
@@ -260,55 +349,111 @@ impl UploadService {
                 // Transient/5xx failure: requeue with backoff while the attempt
                 // budget lasts, otherwise go terminal Failed. The job row is
                 // always left durable and next-tick-evaluable.
-                let provider = upload_in_progress.provider.as_str().to_string();
-                let (next, outcome) = upload_in_progress.retry_with_backoff_or_fail(
-                    policy.max_attempts,
-                    policy.base_backoff_secs,
+                return Self::requeue_or_fail_retryable(
+                    store,
+                    upload_in_progress,
+                    &policy,
                     "network_or_server_error",
-                    message.clone(),
+                    &message,
                     input.now,
                 );
-                store.save_publish_job(next.clone())?;
-                match outcome {
-                    RetryOutcome::Requeued { next_scheduled_for } => {
-                        append_event(
-                            store,
-                            &next.id,
-                            PublishJobEventType::RetryQueued,
-                            PublishJobActorType::Worker,
-                            "provider upload failed; retry queued with backoff",
-                            serde_json::json!({
-                                "provider": provider,
-                                "message": message,
-                                "attempt_count": next.attempt_count,
-                                "next_scheduled_for": next_scheduled_for,
-                            }),
-                            input.now,
-                        )?;
-                    }
-                    RetryOutcome::Exhausted => {
-                        append_event(
-                            store,
-                            &next.id,
-                            PublishJobEventType::Failed,
-                            PublishJobActorType::Provider,
-                            "provider upload failed; retry budget exhausted",
-                            serde_json::json!({
-                                "provider": provider,
-                                "message": message,
-                                "attempt_count": next.attempt_count,
-                            }),
-                            input.now,
-                        )?;
-                    }
-                }
-                next
             }
             Err(UploadAdapterError::ProviderMismatch) => {
                 return Err(UploadServiceError::ProviderMismatch);
             }
         };
 
+        Ok(next)
+    }
+
+    /// Flip the account to `NeedsReauth`, append a `RequiresAction` event, and
+    /// move the job to `RequiresAction` so the next tick short-circuits it. Used
+    /// when a refresh is impossible (refresh token expired / invalid_grant) —
+    /// the provider is never contacted.
+    fn flip_needs_reauth(
+        store: &mut impl SocialStore,
+        job: PublishJob,
+        account_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<PublishJob, UploadServiceError> {
+        let mut account = store.connected_account(account_id)?;
+        account.status = ConnectedAccountStatus::NeedsReauth;
+        account.updated_at = now;
+        store.save_connected_account(account)?;
+
+        let next = job.requires_action(reason, now);
+        store.save_publish_job(next.clone())?;
+        append_event(
+            store,
+            &next.id,
+            PublishJobEventType::RequiresAction,
+            PublishJobActorType::Worker,
+            "token refresh failed; account needs reauth",
+            serde_json::json!({
+                "provider": next.provider.as_str(),
+                "reason": reason,
+            }),
+            now,
+        )?;
+        Ok(next)
+    }
+
+    /// Apply the bounded-backoff decision to a retryable failure and append the
+    /// matching audit event. Shared by the provider `NetworkOrServer` arm and
+    /// the transient-refresh path.
+    fn requeue_or_fail_retryable(
+        store: &mut impl SocialStore,
+        job: PublishJob,
+        policy: &RetryPolicy,
+        normalized_error: &str,
+        message: &str,
+        now: i64,
+    ) -> Result<PublishJob, UploadServiceError> {
+        let provider = job.provider.as_str().to_string();
+        let (next, outcome) = job.retry_with_backoff_or_fail(
+            policy.max_attempts,
+            policy.base_backoff_secs,
+            normalized_error,
+            message,
+            now,
+        );
+        store.save_publish_job(next.clone())?;
+        match outcome {
+            RetryOutcome::Requeued { next_scheduled_for } => {
+                append_event(
+                    store,
+                    &next.id,
+                    PublishJobEventType::RetryQueued,
+                    PublishJobActorType::Worker,
+                    "upload failed; retry queued with backoff",
+                    serde_json::json!({
+                        "provider": provider,
+                        "normalized_error": normalized_error,
+                        "message": message,
+                        "attempt_count": next.attempt_count,
+                        "next_scheduled_for": next_scheduled_for,
+                    }),
+                    now,
+                )?;
+            }
+            RetryOutcome::Exhausted => {
+                append_event(
+                    store,
+                    &next.id,
+                    PublishJobEventType::Failed,
+                    PublishJobActorType::Provider,
+                    "upload failed; retry budget exhausted",
+                    serde_json::json!({
+                        "provider": provider,
+                        "normalized_error": normalized_error,
+                        "message": message,
+                        "attempt_count": next.attempt_count,
+                    }),
+                    now,
+                )?;
+            }
+        }
         Ok(next)
     }
 }
@@ -810,6 +955,160 @@ mod tests {
             ))
         );
         assert_eq!(adapter.call_count(), 0);
+    }
+
+    /// Records whether `refresh` was called and returns a configured result.
+    struct FakeRefresher {
+        result: Result<TokenSecret, TokenRefreshError>,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl FakeRefresher {
+        fn ok() -> Self {
+            // A fresh secret with a far-future expiry.
+            let mut fresh = token_secret();
+            fresh.access_token_expires_at = Some(1_000_000);
+            Self {
+                result: Ok(fresh),
+                calls: std::cell::Cell::new(0),
+            }
+        }
+
+        fn invalid_grant() -> Self {
+            Self {
+                result: Err(TokenRefreshError::InvalidGrant("revoked".into())),
+                calls: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl TokenRefresher for FakeRefresher {
+        fn refresh(
+            &self,
+            _account_id: &str,
+            _secret: &TokenSecret,
+            _now: i64,
+        ) -> Result<TokenSecret, TokenRefreshError> {
+            self.calls.set(self.calls.get() + 1);
+            self.result.clone()
+        }
+    }
+
+    /// Build a store whose token expires soon (so the skew triggers a refresh).
+    fn store_with_expiring_token(
+        access_expires_at: i64,
+        refresh_expires_at: Option<i64>,
+    ) -> InMemorySocialStore {
+        let mut store = store_with_claimed_job();
+        let mut secret = token_secret();
+        secret.access_token_expires_at = Some(access_expires_at);
+        secret.refresh_token_expires_at = refresh_expires_at;
+        store
+            .save_token_secret(secret)
+            .unwrap_or_else(|err| panic!("save token: {err}"));
+        store
+    }
+
+    #[test]
+    fn expiring_token_is_refreshed_then_upload_proceeds() {
+        // Access token expires at 2_050; now=2_000, skew=120 → expiring.
+        let mut store = store_with_expiring_token(2_050, Some(1_000_000));
+        let adapter = RecordingUploadAdapter::published();
+        let refresher = FakeRefresher::ok();
+
+        let job = UploadService::execute_claimed_job_full(
+            &mut store,
+            &adapter,
+            &refresher,
+            execute_input(),
+            RetryPolicy::default(),
+            TOKEN_REFRESH_SKEW_SECS,
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(refresher.calls.get(), 1, "refresher must be called");
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(adapter.call_count(), 1, "upload proceeds after refresh");
+        // The refreshed secret was persisted.
+        let secret = store
+            .token_secret_for_account("acct_1")
+            .unwrap_or_else(|err| panic!("load secret: {err}"));
+        assert_eq!(secret.access_token_expires_at, Some(1_000_000));
+    }
+
+    #[test]
+    fn invalid_grant_refresh_flips_account_to_needs_reauth() {
+        let mut store = store_with_expiring_token(2_050, Some(1_000_000));
+        let adapter = RecordingUploadAdapter::published();
+        let refresher = FakeRefresher::invalid_grant();
+
+        let job = UploadService::execute_claimed_job_full(
+            &mut store,
+            &adapter,
+            &refresher,
+            execute_input(),
+            RetryPolicy::default(),
+            TOKEN_REFRESH_SKEW_SECS,
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("refresh_invalid_grant")
+        );
+        assert_eq!(adapter.call_count(), 0, "provider must NOT be hammered");
+        let account = store
+            .connected_account("acct_1")
+            .unwrap_or_else(|err| panic!("load account: {err}"));
+        assert_eq!(account.status, ConnectedAccountStatus::NeedsReauth);
+    }
+
+    #[test]
+    fn exhausted_refresh_token_flips_to_needs_reauth_without_calling_refresher() {
+        // Refresh token already expired (at 1_500, now=2_000) → no point trying.
+        let mut store = store_with_expiring_token(2_050, Some(1_500));
+        let adapter = RecordingUploadAdapter::published();
+        let refresher = FakeRefresher::ok();
+
+        let job = UploadService::execute_claimed_job_full(
+            &mut store,
+            &adapter,
+            &refresher,
+            execute_input(),
+            RetryPolicy::default(),
+            TOKEN_REFRESH_SKEW_SECS,
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(refresher.calls.get(), 0, "refresher must not be called");
+        assert_eq!(adapter.call_count(), 0);
+        let account = store
+            .connected_account("acct_1")
+            .unwrap_or_else(|err| panic!("load account: {err}"));
+        assert_eq!(account.status, ConnectedAccountStatus::NeedsReauth);
+    }
+
+    #[test]
+    fn non_expiring_token_skips_refresh() {
+        // Access token far in the future → refresher never called.
+        let mut store = store_with_expiring_token(1_000_000, Some(1_000_000));
+        let adapter = RecordingUploadAdapter::published();
+        let refresher = FakeRefresher::ok();
+
+        UploadService::execute_claimed_job_full(
+            &mut store,
+            &adapter,
+            &refresher,
+            execute_input(),
+            RetryPolicy::default(),
+            TOKEN_REFRESH_SKEW_SECS,
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(refresher.calls.get(), 0, "fresh token needs no refresh");
+        assert_eq!(adapter.call_count(), 1);
     }
 
     #[test]

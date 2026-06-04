@@ -27,6 +27,46 @@ impl std::fmt::Display for RefreshError {
     }
 }
 
+/// Synchronous refresh seam used at fire-time inside the (sync) `UploadService`.
+///
+/// The domain crate depends only on this trait — never on `reqwest` or
+/// `client_secret`. The server implements it (bridging to the async OAuth
+/// exchange via `block_on`), keeping refresh tokens and the confidential
+/// client secret server-side, consistent with the crate's "no live HTTP"
+/// property.
+pub trait TokenRefresher {
+    /// Exchange the stored refresh token for a fresh `TokenSecret`.
+    ///
+    /// `secret` is the current (expiring) secret for `account_id`. On success
+    /// the returned secret carries the new encrypted access token and updated
+    /// expiry; the caller persists it.
+    fn refresh(
+        &self,
+        account_id: &str,
+        secret: &TokenSecret,
+        now: i64,
+    ) -> Result<TokenSecret, TokenRefreshError>;
+}
+
+/// Failure modes for an at-fire-time token refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenRefreshError {
+    /// The refresh token is gone or the provider rejected it (`invalid_grant`).
+    /// The account must be flipped to `NeedsReauth`; do not retry.
+    InvalidGrant(String),
+    /// A transient network/server error; the upload may be retried later.
+    Transient(String),
+}
+
+impl std::fmt::Display for TokenRefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidGrant(s) => write!(f, "refresh rejected (invalid_grant): {s}"),
+            Self::Transient(s) => write!(f, "refresh transient error: {s}"),
+        }
+    }
+}
+
 pub struct TokenRefreshService;
 
 impl TokenRefreshService {

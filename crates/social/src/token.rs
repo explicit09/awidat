@@ -175,6 +175,27 @@ impl TokenSecret {
             .map(|enc| aead_open(enc, key_provider))
             .transpose()
     }
+
+    /// True when the access token has expired or will within `skew_secs`.
+    ///
+    /// A token with no recorded expiry is treated as fresh (some providers omit
+    /// `expires_in`). The skew lets the worker refresh slightly ahead of the
+    /// wire so a due upload never races the expiry boundary.
+    pub fn is_access_expiring(&self, now: i64, skew_secs: i64) -> bool {
+        match self.access_token_expires_at {
+            Some(expires_at) => expires_at <= now.saturating_add(skew_secs),
+            None => false,
+        }
+    }
+
+    /// True when the refresh token itself has expired — no automatic refresh is
+    /// possible and the user must re-authenticate.
+    pub fn refresh_token_exhausted(&self, now: i64) -> bool {
+        match self.refresh_token_expires_at {
+            Some(expires_at) => expires_at <= now,
+            None => false,
+        }
+    }
 }
 
 /// Encrypt `plaintext` with ChaCha20-Poly1305.
@@ -236,6 +257,38 @@ mod tests {
 
     fn provider() -> TestKeyProvider {
         TestKeyProvider::new("test-key-1", "local-key-for-testing")
+    }
+
+    fn secret_with_expiry(access: Option<i64>, refresh: Option<i64>) -> TokenSecret {
+        let mut s = TokenSecret::encrypt("acct_1", "at", Some("rt"), &provider(), 0)
+            .unwrap_or_else(|err| panic!("encrypt: {err}"));
+        s.access_token_expires_at = access;
+        s.refresh_token_expires_at = refresh;
+        s
+    }
+
+    #[test]
+    fn is_access_expiring_accounts_for_skew() {
+        let s = secret_with_expiry(Some(1_100), None);
+        assert!(!s.is_access_expiring(1_000, 50), "expires after now+skew");
+        assert!(s.is_access_expiring(1_000, 120), "within skew window");
+        assert!(s.is_access_expiring(1_200, 0), "already expired");
+    }
+
+    #[test]
+    fn is_access_expiring_treats_missing_expiry_as_fresh() {
+        let s = secret_with_expiry(None, None);
+        assert!(!s.is_access_expiring(i64::MAX, 0));
+    }
+
+    #[test]
+    fn refresh_token_exhausted_checks_expiry() {
+        assert!(secret_with_expiry(None, Some(900)).refresh_token_exhausted(1_000));
+        assert!(!secret_with_expiry(None, Some(1_100)).refresh_token_exhausted(1_000));
+        assert!(
+            !secret_with_expiry(None, None).refresh_token_exhausted(i64::MAX),
+            "no recorded expiry → not exhausted"
+        );
     }
 
     #[test]
