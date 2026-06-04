@@ -1,3 +1,4 @@
+use crate::job::RetryOutcome;
 use crate::model::{
     ConnectedAccountStatus, PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType,
     PublishJobStatus,
@@ -5,6 +6,28 @@ use crate::model::{
 use crate::store::{SocialStore, SocialStoreError};
 use crate::upload_adapter::{UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest};
 use thiserror::Error;
+
+/// Bounded-retry policy for retryable provider failures (transient network /
+/// 5xx). Held by the server worker, NOT on the domain `ExecuteUploadInput`
+/// struct (G5 — keep the tested domain signature stable). A `Default` is
+/// provided so every existing call site compiles unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetryPolicy {
+    /// Maximum total attempts before a retryable error becomes terminal `Failed`.
+    pub max_attempts: u32,
+    /// Base backoff in seconds; the delay grows exponentially per attempt.
+    pub base_backoff_secs: i64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        // 5 attempts, 60s base → 60s, 120s, 240s, 480s (capped at 1h ceiling).
+        Self {
+            max_attempts: 5,
+            base_backoff_secs: 60,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecuteUploadInput {
@@ -42,10 +65,30 @@ pub enum UploadServiceError {
 pub struct UploadService;
 
 impl UploadService {
+    /// Execute a claimed upload with the default retry policy.
+    ///
+    /// Preserved verbatim for existing callers (incl. the desktop mock path);
+    /// delegates to [`execute_claimed_job_with_policy`].
     pub fn execute_claimed_job(
         store: &mut impl SocialStore,
         adapter: &impl UploadAdapter,
         input: ExecuteUploadInput,
+    ) -> Result<PublishJob, UploadServiceError> {
+        Self::execute_claimed_job_with_policy(store, adapter, input, RetryPolicy::default())
+    }
+
+    /// Execute a claimed upload, applying `policy` to retryable provider errors.
+    ///
+    /// On a transient `NetworkOrServer` failure the job is requeued with an
+    /// exponential backoff (or fails terminally once the attempt budget is
+    /// spent), leaving a durable, next-tick-evaluable row. All pre-existing
+    /// safety guards — account re-check, cancel-race re-read, privacy
+    /// resolution — are unchanged; only the retryable arm's transition differs.
+    pub fn execute_claimed_job_with_policy(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadAdapter,
+        input: ExecuteUploadInput,
+        policy: RetryPolicy,
     ) -> Result<PublishJob, UploadServiceError> {
         let job = store.publish_job(&input.job_id)?;
         if job.status != PublishJobStatus::Uploading {
@@ -214,21 +257,51 @@ impl UploadService {
                 next
             }
             Err(UploadAdapterError::NetworkOrServer { message }) => {
-                let next =
-                    upload_in_progress.fail("network_or_server_error", message.clone(), input.now);
-                store.save_publish_job(next.clone())?;
-                append_event(
-                    store,
-                    &next.id,
-                    PublishJobEventType::Failed,
-                    PublishJobActorType::Provider,
-                    "provider upload failed",
-                    serde_json::json!({
-                        "provider": next.provider.as_str(),
-                        "message": message,
-                    }),
+                // Transient/5xx failure: requeue with backoff while the attempt
+                // budget lasts, otherwise go terminal Failed. The job row is
+                // always left durable and next-tick-evaluable.
+                let provider = upload_in_progress.provider.as_str().to_string();
+                let (next, outcome) = upload_in_progress.retry_with_backoff_or_fail(
+                    policy.max_attempts,
+                    policy.base_backoff_secs,
+                    "network_or_server_error",
+                    message.clone(),
                     input.now,
-                )?;
+                );
+                store.save_publish_job(next.clone())?;
+                match outcome {
+                    RetryOutcome::Requeued { next_scheduled_for } => {
+                        append_event(
+                            store,
+                            &next.id,
+                            PublishJobEventType::RetryQueued,
+                            PublishJobActorType::Worker,
+                            "provider upload failed; retry queued with backoff",
+                            serde_json::json!({
+                                "provider": provider,
+                                "message": message,
+                                "attempt_count": next.attempt_count,
+                                "next_scheduled_for": next_scheduled_for,
+                            }),
+                            input.now,
+                        )?;
+                    }
+                    RetryOutcome::Exhausted => {
+                        append_event(
+                            store,
+                            &next.id,
+                            PublishJobEventType::Failed,
+                            PublishJobActorType::Provider,
+                            "provider upload failed; retry budget exhausted",
+                            serde_json::json!({
+                                "provider": provider,
+                                "message": message,
+                                "attempt_count": next.attempt_count,
+                            }),
+                            input.now,
+                        )?;
+                    }
+                }
                 next
             }
             Err(UploadAdapterError::ProviderMismatch) => {
@@ -451,6 +524,97 @@ mod tests {
         assert_eq!(events[1].event_type, PublishJobEventType::RequiresAction);
         assert_eq!(events[1].actor_type, PublishJobActorType::Provider);
         assert_eq!(events[1].metadata["reason"], "missing_scope");
+    }
+
+    #[test]
+    fn network_error_requeues_with_backoff_not_failed() {
+        // First transient failure (attempt 1 of 5) → back to Scheduled with a
+        // future scheduled_for and a RetryQueued event, NOT terminal Failed.
+        let mut store = store_with_claimed_job();
+        let adapter = RecordingUploadAdapter::failing(UploadAdapterError::NetworkOrServer {
+            message: "503 upstream".into(),
+        });
+
+        let job = UploadService::execute_claimed_job(&mut store, &adapter, execute_input())
+            .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.attempt_count, 1);
+        assert_eq!(job.scheduled_for, 2_060, "now + 60s base backoff");
+        assert_eq!(job.normalized_error, None, "errors cleared on requeue");
+
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("load events: {err}"));
+        let last = events.last().unwrap_or_else(|| panic!("expected events"));
+        assert_eq!(last.event_type, PublishJobEventType::RetryQueued);
+        assert_eq!(last.actor_type, PublishJobActorType::Worker);
+    }
+
+    #[test]
+    fn network_error_fails_terminally_once_attempts_exhausted() {
+        // Drive attempt_count to the policy max, then a network failure must go
+        // terminal Failed with a Failed event.
+        let policy = RetryPolicy {
+            max_attempts: 2,
+            base_backoff_secs: 60,
+        };
+        let mut store = store_with_claimed_job();
+        // store_with_claimed_job already claimed once (attempt_count=1); claim
+        // again so the next failure (attempt 2) is the budget's last.
+        let claimed = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("load job: {err}"))
+            .claim_for_upload(1_950);
+        store
+            .save_publish_job(claimed)
+            .unwrap_or_else(|err| panic!("save job: {err}"));
+
+        let adapter = RecordingUploadAdapter::failing(UploadAdapterError::NetworkOrServer {
+            message: "503 upstream".into(),
+        });
+
+        let job = UploadService::execute_claimed_job_with_policy(
+            &mut store,
+            &adapter,
+            execute_input(),
+            policy,
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Failed);
+        assert_eq!(
+            job.normalized_error.as_deref(),
+            Some("network_or_server_error")
+        );
+
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("load events: {err}"));
+        let last = events.last().unwrap_or_else(|| panic!("expected events"));
+        assert_eq!(last.event_type, PublishJobEventType::Failed);
+    }
+
+    #[test]
+    fn media_constraint_failure_is_terminal_on_first_attempt() {
+        // A 4xx media rejection won't fix itself — it must fail immediately,
+        // never requeue.
+        let mut store = store_with_claimed_job();
+        let adapter = RecordingUploadAdapter::failing(UploadAdapterError::MediaConstraintFailed {
+            reason: "video_too_long".into(),
+        });
+
+        let job = UploadService::execute_claimed_job(&mut store, &adapter, execute_input())
+            .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Failed);
+        assert_eq!(job.normalized_error.as_deref(), Some("video_too_long"));
+
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("load events: {err}"));
+        let last = events.last().unwrap_or_else(|| panic!("expected events"));
+        assert_eq!(last.event_type, PublishJobEventType::Failed);
     }
 
     #[test]
