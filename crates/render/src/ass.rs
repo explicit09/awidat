@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 
 use awidat_proto::subtitle::SubtitleTrack;
 
-use crate::timeline::{TitlePlan, TitlePosition, TitleWeight};
+use crate::timeline::{
+    CaptionRenderBackground, CaptionRenderCasing, CaptionRenderWeight, TitlePlan, TitlePosition,
+    TitleWeight,
+};
 
 /// 1080p reference frame that title font sizes are authored against.
 /// Mirrors `TIMELINE_RENDER_WIDTH` / `TIMELINE_RENDER_HEIGHT` in
@@ -158,18 +161,46 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
          BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, \
          BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
     );
-    let bold_flag = if matches!(title.font_weight, TitleWeight::Bold) {
-        -1
+
+    // Derive style fields — `caption_style` overrides legacy title fields when present.
+    let (bold_flag, primary, border_style, back) = if let Some(style) = &title.caption_style {
+        let bold = if style.weight == CaptionRenderWeight::Bold {
+            -1i32
+        } else {
+            0i32
+        };
+        let primary_col = hex_to_ass_color(&style.primary_color);
+        let (bs, back_col) = match &style.background {
+            CaptionRenderBackground::Box { color, opacity } => {
+                // ASS alpha is inverted: 0x00 = opaque, 0xFF = transparent.
+                let aa = 255u8 - opacity;
+                let trimmed = color.trim().trim_start_matches('#');
+                let parse = |start: usize| {
+                    u8::from_str_radix(trimmed.get(start..start + 2).unwrap_or("00"), 16)
+                        .unwrap_or(0)
+                };
+                let (r, g, b) = (parse(0), parse(2), parse(4));
+                let back_col = format!("&H{aa:02X}{b:02X}{g:02X}{r:02X}");
+                (3i32, back_col)
+            }
+            CaptionRenderBackground::None => (1i32, "&H80000000".to_string()),
+        };
+        (bold, primary_col, bs, back_col)
     } else {
-        0
+        // Legacy path: derive from TitlePlan's own fields — unchanged.
+        let bold = if matches!(title.font_weight, TitleWeight::Bold) {
+            -1i32
+        } else {
+            0i32
+        };
+        (bold, hex_to_ass_color(&title.color), 1i32, "&H80000000".to_string())
     };
-    let primary = hex_to_ass_color(&title.color);
+
     // Karaoke fill secondary colour: the "unread" word state.
     // libass paints PrimaryColour on already-spoken words and
     // SecondaryColour on the upcoming ones.
     let secondary = "&H00FFFFFF";
     let outline = "&H00000000";
-    let back = "&H80000000";
     // Vertical alignment: bottom = 2, center = 5, top = 8. These
     // numbers are libass numpad-style.
     let alignment = match title.position {
@@ -185,7 +216,7 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
     };
     out.push_str(&format!(
         "Style: Caption,{font},{size},{primary},{secondary},{outline},{back},\
-         {bold},0,0,0,100,100,0,0,1,3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
+         {bold},0,0,0,100,100,0,0,{border_style},3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
         font = default_caption_font_name(),
         size = title.font_size,
         primary = primary,
@@ -193,6 +224,7 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         outline = outline,
         back = back,
         bold = bold_flag,
+        border_style = border_style,
         alignment = alignment,
         margin_l = layout.margin_l,
         margin_r = layout.margin_r,
@@ -310,12 +342,13 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         })
         .collect();
     if words.is_empty() {
-        let text = title.text.trim();
-        if text.is_empty() {
+        let raw_text = title.text.trim();
+        if raw_text.is_empty() {
             return Vec::new();
         }
+        let cased = apply_casing(raw_text, title);
         let layout = CaptionLayoutProfile::for_title(title);
-        let wrapped = wrap_caption_text(&escape_ass_text(text), layout.max_chars_per_line);
+        let wrapped = wrap_caption_text(&escape_ass_text(&cased), layout.max_chars_per_line);
         let start = format_ass_time(title.start_s.max(0.0));
         let end = format_ass_time(title.end_s.max(title.start_s));
         return vec![format!(
@@ -339,7 +372,8 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
     for (idx, word) in words.iter().enumerate() {
         let dur_cs = seconds_to_centiseconds((word.end_s - word.start_s).max(0.0));
         let raw_glyphs = word.text.trim();
-        let glyphs = escape_ass_text(raw_glyphs);
+        let cased_glyphs = apply_casing(raw_glyphs, title);
+        let glyphs = escape_ass_text(&cased_glyphs);
         if idx > 0 {
             let next_chars = raw_glyphs.chars().count();
             if visible_line_chars > 0
@@ -407,6 +441,20 @@ pub(crate) fn hex_to_ass_color(hex: &str) -> String {
             format!("&H{a:02X}{b:02X}{g:02X}{r:02X}")
         }
         _ => "&H00FFFFFF".to_string(),
+    }
+}
+
+/// Apply casing to text based on the title's `caption_style`. When
+/// `caption_style` is absent or casing is `AsIs`, returns the input
+/// unchanged. When casing is `Upper`, uppercases the whole string.
+fn apply_casing(text: &str, title: &TitlePlan) -> String {
+    match title
+        .caption_style
+        .as_ref()
+        .map(|s| &s.casing)
+    {
+        Some(CaptionRenderCasing::Upper) => text.to_uppercase(),
+        _ => text.to_owned(),
     }
 }
 
@@ -779,5 +827,73 @@ mod tests {
         );
         assert_eq!(standard.margin_v_bottom, 162, "standard unchanged");
         assert!(raised.margin_v_bottom > standard.margin_v_bottom);
+    }
+
+    fn styled(
+        spec: crate::timeline::CaptionRenderStyle,
+        text: &str,
+        wt: Vec<crate::timeline::CaptionWordTiming>,
+    ) -> crate::timeline::TitlePlan {
+        let mut t = caption_title(text, wt);
+        t.caption_style = Some(spec);
+        t
+    }
+
+    #[test]
+    fn upper_casing_uppercases_dialogue_text() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(&styled(spec, "rise of solo", vec![]));
+        assert!(doc.contains("RISE OF SOLO"), "Upper casing must uppercase text: {doc}");
+    }
+
+    #[test]
+    fn boxed_background_uses_opaque_border_style() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 48,
+            weight: CaptionRenderWeight::Normal,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::Box { color: "#000000".into(), opacity: 153 },
+        };
+        let doc = build_ass_document(&styled(spec, "hi", vec![]));
+        let style_line = doc.lines().find(|l| l.starts_with("Style: Caption")).expect("style row");
+        let fields: Vec<&str> = style_line.trim_start_matches("Style: ").split(',').collect();
+        // fields[0]="Caption"; BorderStyle is the 16th field => index 15.
+        assert_eq!(fields[15], "3", "boxed background must set BorderStyle=3: {style_line}");
+    }
+
+    #[test]
+    fn bold_weight_sets_bold_flag() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(&styled(spec, "hi", vec![]));
+        let fields: Vec<&str> = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .unwrap()
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
+        assert_eq!(fields[7], "-1", "Bold flag must be -1 for Bold weight"); // Bold is the 8th field
     }
 }
