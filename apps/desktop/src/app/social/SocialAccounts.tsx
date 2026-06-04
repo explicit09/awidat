@@ -13,12 +13,7 @@ import {
   type AccountSummary,
   type Provider,
 } from "./socialModel";
-
-type OAuthStartResponse = {
-  oauthConnectionId: string;
-  provider: Provider;
-  authorizationUrl: string;
-};
+import { startConnect } from "./socialActions";
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   youtube: "YouTube",
@@ -28,18 +23,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-/**
- * A connect run needs a per-attempt connection id and an OAuth `state` value.
- * The `state` is the CSRF guard for the OAuth handshake, so it must be
- * cryptographically random — never `Math.random()`. 128 bits of entropy.
- */
-function randomToken(prefix: string): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${prefix}-${hex}`;
 }
 
 export function SocialAccounts() {
@@ -64,30 +47,23 @@ export function SocialAccounts() {
     async (provider: Provider) => {
       setBusy(true);
       try {
-        const created = nowSeconds();
-        const start = await invoke<OAuthStartResponse>("social_oauth_start", {
-          args: {
-            oauthConnectionId: randomToken("oauth"),
-            provider,
-            // BYO client credentials are configured elsewhere; the desktop
-            // dev path forwards placeholders the stub completion ignores.
-            clientId: "desktop-local",
-            redirectUri: "http://127.0.0.1:8419/social/oauth/callback",
-            rawState: randomToken("state"),
-            returnTo: "/",
-            createdAt: created,
-            expiresAt: created + 600,
-          },
-        });
-        await openUrl(start.authorizationUrl);
+        // The server mints connection id + CSRF state and owns the OAuth client
+        // config; the desktop sends only the provider, opens the returned URL,
+        // and re-polls accounts after the (server-side) callback completes.
+        await startConnect(invoke, openUrl, provider);
         setError(null);
+        // The callback lands server-side, so poll for the new account. A short
+        // delayed re-refresh catches the common "just authorized" case; the
+        // manual Refresh button covers slower consent flows.
+        await refresh();
+        window.setTimeout(() => void refresh(), 4000);
       } catch (e) {
         setError(String(e));
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [refresh],
   );
 
   const disconnect = useCallback(
@@ -126,6 +102,9 @@ export function SocialAccounts() {
             Connect {PROVIDER_LABELS[p]}
           </button>
         ))}
+        <button type="button" onClick={() => void refresh()}>
+          Refresh accounts
+        </button>
       </div>
 
       <ul className="social-accounts__list">

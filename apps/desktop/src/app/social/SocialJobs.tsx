@@ -1,9 +1,10 @@
-// Publish-jobs surface: list jobs with live status, cancel/retry, and a
-// worker "advance" action that drives scheduled -> uploading -> processing ->
-// published via the worker commands (mock adapters this pass). Talks to the
-// `social_*` Tauri commands; derivation lives in `socialModel.ts`.
+// Publish-jobs surface: list jobs with live status + cancel/retry. Firing is
+// the server's job now (pg_cron, Phase 4), so there is no client "advance"
+// worker — the UI passively polls while any job is non-terminal and shows the
+// server-driven status. Talks to the `social_*` Tauri commands; derivation
+// lives in `socialModel.ts`.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -11,7 +12,7 @@ import {
   jobStatusLabel,
   canCancel,
   canRetry,
-  nextWorkerAction,
+  isTerminal,
   type PublishJob,
 } from "./socialModel";
 
@@ -67,36 +68,22 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
     [],
   );
 
-  const advance = useCallback(
-    async (job: PublishJob) => {
-      const action = nextWorkerAction(job.status);
-      if (!action) return;
-      try {
-        const next =
-          action === "execute"
-            ? await invoke<PublishJob>("social_execute_upload", {
-                args: {
-                  jobId: job.id,
-                  title: `Awidat ${job.campaignId}`,
-                  description: null,
-                  tags: [],
-                  thumbnailRef: null,
-                  now: nowSeconds(),
-                },
-              })
-            : await invoke<PublishJob>("social_poll_status", {
-                jobId: job.id,
-                now: nowSeconds(),
-              });
-        setJobs((prev) => ({ ...prev, [next.id]: next }));
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [],
-  );
-
   const rows = jobIds.map((id) => jobs[id]).filter((j): j is PublishJob => !!j);
+
+  // Initial load.
+  useEffect(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  // Passive polling: while any tracked job is still non-terminal the server is
+  // (or will be) advancing it, so re-poll every few seconds. Stops once every
+  // job is terminal to avoid needless invokes.
+  useEffect(() => {
+    const anyInFlight = rows.some((job) => !isTerminal(job.status));
+    if (!anyInFlight) return;
+    const handle = window.setInterval(() => void refreshAll(), 5000);
+    return () => window.clearInterval(handle);
+  }, [rows, refreshAll]);
 
   return (
     <section className="social-jobs">
@@ -132,11 +119,6 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
                 onClick={() => void openUrl(job.providerPostUrl as string)}
               >
                 View post
-              </button>
-            )}
-            {nextWorkerAction(job.status) && (
-              <button type="button" onClick={() => void advance(job)}>
-                Advance
               </button>
             )}
             {canCancel(job.status) && (

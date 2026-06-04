@@ -11,7 +11,7 @@ import {
   jobStatusLabel,
   canCancel,
   canRetry,
-  nextWorkerAction,
+  isTerminal,
 } from "../src/app/social/socialModel.ts";
 
 // Account status labels.
@@ -43,10 +43,13 @@ assert.equal(canRetry("failed"), true);
 assert.equal(canRetry("requires_action"), true);
 assert.equal(canRetry("scheduled"), false);
 
-// Worker-action selection.
-assert.equal(nextWorkerAction("scheduled"), "execute");
-assert.equal(nextWorkerAction("uploading"), "execute");
-assert.equal(nextWorkerAction("processing"), "poll");
-assert.equal(nextWorkerAction("published"), null);
+// Terminal-state detection (drives passive polling — firing is server-side now).
+assert.equal(isTerminal("published"), true);
+assert.equal(isTerminal("failed"), true);
+assert.equal(isTerminal("cancelled"), true);
+assert.equal(isTerminal("scheduled"), false);
+assert.equal(isTerminal("uploading"), false);
+assert.equal(isTerminal("processing"), false);
+assert.equal(isTerminal("requires_action"), false);
 
 console.log("social-model.test.ts: ok");

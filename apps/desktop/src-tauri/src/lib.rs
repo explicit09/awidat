@@ -32,6 +32,7 @@ mod events;
 mod generated_media_watcher;
 mod publishing;
 mod secrets;
+mod social_client;
 mod state;
 
 use std::path::PathBuf;
@@ -111,21 +112,22 @@ pub fn run() {
                 );
             }
 
-            // Open the server-backed social publishing store under the app data
-            // dir and park it in AwidatState for the `social_*` commands. The
-            // setup closure is sync, so use `blocking_lock()` like the
-            // `project_root` block above.
-            {
-                let data_dir = app
-                    .path()
-                    .app_data_dir()
-                    .map_err(|err| format!("resolve app data dir: {err}"))?;
-                std::fs::create_dir_all(&data_dir)
-                    .map_err(|err| format!("create app data dir: {err}"))?;
-                let social_path = data_dir.join("social.sqlite");
-                let store = awidat_social::sqlite_store::SqliteSocialStore::open(&social_path)
-                    .map_err(|err| format!("open social store: {err}"))?;
-                *app.state::<AwidatState>().social.blocking_lock() = Some(store);
+            // Build the server-backed social publishing client from the
+            // environment and park it in AwidatState for the `social_*`
+            // commands (Phase 5). Per RECONCILIATION G6 there is no per-field
+            // desktop config struct, so the server URL + dev bearer come from
+            // `AWIDAT_SOCIAL_SERVER_URL` / `AWIDAT_SOCIAL_AUTH_TOKEN` (mirroring
+            // how `project_root` defaults from `AWIDAT_DESKTOP_PROJECT`). When
+            // the URL is unset the client stays `None` and the commands surface
+            // a clear "not initialized" error rather than hanging. The desktop
+            // no longer opens a local `social.sqlite` — all publishing state
+            // lives server-side.
+            if let Some(social_client) = social_client::SocialClient::from_env() {
+                *app.state::<AwidatState>().social_client.blocking_lock() = Some(social_client);
+            } else {
+                warn!(
+                    "AWIDAT_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
+                );
             }
             Ok(())
         })
@@ -274,7 +276,6 @@ pub fn run() {
             commands::social::social_providers,
             commands::social::social_accounts,
             commands::social::social_oauth_start,
-            commands::social::social_oauth_complete,
             commands::social::social_disconnect_account,
             commands::social::social_bind_target,
             commands::social::social_validate_target,
@@ -283,8 +284,7 @@ pub fn run() {
             commands::social::social_cancel_job,
             commands::social::social_retry_job,
             commands::social::social_account_audit,
-            commands::social::social_execute_upload,
-            commands::social::social_poll_status,
+            commands::social::social_upload_artifact,
         ])
         .build(tauri::generate_context!());
 

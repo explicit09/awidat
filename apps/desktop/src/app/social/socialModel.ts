@@ -150,13 +150,10 @@ export function canRetry(status: PublishJobStatus): boolean {
   return status === "failed" || status === "requires_action";
 }
 
-/** Which worker action advances a job from its current state, if any. */
-export function nextWorkerAction(
-  status: PublishJobStatus,
-): "execute" | "poll" | null {
-  if (status === "scheduled" || status === "uploading") return "execute";
-  if (status === "processing") return "poll";
-  return null;
+/** A job is still "in flight" (server will advance it) until it reaches a
+ * terminal state. The UI polls while any job is non-terminal. */
+export function isTerminal(status: PublishJobStatus): boolean {
+  return status === "published" || status === "failed" || status === "cancelled";
 }
 
 export type PublishJobStatusCounts = {
