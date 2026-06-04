@@ -341,6 +341,47 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
                 && w.end_s >= w.start_s
         })
         .collect();
+
+    // ── Active-word-pop: needs both the reveal flag, a highlight color, and
+    //   word timings. When all three are present, emit one Dialogue per word
+    //   spanning [word.start_s, word.end_s]; the active word gets the
+    //   highlight color inline, all others render in the Style's PrimaryColour.
+    //   If any condition is absent, fall through to the whole-cue path below.
+    let style = title.caption_style.as_ref();
+    let active_pop_style = style.filter(|s| {
+        matches!(s.reveal, crate::timeline::CaptionRenderReveal::ActiveWordPop)
+            && s.highlight_color.is_some()
+            && !words.is_empty()
+    });
+    if let Some(s) = active_pop_style {
+        let hi_hex = s.highlight_color.as_deref().unwrap_or_default();
+        let primary_col = hex_to_ass_color(&s.primary_color);
+        let hi_col = hex_to_ass_color(hi_hex);
+        let mut dialogues = Vec::with_capacity(words.len());
+        for (active_idx, active_word) in words.iter().enumerate() {
+            let mut line = String::new();
+            for (j, w) in words.iter().enumerate() {
+                if j > 0 {
+                    line.push(' ');
+                }
+                let raw = w.text.trim();
+                let cased = apply_casing(raw, title);
+                let escaped = escape_ass_text(&cased);
+                if j == active_idx {
+                    // Wrap active word: set highlight, then restore primary after.
+                    line.push_str(&format!("{{\\c{hi_col}}}{escaped}{{\\c{primary_col}}}"));
+                } else {
+                    line.push_str(&escaped);
+                }
+            }
+            let start = format_ass_time(active_word.start_s);
+            let end = format_ass_time(active_word.end_s);
+            dialogues.push(format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{line}"));
+        }
+        return dialogues;
+    }
+
+    // ── Whole-cue branch (no word timings) ───────────────────────────────────
     if words.is_empty() {
         let raw_text = title.text.trim();
         if raw_text.is_empty() {
@@ -355,6 +396,8 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
             "Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}"
         )];
     }
+
+    // ── Word-by-word karaoke branch ───────────────────────────────────────────
     let start = format_ass_time(title.start_s.max(0.0));
     let end = format_ass_time(title.end_s.max(title.start_s));
 
@@ -895,5 +938,52 @@ mod tests {
             .split(',')
             .collect();
         assert_eq!(fields[7], "-1", "Bold flag must be -1 for Bold weight"); // Bold is the 8th field
+    }
+
+    #[test]
+    fn active_word_pop_emits_one_dialogue_per_word_with_one_highlight() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: CaptionRenderReveal::ActiveWordPop,
+            background: CaptionRenderBackground::None,
+        };
+        let wt = vec![
+            CaptionWordTiming { text: "five".into(), start_s: 1.0, end_s: 1.4 },
+            CaptionWordTiming { text: "ten".into(),  start_s: 1.4, end_s: 2.0 },
+        ];
+        let doc = build_ass_document(&styled(spec, "five ten", wt));
+        let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
+        assert_eq!(dialogues.len(), 2, "one dialogue per word: {dialogues:?}");
+        // full (uppercased) line shown in each
+        assert!(dialogues[0].contains("FIVE") && dialogues[0].contains("TEN"));
+        // exactly one highlight color override marker per dialogue line
+        let hi = hex_to_ass_color("#FFE000");
+        assert_eq!(dialogues[0].matches(&hi).count(), 1, "exactly one highlighted word: {}", dialogues[0]);
+        // the highlighted word in dialogue[0] is the first word; dialogue[1] highlights the second
+        assert_eq!(dialogues[1].matches(&hi).count(), 1);
+        // timing spans the word window
+        assert!(dialogues[0].contains(&format_ass_time(1.0)) && dialogues[0].contains(&format_ass_time(1.4)));
+    }
+
+    #[test]
+    fn active_word_pop_without_timings_degrades_to_whole_cue() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: CaptionRenderReveal::ActiveWordPop,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(&styled(spec, "hello world", vec![]));
+        let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
+        assert_eq!(n, 1, "no word timings -> single whole-cue dialogue");
     }
 }
