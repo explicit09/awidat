@@ -47,6 +47,20 @@ impl PgSocialStore {
         &self,
         migrations_dir: &std::path::Path,
     ) -> Result<(), SocialStoreError> {
+        self.apply_migrations_filtered(migrations_dir, |_| false)
+    }
+
+    /// Like [`apply_migrations`], but `skip(filename)` lets the caller exclude
+    /// specific migration files. Used to skip infrastructure migrations (cron /
+    /// extensions) when running a localhost server against a shared database that
+    /// already has them — so boot never re-activates the deployed cron schedules.
+    ///
+    /// [`apply_migrations`]: Self::apply_migrations
+    pub fn apply_migrations_filtered(
+        &self,
+        migrations_dir: &std::path::Path,
+        skip: impl Fn(&str) -> bool,
+    ) -> Result<(), SocialStoreError> {
         let mut client = self
             .pool
             .get()
@@ -71,6 +85,9 @@ impl PgSocialStore {
 
         for entry in entries {
             let filename = entry.file_name().to_string_lossy().into_owned();
+            if skip(&filename) {
+                continue;
+            }
             let row = client
                 .query_opt(
                     "SELECT 1 FROM _migrations WHERE filename = $1",

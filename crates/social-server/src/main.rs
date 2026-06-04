@@ -169,14 +169,24 @@ async fn main() {
         .build(manager)
         .unwrap_or_else(|e| panic!("build connection pool: {e}"));
 
-    // Apply migrations on boot so Supabase projects are always schema-current.
+    // Apply migrations on boot so the target database is always schema-current.
+    //
+    // Localhost-against-shared-DB safety: the cron/extension migrations (0002,
+    // 0004) are infrastructure for the *deployed* environment — 0004 (re)activates
+    // the pg_cron schedules. A localhost test server (SOCIAL_FIRING_ENABLED=false)
+    // must NOT touch them, or boot would re-point + re-enable the deployed cron at
+    // a placeholder URL. So when firing is disabled we skip those, applying only
+    // the table migrations. (The shared DB already has the extensions + cron.)
     let store = PgSocialStore::new(pool.clone());
     let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| panic!("crates/social-server has no parent directory"))
         .join("social/migrations");
+    let skip_infra = !social_firing_enabled;
     store
-        .apply_migrations(&migrations_dir)
+        .apply_migrations_filtered(&migrations_dir, |filename| {
+            skip_infra && (filename.contains("extensions") || filename.contains("cron"))
+        })
         .unwrap_or_else(|e| panic!("apply migrations: {e}"));
 
     let state = Arc::new(AppState {
