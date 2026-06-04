@@ -207,6 +207,61 @@ fn finalize_timing(cues: &mut [Cue], profile: &CaptionFormatProfile) {
     }
 }
 
+/// A non-destructive readability recommendation for an existing cue. The model
+/// never rewrites a timeline; it proposes, with a human rationale.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReadabilityProposal {
+    Split { at_s: f64, rationale: String },
+    Extend { to_s: f64, rationale: String },
+    Reflow { rationale: String },
+}
+
+impl ReadabilityProposal {
+    pub fn rationale(&self) -> &str {
+        match self {
+            Self::Split { rationale, .. } | Self::Extend { rationale, .. } | Self::Reflow { rationale } => rationale,
+        }
+    }
+}
+
+/// Inspect existing cues and emit split/extend/reflow proposals where a cue
+/// violates the profile. Never mutates the cues.
+pub fn lint(cues: &[Cue], profile: &CaptionFormatProfile) -> Vec<ReadabilityProposal> {
+    let mut out = Vec::new();
+    for c in cues {
+        let dur = c.end_s - c.start_s;
+        if c.cps() > profile.max_cps {
+            let mid = c.start_s + dur / 2.0;
+            out.push(ReadabilityProposal::Split {
+                at_s: mid,
+                rationale: format!(
+                    "Split at {mid:.1}s — {} chars/{:.1}s = {:.0} CPS exceeded {:.0} CPS reading ceiling.",
+                    c.char_count(), dur, c.cps(), profile.max_cps
+                ),
+            });
+        }
+        if dur < profile.min_cue_s {
+            let to = c.start_s + profile.min_cue_s;
+            out.push(ReadabilityProposal::Extend {
+                to_s: to,
+                rationale: format!("Extend to {to:.1}s — cue is {dur:.2}s, under the {:.1}s minimum.", profile.min_cue_s),
+            });
+        }
+        if c.lines.len() > profile.max_lines
+            || c.lines.iter().any(|l| l.chars().count() > profile.max_chars_per_line)
+        {
+            out.push(ReadabilityProposal::Reflow {
+                rationale: format!(
+                    "Reflow — cue exceeds {} line(s) of {} chars.",
+                    profile.max_lines, profile.max_chars_per_line
+                ),
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +356,33 @@ mod tests {
         let cues = segment(&w, &profile);
         let joined: String = cues.iter().flat_map(|c| c.lines.iter().cloned()).collect::<Vec<_>>().join(" ");
         assert!(joined.contains("supercalifragilistic"), "overlong word was dropped: {joined:?}");
+    }
+
+    fn cue(start_s: f64, end_s: f64, text: &str) -> Cue {
+        Cue { start_s, end_s, lines: vec![text.into()], word_timings: vec![] }
+    }
+
+    #[test]
+    fn lint_flags_cps_overrun_with_split_proposal() {
+        // 40 chars in 1.0s = 40 CPS.
+        let cues = vec![cue(0.0, 1.0, "an extraordinarily dense caption line!!")];
+        let proposals = lint(&cues, &CaptionFormatProfile::long_form());
+        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Split { .. })));
+        let p = proposals.iter().find(|p| matches!(p, ReadabilityProposal::Split { .. })).unwrap();
+        assert!(p.rationale().contains("CPS"), "rationale must explain the CPS overrun: {}", p.rationale());
+    }
+
+    #[test]
+    fn lint_flags_sub_minimum_duration_with_extend_proposal() {
+        let cues = vec![cue(0.0, 0.2, "hi")]; // 0.2s < 0.5s minimum
+        let proposals = lint(&cues, &CaptionFormatProfile::long_form());
+        assert!(proposals.iter().any(|p| matches!(p, ReadabilityProposal::Extend { .. })));
+    }
+
+    #[test]
+    fn lint_is_silent_on_clean_cues() {
+        let cues = vec![cue(0.0, 2.0, "a calm, readable line")];
+        let proposals = lint(&cues, &CaptionFormatProfile::long_form());
+        assert!(proposals.is_empty(), "clean cue should not be flagged: {proposals:?}");
     }
 }
