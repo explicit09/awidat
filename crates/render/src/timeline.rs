@@ -9252,15 +9252,61 @@ fn drawtext_escape(s: &str) -> String {
 /// `pick_fontfile_attr()` did before, keeping legacy titles byte-for-byte
 /// identical.
 fn title_fontfile_attr(t: &TitlePlan) -> String {
-    if let Some(path) = t.font_path.as_deref().filter(|s| !s.trim().is_empty()) {
-        return format!(":fontfile={path}");
+    // SECURITY: `font_path`/`font_family` originate from EDL input (title ops
+    // and motion-scene layer params). Splicing them raw into `fontfile=` would
+    // allow a crafted path to inject additional drawtext options or break out
+    // of the filter graph. We therefore escape every honored path for the
+    // filtergraph and reject any path with unescapable metacharacters, falling
+    // back to the safe system-font probe instead. (A missing file is harmless:
+    // ffmpeg simply fails to load it — no injection is possible once escaped.)
+    if let Some(path) = t.font_path.as_deref().filter(|s| !s.trim().is_empty())
+        && let Some(esc) = escape_drawtext_path(path)
+    {
+        return format!(":fontfile={esc}");
     }
     if let Some(family) = t.font_family.as_deref().filter(|s| !s.trim().is_empty())
         && let Some(path) = resolve_font_family(family)
+        && let Some(esc) = escape_drawtext_path(&path)
     {
-        return format!(":fontfile={path}");
+        return format!(":fontfile={esc}");
     }
     pick_fontfile_attr()
+}
+
+/// Escape a filesystem path for safe inclusion as an ffmpeg drawtext
+/// `fontfile=` value inside a `filter_complex` graph. Returns `None` for paths
+/// containing characters that cannot be safely escaped within a filter graph
+/// (`,` `;` `[` `]` and newlines separate filters/options, so a path bearing
+/// them could inject arbitrary filters — see the security review for #3).
+fn escape_drawtext_path(p: &str) -> Option<String> {
+    if p.chars()
+        .any(|c| matches!(c, '\n' | '\r' | ',' | ';' | '[' | ']'))
+    {
+        return None;
+    }
+    Some(
+        p.replace('\\', "\\\\")
+            .replace(':', "\\:")
+            .replace('\'', "\\'"),
+    )
+}
+
+#[test]
+fn escape_drawtext_path_rejects_filter_metacharacters() {
+    // Injection attempt: break out of fontfile and add a filter.
+    assert_eq!(escape_drawtext_path("/f.ttf,drawbox=c=red"), None);
+    assert_eq!(escape_drawtext_path("/f.ttf[x]"), None);
+    assert_eq!(escape_drawtext_path("/f.ttf\nx"), None);
+    // Escapable special chars are escaped, not rejected.
+    assert_eq!(
+        escape_drawtext_path("/a b/Br'and:x.ttf").as_deref(),
+        Some("/a b/Br\\'and\\:x.ttf")
+    );
+    // Plain safe path is unchanged.
+    assert_eq!(
+        escape_drawtext_path("/fonts/Brand.ttf").as_deref(),
+        Some("/fonts/Brand.ttf")
+    );
 }
 
 /// Best-effort resolution of a font family name to a file on disk.
