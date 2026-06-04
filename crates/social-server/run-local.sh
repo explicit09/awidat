@@ -13,12 +13,22 @@
 # Fill in the two <PLACEHOLDER>s, or copy this to .env.local (gitignored) and
 # source it. Secrets must never be committed.
 set -euo pipefail
+cd "$(dirname "$0")"
 
-# ── Required ────────────────────────────────────────────────────────────────
-# Supabase session-pooler URL. Get DB_PASSWORD from Supabase → Settings →
-# Database. The search_path option is MANDATORY (PgSocialStore uses unqualified
-# table names → they must resolve to the awidat_social schema).
-export DATABASE_URL="postgresql://postgres.vgkocfbtkzmpklruqmsx:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres?options=-c%20search_path%3Dawidat_social,public"
+# ── Secrets (gitignored) ─────────────────────────────────────────────────────
+# Put DATABASE_URL (with the Supabase DB password, URL-encoded) in .env.local —
+# that file is gitignored so the password never lands in git. This committed
+# script holds NO secret. See .env.local for the exact connection-string shape;
+# the search_path=awidat_social option is MANDATORY (PgSocialStore uses
+# unqualified table names).
+if [[ -f .env.local ]]; then
+  # shellcheck disable=SC1091
+  source .env.local
+fi
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  echo "DATABASE_URL is unset. Put it in crates/social-server/.env.local (gitignored)." >&2
+  exit 1
+fi
 
 # Bearer the desktop sends to /social/* (dev single-user mode). Must match the
 # desktop's AWIDAT_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
