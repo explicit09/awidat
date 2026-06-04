@@ -1354,6 +1354,13 @@ mod tests {
             self.inner.claim_due_publish_jobs(now, limit)
         }
 
+        fn processing_publish_jobs(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.processing_publish_jobs(limit)
+        }
+
         fn append_publish_job_event(
             &mut self,
             event: PublishJobEvent,
@@ -1546,6 +1553,13 @@ mod tests {
             limit: usize,
         ) -> Result<Vec<PublishJob>, SocialStoreError> {
             self.inner.claim_due_publish_jobs(now, limit)
+        }
+
+        fn processing_publish_jobs(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<PublishJob>, SocialStoreError> {
+            self.inner.processing_publish_jobs(limit)
         }
 
         fn append_publish_job_event(

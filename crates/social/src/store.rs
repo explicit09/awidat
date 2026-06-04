@@ -76,6 +76,11 @@ pub trait SocialStore {
         limit: usize,
     ) -> Result<Vec<PublishJob>, SocialStoreError>;
 
+    /// Return jobs currently in `Processing` (the provider accepted the upload
+    /// and is still transcoding). The poll-processing sweep drives these to
+    /// `Published`/`Failed` via the status adapter. Ordered oldest-first.
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError>;
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError>;
 
     fn publish_job_events(
@@ -299,6 +304,18 @@ impl SocialStore for InMemorySocialStore {
         }
 
         Ok(claimed)
+    }
+
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut jobs: Vec<PublishJob> = self
+            .publish_jobs
+            .values()
+            .filter(|job| job.status == PublishJobStatus::Processing)
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|job| (job.updated_at, job.id.clone()));
+        jobs.truncate(limit);
+        Ok(jobs)
     }
 
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
@@ -653,5 +670,40 @@ mod tests {
 
         assert_eq!(updated.status, OAuthConnectionStatus::Completed);
         assert_eq!(store.oauth_connection("oauth_1"), Ok(updated));
+    }
+
+    #[test]
+    fn processing_publish_jobs_returns_only_processing_oldest_first() {
+        let mut store = InMemorySocialStore::default();
+        // A scheduled job (should be excluded) and two processing jobs.
+        store
+            .save_publish_job(publish_job("job_sched", 1_000))
+            .unwrap_or_else(|err| panic!("save: {err}"));
+        let newer = publish_job("job_proc_new", 1_000)
+            .claim_for_upload(2_000)
+            .processing("vid_new", 2_200);
+        let older = publish_job("job_proc_old", 1_000)
+            .claim_for_upload(2_000)
+            .processing("vid_old", 2_100);
+        store
+            .save_publish_job(newer)
+            .unwrap_or_else(|err| panic!("save: {err}"));
+        store
+            .save_publish_job(older)
+            .unwrap_or_else(|err| panic!("save: {err}"));
+
+        let processing = store
+            .processing_publish_jobs(10)
+            .unwrap_or_else(|err| panic!("processing jobs: {err}"));
+
+        assert_eq!(processing.len(), 2, "scheduled job excluded");
+        assert_eq!(processing[0].id, "job_proc_old", "oldest updated_at first");
+        assert_eq!(processing[1].id, "job_proc_new");
+
+        let limited = store
+            .processing_publish_jobs(1)
+            .unwrap_or_else(|err| panic!("processing jobs: {err}"));
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].id, "job_proc_old");
     }
 }

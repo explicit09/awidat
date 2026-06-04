@@ -488,6 +488,35 @@ impl SocialStore for SqliteSocialStore {
         Ok(claimed)
     }
 
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM publish_jobs
+                WHERE status = ?1
+                ORDER BY updated_at, id
+                LIMIT ?2
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    publish_job_status_as_str(&PublishJobStatus::Processing),
+                    limit as i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(from_json::<PublishJob>(&row.map_err(storage_error)?)?);
+        }
+        Ok(jobs)
+    }
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
         let payload_json = to_json(&event)?;
         self.connection

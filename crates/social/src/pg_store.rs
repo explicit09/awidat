@@ -591,6 +591,21 @@ impl SocialStore for PgSocialStore {
         Ok(claimed)
     }
 
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut client = self.get()?;
+        let processing_str = publish_job_status_as_str(&PublishJobStatus::Processing);
+        let rows = client
+            .query(
+                "SELECT payload_json FROM publish_jobs
+                 WHERE status = $1
+                 ORDER BY updated_at, id
+                 LIMIT $2",
+                &[&processing_str, &(limit as i64)],
+            )
+            .map_err(pg_error)?;
+        rows.iter().map(|row| from_json(row.get(0))).collect()
+    }
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
         let payload_json = to_json(&event)?;
         let mut client = self.get()?;
