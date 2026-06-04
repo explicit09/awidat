@@ -50,7 +50,38 @@ use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
 const TIMELINE_RENDER_WIDTH: u32 = 1920;
 const TIMELINE_RENDER_HEIGHT: u32 = 1080;
+/// Output frame rate the timeline renderer conforms every segment to
+/// before `concat`. Matches [`timeline_frame_rate`]'s default fallback
+/// (30 fps) — the render argv builder does not pass an explicit `-r`,
+/// so the conform `fps=` filter is what actually pins the cadence.
+const TIMELINE_RENDER_FPS: u32 = 30;
 const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
+
+/// Append a resolution/SAR/fps/pixfmt conform chain to `video_label`,
+/// returning the new label. `concat` (demuxer and filter) requires every
+/// input to share width/height/SAR/fps/pixel-format; mixed-resolution or
+/// mixed-fps sources otherwise crash ffmpeg with "Error reinitializing
+/// filters! / Could not open encoder before EOF". The chain letterboxes
+/// (scale + centered pad) so aspect ratio is preserved, then pins SAR,
+/// fps, and pixel format to the timeline output canvas.
+///
+/// Idempotent: the emitted label is `[cf<i>]`; if `video_label` is
+/// already a conform output we return it untouched so callers that stage
+/// a segment twice never double-conform.
+fn append_segment_conform_filter(filter: &mut String, video_label: &str, i: usize) -> String {
+    let conform_label = format!("[cf{i}]");
+    if video_label == conform_label {
+        return conform_label;
+    }
+    let w = TIMELINE_RENDER_WIDTH;
+    let h = TIMELINE_RENDER_HEIGHT;
+    let fps = TIMELINE_RENDER_FPS;
+    filter.push_str(&format!(
+        "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
+pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p{conform_label};"
+    ));
+    conform_label
+}
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -6344,6 +6375,11 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         filter.push_str(&format!("{audio_label}volume={v}{av};"));
         audio_label = av;
     }
+    // Conform to the output canvas LAST so the label fed into concat
+    // (or xfade) matches every other segment's width/height/SAR/fps/
+    // pixfmt. Without this, mixing e.g. a 1280x720 source with 1080p
+    // sources crashes ffmpeg's concat.
+    video_label = append_segment_conform_filter(filter, &video_label, i);
     (video_label, audio_label)
 }
 
@@ -10106,7 +10142,10 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
     }
-    video_label
+    // Conform to the output canvas before concat — see
+    // `append_segment_conform_filter`. The video-only path joins these
+    // labels with the same `concat` requirement as the A/V path.
+    append_segment_conform_filter(filter, &video_label, i)
 }
 
 fn plan_audio_mix_filter(
@@ -10332,7 +10371,7 @@ fn build_timeline_render_spec_inner(
     section: Option<TimelineSectionRange>,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
     let (
-        segs,
+        mut segs,
         transitions,
         video_overlays,
         motion_images,
@@ -10346,6 +10385,22 @@ fn build_timeline_render_spec_inner(
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
+    }
+    // Opt-in per-clip dialogue leveling: measure each dialogue clip's
+    // integrated loudness and fill its per-clip `loudnorm_i` target so
+    // clips are evened BEFORE any master pass. Off by default (gated on
+    // the AWIDAT_LEVEL_DIALOGUE env var) — default render behavior is
+    // unchanged. See `crate::dialogue_leveling`.
+    if crate::dialogue_leveling::dialogue_leveling_enabled() {
+        let leveled = crate::dialogue_leveling::level_dialogue_clips(
+            &mut segs,
+            crate::dialogue_leveling::DEFAULT_DIALOGUE_TARGET_LUFS,
+            crate::dialogue_leveling::DEFAULT_DIALOGUE_TARGET_TP,
+        );
+        tracing::info!(
+            leveled,
+            "dialogue leveling: filled per-clip loudnorm targets"
+        );
     }
     // Total duration is the sum of each segment's visible effective
     // duration. Centered transitions extend source handles before
@@ -13221,10 +13276,64 @@ mod tests {
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
             plan.filter_complex,
-            "[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];[1:a:0]afade=t=in:st=0:d=0.03[bfade1];[0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa]",
+            "[0:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf0];[1:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf1];[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];[1:a:0]afade=t=in:st=0:d=0.03[bfade1];[cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1[outv][outa]",
         );
         assert_eq!(plan.video_out_label, "[outv]");
         assert_eq!(plan.audio_out_label, "[outa]");
+    }
+
+    #[test]
+    fn mixed_resolution_segments_are_conformed_before_concat() {
+        // Two segments stand in for differently-sized sources (e.g.
+        // 1280x720 vs 1920x1080). The planner cannot know the source
+        // dims at graph-build time, so it must unconditionally conform
+        // every segment to the output canvas before concat — otherwise
+        // ffmpeg crashes with "Error reinitializing filters!".
+        let segs = vec![
+            seg("/tmp/720p.mp4", 0.0, 2.0),
+            seg("/tmp/1080p.mp4", 0.0, 2.0),
+        ];
+        let plan = FilterPlanner::new(&segs, &[]).plan();
+        let f = &plan.filter_complex;
+        // Both segments get a scale + centered pad + setsar conform.
+        assert_eq!(
+            f.matches("scale=1920:1080:force_original_aspect_ratio=decrease")
+                .count(),
+            2,
+            "both segments must be scaled to the canvas: {f}",
+        );
+        assert_eq!(
+            f.matches("pad=1920:1080:(ow-iw)/2:(oh-ih)/2").count(),
+            2,
+            "both segments must be letterbox-padded: {f}",
+        );
+        assert_eq!(
+            f.matches("setsar=1").count(),
+            2,
+            "both segments must pin SAR: {f}"
+        );
+        // Conform outputs feed concat — raw [n:v:0] labels must not.
+        assert!(f.contains("[cf0]"), "segment 0 conform label missing: {f}");
+        assert!(f.contains("[cf1]"), "segment 1 conform label missing: {f}");
+        assert!(
+            f.contains("[cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1"),
+            "concat must consume conform labels: {f}",
+        );
+    }
+
+    #[test]
+    fn append_segment_conform_filter_is_idempotent() {
+        let mut filter = String::new();
+        let first = append_segment_conform_filter(&mut filter, "[0:v:0]", 0);
+        assert_eq!(first, "[cf0]");
+        let before = filter.clone();
+        // Re-conforming an already-conformed label is a no-op.
+        let second = append_segment_conform_filter(&mut filter, &first, 0);
+        assert_eq!(second, "[cf0]");
+        assert_eq!(
+            filter, before,
+            "double-conform must not emit a second chain"
+        );
     }
 
     #[test]
@@ -13390,7 +13499,7 @@ mod tests {
         );
         // Seg 1 has no volume effect, but fades in after the hard cut.
         assert!(
-            plan.filter_complex.contains("[1:v:0][bfade1]"),
+            plan.filter_complex.contains("[cf1][bfade1]"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -13791,8 +13900,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex
-                .contains("[0:v:0][bfade0][1:v:0][bfade1]"),
+            plan.filter_complex.contains("[cf0][bfade0][cf1][bfade1]"),
             "concat should consume smoothed audio labels: {}",
             plan.filter_complex,
         );
@@ -13942,7 +14050,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-LUT/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -14593,7 +14701,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-reframe/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -14622,7 +14730,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-shake/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -16970,9 +17078,13 @@ animations: Vec::new(),
             cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4")
         );
         assert!(cmd.contains(
-            "-filter_complex [0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];\
+            "-filter_complex [0:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,\
+             pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf0];\
+             [1:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,\
+             pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf1];\
+             [0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];\
              [1:a:0]afade=t=in:st=0:d=0.03[bfade1];\
-             [0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa] \
+             [cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1[outv][outa] \
              -map [outv] -map [outa]",
         ));
         assert!(cmd.ends_with("/tmp/out.mp4"));
@@ -17002,7 +17114,7 @@ animations: Vec::new(),
             "last segment should fade in at the hard cut: {filter}"
         );
         assert!(
-            filter.contains("[0:v:0][bfade0][1:v:0][bfade1][2:v:0][bfade2]concat=n=3:v=1:a=1"),
+            filter.contains("[cf0][bfade0][cf1][bfade1][cf2][bfade2]concat=n=3:v=1:a=1"),
             "concat should consume the anti-pop fade labels: {filter}"
         );
     }

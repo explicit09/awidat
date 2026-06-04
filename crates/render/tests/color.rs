@@ -115,8 +115,14 @@ fn project_with_color_correction_emits_color_filters() {
         "expected color filters in argv, got: {cmd}",
     );
     assert!(
-        cmd.contains("[cv0][0:a:0]concat"),
-        "expected concat to consume corrected video label, got: {cmd}",
+        cmd.contains("[cf0][0:a:0]concat"),
+        "expected concat to consume the conformed video label, got: {cmd}",
+    );
+    // The color-corrected label is conformed to the output canvas
+    // before concat (see `append_segment_conform_filter`).
+    assert!(
+        cmd.contains("[cv0]scale=1920:1080:force_original_aspect_ratio=decrease"),
+        "expected the corrected video to be conformed, got: {cmd}",
     );
 }
 
