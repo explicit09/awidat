@@ -35,31 +35,41 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   exit 1
 fi
 
+# All values below use ${VAR:-default} so anything exported in .env.local wins
+# (put the Google OAuth secrets there — never in this committed file).
+
 # Bearer the desktop sends to /social/* (dev single-user mode). Must match the
 # desktop's AWIDAT_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
-export DESKTOP_AUTH_TOKEN="local-dev-token"
+export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
-export SERVICE_SHARED_SECRET="local-internal-token"
+export SERVICE_SHARED_SECRET="${SERVICE_SHARED_SECRET:-local-internal-token}"
 
 # AEAD key for token-at-rest encryption (64 hex chars = 32 bytes). Generated for
 # local use; rotate for any real environment. Generate a fresh one with:
 #   openssl rand -hex 32
-export SOCIAL_TOKEN_AEAD_KEY="c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd"
-export SOCIAL_TOKEN_KEY_ID="local-k1"
+export SOCIAL_TOKEN_AEAD_KEY="${SOCIAL_TOKEN_AEAD_KEY:-c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd}"
+export SOCIAL_TOKEN_KEY_ID="${SOCIAL_TOKEN_KEY_ID:-local-k1}"
+
+# ── Google/YouTube OAuth (from .env.local; required for the Connect flow) ─────
+# Create a Google Cloud OAuth client (Web application) with redirect URI
+# http://127.0.0.1:3000/oauth/callback/youtube and put the id/secret in
+# .env.local as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Until set, Connect
+# returns 503 "Google OAuth not configured".
+export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
+export GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
+export OAUTH_REDIRECT_BASE="${OAUTH_REDIRECT_BASE:-http://127.0.0.1:3000}"
 
 # ── Local-test posture ──────────────────────────────────────────────────────
-export SOCIAL_FIRING_ENABLED="false"   # no autonomous firing; skips cron migration on boot
-export BIND_ADDR="127.0.0.1:3000"
+export SOCIAL_FIRING_ENABLED="${SOCIAL_FIRING_ENABLED:-false}"   # no autonomous firing; skips cron migration on boot
+export BIND_ADDR="${BIND_ADDR:-127.0.0.1:3000}"
 export ARTIFACT_BASE_DIR="${ARTIFACT_BASE_DIR:-$PWD/.artifacts-local}"
 mkdir -p "$ARTIFACT_BASE_DIR"
 
-# ── Optional (leave empty for local route testing) ──────────────────────────
-# GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET — real YouTube OAuth (for the OAuth flow)
+# ── Optional (for Storage uploads / Phase 7 auth; leave empty for now) ───────
 # SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co  — for Storage signed URLs
 # SUPABASE_SERVICE_KEY=...                               — for Storage signed URLs
 # SUPABASE_JWT_SECRET=...                                — Phase 7 per-user auth
-# OAUTH_REDIRECT_BASE=http://127.0.0.1:3000
 
 echo "Starting awidat-social on $BIND_ADDR (firing disabled; cron migration skipped)..."
 exec cargo run -p awidat-social-server
