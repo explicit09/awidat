@@ -5122,8 +5122,16 @@ fn append_video_overlays(
                 overlay_video_label = opacity_filter.1,
             )
         };
+        // Force RGBA after scaling so transparent overlays (e.g. VP9
+        // `yuva420p` WebM or ProRes 4444) keep their alpha channel into
+        // the `overlay=` compositor. Without an explicit alpha format,
+        // ffmpeg's filter negotiation can let `scale` emit an opaque
+        // format (e.g. `yuv420p`), which makes the overlay render as a
+        // solid rectangle instead of alpha-compositing. The transform
+        // paths below (rotation/mask/matte/opacity) re-assert `format=rgba`
+        // on their own inputs, so this is idempotent for them.
         filter.push_str(&format!(
-            "{pts_label}scale={scale_expr}{scaled_label};\
+            "{pts_label}scale={scale_expr},format=rgba{scaled_label};\
              {rotation_filter}\
              {corner_pin_filter}\
              {mask_filter}\
@@ -14992,6 +15000,54 @@ animations: Vec::new(),
         assert!(
             filter.contains("[media_overlay_v0]drawtext="),
             "caption drawtext should consume the composited overlay output: {filter}"
+        );
+    }
+
+    #[test]
+    fn transparent_overlay_preserves_alpha_into_overlay_filter() {
+        // A transparent foreground motion-graphic asset (e.g. ProRes 4444
+        // `.mov` or VP9 `yuva420p` `.webm`) inserted with no opacity /
+        // rotation / matte must keep its alpha channel all the way into
+        // the `overlay=` compositor. Otherwise ffmpeg's format
+        // negotiation can let `scale` emit an opaque format (`yuv420p`),
+        // turning the overlay into a solid rectangle instead of an
+        // alpha-composited graphic.
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/generated/overlays/lower-third.mov", 0.0, 3.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        // The scaled overlay must be forced to RGBA before compositing.
+        assert!(
+            filter.contains("scale=w=1920:h=1080,format=rgba[media_overlay_scaled0]"),
+            "default overlay path must force format=rgba after scale to preserve alpha: {filter}"
+        );
+        // It must reach the alpha-compositing `overlay=` filter, not the
+        // opaque `blend=`/burn-in path.
+        assert!(
+            filter.contains("[media_overlay_scaled0]overlay=x=0:y=0"),
+            "scaled rgba overlay must feed the overlay= compositor: {filter}"
         );
     }
 
