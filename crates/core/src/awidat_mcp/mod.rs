@@ -109,6 +109,7 @@ use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
 use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
+use crate::awidat_mcp::tools::plan_speed_ramp::{self, PlanSpeedRampArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
 use crate::awidat_mcp::tools::plan_visual_support_proposals::{
@@ -1576,6 +1577,31 @@ renders/<stem>.json. After this tool, call apply_edl with the returned \
         args: Parameters<PlanColorGradeArgs>,
     ) -> Result<String, ErrorData> {
         plan_color_grade::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_speed_ramp` — turn a ramp intent + clip into a validated
+    /// time-remap EDL.
+    ///
+    /// Marked destructive because the run writes `renders/<stem>.edl` and
+    /// `renders/<stem>.json`.
+    #[tool(
+        description = "\
+Plan a render-ready speed ramp for one clip: turn an intent word \
+(slow_mo_reveal | ramp_to_beat | punch_then | hold_freeze) plus optional \
+factor/hold/beat controls into an eased, validated Set Time Remap curve \
+(source→timeline, monotonic, starts at 0/0). Writes renders/<stem>.edl and \
+renders/<stem>.json and surfaces a motion-blur recommendation. After this \
+tool, call apply_edl with the returned `edl` text (not a path), inspect \
+vedit_diff, then render the timeline.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn plan_speed_ramp(
+        &self,
+        args: Parameters<PlanSpeedRampArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_speed_ramp::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
