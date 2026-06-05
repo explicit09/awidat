@@ -26,9 +26,15 @@ pub struct PlanCaptionsArgs {
     /// Mood register: "minimal_cinematic" | "active_pop".
     pub mood: String,
     /// Optional named style preset; overrides (format, mood) when set.
-    /// Values: clean_white | word_pop | boxed.
+    /// Values: clean_white | word_pop | boxed | emphasis.
     #[serde(default)]
     pub preset: Option<String>,
+    /// Zero-based cue indices (into the returned recommendations) the agent has
+    /// judged to be hook/keyword/payoff lines. Those cues render with the poppier
+    /// `emphasis` preset; the rest keep the default. Empty = no emphasis (default).
+    /// Restraint is the agent's call — reserve this for the 1-2 lines that carry.
+    #[serde(default)]
+    pub emphasis_line_indices: Vec<usize>,
 }
 
 pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
@@ -71,7 +77,15 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
 
     let cues = segment(&words, &profile);
     let lint_proposals = lint(&cues, &profile);
-    let recs = plan(&cues, &LowerSafeZoneStrategy);
+    let mut recs = plan(&cues, &LowerSafeZoneStrategy);
+    // The agent flags hook/keyword/payoff cues by index; those render with the
+    // poppier `emphasis` preset. Out-of-range indices are ignored.
+    for &idx in &args.emphasis_line_indices {
+        if let Some(rec) = recs.get_mut(idx) {
+            rec.is_emphasized = true;
+        }
+    }
+    let emphasis_spec = resolve_preset("emphasis");
     let spec = match args.preset.as_deref().and_then(resolve_preset) {
         Some(s) => s,
         None => resolve_style(format, mood),
@@ -86,7 +100,12 @@ pub fn run(args: PlanCaptionsArgs, ctx: McpToolCtx) -> Result<String, String> {
     };
 
     let mut lines = vec!["*** Begin EDL".to_string()];
-    lines.extend(build_caption_edl_lines(&recs, &spec, safe_area));
+    lines.extend(build_caption_edl_lines(
+        &recs,
+        &spec,
+        emphasis_spec.as_ref(),
+        safe_area,
+    ));
     lines.push("*** End EDL".to_string());
     let edl_fragment = lines.join("\n") + "\n";
 
@@ -155,10 +174,13 @@ plan_scene_aware_short_form for vertical short-form). Segments transcript words 
 to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
 applies a (format, mood) style, and returns caption recommendations, a \
 readability lint, and a reviewable Insert Caption EDL fragment. Pass the \
-optional `preset` field (values: clean_white | word_pop | boxed) to override \
-the (format, mood) style with a named preset. Note: accessibility uses \
-whole-cue reveal regardless of mood. Apply with apply_edl after inspection. \
-Never burns captions into the picture.";
+optional `preset` field (values: clean_white | word_pop | boxed | emphasis) to \
+override the (format, mood) style with a named preset. Pass \
+`emphasis_line_indices` (zero-based cue indices) to render the 1-2 \
+hook/keyword/payoff lines you judge as carrying the moment with the poppier \
+`emphasis` look while the rest stay default; reserve it for those few lines, \
+not every cue. Note: accessibility uses whole-cue reveal regardless of mood. \
+Apply with apply_edl after inspection. Never burns captions into the picture.";
 
 #[cfg(test)]
 mod tests {
@@ -218,6 +240,7 @@ mod tests {
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: Some("word_pop".into()),
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -230,6 +253,59 @@ mod tests {
                 .contains("\"reveal\":\"active_word_pop\""),
             "explicit preset must drive style_json: {}",
             body["edl_fragment"]
+        );
+    }
+
+    #[test]
+    fn emphasis_line_indices_box_only_the_flagged_cue() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "raw/ep.mp4";
+        // Two sentences -> at least two cues; long_form default is clean_white
+        // (no box), emphasis preset is boxed.
+        write_whisper(
+            dir.path(),
+            asset,
+            serde_json::json!({
+                "words": [
+                    {"text":"First","start_s":0.0,"end_s":0.5},
+                    {"text":"sentence","start_s":0.5,"end_s":1.0},
+                    {"text":"here.","start_s":1.0,"end_s":1.6},
+                    {"text":"Second","start_s":2.0,"end_s":2.5},
+                    {"text":"sentence","start_s":2.5,"end_s":3.0},
+                    {"text":"now.","start_s":3.0,"end_s":3.6}
+                ],
+                "segments": []
+            }),
+        );
+        let ctx = McpToolCtx {
+            project_root: dir.path().to_path_buf(),
+        };
+        let out = run(
+            PlanCaptionsArgs {
+                asset_id: asset.into(),
+                clip_id: "c".into(),
+                format: "long_form".into(),
+                mood: "minimal_cinematic".into(),
+                preset: None,
+                emphasis_line_indices: vec![0],
+            },
+            ctx,
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let edl = body["edl_fragment"].as_str().unwrap();
+        assert_eq!(
+            edl.matches("\"kind\":\"box\"").count(),
+            1,
+            "only the flagged cue should be boxed (emphasis): {edl}"
+        );
+        // The plan also reports which cue is emphasized.
+        let plan = body["caption_plan"].as_array().unwrap();
+        assert!(plan[0]["is_emphasized"].as_bool().unwrap());
+        assert!(
+            plan.iter()
+                .skip(1)
+                .all(|c| !c["is_emphasized"].as_bool().unwrap())
         );
     }
 
@@ -262,6 +338,7 @@ mod tests {
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -299,6 +376,7 @@ mod tests {
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -344,6 +422,7 @@ mod tests {
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -375,6 +454,7 @@ mod tests {
                 format: "long_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -395,6 +475,7 @@ mod tests {
                 format: "square".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )
@@ -415,6 +496,7 @@ mod tests {
                 format: "short_form".into(),
                 mood: "minimal_cinematic".into(),
                 preset: None,
+                emphasis_line_indices: vec![],
             },
             ctx,
         )

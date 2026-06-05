@@ -613,7 +613,9 @@ fn build_edl_fragment(
         let spec = crate::caption::styles::resolve_preset("word_pop").unwrap_or_else(|| {
             crate::caption::styles::resolve_style(CaptionFormat::ShortForm, CaptionMood::ActivePop)
         });
-        lines.extend(build_caption_edl_lines(captions, &spec, "mobile"));
+        // Per-cue emphasis is agent-driven via the plan_captions MCP tool; the
+        // scene-aware path applies one preset to all cues (emphasis spec = None).
+        lines.extend(build_caption_edl_lines(captions, &spec, None, "mobile"));
     }
 
     for rec in recommendations {
