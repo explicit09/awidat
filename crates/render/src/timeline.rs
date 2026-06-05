@@ -10220,10 +10220,16 @@ fn plan_one_audio_track(
                 *next_input += 1;
                 let mut label = format!("[{input}:a:0]");
                 let trimmed = format!("[atrim{track_index}_{item_index}]");
-                let source_end = clip.start_s + clip.duration_s;
+                // The input is opened with `-ss {clip.start_s} -t {duration}`
+                // (see the audio input args), so its stream ALREADY starts at 0
+                // and is `duration_s` long. The atrim must therefore be RELATIVE
+                // (0..duration), not the absolute source span — using absolute
+                // start_s here double-seeks, trimming a window past the seeked
+                // stream's end → zero samples → AAC "received no packets" → a
+                // 0-byte/failed render.
                 filter.push_str(&format!(
-                    "{label}atrim={}:{},asetpts=PTS-STARTPTS{};",
-                    clip.start_s, source_end, trimmed
+                    "{label}atrim=0:{},asetpts=PTS-STARTPTS{};",
+                    clip.duration_s, trimmed
                 ));
                 label = trimmed;
                 if let Some(fx) = clip.audio_fx.as_ref()
@@ -12959,9 +12965,11 @@ mod tests {
             .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
             .unwrap();
         assert!(filter.contains("concat=n=2:v=1:a=0[vonly]"));
-        assert!(filter.contains("atrim=10:15.75"));
+        // atrim is RELATIVE to the already -ss-seeked input: 0..duration, not the
+        // absolute source span (clip 1 start=10 dur=5.75 → 0:5.75).
+        assert!(filter.contains("atrim=0:5.75"));
         assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=4.5"));
-        assert!(filter.contains("atrim=19.5:25"));
+        assert!(filter.contains("atrim=0:5.5"));
         assert!(filter.contains("amix=inputs=2"));
     }
 
@@ -13148,7 +13156,9 @@ mod tests {
         );
         assert!(filter.contains("atrim=0:3"));
         assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=3"));
-        assert!(filter.contains("atrim=6:10"));
+        // Relative atrim: trailing clip start=6 dur=4 → 0:4 (the input is
+        // already -ss-seeked to 6), not the absolute 6:10.
+        assert!(filter.contains("atrim=0:4"));
     }
 
     #[test]
