@@ -355,10 +355,12 @@ fn caption_resting_xy(title: &TitlePlan, canvas: RenderCanvas) -> Option<(i64, i
     Some((x, y))
 }
 
-/// Leading ASS override block for entrance/exit motion on one Dialogue line.
-/// `dur_cs` = the line's [start,end] span in centiseconds. Entrance on
-/// Sole|First; exit on Sole|Last. Scale + fade only (alignment-compatible);
-/// slide/float handled elsewhere. Returns "" when nothing applies.
+/// Leading ASS override block for entrance/exit/continuous motion on one
+/// Dialogue line. `dur_cs` = the line's [start,end] span in centiseconds;
+/// `resting` = the caption's (x,y) anchor for position-based motion (None →
+/// fall back to fade/none). Entrance applies on Sole|First, exit on Sole|Last.
+/// Composes scale (`\fscx/\fscy`), fade (`\fad`), and position (`\an2\move`)
+/// tags; a line emits at most one `\move`. Returns "" when nothing applies.
 fn motion_override(
     motion: crate::timeline::CaptionRenderMotion,
     role: CueLineRole,
@@ -464,10 +466,11 @@ fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord) -> String {
     use crate::timeline::CaptionRenderActiveWord as A;
     match m {
         A::None => String::new(),
-        A::Bounce => {
-            "\\fscx100\\fscy100\\t(0,90,\\fscx115\\fscy115)\\t(90,180,\\fscx100\\fscy100)".into()
-        }
-        A::ScalePop => "\\fscx100\\fscy100\\t(0,120,\\fscx112\\fscy112)".into(),
+        // No leading `\fscx100\fscy100` reset: libass starts each `\t` from the
+        // inherited scale, so a reset would cancel a parent line's pop-in for the
+        // active word (the PopIn + Bounce combo). Let the bounce compose on top.
+        A::Bounce => "\\t(0,90,\\fscx115\\fscy115)\\t(90,180,\\fscx100\\fscy100)".into(),
+        A::ScalePop => "\\t(0,120,\\fscx112\\fscy112)".into(),
         A::Shake => "\\frz0\\t(0,60,\\frz3)\\t(60,120,\\frz-3)\\t(120,180,\\frz0)".into(),
     }
 }
@@ -1321,6 +1324,14 @@ mod tests {
         let dialogues: Vec<String> = build_ass_document(&t, RenderCanvas::default()).lines().filter(|l| l.starts_with("Dialogue:")).map(String::from).collect();
         assert_eq!(dialogues.len(), 2);
         assert_eq!(dialogues[0].matches("\\fscx115").count(), 1, "one bounce per line: {}", dialogues[0]);
+        // structural: the bounce lives inside the active word's highlight block,
+        // i.e. the bounce \t immediately follows the highlight color override.
+        let hi = hex_to_ass_color("#FFE000");
+        assert!(
+            dialogues[0].contains(&format!("{hi}\\t(0,90,\\fscx115")),
+            "bounce must sit inside the highlight block: {}",
+            dialogues[0]
+        );
     }
 
     #[test]
