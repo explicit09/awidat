@@ -88,27 +88,50 @@ def select(
         if float(c.get("score", 0.0)) < min_score
     )
 
+    # Quota is based on the *eligible* speakers (those with at least one
+    # above-bar clip in `pool`), not every speaker in the raw candidate set.
+    # Counting ineligible speakers would lower the ceiling and starve speakers
+    # who do have eligible clips.
+    eligible_speakers = {c["speaker_id"] for c in pool}
+    eligible_speakers.discard("unknown")
+
     def speaker_quota_ok(spk: str) -> bool:
-        if not balance_speakers:
-            return True
-        speakers = {speaker_of(c) for _, cs in sources for c in cs}
-        speakers.discard("unknown")
-        if not speakers:
+        if not balance_speakers or not eligible_speakers:
             return True
         # Soft cap: no speaker may exceed ceil(target / num_speakers) + 1.
-        ceiling = -(-target_count // max(1, len(speakers))) + 1
+        ceiling = -(-target_count // max(1, len(eligible_speakers))) + 1
         return per_speaker[spk] < ceiling
+
+    # Track already-claimed moments so overlapping variants of the same source
+    # moment (same moment_id, or same asset + time range) can't fill multiple
+    # spine slots and make the supercut repeat a clip.
+    seen_moments: set = set()
+
+    def moment_key(c: dict) -> object:
+        mid = c.get("moment_id")
+        if mid is not None:
+            return ("mid", mid)
+        return (
+            "range",
+            c["asset"],
+            round(float(c.get("start_s", 0.0)), 2),
+            round(float(c.get("end_s", 0.0)), 2),
+        )
 
     for c in pool:
         if len(selected) >= target_count:
             break
         asset = c["asset"]
         spk = c["speaker_id"]
+        key = moment_key(c)
+        if key in seen_moments:
+            continue
         if per_source_cap is not None and per_source[asset] >= per_source_cap:
             continue
         if not speaker_quota_ok(spk):
             continue
         selected.append(c)
+        seen_moments.add(key)
         per_source[asset] += 1
         per_speaker[spk] += 1
 

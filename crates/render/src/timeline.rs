@@ -1637,7 +1637,7 @@ pub fn analyze_timeline_render_preflight(
         audio_tracks,
         loudness_target,
         render_limitations,
-        _canvas,
+        canvas,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
@@ -1666,6 +1666,7 @@ pub fn analyze_timeline_render_preflight(
         loudness_target,
         render_limitations: &render_limitations,
         master_loudnorm_enabled,
+        canvas,
     };
     let stream_copy_eligibility = analyze_timeline_stream_copy_eligibility(stream_copy_input);
     let (backend, metadata) = if stream_copy_eligibility.blockers.is_empty()
@@ -10765,6 +10766,7 @@ fn build_timeline_render_spec_inner(
             loudness_target,
             render_limitations: &render_limitations,
             master_loudnorm_enabled,
+            canvas,
         });
     if stream_copy_eligibility.blockers.is_empty()
         && let Some(segment) = stream_copy_eligibility.segment
@@ -10917,6 +10919,7 @@ struct TimelineStreamCopyFastPathInput<'a> {
     loudness_target: Option<LoudnessTargetPlan>,
     render_limitations: &'a [RenderPlanLimitation],
     master_loudnorm_enabled: bool,
+    canvas: RenderCanvas,
 }
 
 struct TimelineStreamCopyEligibility<'a> {
@@ -10966,6 +10969,12 @@ fn analyze_timeline_stream_copy_eligibility(
     }
     if input.master_loudnorm_enabled {
         blockers.push("master_loudnorm");
+    }
+    // A non-default output-format canvas (e.g. a 9:16 project) requires the
+    // conform/scale path; a raw `-c copy` remux would emit the source's
+    // original resolution and silently ignore the requested aspect ratio.
+    if input.canvas != RenderCanvas::default() {
+        blockers.push("output_format_canvas");
     }
     let segment = input.segments.first();
     if let Some(segment) = segment {

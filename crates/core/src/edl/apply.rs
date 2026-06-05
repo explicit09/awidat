@@ -8723,6 +8723,20 @@ fn validate_brand_kit(index: usize, kit: &BrandKit) -> Result<(), ApplyError> {
         kit.font_secondary_path.as_deref(),
     )?;
     validate_optional_project_path(index, "music_path", kit.music_path.as_deref())?;
+    // Palette entries flow into overlay color options (e.g. gold_hex →
+    // drawbox/drawtext `color=`), which are interpolated straight into the
+    // FFmpeg filter graph. Reject anything that isn't a plain hex/named color
+    // so a malformed or option-bearing value can't corrupt the filter string.
+    for (i, color) in kit.palette.iter().enumerate() {
+        if !valid_graphic_color(color) {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_brand_kit: palette[{i}] must be #RGB/#RGBA/#RRGGBB/#RRGGBBAA hex or an alphanumeric color name"
+                ),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -8944,6 +8958,13 @@ fn apply_set_title(
         effect
             .metadata
             .insert("font_family".to_string(), serde_json::json!(family));
+        // Render resolves `font_path` before `font_family`, so a stale explicit
+        // font file would shadow the requested family switch. Drop it here —
+        // unless this same op also supplies a new path, which is re-inserted
+        // immediately below.
+        if font_path.filter(|s| !s.trim().is_empty()).is_none() {
+            effect.metadata.remove("font_path");
+        }
     }
     if let Some(path) = font_path.filter(|s| !s.trim().is_empty()) {
         effect
@@ -15406,6 +15427,77 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_title_family_change_clears_stale_font_path() {
+        // Insert a title with an explicit font_path, then SetTitle with only a
+        // font_family. Render resolves font_path before font_family, so the
+        // stale path must be cleared for the family switch to take effect.
+        let tl = timeline_with_three_clips();
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Original".into(),
+                position: super::super::op::TitlePosition::Center,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+                phases: None,
+                font_family: None,
+                font_path: Some("fonts/Custom.ttf".into()),
+            }],
+        };
+        let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &after_insert.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!()
+        };
+        let title_uuid = title_clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("clip_uuid"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .expect("title clip should have a stamped clip_uuid");
+
+        let set_env = EdlEnvelope {
+            ops: vec![EdlOp::SetTitle {
+                anchor: Anchor::ClipUuid { uuid: title_uuid },
+                start_s: None,
+                end_s: None,
+                text: None,
+                position: None,
+                font_size: None,
+                color: None,
+                font_weight: None,
+                animation: None,
+                phases: None,
+                font_family: Some("Helvetica".into()),
+                font_path: None,
+            }],
+        };
+        let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles2) = &after_set.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(updated) = &titles2.children[0] else {
+            panic!()
+        };
+        let effect = &updated.effects[0];
+        assert_eq!(
+            effect.metadata.get("font_family").and_then(|v| v.as_str()),
+            Some("Helvetica"),
+        );
+        assert!(
+            !effect.metadata.contains_key("font_path"),
+            "stale font_path must be cleared when only font_family is set",
+        );
+    }
+
+    #[test]
     fn apply_set_title_rejects_clip_without_title_effect() {
         // Anchor a clip-on-V1 (no awidat.title effect) → error.
         let tl = timeline_with_three_clips();
@@ -15581,6 +15673,29 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
+        );
+    }
+
+    #[test]
+    fn apply_set_brand_kit_rejects_malformed_palette_color() {
+        let tl = timeline_with_three_clips();
+        // A palette value carrying filter-option characters must be rejected so
+        // it can't be interpolated raw into a drawbox/drawtext `color=` option.
+        let kit = BrandKit {
+            palette: vec!["#FFD700".into(), "red:foo@1".into()],
+            ..BrandKit::default()
+        };
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBrandKit { kit }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("palette[1]")),
+            "expected palette[1] rejection, got {err:?}"
         );
     }
 

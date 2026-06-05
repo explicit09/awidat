@@ -113,6 +113,20 @@ class SpeakerNamesTest(unittest.TestCase):
         self.assertEqual(names["SPEAKER_01"], "Pinned")
         self.assertEqual(names["SPEAKER_00"], "B")
 
+    def test_rank_wins_over_order(self) -> None:
+        # When @by_rank and @by_order both map a speaker, rank takes precedence
+        # (documented: direct > rank > order). SPEAKER_01 is rank #1 (most
+        # speech) but order #2; it must get the rank name, not the order name.
+        out = self._attach_with_map(
+            {
+                "@by_order": ["Host", "Guest", "Third"],
+                "@by_rank": ["Primary", "Secondary", "Tertiary"],
+            }
+        )
+        names = {s["id"]: s["name"] for s in out["speakers"]}
+        self.assertEqual(names["SPEAKER_01"], "Primary")
+        self.assertEqual(names["SPEAKER_00"], "Secondary")
+
     def test_explicit_env_path(self) -> None:
         body = _diarized_body()
         with tempfile.TemporaryDirectory() as tmp:

@@ -395,8 +395,16 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
                     line.push_str(&escaped);
                 }
             }
+            // Span each line up to the next word's start (last word runs to the
+            // cue end) so the caption stays on screen during inter-word silence
+            // with only the highlight advancing, instead of disappearing in the
+            // gaps between Whisper word timings.
+            let line_end_s = match words.get(active_idx + 1) {
+                Some(next) => next.start_s.max(active_word.end_s),
+                None => title.end_s.max(active_word.end_s),
+            };
             let start = format_ass_time(active_word.start_s);
-            let end = format_ass_time(active_word.end_s);
+            let end = format_ass_time(line_end_s);
             dialogues.push(format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{line}"));
         }
         return dialogues;
@@ -448,6 +456,13 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
             } else {
                 text.push(' ');
                 visible_line_chars += 1;
+            }
+            // Inter-word silence: hold the karaoke clock for the gap before this
+            // word so later words don't reveal early when the transcript has
+            // pauses between words.
+            let gap_cs = seconds_to_centiseconds((word.start_s - words[idx - 1].end_s).max(0.0));
+            if gap_cs > 0 {
+                text.push_str(&format!("{{\\k{gap_cs}}}"));
             }
         }
         text.push_str(&format!("{{\\k{dur_cs}}}{glyphs}"));

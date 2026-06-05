@@ -996,8 +996,15 @@ def _resolve_speaker_names(
             if isinstance(name, str) and name.strip():
                 resolved[sid] = name.strip()
 
-    order_ids = list(first_seen_order)
-    _assign(order_ids, raw_map.get(SPEAKER_NAMES_ORDER_KEY))
+    # First writer wins, so apply in descending precedence: direct ids, then
+    # @by_rank (total_speech_s desc), then @by_order (first-to-speak). Applying
+    # order first would invert the documented precedence and let order shadow
+    # a rank mapping for an already-seen speaker.
+    for key, value in raw_map.items():
+        if key in (SPEAKER_NAMES_RANK_KEY, SPEAKER_NAMES_ORDER_KEY):
+            continue
+        if isinstance(value, str) and value.strip():
+            resolved[key] = value.strip()
 
     rank_ids = [
         s["id"]
@@ -1008,11 +1015,8 @@ def _resolve_speaker_names(
     ]
     _assign(rank_ids, raw_map.get(SPEAKER_NAMES_RANK_KEY))
 
-    for key, value in raw_map.items():
-        if key in (SPEAKER_NAMES_RANK_KEY, SPEAKER_NAMES_ORDER_KEY):
-            continue
-        if isinstance(value, str) and value.strip():
-            resolved[key] = value.strip()
+    order_ids = list(first_seen_order)
+    _assign(order_ids, raw_map.get(SPEAKER_NAMES_ORDER_KEY))
 
     return resolved
 

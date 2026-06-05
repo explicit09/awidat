@@ -115,6 +115,12 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
 /// Delegates to named presets; format is informational.
 pub fn resolve_style(format: CaptionFormat, mood: CaptionMood) -> CaptionStyleSpec {
     match (format, mood) {
+        // Accessibility is whole-cue regardless of mood (stable, fully legible
+        // cues — no per-word highlight/flicker), matching the documented
+        // contract in plan_captions. Must precede the ActivePop arm.
+        (CaptionFormat::Accessibility, _) => {
+            resolve_preset("clean_white").expect("clean_white preset must exist")
+        }
         (_, CaptionMood::ActivePop) => {
             resolve_preset("word_pop").expect("word_pop preset must exist")
         }
@@ -155,6 +161,20 @@ mod tests {
         assert_eq!(calm.reveal, RevealMode::WholeCue);
         assert_eq!(pop.reveal, RevealMode::ActiveWordPop);
         assert!(pop.font_size >= calm.font_size);
+    }
+
+    #[test]
+    fn accessibility_is_whole_cue_regardless_of_mood() {
+        // Accessibility must stay whole-cue even with an active-pop mood —
+        // stable, fully legible cues rather than per-word highlight/flicker.
+        for mood in [CaptionMood::MinimalCinematic, CaptionMood::ActivePop] {
+            let spec = resolve_style(CaptionFormat::Accessibility, mood);
+            assert_eq!(
+                spec.reveal,
+                RevealMode::WholeCue,
+                "accessibility/{mood:?} must be whole-cue"
+            );
+        }
     }
 
     #[test]
