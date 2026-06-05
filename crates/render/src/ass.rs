@@ -1280,6 +1280,27 @@ mod tests {
         assert!(!d.contains("\\t(") && !d.contains("\\fad("), "no motion -> no animation tags: {d}");
     }
 
+    #[test]
+    fn all_none_motion_with_style_emits_no_animation_tags() {
+        // The actual new code path: caption_style = Some(_) with all-None motion.
+        // It must add NO motion tags (no \t, \fad, or \move) — Phase-1 behavior.
+        use crate::timeline::*;
+        let mut t = caption_title("hello world", vec![]);
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::None,
+            CaptionRenderExit::None,
+        ));
+        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 })
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .unwrap()
+            .to_string();
+        assert!(
+            !d.contains("\\t(") && !d.contains("\\fad(") && !d.contains("\\move("),
+            "all-None motion on a styled caption must emit no animation tags: {d}"
+        );
+    }
+
     fn pop_style_with(active: crate::timeline::CaptionRenderActiveWord, entrance: crate::timeline::CaptionRenderEntrance, exit: crate::timeline::CaptionRenderExit) -> crate::timeline::CaptionRenderStyle {
         let mut s = motion_style(entrance, exit);
         s.reveal = crate::timeline::CaptionRenderReveal::ActiveWordPop;
