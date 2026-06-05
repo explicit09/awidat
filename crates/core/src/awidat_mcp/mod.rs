@@ -100,6 +100,7 @@ use crate::awidat_mcp::tools::manage_assets::{
     TagAssetArgs,
 };
 use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
+use crate::awidat_mcp::tools::plan_color_grade::{self, PlanColorGradeArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
@@ -1551,6 +1552,30 @@ timeline, then call review_look_regions on the render.",
         args: Parameters<PlanLookRegionsArgs>,
     ) -> Result<String, ErrorData> {
         plan_look_regions::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_color_grade` — sample a clip's frames, derive a correction,
+    /// optionally add a creative look LUT, and emit a validated EDL.
+    ///
+    /// Marked destructive because the run writes `renders/<stem>.edl` and
+    /// `renders/<stem>.json`.
+    #[tool(
+        description = "\
+Plan a render-ready color grade for one clip: sample its frames, measure \
+exposure/contrast/white-balance, and emit a validated EDL that corrects \
+first and then (optionally, only with an existing project .cube) applies a \
+creative look at reduced strength. Writes renders/<stem>.edl and \
+renders/<stem>.json. After this tool, call apply_edl with the returned \
+`edl` text, inspect vedit_diff, then render the timeline.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn plan_color_grade(
+        &self,
+        args: Parameters<PlanColorGradeArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_color_grade::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }

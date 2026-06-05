@@ -38,3 +38,4 @@ python/**/__pycache__/
 python/**/*.egg-info/
 python/**/.pytest_cache/
 skills/**/__pycache__/
+video_editing_transcripts/
