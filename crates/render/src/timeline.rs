@@ -9957,6 +9957,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         titles,
         ffmpeg_broadcast_overlay,
     )
+    .with_canvas(canvas)
     .with_editable_subtitle_tracks(editable_subtitle_tracks);
     if let Some(dir) = ass_workdir {
         planner = planner.with_ass_workdir(dir.to_path_buf());
@@ -10225,6 +10226,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
             titles,
             ffmpeg_broadcast_overlay,
         )
+        .with_canvas(canvas)
         .with_editable_subtitle_tracks(editable_subtitle_tracks);
         if let Some(dir) = ass_workdir {
             planner = planner.with_ass_workdir(dir.to_path_buf());
@@ -17745,6 +17747,144 @@ caption_style: None,
         assert_eq!(style.highlight_color, Some("#FFD700".to_string()));
         assert_eq!(style.reveal, CaptionRenderReveal::ActiveWordPop);
         assert!(matches!(style.background, CaptionRenderBackground::None));
+    }
+
+    #[test]
+    fn title_planner_authors_ass_at_canvas_resolution() {
+        // Regression test: the two `FilterPlanner::with_titles_and_broadcast_overlay`
+        // construction sites inside `build_timeline_argv_full_with_annotations_and_ass`
+        // and `build_timeline_argv_with_audio_tracks_and_annotations_and_ass` must
+        // call `.with_canvas(canvas)` so vertical (9:16) renders author captions at
+        // 1080x1920, not the default 1920x1080.
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A caption with role=="caption" is libass-eligible: the planner writes a
+        // .ass file (and uses it in the filter graph) when ass_workdir is set.
+        let caption = TitlePlan {
+            text: "Vertical caption".into(),
+            start_s: 0.5,
+            end_s: 2.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            phases: None,
+            reveal: TextReveal::None,
+            role: "caption".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            word_timings: Vec::new(),
+            animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
+        };
+
+        let vertical_canvas = RenderCanvas {
+            width: 1080,
+            height: 1920,
+        };
+
+        // Exercise the first production call site:
+        // build_timeline_argv_full_with_annotations_and_ass (non-audio-tracks path).
+        let s = seg("/tmp/clip.mp4", 0.0, 3.0);
+        let _argv = build_timeline_argv_full_with_annotations_and_ass(
+            std::slice::from_ref(&s),
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&caption),
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+            Some(tmp.path()),
+            vertical_canvas,
+        );
+
+        // The planner must have written at least one .ass file.
+        let ass_files: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|x| x == "ass")
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            !ass_files.is_empty(),
+            "expected at least one .ass file written into the workdir"
+        );
+
+        // Every written .ass must declare PlayResX: 1080 (vertical width), not
+        // the default 1920 that results from omitting .with_canvas(canvas).
+        for entry in &ass_files {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(
+                content.contains("PlayResX: 1080"),
+                "ASS file {:?} should have PlayResX: 1080 for a 1080x1920 canvas, got:\n{content}",
+                entry.file_name()
+            );
+            assert!(
+                content.contains("PlayResY: 1920"),
+                "ASS file {:?} should have PlayResY: 1920 for a 1080x1920 canvas, got:\n{content}",
+                entry.file_name()
+            );
+        }
+
+        // Also exercise the second production call site (explicit-audio path).
+        let tmp2 = tempfile::tempdir().unwrap();
+        let _argv2 = build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
+            &[s],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[caption],
+            &[],
+            None,
+            None,
+            None,
+            &[],
+            Path::new("/tmp/out2.mp4"),
+            Some(tmp2.path()),
+            vertical_canvas,
+        );
+
+        let ass_files2: Vec<_> = std::fs::read_dir(tmp2.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|x| x == "ass")
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            !ass_files2.is_empty(),
+            "expected at least one .ass file written into the audio-tracks workdir"
+        );
+        for entry in &ass_files2 {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(
+                content.contains("PlayResX: 1080"),
+                "ASS file {:?} (audio-tracks path) should have PlayResX: 1080 for a 1080x1920 \
+                 canvas, got:\n{content}",
+                entry.file_name()
+            );
+            assert!(
+                content.contains("PlayResY: 1920"),
+                "ASS file {:?} (audio-tracks path) should have PlayResY: 1920 for a 1080x1920 \
+                 canvas, got:\n{content}",
+                entry.file_name()
+            );
+        }
     }
 
     #[test]
