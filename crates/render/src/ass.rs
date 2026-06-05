@@ -397,9 +397,12 @@ fn motion_override(
         match motion.entrance {
             E::PopIn => {
                 // Gentle, slow grow-in, no overshoot — "a minimal pop-up", not a
-                // snap. 280ms reads as an ease-in rather than a quick hop.
+                // snap. 280ms reads as an ease-in rather than a quick hop. Cap the
+                // grow-in to the line span so a sub-280ms word (active-word-pop on
+                // "a"/"I") still reaches full scale before its line is dropped.
+                let pop_end = 280.min(dur_ms);
                 init.push_str("\\fscx92\\fscy92");
-                anim.push_str("\\t(0,280,\\fscx100\\fscy100)");
+                anim.push_str(&format!("\\t(0,{pop_end},\\fscx100\\fscy100)"));
             }
             E::FadeIn => fad_in = 150,
             E::SlideUp => match resting {
@@ -422,8 +425,12 @@ fn motion_override(
     if exit_here {
         match motion.exit {
             X::PopOut => {
+                // Shrink and fade together so the cue reads as an exit rather than
+                // an abrupt cut: scaling to 92% alone left the line nearly full-size
+                // and fully opaque until libass dropped it at End.
                 let s = (dur_ms - 150).max(0);
                 anim.push_str(&format!("\\t({s},{dur_ms},\\fscx92\\fscy92)"));
+                fad_out = 150;
             }
             X::FadeOut => fad_out = 150,
             X::SlideDown => match resting {
@@ -475,16 +482,42 @@ fn motion_override(
 
 /// Inline ASS override tags for the active-word animation applied inside the
 /// highlighted word's wrapper block. Returns `""` when no animation is set.
-fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord) -> String {
+///
+/// `dur_ms` = the active word's own Dialogue span. Each `\t` endpoint is
+/// clamped to that span so short words (sub-300ms "a"/"I") finish the motion
+/// before the line is dropped instead of snapping mid-animation. Every variant
+/// returns to its baseline scale/rotation by its end so the transform does not
+/// persist onto the words rendered after the highlight in the same line.
+fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord, dur_ms: i64) -> String {
     use crate::timeline::CaptionRenderActiveWord as A;
+    // Clamp the tuned endpoints into the available span: full-length words keep
+    // the authored timing, short words get a proportionally compressed motion
+    // that still resolves before the line is dropped.
+    let cap = dur_ms.max(1);
+    let clamp_to = |t: i64, floor: i64| t.min(cap).max(floor);
     match m {
         A::None => String::new(),
         // No leading `\fscx100\fscy100` reset: libass starts each `\t` from the
         // inherited scale, so a reset would cancel a parent line's pop-in for the
         // active word (the PopIn + Bounce combo). Let the bounce compose on top.
-        A::Bounce => "\\t(0,160,\\fscx105\\fscy105)\\t(160,360,\\fscx100\\fscy100)".into(),
-        A::ScalePop => "\\t(0,220,\\fscx104\\fscy104)".into(),
-        A::Shake => "\\frz0\\t(0,90,\\frz2)\\t(90,190,\\frz-2)\\t(190,290,\\frz0)".into(),
+        A::Bounce => {
+            let peak = 160.min(cap.saturating_sub(1)).max(1);
+            let settle = clamp_to(360, peak + 1);
+            format!("\\t(0,{peak},\\fscx105\\fscy105)\\t({peak},{settle},\\fscx100\\fscy100)")
+        }
+        // Two-phase so the pop returns to baseline; the original single `\t` left
+        // the line pinned at 104% for every following word in the cue.
+        A::ScalePop => {
+            let peak = 120.min(cap.saturating_sub(1)).max(1);
+            let settle = clamp_to(240, peak + 1);
+            format!("\\t(0,{peak},\\fscx104\\fscy104)\\t({peak},{settle},\\fscx100\\fscy100)")
+        }
+        A::Shake => {
+            let t1 = 90.min(cap.saturating_sub(1)).max(1);
+            let t2 = clamp_to(190, t1 + 1);
+            let t3 = clamp_to(290, t2 + 1);
+            format!("\\frz0\\t(0,{t1},\\frz2)\\t({t1},{t2},\\frz-2)\\t({t2},{t3},\\frz0)")
+        }
     }
 }
 
@@ -554,7 +587,7 @@ fn build_dialogue_lines(title: &TitlePlan, canvas: RenderCanvas) -> Vec<String> 
             let dur_cs =
                 seconds_to_centiseconds((active_word.end_s - active_word.start_s).max(0.0)) as i64;
             let line_mv = motion_override(s.motion, role, dur_cs, resting);
-            let aw = active_word_anim(s.motion.active_word);
+            let aw = active_word_anim(s.motion.active_word, (dur_cs * 10).max(1));
             let mut line = line_mv;
             for (j, w) in words.iter().enumerate() {
                 if j > 0 {
@@ -564,8 +597,14 @@ fn build_dialogue_lines(title: &TitlePlan, canvas: RenderCanvas) -> Vec<String> 
                 let cased = apply_casing(raw, title);
                 let escaped = escape_ass_text(&cased);
                 if j == active_idx {
-                    // Wrap active word: set highlight + per-word animation, then restore primary.
-                    line.push_str(&format!("{{\\c{hi_col}{aw}}}{escaped}{{\\c{primary_col}}}"));
+                    // Wrap active word: set highlight + per-word animation, then
+                    // restore primary color and neutral rotation. `\frz0` keeps the
+                    // Shake rotation from carrying onto the words after the highlight
+                    // (scale is left to the animation's own return-to-baseline so it
+                    // still composes with a line-level pop-in entrance).
+                    line.push_str(&format!(
+                        "{{\\c{hi_col}{aw}}}{escaped}{{\\c{primary_col}\\frz0}}"
+                    ));
                 } else {
                     line.push_str(&escaped);
                 }
@@ -1436,6 +1475,48 @@ mod tests {
         assert!(
             dialogues[0].contains(&format!("{hi}\\t(0,160,\\fscx105")),
             "bounce must sit inside the highlight block: {}",
+            dialogues[0]
+        );
+    }
+
+    #[test]
+    fn active_word_scale_pop_returns_to_baseline_and_resets_rotation() {
+        use crate::timeline::*;
+        let wt = vec![
+            CaptionWordTiming {
+                text: "one".into(),
+                start_s: 1.0,
+                end_s: 1.5,
+            },
+            CaptionWordTiming {
+                text: "two".into(),
+                start_s: 1.5,
+                end_s: 2.0,
+            },
+        ];
+        let mut t = caption_title("one two", wt);
+        t.caption_style = Some(pop_style_with(
+            CaptionRenderActiveWord::ScalePop,
+            CaptionRenderEntrance::None,
+            CaptionRenderExit::None,
+        ));
+        let dialogues: Vec<String> = build_ass_document(&t, RenderCanvas::default())
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .map(String::from)
+            .collect();
+        // The pop must settle back to 100% (the old single \t left the line
+        // pinned at 104% for every word after the active one).
+        assert!(
+            dialogues[0].contains("\\fscx100\\fscy100"),
+            "scale pop must return to baseline: {}",
+            dialogues[0]
+        );
+        // Rotation is neutralized after the highlight so Shake/rotation can't
+        // carry onto the trailing words in the same line.
+        assert!(
+            dialogues[0].contains("\\frz0}"),
+            "rotation reset must follow the active word: {}",
             dialogues[0]
         );
     }
