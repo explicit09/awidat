@@ -17793,7 +17793,10 @@ caption_style: None,
         let json = r##"{"font_size":64,"weight":"bold","casing":"upper","primary_color":"#FFFFFF","highlight_color":"#FFE000","reveal":"active_word_pop","background":{"kind":"none"},"motion":{"entrance":"pop_in","active_word":"bounce","exit":"none","continuous":"none"}}"##;
         let s: CaptionRenderStyle = serde_json::from_str(json).unwrap();
         assert!(matches!(s.motion.entrance, CaptionRenderEntrance::PopIn));
-        assert!(matches!(s.motion.active_word, CaptionRenderActiveWord::Bounce));
+        assert!(matches!(
+            s.motion.active_word,
+            CaptionRenderActiveWord::Bounce
+        ));
     }
 
     #[test]
@@ -17884,12 +17887,7 @@ caption_style: None,
         let ass_files: Vec<_> = std::fs::read_dir(tmp.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "ass")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
             .collect();
         assert!(
             !ass_files.is_empty(),
@@ -17934,12 +17932,7 @@ caption_style: None,
         let ass_files2: Vec<_> = std::fs::read_dir(tmp2.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "ass")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
             .collect();
         assert!(
             !ass_files2.is_empty(),

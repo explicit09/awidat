@@ -27,7 +27,6 @@ use crate::timeline::{
     TitlePosition, TitleWeight,
 };
 
-
 #[derive(Debug, Clone, Copy)]
 struct CaptionLayoutProfile {
     margin_l: u32,
@@ -624,7 +623,9 @@ fn build_dialogue_lines(title: &TitlePlan, canvas: RenderCanvas) -> Vec<String> 
     let mv = motion
         .map(|m| motion_override(m, CueLineRole::Sole, dur_cs, resting))
         .unwrap_or_default();
-    vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{text}",)]
+    vec![format!(
+        "Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{text}",
+    )]
 }
 
 /// ASS uses `H:MM:SS.cc` (centiseconds). Source seconds are master
@@ -1088,7 +1089,10 @@ mod tests {
             background: CaptionRenderBackground::None,
             motion: CaptionRenderMotion::default(),
         };
-        let doc = build_ass_document(&styled(spec, "rise of solo", vec![]), RenderCanvas::default());
+        let doc = build_ass_document(
+            &styled(spec, "rise of solo", vec![]),
+            RenderCanvas::default(),
+        );
         assert!(
             doc.contains("RISE OF SOLO"),
             "Upper casing must uppercase text: {doc}"
@@ -1211,7 +1215,10 @@ mod tests {
             background: CaptionRenderBackground::None,
             motion: CaptionRenderMotion::default(),
         };
-        let doc = build_ass_document(&styled(spec, "hello world", vec![]), RenderCanvas::default());
+        let doc = build_ass_document(
+            &styled(spec, "hello world", vec![]),
+            RenderCanvas::default(),
+        );
         let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
         assert_eq!(n, 1, "no word timings -> single whole-cue dialogue");
     }
@@ -1220,14 +1227,24 @@ mod tests {
     fn ass_playres_matches_render_canvas() {
         use crate::timeline::RenderCanvas;
         let t = caption_title("hi", vec![]);
-        let portrait =
-            build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 });
+        let portrait = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        );
         assert!(
             portrait.contains("PlayResX: 1080") && portrait.contains("PlayResY: 1920"),
             "vertical canvas must drive PlayRes: {portrait}"
         );
-        let landscape =
-            build_ass_document_with_canvas(&t, RenderCanvas { width: 1920, height: 1080 });
+        let landscape = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1920,
+                height: 1080,
+            },
+        );
         assert!(landscape.contains("PlayResX: 1920") && landscape.contains("PlayResY: 1080"));
     }
 
@@ -1256,17 +1273,26 @@ mod tests {
     fn pop_in_entrance_emits_scale_animation_on_whole_cue() {
         use crate::timeline::*;
         let mut t = caption_title("hello", vec![]);
-        t.caption_style = Some(motion_style(CaptionRenderEntrance::PopIn, CaptionRenderExit::None));
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::PopIn,
+            CaptionRenderExit::None,
+        ));
         let doc = build_ass_document(&t, RenderCanvas::default());
         let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
-        assert!(d.contains("\\fscx") && d.contains("\\t("), "PopIn must emit a scale \\t: {d}");
+        assert!(
+            d.contains("\\fscx") && d.contains("\\t("),
+            "PopIn must emit a scale \\t: {d}"
+        );
     }
 
     #[test]
     fn fade_in_out_emits_fad_on_whole_cue() {
         use crate::timeline::*;
         let mut t = caption_title("hello", vec![]);
-        t.caption_style = Some(motion_style(CaptionRenderEntrance::FadeIn, CaptionRenderExit::FadeOut));
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::FadeIn,
+            CaptionRenderExit::FadeOut,
+        ));
         let d = build_ass_document(&t, RenderCanvas::default())
             .lines()
             .find(|l| l.starts_with("Dialogue:"))
@@ -1280,7 +1306,10 @@ mod tests {
         let t = caption_title("hello world", vec![]); // caption_style None
         let doc = build_ass_document(&t, RenderCanvas::default());
         let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
-        assert!(!d.contains("\\t(") && !d.contains("\\fad("), "no motion -> no animation tags: {d}");
+        assert!(
+            !d.contains("\\t(") && !d.contains("\\fad("),
+            "no motion -> no animation tags: {d}"
+        );
     }
 
     #[test]
@@ -1293,18 +1322,28 @@ mod tests {
             CaptionRenderEntrance::None,
             CaptionRenderExit::None,
         ));
-        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 })
-            .lines()
-            .find(|l| l.starts_with("Dialogue:"))
-            .unwrap()
-            .to_string();
+        let d = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        )
+        .lines()
+        .find(|l| l.starts_with("Dialogue:"))
+        .unwrap()
+        .to_string();
         assert!(
             !d.contains("\\t(") && !d.contains("\\fad(") && !d.contains("\\move("),
             "all-None motion on a styled caption must emit no animation tags: {d}"
         );
     }
 
-    fn pop_style_with(active: crate::timeline::CaptionRenderActiveWord, entrance: crate::timeline::CaptionRenderEntrance, exit: crate::timeline::CaptionRenderExit) -> crate::timeline::CaptionRenderStyle {
+    fn pop_style_with(
+        active: crate::timeline::CaptionRenderActiveWord,
+        entrance: crate::timeline::CaptionRenderEntrance,
+        exit: crate::timeline::CaptionRenderExit,
+    ) -> crate::timeline::CaptionRenderStyle {
         let mut s = motion_style(entrance, exit);
         s.reveal = crate::timeline::CaptionRenderReveal::ActiveWordPop;
         s.highlight_color = Some("#FFE000".into());
@@ -1316,14 +1355,35 @@ mod tests {
     fn active_word_bounce_springs_only_the_active_word() {
         use crate::timeline::*;
         let wt = vec![
-            CaptionWordTiming { text: "a".into(), start_s: 1.0, end_s: 1.3 },
-            CaptionWordTiming { text: "b".into(), start_s: 1.3, end_s: 1.7 },
+            CaptionWordTiming {
+                text: "a".into(),
+                start_s: 1.0,
+                end_s: 1.3,
+            },
+            CaptionWordTiming {
+                text: "b".into(),
+                start_s: 1.3,
+                end_s: 1.7,
+            },
         ];
         let mut t = caption_title("a b", wt);
-        t.caption_style = Some(pop_style_with(CaptionRenderActiveWord::Bounce, CaptionRenderEntrance::None, CaptionRenderExit::None));
-        let dialogues: Vec<String> = build_ass_document(&t, RenderCanvas::default()).lines().filter(|l| l.starts_with("Dialogue:")).map(String::from).collect();
+        t.caption_style = Some(pop_style_with(
+            CaptionRenderActiveWord::Bounce,
+            CaptionRenderEntrance::None,
+            CaptionRenderExit::None,
+        ));
+        let dialogues: Vec<String> = build_ass_document(&t, RenderCanvas::default())
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .map(String::from)
+            .collect();
         assert_eq!(dialogues.len(), 2);
-        assert_eq!(dialogues[0].matches("\\fscx115").count(), 1, "one bounce per line: {}", dialogues[0]);
+        assert_eq!(
+            dialogues[0].matches("\\fscx115").count(),
+            1,
+            "one bounce per line: {}",
+            dialogues[0]
+        );
         // structural: the bounce lives inside the active word's highlight block,
         // i.e. the bounce \t immediately follows the highlight color override.
         let hi = hex_to_ass_color("#FFE000");
@@ -1338,23 +1398,60 @@ mod tests {
     fn pop_entrance_only_on_first_word_exit_only_on_last() {
         use crate::timeline::*;
         let wt = vec![
-            CaptionWordTiming { text: "a".into(), start_s: 1.0, end_s: 1.3 },
-            CaptionWordTiming { text: "b".into(), start_s: 1.3, end_s: 1.7 },
+            CaptionWordTiming {
+                text: "a".into(),
+                start_s: 1.0,
+                end_s: 1.3,
+            },
+            CaptionWordTiming {
+                text: "b".into(),
+                start_s: 1.3,
+                end_s: 1.7,
+            },
         ];
         let mut t = caption_title("a b", wt);
-        t.caption_style = Some(pop_style_with(CaptionRenderActiveWord::None, CaptionRenderEntrance::PopIn, CaptionRenderExit::FadeOut));
-        let d: Vec<String> = build_ass_document(&t, RenderCanvas::default()).lines().filter(|l| l.starts_with("Dialogue:")).map(String::from).collect();
-        assert!(d[0].contains("\\fscx80"), "entrance on first word's line: {}", d[0]);
-        assert!(!d[1].contains("\\fscx80"), "no entrance on second word's line: {}", d[1]);
-        assert!(d[1].contains("\\fad("), "exit fade on last word's line: {}", d[1]);
+        t.caption_style = Some(pop_style_with(
+            CaptionRenderActiveWord::None,
+            CaptionRenderEntrance::PopIn,
+            CaptionRenderExit::FadeOut,
+        ));
+        let d: Vec<String> = build_ass_document(&t, RenderCanvas::default())
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .map(String::from)
+            .collect();
+        assert!(
+            d[0].contains("\\fscx80"),
+            "entrance on first word's line: {}",
+            d[0]
+        );
+        assert!(
+            !d[1].contains("\\fscx80"),
+            "no entrance on second word's line: {}",
+            d[1]
+        );
+        assert!(
+            d[1].contains("\\fad("),
+            "exit fade on last word's line: {}",
+            d[1]
+        );
     }
 
     #[test]
     fn slide_up_emits_move_into_resting_position() {
         use crate::timeline::*;
         let mut t = caption_title("hello", vec![]);
-        t.caption_style = Some(motion_style(CaptionRenderEntrance::SlideUp, CaptionRenderExit::None));
-        let doc = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 });
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::SlideUp,
+            CaptionRenderExit::None,
+        ));
+        let doc = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        );
         let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
         assert!(d.contains("\\move("), "SlideUp must emit \\move: {d}");
     }
@@ -1363,20 +1460,47 @@ mod tests {
     fn slide_falls_back_to_fade_on_degenerate_canvas() {
         use crate::timeline::*;
         let mut t = caption_title("hello", vec![]);
-        t.caption_style = Some(motion_style(CaptionRenderEntrance::SlideUp, CaptionRenderExit::None));
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::SlideUp,
+            CaptionRenderExit::None,
+        ));
         // height <= margin => degenerate => fall back to FadeIn (\fad), never \move.
-        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 100, height: 10 })
-            .lines().find(|l| l.starts_with("Dialogue:")).unwrap().to_string();
-        assert!(d.contains("\\fad(") && !d.contains("\\move("), "degenerate slide must fall back to fade: {d}");
+        let d = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 100,
+                height: 10,
+            },
+        )
+        .lines()
+        .find(|l| l.starts_with("Dialogue:"))
+        .unwrap()
+        .to_string();
+        assert!(
+            d.contains("\\fad(") && !d.contains("\\move("),
+            "degenerate slide must fall back to fade: {d}"
+        );
     }
 
     #[test]
     fn slide_down_exit_emits_move() {
         use crate::timeline::*;
         let mut t = caption_title("hello", vec![]);
-        t.caption_style = Some(motion_style(CaptionRenderEntrance::None, CaptionRenderExit::SlideDown));
-        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 })
-            .lines().find(|l| l.starts_with("Dialogue:")).unwrap().to_string();
+        t.caption_style = Some(motion_style(
+            CaptionRenderEntrance::None,
+            CaptionRenderExit::SlideDown,
+        ));
+        let d = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        )
+        .lines()
+        .find(|l| l.starts_with("Dialogue:"))
+        .unwrap()
+        .to_string();
         assert!(d.contains("\\move("), "SlideDown must emit \\move: {d}");
     }
 

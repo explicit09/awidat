@@ -299,7 +299,11 @@ mod tests {
     #[test]
     fn preset_motions_match_corpus_defaults() {
         let clean = resolve_preset("clean_white").unwrap();
-        assert_eq!(clean.motion, CaptionMotion::default(), "cinematic = minimal/none");
+        assert_eq!(
+            clean.motion,
+            CaptionMotion::default(),
+            "cinematic = minimal/none"
+        );
         let boxed = resolve_preset("boxed").unwrap();
         assert_eq!(boxed.motion, CaptionMotion::default());
         let pop = resolve_preset("word_pop").unwrap();
