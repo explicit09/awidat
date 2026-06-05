@@ -17809,12 +17809,7 @@ caption_style: None,
         let ass_files: Vec<_> = std::fs::read_dir(tmp.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "ass")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
             .collect();
         assert!(
             !ass_files.is_empty(),
@@ -17859,12 +17854,7 @@ caption_style: None,
         let ass_files2: Vec<_> = std::fs::read_dir(tmp2.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "ass")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
             .collect();
         assert!(
             !ass_files2.is_empty(),

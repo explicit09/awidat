@@ -27,7 +27,6 @@ use crate::timeline::{
     TitlePosition, TitleWeight,
 };
 
-
 #[derive(Debug, Clone, Copy)]
 struct CaptionLayoutProfile {
     margin_l: u32,
@@ -918,7 +917,10 @@ mod tests {
             reveal: CaptionRenderReveal::WholeCue,
             background: CaptionRenderBackground::None,
         };
-        let doc = build_ass_document(&styled(spec, "rise of solo", vec![]), RenderCanvas::default());
+        let doc = build_ass_document(
+            &styled(spec, "rise of solo", vec![]),
+            RenderCanvas::default(),
+        );
         assert!(
             doc.contains("RISE OF SOLO"),
             "Upper casing must uppercase text: {doc}"
@@ -1037,7 +1039,10 @@ mod tests {
             reveal: CaptionRenderReveal::ActiveWordPop,
             background: CaptionRenderBackground::None,
         };
-        let doc = build_ass_document(&styled(spec, "hello world", vec![]), RenderCanvas::default());
+        let doc = build_ass_document(
+            &styled(spec, "hello world", vec![]),
+            RenderCanvas::default(),
+        );
         let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
         assert_eq!(n, 1, "no word timings -> single whole-cue dialogue");
     }
@@ -1046,14 +1051,24 @@ mod tests {
     fn ass_playres_matches_render_canvas() {
         use crate::timeline::RenderCanvas;
         let t = caption_title("hi", vec![]);
-        let portrait =
-            build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 });
+        let portrait = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        );
         assert!(
             portrait.contains("PlayResX: 1080") && portrait.contains("PlayResY: 1920"),
             "vertical canvas must drive PlayRes: {portrait}"
         );
-        let landscape =
-            build_ass_document_with_canvas(&t, RenderCanvas { width: 1920, height: 1080 });
+        let landscape = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1920,
+                height: 1080,
+            },
+        );
         assert!(landscape.contains("PlayResX: 1920") && landscape.contains("PlayResY: 1080"));
     }
 
