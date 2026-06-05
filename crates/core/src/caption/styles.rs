@@ -86,7 +86,7 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             background: CaptionBackground::None,
         },
         "word_pop" => CaptionStyleSpec {
-            font_size: 64,
+            font_size: 84,
             weight: CaptionWeight::Bold,
             casing: CaptionCasing::Upper,
             primary_color: "#FFFFFF".into(),
