@@ -126,7 +126,7 @@ impl CaptionStyleSpec {
 }
 
 pub fn preset_names() -> &'static [&'static str] {
-    &["clean_white", "word_pop", "boxed"]
+    &["clean_white", "word_pop", "boxed", "emphasis"]
 }
 
 pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
@@ -168,6 +168,24 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
                 opacity: 153,
             },
             motion: CaptionMotion::default(),
+        },
+        "emphasis" => CaptionStyleSpec {
+            font_size: 72,
+            weight: CaptionWeight::Bold,
+            casing: CaptionCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: RevealMode::ActiveWordPop,
+            background: CaptionBackground::Box {
+                color: "#000000".into(),
+                opacity: 178,
+            },
+            motion: CaptionMotion {
+                entrance: EntranceMotion::PopIn,
+                active_word: ActiveWordMotion::Bounce,
+                exit: ExitMotion::None,
+                continuous: ContinuousMotion::None,
+            },
         },
         _ => return None,
     };
@@ -266,6 +284,16 @@ mod tests {
         assert!(matches!(m.continuous, ContinuousMotion::None));
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<CaptionMotion>(&json).unwrap(), m);
+    }
+
+    #[test]
+    fn emphasis_preset_is_poppy_boxed_and_animated() {
+        let e = resolve_preset("emphasis").expect("emphasis");
+        assert!(matches!(e.background, CaptionBackground::Box { .. }));
+        assert!(matches!(e.motion.entrance, EntranceMotion::PopIn));
+        assert!(matches!(e.motion.active_word, ActiveWordMotion::Bounce));
+        assert!(e.font_size >= 64);
+        assert!(preset_names().contains(&"emphasis"));
     }
 
     #[test]
