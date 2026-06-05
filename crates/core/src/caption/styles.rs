@@ -170,7 +170,9 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             motion: CaptionMotion::default(),
         },
         "emphasis" => CaptionStyleSpec {
-            font_size: 72,
+            // Poppier than word_pop (font 84): bigger + a box plate. The font must
+            // stay >= word_pop so the look reads as *more* emphatic, not less.
+            font_size: 92,
             weight: CaptionWeight::Bold,
             casing: CaptionCasing::Upper,
             primary_color: "#FFFFFF".into(),
@@ -178,7 +180,7 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             reveal: RevealMode::ActiveWordPop,
             background: CaptionBackground::Box {
                 color: "#000000".into(),
-                opacity: 178,
+                opacity: 204,
             },
             motion: CaptionMotion {
                 entrance: EntranceMotion::PopIn,
@@ -292,7 +294,14 @@ mod tests {
         assert!(matches!(e.background, CaptionBackground::Box { .. }));
         assert!(matches!(e.motion.entrance, EntranceMotion::PopIn));
         assert!(matches!(e.motion.active_word, ActiveWordMotion::Bounce));
-        assert!(e.font_size >= 64);
+        // Emphasis must read as *more* emphatic than word_pop: at least as large.
+        let word_pop = resolve_preset("word_pop").expect("word_pop");
+        assert!(
+            e.font_size >= word_pop.font_size,
+            "emphasis ({}) must be >= word_pop ({})",
+            e.font_size,
+            word_pop.font_size
+        );
         assert!(preset_names().contains(&"emphasis"));
     }
 
