@@ -333,6 +333,64 @@ fn wrap_plain_subtitle_text(input: &str) -> String {
     }
 }
 
+/// Which line of a cue this Dialogue is, for placing entrance/exit tags.
+// `First`, `Middle`, and `Last` are reserved for multi-line split-cue
+// rendering (future task); only `Sole` is wired today.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq)]
+enum CueLineRole {
+    Sole,
+    First,
+    Middle,
+    Last,
+}
+
+/// Leading ASS override block for entrance/exit motion on one Dialogue line.
+/// `dur_cs` = the line's [start,end] span in centiseconds. Entrance on
+/// Sole|First; exit on Sole|Last. Scale + fade only (alignment-compatible);
+/// slide/float handled elsewhere. Returns "" when nothing applies.
+fn motion_override(
+    motion: crate::timeline::CaptionRenderMotion,
+    role: CueLineRole,
+    dur_cs: i64,
+) -> String {
+    use crate::timeline::{CaptionRenderEntrance as E, CaptionRenderExit as X};
+    let dur_ms = (dur_cs * 10).max(1);
+    let mut init = String::new();
+    let mut anim = String::new();
+    let mut fad_in: i64 = 0;
+    let mut fad_out: i64 = 0;
+    let entrance_here = matches!(role, CueLineRole::Sole | CueLineRole::First);
+    let exit_here = matches!(role, CueLineRole::Sole | CueLineRole::Last);
+    if entrance_here {
+        match motion.entrance {
+            E::PopIn => {
+                init.push_str("\\fscx80\\fscy80");
+                anim.push_str("\\t(0,120,\\fscx103\\fscy103)\\t(120,170,\\fscx100\\fscy100)");
+            }
+            E::FadeIn => fad_in = 150,
+            E::SlideUp | E::None => {}
+        }
+    }
+    if exit_here {
+        match motion.exit {
+            X::PopOut => {
+                let s = (dur_ms - 150).max(0);
+                anim.push_str(&format!("\\t({s},{dur_ms},\\fscx80\\fscy80)"));
+            }
+            X::FadeOut => fad_out = 150,
+            X::SlideDown | X::None => {}
+        }
+    }
+    if fad_in > 0 || fad_out > 0 {
+        anim.push_str(&format!("\\fad({fad_in},{fad_out})"));
+    }
+    if init.is_empty() && anim.is_empty() {
+        return String::new();
+    }
+    format!("{{{init}{anim}}}")
+}
+
 /// Synthesize one Dialogue line per "step" (cumulative word
 /// prefix). Each line spans the full title window so the karaoke
 /// `\k` durations inside paint reveal in sync with the transcript.
@@ -341,6 +399,9 @@ fn wrap_plain_subtitle_text(input: &str) -> String {
 /// within a single Dialogue, painting words in PrimaryColour as
 /// their `\k` duration elapses. That's the karaoke reveal we want.
 fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
+    // CaptionRenderMotion is Copy — extract once for use in all branches.
+    let motion = title.caption_style.as_ref().map(|s| s.motion);
+
     let words: Vec<&crate::timeline::CaptionWordTiming> = title
         .word_timings
         .iter()
@@ -414,8 +475,12 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         let wrapped = wrap_caption_text(&escape_ass_text(&cased), layout.max_chars_per_line);
         let start = format_ass_time(title.start_s.max(0.0));
         let end = format_ass_time(title.end_s.max(title.start_s));
+        let dur_cs = seconds_to_centiseconds((title.end_s - title.start_s).max(0.0)) as i64;
+        let mv = motion
+            .map(|m| motion_override(m, CueLineRole::Sole, dur_cs))
+            .unwrap_or_default();
         return vec![format!(
-            "Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}"
+            "Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{wrapped}"
         )];
     }
 
@@ -455,7 +520,11 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         visible_line_chars += raw_glyphs.chars().count();
     }
 
-    vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}",)]
+    let dur_cs = seconds_to_centiseconds((title.end_s - title.start_s).max(0.0)) as i64;
+    let mv = motion
+        .map(|m| motion_override(m, CueLineRole::Sole, dur_cs))
+        .unwrap_or_default();
+    vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{text}",)]
 }
 
 /// ASS uses `H:MM:SS.cc` (centiseconds). Source seconds are master
@@ -1060,6 +1129,58 @@ mod tests {
         let landscape =
             build_ass_document_with_canvas(&t, RenderCanvas { width: 1920, height: 1080 });
         assert!(landscape.contains("PlayResX: 1920") && landscape.contains("PlayResY: 1080"));
+    }
+
+    fn motion_style(
+        entrance: crate::timeline::CaptionRenderEntrance,
+        exit: crate::timeline::CaptionRenderExit,
+    ) -> crate::timeline::CaptionRenderStyle {
+        crate::timeline::CaptionRenderStyle {
+            font_size: 44,
+            weight: crate::timeline::CaptionRenderWeight::Normal,
+            casing: crate::timeline::CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: crate::timeline::CaptionRenderReveal::WholeCue,
+            background: crate::timeline::CaptionRenderBackground::None,
+            motion: crate::timeline::CaptionRenderMotion {
+                entrance,
+                exit,
+                active_word: crate::timeline::CaptionRenderActiveWord::None,
+                continuous: crate::timeline::CaptionRenderContinuous::None,
+            },
+        }
+    }
+
+    #[test]
+    fn pop_in_entrance_emits_scale_animation_on_whole_cue() {
+        use crate::timeline::*;
+        let mut t = caption_title("hello", vec![]);
+        t.caption_style = Some(motion_style(CaptionRenderEntrance::PopIn, CaptionRenderExit::None));
+        let doc = build_ass_document(&t, RenderCanvas::default());
+        let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
+        assert!(d.contains("\\fscx") && d.contains("\\t("), "PopIn must emit a scale \\t: {d}");
+    }
+
+    #[test]
+    fn fade_in_out_emits_fad_on_whole_cue() {
+        use crate::timeline::*;
+        let mut t = caption_title("hello", vec![]);
+        t.caption_style = Some(motion_style(CaptionRenderEntrance::FadeIn, CaptionRenderExit::FadeOut));
+        let d = build_ass_document(&t, RenderCanvas::default())
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .unwrap()
+            .to_string();
+        assert!(d.contains("\\fad("), "fade must emit \\fad: {d}");
+    }
+
+    #[test]
+    fn no_motion_whole_cue_is_unchanged() {
+        let t = caption_title("hello world", vec![]); // caption_style None
+        let doc = build_ass_document(&t, RenderCanvas::default());
+        let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
+        assert!(!d.contains("\\t(") && !d.contains("\\fad("), "no motion -> no animation tags: {d}");
     }
 
     #[test]
