@@ -4889,7 +4889,7 @@ impl<'a> FilterPlanner<'a> {
         if let Some(workdir) = self.ass_workdir.as_ref()
             && crate::ass::is_libass_eligible(title)
         {
-            match crate::ass::render_ass_file(title, workdir, index) {
+            match crate::ass::render_ass_file(title, workdir, index, self.canvas) {
                 Ok(path) => return crate::ass::ffmpeg_subtitles_filter_arg(&path),
                 Err(err) => {
                     tracing::warn!(
@@ -4905,7 +4905,7 @@ impl<'a> FilterPlanner<'a> {
 
     fn format_subtitle_track_filter(&self, track: &SubtitleTrack, index: usize) -> Option<String> {
         let workdir = self.ass_workdir.as_ref()?;
-        match crate::ass::render_subtitle_track_ass_file(track, workdir, index) {
+        match crate::ass::render_subtitle_track_ass_file(track, workdir, index, self.canvas) {
             Ok(path) => Some(crate::ass::ffmpeg_subtitles_filter_arg(&path)),
             Err(err) => {
                 tracing::warn!(
