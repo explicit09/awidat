@@ -24,6 +24,11 @@ pub struct CaptionRecommendation {
     pub visual_reason: String,
     pub safety_reason: String,
     pub confidence: f64,
+    /// The agent flagged this cue as a hook/keyword/payoff line that should
+    /// carry the poppier `emphasis` style. Defaults false; absent in legacy
+    /// payloads. Selection is the agent's editorial judgment, not an algorithm.
+    #[serde(default)]
+    pub is_emphasized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

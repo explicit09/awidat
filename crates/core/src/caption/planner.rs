@@ -50,6 +50,9 @@ pub fn plan(cues: &[Cue], strategy: &dyn CaptionPlanStrategy) -> Vec<CaptionReco
                 visual_reason: decision.visual_reason,
                 safety_reason: decision.safety_reason,
                 confidence: decision.confidence,
+                // The planner segments for readability; emphasis is the agent's
+                // editorial call, set downstream (e.g. plan_captions args).
+                is_emphasized: false,
             }
         })
         .collect()
