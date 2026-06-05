@@ -99,6 +99,7 @@ use crate::awidat_mcp::tools::manage_assets::{
     self, CreateBinArgs, MarkSelectArgs, MoveToBinArgs, RateAssetArgs, RenameAssetArgs,
     TagAssetArgs,
 };
+use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
@@ -1128,6 +1129,29 @@ applied separately with apply_edl only after inspection.",
         args: Parameters<PlanSceneAwareShortFormArgs>,
     ) -> Result<String, ErrorData> {
         plan_scene_aware_short_form::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_captions` — format-aware, read-only caption planner (long_form|accessibility).
+    #[tool(
+        description = "\
+Build a read-only, format-aware caption plan for one clip from its transcript \
+index. Supports long_form and accessibility formats only (use \
+plan_scene_aware_short_form for vertical short-form). Segments transcript words \
+to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
+applies a (format, mood) style, and returns caption recommendations, a \
+readability lint, and a reviewable Insert Caption EDL fragment. Pass the \
+optional `preset` field (values: clean_white | word_pop | boxed) to override \
+the (format, mood) style with a named preset. Note: accessibility uses \
+whole-cue reveal regardless of mood. Apply with apply_edl after inspection. \
+Never burns captions into the picture.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_captions(
+        &self,
+        args: Parameters<PlanCaptionsArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_captions::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 

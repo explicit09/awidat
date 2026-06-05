@@ -733,6 +733,7 @@ fn assistant_asset_record(
             imported_from: Some(path.to_string()),
             checksum,
             created_by: Some("awidat-assistant-catalog".to_string()),
+            upload_date: None,
         }),
         usage: Default::default(),
     }

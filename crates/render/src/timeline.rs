@@ -50,7 +50,105 @@ use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
 const TIMELINE_RENDER_WIDTH: u32 = 1920;
 const TIMELINE_RENDER_HEIGHT: u32 = 1080;
+
+/// Output canvas (width × height in px) every segment is conformed to
+/// before `concat`. Derived from the timeline's `output_format` aspect
+/// ratio — written into `Timeline.metadata.awidat.extra["output_format"]`
+/// by the `set_output_format` EDL op — so a 9:16 short-form project
+/// renders vertical instead of being letterboxed into the 16:9 default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderCanvas {
+    /// Canvas width in pixels.
+    pub width: u32,
+    /// Canvas height in pixels.
+    pub height: u32,
+}
+
+impl Default for RenderCanvas {
+    /// Legacy 16:9 1920×1080 master — the canvas used when a timeline
+    /// carries no `output_format`.
+    fn default() -> Self {
+        Self {
+            width: TIMELINE_RENDER_WIDTH,
+            height: TIMELINE_RENDER_HEIGHT,
+        }
+    }
+}
+
+impl RenderCanvas {
+    /// Map a `set_output_format` aspect-ratio label to a canvas. The
+    /// long edge is pinned to 1920 for 16:9 and to 1080-wide for the
+    /// vertical/square families so pixel density matches the legacy
+    /// 1080p master. Unknown labels fall back to the 16:9 default —
+    /// `apply_set_output_format` already rejects unsupported ratios, so
+    /// this only guards forward-compat metadata.
+    fn from_aspect_ratio(aspect_ratio: &str) -> Self {
+        match aspect_ratio.trim() {
+            "9:16" => Self {
+                width: 1080,
+                height: 1920,
+            },
+            "1:1" => Self {
+                width: 1080,
+                height: 1080,
+            },
+            "4:5" => Self {
+                width: 1080,
+                height: 1350,
+            },
+            // "16:9" and anything unrecognized.
+            _ => Self::default(),
+        }
+    }
+}
+
+/// Read the conform canvas from a timeline's `output_format` metadata,
+/// defaulting to the 16:9 1920×1080 master when absent or malformed.
+fn timeline_render_canvas(metadata: Option<&AwidatTimelineMetadata>) -> RenderCanvas {
+    metadata
+        .and_then(|m| m.extra.get("output_format"))
+        .and_then(|format| format.get("aspect_ratio"))
+        .and_then(|ratio| ratio.as_str())
+        .map(RenderCanvas::from_aspect_ratio)
+        .unwrap_or_default()
+}
+/// Output frame rate the timeline renderer conforms every segment to
+/// before `concat`. Matches [`timeline_frame_rate`]'s default fallback
+/// (30 fps) — the render argv builder does not pass an explicit `-r`,
+/// so the conform `fps=` filter is what actually pins the cadence.
+const TIMELINE_RENDER_FPS: u32 = 30;
 const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
+
+/// Append a resolution/SAR/fps/pixfmt conform chain to `video_label`,
+/// returning the new label. `concat` (demuxer and filter) requires every
+/// input to share width/height/SAR/fps/pixel-format; mixed-resolution or
+/// mixed-fps sources otherwise crash ffmpeg with "Error reinitializing
+/// filters! / Could not open encoder before EOF". The chain letterboxes
+/// (scale + centered pad) so aspect ratio is preserved, then pins SAR,
+/// fps, and pixel format to the timeline output canvas.
+///
+/// Idempotent: the emitted label is `[cf<i>]`; if `video_label` is
+/// already a conform output we return it untouched so callers that stage
+/// a segment twice never double-conform.
+fn append_segment_conform_filter(
+    filter: &mut String,
+    video_label: &str,
+    i: usize,
+    canvas: RenderCanvas,
+) -> String {
+    let conform_label = format!("[cf{i}]");
+    if video_label == conform_label {
+        return conform_label;
+    }
+    let w = canvas.width;
+    let h = canvas.height;
+    let fps = TIMELINE_RENDER_FPS;
+    filter.push_str(&format!(
+        "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
+pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p{conform_label};"
+    ));
+    conform_label
+}
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -1462,6 +1560,7 @@ type TimelineFullPlan = (
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
     Vec<RenderPlanLimitation>,
+    RenderCanvas,
 );
 
 /// Read-only timeline render preflight result.
@@ -1501,7 +1600,7 @@ pub struct TimelineRenderPreflight {
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -1517,7 +1616,8 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _, _, _, _) =
+        collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -1537,6 +1637,7 @@ pub fn analyze_timeline_render_preflight(
         audio_tracks,
         loudness_target,
         render_limitations,
+        canvas,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
@@ -1565,6 +1666,7 @@ pub fn analyze_timeline_render_preflight(
         loudness_target,
         render_limitations: &render_limitations,
         master_loudnorm_enabled,
+        canvas,
     };
     let stream_copy_eligibility = analyze_timeline_stream_copy_eligibility(stream_copy_input);
     let (backend, metadata) = if stream_copy_eligibility.blockers.is_empty()
@@ -1923,6 +2025,7 @@ pub fn collect_timeline_full_plan(
         .awidat
         .as_ref()
         .and_then(read_timeline_loudness_target);
+    let canvas = timeline_render_canvas(timeline.metadata.awidat.as_ref());
     if audio_tracks.is_empty() {
         audio_tracks = synthesize_audio_tracks(&segs)?;
     }
@@ -1944,6 +2047,7 @@ pub fn collect_timeline_full_plan(
         audio_tracks,
         loudness_target,
         render_limitations,
+        canvas,
     ))
 }
 
@@ -1981,6 +2085,9 @@ fn collect_motion_scene_title_plans(
                         rich_segments: Vec::new(),
                         word_timings: Vec::new(),
                         animations: Vec::new(),
+                        font_path: layer_string_param(layer, "font_path"),
+                        font_family: layer_string_param(layer, "font_family"),
+                        caption_style: None,
                     });
                 }
                 MotionSceneLayerKind::Shape
@@ -3577,6 +3684,19 @@ fn parse_title_plan(
         .get("word_timings")
         .and_then(|value| serde_json::from_value::<Vec<CaptionWordTiming>>(value.clone()).ok())
         .unwrap_or_default();
+    let caption_style = m
+        .get("caption_style")
+        .and_then(|value| serde_json::from_value::<CaptionRenderStyle>(value.clone()).ok());
+    let font_path = m
+        .get("font_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let font_family = m
+        .get("font_family")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -3597,6 +3717,9 @@ fn parse_title_plan(
         rich_segments,
         word_timings,
         animations,
+        font_path,
+        font_family,
+        caption_style,
     };
     Some((plan, animation_selection))
 }
@@ -4262,6 +4385,17 @@ pub struct TitlePlan {
     pub word_timings: Vec<CaptionWordTiming>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+    /// Optional absolute path to a custom font file. When set, the
+    /// drawtext filter uses `fontfile=<path>` directly.
+    pub font_path: Option<String>,
+    /// Optional brand font family name. Used to resolve a font file
+    /// when `font_path` is not set; otherwise the renderer falls back
+    /// to its system-font probe.
+    pub font_family: Option<String>,
+    /// Optional caption style parsed from the EDL `style_json` block.
+    /// When `Some`, the renderer can use these values to override the
+    /// default drawtext / ASS styling for caption overlays.
+    pub caption_style: Option<CaptionRenderStyle>,
 }
 
 /// One transcript word timing attached to a caption title.
@@ -4273,6 +4407,53 @@ pub struct CaptionWordTiming {
     pub start_s: f64,
     /// Word end in master-timeline seconds.
     pub end_s: f64,
+}
+
+/// Font weight for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderWeight {
+    Normal,
+    Bold,
+}
+
+/// Text casing for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderCasing {
+    AsIs,
+    Upper,
+}
+
+/// Background style for caption render style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaptionRenderBackground {
+    None,
+    Box { color: String, opacity: u8 },
+}
+
+/// Word reveal mode for caption render style.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderReveal {
+    WholeCue,
+    WordByWord,
+    ActiveWordPop,
+}
+
+/// Parsed caption styling carried through from the EDL `style_json` block.
+/// Field names mirror `CaptionStyleSpec` in `awidat-core` so the same JSON
+/// deserializes on both sides without a conversion layer.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CaptionRenderStyle {
+    pub font_size: u32,
+    pub weight: CaptionRenderWeight,
+    pub casing: CaptionRenderCasing,
+    pub primary_color: String,
+    pub highlight_color: Option<String>,
+    pub reveal: CaptionRenderReveal,
+    pub background: CaptionRenderBackground,
 }
 
 /// One styled inline run inside a rich title.
@@ -4476,6 +4657,11 @@ pub struct FilterPlanner<'a> {
     /// the drawtext fallback. When `None`, every title goes through
     /// drawtext — that's the legacy path callers default to.
     ass_workdir: Option<PathBuf>,
+    /// Output canvas every segment is conformed (scaled + padded) to
+    /// before `concat`. Defaults to the 16:9 1920×1080 master; the
+    /// timeline-render spec builder overrides it from the project's
+    /// `output_format` so 9:16 / 1:1 / 4:5 projects render natively.
+    canvas: RenderCanvas,
 }
 
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
@@ -4542,6 +4728,7 @@ impl<'a> FilterPlanner<'a> {
             editable_subtitle_tracks: &[],
             broadcast_overlay: None,
             ass_workdir: None,
+            canvas: RenderCanvas::default(),
         }
     }
 
@@ -4560,6 +4747,7 @@ impl<'a> FilterPlanner<'a> {
             editable_subtitle_tracks: &[],
             broadcast_overlay,
             ass_workdir: None,
+            canvas: RenderCanvas::default(),
         }
     }
 
@@ -4578,6 +4766,15 @@ impl<'a> FilterPlanner<'a> {
     /// timings, or non-caption role) keep the drawtext path.
     pub(crate) fn with_ass_workdir(mut self, workdir: PathBuf) -> Self {
         self.ass_workdir = Some(workdir);
+        self
+    }
+
+    /// Override the output conform canvas (default 16:9 1920×1080).
+    /// The timeline-render spec builder derives this from the project's
+    /// `output_format` so vertical / square deliveries conform to the
+    /// requested frame instead of the landscape default.
+    pub(crate) fn with_canvas(mut self, canvas: RenderCanvas) -> Self {
+        self.canvas = canvas;
         self
     }
 
@@ -4693,7 +4890,7 @@ impl<'a> FilterPlanner<'a> {
         if let Some(workdir) = self.ass_workdir.as_ref()
             && crate::ass::is_libass_eligible(title)
         {
-            match crate::ass::render_ass_file(title, workdir, index) {
+            match crate::ass::render_ass_file(title, workdir, index, self.canvas) {
                 Ok(path) => return crate::ass::ffmpeg_subtitles_filter_arg(&path),
                 Err(err) => {
                     tracing::warn!(
@@ -4709,7 +4906,7 @@ impl<'a> FilterPlanner<'a> {
 
     fn format_subtitle_track_filter(&self, track: &SubtitleTrack, index: usize) -> Option<String> {
         let workdir = self.ass_workdir.as_ref()?;
-        match crate::ass::render_subtitle_track_ass_file(track, workdir, index) {
+        match crate::ass::render_subtitle_track_ass_file(track, workdir, index, self.canvas) {
             Ok(path) => Some(crate::ass::ffmpeg_subtitles_filter_arg(&path)),
             Err(err) => {
                 tracing::warn!(
@@ -4759,7 +4956,7 @@ impl<'a> FilterPlanner<'a> {
         // 15.4) prepend their filter chain before the concat. Each
         // call returns the (video, audio) labels to feed into concat.
         let inputs: Vec<(String, String)> = (0..n)
-            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i], self.canvas))
             .collect();
         let inputs: Vec<(String, String)> = inputs
             .into_iter()
@@ -4800,7 +4997,7 @@ impl<'a> FilterPlanner<'a> {
         // resulting [av<i>] label in place of [i:a:0]. Speed runs
         // through a parallel setpts pass on video + atempo on audio.
         let inputs: Vec<(String, String)> = (0..n)
-            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i], self.canvas))
             .collect();
         let inputs: Vec<(String, String)> = inputs
             .into_iter()
@@ -5122,8 +5319,16 @@ fn append_video_overlays(
                 overlay_video_label = opacity_filter.1,
             )
         };
+        // Force RGBA after scaling so transparent overlays (e.g. VP9
+        // `yuva420p` WebM or ProRes 4444) keep their alpha channel into
+        // the `overlay=` compositor. Without an explicit alpha format,
+        // ffmpeg's filter negotiation can let `scale` emit an opaque
+        // format (e.g. `yuv420p`), which makes the overlay render as a
+        // solid rectangle instead of alpha-compositing. The transform
+        // paths below (rotation/mask/matte/opacity) re-assert `format=rgba`
+        // on their own inputs, so this is idempotent for them.
         filter.push_str(&format!(
-            "{pts_label}scale={scale_expr}{scaled_label};\
+            "{pts_label}scale={scale_expr},format=rgba{scaled_label};\
              {rotation_filter}\
              {corner_pin_filter}\
              {mask_filter}\
@@ -6162,7 +6367,12 @@ fn stage_overlay_video_input(
 ///
 /// Returns the `(video_label, audio_label)` pair to feed into the
 /// next filter graph node.
-fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) -> (String, String) {
+fn stage_segment_inputs(
+    filter: &mut String,
+    i: usize,
+    seg: &TimelineSegment,
+    canvas: RenderCanvas,
+) -> (String, String) {
     let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
 
@@ -6344,6 +6554,11 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         filter.push_str(&format!("{audio_label}volume={v}{av};"));
         audio_label = av;
     }
+    // Conform to the output canvas LAST so the label fed into concat
+    // (or xfade) matches every other segment's width/height/SAR/fps/
+    // pixfmt. Without this, mixing e.g. a 1280x720 source with 1080p
+    // sources crashes ffmpeg's concat.
+    video_label = append_segment_conform_filter(filter, &video_label, i, canvas);
     (video_label, audio_label)
 }
 
@@ -7566,7 +7781,7 @@ fn format_drawtext_filter_with_text(
     };
     let resting_x = "(w-text_w)/2".to_string();
     let weight_attr = title_weight_drawtext_attr(t.font_weight);
-    let fontfile = pick_fontfile_attr();
+    let fontfile = title_fontfile_attr(t);
     let anim = apply_title_animation(t, &resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
         format!(
@@ -7699,7 +7914,7 @@ fn format_drawtext_filter_with_position(
         TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
     };
     let weight_attr = title_weight_drawtext_attr(t.font_weight);
-    let fontfile = pick_fontfile_attr();
+    let fontfile = title_fontfile_attr(t);
     let anim = apply_title_animation(t, resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
         format!(
@@ -9164,7 +9379,15 @@ fn drawtext_escape(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\\' => "\\\\".to_string(),
-            '\'' => "\\'".to_string(),
+            // Text is emitted as `text='<escaped>'`. ffmpeg's filtergraph
+            // quoting cannot hold a literal `'` inside single quotes — the
+            // first `'` always closes the quote, even when backslash-prefixed
+            // (`\'` inside quotes is NOT an escape). A bare `\'` therefore
+            // desyncs every downstream quote (including the `enable='...'`),
+            // folding the chain's output label into the last enable
+            // expression and aborting the render. The only correct embedding
+            // is close-quote / escaped-literal-quote / reopen-quote.
+            '\'' => "'\\''".to_string(),
             ':' => "\\:".to_string(),
             ',' => "\\,".to_string(),
             '\n' => "\\n".to_string(),
@@ -9176,6 +9399,116 @@ fn drawtext_escape(s: &str) -> String {
 /// Best-effort condensed font lookup for broadcast labels. Returns
 /// either an empty string or a `:fontfile=<path>` segment ready to
 /// splice into the filter args.
+/// Resolve the `:fontfile=<path>` attribute for a title overlay.
+///
+/// Precedence:
+/// 1. An explicit `font_path` (used verbatim as `fontfile=`).
+/// 2. A `font_family` resolved to a file via [`resolve_font_family`].
+/// 3. The existing system-font probe ([`pick_fontfile_attr`]).
+///
+/// When neither custom field is set this returns exactly what
+/// `pick_fontfile_attr()` did before, keeping legacy titles byte-for-byte
+/// identical.
+fn title_fontfile_attr(t: &TitlePlan) -> String {
+    // SECURITY: `font_path`/`font_family` originate from EDL input (title ops
+    // and motion-scene layer params). Splicing them raw into `fontfile=` would
+    // allow a crafted path to inject additional drawtext options or break out
+    // of the filter graph. We therefore escape every honored path for the
+    // filtergraph and reject any path with unescapable metacharacters, falling
+    // back to the safe system-font probe instead. (A missing file is harmless:
+    // ffmpeg simply fails to load it — no injection is possible once escaped.)
+    if let Some(path) = t.font_path.as_deref().filter(|s| !s.trim().is_empty())
+        && let Some(esc) = escape_drawtext_path(path)
+    {
+        return format!(":fontfile={esc}");
+    }
+    if let Some(family) = t.font_family.as_deref().filter(|s| !s.trim().is_empty())
+        && let Some(path) = resolve_font_family(family)
+        && let Some(esc) = escape_drawtext_path(&path)
+    {
+        return format!(":fontfile={esc}");
+    }
+    pick_fontfile_attr()
+}
+
+/// Escape a filesystem path for safe inclusion as an ffmpeg drawtext
+/// `fontfile=` value inside a `filter_complex` graph. Returns `None` for paths
+/// containing characters that cannot be safely escaped within a filter graph
+/// (`,` `;` `[` `]` and newlines separate filters/options, so a path bearing
+/// them could inject arbitrary filters — see the security review for #3).
+fn escape_drawtext_path(p: &str) -> Option<String> {
+    if p.chars()
+        .any(|c| matches!(c, '\n' | '\r' | ',' | ';' | '[' | ']'))
+    {
+        return None;
+    }
+    Some(
+        p.replace('\\', "\\\\")
+            .replace(':', "\\:")
+            .replace('\'', "\\'"),
+    )
+}
+
+#[test]
+fn escape_drawtext_path_rejects_filter_metacharacters() {
+    // Injection attempt: break out of fontfile and add a filter.
+    assert_eq!(escape_drawtext_path("/f.ttf,drawbox=c=red"), None);
+    assert_eq!(escape_drawtext_path("/f.ttf[x]"), None);
+    assert_eq!(escape_drawtext_path("/f.ttf\nx"), None);
+    // Escapable special chars are escaped, not rejected.
+    assert_eq!(
+        escape_drawtext_path("/a b/Br'and:x.ttf").as_deref(),
+        Some("/a b/Br\\'and\\:x.ttf")
+    );
+    // Plain safe path is unchanged.
+    assert_eq!(
+        escape_drawtext_path("/fonts/Brand.ttf").as_deref(),
+        Some("/fonts/Brand.ttf")
+    );
+}
+
+/// Best-effort resolution of a font family name to a file on disk.
+/// Probes common system font directories for a file whose stem matches
+/// the family (case-insensitive, ignoring spaces). Returns `None` when
+/// nothing matches so the caller can fall back to the system probe.
+fn resolve_font_family(family: &str) -> Option<String> {
+    const FONT_DIRS: &[&str] = &[
+        "/System/Library/Fonts",
+        "/System/Library/Fonts/Supplemental",
+        "/Library/Fonts",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/TTF",
+    ];
+    const FONT_EXTS: &[&str] = &["ttf", "otf", "ttc"];
+    let normalize = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let wanted = normalize(family).to_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    for dir in FONT_DIRS {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !FONT_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if normalize(stem).to_lowercase() == wanted {
+                return path.to_str().map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
 fn pick_fontfile_attr() -> String {
     const CANDIDATES: &[&str] = &[
         "/System/Library/Fonts/Avenir Next Condensed.ttc",
@@ -9541,6 +9874,7 @@ pub fn build_timeline_argv_full_with_annotations(
         loudness_target,
         output_path,
         None,
+        RenderCanvas::default(),
     )
 }
 
@@ -9564,6 +9898,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
     ass_workdir: Option<&Path>,
+    canvas: RenderCanvas,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
@@ -9602,7 +9937,9 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
             argv.extend(["-i".into(), mask_source.to_string_lossy().into_owned()]);
         }
     }
-    let base = FilterPlanner::new(&segs, transitions).plan();
+    let base = FilterPlanner::new(&segs, transitions)
+        .with_canvas(canvas)
+        .plan();
     let media = append_video_overlays(base, &video_overlays, segs.len());
     let images = append_motion_images(media, motion_images, first_motion_image_input);
     let annotated = append_annotations(images, annotations);
@@ -9621,6 +9958,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         titles,
         ffmpeg_broadcast_overlay,
     )
+    .with_canvas(canvas)
     .with_editable_subtitle_tracks(editable_subtitle_tracks);
     if let Some(dir) = ass_workdir {
         planner = planner.with_ass_workdir(dir.to_path_buf());
@@ -9775,6 +10113,7 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         audio_tracks,
         output_path,
         None,
+        RenderCanvas::default(),
     )
 }
 
@@ -9798,6 +10137,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     audio_tracks: &[AudioTrackPlan],
     output_path: &Path,
     ass_workdir: Option<&Path>,
+    canvas: RenderCanvas,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
@@ -9856,7 +10196,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         .iter()
         .map(audio_track_duration)
         .fold(0.1_f64, f64::max);
-    let mut filter = plan_video_only_filter(&segs, transitions, fallback_video_duration);
+    let mut filter = plan_video_only_filter(&segs, transitions, fallback_video_duration, canvas);
     let base_video_label = "[vonly]";
     let media = append_video_overlays(
         FilterPlan {
@@ -9887,6 +10227,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
             titles,
             ffmpeg_broadcast_overlay,
         )
+        .with_canvas(canvas)
         .with_editable_subtitle_tracks(editable_subtitle_tracks);
         if let Some(dir) = ass_workdir {
             planner = planner.with_ass_workdir(dir.to_path_buf());
@@ -9945,16 +10286,18 @@ fn plan_video_only_filter(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     fallback_duration_s: f64,
+    canvas: RenderCanvas,
 ) -> String {
     let mut filter = String::new();
     if segs.is_empty() {
         filter.push_str(&format!(
-            "color=c=black:s=1280x720:r=30:d={fallback_duration_s}[vonly];"
+            "color=c=black:s={}x{}:r=30:d={fallback_duration_s}[vonly];",
+            canvas.width, canvas.height
         ));
         return filter;
     }
     let video_inputs: Vec<String> = (0..segs.len())
-        .map(|i| stage_segment_video_input(&mut filter, i, &segs[i]))
+        .map(|i| stage_segment_video_input(&mut filter, i, &segs[i], canvas))
         .collect();
     if transitions.is_empty() {
         for v in &video_inputs {
@@ -10023,7 +10366,12 @@ fn audio_track_duration(track: &AudioTrackPlan) -> f64 {
         .sum()
 }
 
-fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegment) -> String {
+fn stage_segment_video_input(
+    filter: &mut String,
+    i: usize,
+    seg: &TimelineSegment,
+    canvas: RenderCanvas,
+) -> String {
     let mut video_label = format!("[{i}:v:0]");
     if let Some(color) = seg.color_correction.as_ref()
         && let Some(chain) = color_filter_chain(color)
@@ -10106,7 +10454,10 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
     }
-    video_label
+    // Conform to the output canvas before concat — see
+    // `append_segment_conform_filter`. The video-only path joins these
+    // labels with the same `concat` requirement as the A/V path.
+    append_segment_conform_filter(filter, &video_label, i, canvas)
 }
 
 fn plan_audio_mix_filter(
@@ -10332,7 +10683,7 @@ fn build_timeline_render_spec_inner(
     section: Option<TimelineSectionRange>,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
     let (
-        segs,
+        mut segs,
         transitions,
         video_overlays,
         motion_images,
@@ -10343,9 +10694,26 @@ fn build_timeline_render_spec_inner(
         audio_tracks,
         loudness_target,
         render_limitations,
+        canvas,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
+    }
+    // Opt-in per-clip dialogue leveling: measure each dialogue clip's
+    // integrated loudness and fill its per-clip `loudnorm_i` target so
+    // clips are evened BEFORE any master pass. Off by default (gated on
+    // the AWIDAT_LEVEL_DIALOGUE env var) — default render behavior is
+    // unchanged. See `crate::dialogue_leveling`.
+    if crate::dialogue_leveling::dialogue_leveling_enabled() {
+        let leveled = crate::dialogue_leveling::level_dialogue_clips(
+            &mut segs,
+            crate::dialogue_leveling::DEFAULT_DIALOGUE_TARGET_LUFS,
+            crate::dialogue_leveling::DEFAULT_DIALOGUE_TARGET_TP,
+        );
+        tracing::info!(
+            leveled,
+            "dialogue leveling: filled per-clip loudnorm targets"
+        );
     }
     // Total duration is the sum of each segment's visible effective
     // duration. Centered transitions extend source handles before
@@ -10398,6 +10766,7 @@ fn build_timeline_render_spec_inner(
             loudness_target,
             render_limitations: &render_limitations,
             master_loudnorm_enabled,
+            canvas,
         });
     if stream_copy_eligibility.blockers.is_empty()
         && let Some(segment) = stream_copy_eligibility.segment
@@ -10466,6 +10835,7 @@ fn build_timeline_render_spec_inner(
             loudness_target,
             &output_path,
             ass_workdir.as_deref(),
+            canvas,
         )
     } else {
         build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
@@ -10482,6 +10852,7 @@ fn build_timeline_render_spec_inner(
             &audio_tracks,
             &output_path,
             ass_workdir.as_deref(),
+            canvas,
         )
     };
     let backend_evidence = crate::select_timeline_render_backend_evidence(
@@ -10548,6 +10919,7 @@ struct TimelineStreamCopyFastPathInput<'a> {
     loudness_target: Option<LoudnessTargetPlan>,
     render_limitations: &'a [RenderPlanLimitation],
     master_loudnorm_enabled: bool,
+    canvas: RenderCanvas,
 }
 
 struct TimelineStreamCopyEligibility<'a> {
@@ -10597,6 +10969,12 @@ fn analyze_timeline_stream_copy_eligibility(
     }
     if input.master_loudnorm_enabled {
         blockers.push("master_loudnorm");
+    }
+    // A non-default output-format canvas (e.g. a 9:16 project) requires the
+    // conform/scale path; a raw `-c copy` remux would emit the source's
+    // original resolution and silently ignore the requested aspect ratio.
+    if input.canvas != RenderCanvas::default() {
+        blockers.push("output_format_canvas");
     }
     let segment = input.segments.first();
     if let Some(segment) = segment {
@@ -12509,7 +12887,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, _, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -12751,7 +13129,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, _, _, audio_tracks, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -12785,7 +13163,7 @@ mod tests {
             },
         );
 
-        let (segments, _, _, _, _, _, _, _, _, _, limitations) =
+        let (segments, _, _, _, _, _, _, _, _, _, limitations, _) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -13257,10 +13635,128 @@ mod tests {
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
             plan.filter_complex,
-            "[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];[1:a:0]afade=t=in:st=0:d=0.03[bfade1];[0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa]",
+            "[0:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf0];[1:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf1];[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];[1:a:0]afade=t=in:st=0:d=0.03[bfade1];[cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1[outv][outa]",
         );
         assert_eq!(plan.video_out_label, "[outv]");
         assert_eq!(plan.audio_out_label, "[outa]");
+    }
+
+    #[test]
+    fn mixed_resolution_segments_are_conformed_before_concat() {
+        // Two segments stand in for differently-sized sources (e.g.
+        // 1280x720 vs 1920x1080). The planner cannot know the source
+        // dims at graph-build time, so it must unconditionally conform
+        // every segment to the output canvas before concat — otherwise
+        // ffmpeg crashes with "Error reinitializing filters!".
+        let segs = vec![
+            seg("/tmp/720p.mp4", 0.0, 2.0),
+            seg("/tmp/1080p.mp4", 0.0, 2.0),
+        ];
+        let plan = FilterPlanner::new(&segs, &[]).plan();
+        let f = &plan.filter_complex;
+        // Both segments get a scale + centered pad + setsar conform.
+        assert_eq!(
+            f.matches("scale=1920:1080:force_original_aspect_ratio=decrease")
+                .count(),
+            2,
+            "both segments must be scaled to the canvas: {f}",
+        );
+        assert_eq!(
+            f.matches("pad=1920:1080:(ow-iw)/2:(oh-ih)/2").count(),
+            2,
+            "both segments must be letterbox-padded: {f}",
+        );
+        assert_eq!(
+            f.matches("setsar=1").count(),
+            2,
+            "both segments must pin SAR: {f}"
+        );
+        // Conform outputs feed concat — raw [n:v:0] labels must not.
+        assert!(f.contains("[cf0]"), "segment 0 conform label missing: {f}");
+        assert!(f.contains("[cf1]"), "segment 1 conform label missing: {f}");
+        assert!(
+            f.contains("[cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1"),
+            "concat must consume conform labels: {f}",
+        );
+    }
+
+    #[test]
+    fn render_canvas_maps_output_format_aspect_ratios() {
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("9:16"),
+            RenderCanvas {
+                width: 1080,
+                height: 1920
+            }
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("1:1"),
+            RenderCanvas {
+                width: 1080,
+                height: 1080
+            }
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("4:5"),
+            RenderCanvas {
+                width: 1080,
+                height: 1350
+            }
+        );
+        // 16:9 and unknown labels fall back to the landscape default.
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("16:9"),
+            RenderCanvas::default()
+        );
+        assert_eq!(
+            RenderCanvas::from_aspect_ratio("cinemascope"),
+            RenderCanvas::default()
+        );
+        assert_eq!(
+            RenderCanvas::default(),
+            RenderCanvas {
+                width: 1920,
+                height: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_render_canvas_reads_output_format_metadata() {
+        let mut meta = AwidatTimelineMetadata::default();
+        meta.extra.insert(
+            "output_format".into(),
+            serde_json::json!({ "aspect_ratio": "9:16" }),
+        );
+        assert_eq!(
+            timeline_render_canvas(Some(&meta)),
+            RenderCanvas {
+                width: 1080,
+                height: 1920
+            }
+        );
+        // Absent metadata -> landscape default.
+        assert_eq!(timeline_render_canvas(None), RenderCanvas::default());
+        assert_eq!(
+            timeline_render_canvas(Some(&AwidatTimelineMetadata::default())),
+            RenderCanvas::default()
+        );
+    }
+
+    #[test]
+    fn append_segment_conform_filter_is_idempotent() {
+        let mut filter = String::new();
+        let canvas = RenderCanvas::default();
+        let first = append_segment_conform_filter(&mut filter, "[0:v:0]", 0, canvas);
+        assert_eq!(first, "[cf0]");
+        let before = filter.clone();
+        // Re-conforming an already-conformed label is a no-op.
+        let second = append_segment_conform_filter(&mut filter, &first, 0, canvas);
+        assert_eq!(second, "[cf0]");
+        assert_eq!(
+            filter, before,
+            "double-conform must not emit a second chain"
+        );
     }
 
     #[test]
@@ -13426,7 +13922,7 @@ mod tests {
         );
         // Seg 1 has no volume effect, but fades in after the hard cut.
         assert!(
-            plan.filter_complex.contains("[1:v:0][bfade1]"),
+            plan.filter_complex.contains("[cf1][bfade1]"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -13827,8 +14323,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex
-                .contains("[0:v:0][bfade0][1:v:0][bfade1]"),
+            plan.filter_complex.contains("[cf0][bfade0][cf1][bfade1]"),
             "concat should consume smoothed audio labels: {}",
             plan.filter_complex,
         );
@@ -13978,7 +14473,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-LUT/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -14629,7 +15124,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-reframe/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -14658,7 +15153,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]concat"),
+            plan.filter_complex.contains("[cf0][sa0]concat"),
             "post-shake/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
@@ -14750,6 +15245,9 @@ mod tests {
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -14801,6 +15299,9 @@ mod tests {
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
         let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
@@ -14850,6 +15351,9 @@ mod tests {
                 rich_segments: Vec::new(),
                 word_timings: Vec::new(),
                 animations: Vec::new(),
+                font_path: None,
+                font_family: None,
+                caption_style: None,
             },
             TitlePlan {
                 text: "Two".into(),
@@ -14867,6 +15371,9 @@ mod tests {
                 rich_segments: Vec::new(),
                 word_timings: Vec::new(),
                 animations: Vec::new(),
+                font_path: None,
+                font_family: None,
+                caption_style: None,
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -14898,6 +15405,9 @@ mod tests {
 rich_segments: Vec::new(),
 word_timings: Vec::new(),
 animations: Vec::new(),
+font_path: None,
+font_family: None,
+caption_style: None,
         };
 
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -15001,6 +15511,9 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -15028,6 +15541,54 @@ animations: Vec::new(),
         assert!(
             filter.contains("[media_overlay_v0]drawtext="),
             "caption drawtext should consume the composited overlay output: {filter}"
+        );
+    }
+
+    #[test]
+    fn transparent_overlay_preserves_alpha_into_overlay_filter() {
+        // A transparent foreground motion-graphic asset (e.g. ProRes 4444
+        // `.mov` or VP9 `yuva420p` `.webm`) inserted with no opacity /
+        // rotation / matte must keep its alpha channel all the way into
+        // the `overlay=` compositor. Otherwise ffmpeg's format
+        // negotiation can let `scale` emit an opaque format (`yuv420p`),
+        // turning the overlay into a solid rectangle instead of an
+        // alpha-composited graphic.
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/generated/overlays/lower-third.mov", 0.0, 3.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        // The scaled overlay must be forced to RGBA before compositing.
+        assert!(
+            filter.contains("scale=w=1920:h=1080,format=rgba[media_overlay_scaled0]"),
+            "default overlay path must force format=rgba after scale to preserve alpha: {filter}"
+        );
+        // It must reach the alpha-compositing `overlay=` filter, not the
+        // opaque `blend=`/burn-in path.
+        assert!(
+            filter.contains("[media_overlay_scaled0]overlay=x=0:y=0"),
+            "scaled rgba overlay must feed the overlay= compositor: {filter}"
         );
     }
 
@@ -15112,6 +15673,9 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         }];
 
         let argv = build_timeline_argv_full_with_annotations(
@@ -15393,6 +15957,9 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         };
         let overlay = BroadcastOverlayPlan {
             config: BroadcastOverlayConfig {
@@ -16433,9 +17000,131 @@ animations: Vec::new(),
     fn drawtext_escape_handles_special_chars() {
         let s = drawtext_escape("text: with 'quote', backslash\\");
         assert!(s.contains("\\:"));
-        assert!(s.contains("\\'"));
         assert!(s.contains("\\\\"));
         assert!(s.contains("\\,"));
+    }
+
+    #[test]
+    fn drawtext_escape_breaks_out_of_single_quotes_for_apostrophe() {
+        // drawtext text is always emitted as `text='<escaped>'`. ffmpeg's
+        // filtergraph quoting cannot contain a literal `'` inside a
+        // single-quoted value — the first `'` always *closes* the quote,
+        // even if backslash-prefixed. So a bare `\'` desyncs every
+        // downstream quote (including the `enable='...'`), folding the
+        // chain's `[titled_v]` output label into the last enable
+        // expression. The only correct embedding is close-quote /
+        // escaped-literal-quote / reopen-quote: `'\''`.
+        assert_eq!(drawtext_escape("don't"), "don'\\''t");
+    }
+
+    /// Walk a filtergraph string the way ffmpeg does and assert its
+    /// single quotes are balanced. Outside a quote, `\` escapes the next
+    /// char (so `\'` is a literal quote that does not toggle); a bare `'`
+    /// opens a quote. Inside a quote, `\` is literal and the next `'`
+    /// closes the quote. A well-formed graph ends outside any quote.
+    fn assert_balanced_filtergraph_quotes(fc: &str) {
+        let bytes = fc.as_bytes();
+        let mut in_quote = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' if !in_quote => {
+                    i += 2; // skip the escaped char
+                    continue;
+                }
+                b'\'' => in_quote = !in_quote,
+                _ => {}
+            }
+            i += 1;
+        }
+        assert!(
+            !in_quote,
+            "filter_complex has unbalanced single quotes (a `'` in caption text \
+             desynced the quoting): {fc}"
+        );
+    }
+
+    #[test]
+    fn multi_caption_filter_complex_keeps_quotes_balanced_with_apostrophes() {
+        // Regression: a Titles track full of whole-cue captions lowered to
+        // drawtext. A caption containing an apostrophe used to break the
+        // `text='...'` quote, corrupting the `enable='between(...)'` of the
+        // last filter so `[titled_v]` folded into the expression and ffmpeg
+        // aborted. The emitted graph must stay quote-balanced regardless.
+        let s0 = seg("/tmp/a.mp4", 0.0, 60.0);
+        let captions: Vec<TitlePlan> = (0..12)
+            .map(|i| {
+                let mut t = title(TitleAnimation::None, TitlePosition::Bottom);
+                t.role = "caption".into();
+                t.start_s = i as f64 * 0.5;
+                t.end_s = t.start_s + 0.5;
+                // Mix in apostrophes — ubiquitous in real speech captions.
+                t.text = if i % 2 == 0 {
+                    format!("we're on cue {i}, don't blink")
+                } else {
+                    format!("plain cue {i}")
+                };
+                t
+            })
+            .collect();
+        let plan = FilterPlanner::with_titles(&[s0], &[], &captions).plan();
+        assert!(
+            plan.filter_complex.contains("[titled_v]"),
+            "expected a titled video output label: {}",
+            plan.filter_complex,
+        );
+        assert_balanced_filtergraph_quotes(&plan.filter_complex);
+    }
+
+    #[test]
+    fn ffmpeg_parses_multi_caption_drawtext_filter_complex() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let probe = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-filters"])
+            .output();
+        let has_drawtext = probe
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("drawtext"))
+            .unwrap_or(false);
+        if !has_drawtext {
+            eprintln!("ffmpeg lacks drawtext; skipping caption parse test");
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let synth = dir.path().join("clip.mp4");
+        write_synthetic_video(&ffmpeg, &synth, "blue");
+
+        let s0 = seg(&synth.to_string_lossy(), 0.0, 1.0);
+        let captions: Vec<TitlePlan> = (0..10)
+            .map(|i| {
+                let mut t = title(TitleAnimation::None, TitlePosition::Bottom);
+                t.role = "caption".into();
+                t.start_s = i as f64 * 0.08;
+                t.end_s = t.start_s + 0.08;
+                t.text = format!("cue {i}: we're sure it's fine, don't worry");
+                t
+            })
+            .collect();
+        let plan = FilterPlanner::with_titles(&[s0], &[], &captions).plan();
+
+        let output = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&synth)
+            .arg("-filter_complex")
+            .arg(&plan.filter_complex)
+            .args(["-map", &plan.video_out_label, "-map", &plan.audio_out_label])
+            .args(["-frames:v", "1", "-f", "null", "-"])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg rejected the multi-caption filter_complex\nfilter_complex:\n{}\nstderr:\n{}",
+            plan.filter_complex,
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     #[test]
@@ -16691,6 +17380,41 @@ animations: Vec::new(),
             rich_segments: Vec::new(),
             word_timings: Vec::new(),
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
+        }
+    }
+
+    #[test]
+    fn custom_font_path_drives_drawtext_fontfile() {
+        let mut t = title(TitleAnimation::None, TitlePosition::Center);
+        t.font_path = Some("/fonts/Brand.ttf".into());
+        let filter = format_drawtext_filter(&t, None);
+        assert!(
+            filter.contains("fontfile=/fonts/Brand.ttf"),
+            "expected custom fontfile in drawtext, got: {filter}"
+        );
+    }
+
+    #[test]
+    fn absent_font_falls_back_to_system_probe() {
+        // With no font_path / font_family the title path delegates to
+        // pick_fontfile_attr(), so the emitted attribute must match the
+        // probe exactly (unchanged legacy behavior).
+        let t = title(TitleAnimation::None, TitlePosition::Center);
+        let filter = format_drawtext_filter(&t, None);
+        let probe = pick_fontfile_attr();
+        if probe.is_empty() {
+            assert!(
+                !filter.contains("fontfile="),
+                "no system font found, so no fontfile attr expected: {filter}"
+            );
+        } else {
+            assert!(
+                filter.contains(probe.trim_start_matches(':')),
+                "expected probe fontfile {probe:?} in drawtext, got: {filter}"
+            );
         }
     }
 
@@ -17006,9 +17730,13 @@ animations: Vec::new(),
             cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4")
         );
         assert!(cmd.contains(
-            "-filter_complex [0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];\
+            "-filter_complex [0:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,\
+             pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf0];\
+             [1:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,\
+             pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[cf1];\
+             [0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];\
              [1:a:0]afade=t=in:st=0:d=0.03[bfade1];\
-             [0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa] \
+             [cf0][bfade0][cf1][bfade1]concat=n=2:v=1:a=1[outv][outa] \
              -map [outv] -map [outa]",
         ));
         assert!(cmd.ends_with("/tmp/out.mp4"));
@@ -17038,8 +17766,199 @@ animations: Vec::new(),
             "last segment should fade in at the hard cut: {filter}"
         );
         assert!(
-            filter.contains("[0:v:0][bfade0][1:v:0][bfade1][2:v:0][bfade2]concat=n=3:v=1:a=1"),
+            filter.contains("[cf0][bfade0][cf1][bfade1][cf2][bfade2]concat=n=3:v=1:a=1"),
             "concat should consume the anti-pop fade labels: {filter}"
+        );
+    }
+
+    // ── CaptionRenderStyle round-trip tests ───────────────────────────────────
+
+    #[test]
+    fn caption_render_style_deserializes_from_json() {
+        let json = serde_json::json!({
+            "font_size": 52,
+            "weight": "bold",
+            "casing": "upper",
+            "primary_color": "#FFFFFF",
+            "highlight_color": "#FFD700",
+            "reveal": "active_word_pop",
+            "background": { "kind": "none" }
+        });
+        let style: CaptionRenderStyle = serde_json::from_value(json).expect("should deserialize");
+        assert_eq!(style.font_size, 52);
+        assert_eq!(style.weight, CaptionRenderWeight::Bold);
+        assert_eq!(style.casing, CaptionRenderCasing::Upper);
+        assert_eq!(style.primary_color, "#FFFFFF");
+        assert_eq!(style.highlight_color, Some("#FFD700".to_string()));
+        assert_eq!(style.reveal, CaptionRenderReveal::ActiveWordPop);
+        assert!(matches!(style.background, CaptionRenderBackground::None));
+    }
+
+    #[test]
+    fn title_planner_authors_ass_at_canvas_resolution() {
+        // Regression test: the two `FilterPlanner::with_titles_and_broadcast_overlay`
+        // construction sites inside `build_timeline_argv_full_with_annotations_and_ass`
+        // and `build_timeline_argv_with_audio_tracks_and_annotations_and_ass` must
+        // call `.with_canvas(canvas)` so vertical (9:16) renders author captions at
+        // 1080x1920, not the default 1920x1080.
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A caption with role=="caption" is libass-eligible: the planner writes a
+        // .ass file (and uses it in the filter graph) when ass_workdir is set.
+        let caption = TitlePlan {
+            text: "Vertical caption".into(),
+            start_s: 0.5,
+            end_s: 2.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            phases: None,
+            reveal: TextReveal::None,
+            role: "caption".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            word_timings: Vec::new(),
+            animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
+        };
+
+        let vertical_canvas = RenderCanvas {
+            width: 1080,
+            height: 1920,
+        };
+
+        // Exercise the first production call site:
+        // build_timeline_argv_full_with_annotations_and_ass (non-audio-tracks path).
+        let s = seg("/tmp/clip.mp4", 0.0, 3.0);
+        let _argv = build_timeline_argv_full_with_annotations_and_ass(
+            std::slice::from_ref(&s),
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&caption),
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+            Some(tmp.path()),
+            vertical_canvas,
+        );
+
+        // The planner must have written at least one .ass file.
+        let ass_files: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
+            .collect();
+        assert!(
+            !ass_files.is_empty(),
+            "expected at least one .ass file written into the workdir"
+        );
+
+        // Every written .ass must declare PlayResX: 1080 (vertical width), not
+        // the default 1920 that results from omitting .with_canvas(canvas).
+        for entry in &ass_files {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(
+                content.contains("PlayResX: 1080"),
+                "ASS file {:?} should have PlayResX: 1080 for a 1080x1920 canvas, got:\n{content}",
+                entry.file_name()
+            );
+            assert!(
+                content.contains("PlayResY: 1920"),
+                "ASS file {:?} should have PlayResY: 1920 for a 1080x1920 canvas, got:\n{content}",
+                entry.file_name()
+            );
+        }
+
+        // Also exercise the second production call site (explicit-audio path).
+        let tmp2 = tempfile::tempdir().unwrap();
+        let _argv2 = build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
+            &[s],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[caption],
+            &[],
+            None,
+            None,
+            None,
+            &[],
+            Path::new("/tmp/out2.mp4"),
+            Some(tmp2.path()),
+            vertical_canvas,
+        );
+
+        let ass_files2: Vec<_> = std::fs::read_dir(tmp2.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().map(|x| x == "ass").unwrap_or(false))
+            .collect();
+        assert!(
+            !ass_files2.is_empty(),
+            "expected at least one .ass file written into the audio-tracks workdir"
+        );
+        for entry in &ass_files2 {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(
+                content.contains("PlayResX: 1080"),
+                "ASS file {:?} (audio-tracks path) should have PlayResX: 1080 for a 1080x1920 \
+                 canvas, got:\n{content}",
+                entry.file_name()
+            );
+            assert!(
+                content.contains("PlayResY: 1920"),
+                "ASS file {:?} (audio-tracks path) should have PlayResY: 1920 for a 1080x1920 \
+                 canvas, got:\n{content}",
+                entry.file_name()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_title_plan_reads_caption_style_from_metadata() {
+        // Build a minimal awidat.title clip whose metadata includes a
+        // caption_style blob (as apply_insert_caption now stores it).
+        let style_value = serde_json::json!({
+            "font_size": 52,
+            "weight": "bold",
+            "casing": "upper",
+            "primary_color": "#FFFFFF",
+            "highlight_color": null,
+            "reveal": "word_by_word",
+            "background": { "kind": "box", "color": "#000000", "opacity": 128 }
+        });
+        let mut effect = Effect::new("awidat.title");
+        effect
+            .metadata
+            .insert("text".into(), serde_json::json!("Hello"));
+        effect
+            .metadata
+            .insert("start_s".into(), serde_json::json!(1.0));
+        effect
+            .metadata
+            .insert("end_s".into(), serde_json::json!(3.0));
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
+        effect.metadata.insert("caption_style".into(), style_value);
+
+        let mut clip = Clip::empty("caption-test");
+        clip.effects.push(effect);
+
+        let (plan, _) = parse_title_plan(&clip, &[]).expect("parse_title_plan should succeed");
+        let style = plan.caption_style.expect("caption_style must be Some");
+        assert_eq!(style.reveal, CaptionRenderReveal::WordByWord);
+        assert!(
+            matches!(&style.background, CaptionRenderBackground::Box { color, opacity } if color == "#000000" && *opacity == 128),
+            "background should be Box with correct fields"
         );
     }
 }

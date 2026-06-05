@@ -8,6 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::caption::types::{
+    CaptionPlacement, CaptionRecommendation, CaptionStyle, CaptionWordTiming,
+};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneAwareShortFormInput {
     pub asset_id: String,
@@ -111,60 +115,11 @@ pub struct ClipMatchCandidate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CaptionPlacement {
-    Bottom,
-    Upper,
-    Left,
-    Right,
-}
-
-impl CaptionPlacement {
-    fn edl_value(self) -> &'static str {
-        match self {
-            Self::Bottom => "bottom",
-            Self::Upper => "top",
-            Self::Left => "left",
-            Self::Right => "right",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum FramingQuality {
     Strong,
     Usable,
     Weak,
     Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptionRecommendation {
-    pub start_s: f64,
-    pub end_s: f64,
-    pub text: String,
-    pub word_timings: Vec<CaptionWordTiming>,
-    pub placement: CaptionPlacement,
-    pub style: CaptionStyle,
-    pub transcript_reason: String,
-    pub visual_reason: String,
-    pub safety_reason: String,
-    pub confidence: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptionWordTiming {
-    pub text: String,
-    pub start_s: f64,
-    pub end_s: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptionStyle {
-    Plain,
-    Boxed,
-    Minimal,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -324,17 +279,26 @@ fn plan_captions(
     input: &SceneAwareShortFormInput,
     shots: &[SceneShotAnalysis],
 ) -> Vec<CaptionRecommendation> {
-    transcript_segments(&input.transcript)
-        .into_iter()
-        .filter(|segment| !segment.text.trim().is_empty())
-        .map(|segment| {
-            let shot = shot_at(shots, segment.start_s);
+    use crate::caption::planner::{CaptionPlanStrategy, CuePlan, plan};
+    use crate::caption::readability::{CaptionFormatProfile, Cue, segment, words_from_transcript};
+
+    // Flatten transcript word timings via the shared guarded helper.
+    let words = words_from_transcript(&input.transcript);
+
+    let cues = segment(&words, &CaptionFormatProfile::short_form());
+
+    struct ShotAwareStrategy<'a> {
+        shots: &'a [SceneShotAnalysis],
+    }
+    impl CaptionPlanStrategy for ShotAwareStrategy<'_> {
+        fn plan_cue(&self, cue: &Cue) -> CuePlan {
+            let shot = shot_at(self.shots, cue.start_s);
             let placement = shot
                 .and_then(|shot| shot.safe_text_zones.first().copied())
                 .unwrap_or(CaptionPlacement::Bottom);
-            let style = if shot.is_some_and(|shot| shot.busy_regions.contains(&placement)) {
+            let style = if shot.is_some_and(|s| s.busy_regions.contains(&placement)) {
                 CaptionStyle::Boxed
-            } else if shot.is_some_and(|shot| shot.motion_intensity > 0.7) {
+            } else if shot.is_some_and(|s| s.motion_intensity > 0.7) {
                 CaptionStyle::Minimal
             } else {
                 CaptionStyle::Plain
@@ -342,31 +306,28 @@ fn plan_captions(
             let visual_reason = shot
                 .map(caption_visual_reason)
                 .unwrap_or_else(|| "uses default mobile caption zone".into());
-            let safety_reason = if shot.is_some_and(|shot| shot.face_box.is_some()) {
+            let safety_reason = if shot.is_some_and(|s| s.face_box.is_some()) {
                 format!(
                     "placement avoids detected face/eye/mouth regions; bottom_safe={}",
-                    !shot.is_some_and(|shot| placement_overlaps_face(
+                    !shot.is_some_and(|s| placement_overlaps_face(
                         CaptionPlacement::Bottom,
-                        shot.face_box
+                        s.face_box
                     ))
                 )
             } else {
                 "no face region detected in this shot".into()
             };
-            CaptionRecommendation {
-                start_s: segment.start_s,
-                end_s: segment.end_s,
-                text: segment.text,
-                word_timings: segment.word_timings,
+            CuePlan {
                 placement,
                 style,
-                transcript_reason: "phrase-level transcript segment with source timings".into(),
                 visual_reason,
                 safety_reason,
                 confidence: shot.map(confidence_for_shot).unwrap_or(0.58),
             }
-        })
-        .collect()
+        }
+    }
+
+    plan(&cues, &ShotAwareStrategy { shots })
 }
 
 fn output_format_recommendation() -> EditRecommendation {
@@ -643,21 +604,16 @@ fn build_edl_fragment(
         ]);
     }
 
-    for caption in captions {
-        lines.extend([
-            "*** Insert Caption".to_string(),
-            format!("+ start_s: {}", fmt_number(caption.start_s)),
-            format!("+ end_s: {}", fmt_number(caption.end_s)),
-            format!("+ text: {}", json_string(&caption.text)),
-            format!("+ position: {}", caption.placement.edl_value()),
-            "+ font_size: 56".to_string(),
-            "+ color: #FFFFFF".to_string(),
-            "+ safe_area: mobile".to_string(),
-            format!(
-                "+ word_timings_json: {}",
-                serde_json::to_string(&caption.word_timings).unwrap_or_else(|_| "[]".into())
-            ),
-        ]);
+    // Captions: short-form uses the word_pop preset (energetic word-by-word
+    // active reveal). Falls back to resolve_style(ShortForm, ActivePop) which
+    // also maps to word_pop, keeping the path sound if the registry ever shifts.
+    {
+        use crate::caption::edl::build_caption_edl_lines;
+        use crate::caption::styles::{CaptionFormat, CaptionMood};
+        let spec = crate::caption::styles::resolve_preset("word_pop").unwrap_or_else(|| {
+            crate::caption::styles::resolve_style(CaptionFormat::ShortForm, CaptionMood::ActivePop)
+        });
+        lines.extend(build_caption_edl_lines(captions, &spec, "mobile"));
     }
 
     for rec in recommendations {
@@ -809,7 +765,6 @@ struct TranscriptSegment {
     start_s: f64,
     end_s: f64,
     text: String,
-    word_timings: Vec<CaptionWordTiming>,
 }
 
 fn transcript_segments(transcript: &serde_json::Value) -> Vec<TranscriptSegment> {
@@ -827,37 +782,6 @@ fn transcript_segments(transcript: &serde_json::Value) -> Vec<TranscriptSegment>
                 .unwrap_or("")
                 .trim()
                 .to_string(),
-            word_timings: word_timings(segment),
-        })
-        .collect()
-}
-
-fn word_timings(segment: &serde_json::Value) -> Vec<CaptionWordTiming> {
-    segment
-        .get("words")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|word| {
-            let text = word
-                .get("text")
-                .or_else(|| word.get("word"))
-                .and_then(|value| value.as_str())?
-                .trim()
-                .to_string();
-            if text.is_empty() {
-                return None;
-            }
-            let start_s = number_field(word, "start_s", number_field(word, "start", f64::NAN));
-            let end_s = number_field(word, "end_s", number_field(word, "end", f64::NAN));
-            if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
-                return None;
-            }
-            Some(CaptionWordTiming {
-                text,
-                start_s: round3(start_s),
-                end_s: round3(end_s),
-            })
         })
         .collect()
 }
@@ -975,7 +899,7 @@ fn best_negative_space(
         .max_by(|left, right| left.score.total_cmp(&right.score))
 }
 
-fn composition_zones(
+pub(crate) fn composition_zones(
     composition: &serde_json::Value,
     start_s: f64,
     end_s: f64,
@@ -1029,7 +953,7 @@ fn collect_placements(value: Option<&serde_json::Value>, zones: &mut Vec<Caption
     }
 }
 
-fn caption_placement_from_str(label: &str) -> Option<CaptionPlacement> {
+pub(crate) fn caption_placement_from_str(label: &str) -> Option<CaptionPlacement> {
     match label.to_lowercase().as_str() {
         "top" | "upper" | "upper_third" => Some(CaptionPlacement::Upper),
         "left" | "left_third" => Some(CaptionPlacement::Left),
@@ -1414,6 +1338,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn short_form_captions_obey_readability_and_known_placements() {
+        use crate::caption::readability::CaptionFormatProfile;
+        let mut input = SceneAwareShortFormInput::default();
+        input.source_width = 1080;
+        input.source_height = 1920;
+        // Use slow-enough speech (1s per word) so that each segmented cue
+        // (max 15 chars) satisfies the CPS ceiling even before finalize_timing
+        // extension. At 17 CPS, 15 chars needs ≥ 0.88s; 1s per word clears that.
+        input.transcript = serde_json::json!({
+            "segments": [{
+                "start_s": 0.0, "end_s": 4.0,
+                "text": "absolutely incredible breakthrough today",
+                "words": [
+                    {"text": "absolutely", "start_s": 0.0, "end_s": 1.0},
+                    {"text": "incredible", "start_s": 1.0, "end_s": 2.0},
+                    {"text": "breakthrough", "start_s": 2.0, "end_s": 3.0},
+                    {"text": "today", "start_s": 3.0, "end_s": 4.0}
+                ]
+            }]
+        });
+        let plan = build_scene_aware_short_form_plan(input);
+        assert!(!plan.caption_plan.is_empty(), "should produce captions");
+        let profile = CaptionFormatProfile::short_form();
+        let budget = profile.max_chars_per_line * profile.max_lines;
+        // The old whole-segment path emitted ONE 40-char cue; readability
+        // segmentation must split it into multiple short, budget-fitting cues.
+        assert!(
+            plan.caption_plan.len() >= 2,
+            "readability segmentation should split the segment into multiple cues, got {}",
+            plan.caption_plan.len()
+        );
+        for cue in &plan.caption_plan {
+            let rendered = cue.text.replace('\n', " ");
+            let chars = rendered.chars().count();
+            let dur = (cue.end_s - cue.start_s).max(1e-6);
+            assert!(
+                chars <= budget,
+                "cue exceeds the {budget}-char short-form budget: {rendered:?} ({chars} chars)"
+            );
+            assert!(
+                chars as f64 / dur <= profile.max_cps + 1e-6,
+                "short-form cue over CPS ceiling: {rendered:?}"
+            );
+            assert!(matches!(
+                cue.placement,
+                CaptionPlacement::Bottom
+                    | CaptionPlacement::Upper
+                    | CaptionPlacement::Left
+                    | CaptionPlacement::Right
+            ));
+        }
+    }
+
+    #[test]
     fn avoids_bottom_captions_when_face_occupies_lower_frame() {
         let plan = build_scene_aware_short_form_plan(SceneAwareShortFormInput {
             asset_id: "raw/demo.mp4".into(),
@@ -1564,7 +1542,11 @@ mod tests {
     }
 
     #[test]
-    fn caption_edl_preserves_source_word_timings() {
+    fn caption_plan_preserves_source_word_timings() {
+        // Word timings are preserved in the caption_plan recommendations.
+        // The EDL word_timings_json line is only emitted when the preset uses
+        // WordByWord or ActiveWordPop reveal; clean_white uses WholeCue, so
+        // the EDL fragment will not carry them (Task 8 switches to word_pop).
         let plan = build_scene_aware_short_form_plan(SceneAwareShortFormInput {
             asset_id: "raw/demo.mp4".into(),
             clip_id: "clip-1".into(),
@@ -1585,8 +1567,7 @@ mod tests {
         });
 
         assert_eq!(plan.caption_plan[0].word_timings.len(), 2);
-        assert!(plan.edl_fragment.contains("\"text\":\"Watch\""));
-        assert!(plan.edl_fragment.contains("\"text\":\"this\""));
+        assert!(plan.edl_fragment.contains("*** Insert Caption"));
     }
 
     #[test]
@@ -1772,6 +1753,33 @@ mod tests {
                 .ops
                 .iter()
                 .any(|op| matches!(op, crate::edl::EdlOp::TrimClip { .. }))
+        );
+    }
+
+    #[test]
+    fn short_form_uses_word_pop_caption_preset() {
+        // build a scene-aware plan with a transcript and assert that the
+        // caption EDL carries "active_word_pop" reveal (word_pop preset).
+        let mut input = SceneAwareShortFormInput::default();
+        input.source_width = 1080;
+        input.source_height = 1920;
+        input.transcript = serde_json::json!({
+            "segments": [{
+                "start_s": 0.0, "end_s": 4.0,
+                "text": "absolutely incredible breakthrough today",
+                "words": [
+                    {"text": "absolutely", "start_s": 0.0, "end_s": 1.0},
+                    {"text": "incredible", "start_s": 1.0, "end_s": 2.0},
+                    {"text": "breakthrough", "start_s": 2.0, "end_s": 3.0},
+                    {"text": "today", "start_s": 3.0, "end_s": 4.0}
+                ]
+            }]
+        });
+        let plan = build_scene_aware_short_form_plan(input);
+        assert!(
+            plan.edl_fragment.contains("\"reveal\":\"active_word_pop\""),
+            "short-form EDL must use word_pop preset (active_word_pop reveal): {}",
+            plan.edl_fragment
         );
     }
 

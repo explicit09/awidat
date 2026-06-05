@@ -930,6 +930,7 @@ fn build_diff_hints(
             | EdlOp::SetLoudnessTarget { .. }
             | EdlOp::MuteClip { .. }
             | EdlOp::RemoveAudio { .. }
+            | EdlOp::SetBrandKit { .. }
             | EdlOp::SetPackageMetadata { .. } => {}
         }
     }
@@ -1155,6 +1156,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertAnnotation { .. } => "InsertAnnotation",
         EdlOp::SetOutputFormat { .. } => "SetOutputFormat",
         EdlOp::SetLoudnessTarget { .. } => "SetLoudnessTarget",
+        EdlOp::SetBrandKit { .. } => "SetBrandKit",
         EdlOp::SetPackageMetadata { .. } => "SetPackageMetadata",
     }
 }

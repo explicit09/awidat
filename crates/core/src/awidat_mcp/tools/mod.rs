@@ -54,6 +54,7 @@ pub mod list_stringouts;
 pub mod load_skill;
 pub mod local_review_package;
 pub mod manage_assets;
+pub mod plan_captions;
 pub mod plan_emphasis;
 pub mod plan_generated_media;
 pub mod plan_look_regions;

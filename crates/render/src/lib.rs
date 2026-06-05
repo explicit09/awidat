@@ -38,6 +38,7 @@
 
 pub mod animation;
 pub(crate) mod ass;
+pub mod dialogue_leveling;
 pub mod ffmpeg;
 pub mod frame_io;
 pub mod job;
@@ -53,6 +54,12 @@ pub mod reframe_smoothing;
 pub mod timeline;
 
 pub use ass::{build_ass_document_for_test, default_caption_font_name, resolve_caption_font_name};
+pub use dialogue_leveling::{
+    ClipLoudness, DEFAULT_DIALOGUE_TARGET_LUFS, DEFAULT_DIALOGUE_TARGET_TP, DialogueLevelingError,
+    LEVEL_DIALOGUE_ENV, build_clip_measure_argv, dialogue_leveling_enabled,
+    fill_dialogue_loudnorm_targets, is_dialogue_candidate, level_dialogue_clips,
+    measure_clip_loudness,
+};
 pub use ffmpeg::{
     BlackFrameRange, FfmpegError, ImageFormat, MediaProbe, MotionSignal, PROXY_SCHEMA_TAG,
     ReframeTarget, SilenceRange, TranscodeProgress, TranscodeProgressCallback, Waveform,
