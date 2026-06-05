@@ -29,12 +29,11 @@ pub fn build_caption_edl_lines(
         lines.push("*** Insert Caption".to_string());
         lines.push(format!("+ start_s: {}", fmt_seconds(caption.start_s)));
         lines.push(format!("+ end_s: {}", fmt_seconds(caption.end_s)));
-        // The line-based EDL cannot carry a real newline and the parser does not
-        // JSON-decode `\n`, so a multi-line cue's break is flattened to a space
-        // here and left to the renderer to word-wrap. (Hard two-line breaks await
-        // the parser text-decode fix.) Short-form cues are single-line already.
-        let text = caption.text.replace('\n', " ");
-        lines.push(format!("+ text: {}", json_string(&text)));
+        // Authored line breaks are preserved. `json_string` JSON-encodes the
+        // newline (the EDL line stays single-line, e.g. `"top\nbottom"`), and the
+        // parser JSON-decodes it back to a real newline, which the renderer honors
+        // as a hard ASS `\N` break. Short-form cues are single-line already.
+        lines.push(format!("+ text: {}", json_string(&caption.text)));
         lines.push(format!("+ position: {}", edl_position(caption.placement)));
         lines.push(format!("+ font_size: {}", chosen.font_size));
         lines.push(format!("+ color: {}", chosen.primary_color));
@@ -106,19 +105,24 @@ mod tests {
     }
 
     #[test]
-    fn multiline_cue_text_is_flattened_to_a_single_line() {
+    fn multiline_cue_text_preserves_the_authored_break() {
         let mut r = rec();
         r.text = "the rise of solar\nentrepreneurs.".into();
         let spec = resolve_preset("clean_white").unwrap();
-        let blob = build_caption_edl_lines(&[r], &spec, None, "standard").join("\n");
-        assert!(
-            blob.contains("the rise of solar entrepreneurs."),
-            "newline should flatten to a space: {blob}"
+        let lines = build_caption_edl_lines(&[r], &spec, None, "standard");
+        let text_line = lines
+            .iter()
+            .find(|l| l.starts_with("+ text:"))
+            .expect("a text field");
+        // The break is JSON-encoded so the EDL stays single-line (no raw newline
+        // in the field), and the parser decodes it back to a real newline.
+        assert_eq!(
+            text_line, "+ text: \"the rise of solar\\nentrepreneurs.\"",
+            "authored break must survive as a JSON-escaped \\n on one EDL line"
         );
-        assert!(
-            !blob.contains("solar\\nentrepreneurs"),
-            "must not emit a literal backslash-n"
-        );
+        // The whole EDL blob keeps each field on its own line — the cue text must
+        // not inject a real newline that the line-based parser would mis-split.
+        assert_eq!(lines.iter().filter(|l| l.starts_with("+ text:")).count(), 1);
     }
 
     #[test]

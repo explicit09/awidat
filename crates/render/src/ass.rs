@@ -292,6 +292,18 @@ fn push_subtitle_track_events(out: &mut String, track: &SubtitleTrack) {
 /// Word-wrap already-escaped caption text to <= max_chars_per_line per visible
 /// line, inserting ASS `\N` hard breaks. Honors the layout width (unlike the
 /// fixed-32 wrap_plain_subtitle_text).
+/// Honor authored hard breaks (`\n`) as ASS `\N` line breaks while still
+/// soft-wrapping each authored line to the character budget. A cue with no
+/// `\n` wraps exactly as before (single segment). Over-long authored lines
+/// still soft-wrap; the author's intended breaks are never lost.
+fn wrap_caption_with_authored_breaks(cased: &str, max_chars_per_line: usize) -> String {
+    cased
+        .split('\n')
+        .map(|seg| wrap_caption_text(&escape_ass_text(seg), max_chars_per_line))
+        .collect::<Vec<_>>()
+        .join("\\N")
+}
+
 fn wrap_caption_text(escaped: &str, max_chars_per_line: usize) -> String {
     let mut out = String::new();
     let mut visible = 0usize;
@@ -573,7 +585,7 @@ fn build_dialogue_lines(title: &TitlePlan, canvas: RenderCanvas) -> Vec<String> 
         }
         let cased = apply_casing(raw_text, title);
         let layout = CaptionLayoutProfile::for_title(title);
-        let wrapped = wrap_caption_text(&escape_ass_text(&cased), layout.max_chars_per_line);
+        let wrapped = wrap_caption_with_authored_breaks(&cased, layout.max_chars_per_line);
         let start = format_ass_time(title.start_s.max(0.0));
         let end = format_ass_time(title.end_s.max(title.start_s));
         let dur_cs = seconds_to_centiseconds((title.end_s - title.start_s).max(0.0)) as i64;
@@ -1050,6 +1062,38 @@ mod tests {
         assert!(
             !dialogues[0].contains("\\k"),
             "whole-cue must not emit karaoke \\k tags"
+        );
+    }
+
+    #[test]
+    fn whole_cue_authored_newline_becomes_a_hard_ass_break() {
+        // A long-form cue with an authored two-line break must render as a hard
+        // ASS `\N`, not a flattened single line.
+        let t = caption_title("the rise of solar\nentrepreneurs.", vec![]);
+        let doc = build_ass_document(&t, RenderCanvas::default());
+        let dialogue = doc
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .expect("a dialogue line");
+        assert!(
+            dialogue.contains("solar\\Nentrepreneurs."),
+            "authored break must render as a hard \\N: {dialogue}"
+        );
+    }
+
+    #[test]
+    fn whole_cue_without_newline_is_unchanged() {
+        // No authored break -> identical to plain wrapping (no spurious \N from
+        // the hard-break path on a single short line).
+        let t = caption_title("short line", vec![]);
+        let dialogue = build_ass_document(&t, RenderCanvas::default())
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .expect("a dialogue line")
+            .to_string();
+        assert!(
+            dialogue.contains("short line") && !dialogue.contains("\\N"),
+            "single short line must not gain a break: {dialogue}"
         );
     }
 
