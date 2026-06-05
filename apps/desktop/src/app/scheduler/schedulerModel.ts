@@ -164,10 +164,23 @@ function schedulerStatusFromUploadState(
     case "published":
       return "published";
     case "failed":
-      return uploadState.reason === "server publish requires_action"
+      return isRequiresActionReason(uploadState.reason)
         ? "requires_action"
         : "failed";
   }
+}
+
+function isRequiresActionReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return [
+    "requires_action",
+    "requires action",
+    "missing_scope",
+    "permission_required",
+    "reauth_required",
+    "needs_reauth",
+    "needs reauth",
+  ].some((marker) => normalized.includes(marker));
 }
 
 function uploadJobId(

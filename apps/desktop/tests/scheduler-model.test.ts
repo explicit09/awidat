@@ -162,6 +162,89 @@ assert.deepEqual(
     "late:3000:Late post",
   ],
 );
+
+const actionNeededEntry: RenderQueueEntry = {
+  ...entry,
+  id: "queue_action_needed_reasons",
+  uploadTargets: ["server", "scope", "reauth", "text", "timeout"],
+  uploadMetadata: {
+    server: {
+      title: "Server fallback action",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 4_000,
+    },
+    scope: {
+      title: "Missing scope action",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 4_001,
+    },
+    reauth: {
+      title: "Provider reauth action",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 4_002,
+    },
+    text: {
+      title: "Human reauth action",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 4_003,
+    },
+    timeout: {
+      title: "Ordinary failure",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 4_004,
+    },
+  },
+  uploadStates: {
+    server: {
+      state: "failed",
+      reason: "server publish requires_action",
+      job_id: "job_server_action",
+    },
+    scope: {
+      state: "failed",
+      reason: "missing_scope",
+      job_id: "job_scope_action",
+    },
+    reauth: {
+      state: "failed",
+      reason: "youtube_reauth_required",
+      job_id: "job_reauth_action",
+    },
+    text: {
+      state: "failed",
+      reason: "token refresh failed; account needs reauth",
+      job_id: "job_text_action",
+    },
+    timeout: {
+      state: "failed",
+      reason: "upload timed out",
+      job_id: "job_timeout_failure",
+    },
+  },
+};
+
+assert.deepEqual(
+  deriveSchedulerPosts([actionNeededEntry], 1_700).map(
+    (post) => `${post.provider}:${post.status}:${post.failureReason}`,
+  ),
+  [
+    "server:requires_action:server publish requires_action",
+    "scope:requires_action:missing_scope",
+    "reauth:requires_action:youtube_reauth_required",
+    "text:requires_action:token refresh failed; account needs reauth",
+    "timeout:failed:upload timed out",
+  ],
+);
 assert.equal(schedulerStatusLabel("requires_action"), "Action needed");
 assert.equal(formatSchedulerTime(1_800, "UTC"), "1970-01-01 00:30 UTC");
 
