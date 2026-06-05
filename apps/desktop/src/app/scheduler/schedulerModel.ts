@@ -59,7 +59,7 @@ export function deriveSchedulerPosts(
     })
     .sort((a, b) => {
       if (a.scheduledAt !== b.scheduledAt) {
-        return b.scheduledAt - a.scheduledAt;
+        return a.scheduledAt - b.scheduledAt;
       }
       return a.title.localeCompare(b.title);
     });
@@ -125,11 +125,15 @@ function deriveSchedulerPost(
 }
 
 function uploadProviders(entry: RenderQueueEntry): string[] {
-  const providers: string[] = [];
-  for (const provider of entry.uploadTargets ?? []) {
-    if (!providers.includes(provider)) providers.push(provider);
+  if (entry.uploadTargets && entry.uploadTargets.length > 0) {
+    return uniqueProviders(entry.uploadTargets);
   }
-  for (const provider of Object.keys(entry.uploadStates ?? {})) {
+  return uniqueProviders(Object.keys(entry.uploadStates ?? {}));
+}
+
+function uniqueProviders(source: string[]): string[] {
+  const providers: string[] = [];
+  for (const provider of source) {
     if (!providers.includes(provider)) providers.push(provider);
   }
   return providers;
