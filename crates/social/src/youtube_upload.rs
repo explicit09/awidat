@@ -364,7 +364,7 @@ pub mod live {
     ///
     /// The sync `upload_video` and `poll_status` methods bridge to async reqwest via
     /// `tokio::runtime::Handle::current().block_on(...)`. This is intentional: the
-    /// FSM and `UploadAdapter` traits are synchronous; only this leaf bridges to async.
+    /// FSM and `UploadAdapter` traits are synchronous; only HTTP work enters async.
     pub struct LiveYouTubeUploadClient<R, A> {
         token_resolver: R,
         artifact_source: A,
@@ -385,22 +385,9 @@ pub mod live {
         async fn do_upload(
             &self,
             request: &YouTubeUploadRequest,
+            token: String,
+            body: ArtifactBody,
         ) -> Result<YouTubeUploadResponse, YouTubeUploadClientError> {
-            let token = self
-                .token_resolver
-                .bearer_for(&request.access_token_ref)
-                .map_err(|e| YouTubeUploadClientError::NetworkOrServer(e.to_string()))?;
-
-            let body = self
-                .artifact_source
-                .open(&request.artifact_ref)
-                .map_err(|e| match e {
-                    ArtifactSourceError::SizeExceeded { .. } => {
-                        YouTubeUploadClientError::NetworkOrServer(e.to_string())
-                    }
-                    _ => YouTubeUploadClientError::NetworkOrServer(e.to_string()),
-                })?;
-
             if body.total_bytes > YOUTUBE_MAX_BYTES {
                 return Err(YouTubeUploadClientError::NetworkOrServer(format!(
                     "file too large: {} bytes (max {})",
@@ -558,7 +545,21 @@ pub mod live {
             &self,
             request: &YouTubeUploadRequest,
         ) -> Result<YouTubeUploadResponse, YouTubeUploadClientError> {
-            tokio::runtime::Handle::current().block_on(self.do_upload(request))
+            let token = self
+                .token_resolver
+                .bearer_for(&request.access_token_ref)
+                .map_err(|e| YouTubeUploadClientError::NetworkOrServer(e.to_string()))?;
+            let body = self
+                .artifact_source
+                .open(&request.artifact_ref)
+                .map_err(|e| match e {
+                    ArtifactSourceError::SizeExceeded { .. } => {
+                        YouTubeUploadClientError::NetworkOrServer(e.to_string())
+                    }
+                    _ => YouTubeUploadClientError::NetworkOrServer(e.to_string()),
+                })?;
+
+            tokio::runtime::Handle::current().block_on(self.do_upload(request, token, body))
         }
     }
 
@@ -590,12 +591,8 @@ pub mod live {
         async fn do_poll(
             &self,
             request: &YouTubeStatusRequest,
+            token: String,
         ) -> Result<YouTubeStatusResponse, YouTubeStatusClientError> {
-            let token = self
-                .token_resolver
-                .bearer_for(&request.access_token_ref)
-                .map_err(|e| YouTubeStatusClientError::NetworkOrServer(e.to_string()))?;
-
             let resp = self
                 .http
                 .get(&self.videos_base)
@@ -657,7 +654,12 @@ pub mod live {
             &self,
             request: &YouTubeStatusRequest,
         ) -> Result<YouTubeStatusResponse, YouTubeStatusClientError> {
-            tokio::runtime::Handle::current().block_on(self.do_poll(request))
+            let token = self
+                .token_resolver
+                .bearer_for(&request.access_token_ref)
+                .map_err(|e| YouTubeStatusClientError::NetworkOrServer(e.to_string()))?;
+
+            tokio::runtime::Handle::current().block_on(self.do_poll(request, token))
         }
     }
 }

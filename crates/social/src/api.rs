@@ -24,8 +24,9 @@ use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
+use crate::token_refresh::TokenRefresher;
 use crate::upload_adapter::{UploadAdapter, UploadPrivacy};
-use crate::upload_service::{ExecuteUploadInput, UploadService, UploadServiceError};
+use crate::upload_service::{ExecuteUploadInput, RetryPolicy, UploadService, UploadServiceError};
 use crate::upload_status::{
     PollUploadStatusInput, UploadStatusAdapter, UploadStatusService, UploadStatusServiceError,
 };
@@ -691,6 +692,53 @@ impl SocialApi {
         adapter: &impl UploadAdapter,
         request: ExecuteUploadRequest,
     ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = Self::execute_claimed_upload_job_with_input(
+            store,
+            adapter,
+            request,
+            |store, adapter, input| UploadService::execute_claimed_job(store, adapter, input),
+        )?;
+        job_response(store, job)
+    }
+
+    /// Worker entrypoint: execute an already-claimed upload job with fire-time
+    /// token refresh.
+    pub fn execute_claimed_upload_job_with_refresher(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadAdapter,
+        refresher: &impl TokenRefresher,
+        request: ExecuteUploadRequest,
+        refresh_skew_secs: i64,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = Self::execute_claimed_upload_job_with_input(
+            store,
+            adapter,
+            request,
+            |store, adapter, input| {
+                UploadService::execute_claimed_job_full(
+                    store,
+                    adapter,
+                    refresher,
+                    input,
+                    RetryPolicy::default(),
+                    refresh_skew_secs,
+                )
+            },
+        )?;
+        job_response(store, job)
+    }
+
+    fn execute_claimed_upload_job_with_input<S, A, F>(
+        store: &mut S,
+        adapter: &A,
+        request: ExecuteUploadRequest,
+        execute: F,
+    ) -> Result<PublishJob, SocialApiError>
+    where
+        S: SocialStore,
+        A: UploadAdapter,
+        F: FnOnce(&mut S, &A, ExecuteUploadInput) -> Result<PublishJob, UploadServiceError>,
+    {
         // Resolve the upload's visibility: the caller's explicit value wins,
         // otherwise fall back to the connected account's `default_privacy`,
         // then `Private`. Without this the worker would publish every job as
@@ -699,20 +747,16 @@ impl SocialApi {
             Some(privacy) => privacy,
             None => resolve_account_default_privacy(store, &request.job_id)?,
         };
-        let job = UploadService::execute_claimed_job(
-            store,
-            adapter,
-            ExecuteUploadInput {
-                job_id: request.job_id,
-                title: request.title,
-                description: request.description,
-                tags: request.tags,
-                thumbnail_ref: request.thumbnail_ref,
-                privacy,
-                now: request.now,
-            },
-        )?;
-        job_response(store, job)
+        let input = ExecuteUploadInput {
+            job_id: request.job_id,
+            title: request.title,
+            description: request.description,
+            tags: request.tags,
+            thumbnail_ref: request.thumbnail_ref,
+            privacy,
+            now: request.now,
+        };
+        Ok(execute(store, adapter, input)?)
     }
 
     /// Worker entrypoint: poll a processing job's provider status.

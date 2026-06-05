@@ -166,6 +166,8 @@ impl PublishJob {
 
     pub fn retry(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Scheduled;
+        self.provider_post_id = None;
+        self.provider_post_url = None;
         self.normalized_error = None;
         self.raw_error_ref = None;
         self.requires_action_reason = None;

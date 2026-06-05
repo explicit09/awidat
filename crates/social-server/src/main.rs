@@ -37,10 +37,11 @@ mod token_refresher;
 mod token_resolver;
 mod user_routes;
 
+use awidat_social::upload_adapter::UploadPrivacy;
 use awidat_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
     api::{ExecuteUploadRequest, SocialApi},
-    model::{ConnectedAccount, OwnerRef, Provider},
+    model::{ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobEventType},
     oauth_exchange::{
         GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthTokenExchange, TokenExchangeInput,
     },
@@ -155,7 +156,8 @@ async fn main() {
 
     info!(
         social_firing_enabled,
-        "awidat-social-server starting — firing enabled: {social_firing_enabled}"
+        youtube_force_private,
+        "awidat-social-server starting — firing enabled: {social_firing_enabled}, youtube_force_private: {youtube_force_private}"
     );
 
     let manager = PostgresConnectionManager::new(
@@ -174,11 +176,13 @@ async fn main() {
     //
     // Localhost-against-shared-DB safety: the cron/extension migrations (0002,
     // 0004) are infrastructure for the *deployed* environment — 0004 (re)activates
-    // the pg_cron schedules. A localhost test server (SOCIAL_FIRING_ENABLED=false)
-    // must NOT touch them, or boot would re-point + re-enable the deployed cron at
-    // a placeholder URL. So when firing is disabled we skip those, applying only
-    // the table migrations. (The shared DB already has the extensions + cron.)
-    let skip_infra = !social_firing_enabled;
+    // the pg_cron schedules. A localhost test server must NOT touch them, or boot
+    // would re-point + re-enable the deployed cron at a placeholder URL. By
+    // default we skip those whenever firing is disabled; local runners can also
+    // force skipping while enabling their own in-process tick loop.
+    let skip_infra = std::env::var("AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS")
+        .map(|v| v == "true")
+        .unwrap_or(!social_firing_enabled);
     let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| panic!("crates/social-server has no parent directory"))
@@ -739,6 +743,8 @@ async fn internal_tick_handler(
     let pool = state.pool.clone();
     let force_private = state.config.youtube_force_private;
     let artifact_base_dir = state.config.artifact_base_dir.clone();
+    let google_client_id = state.config.google_client_id.clone();
+    let google_client_secret = state.config.google_client_secret.clone();
 
     let claimed_count = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool.clone());
@@ -774,18 +780,18 @@ async fn internal_tick_handler(
                     let yt_config = YouTubeClientConfig { force_private, ..Default::default() };
                     let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
                     let adapter = YouTubeUploadAdapter::new(client);
-                    if let Err(e) = SocialApi::execute_claimed_upload_job(
+                    let refresher = token_refresher::ServerTokenRefresher::new(
+                        google_client_id.clone(),
+                        google_client_secret.clone(),
+                        aead_key_clone(&aead_key),
+                    );
+                    let upload = upload_request_for_job(&store, &job, now);
+                    if let Err(e) = SocialApi::execute_claimed_upload_job_with_refresher(
                         &mut store,
                         &adapter,
-                        ExecuteUploadRequest {
-                            job_id: job.id.clone(),
-                            title: String::new(),
-                            description: None,
-                            tags: Vec::new(),
-                            thumbnail_ref: None,
-                            privacy: None,
-                            now,
-                        },
+                        &refresher,
+                        upload,
+                        TOKEN_REFRESH_SWEEP_SKEW_SECS,
                     ) {
                         tracing::warn!(job_id = %job.id, "YouTube execute failed: {e}");
                     } else {
@@ -808,18 +814,11 @@ async fn internal_tick_handler(
                         Provider::YouTube => unreachable!(),
                     };
                     let adapter = BlockedUploadAdapter::new(job.provider.clone(), reason);
+                    let upload = upload_request_for_job(&store, &job, now);
                     if let Err(e) = SocialApi::execute_claimed_upload_job(
                         &mut store,
                         &adapter,
-                        ExecuteUploadRequest {
-                            job_id: job.id.clone(),
-                            title: String::new(),
-                            description: None,
-                            tags: Vec::new(),
-                            thumbnail_ref: None,
-                            privacy: None,
-                            now,
-                        },
+                        upload,
                     ) {
                         tracing::warn!(job_id = %job.id, provider = ?job.provider, "blocked-adapter execute failed: {e}");
                     }
@@ -846,6 +845,74 @@ async fn internal_tick_handler(
     Ok(Json(
         serde_json::json!({"status": "ok", "claimed": claimed_count}),
     ))
+}
+
+fn upload_request_for_job(
+    store: &impl SocialStore,
+    job: &PublishJob,
+    now: i64,
+) -> ExecuteUploadRequest {
+    let fields = scheduled_target_platform_fields(store, job).unwrap_or_default();
+    let title = string_field(&fields, "title")
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| job.variant_id.clone());
+    ExecuteUploadRequest {
+        job_id: job.id.clone(),
+        title,
+        description: string_field(&fields, "description"),
+        tags: string_array_field(&fields, "tags"),
+        thumbnail_ref: string_field(&fields, "thumbnailRef")
+            .or_else(|| string_field(&fields, "thumbnail_ref")),
+        privacy: string_field(&fields, "privacy").map(|raw| parse_upload_privacy(&raw)),
+        now,
+    }
+}
+
+fn scheduled_target_platform_fields(
+    store: &impl SocialStore,
+    job: &PublishJob,
+) -> Option<serde_json::Value> {
+    let target_id = store
+        .publish_job_events(&job.id)
+        .ok()?
+        .into_iter()
+        .find(|event| event.event_type == PublishJobEventType::Scheduled)?
+        .metadata
+        .get("target_id")?
+        .as_str()?
+        .to_string();
+    store
+        .campaign_variant_target(&target_id)
+        .ok()
+        .map(|target| target.platform_fields)
+}
+
+fn string_field(fields: &serde_json::Value, key: &str) -> Option<String> {
+    fields
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn string_array_field(fields: &serde_json::Value, key: &str) -> Vec<String> {
+    fields
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_upload_privacy(raw: &str) -> UploadPrivacy {
+    match raw {
+        "public" => UploadPrivacy::Public,
+        "unlisted" => UploadPrivacy::Unlisted,
+        _ => UploadPrivacy::Private,
+    }
 }
 
 /// `POST /internal/cron/poll-processing` — advance `Processing` jobs.
@@ -1199,5 +1266,64 @@ mod tests {
             redirect_uri(&config, &Provider::YouTube),
             "https://app.example/oauth/callback/youtube"
         );
+    }
+
+    #[test]
+    fn upload_request_for_job_uses_target_platform_fields() {
+        use awidat_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            serde_json::json!({
+                "title": "Launch clip",
+                "description": "Rendered from Awidat",
+                "tags": ["awidat", "launch"],
+                "privacy": "unlisted"
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert_eq!(request.title, "Launch clip");
+        assert_eq!(request.description.as_deref(), Some("Rendered from Awidat"));
+        assert_eq!(request.tags, vec!["awidat", "launch"]);
+        assert_eq!(request.privacy, Some(UploadPrivacy::Unlisted));
     }
 }

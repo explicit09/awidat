@@ -215,10 +215,7 @@ impl PublishService {
         if account.owner != *owner {
             return Err(PublishServiceError::OwnerMismatch);
         }
-        if !matches!(
-            job.status,
-            PublishJobStatus::Failed | PublishJobStatus::RequiresAction
-        ) {
+        if !is_user_retryable(&job) {
             return Err(PublishServiceError::JobNotRetryable);
         }
 
@@ -236,6 +233,16 @@ impl PublishService {
         ))?;
         Ok(retry)
     }
+}
+
+fn is_user_retryable(job: &PublishJob) -> bool {
+    matches!(
+        job.status,
+        PublishJobStatus::Failed | PublishJobStatus::RequiresAction
+    ) || (matches!(
+        job.status,
+        PublishJobStatus::Uploading | PublishJobStatus::Processing
+    ) && job.provider_post_id.is_none())
 }
 
 fn existing_target(
@@ -724,6 +731,50 @@ mod tests {
             .unwrap_or_else(|err| panic!("events: {err}"));
         assert_eq!(events[1].id, "event_job_1_retry_1");
         assert_eq!(events[2].id, "event_job_1_retry_2");
+    }
+
+    #[test]
+    fn retry_job_requeues_stranded_in_flight_job_without_provider_post_id() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+        PublishService::schedule_target(
+            &mut store,
+            &owner(),
+            ScheduleTargetInput {
+                job_id: "job_1".into(),
+                target_id: "target_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"));
+        let stranded = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("job: {err}"))
+            .start_provider_processing(2_200);
+        store
+            .save_publish_job(stranded)
+            .unwrap_or_else(|err| panic!("save stranded job: {err}"));
+
+        let retry = PublishService::retry_job(&mut store, &owner(), "job_1", 2_300)
+            .unwrap_or_else(|err| panic!("retry job: {err}"));
+        assert_eq!(retry.status, PublishJobStatus::Scheduled);
+        assert_eq!(retry.provider_post_id, None);
+
+        let processing_with_post = retry.processing("yt_video_1", 2_400);
+        store
+            .save_publish_job(processing_with_post)
+            .unwrap_or_else(|err| panic!("save processing job: {err}"));
+        assert_eq!(
+            PublishService::retry_job(&mut store, &owner(), "job_1", 2_500),
+            Err(PublishServiceError::JobNotRetryable)
+        );
     }
 
     fn owner() -> OwnerRef {

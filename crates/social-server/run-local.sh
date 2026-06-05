@@ -4,11 +4,13 @@
 # This is for LOCAL TESTING — no Fly, no deploy. The server binds 127.0.0.1:3000;
 # point the desktop at AWIDAT_SOCIAL_SERVER_URL=http://127.0.0.1:3000.
 #
-# SOCIAL_FIRING_ENABLED stays "false": the localhost server does NOT fire jobs on
-# a schedule (that's the deployed environment's pg_cron job). With firing off, the
-# boot migration step skips the cron/extension migrations, so it will NOT touch or
-# re-enable the deployed cron schedules. To exercise the worker by hand, POST
-# /internal/tick yourself (see the curl at the bottom).
+# SOCIAL_FIRING_ENABLED defaults to "false": the localhost server does NOT fire
+# jobs unless explicitly enabled. With firing off, boot skips cron/extension
+# migrations, so it will NOT touch or re-enable deployed cron schedules.
+#
+# When SOCIAL_FIRING_ENABLED=true, this script runs a local-only cron loop that
+# calls the same /internal/* worker routes pg_cron calls in deployment. That makes
+# desktop local dev behave like the deployed scheduler without applying cron SQL.
 #
 # DATABASE_URL must use the Supabase SESSION pooler (port 5432), NOT transaction
 # mode (6543): the sync `postgres` crate uses named prepared statements, which
@@ -62,6 +64,10 @@ export OAUTH_REDIRECT_BASE="${OAUTH_REDIRECT_BASE:-http://127.0.0.1:3000}"
 
 # ── Local-test posture ──────────────────────────────────────────────────────
 export SOCIAL_FIRING_ENABLED="${SOCIAL_FIRING_ENABLED:-false}"   # no autonomous firing; skips cron migration on boot
+export AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS="${AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS:-true}"
+# Local direct-publish tests should honor the visibility selected in the desktop.
+# The server binary itself still defaults this to true for deployed/pre-audit use.
+export YOUTUBE_FORCE_PRIVATE="${YOUTUBE_FORCE_PRIVATE:-false}"
 export BIND_ADDR="${BIND_ADDR:-127.0.0.1:3000}"
 export ARTIFACT_BASE_DIR="${ARTIFACT_BASE_DIR:-$PWD/.artifacts-local}"
 mkdir -p "$ARTIFACT_BASE_DIR"
@@ -71,8 +77,49 @@ mkdir -p "$ARTIFACT_BASE_DIR"
 # SUPABASE_SERVICE_KEY=...                               — for Storage signed URLs
 # SUPABASE_JWT_SECRET=...                                — Phase 7 per-user auth
 
-echo "Starting awidat-social on $BIND_ADDR (firing disabled; cron migration skipped)..."
-exec cargo run -p awidat-social-server
+if [[ "$SOCIAL_FIRING_ENABLED" != "true" ]]; then
+  echo "Starting awidat-social on $BIND_ADDR (firing disabled; cron migration skipped)..."
+  exec cargo run -p awidat-social-server
+fi
+
+LOCAL_CRON_INTERVAL_SECS="${AWIDAT_SOCIAL_LOCAL_CRON_INTERVAL_SECS:-15}"
+echo "Starting awidat-social on $BIND_ADDR (local firing loop enabled; cron migration skipped)..."
+cargo run -p awidat-social-server &
+server_pid=$!
+
+cleanup() {
+  kill "$server_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for _ in {1..120}; do
+  if curl -fsS "http://$BIND_ADDR/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    wait "$server_pid"
+    exit $?
+  fi
+  sleep 1
+done
+
+if ! kill -0 "$server_pid" 2>/dev/null; then
+  wait "$server_pid"
+  exit $?
+fi
+
+echo "Local social cron loop active every ${LOCAL_CRON_INTERVAL_SECS}s."
+while kill -0 "$server_pid" 2>/dev/null; do
+  curl -fsS -X POST \
+    -H "Authorization: Bearer $SERVICE_SHARED_SECRET" \
+    "http://$BIND_ADDR/internal/tick" >/dev/null || true
+  curl -fsS -X POST \
+    -H "Authorization: Bearer $SERVICE_SHARED_SECRET" \
+    "http://$BIND_ADDR/internal/cron/poll-processing" >/dev/null || true
+  sleep "$LOCAL_CRON_INTERVAL_SECS"
+done
+
+wait "$server_pid"
 
 # ── Smoke test (in another terminal) ────────────────────────────────────────
 #   curl -s http://127.0.0.1:3000/health
