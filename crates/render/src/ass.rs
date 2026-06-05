@@ -384,8 +384,10 @@ fn motion_override(
     if entrance_here {
         match motion.entrance {
             E::PopIn => {
-                init.push_str("\\fscx80\\fscy80");
-                anim.push_str("\\t(0,120,\\fscx103\\fscy103)\\t(120,170,\\fscx100\\fscy100)");
+                // Gentle, slow grow-in, no overshoot — "a minimal pop-up", not a
+                // snap. 280ms reads as an ease-in rather than a quick hop.
+                init.push_str("\\fscx92\\fscy92");
+                anim.push_str("\\t(0,280,\\fscx100\\fscy100)");
             }
             E::FadeIn => fad_in = 150,
             E::SlideUp => match resting {
@@ -409,7 +411,7 @@ fn motion_override(
         match motion.exit {
             X::PopOut => {
                 let s = (dur_ms - 150).max(0);
-                anim.push_str(&format!("\\t({s},{dur_ms},\\fscx80\\fscy80)"));
+                anim.push_str(&format!("\\t({s},{dur_ms},\\fscx92\\fscy92)"));
             }
             X::FadeOut => fad_out = 150,
             X::SlideDown => match resting {
@@ -468,9 +470,9 @@ fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord) -> String {
         // No leading `\fscx100\fscy100` reset: libass starts each `\t` from the
         // inherited scale, so a reset would cancel a parent line's pop-in for the
         // active word (the PopIn + Bounce combo). Let the bounce compose on top.
-        A::Bounce => "\\t(0,90,\\fscx115\\fscy115)\\t(90,180,\\fscx100\\fscy100)".into(),
-        A::ScalePop => "\\t(0,120,\\fscx112\\fscy112)".into(),
-        A::Shake => "\\frz0\\t(0,60,\\frz3)\\t(60,120,\\frz-3)\\t(120,180,\\frz0)".into(),
+        A::Bounce => "\\t(0,160,\\fscx105\\fscy105)\\t(160,360,\\fscx100\\fscy100)".into(),
+        A::ScalePop => "\\t(0,220,\\fscx104\\fscy104)".into(),
+        A::Shake => "\\frz0\\t(0,90,\\frz2)\\t(90,190,\\frz-2)\\t(190,290,\\frz0)".into(),
     }
 }
 
@@ -1379,7 +1381,7 @@ mod tests {
             .collect();
         assert_eq!(dialogues.len(), 2);
         assert_eq!(
-            dialogues[0].matches("\\fscx115").count(),
+            dialogues[0].matches("\\fscx105").count(),
             1,
             "one bounce per line: {}",
             dialogues[0]
@@ -1388,7 +1390,7 @@ mod tests {
         // i.e. the bounce \t immediately follows the highlight color override.
         let hi = hex_to_ass_color("#FFE000");
         assert!(
-            dialogues[0].contains(&format!("{hi}\\t(0,90,\\fscx115")),
+            dialogues[0].contains(&format!("{hi}\\t(0,160,\\fscx105")),
             "bounce must sit inside the highlight block: {}",
             dialogues[0]
         );
@@ -1421,12 +1423,12 @@ mod tests {
             .map(String::from)
             .collect();
         assert!(
-            d[0].contains("\\fscx80"),
+            d[0].contains("\\fscx92"),
             "entrance on first word's line: {}",
             d[0]
         );
         assert!(
-            !d[1].contains("\\fscx80"),
+            !d[1].contains("\\fscx92"),
             "no entrance on second word's line: {}",
             d[1]
         );
