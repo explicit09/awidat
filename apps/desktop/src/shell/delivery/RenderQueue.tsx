@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   Card,
   Inline,
@@ -11,6 +12,7 @@ import {
 } from "../../app/renderQueue";
 import {
   cancelRender,
+  refreshServerUploadState,
   retryUploadForTarget,
 } from "../../app/useRenderQueueWorker";
 import { summarizeCredit } from "../../state/aiDisclosure";
@@ -36,6 +38,26 @@ export function RenderQueuePanel() {
   const clearTerminal = useRenderQueueStore((s) => s.clearTerminal);
   const markReviewed = useRenderQueueStore((s) => s.markReviewed);
   const visible = entries.slice(-12);
+  useEffect(() => {
+    const liveUploadEntries = visible.flatMap((entry) =>
+      Object.entries(entry.uploadStates ?? {})
+        .filter(
+          ([, state]) =>
+            state.state === "scheduled" || state.state === "processing",
+        )
+        .map(([provider]) => ({ entry, provider })),
+    );
+    if (liveUploadEntries.length === 0) return;
+    const tick = () => {
+      for (const { entry, provider } of liveUploadEntries) {
+        void refreshServerUploadState(entry, provider);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 2_000);
+    return () => window.clearInterval(timer);
+  }, [visible]);
+
   if (visible.length === 0) {
     return (
       <Card padding="md">
@@ -296,6 +318,36 @@ function UploadTargetRow({
       </li>
     );
   }
+  if (state.state === "scheduled") {
+    return (
+      <li className="flex flex-wrap items-center gap-1 text-[var(--color-text-secondary)]">
+        <span aria-hidden>→</span>
+        <span className="min-w-0">Staged for {label} · waiting for server</span>
+        <button
+          type="button"
+          onClick={() => void refreshServerUploadState(entry, provider)}
+          className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        >
+          Refresh
+        </button>
+      </li>
+    );
+  }
+  if (state.state === "processing") {
+    return (
+      <li className="flex flex-wrap items-center gap-1 text-[var(--color-text-secondary)]">
+        <span aria-hidden>→</span>
+        <span className="min-w-0">Processing on {label}</span>
+        <button
+          type="button"
+          onClick={() => void refreshServerUploadState(entry, provider)}
+          className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        >
+          Refresh
+        </button>
+      </li>
+    );
+  }
   if (state.state === "published") {
     return (
       <li className="flex items-center gap-1 text-[var(--color-success)]">
@@ -312,9 +364,10 @@ function UploadTargetRow({
       </li>
     );
   }
-  // Failed — show the reason + a retry button. Retry only enabled
-  // when we have a backend job id and an output file to re-upload.
+  // Failed — show the reason + recovery actions. A server-backed
+  // failure can still refresh if the backend job later recovers.
   const canRetry = Boolean(entry.jobId && entry.outputPath);
+  const canRefresh = Boolean(state.job_id);
   return (
     <li className="flex items-start gap-1 text-[var(--color-job-failed-text)]">
       <span aria-hidden>→</span>
@@ -322,6 +375,15 @@ function UploadTargetRow({
         <span className="truncate" title={state.reason}>
           {label} upload failed: {state.reason}
         </span>
+        {canRefresh ? (
+          <button
+            type="button"
+            onClick={() => void refreshServerUploadState(entry, provider)}
+            className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          >
+            Refresh
+          </button>
+        ) : null}
         {canRetry ? (
           <button
             type="button"

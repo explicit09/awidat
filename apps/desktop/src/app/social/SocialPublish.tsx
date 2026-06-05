@@ -24,6 +24,11 @@ import { Button, Card, Inline, Stack } from "../../ui";
 
 type UploadPrivacy = "private" | "unlisted" | "public";
 
+type ValidatedTarget = {
+  validation_state?: string;
+  validationState?: string;
+};
+
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -33,6 +38,10 @@ function randomId(prefix: string): string {
   crypto.getRandomValues(bytes);
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   return `${prefix}-${hex}`;
+}
+
+function validationState(target: ValidatedTarget): string {
+  return target.validation_state ?? target.validationState ?? "unknown";
 }
 
 /** Format a unix-seconds value for a datetime-local input. */
@@ -111,14 +120,13 @@ export function SocialPublish() {
       });
 
       // 2. validate (eligibility + scheduled time).
-      const validated = await invoke<{ validationState: string }>(
+      const validated = await invoke<ValidatedTarget>(
         "social_validate_target",
         { targetId, now: nowSeconds() },
       );
-      if (validated.validationState !== "valid") {
-        setError(
-          `Not valid to schedule: ${reasonCopy(validated.validationState)}`,
-        );
+      const validatedState = validationState(validated);
+      if (validatedState !== "valid") {
+        setError(`Not valid to schedule: ${reasonCopy(validatedState)}`);
         setBusy(null);
         return;
       }

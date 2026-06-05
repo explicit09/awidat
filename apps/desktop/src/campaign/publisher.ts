@@ -23,6 +23,11 @@ export type CampaignUploadRequest = {
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+type ValidatedTarget = {
+  validation_state?: string;
+  validationState?: string;
+};
+
 const VISIBILITIES = new Set<UploadVisibility>([
   "private",
   "unlisted",
@@ -33,6 +38,10 @@ function visibilityFrom(value: unknown): UploadVisibility {
   return typeof value === "string" && VISIBILITIES.has(value as UploadVisibility)
     ? (value as UploadVisibility)
     : "private";
+}
+
+function validationState(target: ValidatedTarget): string {
+  return target.validation_state ?? target.validationState ?? "unknown";
 }
 
 function itemForVariant(
@@ -197,14 +206,15 @@ export async function publishCampaignViaServer(
           now: nowSeconds(),
         },
       });
-      const validated = await invoke<{ validationState: string }>(
+      const validated = await invoke<ValidatedTarget>(
         "social_validate_target",
         { targetId, now: nowSeconds() },
       );
-      if (validated.validationState !== "valid") {
+      const validatedState = validationState(validated);
+      if (validatedState !== "valid") {
         results.push({
           variantId: req.variantId,
-          error: `Not valid: ${validated.validationState}`,
+          error: `Not valid: ${validatedState}`,
         });
         continue;
       }

@@ -31,6 +31,7 @@ import {
   useAiDisclosure,
   type AiDisclosure,
 } from "../state/aiDisclosure";
+import { publishRenderTargetsViaServer } from "./serverPublish";
 
 type TimelineRenderInfo = {
   job_id: string;
@@ -55,6 +56,15 @@ type JobStatus = {
   exit_code: number | null;
 };
 
+type SocialPublishJob = {
+  id: string;
+  status: string;
+  providerPostId?: string | null;
+  providerPostUrl?: string | null;
+  normalizedError?: string | null;
+  requiresActionReason?: string | null;
+};
+
 type CaptionSidecarPaths = {
   srt_path: string;
   vtt_path: string;
@@ -67,6 +77,80 @@ type StillExportInfo = {
 };
 
 const POLL_INTERVAL_MS = 500;
+
+function publishedUrlsFromStates(
+  states: Record<string, RenderUploadState>,
+): Record<string, string> {
+  const urls: Record<string, string> = {};
+  for (const [provider, state] of Object.entries(states)) {
+    if (state.state === "published") {
+      urls[provider] = state.remote_url;
+    }
+  }
+  return urls;
+}
+
+function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
+  if (job.status === "published" && job.providerPostUrl) {
+    return {
+      state: "published",
+      remote_url: job.providerPostUrl,
+      remote_id: job.providerPostId ?? job.id,
+    };
+  }
+  if (
+    job.status === "failed" ||
+    job.status === "requires_action" ||
+    job.status === "cancelled"
+  ) {
+    return {
+      state: "failed",
+      reason:
+        job.normalizedError ??
+        job.requiresActionReason ??
+        `server publish ${job.status}`,
+      job_id: job.id,
+    };
+  }
+  if (job.status === "processing" || job.status === "uploading") {
+    return { state: "processing", job_id: job.id };
+  }
+  return { state: "scheduled", job_id: job.id };
+}
+
+export async function refreshServerUploadState(
+  entry: RenderQueueEntry,
+  provider: string,
+): Promise<void> {
+  const current = entry.uploadStates?.[provider];
+  if (
+    current?.state !== "scheduled" &&
+    current?.state !== "processing" &&
+    !(current?.state === "failed" && current.job_id)
+  ) {
+    return;
+  }
+  const latest =
+    useRenderQueueStore.getState().entries.find((e) => e.id === entry.id)
+      ?.uploadStates ?? {};
+  let nextState: RenderUploadState;
+  try {
+    const job = await invoke<SocialPublishJob>("social_publish_job", {
+      jobId: current.job_id,
+    });
+    nextState = uploadStateFromSocialJob(job);
+  } catch (error) {
+    nextState = {
+      state: "failed",
+      reason: error instanceof Error ? error.message : String(error),
+      job_id: current.job_id,
+    };
+  }
+  const next = { ...latest, [provider]: nextState };
+  useRenderQueueStore
+    .getState()
+    .setUploadStates(entry.id, next, publishedUrlsFromStates(next));
+}
 
 /** Hook that runs the queue. Mount it once at the app root (App.tsx);
  *  it idles when there's nothing pending. */
@@ -183,27 +267,9 @@ async function runEntry(
   }
 }
 
-/** Per-target upload entry returned by the backend. Matches Rust's
- *  `UploadJobEntry`. */
-type UploadJobEntryWire = {
-  job_id: string;
-  upload_targets: string[];
-  upload_states: Record<string, RenderUploadState>;
-  published_urls: Record<string, string>;
-};
-
 /**
  * After a render lands at `done`, fan out uploads to the user's
- * selected targets. Two-step protocol:
- *
- *   1. `set_render_upload_targets(jobId, providers)` — backend
- *      registers per-target tracking.
- *   2. `start_uploads_for_job(jobId, file, title)` — backend spawns
- *      one tokio task per target, each driving the
- *      `Pending → Uploading → Published / Failed` lifecycle.
- *
- * Then this function polls `poll_upload_states` until every target
- * lands in a terminal state.
+ * selected server-backed social targets.
  *
  * No-op when the entry has no `uploadTargets` — the queue still
  * publishes the render-done state via `markDone` upstream, just
@@ -230,26 +296,11 @@ async function maybeChainUploads(
     );
   }
   try {
-    await invoke<void>("set_render_upload_targets", {
-      jobId,
-      providers: targets,
-    });
-    // Push each target's metadata to the backend before we kick the
-    // upload — `start_uploads_for_job` reads from there to build the
-    // per-provider `UploadParams`. Awaited in parallel to keep total
-    // latency to one round trip even with three targets.
-    await Promise.all(
-      targets.map((provider) =>
-        invoke<void>("set_upload_metadata", {
-          jobId,
-          provider,
-          metadata: metadataByProvider[provider],
-        }),
-      ),
+    store.setUploadStates(
+      entry.id,
+      Object.fromEntries(targets.map((p) => [p, { state: "pending" }])),
+      {},
     );
-    // Mirror the saved metadata onto the queue entry so the retry
-    // path doesn't have to re-read the form (which may have moved on
-    // to a different render's metadata by then).
     store.setUploadMetadata(entry.id, metadataByProvider);
     // Compute the AI disclosure (W5.A4) — backend walks the project
     // timeline against the generated-media registry. The result is
@@ -270,10 +321,23 @@ async function maybeChainUploads(
       store.setAiDisclosure(entry.id, disclosure);
       useAiDisclosure.getState().set(jobId, disclosure);
     }
-    await invoke<void>("start_uploads_for_job", {
-      jobId,
-      filePath: outputPath,
+
+    await publishRenderTargetsViaServer({
+      renderQueueId: entry.id,
+      renderJobId: jobId,
+      outputPath,
       title: entry.label,
+      targets,
+      metadataByProvider,
+      invoke,
+      onState: (provider, state) => {
+        const current =
+          useRenderQueueStore.getState().entries.find((e) => e.id === entry.id)
+            ?.uploadStates ?? {};
+        const next = { ...current, [provider]: state };
+        const urls = publishedUrlsFromStates(next);
+        store.setUploadStates(entry.id, next, urls);
+      },
     });
   } catch (err) {
     // Couldn't register / kick — surface as failed states for every
@@ -284,43 +348,6 @@ async function maybeChainUploads(
     );
     store.setUploadStates(entry.id, states, {});
     return;
-  }
-  await pollUploadStates(entry.id, jobId);
-}
-
-const UPLOAD_POLL_INTERVAL_MS = 800;
-
-/** Poll backend `poll_upload_states` until every target terminal. */
-async function pollUploadStates(queueId: string, jobId: string): Promise<void> {
-  const store = useRenderQueueStore.getState();
-  // Safety bound: ~10 minutes at 800ms cadence. Long-running uploads
-  // (multi-GB to YouTube) can outrun this; that's fine — the worker
-  // returns, the UI reflects the last-seen states, and the user can
-  // hit "Retry" to re-poll on demand.
-  const maxTicks = 750;
-  for (let tick = 0; tick < maxTicks; tick++) {
-    await sleep(UPLOAD_POLL_INTERVAL_MS);
-    let snapshot: UploadJobEntryWire | null;
-    try {
-      snapshot = await invoke<UploadJobEntryWire | null>(
-        "poll_upload_states",
-        { jobId },
-      );
-    } catch {
-      // Treat IPC errors as "try again next tick" — the backend may
-      // not be ready yet, or we may be reloading.
-      continue;
-    }
-    if (!snapshot) continue;
-    store.setUploadStates(
-      queueId,
-      snapshot.upload_states,
-      snapshot.published_urls,
-    );
-    const allTerminal = Object.values(snapshot.upload_states).every(
-      (s) => s.state === "published" || s.state === "failed",
-    );
-    if (allTerminal) return;
   }
 }
 
@@ -477,12 +504,28 @@ export async function retryUploadForTarget(
     // should hide the Retry button until outputPath is set.
     return;
   }
+  const metadata =
+    entry.uploadMetadata?.[provider] ??
+    useUploadMetadata.getState().get(entry.id, provider, entry.label);
   try {
-    await invoke<void>("retry_upload", {
-      jobId,
-      provider,
-      filePath,
+    await publishRenderTargetsViaServer({
+      renderQueueId: entry.id,
+      renderJobId: jobId,
+      outputPath: filePath,
       title: entry.label,
+      targets: [provider],
+      metadataByProvider: { [provider]: metadata },
+      invoke,
+      onState: (_provider, state) => {
+        const current =
+          useRenderQueueStore.getState().entries.find((e) => e.id === entry.id)
+            ?.uploadStates ?? {};
+        const next = { ...current, [provider]: state };
+        const urls = publishedUrlsFromStates(next);
+        useRenderQueueStore
+          .getState()
+          .setUploadStates(entry.id, next, urls);
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -494,5 +537,4 @@ export async function retryUploadForTarget(
     store.setUploadStates(entry.id, states, entry.publishedUrls ?? {});
     return;
   }
-  await pollUploadStates(entry.id, jobId);
 }
