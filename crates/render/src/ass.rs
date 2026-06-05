@@ -128,7 +128,7 @@ fn build_ass_document(title: &TitlePlan, canvas: RenderCanvas) -> String {
     let mut out = String::new();
     push_script_info(&mut out, canvas);
     push_styles(&mut out, title);
-    push_events(&mut out, title);
+    push_events(&mut out, title, canvas);
     out
 }
 
@@ -258,12 +258,12 @@ fn push_default_subtitle_styles(out: &mut String) {
     out.push('\n');
 }
 
-fn push_events(out: &mut String, title: &TitlePlan) {
+fn push_events(out: &mut String, title: &TitlePlan, canvas: RenderCanvas) {
     out.push_str("[Events]\n");
     out.push_str(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
     );
-    let dialogues = build_dialogue_lines(title);
+    let dialogues = build_dialogue_lines(title, canvas);
     for dialogue in dialogues {
         out.push_str(&dialogue);
         out.push('\n');
@@ -342,6 +342,19 @@ enum CueLineRole {
     Last,
 }
 
+/// Resting anchor (x,y) in PlayRes coords for a bottom-aligned caption.
+/// x = horizontal center; y = canvas height minus the bottom margin.
+/// Returns None when the canvas is degenerate (no room for the caption).
+fn caption_resting_xy(title: &TitlePlan, canvas: RenderCanvas) -> Option<(i64, i64)> {
+    let layout = CaptionLayoutProfile::for_title(title);
+    if canvas.width == 0 || (canvas.height as i64) <= layout.margin_v_bottom as i64 {
+        return None;
+    }
+    let x = (canvas.width / 2) as i64;
+    let y = (canvas.height as i64 - layout.margin_v_bottom as i64).max(0);
+    Some((x, y))
+}
+
 /// Leading ASS override block for entrance/exit motion on one Dialogue line.
 /// `dur_cs` = the line's [start,end] span in centiseconds. Entrance on
 /// Sole|First; exit on Sole|Last. Scale + fade only (alignment-compatible);
@@ -350,15 +363,23 @@ fn motion_override(
     motion: crate::timeline::CaptionRenderMotion,
     role: CueLineRole,
     dur_cs: i64,
+    resting: Option<(i64, i64)>,
 ) -> String {
-    use crate::timeline::{CaptionRenderEntrance as E, CaptionRenderExit as X};
+    use crate::timeline::{
+        CaptionRenderContinuous as C, CaptionRenderEntrance as E, CaptionRenderExit as X,
+    };
+    const SLIDE_PX: i64 = 60;
+    const FLOAT_PX: i64 = 12;
+
     let dur_ms = (dur_cs * 10).max(1);
     let mut init = String::new();
     let mut anim = String::new();
     let mut fad_in: i64 = 0;
     let mut fad_out: i64 = 0;
+    let mut have_move = false;
     let entrance_here = matches!(role, CueLineRole::Sole | CueLineRole::First);
     let exit_here = matches!(role, CueLineRole::Sole | CueLineRole::Last);
+
     if entrance_here {
         match motion.entrance {
             E::PopIn => {
@@ -366,9 +387,23 @@ fn motion_override(
                 anim.push_str("\\t(0,120,\\fscx103\\fscy103)\\t(120,170,\\fscx100\\fscy100)");
             }
             E::FadeIn => fad_in = 150,
-            E::SlideUp | E::None => {}
+            E::SlideUp => match resting {
+                Some((x, y)) => {
+                    let y2 = y + SLIDE_PX;
+                    // \an2 + \move: start below resting, end at resting.
+                    anim.push_str(&format!("\\an2\\move({x},{y2},{x},{y},0,150)"));
+                    have_move = true;
+                    fad_in = 150;
+                }
+                None => {
+                    // Degenerate canvas: fall back to fade.
+                    fad_in = 150;
+                }
+            },
+            E::None => {}
         }
     }
+
     if exit_here {
         match motion.exit {
             X::PopOut => {
@@ -376,9 +411,44 @@ fn motion_override(
                 anim.push_str(&format!("\\t({s},{dur_ms},\\fscx80\\fscy80)"));
             }
             X::FadeOut => fad_out = 150,
-            X::SlideDown | X::None => {}
+            X::SlideDown => match resting {
+                Some((x, y)) if !have_move => {
+                    let s = (dur_ms - 150).max(0);
+                    let y2 = y + SLIDE_PX;
+                    anim.push_str(&format!("\\an2\\move({x},{y},{x},{y2},{s},{dur_ms})"));
+                    have_move = true;
+                    fad_out = 150;
+                }
+                Some(_) => {
+                    // Already have a \move (entrance slide on same line — Sole).
+                    // Can't emit two \move; fall back to fade for exit.
+                    fad_out = 150;
+                }
+                None => {
+                    // Degenerate canvas: fall back to fade.
+                    fad_out = 150;
+                }
+            },
+            X::None => {}
         }
     }
+
+    // Continuous float — emit only on entrance-bearing lines (Sole|First) to
+    // avoid stacking. Skip when a \move is already in use.
+    // Degenerate canvas (resting == None): no-op for float.
+    if matches!(motion.continuous, C::Float)
+        && entrance_here
+        && !have_move
+        && let Some((x, y)) = resting
+    {
+        let y_end = y - FLOAT_PX;
+        anim.push_str(&format!("\\an2\\move({x},{y},{x},{y_end},0,{dur_ms})"));
+        have_move = true;
+    }
+    // have_move guards all \move emissions above; reference it to satisfy the
+    // compiler when no branch actually uses the final value.
+    let _ = have_move;
+
     if fad_in > 0 || fad_out > 0 {
         anim.push_str(&format!("\\fad({fad_in},{fad_out})"));
     }
@@ -409,9 +479,11 @@ fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord) -> String {
 /// Why one line and not one-per-word: libass `\k` tags chain
 /// within a single Dialogue, painting words in PrimaryColour as
 /// their `\k` duration elapses. That's the karaoke reveal we want.
-fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
+fn build_dialogue_lines(title: &TitlePlan, canvas: RenderCanvas) -> Vec<String> {
     // CaptionRenderMotion is Copy — extract once for use in all branches.
     let motion = title.caption_style.as_ref().map(|s| s.motion);
+    // Resting position for slide/float motion — None on degenerate canvas.
+    let resting = caption_resting_xy(title, canvas);
 
     let words: Vec<&crate::timeline::CaptionWordTiming> = title
         .word_timings
@@ -465,7 +537,7 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
             };
             let dur_cs =
                 seconds_to_centiseconds((active_word.end_s - active_word.start_s).max(0.0)) as i64;
-            let line_mv = motion_override(s.motion, role, dur_cs);
+            let line_mv = motion_override(s.motion, role, dur_cs, resting);
             let aw = active_word_anim(s.motion.active_word);
             let mut line = line_mv;
             for (j, w) in words.iter().enumerate() {
@@ -502,7 +574,7 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         let end = format_ass_time(title.end_s.max(title.start_s));
         let dur_cs = seconds_to_centiseconds((title.end_s - title.start_s).max(0.0)) as i64;
         let mv = motion
-            .map(|m| motion_override(m, CueLineRole::Sole, dur_cs))
+            .map(|m| motion_override(m, CueLineRole::Sole, dur_cs, resting))
             .unwrap_or_default();
         return vec![format!(
             "Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{wrapped}"
@@ -547,7 +619,7 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
 
     let dur_cs = seconds_to_centiseconds((title.end_s - title.start_s).max(0.0)) as i64;
     let mv = motion
-        .map(|m| motion_override(m, CueLineRole::Sole, dur_cs))
+        .map(|m| motion_override(m, CueLineRole::Sole, dur_cs, resting))
         .unwrap_or_default();
     vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{mv}{text}",)]
 }
@@ -1243,6 +1315,37 @@ mod tests {
         assert!(d[0].contains("\\fscx80"), "entrance on first word's line: {}", d[0]);
         assert!(!d[1].contains("\\fscx80"), "no entrance on second word's line: {}", d[1]);
         assert!(d[1].contains("\\fad("), "exit fade on last word's line: {}", d[1]);
+    }
+
+    #[test]
+    fn slide_up_emits_move_into_resting_position() {
+        use crate::timeline::*;
+        let mut t = caption_title("hello", vec![]);
+        t.caption_style = Some(motion_style(CaptionRenderEntrance::SlideUp, CaptionRenderExit::None));
+        let doc = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 });
+        let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
+        assert!(d.contains("\\move("), "SlideUp must emit \\move: {d}");
+    }
+
+    #[test]
+    fn slide_falls_back_to_fade_on_degenerate_canvas() {
+        use crate::timeline::*;
+        let mut t = caption_title("hello", vec![]);
+        t.caption_style = Some(motion_style(CaptionRenderEntrance::SlideUp, CaptionRenderExit::None));
+        // height <= margin => degenerate => fall back to FadeIn (\fad), never \move.
+        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 100, height: 10 })
+            .lines().find(|l| l.starts_with("Dialogue:")).unwrap().to_string();
+        assert!(d.contains("\\fad(") && !d.contains("\\move("), "degenerate slide must fall back to fade: {d}");
+    }
+
+    #[test]
+    fn slide_down_exit_emits_move() {
+        use crate::timeline::*;
+        let mut t = caption_title("hello", vec![]);
+        t.caption_style = Some(motion_style(CaptionRenderEntrance::None, CaptionRenderExit::SlideDown));
+        let d = build_ass_document_with_canvas(&t, RenderCanvas { width: 1080, height: 1920 })
+            .lines().find(|l| l.starts_with("Dialogue:")).unwrap().to_string();
+        assert!(d.contains("\\move("), "SlideDown must emit \\move: {d}");
     }
 
     #[test]
