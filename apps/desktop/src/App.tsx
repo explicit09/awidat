@@ -90,6 +90,7 @@ import {
 } from "./state/uploadPrefs";
 import { useUploadMetadata } from "./state/uploadMetadata";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
+import { SchedulerWorkspace } from "./app/scheduler/SchedulerWorkspace";
 import {
   DELIVERY_TARGETS,
   useDeliveryTargetsStore,
@@ -1731,6 +1732,7 @@ function App() {
       }}
     />
   );
+  const realSchedulerWorkspace = <SchedulerWorkspace />;
   // Multi-proposal review used to route through `BatchReviewSurface`,
   // but that component was full of demo placeholders (fake titles,
   // hard-coded constraints, fabricated risk notes) that lied to the
@@ -2008,7 +2010,7 @@ function App() {
         }}
         autoInspect={activeProposal !== null}
         deliver={realDeliveryWorkspace}
-        schedule={null}
+        schedule={realSchedulerWorkspace}
         skills={<SkillsSurface variant="sheet" />}
         history={<HistorySurface variant="sheet" />}
         stage={stage}
