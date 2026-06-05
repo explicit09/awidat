@@ -3386,6 +3386,32 @@ mod tests {
     }
 
     #[test]
+    fn insert_caption_text_decodes_an_authored_newline() {
+        // A multi-line cue is emitted as a single EDL line with a JSON-escaped
+        // newline; the parser must decode it back to a real newline so the
+        // renderer can honor the authored two-line break (long-form subtitles).
+        let text = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.4
++ text: \"the rise of solar\\nentrepreneurs.\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption { text, .. } => {
+                assert_eq!(text, "the rise of solar\nentrepreneurs.");
+                assert!(
+                    text.contains('\n'),
+                    "must be a real newline, not a literal backslash-n"
+                );
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_insert_caption_with_word_timings_json() {
         let text = "\
 *** Begin EDL
