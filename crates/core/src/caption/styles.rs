@@ -46,6 +46,59 @@ pub enum CaptionBackground {
     Box { color: String, opacity: u8 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntranceMotion {
+    None,
+    PopIn,
+    SlideUp,
+    FadeIn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveWordMotion {
+    None,
+    Bounce,
+    ScalePop,
+    Shake,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitMotion {
+    None,
+    PopOut,
+    FadeOut,
+    SlideDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuousMotion {
+    None,
+    Float,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptionMotion {
+    pub entrance: EntranceMotion,
+    pub active_word: ActiveWordMotion,
+    pub exit: ExitMotion,
+    pub continuous: ContinuousMotion,
+}
+
+impl Default for CaptionMotion {
+    fn default() -> Self {
+        Self {
+            entrance: EntranceMotion::None,
+            active_word: ActiveWordMotion::None,
+            exit: ExitMotion::None,
+            continuous: ContinuousMotion::None,
+        }
+    }
+}
+
 /// EDL-carryable caption style knobs. Outline/shadow are render invariants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptionStyleSpec {
@@ -56,6 +109,8 @@ pub struct CaptionStyleSpec {
     pub highlight_color: Option<String>,
     pub reveal: RevealMode,
     pub background: CaptionBackground,
+    #[serde(default)]
+    pub motion: CaptionMotion,
 }
 
 impl CaptionStyleSpec {
@@ -71,7 +126,7 @@ impl CaptionStyleSpec {
 }
 
 pub fn preset_names() -> &'static [&'static str] {
-    &["clean_white", "word_pop", "boxed"]
+    &["clean_white", "word_pop", "boxed", "emphasis"]
 }
 
 pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
@@ -84,6 +139,7 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             highlight_color: None,
             reveal: RevealMode::WholeCue,
             background: CaptionBackground::None,
+            motion: CaptionMotion::default(),
         },
         "word_pop" => CaptionStyleSpec {
             font_size: 84,
@@ -93,6 +149,12 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             highlight_color: Some("#FFE000".into()),
             reveal: RevealMode::ActiveWordPop,
             background: CaptionBackground::None,
+            motion: CaptionMotion {
+                entrance: EntranceMotion::PopIn,
+                active_word: ActiveWordMotion::Bounce,
+                exit: ExitMotion::None,
+                continuous: ContinuousMotion::None,
+            },
         },
         "boxed" => CaptionStyleSpec {
             font_size: 48,
@@ -104,6 +166,27 @@ pub fn resolve_preset(name: &str) -> Option<CaptionStyleSpec> {
             background: CaptionBackground::Box {
                 color: "#000000".into(),
                 opacity: 153,
+            },
+            motion: CaptionMotion::default(),
+        },
+        "emphasis" => CaptionStyleSpec {
+            // Poppier than word_pop (font 84): bigger + a box plate. The font must
+            // stay >= word_pop so the look reads as *more* emphatic, not less.
+            font_size: 92,
+            weight: CaptionWeight::Bold,
+            casing: CaptionCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: RevealMode::ActiveWordPop,
+            background: CaptionBackground::Box {
+                color: "#000000".into(),
+                opacity: 204,
+            },
+            motion: CaptionMotion {
+                entrance: EntranceMotion::PopIn,
+                active_word: ActiveWordMotion::Bounce,
+                exit: ExitMotion::None,
+                continuous: ContinuousMotion::None,
             },
         },
         _ => return None,
@@ -212,5 +295,55 @@ mod tests {
             let back: CaptionStyleSpec = serde_json::from_str(&json).unwrap();
             assert_eq!(spec, back);
         }
+    }
+
+    #[test]
+    fn caption_motion_defaults_to_none_and_round_trips() {
+        let m = CaptionMotion::default();
+        assert!(matches!(m.entrance, EntranceMotion::None));
+        assert!(matches!(m.active_word, ActiveWordMotion::None));
+        assert!(matches!(m.exit, ExitMotion::None));
+        assert!(matches!(m.continuous, ContinuousMotion::None));
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<CaptionMotion>(&json).unwrap(), m);
+    }
+
+    #[test]
+    fn emphasis_preset_is_poppy_boxed_and_animated() {
+        let e = resolve_preset("emphasis").expect("emphasis");
+        assert!(matches!(e.background, CaptionBackground::Box { .. }));
+        assert!(matches!(e.motion.entrance, EntranceMotion::PopIn));
+        assert!(matches!(e.motion.active_word, ActiveWordMotion::Bounce));
+        // Emphasis must read as *more* emphatic than word_pop: at least as large.
+        let word_pop = resolve_preset("word_pop").expect("word_pop");
+        assert!(
+            e.font_size >= word_pop.font_size,
+            "emphasis ({}) must be >= word_pop ({})",
+            e.font_size,
+            word_pop.font_size
+        );
+        assert!(preset_names().contains(&"emphasis"));
+    }
+
+    #[test]
+    fn preset_motions_match_corpus_defaults() {
+        let clean = resolve_preset("clean_white").unwrap();
+        assert_eq!(
+            clean.motion,
+            CaptionMotion::default(),
+            "cinematic = minimal/none"
+        );
+        let boxed = resolve_preset("boxed").unwrap();
+        assert_eq!(boxed.motion, CaptionMotion::default());
+        let pop = resolve_preset("word_pop").unwrap();
+        assert!(matches!(pop.motion.entrance, EntranceMotion::PopIn));
+        assert!(matches!(pop.motion.active_word, ActiveWordMotion::Bounce));
+    }
+
+    #[test]
+    fn style_json_without_motion_deserializes_to_default() {
+        let legacy = r##"{"font_size":44,"weight":"normal","casing":"as_is","primary_color":"#FFFFFF","highlight_color":null,"reveal":"whole_cue","background":{"kind":"none"}}"##;
+        let spec: CaptionStyleSpec = serde_json::from_str(legacy).unwrap();
+        assert_eq!(spec.motion, CaptionMotion::default());
     }
 }

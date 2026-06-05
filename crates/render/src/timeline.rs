@@ -4442,6 +4442,76 @@ pub enum CaptionRenderReveal {
     ActiveWordPop,
 }
 
+/// Entrance animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderEntrance {
+    #[default]
+    None,
+    PopIn,
+    SlideUp,
+    FadeIn,
+}
+
+/// Active-word animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderActiveWord {
+    #[default]
+    None,
+    Bounce,
+    ScalePop,
+    Shake,
+}
+
+/// Exit animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderExit {
+    #[default]
+    None,
+    PopOut,
+    FadeOut,
+    SlideDown,
+}
+
+/// Continuous animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderContinuous {
+    #[default]
+    None,
+    Float,
+}
+
+/// Motion settings mirroring `CaptionMotion` in `awidat-core`.
+///
+/// Each slot carries `#[serde(default)]` so a partially-specified motion
+/// object (e.g. `{"entrance":"fade_in"}`) degrades the omitted slots to
+/// `None` rather than failing deserialization of the whole caption style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CaptionRenderMotion {
+    #[serde(default)]
+    pub entrance: CaptionRenderEntrance,
+    #[serde(default)]
+    pub active_word: CaptionRenderActiveWord,
+    #[serde(default)]
+    pub exit: CaptionRenderExit,
+    #[serde(default)]
+    pub continuous: CaptionRenderContinuous,
+}
+
+impl Default for CaptionRenderMotion {
+    fn default() -> Self {
+        Self {
+            entrance: CaptionRenderEntrance::None,
+            active_word: CaptionRenderActiveWord::None,
+            exit: CaptionRenderExit::None,
+            continuous: CaptionRenderContinuous::None,
+        }
+    }
+}
+
 /// Parsed caption styling carried through from the EDL `style_json` block.
 /// Field names mirror `CaptionStyleSpec` in `awidat-core` so the same JSON
 /// deserializes on both sides without a conversion layer.
@@ -4454,6 +4524,8 @@ pub struct CaptionRenderStyle {
     pub highlight_color: Option<String>,
     pub reveal: CaptionRenderReveal,
     pub background: CaptionRenderBackground,
+    #[serde(default)]
+    pub motion: CaptionRenderMotion,
 }
 
 /// One styled inline run inside a rich title.
@@ -17736,6 +17808,43 @@ caption_style: None,
     }
 
     // ── CaptionRenderStyle round-trip tests ───────────────────────────────────
+
+    #[test]
+    fn caption_render_style_carries_motion_from_json() {
+        let json = r##"{"font_size":64,"weight":"bold","casing":"upper","primary_color":"#FFFFFF","highlight_color":"#FFE000","reveal":"active_word_pop","background":{"kind":"none"},"motion":{"entrance":"pop_in","active_word":"bounce","exit":"none","continuous":"none"}}"##;
+        let s: CaptionRenderStyle = serde_json::from_str(json).unwrap();
+        assert!(matches!(s.motion.entrance, CaptionRenderEntrance::PopIn));
+        assert!(matches!(
+            s.motion.active_word,
+            CaptionRenderActiveWord::Bounce
+        ));
+    }
+
+    #[test]
+    fn caption_render_style_motion_defaults_when_absent() {
+        let json = r##"{"font_size":44,"weight":"normal","casing":"as_is","primary_color":"#FFFFFF","highlight_color":null,"reveal":"whole_cue","background":{"kind":"none"}}"##;
+        let s: CaptionRenderStyle = serde_json::from_str(json).unwrap();
+        assert!(matches!(s.motion.entrance, CaptionRenderEntrance::None));
+    }
+
+    #[test]
+    fn caption_render_style_partial_motion_degrades_omitted_slots() {
+        // A hand-authored or partially-overridden motion object must not
+        // invalidate the whole CaptionRenderStyle: omitted slots degrade to
+        // None rather than failing deserialization (which previously dropped
+        // font/color/reveal entirely via parse_title_plan's `.ok()`).
+        let json = r##"{"font_size":48,"weight":"bold","casing":"upper","primary_color":"#FFFFFF","highlight_color":"#FFE000","reveal":"active_word_pop","background":{"kind":"none"},"motion":{"entrance":"fade_in"}}"##;
+        let s: CaptionRenderStyle = serde_json::from_str(json).expect("partial motion must parse");
+        assert_eq!(s.font_size, 48);
+        assert_eq!(s.reveal, CaptionRenderReveal::ActiveWordPop);
+        assert!(matches!(s.motion.entrance, CaptionRenderEntrance::FadeIn));
+        assert!(matches!(
+            s.motion.active_word,
+            CaptionRenderActiveWord::None
+        ));
+        assert!(matches!(s.motion.exit, CaptionRenderExit::None));
+        assert!(matches!(s.motion.continuous, CaptionRenderContinuous::None));
+    }
 
     #[test]
     fn caption_render_style_deserializes_from_json() {

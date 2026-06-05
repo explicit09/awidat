@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn word_by_word_spec_emits_word_timings() {
         use crate::caption::readability::RevealMode;
-        use crate::caption::styles::{CaptionStyleSpec, MIN_LEGIBLE_FONT_SIZE};
+        use crate::caption::styles::{CaptionMotion, CaptionStyleSpec, MIN_LEGIBLE_FONT_SIZE};
         let spec = CaptionStyleSpec {
             font_size: MIN_LEGIBLE_FONT_SIZE.max(56),
             weight: CaptionWeight::Normal,
@@ -136,6 +136,7 @@ mod tests {
             highlight_color: None,
             reveal: RevealMode::WordByWord,
             background: CaptionBackground::None,
+            motion: CaptionMotion::default(),
         };
         let lines = build_caption_edl_lines(&[rec()], &spec, "standard");
         let blob = lines.join("\n");
