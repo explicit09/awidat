@@ -11,6 +11,7 @@
     "test:tokens": "node tests/tokens-presence.mjs",
     "test:status-pill": "node --experimental-strip-types tests/status-pill.test.ts",
     "test:social-model": "node --experimental-strip-types tests/social-model.test.ts",
+    "test:scheduler-model": "node --experimental-strip-types tests/scheduler-model.test.ts",
     "test:social-accounts": "node --experimental-strip-types tests/social-accounts-connect.test.ts",
     "test:mode-store": "node --experimental-strip-types tests/mode-store.test.ts",
     "test:center-mode": "node --experimental-strip-types tests/center-mode.test.ts",
