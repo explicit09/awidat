@@ -334,9 +334,6 @@ fn wrap_plain_subtitle_text(input: &str) -> String {
 }
 
 /// Which line of a cue this Dialogue is, for placing entrance/exit tags.
-// `First`, `Middle`, and `Last` are reserved for multi-line split-cue
-// rendering (future task); only `Sole` is wired today.
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 enum CueLineRole {
     Sole,
@@ -391,6 +388,20 @@ fn motion_override(
     format!("{{{init}{anim}}}")
 }
 
+/// Inline ASS override tags for the active-word animation applied inside the
+/// highlighted word's wrapper block. Returns `""` when no animation is set.
+fn active_word_anim(m: crate::timeline::CaptionRenderActiveWord) -> String {
+    use crate::timeline::CaptionRenderActiveWord as A;
+    match m {
+        A::None => String::new(),
+        A::Bounce => {
+            "\\fscx100\\fscy100\\t(0,90,\\fscx115\\fscy115)\\t(90,180,\\fscx100\\fscy100)".into()
+        }
+        A::ScalePop => "\\fscx100\\fscy100\\t(0,120,\\fscx112\\fscy112)".into(),
+        A::Shake => "\\frz0\\t(0,60,\\frz3)\\t(60,120,\\frz-3)\\t(120,180,\\frz0)".into(),
+    }
+}
+
 /// Synthesize one Dialogue line per "step" (cumulative word
 /// prefix). Each line spans the full title window so the karaoke
 /// `\k` durations inside paint reveal in sync with the transcript.
@@ -442,7 +453,21 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         let hi_col = hex_to_ass_color(hi_hex);
         let mut dialogues = Vec::with_capacity(words.len());
         for (active_idx, active_word) in words.iter().enumerate() {
-            let mut line = String::new();
+            // Compute the cue-line role for entrance/exit placement.
+            let role = if words.len() == 1 {
+                CueLineRole::Sole
+            } else if active_idx == 0 {
+                CueLineRole::First
+            } else if active_idx == words.len() - 1 {
+                CueLineRole::Last
+            } else {
+                CueLineRole::Middle
+            };
+            let dur_cs =
+                seconds_to_centiseconds((active_word.end_s - active_word.start_s).max(0.0)) as i64;
+            let line_mv = motion_override(s.motion, role, dur_cs);
+            let aw = active_word_anim(s.motion.active_word);
+            let mut line = line_mv;
             for (j, w) in words.iter().enumerate() {
                 if j > 0 {
                     line.push(' ');
@@ -451,8 +476,8 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
                 let cased = apply_casing(raw, title);
                 let escaped = escape_ass_text(&cased);
                 if j == active_idx {
-                    // Wrap active word: set highlight, then restore primary after.
-                    line.push_str(&format!("{{\\c{hi_col}}}{escaped}{{\\c{primary_col}}}"));
+                    // Wrap active word: set highlight + per-word animation, then restore primary.
+                    line.push_str(&format!("{{\\c{hi_col}{aw}}}{escaped}{{\\c{primary_col}}}"));
                 } else {
                     line.push_str(&escaped);
                 }
@@ -1181,6 +1206,43 @@ mod tests {
         let doc = build_ass_document(&t, RenderCanvas::default());
         let d = doc.lines().find(|l| l.starts_with("Dialogue:")).unwrap();
         assert!(!d.contains("\\t(") && !d.contains("\\fad("), "no motion -> no animation tags: {d}");
+    }
+
+    fn pop_style_with(active: crate::timeline::CaptionRenderActiveWord, entrance: crate::timeline::CaptionRenderEntrance, exit: crate::timeline::CaptionRenderExit) -> crate::timeline::CaptionRenderStyle {
+        let mut s = motion_style(entrance, exit);
+        s.reveal = crate::timeline::CaptionRenderReveal::ActiveWordPop;
+        s.highlight_color = Some("#FFE000".into());
+        s.motion.active_word = active;
+        s
+    }
+
+    #[test]
+    fn active_word_bounce_springs_only_the_active_word() {
+        use crate::timeline::*;
+        let wt = vec![
+            CaptionWordTiming { text: "a".into(), start_s: 1.0, end_s: 1.3 },
+            CaptionWordTiming { text: "b".into(), start_s: 1.3, end_s: 1.7 },
+        ];
+        let mut t = caption_title("a b", wt);
+        t.caption_style = Some(pop_style_with(CaptionRenderActiveWord::Bounce, CaptionRenderEntrance::None, CaptionRenderExit::None));
+        let dialogues: Vec<String> = build_ass_document(&t, RenderCanvas::default()).lines().filter(|l| l.starts_with("Dialogue:")).map(String::from).collect();
+        assert_eq!(dialogues.len(), 2);
+        assert_eq!(dialogues[0].matches("\\fscx115").count(), 1, "one bounce per line: {}", dialogues[0]);
+    }
+
+    #[test]
+    fn pop_entrance_only_on_first_word_exit_only_on_last() {
+        use crate::timeline::*;
+        let wt = vec![
+            CaptionWordTiming { text: "a".into(), start_s: 1.0, end_s: 1.3 },
+            CaptionWordTiming { text: "b".into(), start_s: 1.3, end_s: 1.7 },
+        ];
+        let mut t = caption_title("a b", wt);
+        t.caption_style = Some(pop_style_with(CaptionRenderActiveWord::None, CaptionRenderEntrance::PopIn, CaptionRenderExit::FadeOut));
+        let d: Vec<String> = build_ass_document(&t, RenderCanvas::default()).lines().filter(|l| l.starts_with("Dialogue:")).map(String::from).collect();
+        assert!(d[0].contains("\\fscx80"), "entrance on first word's line: {}", d[0]);
+        assert!(!d[1].contains("\\fscx80"), "no entrance on second word's line: {}", d[1]);
+        assert!(d[1].contains("\\fad("), "exit fade on last word's line: {}", d[1]);
     }
 
     #[test]
