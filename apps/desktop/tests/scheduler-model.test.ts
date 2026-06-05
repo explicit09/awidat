@@ -77,6 +77,91 @@ assert.deepEqual(
   targetFilteredPosts.map((post) => post.provider),
   ["youtube"],
 );
+
+const stateFallbackEntry: RenderQueueEntry = {
+  ...entry,
+  id: "queue_state_fallback",
+  uploadTargets: undefined,
+  uploadMetadata: {},
+  uploadStates: {
+    instagram: { state: "processing", job_id: "job_ig" },
+    youtube: { state: "pending" },
+  },
+  publishedUrls: {},
+};
+
+const emptyTargetsFallbackEntry: RenderQueueEntry = {
+  ...stateFallbackEntry,
+  id: "queue_empty_targets_fallback",
+  uploadTargets: [],
+};
+
+assert.deepEqual(
+  deriveSchedulerPosts([stateFallbackEntry], 1_700).map(
+    (post) => `${post.provider}:${post.status}`,
+  ),
+  ["instagram:processing", "youtube:draft"],
+);
+assert.deepEqual(
+  deriveSchedulerPosts([emptyTargetsFallbackEntry], 1_700).map(
+    (post) => post.provider,
+  ),
+  ["instagram", "youtube"],
+);
+
+const unsortedTargetsEntry: RenderQueueEntry = {
+  ...entry,
+  id: "queue_unsorted_targets",
+  uploadTargets: ["late", "tie_z", "early", "tie_a"],
+  uploadMetadata: {
+    late: {
+      title: "Late post",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 3_000,
+    },
+    tie_z: {
+      title: "Zulu tie",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 2_000,
+    },
+    early: {
+      title: "Early post",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 1_000,
+    },
+    tie_a: {
+      title: "Alpha tie",
+      description: "",
+      tags: [],
+      visibility: "private",
+      scheduledAt: 2_000,
+    },
+  },
+  uploadStates: {
+    late: { state: "pending" },
+    tie_z: { state: "pending" },
+    early: { state: "pending" },
+    tie_a: { state: "pending" },
+  },
+};
+
+assert.deepEqual(
+  deriveSchedulerPosts([unsortedTargetsEntry], 1_700).map(
+    (post) => `${post.provider}:${post.scheduledAt}:${post.title}`,
+  ),
+  [
+    "early:1000:Early post",
+    "tie_a:2000:Alpha tie",
+    "tie_z:2000:Zulu tie",
+    "late:3000:Late post",
+  ],
+);
 assert.equal(schedulerStatusLabel("requires_action"), "Action needed");
 assert.equal(formatSchedulerTime(1_800, "UTC"), "1970-01-01 00:30 UTC");
 
