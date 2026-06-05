@@ -917,6 +917,7 @@ mod tests {
             highlight_color: None,
             reveal: CaptionRenderReveal::WholeCue,
             background: CaptionRenderBackground::None,
+            motion: CaptionRenderMotion::default(),
         };
         let doc = build_ass_document(&styled(spec, "rise of solo", vec![]), RenderCanvas::default());
         assert!(
@@ -939,6 +940,7 @@ mod tests {
                 color: "#000000".into(),
                 opacity: 153,
             },
+            motion: CaptionRenderMotion::default(),
         };
         let doc = build_ass_document(&styled(spec, "hi", vec![]), RenderCanvas::default());
         let style_line = doc
@@ -967,6 +969,7 @@ mod tests {
             highlight_color: None,
             reveal: CaptionRenderReveal::WholeCue,
             background: CaptionRenderBackground::None,
+            motion: CaptionRenderMotion::default(),
         };
         let doc = build_ass_document(&styled(spec, "hi", vec![]), RenderCanvas::default());
         let fields: Vec<&str> = doc
@@ -990,6 +993,7 @@ mod tests {
             highlight_color: Some("#FFE000".into()),
             reveal: CaptionRenderReveal::ActiveWordPop,
             background: CaptionRenderBackground::None,
+            motion: CaptionRenderMotion::default(),
         };
         let wt = vec![
             CaptionWordTiming {
@@ -1036,6 +1040,7 @@ mod tests {
             highlight_color: Some("#FFE000".into()),
             reveal: CaptionRenderReveal::ActiveWordPop,
             background: CaptionRenderBackground::None,
+            motion: CaptionRenderMotion::default(),
         };
         let doc = build_ass_document(&styled(spec, "hello world", vec![]), RenderCanvas::default());
         let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
@@ -1068,6 +1073,7 @@ mod tests {
             highlight_color: None,
             reveal: CaptionRenderReveal::WholeCue,
             background: CaptionRenderBackground::None,
+            motion: CaptionRenderMotion::default(),
         };
         let mut t = styled(spec, "hi", vec![]);
         t.font_size = 30; // top-level differs; style must win

@@ -4441,6 +4441,64 @@ pub enum CaptionRenderReveal {
     ActiveWordPop,
 }
 
+/// Entrance animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderEntrance {
+    None,
+    PopIn,
+    SlideUp,
+    FadeIn,
+}
+
+/// Active-word animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderActiveWord {
+    None,
+    Bounce,
+    ScalePop,
+    Shake,
+}
+
+/// Exit animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderExit {
+    None,
+    PopOut,
+    FadeOut,
+    SlideDown,
+}
+
+/// Continuous animation for caption render motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRenderContinuous {
+    None,
+    Float,
+}
+
+/// Motion settings mirroring `CaptionMotion` in `awidat-core`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CaptionRenderMotion {
+    pub entrance: CaptionRenderEntrance,
+    pub active_word: CaptionRenderActiveWord,
+    pub exit: CaptionRenderExit,
+    pub continuous: CaptionRenderContinuous,
+}
+
+impl Default for CaptionRenderMotion {
+    fn default() -> Self {
+        Self {
+            entrance: CaptionRenderEntrance::None,
+            active_word: CaptionRenderActiveWord::None,
+            exit: CaptionRenderExit::None,
+            continuous: CaptionRenderContinuous::None,
+        }
+    }
+}
+
 /// Parsed caption styling carried through from the EDL `style_json` block.
 /// Field names mirror `CaptionStyleSpec` in `awidat-core` so the same JSON
 /// deserializes on both sides without a conversion layer.
@@ -4453,6 +4511,8 @@ pub struct CaptionRenderStyle {
     pub highlight_color: Option<String>,
     pub reveal: CaptionRenderReveal,
     pub background: CaptionRenderBackground,
+    #[serde(default)]
+    pub motion: CaptionRenderMotion,
 }
 
 /// One styled inline run inside a rich title.
@@ -17727,6 +17787,21 @@ caption_style: None,
     }
 
     // ── CaptionRenderStyle round-trip tests ───────────────────────────────────
+
+    #[test]
+    fn caption_render_style_carries_motion_from_json() {
+        let json = r##"{"font_size":64,"weight":"bold","casing":"upper","primary_color":"#FFFFFF","highlight_color":"#FFE000","reveal":"active_word_pop","background":{"kind":"none"},"motion":{"entrance":"pop_in","active_word":"bounce","exit":"none","continuous":"none"}}"##;
+        let s: CaptionRenderStyle = serde_json::from_str(json).unwrap();
+        assert!(matches!(s.motion.entrance, CaptionRenderEntrance::PopIn));
+        assert!(matches!(s.motion.active_word, CaptionRenderActiveWord::Bounce));
+    }
+
+    #[test]
+    fn caption_render_style_motion_defaults_when_absent() {
+        let json = r##"{"font_size":44,"weight":"normal","casing":"as_is","primary_color":"#FFFFFF","highlight_color":null,"reveal":"whole_cue","background":{"kind":"none"}}"##;
+        let s: CaptionRenderStyle = serde_json::from_str(json).unwrap();
+        assert!(matches!(s.motion.entrance, CaptionRenderEntrance::None));
+    }
 
     #[test]
     fn caption_render_style_deserializes_from_json() {
