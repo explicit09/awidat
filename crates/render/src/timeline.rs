@@ -10850,7 +10850,11 @@ fn render_input_paths(
             AudioTrackItemPlan::Gap { .. } => None,
         }));
     }
+    let mut seen = BTreeSet::new();
     paths
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
 }
 
 fn prepare_browser_broadcast_overlay_video(
@@ -11639,6 +11643,33 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("timeline-")
         );
+    }
+
+    #[test]
+    fn render_input_paths_deduplicates_shared_video_and_audio_sources() {
+        let source = PathBuf::from("/project/raw/source.mov");
+        let segment = TimelineSegment {
+            asset_path: source.clone(),
+            ..TimelineSegment::default()
+        };
+        let audio_track = AudioTrackPlan {
+            name: "A1".into(),
+            role: "dialogue".into(),
+            volume: 1.0,
+            volume_automation: None,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: source.clone(),
+                ..AudioClipPlan::default()
+            })],
+        };
+
+        let paths = render_input_paths(&[segment], &[], &[], &[audio_track]);
+
+        assert_eq!(paths, vec![source]);
     }
 
     #[test]

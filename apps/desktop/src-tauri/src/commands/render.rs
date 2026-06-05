@@ -122,7 +122,7 @@ fn prepare_desktop_timeline_render_spec(
             } else {
                 project_root.join(path)
             };
-            awidat_render::fingerprint_file(&resolved, true)
+            awidat_render::fingerprint_file_sampled(&resolved, true)
                 .map_err(|e| format!("fingerprint input {}: {e}", resolved.display()))
         })
         .collect::<Result<Vec<_>, _>>()?;
