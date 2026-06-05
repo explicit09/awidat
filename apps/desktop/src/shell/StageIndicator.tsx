@@ -1,6 +1,7 @@
 import {
   SlidersHorizontal,
   Upload,
+  Clock3,
   Sparkles,
   History,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { cn } from "../ui";
 const STAGE_ICON: Record<Stage, LucideIcon> = {
   edit: SlidersHorizontal,
   deliver: Upload,
+  schedule: Clock3,
   skills: Sparkles,
   history: History,
 };

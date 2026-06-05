@@ -2008,6 +2008,7 @@ function App() {
         }}
         autoInspect={activeProposal !== null}
         deliver={realDeliveryWorkspace}
+        schedule={null}
         skills={<SkillsSurface variant="sheet" />}
         history={<HistorySurface variant="sheet" />}
         stage={stage}

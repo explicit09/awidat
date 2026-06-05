@@ -17,7 +17,7 @@ import mark from "../brand/awidat-mark.svg";
  *   • The agent's proposals ride alongside as a swipeable glass deck,
  *     wired to the real useBriefProposalsStore (accept / reject).
  *   • A persistent command bar drives edits AND navigation.
- *   • Deliver / Skills / History are summoned via the thin left dock
+ *   • Deliver / Schedule / Skills / History are summoned via the thin left dock
  *     (or command routes) and slide in as glass sheets over the dimmed
  *     stage — the command bar + dock persist, so context is never lost.
  *
@@ -47,6 +47,7 @@ type DockItem = { id: Stage; glyph: string; label: string };
 const DOCK: DockItem[] = [
   { id: "edit", glyph: "▶", label: "Stage" },
   { id: "deliver", glyph: "↑", label: "Deliver" },
+  { id: "schedule", glyph: "◷", label: "Schedule" },
   { id: "skills", glyph: "✦", label: "Skills" },
   { id: "history", glyph: "◷", label: "History" },
 ];
@@ -95,6 +96,7 @@ export type StageShellProps = {
   /** Rising edge auto-opens the Inspector tool (proposal/clip selected). */
   autoInspect?: boolean;
   deliver: ReactNode;
+  schedule: ReactNode;
   skills: ReactNode;
   history: ReactNode;
   stage: Stage;
@@ -115,7 +117,7 @@ export type StageShellProps = {
 export function StageShell(props: StageShellProps) {
   const {
     hasProject, landing, preview, timeline, trackCount = 0, tools, autoInspect,
-    deliver, skills, history,
+    deliver, schedule, skills, history,
     stage, onStage, onCommand, running, onCancel,
     projectLabel, projectType, timecode, agentRead,
   } = props;
@@ -178,7 +180,7 @@ export function StageShell(props: StageShellProps) {
     if (lower === "transcript" || lower === "media" || lower === "inspector" || lower === "index" || lower === "vedit") {
       onStage("edit"); // tools live on the Stage
       setTool(lower as ToolKey);
-    } else if (lower === "deliver" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
+    } else if (lower === "deliver" || lower === "schedule" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
@@ -238,7 +240,7 @@ export function StageShell(props: StageShellProps) {
       </div>
 
       {/* right-edge tool dock — summon cockpit tools as a side panel.
-          Hidden while a destination sheet (deliver/skills/history) is open. */}
+          Hidden while a destination sheet (deliver/schedule/skills/history) is open. */}
       {tools && onStage_ ? (
         <div
           className="group/tools absolute top-1/2 z-40 -translate-y-1/2 transition-[right] duration-300"
@@ -375,7 +377,7 @@ export function StageShell(props: StageShellProps) {
               <button onClick={() => onStage("edit")} className="glass-ghost ml-auto rounded-lg px-3 py-1.5 text-[12px]">← Stage</button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
-              {stage === "deliver" ? deliver : stage === "skills" ? skills : stage === "history" ? history : null}
+              {stage === "deliver" ? deliver : stage === "schedule" ? schedule : stage === "skills" ? skills : stage === "history" ? history : null}
             </div>
           </div>
         </div>
@@ -407,11 +409,11 @@ export function StageShell(props: StageShellProps) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            placeholder="ask, trim, propose…  or type a destination: deliver · skills · history"
+            placeholder="ask, trim, propose…  or type a destination: deliver · schedule · skills · history"
             className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
           />
           <span className="hidden items-center gap-1 md:flex">
-            {(["deliver", "skills", "history"] as Stage[]).map((s) => (
+            {(["deliver", "schedule", "skills", "history"] as Stage[]).map((s) => (
               <button key={s} onClick={() => onStage(s)} className="glass-ghost rounded-lg px-2 py-1 text-[11px]">/{s}</button>
             ))}
           </span>

@@ -18,15 +18,16 @@ export const STAGES = ["edit", "deliver"] as const;
 
 /**
  * The full set of routable destinations. `Stage` is the workflow
- * surface union; `skills` and `history` are non-linear tabs that live
- * next to the workflow stages in the WorkspaceRow but don't
- * participate in the progress indicator.
+ * surface union; `schedule`, `skills`, and `history` are non-linear
+ * tabs that live next to the workflow stages in the WorkspaceRow but
+ * don't participate in the progress indicator.
  */
-export type Stage = (typeof STAGES)[number] | "skills" | "history";
+export type Stage = (typeof STAGES)[number] | "schedule" | "skills" | "history";
 
 export const STAGE_LABEL: Record<Stage, string> = {
   edit: "Edit",
   deliver: "Deliver",
+  schedule: "Schedule",
   skills: "Skills",
   history: "History",
 };
@@ -48,7 +49,7 @@ export type StageStore = {
  *  (used for native screenshot tours; ignored in production builds). */
 const DEV_INITIAL_STAGE = ((): Stage => {
   const v = import.meta.env?.VITE_AWIDAT_STAGE as string | undefined;
-  return v === "deliver" || v === "skills" || v === "history" ? v : "edit";
+  return v === "deliver" || v === "schedule" || v === "skills" || v === "history" ? v : "edit";
 })();
 
 export const useStageStore = create<StageStore>((set) => ({

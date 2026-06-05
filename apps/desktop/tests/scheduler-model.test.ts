@@ -248,4 +248,7 @@ assert.deepEqual(
 assert.equal(schedulerStatusLabel("requires_action"), "Action needed");
 assert.equal(formatSchedulerTime(1_800, "UTC"), "1970-01-01 00:30 UTC");
 
+const { STAGE_LABEL } = await import("../src/state/stages.ts");
+assert.equal(STAGE_LABEL.schedule, "Schedule");
+
 console.log("scheduler-model: OK");
