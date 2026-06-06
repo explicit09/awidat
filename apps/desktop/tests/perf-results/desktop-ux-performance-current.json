@@ -1,0 +1,273 @@
+{
+  "label": "current",
+  "generatedAt": "2026-06-06T22:12:31.790Z",
+  "baseUrl": "http://localhost:1420/",
+  "targets": {
+    "warmStartupUsableShellMs": 2500,
+    "coldStartupUsableShellMs": 4000,
+    "openProjectToFirstPreviewFrameMs": 1500,
+    "openProjectToInteractiveTimelineMs": 2000,
+    "menuSwitchP95Ms": 120,
+    "maxAvoidableLongTaskMs": 50
+  },
+  "metrics": {
+    "processStartToRendererReadyMs": null,
+    "rendererReadyToShellInteractiveMs": 280,
+    "warmStartupUsableShellMs": 280,
+    "coldStartupUsableShellMs": 1316,
+    "openProjectToTimelineInteractiveMs": 311,
+    "openProjectToInteractiveTimelineMs": 311,
+    "openProjectToFirstPreviewFrameMs": 550,
+    "previewEngineInitializationMs": null,
+    "menuSwitchP95Ms": 385.8,
+    "menuSwitchMaxMs": 397,
+    "maxLongTaskMs": 59
+  },
+  "switches": {
+    "samples": [
+      {
+        "name": "Deliver",
+        "iteration": 0,
+        "durationMs": 125.17849999999999
+      },
+      {
+        "name": "Schedule",
+        "iteration": 0,
+        "durationMs": 345.3810000000003
+      },
+      {
+        "name": "Skills",
+        "iteration": 0,
+        "durationMs": 94.86766700000044
+      },
+      {
+        "name": "Stage",
+        "iteration": 0,
+        "durationMs": 189.89712500000041
+      },
+      {
+        "name": "Deliver",
+        "iteration": 1,
+        "durationMs": 335.9137499999997
+      },
+      {
+        "name": "Schedule",
+        "iteration": 1,
+        "durationMs": 96.77149999999983
+      },
+      {
+        "name": "Skills",
+        "iteration": 1,
+        "durationMs": 275.92654200000015
+      },
+      {
+        "name": "Stage",
+        "iteration": 1,
+        "durationMs": 181.85379100000046
+      },
+      {
+        "name": "Deliver",
+        "iteration": 2,
+        "durationMs": 267.7238749999997
+      },
+      {
+        "name": "Schedule",
+        "iteration": 2,
+        "durationMs": 171.02733399999943
+      },
+      {
+        "name": "Skills",
+        "iteration": 2,
+        "durationMs": 185.11920800000007
+      },
+      {
+        "name": "Stage",
+        "iteration": 2,
+        "durationMs": 183.5244589999993
+      },
+      {
+        "name": "Deliver",
+        "iteration": 3,
+        "durationMs": 253.54625000000033
+      },
+      {
+        "name": "Schedule",
+        "iteration": 3,
+        "durationMs": 285.6771660000004
+      },
+      {
+        "name": "Skills",
+        "iteration": 3,
+        "durationMs": 397.039166999999
+      },
+      {
+        "name": "Stage",
+        "iteration": 3,
+        "durationMs": 95.6412079999991
+      },
+      {
+        "name": "Deliver",
+        "iteration": 4,
+        "durationMs": 373.2167499999996
+      },
+      {
+        "name": "Schedule",
+        "iteration": 4,
+        "durationMs": 195.1230000000014
+      },
+      {
+        "name": "Skills",
+        "iteration": 4,
+        "durationMs": 101.98075000000063
+      },
+      {
+        "name": "Stage",
+        "iteration": 4,
+        "durationMs": 291.2147090000017
+      },
+      {
+        "name": "Deliver",
+        "iteration": 5,
+        "durationMs": 284.5722500000011
+      },
+      {
+        "name": "Schedule",
+        "iteration": 5,
+        "durationMs": 300.5840420000004
+      },
+      {
+        "name": "Skills",
+        "iteration": 5,
+        "durationMs": 204.5291670000006
+      },
+      {
+        "name": "Stage",
+        "iteration": 5,
+        "durationMs": 297.6059580000001
+      },
+      {
+        "name": "Deliver",
+        "iteration": 6,
+        "durationMs": 182.09545799999978
+      },
+      {
+        "name": "Schedule",
+        "iteration": 6,
+        "durationMs": 300.24416700000074
+      },
+      {
+        "name": "Skills",
+        "iteration": 6,
+        "durationMs": 204.62825000000157
+      },
+      {
+        "name": "Stage",
+        "iteration": 6,
+        "durationMs": 294.1246250000004
+      },
+      {
+        "name": "Deliver",
+        "iteration": 7,
+        "durationMs": 186.37312500000007
+      },
+      {
+        "name": "Schedule",
+        "iteration": 7,
+        "durationMs": 385.80966699999954
+      },
+      {
+        "name": "Skills",
+        "iteration": 7,
+        "durationMs": 103.2672079999993
+      },
+      {
+        "name": "Stage",
+        "iteration": 7,
+        "durationMs": 295.337125
+      }
+    ],
+    "p95Ms": 385.80966699999954,
+    "maxMs": 397.039166999999
+  },
+  "longTasks": [
+    {
+      "name": "self",
+      "startTime": 203.30000019073486,
+      "duration": 59
+    }
+  ],
+  "ipcSummary": [
+    {
+      "command": "current_project_root",
+      "atMs": 167.8
+    },
+    {
+      "command": "recent_projects",
+      "atMs": 167.8
+    },
+    {
+      "command": "set_menu_item_enabled",
+      "atMs": 168
+    },
+    {
+      "command": "set_menu_item_enabled",
+      "atMs": 170.4
+    },
+    {
+      "command": "get_project_type",
+      "atMs": 170.4
+    },
+    {
+      "command": "read_timeline",
+      "atMs": 198.4
+    },
+    {
+      "command": "set_menu_item_enabled",
+      "atMs": 198.5
+    },
+    {
+      "command": "read_timeline",
+      "atMs": 198.5
+    },
+    {
+      "command": "list_source_media",
+      "atMs": 198.6
+    },
+    {
+      "command": "list_proxies",
+      "atMs": 198.6
+    },
+    {
+      "command": "set_menu_item_enabled",
+      "atMs": 201.4
+    },
+    {
+      "command": "media_url_for_path",
+      "atMs": 215
+    },
+    {
+      "command": "set_view_state",
+      "atMs": 215.1
+    },
+    {
+      "command": "set_menu_item_enabled",
+      "atMs": 219
+    },
+    {
+      "command": "start_turn",
+      "atMs": 222.3
+    },
+    {
+      "command": "read_transcript",
+      "atMs": 222.3
+    },
+    {
+      "command": "media_url_for_path",
+      "atMs": 222.3
+    }
+  ],
+  "commands": [
+    "npm run test:perf-full",
+    "pnpm exec vite --host 127.0.0.1"
+  ]
+}
