@@ -1056,6 +1056,8 @@ function App() {
     }
     const { thumbnailDir, waveformPath } = firstTimelineSidecars(timelineSnapshot);
     let cancelled = false;
+    if (!thumbnailDir) setRealVideoFrames([]);
+    if (!waveformPath) setRealAudioPeaks([]);
 
     const cancelDeferred = deferNonCriticalHydration(() => {
       if (thumbnailDir) {
@@ -1068,8 +1070,6 @@ function App() {
             console.warn("list_thumbnail_frames failed", e);
             if (!cancelled) setRealVideoFrames([]);
           });
-      } else {
-        setRealVideoFrames([]);
       }
 
       if (waveformPath) {
@@ -1082,8 +1082,6 @@ function App() {
             console.warn("read_waveform failed", e);
             if (!cancelled) setRealAudioPeaks([]);
           });
-      } else {
-        setRealAudioPeaks([]);
       }
     });
 

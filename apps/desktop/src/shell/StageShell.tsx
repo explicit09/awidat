@@ -143,10 +143,14 @@ export function StageShell(props: StageShellProps) {
       setVisibleDestination(stage);
       return undefined;
     }
-    const frame = window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => setVisibleDestination(null));
+    let secondFrame: number | null = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setVisibleDestination(null));
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+    };
   }, [onStage_, stage]);
 
   const cur = pending[Math.min(active, Math.max(0, pending.length - 1))];
