@@ -713,6 +713,10 @@ git add docs/superpowers/plans/2026-06-06-auto-indexing-performance.md
 git commit -m "docs(indexing): record timeline trigger verification"
 ```
 
+## Verification Evidence
+
+- `rg -n "insert_media_on_timeline|index_project|index_project_assets|start_indexing" apps/desktop/src apps/desktop/src-tauri/src crates/core/src/awidat_mcp/tools` confirmed timeline insertion does not trigger indexing; import commands own auto-indexing.
+
 ---
 
 ### Task 6: Final Focused Verification
