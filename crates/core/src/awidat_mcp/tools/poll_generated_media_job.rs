@@ -25,7 +25,9 @@ use crate::generated_media::openrouter::{
     OpenRouterVideoConfig, apply_status_to_record, download_completed_video,
     local_video_output_path, poll_video_job,
 };
-use crate::generated_media::registry::{GeneratedMediaRecord, GeneratedMediaState, Registry};
+use crate::generated_media::registry::{
+    GeneratedMediaRecord, GeneratedMediaState, Registry, write_generated_description_sidecar,
+};
 
 /// Arguments to `poll_generated_media_job`.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -125,6 +127,11 @@ pub async fn run(args: PollGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<Str
         registry
             .upsert(&ctx.project_root, record.clone())
             .map_err(|e| format!("poll_generated_media_job: persist registry: {e}"))?;
+        if matches!(record.state, GeneratedMediaState::Succeeded) {
+            write_generated_description_sidecar(&ctx.project_root, &record).map_err(|e| {
+                format!("poll_generated_media_job: generated description sidecar: {e}")
+            })?;
+        }
 
         // Loop if the caller asked us to wait and we haven't blown
         // the budget yet. Otherwise return whatever we just observed.

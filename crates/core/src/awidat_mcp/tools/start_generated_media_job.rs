@@ -14,7 +14,7 @@ use crate::awidat_mcp::context::McpToolCtx;
 use crate::generated_media::provider::{
     GeneratedMediaProvider, MockProvider, StartGeneratedMediaRequest,
 };
-use crate::generated_media::registry::Registry;
+use crate::generated_media::registry::{Registry, write_generated_description_sidecar};
 
 /// Arguments to `start_generated_media_job`.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -112,6 +112,8 @@ pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<St
     Registry::load_or_default(&ctx.project_root)
         .and_then(|registry| registry.upsert(&ctx.project_root, record.clone()))
         .map_err(|e| format!("start_generated_media_job: {e}"))?;
+    write_generated_description_sidecar(&ctx.project_root, &record)
+        .map_err(|e| format!("start_generated_media_job: generated description sidecar: {e}"))?;
 
     Ok(serde_json::json!({
         "job_id": record.job_id,

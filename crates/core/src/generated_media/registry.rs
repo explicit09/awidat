@@ -269,6 +269,53 @@ pub fn registry_path(project_root: &Path) -> PathBuf {
     project_root.join(REGISTRY_RELATIVE_PATH)
 }
 
+/// Write the lightweight semantic sidecar for a generated-media record.
+pub fn write_generated_description_sidecar(
+    project_root: &Path,
+    record: &GeneratedMediaRecord,
+) -> Result<(), RegistryError> {
+    let Some(asset_id) = record.output_video_path() else {
+        return Ok(());
+    };
+    let sidecar_path = project_root
+        .join("index")
+        .join("generated-description")
+        .join(format!("{asset_id}.json"));
+    if let Some(parent) = sidecar_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let produced_at = record
+        .completed_at
+        .unwrap_or(record.updated_at)
+        .to_rfc3339();
+    let body = serde_json::json!({
+        "indexer": "generated-description",
+        "indexer_version": "0.1.0",
+        "schema_version": "1",
+        "asset_id": asset_id,
+        "asset_sha256": record.prompt_hash,
+        "produced_at": produced_at,
+        "data": {
+            "job_id": record.job_id,
+            "provider": record.provider,
+            "model": record.model,
+            "prompt": record.prompt,
+            "prompt_hash": record.prompt_hash,
+            "artifact_kind": record.artifact_kind,
+            "workflow_purpose": record.workflow_purpose,
+            "visual_summary": record.prompt,
+            "intended_use": record.workflow_purpose,
+            "created_at": record.created_at,
+            "completed_at": record.completed_at,
+            "requires_disclosure": record.requires_disclosure,
+            "uses_likeness": record.uses_likeness,
+            "provenance": "generated_media_registry"
+        }
+    });
+    fs::write(sidecar_path, serde_json::to_vec_pretty(&body)?)?;
+    Ok(())
+}
+
 /// Return the SHA-256 hash of a prompt as lowercase hex.
 pub fn prompt_hash(prompt: &str) -> String {
     let digest = Sha256::digest(prompt.as_bytes());
@@ -316,6 +363,36 @@ mod tests {
 
         let loaded = Registry::load_or_default(dir.path()).unwrap();
         assert_eq!(loaded.get("job-1"), Some(&record));
+    }
+
+    #[test]
+    fn generated_description_sidecar_uses_registry_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = GeneratedMediaRecord::new_mock_succeeded(
+            "gen-1",
+            "raw/generated/mock/gen-1.mp4",
+            "slow orbit around a product on a clean desk",
+        )
+        .unwrap();
+
+        write_generated_description_sidecar(dir.path(), &record).unwrap();
+
+        let path = dir
+            .path()
+            .join("index/generated-description/raw/generated/mock/gen-1.mp4.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+
+        assert_eq!(value["indexer"], "generated-description");
+        assert_eq!(value["asset_id"], "raw/generated/mock/gen-1.mp4");
+        assert_eq!(value["data"]["job_id"], "gen-1");
+        assert_eq!(value["data"]["workflow_purpose"], "broll");
+        assert!(
+            value["data"]["visual_summary"]
+                .as_str()
+                .unwrap()
+                .contains("slow orbit")
+        );
     }
 
     #[test]
