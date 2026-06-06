@@ -101,6 +101,7 @@ use crate::awidat_mcp::tools::manage_assets::{
 };
 use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 use crate::awidat_mcp::tools::plan_color_grade::{self, PlanColorGradeArgs};
+use crate::awidat_mcp::tools::plan_delivery_export::{self, PlanDeliveryExportArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
@@ -840,6 +841,25 @@ what setup must stay intact when cutting this beat standalone.",
     }
 
     /// `plan_emphasis` — read-only single-clip emphasis-motion planner.
+    /// `plan_delivery_export` — read-only delivery/export planner.
+    #[tool(
+        description = "\
+Read-only delivery/export planner. Pass a human delivery intent plus optional \
+destination. The tool selects an existing Awidat export/package path, returns \
+the intended ExportPreset/profile, preflight checks, ordered follow-up tools \
+(`render_preflight`, `start_render` or `export_package`/`stream_remux`, \
+`poll_render`, `verify_render`, optional packaging), and verification \
+requirements. It never starts a render or writes files.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_delivery_export(
+        &self,
+        args: Parameters<PlanDeliveryExportArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_delivery_export::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     #[tool(
         description = "\
 Read-only emphasis planner. Given a clip id, optional beat times, visual \
