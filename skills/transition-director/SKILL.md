@@ -10,6 +10,7 @@ tools_allowlist:
   - assess_edit_quality
   - transition_context
   - plan_transition
+  - validate_transition_choice
   - find_beat
   - apply_edl
   - vedit_diff
@@ -44,6 +45,11 @@ a visible transition with safe handles. If `plan_transition` returns a
 hard-cut fragment, preserve the hard cut and apply `Set Cut Intent`
 instead of forcing an effect.
 
+For motion-sensitive choices such as whip, slide, pass-by, or motion
+blur, call `validate_transition_choice` after applying the EDL. If it
+reports the wrong direction or no usable signal, back out to a hard cut,
+split edit, b-roll cover, or a non-directional transition.
+
 ## Supported Phase-One IDs
 
 Use these stable ids in `Insert Transition`:
@@ -77,6 +83,9 @@ Use `SMPTE_Dissolve` only for older/simple EDL compatibility. Use no
 transition for `awidat.hard_cut`; just leave the cut as-is.
 Do not author raw FFmpeg transition names such as `fadeblack`,
 `slideleft`, or `wipeleft`; use registered `awidat.*` ids instead.
+Phase-one FFmpeg rendering aliases some semantic ids: match-dissolve
+renders like cross-dissolve, whip directions collapse to horizontal
+blur, and invisible-cut is a fast fade rather than a true mask.
 
 ## On-The-Spot Compositions
 
@@ -109,6 +118,8 @@ outside the normal editing flow.
 - Dialogue, serious emotion, or tight reasoning: hard cut or `awidat.cross_dissolve`.
 - Speaker handoff: prefer `Set Audio Lead` / `Set Audio Trail`; a
   transition is not an audio continuity repair.
+- Same-camera or same-angle jump cut: do not use a dissolve to hide the
+  seam. Prefer a reframe, punch-in, cutaway, or b-roll cover.
 - Beat hit, laugh, reveal, or high-energy turn: `awidat.flash_white`, `awidat.zoom_in`, or a short slide.
 - Motion mismatch or camera direction: choose slide/wipe direction that follows existing motion.
 - Pass-by object or full-frame occlusion: use `awidat.pass_by_left/right`
@@ -119,6 +130,26 @@ outside the normal editing flow.
 - Topic/chapter boundary: `awidat.cross_dissolve` for soft, `awidat.fade_black` for strong.
 - Tech/product/glitch context: `awidat.pixelize`, short duration only.
 - If neither clip has extra handles for overlap, avoid a transition or repair handles first.
+- Avoid repeating the same visible transition twice in a row or making
+  every transition the same length unless repetition is the style.
+
+## Sound And Motion Craft
+
+Impact transitions need audio design. Pair beat hits, flashes, whips,
+slides, and glitches with intentional sound such as a whoosh, hit,
+riser, ambience bridge, or brief audio fade. Do not rely on a visual
+effect alone when the cut is supposed to feel rhythmic or forceful.
+
+For motion transitions, preserve screen direction, use eased movement
+instead of linear motion, and aim the zoom or pivot at the subject rather
+than the geometric center when the subject is off-center. Scale, mirror,
+or otherwise cover edges so blur, shake, slide, or whip motion does not
+reveal black borders.
+
+High-energy short-form, gaming, and aesthetic edits can carry denser
+visual changes than documentary or tutorial work. Even there, prefer new
+information, b-roll, captions, or animation over decorative transitions
+when the boundary itself does not need a transition.
 
 ## Durations
 
@@ -173,3 +204,20 @@ After applying transitions, call `view_timeline` to confirm placement
 between adjacent clips, then `vedit_diff` to verify the committed OTIO
 change. For final checks, render with `start_render(scope="timeline")`
 and inspect/poll the result.
+
+For proof renders, use adjacent clips or ranges that are visually distinct
+enough for the transition to be seen. Set the output format before rendering
+so vertical material proves in `9:16` instead of a padded landscape canvas.
+Do not call a transition proof successful only because the render manifest
+contains `xfade`; inspect the video or sample a mid-transition frame and
+confirm it visibly differs from both the outgoing and incoming frames.
+Use a clear slide, wipe, dissolve, flash, or zoom family for generic proof
+renders. Avoid iris/radial proof renders unless the user specifically asked
+for stylized vintage or circular reveal grammar.
+
+To avoid laggy proof renders and previews, keep verification renders short,
+use constant-frame-rate clips, normalize output dimensions before transition
+work, and test one transition boundary at a time. Avoid chaining many heavy
+`xfade` transitions into one proof render unless the user is explicitly
+reviewing a full montage, because long transition graphs make render time and
+playback diagnosis harder.

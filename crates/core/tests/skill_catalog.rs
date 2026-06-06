@@ -152,7 +152,11 @@ fn cut_and_split_directors_expose_first_class_edit_grammar() {
         "view_timeline",
         "inspect_clip",
         "assess_edit_quality",
+        "find_dead_air",
+        "find_false_starts",
         "apply_edl",
+        "transition_context",
+        "plan_split_edit",
         "vedit_diff",
         "start_render",
         "poll_render",
@@ -169,6 +173,7 @@ fn cut_and_split_directors_expose_first_class_edit_grammar() {
         "Set Audio Trail",
         "lead_s",
         "trail_s",
+        "plan_split_edit",
         "learned",
         "preview-limited",
         "review by ear",
@@ -369,7 +374,11 @@ fn transition_and_broll_skills_use_edit_quality_layer() {
     let transition = registry
         .get("transition-director")
         .expect("transition-director skill exists");
-    for tool in ["transition_context", "plan_transition"] {
+    for tool in [
+        "transition_context",
+        "plan_transition",
+        "validate_transition_choice",
+    ] {
         assert!(
             transition.meta.tools_allowlist.iter().any(|t| t == tool),
             "transition-director must allow {tool}"
@@ -379,6 +388,7 @@ fn transition_and_broll_skills_use_edit_quality_layer() {
         "assess_edit_quality",
         "transition_context",
         "plan_transition",
+        "validate_transition_choice",
         "style_context.transition_density_last_30s",
         "Set Audio Lead",
         "Set Audio Trail",

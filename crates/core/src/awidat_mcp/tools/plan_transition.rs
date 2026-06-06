@@ -35,6 +35,8 @@ struct ContextSummary {
     incoming_motion_direction: Option<MotionAlignment>,
     motion_match: Option<String>,
     motion_match_confidence: Option<f64>,
+    outgoing_occlusion_score: Option<f64>,
+    incoming_occlusion_score: Option<f64>,
     either_side_static: bool,
 }
 
@@ -94,6 +96,12 @@ fn parse_context(value: &serde_json::Value) -> Result<ContextSummary, String> {
     let motion_match_confidence = value
         .pointer("/visual_signals/motion_match_confidence")
         .and_then(|v| v.as_f64());
+    let outgoing_occlusion_score = value
+        .pointer("/visual_signals/outgoing/occlusion_score")
+        .and_then(|v| v.as_f64());
+    let incoming_occlusion_score = value
+        .pointer("/visual_signals/incoming/occlusion_score")
+        .and_then(|v| v.as_f64());
     let either_side_static = value
         .pointer("/visual_signals/either_side_static")
         .and_then(|v| v.as_bool())
@@ -108,6 +116,8 @@ fn parse_context(value: &serde_json::Value) -> Result<ContextSummary, String> {
         incoming_motion_direction,
         motion_match,
         motion_match_confidence,
+        outgoing_occlusion_score,
+        incoming_occlusion_score,
         either_side_static,
     })
 }
@@ -195,6 +205,15 @@ fn incompatibility_reason(
             transition.display_name
         ));
     }
+    if transition.avoid_for.contains(&"no_occlusion_signal")
+        && max_occlusion_score(context).unwrap_or(0.0) < 0.75
+    {
+        return Some(format!(
+            "{} needs a real occlusion, dark-frame, or mask signal; this boundary does not show \
+             enough occlusion evidence, so keep the cut or repair it another way.",
+            transition.display_name
+        ));
+    }
     if transition.requires_motion_continuity && context.motion_match.as_deref() == Some("opposed") {
         return Some(format!(
             "{} requires motion continuity and the boundary shows opposed screen-direction \
@@ -203,6 +222,18 @@ fn incompatibility_reason(
         ));
     }
     None
+}
+
+fn max_occlusion_score(context: &ContextSummary) -> Option<f64> {
+    match (
+        context.outgoing_occlusion_score,
+        context.incoming_occlusion_score,
+    ) {
+        (Some(outgoing), Some(incoming)) => Some(outgoing.max(incoming)),
+        (Some(outgoing), None) => Some(outgoing),
+        (None, Some(incoming)) => Some(incoming),
+        (None, None) => None,
+    }
 }
 
 fn inferred_motion_direction(context: &ContextSummary) -> Option<MotionAlignment> {
@@ -228,12 +259,57 @@ fn transition_for_job(job: &str, direction: Option<MotionAlignment>) -> &'static
         "chapter_reset" => "awidat.fade_black",
         "visual_match" => "awidat.match_dissolve",
         "style_accent" => "awidat.motion_blur",
+        "occlusion_mask" | "pass_by_motion" | "invisible_scene_move" => {
+            pass_by_or_invisible(direction)
+        }
+        "mask_cut" | "occlusion_or_dark_frame" | "hide_camera_reposition" => "awidat.invisible_cut",
+        "punch_in" | "forward_momentum" => "awidat.zoom_in",
+        "spatial_shift" => match direction {
+            Some(MotionAlignment::In) | Some(MotionAlignment::Out) => "awidat.distance_zoom",
+            _ => directional_slide(direction),
+        },
+        "energy_jump" => match direction {
+            Some(MotionAlignment::In) | Some(MotionAlignment::Out) => "awidat.distance_zoom",
+            _ => "awidat.flash_white",
+        },
+        "stylized_reveal" | "vintage_reveal" | "comic_reveal" => "awidat.iris_open",
+        "stylized_closure" | "comic_button" => "awidat.iris_close",
+        "graphic_movement" | "related_scene_change" => directional_wipe(direction),
+        "social_push" | "screen_direction" => directional_slide(direction),
+        "tech_context" | "glitch_moment" => "awidat.pixelize",
         "hide_motion_jump" => match direction {
             Some(MotionAlignment::Left) => "awidat.whip_pan_left",
             Some(MotionAlignment::Right) => "awidat.whip_pan_right",
             _ => "awidat.motion_blur",
         },
         _ => "awidat.motion_blur",
+    }
+}
+
+fn pass_by_or_invisible(direction: Option<MotionAlignment>) -> &'static str {
+    match direction {
+        Some(MotionAlignment::Left) => "awidat.pass_by_left",
+        Some(MotionAlignment::Right) => "awidat.pass_by_right",
+        _ => "awidat.invisible_cut",
+    }
+}
+
+fn directional_wipe(direction: Option<MotionAlignment>) -> &'static str {
+    match direction {
+        Some(MotionAlignment::Left) => "awidat.wipe_left",
+        Some(MotionAlignment::Right) => "awidat.wipe_right",
+        Some(MotionAlignment::Up) => "awidat.wipe_up",
+        Some(MotionAlignment::Down) => "awidat.wipe_down",
+        _ => "awidat.radial",
+    }
+}
+
+fn directional_slide(direction: Option<MotionAlignment>) -> &'static str {
+    match direction {
+        Some(MotionAlignment::Left) => "awidat.slide_left",
+        Some(MotionAlignment::Right) => "awidat.slide_right",
+        Some(MotionAlignment::Up) => "awidat.slide_up",
+        _ => "awidat.smooth_push_left",
     }
 }
 
@@ -244,6 +320,16 @@ fn intent_for_job(job: &str) -> &'static str {
         "chapter_reset" => "chapter_reset",
         "visual_match" => "visual_match",
         "style_accent" => "style_accent",
+        "occlusion_mask" | "pass_by_motion" | "invisible_scene_move" => "invisible_scene_move",
+        "mask_cut" | "occlusion_or_dark_frame" | "hide_camera_reposition" => "mask_cut",
+        "punch_in" | "forward_momentum" => "punch_in",
+        "spatial_shift" => "spatial_shift",
+        "energy_jump" => "energy_jump",
+        "stylized_reveal" | "vintage_reveal" | "comic_reveal" => "stylized_reveal",
+        "stylized_closure" | "comic_button" => "stylized_closure",
+        "graphic_movement" | "related_scene_change" => "graphic_movement",
+        "social_push" | "screen_direction" => "screen_direction",
+        "tech_context" | "glitch_moment" => "glitch_moment",
         _ => "hide_motion_jump",
     }
 }
@@ -253,6 +339,13 @@ fn energy_for_job(job: &str) -> f64 {
         "beat_hit" => 0.82,
         "chapter_reset" => 0.55,
         "soft_time_passage" | "visual_match" => 0.42,
+        "occlusion_mask" | "pass_by_motion" | "invisible_scene_move" => 0.72,
+        "mask_cut" | "occlusion_or_dark_frame" | "hide_camera_reposition" => 0.40,
+        "punch_in" | "forward_momentum" | "spatial_shift" => 0.70,
+        "energy_jump" | "tech_context" | "glitch_moment" => 0.82,
+        "stylized_reveal" | "vintage_reveal" | "comic_reveal" => 0.56,
+        "stylized_closure" | "comic_button" => 0.58,
+        "graphic_movement" | "related_scene_change" | "social_push" | "screen_direction" => 0.64,
         "style_accent" => 0.62,
         _ => 0.68,
     }

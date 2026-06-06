@@ -58,6 +58,16 @@ Use these cut types deliberately:
   using it as accidental roughness.
 - `cross_cut`: interleave parallel actions, locations, or arguments.
 
+When cutting on action, cut during the motion rather than after it has
+settled. For very fast motion, a tiny repeated-frame overlap can help
+the viewer re-orient. Avoid cutting on a blink or on a one-frame visual
+"blink" such as a light flicker, object crossing, or sudden exposure
+change unless the blink is the point.
+
+For same-angle talking-head or tutorial jump cuts, prefer a small
+reframe or punch-in with matched eye position, or cover the seam with an
+insert/cutaway. Do not route these cuts to a dissolve first.
+
 ## Workflow
 
 1. Use `view_timeline` to locate the boundary and clip UUIDs.
