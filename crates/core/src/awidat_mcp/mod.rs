@@ -109,6 +109,8 @@ use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
 use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
+use crate::awidat_mcp::tools::plan_sound_design::{self, PlanSoundDesignArgs};
+use crate::awidat_mcp::tools::plan_split_edit::{self, PlanSplitEditArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
 use crate::awidat_mcp::tools::plan_visual_support_proposals::{
@@ -906,6 +908,43 @@ duration, reason, alternate, and EDL fragment. It never applies the edit.",
         args: Parameters<PlanTransitionArgs>,
     ) -> Result<String, ErrorData> {
         plan_transition::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_split_edit` — read-only J/L-cut planner.
+    #[tool(
+        description = "\
+Read-only J-cut/L-cut planner. Pass the JSON object returned by \
+transition_context. The tool recommends one audio-led split edit with a \
+concrete lead_s or trail_s, reason, confidence, alternate hard-cut \
+fallback, and apply-ready Set Audio Lead/Trail EDL fragment. It never \
+applies the edit.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_split_edit(
+        &self,
+        args: Parameters<PlanSplitEditArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_split_edit::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_sound_design` — read-only audio/sound-design planner.
+    #[tool(
+        description = "\
+Read-only audio/sound-design planner. Pass an intent such as \
+whoosh_transition, impact_hit, riser, ambience_bridge, music_bed, or \
+dialogue_ducking plus optional transition_context and timing. Returns an \
+asset search query, mix guidance, follow-up tool calls, and a parseable EDL \
+template using existing Insert Clip, Set Audio Lead/Trail, and Set Loudness \
+Target operations. It never applies the edit and never invents media.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_sound_design(
+        &self,
+        args: Parameters<PlanSoundDesignArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_sound_design::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
