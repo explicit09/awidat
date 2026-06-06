@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use awidat_proto::index::{AssetId, IndexerEntry, Manifest};
+use awidat_proto::project::files;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -313,6 +315,52 @@ pub fn write_generated_description_sidecar(
         }
     });
     fs::write(sidecar_path, serde_json::to_vec_pretty(&body)?)?;
+    register_generated_description_sidecar(
+        project_root,
+        asset_id,
+        record.completed_at.unwrap_or(record.updated_at),
+    )?;
+    Ok(())
+}
+
+fn register_generated_description_sidecar(
+    project_root: &Path,
+    asset_id: &str,
+    last_run: DateTime<Utc>,
+) -> Result<(), RegistryError> {
+    let manifest_path = project_root
+        .join(files::INDEX_DIR)
+        .join(files::INDEX_MANIFEST);
+    let mut manifest = if manifest_path.is_file() {
+        serde_json::from_slice::<Manifest>(&fs::read(&manifest_path)?)?
+    } else {
+        Manifest::empty()
+    };
+    let asset = AssetId::new(asset_id);
+    if let Some(entry) = manifest
+        .indexers
+        .iter_mut()
+        .find(|entry| entry.name == "generated-description")
+    {
+        entry.version = "0.1.0".into();
+        entry.schema_version = "1".into();
+        entry.last_run = last_run;
+        if !entry.covers(&asset) {
+            entry.assets.push(asset);
+        }
+    } else {
+        manifest.indexers.push(IndexerEntry {
+            name: "generated-description".into(),
+            version: "0.1.0".into(),
+            schema_version: "1".into(),
+            assets: vec![asset],
+            last_run,
+        });
+    }
+    if let Some(parent) = manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     Ok(())
 }
 
@@ -392,6 +440,27 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("slow orbit")
+        );
+    }
+
+    #[test]
+    fn generated_description_sidecar_registers_manifest_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        awidat_proto::project::Project::init(dir.path()).unwrap();
+        let record = GeneratedMediaRecord::mock_succeeded(
+            "gen-1",
+            "raw/generated/mock/gen-1.mp4",
+            "quiet street",
+        );
+
+        write_generated_description_sidecar(dir.path(), &record).unwrap();
+
+        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let report = awidat_proto::validate::validate_project(&project).unwrap();
+        assert!(
+            report.index_warnings.is_empty(),
+            "generated-description sidecar must not create validation noise: {:?}",
+            report.index_warnings
         );
     }
 

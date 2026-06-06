@@ -392,6 +392,13 @@ fn summarize_sidecar(signal: &str, sidecar: &serde_json::Value) -> serde_json::V
             "frame_count": data.get("frame_count"),
             "summary": data.get("summary"),
         }),
+        "generated_description" => serde_json::json!({
+            "job_id": data.get("job_id"),
+            "visual_summary": data.get("visual_summary"),
+            "requires_disclosure": data.get("requires_disclosure"),
+            "uses_likeness": data.get("uses_likeness"),
+            "provenance": data.get("provenance"),
+        }),
         _ => serde_json::json!({}),
     }
 }
@@ -532,6 +539,10 @@ const INDEX_SIGNALS: &[IndexSignal] = &[
     IndexSignal {
         name: "frame_quality",
         indexer: "frame-quality",
+    },
+    IndexSignal {
+        name: "generated_description",
+        indexer: "generated-description",
     },
 ];
 
