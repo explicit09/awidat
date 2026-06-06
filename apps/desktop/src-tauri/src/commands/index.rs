@@ -13,6 +13,7 @@ use awidat_index::{
     AssetInput, IndexProgress, PairOutcome, ProgressCallback, media_files::collect_raw_media_inputs,
 };
 use awidat_mcp::ClientInfo;
+use awidat_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
@@ -115,7 +116,10 @@ pub async fn index_project_at_root(
 
     // Discover assets under raw/ — same walk as the CLI's
     // `index_cmd::collect_assets` minus the explicit-paths branch.
-    let assets = collect_assets(&project_root).map_err(|e| format!("scan raw/: {e}"))?;
+    let resolved_assets =
+        resolve_assets_for_request(&project_root, None, ScopedFallback::WholeProject)?;
+    let scope_label = resolved_assets.scope.progress_label();
+    let assets = resolved_assets.assets;
     if assets.is_empty() {
         return Err(format!(
             "no assets to index. Drop source files under '{}/raw' or use Import.",
@@ -133,7 +137,7 @@ pub async fn index_project_at_root(
         job_id.clone(),
         JobKind::Indexing,
         format!(
-            "indexing {} asset(s) with {} indexer(s)",
+            "indexing {} asset(s) with {} indexer(s) ({scope_label})",
             assets.len(),
             servers.len()
         ),
@@ -141,8 +145,8 @@ pub async fn index_project_at_root(
     emitter.progress(
         Some(0),
         format!(
-            "preparing {} source media item(s) · hashing before indexers launch",
-            assets.len()
+            "preparing {} source media item(s) ({scope_label}) · hashing before indexers launch",
+            assets.len(),
         ),
     );
 
@@ -592,6 +596,134 @@ fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetIn
     collect_raw_media_inputs(project_root)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopedFallback {
+    WholeProject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolvedIndexScope {
+    All,
+    Scoped,
+    FallbackAll { reason: String },
+}
+
+impl ResolvedIndexScope {
+    fn progress_label(&self) -> String {
+        match self {
+            Self::All => "all raw source media".to_string(),
+            Self::Scoped => "newly imported media".to_string(),
+            Self::FallbackAll { reason } => {
+                format!("all raw source media after fallback: {reason}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResolvedIndexAssets {
+    assets: Vec<AssetInput>,
+    scope: ResolvedIndexScope,
+}
+
+fn resolve_assets_for_request(
+    project_root: &Path,
+    scoped_asset_ids: Option<&[String]>,
+    fallback: ScopedFallback,
+) -> Result<ResolvedIndexAssets, String> {
+    let Some(asset_ids) = scoped_asset_ids else {
+        return collect_assets(project_root)
+            .map(|assets| ResolvedIndexAssets {
+                assets,
+                scope: ResolvedIndexScope::All,
+            })
+            .map_err(|e| format!("scan raw/: {e}"));
+    };
+    if asset_ids.is_empty() {
+        return collect_assets(project_root)
+            .map(|assets| ResolvedIndexAssets {
+                assets,
+                scope: ResolvedIndexScope::All,
+            })
+            .map_err(|e| format!("scan raw/: {e}"));
+    }
+
+    match resolve_scoped_assets(project_root, asset_ids) {
+        Ok(assets) => Ok(ResolvedIndexAssets {
+            assets,
+            scope: ResolvedIndexScope::Scoped,
+        }),
+        Err(reason) => match fallback {
+            ScopedFallback::WholeProject => collect_assets(project_root)
+                .map(|assets| ResolvedIndexAssets {
+                    assets,
+                    scope: ResolvedIndexScope::FallbackAll { reason },
+                })
+                .map_err(|e| format!("scan raw/: {e}")),
+        },
+    }
+}
+
+fn resolve_scoped_assets(
+    project_root: &Path,
+    asset_ids: &[String],
+) -> Result<Vec<AssetInput>, String> {
+    let mut assets = Vec::with_capacity(asset_ids.len());
+    for asset_id in asset_ids {
+        let normalized = normalize_scoped_raw_asset_id(asset_id)?;
+        let path = project_root.join(&normalized);
+        if !path.is_file() {
+            return Err(format!("missing scoped asset '{}'", normalized));
+        }
+        assets.push(AssetInput {
+            id: AssetId::new(normalized),
+            path,
+        });
+    }
+    Ok(assets)
+}
+
+fn normalize_scoped_raw_asset_id(asset_id: &str) -> Result<String, String> {
+    let trimmed = asset_id.trim();
+    if trimmed.is_empty() {
+        return Err("scoped asset id cannot be empty".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "scoped asset '{}' must be project-relative",
+            trimmed
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                let Some(part) = part.to_str() else {
+                    return Err(format!("scoped asset '{}' is not valid UTF-8", trimmed));
+                };
+                parts.push(part);
+            }
+            _ => {
+                return Err(format!(
+                    "scoped asset '{}' must not escape the project",
+                    trimmed
+                ));
+            }
+        }
+    }
+    if parts.first() != Some(&"raw") {
+        return Err(format!("scoped asset '{}' must be under raw/", trimmed));
+    }
+    if parts.len() < 2 {
+        return Err(format!(
+            "scoped asset '{}' must name a file under raw/",
+            trimmed
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
 fn prepare_desktop_indexers(servers: &mut [McpServer]) {
     for server in servers.iter_mut() {
         if server.name == "whisper" && is_deepgram_whisper(server) {
@@ -923,5 +1055,68 @@ mod tests {
         let readiness = compute_index_readiness_at(dir.path());
         assert!(readiness.transcripts);
         assert!(!readiness.speaker, "diarized=false leaves speaker unready");
+    }
+
+    #[test]
+    fn resolve_scoped_assets_uses_only_requested_raw_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw/nested")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+        std::fs::write(dir.path().join("raw/nested/b.wav"), b"b").unwrap();
+        std::fs::write(dir.path().join("raw/other.mp4"), b"c").unwrap();
+
+        let assets = resolve_scoped_assets(
+            dir.path(),
+            &["raw/nested/b.wav".to_string(), "raw/a.mov".to_string()],
+        )
+        .unwrap();
+
+        let ids: Vec<String> = assets.iter().map(|asset| asset.id.to_string()).collect();
+        assert_eq!(ids, vec!["raw/nested/b.wav", "raw/a.mov"]);
+        assert_eq!(assets[0].path, dir.path().join("raw/nested/b.wav"));
+        assert_eq!(assets[1].path, dir.path().join("raw/a.mov"));
+    }
+
+    #[test]
+    fn resolve_scoped_assets_rejects_non_raw_or_missing_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+
+        let outside =
+            resolve_scoped_assets(dir.path(), &["renders/a.mp4".to_string()]).unwrap_err();
+        assert!(outside.contains("must be under raw/"), "{outside}");
+
+        let missing =
+            resolve_scoped_assets(dir.path(), &["raw/missing.mov".to_string()]).unwrap_err();
+        assert!(missing.contains("missing scoped asset"), "{missing}");
+    }
+
+    #[test]
+    fn resolve_assets_for_request_falls_back_to_all_raw_assets_when_scoped_input_is_bad() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+        std::fs::write(dir.path().join("raw/b.mov"), b"b").unwrap();
+
+        let resolved = resolve_assets_for_request(
+            dir.path(),
+            Some(&["../escape.mov".to_string()]),
+            ScopedFallback::WholeProject,
+        )
+        .unwrap();
+
+        let ids: Vec<String> = resolved
+            .assets
+            .iter()
+            .map(|asset| asset.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["raw/a.mov", "raw/b.mov"]);
+        match resolved.scope {
+            ResolvedIndexScope::FallbackAll { reason } => {
+                assert!(reason.contains("must not escape"), "{reason}");
+            }
+            other => panic!("expected fallback scope, got {other:?}"),
+        }
     }
 }
