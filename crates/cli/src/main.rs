@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 mod apply_edl_cmd;
 mod chat_codex_cmd;
 mod index_cmd;
+mod index_perf_cmd;
 mod lessons_cmd;
 mod new_cmd;
 mod plan_clip;
@@ -106,6 +107,32 @@ enum Command {
         /// indexer-kinded server in config runs.
         #[arg(long = "indexer")]
         indexers: Vec<String>,
+        /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
+        #[arg(long, default_value_t = 2)]
+        concurrency: usize,
+    },
+    /// Run indexing and write a timing report for performance review.
+    IndexPerf {
+        /// Project directory.
+        path: PathBuf,
+        /// Specific assets to index. If omitted, all files under
+        /// `<project>/raw/` are indexed.
+        #[arg(long = "asset")]
+        assets: Vec<PathBuf>,
+        /// Restrict to specific indexers by name before exclusions.
+        #[arg(long = "indexer")]
+        indexers: Vec<String>,
+        /// Exclude specific indexers by name. `whisper` is excluded by
+        /// default unless `--include-whisper` is passed.
+        #[arg(long = "exclude-indexer")]
+        exclude_indexers: Vec<String>,
+        /// Include whisper/transcription in this performance run.
+        #[arg(long, default_value_t = false)]
+        include_whisper: bool,
+        /// Directory where `indexing-performance.json` and
+        /// `indexing-performance.md` are written.
+        #[arg(long)]
+        output: Option<PathBuf>,
         /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
         #[arg(long, default_value_t = 2)]
         concurrency: usize,
@@ -450,6 +477,23 @@ fn main() -> ExitCode {
             indexers,
             concurrency,
         } => index_cmd::run(&path, assets, indexers, concurrency),
+        Command::IndexPerf {
+            path,
+            assets,
+            indexers,
+            exclude_indexers,
+            include_whisper,
+            output,
+            concurrency,
+        } => index_perf_cmd::run(index_perf_cmd::IndexPerfArgs {
+            project_root: path,
+            assets,
+            indexers,
+            exclude_indexers,
+            include_whisper,
+            output,
+            concurrency,
+        }),
         Command::ApplyEdl { path, edl } => apply_edl_cmd::run(&path, &edl),
         Command::Render { path } => render_cmd::run(&path),
         Command::ReplayRender { manifest } => cmd_replay_render(&manifest),

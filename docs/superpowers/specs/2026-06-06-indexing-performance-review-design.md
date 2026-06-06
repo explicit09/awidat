@@ -41,7 +41,7 @@ assets, filters out `whisper` unless explicitly requested, and writes:
 The command should be explicit, for example:
 
 ```bash
-cargo run -p awidat-cli -- index-perf /path/to/project \
+cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
   --asset /path/to/project/raw/varied_720p_24fps_30s.mp4 \
   --output /path/to/project/reports/indexing-perf \
   --exclude-indexer whisper

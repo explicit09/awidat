@@ -101,7 +101,7 @@ pub fn run(
     }
 }
 
-fn collect_assets(project_root: &Path, explicit: &[PathBuf]) -> Result<Vec<AssetInput>> {
+pub(crate) fn collect_assets(project_root: &Path, explicit: &[PathBuf]) -> Result<Vec<AssetInput>> {
     let mut out = Vec::new();
     if !explicit.is_empty() {
         for p in explicit {
