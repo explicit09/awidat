@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "allProvidersVerified": false,
+  "updatedAt": "2026-06-05",
+  "providers": [
+    {
+      "provider": "youtube",
+      "status": "pending",
+      "evidenceFolder": "docs/social-server/evidence/youtube/",
+      "evidenceIndex": "docs/social-server/evidence/youtube/README.md",
+      "checks": {
+        "oauthSignIn": false,
+        "selectedAccount": false,
+        "metadataValidation": false,
+        "privateOrSandboxPublish": false,
+        "scheduledAppClosedFiring": false,
+        "statusPolling": false,
+        "providerUrl": false,
+        "auditHistory": false,
+        "negativePath": false,
+        "cleanup": false
+      },
+      "blockers": [
+        "Need dated private/unlisted YouTube publish evidence from a test channel."
+      ]
+    },
+    {
+      "provider": "tiktok",
+      "status": "pending",
+      "evidenceFolder": "docs/social-server/evidence/tiktok/",
+      "evidenceIndex": "docs/social-server/evidence/tiktok/README.md",
+      "checks": {
+        "oauthSignIn": false,
+        "selectedAccount": false,
+        "metadataValidation": false,
+        "privateOrSandboxPublish": false,
+        "scheduledAppClosedFiring": false,
+        "statusPolling": false,
+        "providerUrl": false,
+        "auditHistory": false,
+        "negativePath": false,
+        "cleanup": false
+      },
+      "blockers": [
+        "Need TikTok sandbox/private account with video publish capability and provider-fetchable artifact evidence."
+      ]
+    },
+    {
+      "provider": "instagram",
+      "status": "pending",
+      "evidenceFolder": "docs/social-server/evidence/instagram/",
+      "evidenceIndex": "docs/social-server/evidence/instagram/README.md",
+      "checks": {
+        "oauthSignIn": false,
+        "selectedAccount": false,
+        "metadataValidation": false,
+        "privateOrSandboxPublish": false,
+        "scheduledAppClosedFiring": false,
+        "statusPolling": false,
+        "providerUrl": false,
+        "auditHistory": false,
+        "negativePath": false,
+        "cleanup": false
+      },
+      "blockers": [
+        "Need Instagram professional sandbox/private publish evidence with media processing and required-action status proof."
+      ]
+    },
+    {
+      "provider": "twitter_x",
+      "status": "pending",
+      "evidenceFolder": "docs/social-server/evidence/twitter_x/",
+      "evidenceIndex": "docs/social-server/evidence/twitter_x/README.md",
+      "checks": {
+        "oauthSignIn": false,
+        "selectedAccount": false,
+        "metadataValidation": false,
+        "privateOrSandboxPublish": false,
+        "scheduledAppClosedFiring": false,
+        "statusPolling": false,
+        "providerUrl": false,
+        "auditHistory": false,
+        "negativePath": false,
+        "cleanup": false
+      },
+      "blockers": [
+        "Need Twitter/X test-account OAuth and media publish evidence with cleanup proof or documented cleanup limitation."
+      ]
+    }
+  ]
+}

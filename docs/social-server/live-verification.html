@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Awidat Social Live Verification</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d10;
+        --panel: #151922;
+        --line: #2a3140;
+        --text: #f4f7fb;
+        --muted: #a8b0bf;
+        --accent: #ff8a32;
+        --ok: #61d394;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+      h1 {
+        font-size: 24px;
+      }
+      h2 {
+        margin-top: 22px;
+        font-size: 16px;
+        color: var(--accent);
+      }
+      h3 {
+        font-size: 15px;
+      }
+      p {
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .card,
+      .gate {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 12px;
+      }
+      .gate {
+        margin-top: 10px;
+      }
+      ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+      code {
+        color: var(--ok);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+      .badge {
+        display: inline-flex;
+        margin-top: 8px;
+        border: 1px solid rgba(255, 138, 50, 0.45);
+        border-radius: 999px;
+        padding: 2px 8px;
+        color: var(--accent);
+        font-size: 12px;
+      }
+      @media (max-width: 900px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Awidat Social Live Verification</h1>
+      <p>
+        This is the release gate for real-user social publishing. Unit tests can
+        prove command shape, but this page defines the live/sandbox/private
+        evidence required before claiming a provider workflow is ready.
+      </p>
+
+      <h2>Shared Gate</h2>
+      <div class="gate">
+        <h3>End-to-end workflow evidence</h3>
+        <ul>
+          <li>OAuth sign-in starts from Awidat and returns a connected account via <code>social_accounts</code>.</li>
+          <li>User selects the destination account and edits metadata before publish.</li>
+          <li>Publish path uses <code>social_bind_target</code>, <code>social_validate_target</code>, <code>social_schedule_target</code>, and <code>social_upload_artifact</code>.</li>
+          <li>Scheduled app-closed firing is proven from hosted cron/tick logs, not a frontend timer.</li>
+          <li>Status is read with <code>social_publish_job</code> until final provider URL or actionable failure.</li>
+          <li>Evidence includes provider URL, audit history, retry/reconnect behavior, and cleanup.</li>
+        </ul>
+      </div>
+
+      <h2>Provider Matrix</h2>
+      <section class="grid">
+        <article class="card">
+          <h3>YouTube</h3>
+          <span class="badge">private or unlisted first</span>
+          <ul>
+            <li>Connect a test channel with upload scope.</li>
+            <li>Upload a short clip as private or unlisted; keep <code>YOUTUBE_FORCE_PRIVATE=true</code> until audit clears.</li>
+            <li>Verify thumbnail, title, description, tags, schedule, provider URL, and cleanup/delete path.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>TikTok</h3>
+          <span class="badge">sandbox/private first</span>
+          <ul>
+            <li>Connect an account approved for video publish capability.</li>
+            <li>Run private or sandbox publish with provider-fetchable artifact URL.</li>
+            <li>Verify public eligibility errors, status polling, provider URL, audit history, and cleanup.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Instagram</h3>
+          <span class="badge">sandbox/private first</span>
+          <ul>
+            <li>Connect an Instagram professional account through the server OAuth flow.</li>
+            <li>Run private or sandbox publish with caption metadata and provider-fetchable artifact URL.</li>
+            <li>Verify media container processing, provider URL, required action states, audit history, and cleanup.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Twitter/X</h3>
+          <span class="badge">private/sandbox account first</span>
+          <ul>
+            <li>Connect with PKCE OAuth and media write permissions.</li>
+            <li>Publish a short clip from a test account with non-public blast-radius controls.</li>
+            <li>Verify upload processing, post URL, retry/reconnect behavior, audit history, and cleanup/delete if available.</li>
+          </ul>
+        </article>
+      </section>
+
+      <h2>Evidence Bundle</h2>
+      <div class="gate">
+        <h3>Required before “ready for users”</h3>
+        <ul>
+          <li>Update <code>docs/social-server/live-evidence-manifest.json</code>; <code>allProvidersVerified</code> must remain false until every provider check is true.</li>
+          <li>One dated evidence folder per provider with screenshots or JSON logs for account connection, selected account, metadata, schedule time, job id, status history, and final provider URL.</li>
+          <li>One hosted-service log slice showing app-closed scheduled app-closed firing for a due job.</li>
+          <li>One negative-path run per provider: missing scope, reconnect required, validation error, or provider requires action.</li>
+          <li>Cleanup proof for every real provider post, or a documented reason cleanup is not possible in that provider mode.</li>
+        </ul>
+      </div>
+    </main>
+  </body>
+</html>

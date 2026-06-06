@@ -182,8 +182,36 @@ SELECT * FROM net._http_response ORDER BY created DESC LIMIT 5;
 Also check the service log:
 ```bash
 fly logs --app awidat-social
-# Expected line: "internal/tick received but SOCIAL_FIRING_ENABLED=false — skipping"
+# Expected line: "tick processed"
 ```
+
+For the deployed product, `SOCIAL_FIRING_ENABLED` must be `true` and migration
+`0004_phase4_cron.sql` must be applied with the Vault secrets in place. A 200
+response from `/internal/tick` while firing is disabled proves only networking,
+not that scheduled posts will fire while the desktop app is closed.
+
+Confirm the scheduler jobs are registered:
+
+```sql
+SELECT jobname, schedule, active
+FROM cron.job
+WHERE jobname IN (
+  'awidat-publish-tick',
+  'awidat-poll-processing',
+  'awidat-refresh-tokens'
+)
+ORDER BY jobname;
+```
+
+Before calling social publishing ready for users, complete the provider-level
+live verification contract in
+[`live-verification.html`](./live-verification.html). The contract requires
+private/sandbox publishes for YouTube, TikTok, Instagram, and Twitter/X,
+including OAuth sign-in, selected account evidence, scheduled app-closed firing,
+provider URL/status proof, audit history, negative paths, and cleanup. Track
+the current machine-readable evidence status in
+[`live-evidence-manifest.json`](./live-evidence-manifest.json); keep
+`allProvidersVerified` false until every provider's live evidence is complete.
 
 ---
 
@@ -194,7 +222,8 @@ fly logs --app awidat-social
 | `DATABASE_URL` | Yes | 1 | Supavisor session-pooler URL |
 | `SERVICE_SHARED_SECRET` | Yes | 1 | Random hex; also stored in Supabase for `pg_net` |
 | `BIND_ADDR` | No | 1 | Default `0.0.0.0:3000` |
-| `SOCIAL_FIRING_ENABLED` | No | 1–4 | Default `false`; Phase 4 sets `true` |
+| `SOCIAL_FIRING_ENABLED` | Yes | 4 | Must be `true` in deployment so pg_cron fires due publish jobs |
+| `TIKTOK_PUBLIC_POSTING_ENABLED` | No | 6 | Default `false`; keep false until TikTok app audit clears public/friends posting |
 | `SUPABASE_URL` | Yes | 1 | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Yes | 1 | service_role key |
 | `STORAGE_BUCKET` | No | 1 | Default `artifacts` |
@@ -226,7 +255,7 @@ code changes.
 - [ ] Migrations applied — 8 tables visible in the dashboard
 - [ ] Supabase Storage bucket `artifacts` created
 - [ ] Fly.io app deployed, `/health` returns 200 from the public internet
-- [ ] Step 8 smoke test: 200 in `net._http_response`
+- [ ] Step 8 smoke test: 200 in `net._http_response` and service log shows `tick processed`
 - [ ] Platform app-reviews started in parallel (YouTube TOS, TikTok video.publish,
       Instagram instagram_content_publish) — on the critical path for Phases 3/6
 
