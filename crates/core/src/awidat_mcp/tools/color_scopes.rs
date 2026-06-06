@@ -236,7 +236,7 @@ fn chroma_coordinates(r: u8, g: u8, b: u8) -> (f64, f64) {
     (cb, cr)
 }
 
-async fn extract_rgb_frame(
+pub(crate) async fn extract_rgb_frame(
     asset_path: &Path,
     t_s: f64,
     bins: usize,
@@ -289,7 +289,7 @@ async fn extract_rgb_frame(
     })
 }
 
-async fn probe_video_dimensions(asset_path: &Path) -> Result<(usize, usize), String> {
+pub(crate) async fn probe_video_dimensions(asset_path: &Path) -> Result<(usize, usize), String> {
     let ffprobe = awidat_render::ffprobe_path()
         .map_err(|e| format!("color_scopes: ffprobe unavailable: {e}"))?;
     let output = Command::new(ffprobe)
@@ -340,7 +340,7 @@ async fn probe_video_dimensions(asset_path: &Path) -> Result<(usize, usize), Str
     Ok((width, height))
 }
 
-fn scaled_dimensions(width: usize, height: usize, max_width: usize) -> (usize, usize) {
+pub(crate) fn scaled_dimensions(width: usize, height: usize, max_width: usize) -> (usize, usize) {
     if width <= max_width {
         return (width, height);
     }
@@ -350,7 +350,7 @@ fn scaled_dimensions(width: usize, height: usize, max_width: usize) -> (usize, u
     (max_width, scaled_height)
 }
 
-fn resolve_asset_path(project_root: &Path, asset: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_asset_path(project_root: &Path, asset: &str) -> Result<PathBuf, String> {
     let p = Path::new(asset);
     if asset.contains("..") {
         return Err(format!(

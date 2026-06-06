@@ -54,6 +54,7 @@ pub mod caption;
 pub mod caption_rendered_output_scorer;
 pub mod captions;
 pub mod clip_candidates;
+pub mod color_analysis;
 pub mod context;
 pub mod continuity;
 pub mod dismissal;
