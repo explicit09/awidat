@@ -79,6 +79,7 @@ pub mod scene_aware_short_form;
 pub mod short_form_intelligence;
 pub mod short_form_review;
 pub mod skills;
+pub mod speed_ramp;
 pub mod subagent;
 pub mod system_prompt;
 pub mod tool;

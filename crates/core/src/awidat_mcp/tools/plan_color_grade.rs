@@ -26,6 +26,7 @@ use crate::awidat_mcp::tools::clip_anchor::{normalize_project_rel, resolve_clip_
 use crate::awidat_mcp::tools::color_scopes::{
     self, ColorScopeInput, compute_color_scopes, extract_rgb_frame,
 };
+use crate::awidat_mcp::tools::media_probe::probe_duration;
 use crate::awidat_mcp::tools::plan_color_grade_edl::{
     LookPlan, assemble_edl, correction_block, correction_params, is_camera_log_space, look_block,
     look_params, shaper_stem_for_space,
@@ -139,34 +140,6 @@ fn sample_times(explicit: &[f64], duration_s: f64, offset_s: f64) -> Vec<f64> {
         .map(|f| base + (f * duration_s).max(0.0))
         .take(MAX_SAMPLES)
         .collect()
-}
-
-/// Probe a clip's duration in seconds via ffprobe. Returns `None` on any
-/// failure so the caller can fall back to a single sample.
-async fn probe_duration(asset_path: &Path) -> Option<f64> {
-    let ffprobe = awidat_render::ffprobe_path().ok()?;
-    let output = tokio::process::Command::new(ffprobe)
-        .arg("-v")
-        .arg("error")
-        .arg("-show_entries")
-        .arg("format=duration")
-        .arg("-of")
-        .arg("default=noprint_wrappers=1:nokey=1")
-        .arg(asset_path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|d| d.is_finite() && *d > 0.0)
 }
 
 /// Sample frames at the given times and return per-frame stats. Fails loud
