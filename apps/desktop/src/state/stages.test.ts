@@ -6,7 +6,14 @@
  * Stays pure / no React / no DOM so it's cheap to run from CLI.
  */
 import { strict as assert } from "node:assert";
-import { stageProgress, STAGES, type Stage } from "./stages.ts";
+import {
+  stageFromWorkspaceShortcut,
+  stageProgress,
+  STAGES,
+  WORKSPACE_DESTINATIONS,
+  WORKSPACE_SHORTCUTS,
+  type Stage,
+} from "./stages.ts";
 
 function describe(name: string, fn: () => void) {
   console.log(`\n# ${name}`);
@@ -41,5 +48,35 @@ describe("stageProgress", () => {
 
   it("STAGES order matches the simplified editor workflow", () => {
     assert.deepEqual([...STAGES], ["edit", "deliver"]);
+  });
+
+  it("workspace destinations expose scheduling from the product chrome", () => {
+    assert.deepEqual([...WORKSPACE_DESTINATIONS], [
+      "edit",
+      "deliver",
+      "schedule",
+      "skills",
+      "history",
+    ]);
+  });
+
+  it("workspace shortcuts route directly to schedule and other destinations", () => {
+    assert.equal(stageFromWorkspaceShortcut("1", true), "edit");
+    assert.equal(stageFromWorkspaceShortcut("2", true), "deliver");
+    assert.equal(stageFromWorkspaceShortcut("3", true), "schedule");
+    assert.equal(stageFromWorkspaceShortcut("4", true), "skills");
+    assert.equal(stageFromWorkspaceShortcut("5", true), "history");
+    assert.equal(stageFromWorkspaceShortcut("3", false), null);
+    assert.equal(stageFromWorkspaceShortcut("6", true), null);
+  });
+
+  it("workspace shortcut labels match destination order", () => {
+    assert.deepEqual(WORKSPACE_SHORTCUTS, [
+      { stage: "edit", keys: "⌘1", label: "Edit" },
+      { stage: "deliver", keys: "⌘2", label: "Deliver" },
+      { stage: "schedule", keys: "⌘3", label: "Schedule" },
+      { stage: "skills", keys: "⌘4", label: "Skills" },
+      { stage: "history", keys: "⌘5", label: "History" },
+    ]);
   });
 });

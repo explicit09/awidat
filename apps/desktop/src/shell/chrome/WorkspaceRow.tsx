@@ -1,12 +1,16 @@
 import { cn } from "../../ui/cn";
-import { useStageStore, type Stage } from "../../state";
+import {
+  WORKSPACE_SHORTCUTS,
+  useStageStore,
+  type Stage,
+} from "../../state";
 import { useMediaStore } from "../../media/store";
 
 /**
  * WorkspaceRow — row 2 of the redesigned top chrome.
  *
  * Layout:
- *   [Edit] [Deliver] [Skills] [History]                       00:00:00:00 / 00:00:38:17
+ *   [Edit] [Deliver] [Schedule] [Skills] [History]             00:00:00:00 / 00:00:38:17
  *
  * Tabs drive the global stage (`useStageStore`). All four tabs are
  * routable destinations: Edit and Deliver are workflow stages, Skills
@@ -28,14 +32,11 @@ type TabDef = {
   disabled?: boolean;
 };
 
-const TABS: readonly TabDef[] = [
-  { id: "edit", label: "Edit", kbd: "⌘1" },
-  { id: "deliver", label: "Deliver", kbd: "⌘2" },
-  // Skills is a real destination — see `SkillsSurface` in the workspace.
-  { id: "skills", label: "Skills", kbd: "⌘3" },
-  // History surfaces the persisted proposal-decision log (T4).
-  { id: "history", label: "History", kbd: "⌘4" },
-];
+const TABS: readonly TabDef[] = WORKSPACE_SHORTCUTS.map((shortcut) => ({
+  id: shortcut.stage,
+  label: shortcut.label,
+  kbd: shortcut.keys,
+}));
 
 export function WorkspaceRow() {
   const active = useStageStore((s) => s.current);

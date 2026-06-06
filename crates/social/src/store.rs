@@ -76,6 +76,11 @@ pub trait SocialStore {
         limit: usize,
     ) -> Result<Vec<PublishJob>, SocialStoreError>;
 
+    /// Return jobs currently in `Processing` (the provider accepted the upload
+    /// and is still transcoding). The poll-processing sweep drives these to
+    /// `Published`/`Failed` via the status adapter. Ordered oldest-first.
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError>;
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError>;
 
     fn publish_job_events(
@@ -102,6 +107,29 @@ pub trait SocialStore {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
+
+    /// Return every workspace role for a given user — the by-user variant the
+    /// Phase 7 auth middleware needs to build an `ApiActor` that can authorize
+    /// against any workspace the user belongs to. (The workspace-keyed variant
+    /// above answers a different question.)
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>;
+
+    /// Return all token secrets whose access token expires before `deadline`.
+    /// Used by the token-refresh sweep to pro-actively refresh near-expiry tokens.
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<TokenSecret>, SocialStoreError>;
+
+    /// Return today's YouTube upload count for the default project key.
+    /// `now` is a Unix-second timestamp used to derive today's epoch-day.
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError>;
+
+    /// Increment today's YouTube upload count by one.
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -114,6 +142,8 @@ pub struct InMemorySocialStore {
     publish_job_events: BTreeMap<String, Vec<PublishJobEvent>>,
     account_publish_defaults: BTreeMap<String, AccountPublishDefaults>,
     workspace_member_roles: BTreeMap<(String, String), WorkspaceMemberRole>,
+    // key: epoch_day, value: count
+    youtube_quota: BTreeMap<i64, usize>,
 }
 
 impl SocialStore for InMemorySocialStore {
@@ -285,6 +315,18 @@ impl SocialStore for InMemorySocialStore {
         Ok(claimed)
     }
 
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut jobs: Vec<PublishJob> = self
+            .publish_jobs
+            .values()
+            .filter(|job| job.status == PublishJobStatus::Processing)
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|job| (job.updated_at, job.id.clone()));
+        jobs.truncate(limit);
+        Ok(jobs)
+    }
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
         self.publish_job_events
             .entry(event.publish_job_id.clone())
@@ -342,6 +384,41 @@ impl SocialStore for InMemorySocialStore {
             .filter(|role| role.workspace_id == workspace_id)
             .cloned()
             .collect())
+    }
+
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        Ok(self
+            .workspace_member_roles
+            .values()
+            .filter(|role| role.user_id == user_id)
+            .cloned()
+            .collect())
+    }
+
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<TokenSecret>, SocialStoreError> {
+        Ok(self
+            .token_secrets
+            .values()
+            .filter(|s| s.access_token_expires_at.is_some_and(|exp| exp <= deadline))
+            .cloned()
+            .collect())
+    }
+
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+        let day = now / 86_400;
+        Ok(*self.youtube_quota.get(&day).unwrap_or(&0))
+    }
+
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+        let day = now / 86_400;
+        *self.youtube_quota.entry(day).or_insert(0) += 1;
+        Ok(())
     }
 }
 
@@ -614,5 +691,69 @@ mod tests {
 
         assert_eq!(updated.status, OAuthConnectionStatus::Completed);
         assert_eq!(store.oauth_connection("oauth_1"), Ok(updated));
+    }
+
+    #[test]
+    fn workspace_member_roles_for_user_returns_all_their_workspaces() {
+        use crate::model::{TeamRole, WorkspaceMemberRole};
+        let mut store = InMemorySocialStore::default();
+        for (ws, user, role) in [
+            ("ws_1", "user_a", TeamRole::Publisher),
+            ("ws_2", "user_a", TeamRole::Admin),
+            ("ws_1", "user_b", TeamRole::Viewer),
+        ] {
+            store
+                .save_workspace_member_role(WorkspaceMemberRole {
+                    workspace_id: ws.into(),
+                    user_id: user.into(),
+                    role,
+                })
+                .unwrap_or_else(|err| panic!("save role: {err}"));
+        }
+
+        let mut roles = store
+            .workspace_member_roles_for_user("user_a")
+            .unwrap_or_else(|err| panic!("roles for user: {err}"));
+        roles.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+        assert_eq!(roles.len(), 2, "only user_a's two workspaces");
+        assert_eq!(roles[0].workspace_id, "ws_1");
+        assert_eq!(roles[0].role, TeamRole::Publisher);
+        assert_eq!(roles[1].workspace_id, "ws_2");
+        assert_eq!(roles[1].role, TeamRole::Admin);
+    }
+
+    #[test]
+    fn processing_publish_jobs_returns_only_processing_oldest_first() {
+        let mut store = InMemorySocialStore::default();
+        // A scheduled job (should be excluded) and two processing jobs.
+        store
+            .save_publish_job(publish_job("job_sched", 1_000))
+            .unwrap_or_else(|err| panic!("save: {err}"));
+        let newer = publish_job("job_proc_new", 1_000)
+            .claim_for_upload(2_000)
+            .processing("vid_new", 2_200);
+        let older = publish_job("job_proc_old", 1_000)
+            .claim_for_upload(2_000)
+            .processing("vid_old", 2_100);
+        store
+            .save_publish_job(newer)
+            .unwrap_or_else(|err| panic!("save: {err}"));
+        store
+            .save_publish_job(older)
+            .unwrap_or_else(|err| panic!("save: {err}"));
+
+        let processing = store
+            .processing_publish_jobs(10)
+            .unwrap_or_else(|err| panic!("processing jobs: {err}"));
+
+        assert_eq!(processing.len(), 2, "scheduled job excluded");
+        assert_eq!(processing[0].id, "job_proc_old", "oldest updated_at first");
+        assert_eq!(processing[1].id, "job_proc_new");
+
+        let limited = store
+            .processing_publish_jobs(1)
+            .unwrap_or_else(|err| panic!("processing jobs: {err}"));
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].id, "job_proc_old");
     }
 }

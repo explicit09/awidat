@@ -8,13 +8,14 @@
 // SRP: model + derivation logic here, presentation in the .tsx file.
 
 import type { DeliveryTargetKey } from "../shell/delivery/types";
+import type { Provider } from "./social/socialModel";
 
-/** The three providers the W5 publishing pipeline supports. Kept as
+/** The providers the publishing pipeline exposes. Kept as
  *  a constant so the Settings section renders even when
  *  `list_providers` is unreachable (running outside Tauri, backend not
  *  yet initialised). */
 export const PROVIDERS: ReadonlyArray<{
-  key: DeliveryTargetKey;
+  key: Provider;
   displayName: string;
   devConsoleUrl: string;
 }> = [
@@ -33,7 +34,16 @@ export const PROVIDERS: ReadonlyArray<{
     displayName: "Instagram",
     devConsoleUrl: "https://developers.facebook.com/apps",
   },
+  {
+    key: "twitter_x",
+    displayName: "Twitter/X",
+    devConsoleUrl: "https://developer.x.com/",
+  },
 ];
+
+export function providerDisplayName(key: DeliveryTargetKey): string {
+  return PROVIDERS.find((provider) => provider.key === key)?.displayName ?? key;
+}
 
 /** Mirror of the backend `ConnectionStatus` shape. */
 export type ConnectionStatus = {

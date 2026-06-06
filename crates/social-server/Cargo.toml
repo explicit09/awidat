@@ -1,0 +1,46 @@
+[package]
+name = "awidat-social-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "awidat-social-server"
+path = "src/main.rs"
+
+[dependencies]
+awidat-social = { workspace = true, features = ["youtube-live"] }
+# Axum: workspace dep is default-features=false; we add the features we need (G1).
+axum = { workspace = true, features = ["http1", "tokio", "json", "query"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+urlencoding = { workspace = true }
+# r2d2 and postgres come transitively via awidat-social; re-declare here so
+# main.rs can use them directly when building the pool.
+r2d2 = { workspace = true }
+r2d2_postgres = { workspace = true }
+postgres = { workspace = true }
+constant_time_eq = { workspace = true }
+# CSPRNG for unguessable OAuth CSRF state + connection ids.
+rand = { workspace = true }
+# Signed public artifact URLs for provider pull-based uploads.
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+# Supabase Auth JWT verification (Phase 7).
+jsonwebtoken = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

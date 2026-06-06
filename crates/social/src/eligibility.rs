@@ -117,6 +117,38 @@ pub fn instagram_eligibility(
     }
 }
 
+pub fn twitter_x_eligibility(
+    provider_account_id: impl Into<String>,
+    display_name: impl Into<String>,
+    handle: Option<&str>,
+    scopes: &[&str],
+) -> ProviderEligibilityReport {
+    let has_write_scope = scopes.contains(&"tweet.write") || scopes.contains(&"media.write");
+    ProviderEligibilityReport {
+        profile: ProviderAccountProfile {
+            provider: Provider::TwitterX,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: handle.map(ToOwned::to_owned),
+            avatar_url: None,
+            account_kind: AccountKind::Creator,
+        },
+        capabilities: ProviderCapabilities {
+            native_scheduling: false,
+            queue_scheduling: true,
+            upload_video: has_write_scope,
+            upload_thumbnail: false,
+            public_posting: has_write_scope,
+            requires_user_consent: false,
+        },
+        eligibility: if has_write_scope {
+            AccountEligibility::eligible()
+        } else {
+            AccountEligibility::blocked("missing_twitter_x_write_scope")
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +207,40 @@ mod tests {
         assert_eq!(
             report.eligibility.reasons,
             vec!["missing_instagram_content_publish_scope"]
+        );
+    }
+
+    #[test]
+    fn tiktok_with_publish_scope_is_upload_eligible_and_public_capable() {
+        // A TikTok account that carries video.publish flips to eligible and
+        // exposes upload_video + public_posting — the adapter threads
+        // public_posting into its privacy clamp (Phase 6 Task 2).
+        let report = tiktok_eligibility("open_id_1", "Creator", &["video.publish"]);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(
+            report.capabilities.public_posting,
+            "public_posting drives the adapter's eligible_for_public clamp"
+        );
+        assert_eq!(report.profile.account_kind, AccountKind::Creator);
+    }
+
+    #[test]
+    fn instagram_professional_with_publish_scope_is_upload_eligible() {
+        let report = instagram_eligibility("ig_1", "Creator", true, true);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
+        assert_eq!(report.profile.account_kind, AccountKind::Professional);
+    }
+
+    #[test]
+    fn twitter_x_missing_write_scope_is_ineligible() {
+        let report = twitter_x_eligibility("x_1", "Creator", Some("@awidat"), &["users.read"]);
+        assert!(!report.eligibility.eligible);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["missing_twitter_x_write_scope"]
         );
     }
 }

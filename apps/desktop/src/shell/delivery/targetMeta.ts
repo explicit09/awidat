@@ -3,6 +3,7 @@ import {
   FileImage,
   FileVideo,
   Image as ImageIcon,
+  MessageCircle,
   Play,
   Square,
   type LucideIcon,
@@ -46,6 +47,12 @@ export const TARGET_META: Record<DeliveryTargetKey, TargetMeta> = {
     spec: "1080p · 1:1 / 9:16",
     kind: "video",
   },
+  twitter_x: {
+    icon: MessageCircle,
+    label: "Twitter/X",
+    spec: "1080p · 9:16 · h264",
+    kind: "video",
+  },
   captions: { icon: Captions, label: "Captions", spec: "SRT + VTT", kind: "asset" },
   cover: { icon: ImageIcon, label: "Cover", spec: "1280×720 PNG", kind: "asset" },
   custom: { icon: FileImage, label: "Custom frame", spec: "User-selected", kind: "asset" },
@@ -65,6 +72,7 @@ export function targetKeyForKind(
   if (kind === "video_master") return "youtube";
   if (kind === "video_reframe") {
     const lc = label.toLowerCase();
+    if (lc.includes("twitter") || lc.includes("x ")) return "twitter_x";
     if (lc.includes("tiktok") || lc.includes("9:16")) return "tiktok";
     if (lc.includes("instagram") || lc.includes("1:1")) return "instagram";
     return "tiktok";

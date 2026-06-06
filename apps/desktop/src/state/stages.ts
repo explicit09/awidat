@@ -18,18 +18,44 @@ export const STAGES = ["edit", "deliver"] as const;
 
 /**
  * The full set of routable destinations. `Stage` is the workflow
- * surface union; `skills` and `history` are non-linear tabs that live
- * next to the workflow stages in the WorkspaceRow but don't
- * participate in the progress indicator.
+ * surface union; `schedule`, `skills`, and `history` are non-linear
+ * tabs that live next to the workflow stages in the WorkspaceRow but
+ * don't participate in the progress indicator.
  */
-export type Stage = (typeof STAGES)[number] | "skills" | "history";
+export type Stage = (typeof STAGES)[number] | "schedule" | "skills" | "history";
+
+/**
+ * Routable product surfaces shown in top-level workspace chrome.
+ * `STAGES` remains the linear edit -> deliver workflow; this list is the
+ * places a user can jump to directly from the product surface.
+ */
+export const WORKSPACE_DESTINATIONS = [
+  "edit",
+  "deliver",
+  "schedule",
+  "skills",
+  "history",
+] as const satisfies readonly Stage[];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   edit: "Edit",
   deliver: "Deliver",
+  schedule: "Schedule",
   skills: "Skills",
   history: "History",
 };
+
+export type WorkspaceShortcut = {
+  stage: Stage;
+  keys: string;
+  label: string;
+};
+
+export const WORKSPACE_SHORTCUTS = WORKSPACE_DESTINATIONS.map((stage, index) => ({
+  stage,
+  keys: `⌘${index + 1}`,
+  label: STAGE_LABEL[stage],
+})) as readonly WorkspaceShortcut[];
 
 /**
  * For the StageIndicator chrome: each stage can be at one of these visual states.
@@ -48,7 +74,7 @@ export type StageStore = {
  *  (used for native screenshot tours; ignored in production builds). */
 const DEV_INITIAL_STAGE = ((): Stage => {
   const v = import.meta.env?.VITE_AWIDAT_STAGE as string | undefined;
-  return v === "deliver" || v === "skills" || v === "history" ? v : "edit";
+  return v === "deliver" || v === "schedule" || v === "skills" || v === "history" ? v : "edit";
 })();
 
 export const useStageStore = create<StageStore>((set) => ({
@@ -70,4 +96,16 @@ export function stageProgress(stage: Stage, current: Stage, visited: Set<Stage>)
   if (stage === current) return "current";
   if (visited.has(stage)) return "complete";
   return "upcoming";
+}
+
+export function stageFromWorkspaceShortcut(
+  key: string,
+  modifierPressed: boolean,
+): Stage | null {
+  if (!modifierPressed) return null;
+  const index = Number(key) - 1;
+  if (!Number.isInteger(index) || index < 0 || index >= WORKSPACE_DESTINATIONS.length) {
+    return null;
+  }
+  return WORKSPACE_DESTINATIONS[index] ?? null;
 }

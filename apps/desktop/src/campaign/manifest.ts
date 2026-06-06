@@ -15,7 +15,10 @@ export type PlatformVariantStatus =
   | "failed"
   | "requires_action"
   | "cancelled";
-export type CampaignPlatform = Extract<DeliveryTargetKey, "youtube" | "tiktok" | "instagram">;
+export type CampaignPlatform = Extract<
+  DeliveryTargetKey,
+  "youtube" | "tiktok" | "instagram" | "twitter_x"
+>;
 export type PreflightSeverity = "pass" | "info" | "warning" | "error" | "failure";
 
 export type TranscriptAnchor = {

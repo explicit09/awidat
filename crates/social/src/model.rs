@@ -8,6 +8,8 @@ pub enum Provider {
     TikTok,
     #[serde(rename = "instagram")]
     Instagram,
+    #[serde(rename = "twitter_x")]
+    TwitterX,
 }
 
 impl Provider {
@@ -16,6 +18,7 @@ impl Provider {
             Self::YouTube => "youtube",
             Self::TikTok => "tiktok",
             Self::Instagram => "instagram",
+            Self::TwitterX => "twitter_x",
         }
     }
 }
@@ -170,6 +173,7 @@ pub enum PublishJobEventType {
     StatusPolled,
     Cancelled,
     RetryQueued,
+    Rescheduled,
     RequiresAction,
     Failed,
 }
@@ -254,7 +258,12 @@ mod tests {
 
     #[test]
     fn provider_keys_are_stable() {
-        for provider in [Provider::YouTube, Provider::TikTok, Provider::Instagram] {
+        for provider in [
+            Provider::YouTube,
+            Provider::TikTok,
+            Provider::Instagram,
+            Provider::TwitterX,
+        ] {
             let json = serde_json::to_value(&provider)
                 .unwrap_or_else(|err| panic!("serialize provider: {err}"));
             assert_eq!(json, serde_json::Value::String(provider.as_str().into()));

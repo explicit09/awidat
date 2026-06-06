@@ -1,9 +1,10 @@
-// Publish-jobs surface: list jobs with live status, cancel/retry, and a
-// worker "advance" action that drives scheduled -> uploading -> processing ->
-// published via the worker commands (mock adapters this pass). Talks to the
-// `social_*` Tauri commands; derivation lives in `socialModel.ts`.
+// Publish-jobs surface: list jobs with live status + cancel/retry. Firing is
+// the server's job now (pg_cron, Phase 4), so there is no client "advance"
+// worker — the UI passively polls while any job is non-terminal and shows the
+// server-driven status. Talks to the `social_*` Tauri commands; derivation
+// lives in `socialModel.ts`.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -11,7 +12,8 @@ import {
   jobStatusLabel,
   canCancel,
   canRetry,
-  nextWorkerAction,
+  canReschedule,
+  isTerminal,
   type PublishJob,
 } from "./socialModel";
 
@@ -19,8 +21,21 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+function toDateTimeLocal(secs: number): string {
+  const date = new Date(secs * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDateTimeLocal(value: string): number | null {
+  const millis = new Date(value).getTime();
+  if (!Number.isFinite(millis)) return null;
+  return Math.floor(millis / 1000);
+}
+
 export function SocialJobs({ jobIds }: { jobIds: string[] }) {
   const [jobs, setJobs] = useState<Record<string, PublishJob>>({});
+  const [rescheduleAt, setRescheduleAt] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const loadJob = useCallback(async (jobId: string) => {
@@ -67,36 +82,47 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
     [],
   );
 
-  const advance = useCallback(
-    async (job: PublishJob) => {
-      const action = nextWorkerAction(job.status);
-      if (!action) return;
+  const reschedule = useCallback(
+    async (jobId: string) => {
+      const scheduledFor = fromDateTimeLocal(rescheduleAt[jobId] ?? "");
+      if (!scheduledFor) {
+        setError("Choose a valid reschedule time");
+        return;
+      }
       try {
-        const next =
-          action === "execute"
-            ? await invoke<PublishJob>("social_execute_upload", {
-                args: {
-                  jobId: job.id,
-                  title: `Awidat ${job.campaignId}`,
-                  description: null,
-                  tags: [],
-                  thumbnailRef: null,
-                  now: nowSeconds(),
-                },
-              })
-            : await invoke<PublishJob>("social_poll_status", {
-                jobId: job.id,
-                now: nowSeconds(),
-              });
-        setJobs((prev) => ({ ...prev, [next.id]: next }));
+        const job = await invoke<PublishJob>("social_reschedule_job", {
+          jobId,
+          args: { scheduledFor },
+        });
+        setJobs((prev) => ({ ...prev, [job.id]: job }));
+        setRescheduleAt((prev) => ({
+          ...prev,
+          [job.id]: toDateTimeLocal(job.scheduledFor),
+        }));
+        setError(null);
       } catch (e) {
         setError(String(e));
       }
     },
-    [],
+    [rescheduleAt],
   );
 
   const rows = jobIds.map((id) => jobs[id]).filter((j): j is PublishJob => !!j);
+
+  // Initial load.
+  useEffect(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  // Passive polling: while any tracked job is still non-terminal the server is
+  // (or will be) advancing it, so re-poll every few seconds. Stops once every
+  // job is terminal to avoid needless invokes.
+  useEffect(() => {
+    const anyInFlight = rows.some((job) => !isTerminal(job.status));
+    if (!anyInFlight) return;
+    const handle = window.setInterval(() => void refreshAll(), 5000);
+    return () => window.clearInterval(handle);
+  }, [rows, refreshAll]);
 
   return (
     <section className="social-jobs">
@@ -134,11 +160,6 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
                 View post
               </button>
             )}
-            {nextWorkerAction(job.status) && (
-              <button type="button" onClick={() => void advance(job)}>
-                Advance
-              </button>
-            )}
             {canCancel(job.status) && (
               <button type="button" onClick={() => void cancel(job.id)}>
                 Cancel
@@ -148,6 +169,24 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
               <button type="button" onClick={() => void retry(job.id)}>
                 Retry
               </button>
+            )}
+            {canReschedule(job.status) && (
+              <span className="social-jobs__reschedule">
+                <input
+                  type="datetime-local"
+                  value={rescheduleAt[job.id] ?? toDateTimeLocal(job.scheduledFor)}
+                  onChange={(event) =>
+                    setRescheduleAt((prev) => ({
+                      ...prev,
+                      [job.id]: event.currentTarget.value,
+                    }))
+                  }
+                  aria-label={`Reschedule ${job.id}`}
+                />
+                <button type="button" onClick={() => void reschedule(job.id)}>
+                  Reschedule
+                </button>
+              </span>
             )}
           </li>
         ))}

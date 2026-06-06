@@ -75,13 +75,13 @@ pub use job::{
 };
 pub use manifest::{
     RENDER_MANIFEST_SCHEMA_VERSION, RenderBackendKind, RenderExecutionManifest,
-    RenderExecutionManifestInput, RenderInputFingerprint, RenderManifestError,
-    RenderManifestLimitation, RenderOutputArtifact, RenderReplayError, RenderReplayOutcome,
-    RenderReplayPlan, RenderSidecarFingerprint, RenderVerificationSummary,
+    RenderExecutionManifestInput, RenderInputFingerprint, RenderInputFingerprintKind,
+    RenderManifestError, RenderManifestLimitation, RenderOutputArtifact, RenderReplayError,
+    RenderReplayOutcome, RenderReplayPlan, RenderSidecarFingerprint, RenderVerificationSummary,
     ass_sidecar_layout_metadata, finalize_render_manifest_file, finalize_render_manifest_outputs,
-    fingerprint_ffmpeg_subtitle_sidecars, fingerprint_file, limitation, manifest_path_for_output,
-    output_artifact, planned_at_now, read_render_manifest, replay_render_manifest,
-    validate_replay_manifest, write_render_manifest,
+    fingerprint_ffmpeg_subtitle_sidecars, fingerprint_file, fingerprint_file_sampled, limitation,
+    manifest_path_for_output, output_artifact, planned_at_now, read_render_manifest,
+    replay_render_manifest, validate_replay_manifest, write_render_manifest,
 };
 pub use master_loudnorm::{
     JobManagerRunner, MasterLoudnormError, MasterLoudnormPlan, MeasuredLoudnorm, RenderJobRunner,

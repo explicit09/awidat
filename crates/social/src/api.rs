@@ -18,14 +18,15 @@ use crate::model::{
 use crate::oauth_url::OAuthProviderConfig;
 use crate::provider::{ProviderRegistry, ProviderState};
 use crate::publish_service::{
-    BindTargetInput, PublishService, PublishServiceError, ScheduleTargetInput,
+    BindTargetInput, PublishService, PublishServiceError, RescheduleJobInput, ScheduleTargetInput,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
+use crate::token_refresh::TokenRefresher;
 use crate::upload_adapter::{UploadAdapter, UploadPrivacy};
-use crate::upload_service::{ExecuteUploadInput, UploadService, UploadServiceError};
+use crate::upload_service::{ExecuteUploadInput, RetryPolicy, UploadService, UploadServiceError};
 use crate::upload_status::{
     PollUploadStatusInput, UploadStatusAdapter, UploadStatusService, UploadStatusServiceError,
 };
@@ -151,13 +152,53 @@ impl From<TeamServiceError> for SocialApiError {
     }
 }
 
+impl From<crate::auth_context::AuthContextError> for SocialApiError {
+    /// Any auth-context failure (missing/expired/invalid/malformed token) maps to
+    /// the existing `Unauthorized` variant, preserving the redaction + HTTP-status
+    /// contract from earlier phases.
+    fn from(_error: crate::auth_context::AuthContextError) -> Self {
+        SocialApiError::Unauthorized
+    }
+}
+
+/// Capabilities in camelCase for the wire/clients.
+///
+/// A DTO mirror of [`ProviderCapabilities`] so the client/frontend can read
+/// camelCase (`uploadVideo`, …) WITHOUT changing how `ProviderCapabilities`
+/// serializes into the store's `payload_json` (which must stay snake_case to
+/// preserve existing rows + the store round-trip tests).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilitiesDto {
+    pub native_scheduling: bool,
+    pub queue_scheduling: bool,
+    pub upload_video: bool,
+    pub upload_thumbnail: bool,
+    pub public_posting: bool,
+    pub requires_user_consent: bool,
+}
+
+impl From<ProviderCapabilities> for CapabilitiesDto {
+    fn from(c: ProviderCapabilities) -> Self {
+        Self {
+            native_scheduling: c.native_scheduling,
+            queue_scheduling: c.queue_scheduling,
+            upload_video: c.upload_video,
+            upload_thumbnail: c.upload_thumbnail,
+            public_posting: c.public_posting,
+            requires_user_consent: c.requires_user_consent,
+        }
+    }
+}
+
 /// Provider slot summary, safe to serialize to clients.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderSummary {
     pub provider: Provider,
     pub display_name: String,
     pub scopes: Vec<String>,
-    pub capabilities: ProviderCapabilities,
+    pub capabilities: CapabilitiesDto,
     pub eligibility: AccountEligibility,
 }
 
@@ -172,7 +213,7 @@ impl ProviderSummary {
                 .iter()
                 .map(|scope| (*scope).to_string())
                 .collect(),
-            capabilities: state.descriptor.capabilities.clone(),
+            capabilities: state.descriptor.capabilities.clone().into(),
             eligibility: state.eligibility.clone(),
         }
     }
@@ -183,6 +224,7 @@ impl ProviderSummary {
 /// This deliberately mirrors only the non-secret fields of
 /// [`ConnectedAccount`]; it never carries token rows, KMS ids, or OAuth state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountSummary {
     pub id: String,
     pub owner: OwnerRef,
@@ -194,7 +236,7 @@ pub struct AccountSummary {
     pub account_kind: AccountKind,
     pub status: ConnectedAccountStatus,
     pub scopes: Vec<String>,
-    pub capabilities: ProviderCapabilities,
+    pub capabilities: CapabilitiesDto,
     pub eligibility: AccountEligibility,
     pub last_verified_at: Option<i64>,
     pub created_at: i64,
@@ -214,7 +256,7 @@ impl From<ConnectedAccount> for AccountSummary {
             account_kind: account.account_kind,
             status: account.status,
             scopes: account.scopes,
-            capabilities: account.capabilities,
+            capabilities: account.capabilities.into(),
             eligibility: account.eligibility,
             last_verified_at: account.last_verified_at,
             created_at: account.created_at,
@@ -238,6 +280,7 @@ pub struct OAuthStartRequest {
 
 /// Response after a provider OAuth start, carrying the authorization URL.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthStartResponse {
     pub oauth_connection_id: String,
     pub provider: Provider,
@@ -263,6 +306,7 @@ pub struct OAuthCompleteRequest {
 
 /// Response after completing OAuth, carrying only sanitized account data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthCompleteResponse {
     pub account: AccountSummary,
 }
@@ -286,6 +330,22 @@ pub struct ValidateTargetRequest {
     pub now: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateTargetResponse {
+    #[serde(flatten)]
+    pub target: CampaignVariantTarget,
+    pub validation_reasons: Vec<String>,
+}
+
+impl std::ops::Deref for ValidateTargetResponse {
+    type Target = CampaignVariantTarget;
+
+    fn deref(&self) -> &Self::Target {
+        &self.target
+    }
+}
+
 /// `POST /campaigns/:campaign_id/variants/:variant_id/schedule` body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScheduleTargetRequest {
@@ -296,11 +356,19 @@ pub struct ScheduleTargetRequest {
     pub now: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescheduleJobRequest {
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
 /// Publish job state, safe to serialize to clients.
 ///
 /// Carries only public job fields: never token rows. The `raw_error_ref` is a
 /// pointer to a server-side error blob, not the raw provider error body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishJobResponse {
     pub id: String,
     pub campaign_id: String,
@@ -352,6 +420,7 @@ impl PublishJobResponse {
 /// already keep provider token material out of event payloads (see the upload
 /// and status service token-safety tests).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishJobEventResponse {
     pub id: String,
     pub event_type: PublishJobEventType,
@@ -384,6 +453,8 @@ pub struct ExecuteUploadRequest {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
+    /// Optional provider-facing artifact URL, used by PULL-model providers.
+    pub artifact_ref: Option<String>,
     /// Resolved visibility the caller already derived from the campaign target.
     /// When `None`, [`SocialApi::execute_claimed_upload_job`] falls back to the
     /// connected account's `default_privacy`, then to `Private`.
@@ -400,11 +471,16 @@ pub struct SocialApi;
 impl SocialApi {
     /// `GET /social/providers`: list provider slots and capability summaries.
     pub fn providers(registry: &ProviderRegistry) -> Vec<ProviderSummary> {
-        [Provider::YouTube, Provider::TikTok, Provider::Instagram]
-            .iter()
-            .filter_map(|provider| registry.get(provider).ok())
-            .map(ProviderSummary::from_state)
-            .collect()
+        [
+            Provider::YouTube,
+            Provider::TikTok,
+            Provider::Instagram,
+            Provider::TwitterX,
+        ]
+        .iter()
+        .filter_map(|provider| registry.get(provider).ok())
+        .map(ProviderSummary::from_state)
+        .collect()
     }
 
     /// `GET /social/accounts`: list connected accounts for an owner.
@@ -528,7 +604,7 @@ impl SocialApi {
         registry: &ProviderRegistry,
         actor: &ApiActor,
         request: ValidateTargetRequest,
-    ) -> Result<CampaignVariantTarget, SocialApiError> {
+    ) -> Result<ValidateTargetResponse, SocialApiError> {
         let target = store.campaign_variant_target(&request.target_id)?;
         // Reject unknown providers before mutating any state.
         registry
@@ -536,9 +612,13 @@ impl SocialApi {
             .map_err(|err| SocialApiError::Publish(err.to_string()))?;
         let owner = account_owner(store, &target.connected_account_id)?;
         actor.authorize(&owner, TeamAction::SchedulePublish)?;
-        PublishService::validate_target(store, &owner, &request.target_id, request.now)?;
+        let report =
+            PublishService::validate_target(store, &owner, &request.target_id, request.now)?;
         let validated = store.campaign_variant_target(&request.target_id)?;
-        Ok(validated)
+        Ok(ValidateTargetResponse {
+            target: validated,
+            validation_reasons: report.reasons,
+        })
     }
 
     /// `POST /campaigns/:campaign_id/variants/:variant_id/schedule`: create a
@@ -614,6 +694,29 @@ impl SocialApi {
         job_response(store, job)
     }
 
+    /// `POST /publish-jobs/:id/reschedule`: change the due time for a
+    /// scheduled publish job. The server-side scheduler remains the firing
+    /// owner; this only updates the durable job timestamp it reads.
+    pub fn reschedule_job(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+        request: RescheduleJobRequest,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        authorize_job_owner(store, actor, owner, job_id, TeamAction::SchedulePublish)?;
+        let job = PublishService::reschedule_job(
+            store,
+            &owner.owner,
+            RescheduleJobInput {
+                job_id: job_id.to_string(),
+                scheduled_for: request.scheduled_for,
+                now: request.now,
+            },
+        )?;
+        job_response(store, job)
+    }
+
     /// `GET /social/accounts/:id/audit`: per-account jobs, events, and status
     /// counts for an owner. Read-gated; never includes token material.
     pub fn account_usage_audit(
@@ -646,6 +749,53 @@ impl SocialApi {
         adapter: &impl UploadAdapter,
         request: ExecuteUploadRequest,
     ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = Self::execute_claimed_upload_job_with_input(
+            store,
+            adapter,
+            request,
+            |store, adapter, input| UploadService::execute_claimed_job(store, adapter, input),
+        )?;
+        job_response(store, job)
+    }
+
+    /// Worker entrypoint: execute an already-claimed upload job with fire-time
+    /// token refresh.
+    pub fn execute_claimed_upload_job_with_refresher(
+        store: &mut impl SocialStore,
+        adapter: &impl UploadAdapter,
+        refresher: &impl TokenRefresher,
+        request: ExecuteUploadRequest,
+        refresh_skew_secs: i64,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        let job = Self::execute_claimed_upload_job_with_input(
+            store,
+            adapter,
+            request,
+            |store, adapter, input| {
+                UploadService::execute_claimed_job_full(
+                    store,
+                    adapter,
+                    refresher,
+                    input,
+                    RetryPolicy::default(),
+                    refresh_skew_secs,
+                )
+            },
+        )?;
+        job_response(store, job)
+    }
+
+    fn execute_claimed_upload_job_with_input<S, A, F>(
+        store: &mut S,
+        adapter: &A,
+        request: ExecuteUploadRequest,
+        execute: F,
+    ) -> Result<PublishJob, SocialApiError>
+    where
+        S: SocialStore,
+        A: UploadAdapter,
+        F: FnOnce(&mut S, &A, ExecuteUploadInput) -> Result<PublishJob, UploadServiceError>,
+    {
         // Resolve the upload's visibility: the caller's explicit value wins,
         // otherwise fall back to the connected account's `default_privacy`,
         // then `Private`. Without this the worker would publish every job as
@@ -654,20 +804,17 @@ impl SocialApi {
             Some(privacy) => privacy,
             None => resolve_account_default_privacy(store, &request.job_id)?,
         };
-        let job = UploadService::execute_claimed_job(
-            store,
-            adapter,
-            ExecuteUploadInput {
-                job_id: request.job_id,
-                title: request.title,
-                description: request.description,
-                tags: request.tags,
-                thumbnail_ref: request.thumbnail_ref,
-                privacy,
-                now: request.now,
-            },
-        )?;
-        job_response(store, job)
+        let input = ExecuteUploadInput {
+            job_id: request.job_id,
+            title: request.title,
+            description: request.description,
+            tags: request.tags,
+            thumbnail_ref: request.thumbnail_ref,
+            artifact_ref: request.artifact_ref,
+            privacy,
+            now: request.now,
+        };
+        Ok(execute(store, adapter, input)?)
     }
 
     /// Worker entrypoint: poll a processing job's provider status.
@@ -872,7 +1019,12 @@ mod tests {
         let provider_ids: Vec<&Provider> = providers.iter().map(|p| &p.provider).collect();
         assert_eq!(
             provider_ids,
-            vec![&Provider::YouTube, &Provider::TikTok, &Provider::Instagram]
+            vec![
+                &Provider::YouTube,
+                &Provider::TikTok,
+                &Provider::Instagram,
+                &Provider::TwitterX
+            ]
         );
 
         let mut store = InMemorySocialStore::default();
@@ -1100,7 +1252,7 @@ mod tests {
             campaign_id: "campaign_1".into(),
             variant_id: "variant_1".into(),
             connected_account_id: account_id.into(),
-            platform_fields: serde_json::json!({"privacy": "private"}),
+            platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
             scheduled_for: 2_000,
             now: 1_000,
         }
@@ -1200,6 +1352,36 @@ mod tests {
     }
 
     #[test]
+    fn publish_api_validate_target_returns_reasons_for_invalid_metadata() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let mut request = bind_request("acct_1");
+        request.platform_fields = serde_json::json!({
+            "privacy": "private",
+            "title": ""
+        });
+        SocialApi::bind_target(&mut store, &user_actor(), request)
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+
+        let validated = SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+
+        assert_eq!(validated.validation_state, ValidationState::Invalid);
+        assert_eq!(validated.validation_reasons, vec!["title.required"]);
+    }
+
+    #[test]
     fn publish_api_bind_rejects_foreign_user() {
         let mut store = InMemorySocialStore::default();
         store
@@ -1280,6 +1462,53 @@ mod tests {
                 PublishServiceError::JobNotRetryable.to_string()
             ))
         );
+    }
+
+    #[test]
+    fn publish_api_reschedule_is_authorized_and_returns_audit_event() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        assert_eq!(
+            SocialApi::reschedule_job(
+                &mut store,
+                &other_user_actor(),
+                &ApiOwner {
+                    owner: user_owner()
+                },
+                "job_1",
+                RescheduleJobRequest {
+                    scheduled_for: 2_800,
+                    now: 1_500,
+                },
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+
+        let job = SocialApi::reschedule_job(
+            &mut store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "job_1",
+            RescheduleJobRequest {
+                scheduled_for: 2_800,
+                now: 1_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("reschedule job: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.scheduled_for, 2_800);
+        assert_eq!(
+            job.events.last().map(|event| &event.event_type),
+            Some(&PublishJobEventType::Rescheduled)
+        );
+        let json = serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
     }
 
     #[test]
@@ -1541,6 +1770,7 @@ mod tests {
             description: Some("Description".into()),
             tags: vec!["awidat".into()],
             thumbnail_ref: Some("render://thumb_1".into()),
+            artifact_ref: None,
             privacy: None,
             now: 2_000,
         }

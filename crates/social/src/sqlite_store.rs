@@ -488,6 +488,35 @@ impl SocialStore for SqliteSocialStore {
         Ok(claimed)
     }
 
+    fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM publish_jobs
+                WHERE status = ?1
+                ORDER BY updated_at, id
+                LIMIT ?2
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    publish_job_status_as_str(&PublishJobStatus::Processing),
+                    limit as i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(from_json::<PublishJob>(&row.map_err(storage_error)?)?);
+        }
+        Ok(jobs)
+    }
+
     fn append_publish_job_event(&mut self, event: PublishJobEvent) -> Result<(), SocialStoreError> {
         let payload_json = to_json(&event)?;
         self.connection
@@ -634,6 +663,84 @@ impl SocialStore for SqliteSocialStore {
         }
         Ok(roles)
     }
+
+    fn workspace_member_roles_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM workspace_member_roles
+                WHERE user_id = ?1
+                ORDER BY workspace_id
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![user_id], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut roles = Vec::new();
+        for row in rows {
+            let payload_json = row.map_err(storage_error)?;
+            roles.push(from_json(&payload_json)?);
+        }
+        Ok(roles)
+    }
+
+    fn token_secrets_due_refresh(
+        &self,
+        deadline: i64,
+    ) -> Result<Vec<crate::token::TokenSecret>, SocialStoreError> {
+        let mut stmt = self
+            .connection
+            .prepare(
+                r#"
+                SELECT payload_json
+                FROM oauth_token_secrets
+                WHERE access_token_expires_at IS NOT NULL
+                  AND access_token_expires_at <= ?1
+                "#,
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map(params![deadline], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut secrets = Vec::new();
+        for row in rows {
+            secrets.push(from_json(&row.map_err(storage_error)?)?);
+        }
+        Ok(secrets)
+    }
+
+    fn youtube_upload_quota_today(&self, now: i64) -> Result<usize, SocialStoreError> {
+        let day = now / 86_400;
+        let count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(count,0) FROM provider_upload_quota
+                 WHERE project_key='default' AND day_epoch=?1",
+                rusqlite::params![day],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(count as usize)
+    }
+
+    fn increment_youtube_quota(&mut self, now: i64) -> Result<(), SocialStoreError> {
+        let day = now / 86_400;
+        self.connection
+            .execute(
+                "INSERT INTO provider_upload_quota (project_key, day_epoch, count)
+                 VALUES ('default', ?1, 1)
+                 ON CONFLICT(project_key, day_epoch) DO UPDATE SET count = count + 1",
+                rusqlite::params![day],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -744,6 +851,7 @@ fn publish_job_event_type_as_str(event_type: &PublishJobEventType) -> &'static s
         PublishJobEventType::StatusPolled => "status_polled",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
+        PublishJobEventType::Rescheduled => "rescheduled",
         PublishJobEventType::RequiresAction => "requires_action",
         PublishJobEventType::Failed => "failed",
     }

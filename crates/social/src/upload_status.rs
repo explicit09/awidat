@@ -109,7 +109,9 @@ impl UploadStatusService {
         let result = adapter
             .poll_status(&request)
             .map_err(status_adapter_error)?;
-        if result.provider_post_id != provider_post_id {
+        if result.status != UploadProcessingStatus::Published
+            && result.provider_post_id != provider_post_id
+        {
             return Err(UploadStatusServiceError::ProviderPostIdMismatch);
         }
 
@@ -371,6 +373,35 @@ mod tests {
             .publish_job_events("job_1")
             .unwrap_or_else(|err| panic!("events: {err}"));
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn poll_processing_job_allows_final_provider_post_id_on_published_status() {
+        let mut store = store_with_processing_job();
+        let adapter = RecordingStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "ig_media_1".into(),
+            provider_post_url: Some("https://www.instagram.com/reel/abc/".into()),
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let job = UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(job.provider_post_id.as_deref(), Some("ig_media_1"));
+        assert_eq!(
+            job.provider_post_url.as_deref(),
+            Some("https://www.instagram.com/reel/abc/")
+        );
     }
 
     #[test]

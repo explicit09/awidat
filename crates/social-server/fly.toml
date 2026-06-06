@@ -1,0 +1,63 @@
+# Fly.io deployment manifest for awidat-social-server.
+#
+# Set the region to match your Supabase project's region to minimise latency
+# between pg_net HTTP calls and this service.  Common Supabase regions:
+#   us-east-1 → iad  (Ashburn, VA)
+#   ap-southeast-1 → sin (Singapore)
+#   eu-west-1 → lhr  (London)
+#
+# Apply via: fly deploy --config crates/social-server/fly.toml
+
+app = "awidat-social"
+primary_region = "iad"  # ← change to match your Supabase region
+
+[build]
+  dockerfile = "crates/social-server/Dockerfile"
+
+[env]
+  BIND_ADDR = "0.0.0.0:3000"
+  SOCIAL_FIRING_ENABLED = "true"   # Deployed service owns scheduled publish firing.
+  STORAGE_BUCKET = "artifacts"
+
+# Secrets (set via `fly secrets set`, never committed):
+#   DATABASE_URL            — Supavisor session-pooler URL
+#   SERVICE_SHARED_SECRET   — bearer token pg_net sends to /internal/tick
+#   SUPABASE_URL            — project URL (https://<ref>.supabase.co)
+#   SUPABASE_SERVICE_KEY    — service_role key
+#   GOOGLE_CLIENT_ID        — (Phase 2) Google OAuth app client ID
+#   GOOGLE_CLIENT_SECRET    — (Phase 2) Google OAuth app client secret (server-only)
+#   SOCIAL_TOKEN_AEAD_KEY   — (Phase 2) 64 hex chars = 32-byte ChaCha20-Poly1305 key
+#   SOCIAL_TOKEN_KEY_ID     — (Phase 2) key identifier (e.g. "k1")
+#   OAUTH_REDIRECT_BASE     — (Phase 2) base URL for OAuth callbacks (e.g. https://awidat-social.fly.dev)
+#   YOUTUBE_FORCE_PRIVATE   — (Phase 3) "false" allows non-private uploads (default true; keep true pre-audit)
+#   ARTIFACT_BASE_DIR       — (Phase 3) root dir for file:// artifact refs (default /var/lib/awidat-artifacts)
+#   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
+#   DESKTOP_USER_ID         — (Phase 5) user id the dev bearer maps to (default desktop-user)
+#   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs (server-only)
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    tls_skip_verify = false
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

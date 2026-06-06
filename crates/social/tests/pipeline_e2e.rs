@@ -159,7 +159,7 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
 
     // 1. Providers list is available and token-safe.
     let providers = SocialApi::providers(&registry);
-    assert_eq!(providers.len(), 3, "[{store_label}] expected 3 providers");
+    assert_eq!(providers.len(), 4, "[{store_label}] expected 4 providers");
     assert_token_safe(&format!("[{store_label}] providers"), &providers);
 
     // 2. OAuth start persists a connection and returns an authorization URL.
@@ -226,7 +226,7 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
             campaign_id: "campaign_e2e".into(),
             variant_id: "variant_e2e".into(),
             connected_account_id: "acct_e2e".into(),
-            platform_fields: serde_json::json!({"privacy": "private"}),
+            platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
             scheduled_for: 5_000,
             now: 1_100,
         },
@@ -282,6 +282,7 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
             description: Some("End-to-end pipeline test".into()),
             tags: vec!["awidat".into(), "e2e".into()],
             thumbnail_ref: Some("render://thumb_e2e".into()),
+            artifact_ref: None,
             privacy: None,
             now: 5_100,
         },

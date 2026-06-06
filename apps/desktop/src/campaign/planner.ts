@@ -11,7 +11,12 @@ import {
   type PublishableItemKind,
 } from "./manifest.ts";
 
-const PUBLISHING_TARGETS = new Set<DeliveryTargetKey>(["youtube", "tiktok", "instagram"]);
+const PUBLISHING_TARGETS = new Set<DeliveryTargetKey>([
+  "youtube",
+  "tiktok",
+  "instagram",
+  "twitter_x",
+]);
 
 export type PlanCampaignInput = {
   campaignType: CampaignType;
@@ -123,6 +128,7 @@ export function planCampaignFromDelivery(input: PlanCampaignInput): CampaignMani
             variantId: `variant-${entry.id}-${platform}`,
             itemId: `item-${entry.id}`,
             platform,
+            accountId: entry.uploadAccountIds?.[platform],
             scheduledFor: metadata?.scheduledAt,
             platformFields: platformFieldsForMetadata(metadata),
           })

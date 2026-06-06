@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import {
   Card,
   Inline,
@@ -5,12 +7,28 @@ import {
   StatusPill,
 } from "../../ui";
 import {
+  deriveUploadTargetActions,
+  deriveUploadTargetRetryMode,
+  renderQueueApprovalCopy,
+  renderQueueStatusLabel,
+  renderQueueVisibleEntries,
   useRenderQueueStore,
   type RenderQueueEntry,
   type RenderUploadState,
 } from "../../app/renderQueue";
-import { retryUploadForTarget } from "../../app/useRenderQueueWorker";
+import {
+  cancelRender,
+  refreshServerUploadState,
+  retryUploadForTarget,
+} from "../../app/useRenderQueueWorker";
 import { summarizeCredit } from "../../state/aiDisclosure";
+import {
+  accountLabelForProvider,
+  selectedAccountIdForProvider,
+  uploadCapableAccountsForProvider,
+  useUploadAccountSelections,
+  type UploadAccountOption,
+} from "../../state/uploadAccountSelections";
 import { TARGET_META } from "./targetMeta";
 import type { DeliveryTargetKey } from "./types";
 
@@ -32,7 +50,49 @@ export function RenderQueuePanel() {
   const dismiss = useRenderQueueStore((s) => s.dismiss);
   const clearTerminal = useRenderQueueStore((s) => s.clearTerminal);
   const markReviewed = useRenderQueueStore((s) => s.markReviewed);
-  const visible = entries.slice(-12);
+  const [accounts, setAccounts] = useState<UploadAccountOption[]>([]);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const visible = renderQueueVisibleEntries(entries).slice(-12);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAccounts() {
+      try {
+        const loaded = await invoke<UploadAccountOption[]>("social_accounts");
+        if (!cancelled) {
+          setAccounts(loaded);
+          setAccountError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAccountError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+    void loadAccounts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    const liveUploadEntries = visible.flatMap((entry) =>
+      Object.entries(entry.uploadStates ?? {})
+        .filter(
+          ([, state]) =>
+            state.state === "scheduled" || state.state === "processing",
+        )
+        .map(([provider]) => ({ entry, provider })),
+    );
+    if (liveUploadEntries.length === 0) return;
+    const tick = () => {
+      for (const { entry, provider } of liveUploadEntries) {
+        void refreshServerUploadState(entry, provider);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 2_000);
+    return () => window.clearInterval(timer);
+  }, [visible]);
+
   if (visible.length === 0) {
     return (
       <Card padding="md">
@@ -73,6 +133,9 @@ export function RenderQueuePanel() {
             <RenderQueueRow
               key={entry.id}
               entry={entry}
+              entries={entries}
+              accounts={accounts}
+              accountError={accountError}
               onDismiss={() => dismiss(entry.id)}
               onReview={(reviewStatus) => markReviewed(entry.id, reviewStatus)}
             />
@@ -86,7 +149,20 @@ export function RenderQueuePanel() {
 /** Map a queue entry's status to a `<StatusPill>` family+state pair.
  *  `pending` reads as idle; `done` as ready; `failed`/`cancelled` as
  *  failed; `running` keeps its percent so the pill shows progress. */
-function queueStatusPill(entry: RenderQueueEntry) {
+function queueStatusPill(entry: RenderQueueEntry, entries: RenderQueueEntry[]) {
+  const label = renderQueueStatusLabel(entry, entries);
+  if (entry.status === "pending" && label === "Preparing source") {
+    const source = entries.find((candidate) => candidate.id === entry.sourceEntryId);
+    return (
+      <StatusPill
+        family="job"
+        state="running"
+        size="sm"
+        label="Preparing"
+        percent={typeof source?.progress === "number" ? source.progress : 0}
+      />
+    );
+  }
   if (entry.status === "running") {
     return (
       <StatusPill
@@ -97,13 +173,23 @@ function queueStatusPill(entry: RenderQueueEntry) {
       />
     );
   }
+  if (entry.status === "done" && label === "Needs action") {
+    return (
+      <StatusPill
+        family="job"
+        state="failed"
+        size="sm"
+        label={label}
+      />
+    );
+  }
   if (entry.status === "done") {
     return (
       <StatusPill
         family="job"
         state="ready"
         size="sm"
-        label={entry.reviewStatus === "pending" ? "Review" : "Done"}
+        label={label}
       />
     );
   }
@@ -122,10 +208,16 @@ function queueStatusPill(entry: RenderQueueEntry) {
 
 function RenderQueueRow({
   entry,
+  entries,
+  accounts,
+  accountError,
   onDismiss,
   onReview,
 }: {
   entry: RenderQueueEntry;
+  entries: RenderQueueEntry[];
+  accounts: UploadAccountOption[];
+  accountError: string | null;
   onDismiss: () => void;
   onReview: (
     reviewStatus: NonNullable<RenderQueueEntry["reviewStatus"]>,
@@ -141,7 +233,17 @@ function RenderQueueRow({
           <AiDisclosureChip entry={entry} />
         </Inline>
         <Inline gap="2" align="center" className="shrink-0">
-          {queueStatusPill(entry)}
+          {queueStatusPill(entry, entries)}
+          {entry.status === "running" || entry.status === "pending" ? (
+            <button
+              type="button"
+              onClick={() => void cancelRender(entry)}
+              className="rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-muted)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              title="Cancel render"
+            >
+              Cancel
+            </button>
+          ) : null}
           {entry.status === "done" || entry.status === "failed" || entry.status === "cancelled" ? (
             <button
               type="button"
@@ -189,10 +291,16 @@ function RenderQueueRow({
                 Needs changes
               </button>
             </div>
-          ) : entry.reviewStatus === "approved" ? (
-            <p className="text-[var(--color-success)]">Approved for delivery.</p>
-          ) : entry.reviewStatus === "changes_requested" ? (
-            <p className="text-[var(--color-warning)]">Changes requested. Re-edit before delivery.</p>
+          ) : renderQueueApprovalCopy(entry) ? (
+            <p
+              className={
+                entry.reviewStatus === "changes_requested"
+                  ? "text-[var(--color-warning)]"
+                  : "text-[var(--color-success)]"
+              }
+            >
+              {renderQueueApprovalCopy(entry)}
+            </p>
           ) : null}
         </div>
       ) : null}
@@ -201,7 +309,11 @@ function RenderQueueRow({
           {entry.error}
         </p>
       ) : null}
-      <UploadTargetsBlock entry={entry} />
+      <UploadTargetsBlock
+        entry={entry}
+        accounts={accounts}
+        accountError={accountError}
+      />
     </div>
   );
 }
@@ -220,11 +332,19 @@ function RenderQueueRow({
  */
 function UploadTargetsBlock({
   entry,
+  accounts,
+  accountError,
 }: {
   entry: RenderQueueEntry;
+  accounts: UploadAccountOption[];
+  accountError: string | null;
 }) {
   const targets = entry.uploadTargets ?? [];
   if (targets.length === 0) return null;
+  const uploadStarted = Object.values(entry.uploadStates ?? {}).some(
+    (state) => state.state !== "pending",
+  );
+  if (entry.status !== "done" && !uploadStarted) return null;
   return (
     <ul className="mt-2 space-y-1 text-[var(--text-caption)]">
       {targets.map((provider) => {
@@ -236,6 +356,8 @@ function UploadTargetsBlock({
             entry={entry}
             provider={provider}
             state={state}
+            accounts={accounts}
+            accountError={accountError}
           />
         );
       })}
@@ -251,21 +373,113 @@ function providerLabel(provider: string): string {
   return meta?.label ?? provider;
 }
 
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function toDateTimeLocal(secs: number): string {
+  const date = new Date(secs * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDateTimeLocal(value: string): number | null {
+  const millis = new Date(value).getTime();
+  if (!Number.isFinite(millis)) return null;
+  return Math.floor(millis / 1000);
+}
+
+function scheduledUploadCopy(providerLabel: string, scheduledFor?: number): string {
+  if (!scheduledFor || scheduledFor <= nowSeconds() + 60) {
+    return `Queued on server for ${providerLabel}`;
+  }
+  return `Scheduled on server for ${providerLabel} at ${new Date(
+    scheduledFor * 1000,
+  ).toLocaleString([], {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+}
+
 function UploadTargetRow({
   entry,
   provider,
   state,
+  accounts,
+  accountError,
 }: {
   entry: RenderQueueEntry;
   provider: string;
   state: RenderUploadState;
+  accounts: UploadAccountOption[];
+  accountError: string | null;
 }) {
   const label = providerLabel(provider);
+  const actions = deriveUploadTargetActions(state);
+  const jobId =
+    state.state === "scheduled" ||
+    state.state === "processing" ||
+    state.state === "failed"
+      ? state.job_id
+      : undefined;
+  const scheduledFor = state.state === "scheduled" ? state.scheduled_for : undefined;
+  const [rescheduleAt, setRescheduleAt] = useState(
+    toDateTimeLocal(scheduledFor ?? nowSeconds() + 3600),
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRescheduleAt(toDateTimeLocal(scheduledFor ?? nowSeconds() + 3600));
+  }, [jobId, scheduledFor]);
+
+  async function runUploadJobCommand(command: string, args: Record<string, unknown>) {
+    if (!jobId) return;
+    setBusyAction(command);
+    try {
+      await invoke(command, args);
+      await refreshServerUploadState(entry, provider);
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function rescheduleUploadJob() {
+    if (!jobId) return;
+    const scheduledFor = fromDateTimeLocal(rescheduleAt);
+    if (!scheduledFor) {
+      setActionError("Choose a valid reschedule time");
+      return;
+    }
+    await runUploadJobCommand("social_reschedule_job", {
+      jobId,
+      args: { scheduledFor },
+    });
+  }
+
+  const accountSelector = (
+    <UploadAccountSelector
+      entry={entry}
+      provider={provider}
+      accounts={accounts}
+      error={accountError}
+      editable={state.state === "pending" || state.state === "failed"}
+    />
+  );
   if (state.state === "pending") {
     return (
-      <li className="flex items-center gap-1 text-[var(--color-text-muted)]">
-        <span aria-hidden>→</span>
-        <span>Queued for {label}</span>
+      <li className="grid gap-1 text-[var(--color-text-muted)]">
+        <span className="flex items-center gap-1">
+          <span aria-hidden>→</span>
+          <span>Queued for {label}</span>
+        </span>
+        {accountSelector}
       </li>
     );
   }
@@ -275,33 +489,111 @@ function UploadTargetRow({
         100,
     );
     return (
-      <li className="flex items-center gap-1 text-[var(--color-text-secondary)]">
-        <span aria-hidden>→</span>
-        <span>
-          Uploading to {label} · {pct}%
+      <li className="grid gap-1 text-[var(--color-text-secondary)]">
+        <span className="flex items-center gap-1">
+          <span aria-hidden>→</span>
+          <span>
+            Uploading to {label} · {pct}%
+          </span>
         </span>
+        {accountSelector}
+      </li>
+    );
+  }
+  if (state.state === "scheduled") {
+    return (
+      <li className="grid gap-1 text-[var(--color-text-secondary)]">
+        <span className="flex flex-wrap items-center gap-1">
+          <span aria-hidden>→</span>
+          <span className="min-w-0">
+            {scheduledUploadCopy(label, state.scheduled_for)}
+          </span>
+          <UploadJobActionButtons
+            actions={actions}
+            busyAction={busyAction}
+            onRefresh={() => void refreshServerUploadState(entry, provider)}
+            onCancel={() =>
+              void runUploadJobCommand("social_cancel_job", {
+                jobId,
+                now: nowSeconds(),
+              })
+            }
+          />
+        </span>
+        {actions.canReschedule ? (
+          <span className="flex flex-wrap items-center gap-1 pl-3">
+            <input
+              type="datetime-local"
+              value={rescheduleAt}
+              onChange={(event) => setRescheduleAt(event.currentTarget.value)}
+              aria-label={`Reschedule ${jobId}`}
+              className="max-w-[180px] rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-primary)]"
+            />
+            <button
+              type="button"
+              onClick={() => void rescheduleUploadJob()}
+              disabled={busyAction === "social_reschedule_job"}
+              className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            >
+              {busyAction === "social_reschedule_job" ? "Rescheduling…" : "Reschedule"}
+            </button>
+          </span>
+        ) : null}
+        {actionError ? (
+          <span className="pl-3 text-[var(--color-job-failed-text)]">{actionError}</span>
+        ) : null}
+        {accountSelector}
+      </li>
+    );
+  }
+  if (state.state === "processing") {
+    return (
+      <li className="grid gap-1 text-[var(--color-text-secondary)]">
+        <span className="flex flex-wrap items-center gap-1">
+          <span aria-hidden>→</span>
+          <span className="min-w-0">Processing on {label}</span>
+          <UploadJobActionButtons
+            actions={actions}
+            busyAction={busyAction}
+            onRefresh={() => void refreshServerUploadState(entry, provider)}
+            onCancel={() =>
+              void runUploadJobCommand("social_cancel_job", {
+                jobId,
+                now: nowSeconds(),
+              })
+            }
+          />
+        </span>
+        {actionError ? (
+          <span className="pl-3 text-[var(--color-job-failed-text)]">{actionError}</span>
+        ) : null}
+        {accountSelector}
       </li>
     );
   }
   if (state.state === "published") {
     return (
-      <li className="flex items-center gap-1 text-[var(--color-success)]">
-        <span aria-hidden>→</span>
-        <a
-          href={state.remote_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hover:underline"
-          title={state.remote_url}
-        >
-          Published on {label} ↗
-        </a>
+      <li className="grid gap-1 text-[var(--color-success)]">
+        <span className="flex items-center gap-1">
+          <span aria-hidden>→</span>
+          <a
+            href={state.remote_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline"
+            title={state.remote_url}
+          >
+            Published on {label} ↗
+          </a>
+        </span>
+        {accountSelector}
       </li>
     );
   }
-  // Failed — show the reason + a retry button. Retry only enabled
-  // when we have a backend job id and an output file to re-upload.
-  const canRetry = Boolean(entry.jobId && entry.outputPath);
+  // Failed — show the reason + recovery actions. A server-backed
+  // failure can still refresh if the backend job later recovers.
+  const retryMode = deriveUploadTargetRetryMode(state, Boolean(entry.jobId && entry.outputPath));
+  const canRefresh = actions.canRefresh;
   return (
     <li className="flex items-start gap-1 text-[var(--color-job-failed-text)]">
       <span aria-hidden>→</span>
@@ -309,21 +601,142 @@ function UploadTargetRow({
         <span className="truncate" title={state.reason}>
           {label} upload failed: {state.reason}
         </span>
-        {canRetry ? (
+        {canRefresh ? (
+          <button
+            type="button"
+            onClick={() => void refreshServerUploadState(entry, provider)}
+            className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          >
+            Refresh
+          </button>
+        ) : null}
+        {retryMode ? (
           <button
             type="button"
             onClick={() => {
-              if (entry.jobId) {
+              if (retryMode === "server_job" && jobId) {
+                void runUploadJobCommand("social_retry_job", {
+                  jobId,
+                  now: nowSeconds(),
+                });
+                return;
+              }
+              if (retryMode === "republish" && entry.jobId) {
                 void retryUploadForTarget(entry, entry.jobId, provider);
               }
             }}
-            className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+            disabled={busyAction === "social_retry_job"}
+            className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
           >
-            Retry
+            {busyAction === "social_retry_job" ? "Retrying…" : "Retry"}
           </button>
         ) : null}
+        {accountSelector}
       </div>
     </li>
+  );
+}
+
+function UploadJobActionButtons({
+  actions,
+  busyAction,
+  onRefresh,
+  onCancel,
+}: {
+  actions: ReturnType<typeof deriveUploadTargetActions>;
+  busyAction: string | null;
+  onRefresh: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <>
+      {actions.canRefresh ? (
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="ml-1 inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        >
+          Refresh
+        </button>
+      ) : null}
+      {actions.canCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busyAction === "social_cancel_job"}
+          className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+        >
+          {busyAction === "social_cancel_job" ? "Cancelling…" : "Cancel"}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function UploadAccountSelector({
+  entry,
+  provider,
+  accounts,
+  error,
+  editable,
+}: {
+  entry: RenderQueueEntry;
+  provider: string;
+  accounts: UploadAccountOption[];
+  error: string | null;
+  editable: boolean;
+}) {
+  const setUploadAccountIds = useRenderQueueStore((s) => s.setUploadAccountIds);
+  const setSelected = useUploadAccountSelections((s) => s.setSelected);
+  const uploadCapable = uploadCapableAccountsForProvider(accounts, provider);
+  const selectedAccountId = selectedAccountIdForProvider(
+    accounts,
+    provider,
+    entry.uploadAccountIds?.[provider],
+  );
+  if (error) {
+    return (
+      <span className="pl-3 text-[var(--color-job-failed-text)]">
+        Account lookup failed: {error}
+      </span>
+    );
+  }
+  if (uploadCapable.length === 0) {
+    return (
+      <span className="pl-3 text-[var(--color-text-muted)]">
+        No upload-capable account connected.
+      </span>
+    );
+  }
+  if (!editable) {
+    return (
+      <span className="pl-3 text-[var(--color-text-muted)]">
+        Account: {accountLabelForProvider(accounts, provider, entry.uploadAccountIds?.[provider])}
+      </span>
+    );
+  }
+  return (
+    <label className="grid gap-1 pl-3 text-[var(--color-text-muted)]">
+      <span>Account</span>
+      <select
+        value={selectedAccountId ?? ""}
+        onChange={(event) => {
+          const accountId = event.currentTarget.value;
+          setSelected(provider, accountId);
+          setUploadAccountIds(entry.id, {
+            ...(entry.uploadAccountIds ?? {}),
+            [provider]: accountId,
+          });
+        }}
+        className="min-w-0 rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-1.5 py-0.5 text-[var(--text-caption)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand)]"
+      >
+        {uploadCapable.map((account) => (
+          <option key={account.id} value={account.id}>
+            {account.displayName || account.handle || account.providerAccountId || account.id}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

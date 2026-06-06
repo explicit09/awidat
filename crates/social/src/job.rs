@@ -109,6 +109,13 @@ impl PublishJob {
         self
     }
 
+    pub fn reschedule(mut self, scheduled_for: i64, now: i64) -> Self {
+        self.scheduled_for = scheduled_for;
+        self.status = PublishJobStatus::Scheduled;
+        self.updated_at = now;
+        self
+    }
+
     pub fn claim_for_upload(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Uploading;
         self.attempt_count = self.attempt_count.saturating_add(1);
@@ -166,12 +173,69 @@ impl PublishJob {
 
     pub fn retry(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Scheduled;
+        self.provider_post_id = None;
+        self.provider_post_url = None;
         self.normalized_error = None;
         self.raw_error_ref = None;
         self.requires_action_reason = None;
         self.updated_at = now;
         self
     }
+
+    /// Decide, after a *retryable* provider failure, whether to requeue with a
+    /// backoff delay or go terminal `Failed`.
+    ///
+    /// `attempt_count` was already bumped by `claim_for_upload`, so it reflects
+    /// attempts-so-far. If it has reached `max_attempts` the budget is spent and
+    /// the job fails (recording the error). Otherwise it is rescheduled for
+    /// `now + backoff(attempt_count)` with errors cleared (like `retry`), where
+    /// backoff is exponential — `base * 2^(attempt_count - 1)` — capped at
+    /// [`RETRY_BACKOFF_CEILING_SECS`].
+    ///
+    /// Returns the transitioned job plus a [`RetryOutcome`] so the caller can
+    /// append the matching audit event (`RetryQueued` vs `Failed`).
+    pub fn retry_with_backoff_or_fail(
+        self,
+        max_attempts: u32,
+        base_backoff_secs: i64,
+        normalized_error: impl Into<String>,
+        raw_error_ref: impl Into<String>,
+        now: i64,
+    ) -> (Self, RetryOutcome) {
+        if self.attempt_count >= max_attempts {
+            let job = self.fail(normalized_error, raw_error_ref, now);
+            return (job, RetryOutcome::Exhausted);
+        }
+        let delay = backoff_delay_secs(self.attempt_count, base_backoff_secs);
+        let next_scheduled_for = now.saturating_add(delay);
+        let mut job = self.retry(now);
+        job.scheduled_for = next_scheduled_for;
+        (job, RetryOutcome::Requeued { next_scheduled_for })
+    }
+}
+
+/// Outcome of [`PublishJob::retry_with_backoff_or_fail`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryOutcome {
+    /// The job was rescheduled; fires again at `next_scheduled_for`.
+    Requeued { next_scheduled_for: i64 },
+    /// The retry budget is spent; the job is now terminal `Failed`.
+    Exhausted,
+}
+
+/// Upper bound on a single backoff delay (1 hour). Keeps exponential growth
+/// from pushing a job arbitrarily far into the future.
+pub const RETRY_BACKOFF_CEILING_SECS: i64 = 3_600;
+
+/// Exponential backoff: `base * 2^(attempt_count - 1)`, capped at the ceiling.
+/// `attempt_count` is 1-based (the first attempt has count 1 after claim).
+fn backoff_delay_secs(attempt_count: u32, base_backoff_secs: i64) -> i64 {
+    let exp = attempt_count.saturating_sub(1).min(32);
+    let factor = 1i64.checked_shl(exp).unwrap_or(i64::MAX);
+    base_backoff_secs
+        .checked_mul(factor)
+        .unwrap_or(RETRY_BACKOFF_CEILING_SECS)
+        .min(RETRY_BACKOFF_CEILING_SECS)
 }
 
 impl PublishJobEvent {
@@ -431,6 +495,79 @@ mod tests {
         assert_eq!(job.raw_error_ref, None);
         assert_eq!(job.requires_action_reason, None);
         assert_eq!(job.updated_at, 2_300);
+    }
+
+    fn claimed_job(attempts: u32) -> PublishJob {
+        let mut job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "render://artifact_1",
+            1_800,
+            "user_1",
+        )
+        .schedule(2_000);
+        // Simulate `attempts` claim cycles (each bumps attempt_count).
+        for _ in 0..attempts {
+            job = job.claim_for_upload(2_100);
+        }
+        job
+    }
+
+    #[test]
+    fn retry_with_backoff_requeues_first_attempt_at_base_delay() {
+        let job = claimed_job(1); // attempt_count == 1 of 3
+        let (job, outcome) =
+            job.retry_with_backoff_or_fail(3, 60, "net_error", "errors/job_1.json", 5_000);
+
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.scheduled_for, 5_060, "now + base * 2^0");
+        assert_eq!(job.normalized_error, None, "errors cleared on requeue");
+        assert_eq!(
+            outcome,
+            RetryOutcome::Requeued {
+                next_scheduled_for: 5_060
+            }
+        );
+    }
+
+    #[test]
+    fn retry_with_backoff_doubles_on_second_attempt() {
+        let job = claimed_job(2); // attempt_count == 2
+        let (job, outcome) =
+            job.retry_with_backoff_or_fail(3, 60, "net_error", "errors/job_1.json", 5_000);
+
+        assert_eq!(job.scheduled_for, 5_120, "now + base * 2^1");
+        assert_eq!(
+            outcome,
+            RetryOutcome::Requeued {
+                next_scheduled_for: 5_120
+            }
+        );
+    }
+
+    #[test]
+    fn retry_with_backoff_exhausts_at_max_attempts() {
+        let job = claimed_job(3); // attempt_count == max
+        let (job, outcome) =
+            job.retry_with_backoff_or_fail(3, 60, "net_error", "errors/job_1.json", 5_000);
+
+        assert_eq!(job.status, PublishJobStatus::Failed);
+        assert_eq!(job.normalized_error.as_deref(), Some("net_error"));
+        assert_eq!(job.raw_error_ref.as_deref(), Some("errors/job_1.json"));
+        assert_eq!(outcome, RetryOutcome::Exhausted);
+    }
+
+    #[test]
+    fn retry_with_backoff_is_capped_at_ceiling() {
+        // attempt_count == 20 with base 60 would be astronomically large;
+        // the delay must clamp to the ceiling.
+        let job = claimed_job(20);
+        let (job, _) =
+            job.retry_with_backoff_or_fail(64, 60, "net_error", "errors/job_1.json", 5_000);
+        assert_eq!(job.scheduled_for, 5_000 + RETRY_BACKOFF_CEILING_SECS);
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { approvalSummary, type CampaignType } from "../../campaign/manifest";
 import { planCampaignFromDelivery } from "../../campaign/planner";
 import {
   campaignUploadRequests,
-  startCampaignUploads,
+  publishCampaignViaServer,
 } from "../../campaign/publisher";
 import { useCampaignStore } from "../../campaign/store";
 import { Button, Card, Inline, Stack, StatusPill, cn } from "../../ui";
@@ -88,17 +88,24 @@ export function CampaignApprovalPanel({
     setPublishing(true);
     setPublishError(null);
     try {
-      await startCampaignUploads(active, renderEntries, invoke, {
-        onStarted: (started) => {
-          for (const request of started) {
-            setVariantPublishJob(
-              active.campaignId,
-              request.variantId,
-              request.jobId,
-            );
-          }
-        },
-      });
+      // Server-backed path (Phase 5): publishes through the awidat-social server
+      // and the OAuth-connected account, not the legacy desktop-local uploader.
+      const results = await publishCampaignViaServer(
+        active,
+        renderEntries,
+        invoke,
+      );
+      const failures: string[] = [];
+      for (const r of results) {
+        if (r.jobId) {
+          setVariantPublishJob(active.campaignId, r.variantId, r.jobId);
+        } else if (r.error) {
+          failures.push(`${r.variantId}: ${r.error}`);
+        }
+      }
+      if (failures.length > 0) {
+        setPublishError(failures.join("; "));
+      }
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : String(err));
     } finally {

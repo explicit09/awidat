@@ -4,6 +4,7 @@ export type DeliveryTargetKey =
   | "youtube"
   | "tiktok"
   | "instagram"
+  | "twitter_x"
   | "captions"
   | "cover"
   | "custom";
@@ -39,6 +40,7 @@ export const ALL_TARGETS: DeliveryTargetKey[] = [
   "youtube",
   "tiktok",
   "instagram",
+  "twitter_x",
   "captions",
   "cover",
   "custom",

@@ -11,10 +11,14 @@ export {
   useStageStore,
   STAGES,
   STAGE_LABEL,
+  WORKSPACE_DESTINATIONS,
+  WORKSPACE_SHORTCUTS,
+  stageFromWorkspaceShortcut,
   stageProgress,
   type Stage,
   type StageProgress,
   type StageStore,
+  type WorkspaceShortcut,
 } from "./stages";
 
 export {

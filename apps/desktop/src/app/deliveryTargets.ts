@@ -1,7 +1,7 @@
 // Selected delivery targets store + target catalog.
 //
 // The DeliverySurface renders 6 platform cards (YouTube / TikTok /
-// Instagram / Captions / Cover / Custom frame). This store tracks
+// Instagram / Twitter/X / Captions / Cover / Custom frame). This store tracks
 // which of those the user has *selected* for the next export, and
 // persists the selection per-project so reloads keep the choices.
 //
@@ -15,6 +15,7 @@ export type DeliveryTargetKey =
   | "youtube"
   | "tiktok"
   | "instagram"
+  | "twitter_x"
   | "captions"
   | "cover"
   | "custom";
@@ -65,6 +66,15 @@ export const DELIVERY_TARGETS: Record<DeliveryTargetKey, DeliveryTargetSpec> = {
     height: 1080,
     videoBitrateKbps: 8_000,
   },
+  twitter_x: {
+    key: "twitter_x",
+    label: "Twitter/X",
+    spec: "1080p · 9:16 · h264",
+    kind: "video_reframe",
+    width: 1080,
+    height: 1920,
+    videoBitrateKbps: 9_000,
+  },
   captions: {
     key: "captions",
     label: "Captions",
@@ -86,6 +96,16 @@ export const DELIVERY_TARGETS: Record<DeliveryTargetKey, DeliveryTargetSpec> = {
     stillKind: "custom",
   },
 };
+
+export function renderQueueLabelForTarget(
+  key: DeliveryTargetKey,
+  selected: ReadonlySet<DeliveryTargetKey>,
+): string {
+  if (key === "youtube" && !selected.has("youtube")) {
+    return "Source master render";
+  }
+  return DELIVERY_TARGETS[key].label;
+}
 
 type State = {
   /** Selected target keys. Use a Set to keep order stable for the
