@@ -30,6 +30,12 @@ especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 - Python indexers live under `python/packages/*-mcp/`; use shared `awidat-mcp` patterns and avoid broad smoke tests that trigger model downloads unless required.
 - Bundled skills live under `skills/<name>/SKILL.md`; prefer scripts for repeatable skill logic.
 
+## Review Artifacts
+
+- When writing specs, plans, review reports, or other artifacts primarily for user review, prefer a short interactive HTML file over Markdown.
+- If a workflow requires Markdown, keep the Markdown but add an HTML companion next to it and present the HTML path first.
+- Keep review HTML concise and illustrative; do not replace source docs, `SKILL.md`, generated docs, or machine-read references with HTML unless explicitly requested.
+
 ## Testing
 
 - Run the narrow relevant check first, then broader checks when the blast radius justifies it.
