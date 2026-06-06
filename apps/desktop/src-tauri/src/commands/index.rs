@@ -88,6 +88,24 @@ pub async fn index_project_at_root(
     state: &State<'_, AwidatState>,
     project_root: std::path::PathBuf,
 ) -> Result<(), String> {
+    index_project_at_root_with_assets(app, state, project_root, None).await
+}
+
+pub async fn index_project_assets_at_root(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: std::path::PathBuf,
+    asset_ids: Vec<String>,
+) -> Result<(), String> {
+    index_project_at_root_with_assets(app, state, project_root, Some(&asset_ids)).await
+}
+
+async fn index_project_at_root_with_assets(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: std::path::PathBuf,
+    scoped_asset_ids: Option<&[String]>,
+) -> Result<(), String> {
     // Load config (project-scoped overlays the global one). If no
     // indexers are configured the message mirrors the CLI's so a
     // user troubleshooting can match.
@@ -116,8 +134,11 @@ pub async fn index_project_at_root(
 
     // Discover assets under raw/ — same walk as the CLI's
     // `index_cmd::collect_assets` minus the explicit-paths branch.
-    let resolved_assets =
-        resolve_assets_for_request(&project_root, None, ScopedFallback::WholeProject)?;
+    let resolved_assets = resolve_assets_for_request(
+        &project_root,
+        scoped_asset_ids,
+        ScopedFallback::WholeProject,
+    )?;
     let scope_label = resolved_assets.scope.progress_label();
     let assets = resolved_assets.assets;
     if assets.is_empty() {
