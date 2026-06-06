@@ -111,7 +111,6 @@ async fn index_project_at_root_with_assets(
     // user troubleshooting can match.
     let config = Config::load(Some(&project_root)).map_err(|e| format!("load config: {e}"))?;
     let mut servers: Vec<_> = config.indexers().cloned().collect();
-    prepare_desktop_indexers(&mut servers);
     // Per-project overlay (Wave 4 T3) — drop any indexer the user has
     // disabled via the IndexersStrip popover. Reading the overlay file
     // server-side keeps the front-end IPC contract unchanged (no
@@ -124,6 +123,12 @@ async fn index_project_at_root_with_assets(
     if !disabled.is_empty() {
         servers.retain(|server| !disabled.iter().any(|name| name == &server.name));
     }
+    let mode = if scoped_asset_ids.is_some() {
+        IndexMode::FastContext
+    } else {
+        manual_index_mode()
+    };
+    plan_indexers_for_mode(&mut servers, mode, current_machine_profile());
     if servers.is_empty() {
         return Err(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
@@ -613,6 +618,41 @@ fn read_load_avg_1min() -> Option<f64> {
     None
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexMode {
+    FastContext,
+    FullContext,
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineProfile {
+    Average,
+    Powerful,
+}
+
+fn current_machine_profile() -> MachineProfile {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    profile_for_signals(cores, read_load_avg_1min())
+}
+
+fn manual_index_mode() -> IndexMode {
+    if std::env::var("AWIDAT_INDEX_MODE").as_deref() == Ok("full-context") {
+        IndexMode::FullContext
+    } else {
+        IndexMode::Manual
+    }
+}
+
+fn profile_for_signals(cores: usize, load_1min: Option<f64>) -> MachineProfile {
+    match load_1min {
+        Some(load) if cores >= 8 && load < (cores as f64) * 0.5 => MachineProfile::Powerful,
+        _ => MachineProfile::Average,
+    }
+}
+
 fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetInput>> {
     collect_raw_media_inputs(project_root)
 }
@@ -752,6 +792,47 @@ fn prepare_desktop_indexers(servers: &mut [McpServer]) {
         }
     }
     servers.sort_by_key(|server| desktop_indexer_priority(&server.name));
+}
+
+fn plan_indexers_for_mode(servers: &mut Vec<McpServer>, mode: IndexMode, profile: MachineProfile) {
+    prepare_desktop_indexers(servers);
+    if matches!(mode, IndexMode::FastContext) {
+        servers.retain(|server| {
+            matches!(
+                server.name.as_str(),
+                "whisper"
+                    | "audio-energy"
+                    | "beats"
+                    | "scenedetect"
+                    | "topic"
+                    | "editorial-moments"
+            )
+        });
+    }
+    if matches!(
+        (mode, profile),
+        (IndexMode::FastContext, MachineProfile::Average)
+    ) {
+        servers.retain(|server| server.name != "beats");
+    }
+    servers.sort_by_key(|server| planned_indexer_priority(&server.name));
+}
+
+fn planned_indexer_priority(name: &str) -> u8 {
+    match name {
+        "whisper" => 0,
+        "audio-energy" => 1,
+        "beats" => 2,
+        "scenedetect" => 3,
+        "topic" => 4,
+        "editorial-moments" => 5,
+        "frame-quality" | "color-analysis" => 6,
+        "face" => 7,
+        "gaze" => 8,
+        "shot" => 9,
+        "clip" => 10,
+        _ => 11,
+    }
 }
 
 fn is_deepgram_whisper(server: &McpServer) -> bool {
@@ -993,6 +1074,78 @@ mod tests {
 
         assert_eq!(servers[0].name, "whisper");
         assert_eq!(servers[0].resource_class, IndexerResourceClass::Exclusive);
+    }
+
+    #[test]
+    fn fast_context_keeps_agent_critical_indexers_first() {
+        let mut servers = vec![
+            test_server("clip"),
+            test_server("topic"),
+            test_server("whisper"),
+            test_server("audio-energy"),
+            test_server("scenedetect"),
+            test_server("editorial-moments"),
+            test_server("frame-quality"),
+        ];
+
+        plan_indexers_for_mode(
+            &mut servers,
+            IndexMode::FastContext,
+            MachineProfile::Average,
+        );
+
+        let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "whisper",
+                "audio-energy",
+                "scenedetect",
+                "topic",
+                "editorial-moments"
+            ]
+        );
+    }
+
+    #[test]
+    fn full_context_on_powerful_machine_retains_visual_indexers_after_semantic_work() {
+        let mut servers = vec![
+            test_server("clip"),
+            test_server("topic"),
+            test_server("whisper"),
+            test_server("face"),
+            test_server("gaze"),
+            test_server("shot"),
+            test_server("audio-energy"),
+        ];
+
+        plan_indexers_for_mode(
+            &mut servers,
+            IndexMode::FullContext,
+            MachineProfile::Powerful,
+        );
+
+        let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "whisper",
+                "audio-energy",
+                "topic",
+                "face",
+                "gaze",
+                "shot",
+                "clip"
+            ]
+        );
+    }
+
+    #[test]
+    fn machine_profile_defaults_to_average_on_low_core_count() {
+        assert_eq!(profile_for_signals(4, Some(0.2)), MachineProfile::Average);
+        assert_eq!(profile_for_signals(8, Some(0.2)), MachineProfile::Powerful);
+        assert_eq!(profile_for_signals(8, Some(8.0)), MachineProfile::Average);
+        assert_eq!(profile_for_signals(8, None), MachineProfile::Average);
     }
 
     #[test]
