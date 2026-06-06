@@ -22,6 +22,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
+urlencoding = { workspace = true }
 # r2d2 and postgres come transitively via awidat-social; re-declare here so
 # main.rs can use them directly when building the pool.
 r2d2 = { workspace = true }
@@ -30,11 +31,16 @@ postgres = { workspace = true }
 constant_time_eq = { workspace = true }
 # CSPRNG for unguessable OAuth CSRF state + connection ids.
 rand = { workspace = true }
+# Signed public artifact URLs for provider pull-based uploads.
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 # Supabase Auth JWT verification (Phase 7).
 jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

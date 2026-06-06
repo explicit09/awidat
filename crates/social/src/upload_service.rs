@@ -59,6 +59,9 @@ pub struct ExecuteUploadInput {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
+    /// Optional provider-facing artifact URL. When absent, the durable job's
+    /// opaque artifact ref is used.
+    pub artifact_ref: Option<String>,
     /// Resolved visibility for this upload, derived upstream from the campaign
     /// target / account defaults. The worker no longer hard-codes `Private`.
     pub privacy: UploadPrivacy,
@@ -223,7 +226,9 @@ impl UploadService {
             job_id: job.id.clone(),
             provider: job.provider.clone(),
             connected_account_id: account.id.clone(),
-            artifact_ref: job.artifact_ref.clone(),
+            artifact_ref: input
+                .artifact_ref
+                .unwrap_or_else(|| job.artifact_ref.clone()),
             title: input.title,
             description: input.description,
             tags: input.tags,
@@ -509,6 +514,7 @@ fn event_type_slug(event_type: &PublishJobEventType) -> &'static str {
         PublishJobEventType::StatusPolled => "status_polled",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
+        PublishJobEventType::Rescheduled => "rescheduled",
         PublishJobEventType::RequiresAction => "requires_action",
         PublishJobEventType::Failed => "failed",
     }
@@ -587,6 +593,7 @@ mod tests {
                 description: Some("Description".into()),
                 tags: vec!["awidat".into()],
                 thumbnail_ref: Some("render://thumb_1".into()),
+                artifact_ref: None,
                 privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
@@ -651,6 +658,7 @@ mod tests {
                 description: None,
                 tags: Vec::new(),
                 thumbnail_ref: None,
+                artifact_ref: None,
                 privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
@@ -784,6 +792,7 @@ mod tests {
                     description: None,
                     tags: Vec::new(),
                     thumbnail_ref: None,
+                    artifact_ref: None,
                     privacy: UploadPrivacy::Private,
                     now: 2_000,
                 },
@@ -813,6 +822,7 @@ mod tests {
                 description: None,
                 tags: Vec::new(),
                 thumbnail_ref: None,
+                artifact_ref: None,
                 privacy: UploadPrivacy::Private,
                 now: 2_000,
             },
@@ -861,6 +871,7 @@ mod tests {
                     description: None,
                     tags: Vec::new(),
                     thumbnail_ref: None,
+                    artifact_ref: None,
                     privacy: UploadPrivacy::Private,
                     now: 2_000,
                 },
@@ -1136,6 +1147,41 @@ mod tests {
     }
 
     #[test]
+    fn execute_upload_uses_resolved_artifact_ref_when_supplied() {
+        let mut store = store_with_claimed_job();
+        let adapter = RecordingUploadAdapter::published();
+
+        UploadService::execute_claimed_job(
+            &mut store,
+            &adapter,
+            ExecuteUploadInput {
+                artifact_ref: Some("https://storage.example/signed/render.mp4".into()),
+                ..execute_input()
+            },
+        )
+        .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        let request = adapter
+            .requests
+            .borrow()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected adapter request"));
+        assert_eq!(
+            request.artifact_ref,
+            "https://storage.example/signed/render.mp4"
+        );
+        assert_eq!(
+            store
+                .publish_job("job_1")
+                .unwrap_or_else(|err| panic!("load job: {err}"))
+                .artifact_ref,
+            "render://artifact_1",
+            "the durable job keeps its opaque artifact ref"
+        );
+    }
+
+    #[test]
     fn execute_upload_discards_result_when_job_cancelled_mid_upload() {
         // The store flips the job to Cancelled the moment the adapter is asked
         // to upload — modeling a user cancel landing while the provider call is
@@ -1171,6 +1217,7 @@ mod tests {
             description: None,
             tags: Vec::new(),
             thumbnail_ref: None,
+            artifact_ref: None,
             privacy: UploadPrivacy::Private,
             now: 2_000,
         }

@@ -249,6 +249,7 @@ fn publish_job_event_type_as_str(t: &PublishJobEventType) -> &'static str {
         PublishJobEventType::StatusPolled => "status_polled",
         PublishJobEventType::Cancelled => "cancelled",
         PublishJobEventType::RetryQueued => "retry_queued",
+        PublishJobEventType::Rescheduled => "rescheduled",
         PublishJobEventType::RequiresAction => "requires_action",
         PublishJobEventType::Failed => "failed",
     }

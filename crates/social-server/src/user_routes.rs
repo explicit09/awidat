@@ -14,8 +14,8 @@ use crate::{SharedState, bearer_auth, now_secs, parse_provider, provider_client_
 use awidat_social::{
     api::{
         AccountSummary, ApiActor, ApiOwner, BindTargetRequest, OAuthStartRequest,
-        OAuthStartResponse, PublishJobResponse, ScheduleTargetRequest, SocialApi, SocialApiError,
-        ValidateTargetRequest,
+        OAuthStartResponse, PublishJobResponse, RescheduleJobRequest, ScheduleTargetRequest,
+        SocialApi, SocialApiError, ValidateTargetRequest, ValidateTargetResponse,
     },
     auth_context::JwtVerifier,
     model::AccountUsageAudit,
@@ -272,7 +272,7 @@ pub(crate) async fn validate_target_handler(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(req): Json<ValidateTargetRequest>,
-) -> HttpResult<awidat_social::model::CampaignVariantTarget> {
+) -> HttpResult<ValidateTargetResponse> {
     let (actor, _owner) = desktop_auth(&state, &headers)?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
@@ -356,6 +356,27 @@ pub(crate) async fn retry_job_handler(
     let job = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
         SocialApi::retry_job(&mut store, &actor, &owner, &job_id, now)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+    Ok(Json(job))
+}
+
+// ── POST /social/jobs/{id}/reschedule ──────────────────────────────────────
+
+pub(crate) async fn reschedule_job_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+    Json(mut req): Json<RescheduleJobRequest>,
+) -> HttpResult<PublishJobResponse> {
+    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    req.now = now_secs();
+    let job = tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool);
+        SocialApi::reschedule_job(&mut store, &actor, &owner, &job_id, req)
     })
     .await
     .map_err(join_error)?

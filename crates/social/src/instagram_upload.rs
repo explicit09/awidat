@@ -242,6 +242,276 @@ fn instagram_status_client_error(error: InstagramStatusClientError) -> UploadSta
     UploadStatusAdapterError::NetworkOrServer { message }
 }
 
+pub const INSTAGRAM_GRAPH_BASE: &str = "https://graph.facebook.com/v24.0";
+
+pub struct LiveInstagramUploadClient<R> {
+    token_resolver: R,
+    graph_base: String,
+    ig_user_id: String,
+    http: reqwest::Client,
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> LiveInstagramUploadClient<R> {
+    pub fn new(token_resolver: R, ig_user_id: String) -> Self {
+        Self::with_base(token_resolver, INSTAGRAM_GRAPH_BASE.to_string(), ig_user_id)
+    }
+
+    pub fn with_base(token_resolver: R, graph_base: String, ig_user_id: String) -> Self {
+        Self {
+            token_resolver,
+            graph_base,
+            ig_user_id,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    async fn do_create_container(
+        &self,
+        request: &InstagramContainerRequest,
+        token: String,
+    ) -> Result<InstagramContainerResponse, InstagramUploadClientError> {
+        let url = format!(
+            "{}/{}/media",
+            self.graph_base.trim_end_matches('/'),
+            self.ig_user_id
+        );
+        let resp = self
+            .http
+            .post(url)
+            .form(&[
+                ("media_type", request.media_type.as_str()),
+                ("video_url", request.video_url.as_str()),
+                ("caption", request.caption.as_str()),
+                ("access_token", token.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|e| InstagramUploadClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| InstagramUploadClientError::NetworkOrServer(e.to_string()))?;
+        if let Some(error) = instagram_upload_error(status, &json) {
+            return Err(error);
+        }
+        let creation_id = json["id"]
+            .as_str()
+            .ok_or_else(|| {
+                InstagramUploadClientError::NetworkOrServer(
+                    "instagram media response missing id".into(),
+                )
+            })?
+            .to_string();
+        Ok(InstagramContainerResponse { creation_id })
+    }
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> InstagramUploadClient
+    for LiveInstagramUploadClient<R>
+{
+    fn create_container(
+        &self,
+        request: &InstagramContainerRequest,
+    ) -> Result<InstagramContainerResponse, InstagramUploadClientError> {
+        let token = self
+            .token_resolver
+            .bearer_for(&request.access_token_ref)
+            .map_err(|e| InstagramUploadClientError::NetworkOrServer(e.to_string()))?;
+        tokio::runtime::Handle::current().block_on(self.do_create_container(request, token))
+    }
+}
+
+pub struct LiveInstagramStatusClient<R> {
+    token_resolver: R,
+    graph_base: String,
+    ig_user_id: String,
+    http: reqwest::Client,
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> LiveInstagramStatusClient<R> {
+    pub fn new(token_resolver: R, ig_user_id: String) -> Self {
+        Self::with_base(token_resolver, INSTAGRAM_GRAPH_BASE.to_string(), ig_user_id)
+    }
+
+    pub fn with_base(token_resolver: R, graph_base: String, ig_user_id: String) -> Self {
+        Self {
+            token_resolver,
+            graph_base,
+            ig_user_id,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    async fn do_container_status(
+        &self,
+        creation_id: &str,
+        token: String,
+    ) -> Result<InstagramContainerState, InstagramStatusClientError> {
+        let url = format!("{}/{}", self.graph_base.trim_end_matches('/'), creation_id);
+        let resp = self
+            .http
+            .get(url)
+            .query(&[("fields", "status_code"), ("access_token", token.as_str())])
+            .send()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        if let Some(error) = instagram_status_error(status, &json) {
+            return Err(error);
+        }
+        match json["status_code"].as_str().unwrap_or("IN_PROGRESS") {
+            "FINISHED" => Ok(InstagramContainerState::Finished),
+            "ERROR" | "EXPIRED" => Ok(InstagramContainerState::Error),
+            _ => Ok(InstagramContainerState::InProgress),
+        }
+    }
+
+    async fn do_publish_container(
+        &self,
+        creation_id: &str,
+        token: String,
+    ) -> Result<InstagramPublishResponse, InstagramStatusClientError> {
+        let publish_url = format!(
+            "{}/{}/media_publish",
+            self.graph_base.trim_end_matches('/'),
+            self.ig_user_id
+        );
+        let resp = self
+            .http
+            .post(publish_url)
+            .form(&[
+                ("creation_id", creation_id),
+                ("access_token", token.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        if let Some(error) = instagram_status_error(status, &json) {
+            return Err(error);
+        }
+        let media_id = json["id"]
+            .as_str()
+            .ok_or_else(|| {
+                InstagramStatusClientError::NetworkOrServer(
+                    "instagram publish response missing id".into(),
+                )
+            })?
+            .to_string();
+        let permalink = self
+            .do_permalink(&media_id, token)
+            .await?
+            .or_else(|| Some(format!("https://www.instagram.com/p/{media_id}/")));
+        Ok(InstagramPublishResponse {
+            media_id,
+            permalink,
+        })
+    }
+
+    async fn do_permalink(
+        &self,
+        media_id: &str,
+        token: String,
+    ) -> Result<Option<String>, InstagramStatusClientError> {
+        let url = format!("{}/{}", self.graph_base.trim_end_matches('/'), media_id);
+        let resp = self
+            .http
+            .get(url)
+            .query(&[("fields", "permalink"), ("access_token", token.as_str())])
+            .send()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        if let Some(error) = instagram_status_error(status, &json) {
+            return Err(error);
+        }
+        Ok(json["permalink"].as_str().map(ToOwned::to_owned))
+    }
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> InstagramStatusClient
+    for LiveInstagramStatusClient<R>
+{
+    fn container_status(
+        &self,
+        creation_id: &str,
+        access_token_ref: &str,
+    ) -> Result<InstagramContainerState, InstagramStatusClientError> {
+        let token = self
+            .token_resolver
+            .bearer_for(access_token_ref)
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        tokio::runtime::Handle::current().block_on(self.do_container_status(creation_id, token))
+    }
+
+    fn publish_container(
+        &self,
+        creation_id: &str,
+        access_token_ref: &str,
+    ) -> Result<InstagramPublishResponse, InstagramStatusClientError> {
+        let token = self
+            .token_resolver
+            .bearer_for(access_token_ref)
+            .map_err(|e| InstagramStatusClientError::NetworkOrServer(e.to_string()))?;
+        tokio::runtime::Handle::current().block_on(self.do_publish_container(creation_id, token))
+    }
+}
+
+fn instagram_upload_error(
+    status: u16,
+    json: &serde_json::Value,
+) -> Option<InstagramUploadClientError> {
+    let code = json["error"]["code"].as_i64().unwrap_or_default();
+    let message = json["error"]["message"].as_str().unwrap_or_default();
+    if status == 401 || status == 403 || code == 10 || code == 190 || code == 200 {
+        if message.contains("instagram_content_publish") || code == 10 || code == 200 {
+            return Some(InstagramUploadClientError::MissingScope);
+        }
+        return Some(InstagramUploadClientError::NotProfessional);
+    }
+    if status == 429 || code == 4 || code == 32 {
+        return Some(InstagramUploadClientError::RateLimited);
+    }
+    if !(200..300).contains(&status) {
+        return Some(InstagramUploadClientError::NetworkOrServer(format!(
+            "instagram graph {status}: {json}"
+        )));
+    }
+    None
+}
+
+fn instagram_status_error(
+    status: u16,
+    json: &serde_json::Value,
+) -> Option<InstagramStatusClientError> {
+    let code = json["error"]["code"].as_i64().unwrap_or_default();
+    if status == 401 || status == 403 || code == 10 || code == 190 || code == 200 {
+        return Some(InstagramStatusClientError::MissingScope);
+    }
+    if status == 429 || code == 4 || code == 32 {
+        return Some(InstagramStatusClientError::RateLimited);
+    }
+    if !(200..300).contains(&status) {
+        return Some(InstagramStatusClientError::NetworkOrServer(format!(
+            "instagram graph {status}: {json}"
+        )));
+    }
+    None
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -459,5 +729,104 @@ mod tests {
         let seen = adapter.client.seen.borrow().clone().expect("request seen");
         assert_eq!(seen.access_token_ref, "token-secret-ref");
         assert!(!seen.access_token_ref.contains("access_token"));
+    }
+
+    #[tokio::test]
+    async fn live_instagram_upload_client_creates_reels_container_with_pull_url() {
+        use crate::youtube_upload::FixedTokenResolver;
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ig-user-123/media"))
+            .and(body_string_contains("media_type=REELS"))
+            .and(body_string_contains(
+                "video_url=https%3A%2F%2Fstorage.example%2Frender.mp4",
+            ))
+            .and(body_string_contains("caption=Launch+clip"))
+            .and(body_string_contains("access_token=ig-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "creation_123"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = LiveInstagramUploadClient::with_base(
+            FixedTokenResolver("ig-access".into()),
+            server.uri(),
+            "ig-user-123".into(),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.create_container(&InstagramContainerRequest {
+                video_url: "https://storage.example/render.mp4".into(),
+                caption: "Launch clip".into(),
+                media_type: IG_MEDIA_TYPE_REELS.into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.creation_id, "creation_123");
+    }
+
+    #[tokio::test]
+    async fn live_instagram_status_client_publishes_finished_container_and_resolves_permalink() {
+        use crate::youtube_upload::FixedTokenResolver;
+        use wiremock::matchers::{body_string_contains, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/creation_123"))
+            .and(query_param("fields", "status_code"))
+            .and(query_param("access_token", "ig-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status_code": "FINISHED"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/ig-user-123/media_publish"))
+            .and(body_string_contains("creation_id=creation_123"))
+            .and(body_string_contains("access_token=ig-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "media_123"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/media_123"))
+            .and(query_param("fields", "permalink"))
+            .and(query_param("access_token", "ig-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "permalink": "https://www.instagram.com/reel/abc/"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = LiveInstagramStatusClient::with_base(
+            FixedTokenResolver("ig-access".into()),
+            server.uri(),
+            "ig-user-123".into(),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            let status = client
+                .container_status("creation_123", "token_secret:acct_1")
+                .unwrap();
+            assert_eq!(status, InstagramContainerState::Finished);
+            client.publish_container("creation_123", "token_secret:acct_1")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.media_id, "media_123");
+        assert_eq!(
+            response.permalink.as_deref(),
+            Some("https://www.instagram.com/reel/abc/")
+        );
     }
 }

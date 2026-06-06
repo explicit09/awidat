@@ -62,7 +62,7 @@ impl ProviderTokenBundle {
 
 fn split_scopes(provider: &Provider, raw: &str) -> Vec<String> {
     let delimiter = match provider {
-        Provider::YouTube => ' ',
+        Provider::YouTube | Provider::TwitterX => ' ',
         Provider::TikTok | Provider::Instagram => ',',
     };
 

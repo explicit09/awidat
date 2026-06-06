@@ -16,7 +16,7 @@ primary_region = "iad"  # ← change to match your Supabase region
 
 [env]
   BIND_ADDR = "0.0.0.0:3000"
-  SOCIAL_FIRING_ENABLED = "false"   # Phase 4 flips this to "true"
+  SOCIAL_FIRING_ENABLED = "true"   # Deployed service owns scheduled publish firing.
   STORAGE_BUCKET = "artifacts"
 
 # Secrets (set via `fly secrets set`, never committed):

@@ -27,6 +27,8 @@
 //!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://awidat-social.fly.dev"
 //!   YOUTUBE_FORCE_PRIVATE   — "false" allows non-private uploads (default "true"; keep true pre-audit)
 //!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/awidat-artifacts")
+//!   SOCIAL_MIGRATIONS_DIR   — SQL migration dir (default: ../social/migrations from Cargo manifest)
+//!   SOCIAL_DB_POOL_MAX_SIZE — max Postgres pool size (default "4")
 //!   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
 //!   DESKTOP_USER_ID         — (Phase 5) fixed user id the dev bearer maps to (default "desktop-user")
 //!   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs; server-only
@@ -41,33 +43,50 @@ use awidat_social::upload_adapter::UploadPrivacy;
 use awidat_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
     api::{ExecuteUploadRequest, SocialApi},
+    instagram_upload::{
+        InstagramStatusAdapter, InstagramUploadAdapter, LiveInstagramStatusClient,
+        LiveInstagramUploadClient,
+    },
     model::{ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobEventType},
     oauth_exchange::{
-        GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthTokenExchange, TokenExchangeInput,
+        GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthTokenExchange, PlatformOAuthExchange,
+        PlatformOAuthExchangeConfig, TokenExchangeInput,
     },
     oauth_url::OAuthProviderConfig,
     pg_store::PgSocialStore,
     provider::ProviderRegistry,
     store::SocialStore,
+    tiktok_upload::{
+        LiveTikTokStatusClient, LiveTikTokUploadClient, TikTokStatusAdapter, TikTokUploadAdapter,
+    },
     token::{Aead256Key, LocalTokenKeyProvider},
     token_bundle::ProviderTokenBundle,
     token_refresh::{TokenRefreshError, TokenRefresher},
+    twitter_x_upload::{
+        LiveTwitterXStatusClient, LiveTwitterXUploadClient, TwitterXStatusAdapter,
+        TwitterXUploadAdapter,
+    },
     youtube_upload::{
-        YouTubeClientConfig, YouTubeStatusAdapter, YouTubeUploadAdapter,
+        ArtifactSource, YouTubeClientConfig, YouTubeStatusAdapter, YouTubeUploadAdapter,
         live::{LiveYouTubeStatusClient, LiveYouTubeUploadClient},
     },
 };
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Response, StatusCode, header},
+    response::{Html, IntoResponse},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use constant_time_eq::constant_time_eq;
+use hmac::{Hmac, Mac};
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use r2d2_postgres::postgres::NoTls;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::sync::Arc;
 use token_resolver::ServerAccessTokenResolver;
 use tracing::info;
@@ -85,6 +104,12 @@ pub(crate) struct ServerConfig {
     // Phase 2: Google OAuth credentials.
     google_client_id: String,
     google_client_secret: String,
+    tiktok_client_key: String,
+    tiktok_client_secret: String,
+    instagram_client_id: String,
+    instagram_client_secret: String,
+    twitter_x_client_id: String,
+    twitter_x_client_secret: String,
     // Phase 2: AEAD token encryption.
     token_key_id: String,
     token_key_hex: String,
@@ -92,6 +117,9 @@ pub(crate) struct ServerConfig {
     // When true, forces all uploads to private regardless of job privacy setting.
     // Must be true until the YouTube TOS audit clears.
     youtube_force_private: bool,
+    // TikTok unaudited/sandbox apps can only direct-post private videos.
+    // Keep false until TikTok approves public posting for the app.
+    tiktok_public_posting_enabled: bool,
     // Phase 3: artifact root. `file://` artifact refs are confined to this
     // directory (path-traversal defense). Phase 5 replaces local files with
     // Supabase Storage signed URLs.
@@ -140,12 +168,21 @@ async fn main() {
     let oauth_redirect_base = std::env::var("OAUTH_REDIRECT_BASE").unwrap_or_default();
     let google_client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
     let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let tiktok_client_key = std::env::var("TIKTOK_CLIENT_KEY").unwrap_or_default();
+    let tiktok_client_secret = std::env::var("TIKTOK_CLIENT_SECRET").unwrap_or_default();
+    let instagram_client_id = std::env::var("INSTAGRAM_CLIENT_ID").unwrap_or_default();
+    let instagram_client_secret = std::env::var("INSTAGRAM_CLIENT_SECRET").unwrap_or_default();
+    let twitter_x_client_id = std::env::var("TWITTER_X_CLIENT_ID").unwrap_or_default();
+    let twitter_x_client_secret = std::env::var("TWITTER_X_CLIENT_SECRET").unwrap_or_default();
     let token_key_hex = std::env::var("SOCIAL_TOKEN_AEAD_KEY").unwrap_or_default();
     let token_key_id = std::env::var("SOCIAL_TOKEN_KEY_ID").unwrap_or_else(|_| "k1".into());
     // Default true: force private until the YouTube TOS audit clears.
     let youtube_force_private = std::env::var("YOUTUBE_FORCE_PRIVATE")
         .map(|v| v != "false")
         .unwrap_or(true);
+    let tiktok_public_posting_enabled = std::env::var("TIKTOK_PUBLIC_POSTING_ENABLED")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let artifact_base_dir =
         std::env::var("ARTIFACT_BASE_DIR").unwrap_or_else(|_| "/var/lib/awidat-artifacts".into());
     // Phase 5 desktop dev bearer (single-user until Phase 7 Supabase Auth).
@@ -157,7 +194,8 @@ async fn main() {
     info!(
         social_firing_enabled,
         youtube_force_private,
-        "awidat-social-server starting — firing enabled: {social_firing_enabled}, youtube_force_private: {youtube_force_private}"
+        tiktok_public_posting_enabled,
+        "awidat-social-server starting — firing enabled: {social_firing_enabled}, youtube_force_private: {youtube_force_private}, tiktok_public_posting_enabled: {tiktok_public_posting_enabled}"
     );
 
     let manager = PostgresConnectionManager::new(
@@ -183,13 +221,11 @@ async fn main() {
     let skip_infra = std::env::var("AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS")
         .map(|v| v == "true")
         .unwrap_or(!social_firing_enabled);
-    let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| panic!("crates/social-server has no parent directory"))
-        .join("social/migrations");
+    let db_pool_max_size = db_pool_max_size();
+    let migrations_dir = migrations_dir();
     let pool = tokio::task::spawn_blocking(move || {
         let pool = Pool::builder()
-            .max_size(10)
+            .max_size(db_pool_max_size)
             .build(manager)
             .unwrap_or_else(|e| panic!("build connection pool: {e}"));
         let store = PgSocialStore::new(pool.clone());
@@ -215,9 +251,16 @@ async fn main() {
             oauth_redirect_base,
             google_client_id,
             google_client_secret,
+            tiktok_client_key,
+            tiktok_client_secret,
+            instagram_client_id,
+            instagram_client_secret,
+            twitter_x_client_id,
+            twitter_x_client_secret,
             token_key_id,
             token_key_hex,
             youtube_force_private,
+            tiktok_public_posting_enabled,
             artifact_base_dir,
             desktop_auth_token,
             desktop_user_id,
@@ -229,6 +272,7 @@ async fn main() {
         .route("/health", get(health_handler))
         .route("/providers", get(providers_handler))
         .route("/artifacts/upload-url", post(artifacts_upload_url_handler))
+        .route("/public/artifacts/{filename}", get(public_artifact_handler))
         .route("/oauth/begin/{provider}", post(oauth_begin_handler))
         .route("/oauth/callback/{provider}", get(oauth_callback_handler))
         // Phase 5 user-facing routes (desktop dev-bearer auth).
@@ -267,6 +311,10 @@ async fn main() {
             post(user_routes::retry_job_handler),
         )
         .route(
+            "/social/jobs/{job_id}/reschedule",
+            post(user_routes::reschedule_job_handler),
+        )
+        .route(
             "/social/jobs/{job_id}/upload-url",
             post(user_routes::upload_url_handler),
         )
@@ -292,6 +340,25 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .unwrap_or_else(|e| panic!("serve: {e}"));
+}
+
+fn migrations_dir() -> std::path::PathBuf {
+    std::env::var_os("SOCIAL_MIGRATIONS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| panic!("crates/social-server has no parent directory"))
+                .join("social/migrations")
+        })
+}
+
+fn db_pool_max_size() -> u32 {
+    std::env::var("SOCIAL_DB_POOL_MAX_SIZE")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(4)
 }
 
 /// Maximum YouTube Data API uploads per day per project (hard Google quota).
@@ -468,7 +535,7 @@ async fn oauth_callback_handler(
     State(state): State<SharedState>,
     Path(provider_str): Path<String>,
     Query(q): Query<OAuthCallbackQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Response<Body>, (StatusCode, Json<serde_json::Value>)> {
     let provider = parse_provider(&provider_str)?;
     let key = aead_key_from_state(&state.config)?;
     let redirect_uri = redirect_uri(&state.config, &provider);
@@ -493,6 +560,7 @@ async fn oauth_callback_handler(
                     provider: provider.clone(),
                     code: q.code.clone(),
                     redirect_uri: redirect_uri.clone(),
+                    code_verifier: None,
                 })
                 .await
                 .map_err(|e| {
@@ -502,14 +570,38 @@ async fn oauth_callback_handler(
                     )
                 })?
         }
-        Provider::TikTok | Provider::Instagram => {
-            return Err((
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({"error": "provider not yet supported in Phase 2"})),
-            ));
+        Provider::TikTok | Provider::Instagram | Provider::TwitterX => {
+            let client_id = provider_client_id(&state.config, &provider)?;
+            let client_secret = provider_client_secret(&state.config, &provider)?;
+            let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+                provider: provider.clone(),
+                client_id,
+                client_secret,
+                token_endpoint: token_endpoint(&provider).into(),
+                profile_endpoint: profile_endpoint(&provider).map(ToOwned::to_owned),
+            });
+            exchange
+                .exchange(TokenExchangeInput {
+                    provider: provider.clone(),
+                    code: q.code.clone(),
+                    redirect_uri: redirect_uri.clone(),
+                    code_verifier: if provider == Provider::TwitterX {
+                        Some(q.state.clone())
+                    } else {
+                        None
+                    },
+                })
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({"error": e.to_string()})),
+                    )
+                })?
         }
     };
 
+    let display_name = output.display_name;
     let token_response = output.token_response;
     let access_token = output.access_token;
     let refresh_token = output.refresh_token;
@@ -556,12 +648,12 @@ async fn oauth_callback_handler(
         let owner = connection.owner;
 
         // SECURITY: account id + display name are server-derived from the
-        // provider's own account id, not client input.
+        // provider response, not client input.
         let account_id = format!(
             "{}:{provider_account_id}",
             provider_slug(&provider_for_blocking)
         );
-        let display_name = provider_account_id.clone();
+        let display_name = display_name.unwrap_or_else(|| provider_account_id.clone());
         let account = build_connected_account(
             account_id,
             owner,
@@ -602,11 +694,49 @@ async fn oauth_callback_handler(
     })?;
 
     info!(account_id = %account.id, provider = ?account.provider, "OAuth complete");
-    Ok(Json(serde_json::json!({
-        "status": "ok",
-        "account_id": account.id,
-        "provider_account_id": account.provider_account_id,
-    })))
+    Ok(Html(oauth_success_html(&account)).into_response())
+}
+
+fn oauth_success_html(account: &ConnectedAccount) -> String {
+    let provider = html_escape(provider_slug(&account.provider));
+    let account_name = html_escape(&account.display_name);
+    let account_id = html_escape(&account.id);
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Awidat social account connected</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #10131f; color: #f4f6fb; }}
+    main {{ width: min(560px, calc(100vw - 32px)); border: 1px solid rgba(255,255,255,.16); border-radius: 12px; padding: 28px; background: #171b2b; box-shadow: 0 20px 80px rgba(0,0,0,.35); }}
+    h1 {{ margin: 0 0 12px; font-size: 24px; line-height: 1.2; }}
+    p {{ margin: 8px 0; color: #b9bfce; line-height: 1.5; }}
+    strong {{ color: #fff; }}
+    code {{ color: #a7f3d0; word-break: break-all; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connected to Awidat</h1>
+    <p><strong>{account_name}</strong> is connected for <strong>{provider}</strong>.</p>
+    <p>You can close this tab and return to Awidat.</p>
+    <p><code>{account_id}</code></p>
+  </main>
+</body>
+</html>"#
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 // ── Artifact upload URL ───────────────────────────────────────────────────────
@@ -621,6 +751,12 @@ struct ArtifactUploadUrlRequest {
 struct ArtifactUploadUrlResponse {
     upload_url: String,
     artifact_ref: String,
+}
+
+#[derive(Deserialize)]
+struct PublicArtifactQuery {
+    exp: i64,
+    sig: String,
 }
 
 fn is_safe_object_path(path: &str) -> bool {
@@ -713,6 +849,102 @@ async fn artifacts_upload_url_handler(
     }))
 }
 
+async fn public_artifact_handler(
+    State(state): State<SharedState>,
+    Path(filename): Path<String>,
+    Query(query): Query<PublicArtifactQuery>,
+) -> Result<Response<Body>, (StatusCode, Json<serde_json::Value>)> {
+    let job_id = filename
+        .strip_suffix(".mp4")
+        .unwrap_or(&filename)
+        .to_string();
+    if !verify_public_artifact_signature(
+        &state.config.service_shared_secret,
+        &job_id,
+        query.exp,
+        &query.sig,
+        now_secs(),
+    ) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        ));
+    }
+
+    let pool = state.pool.clone();
+    let artifact_base_dir = state.config.artifact_base_dir.clone();
+    let supabase_url = state.config.supabase_url.clone();
+    let supabase_service_key = state.config.supabase_service_key.clone();
+
+    let body = tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        let job = store
+            .publish_job(&job_id)
+            .map_err(|e| format!("publish job: {e}"))?;
+        let artifact_source = artifact_source::FileArtifactSource::new(artifact_base_dir)
+            .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                supabase_url,
+                supabase_service_key,
+                3600,
+            ));
+        artifact_source
+            .open(&job.artifact_ref)
+            .map_err(|e| format!("artifact open: {e}"))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("artifact task: {e}")})),
+        )
+    })?
+    .map_err(|e| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))))?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CONTENT_LENGTH, body.total_bytes.to_string())
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(Body::from(body.data))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })
+}
+
+fn sign_public_artifact(signing_secret: &str, job_id: &str, expires_at: i64) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(signing_secret.as_bytes())
+        .unwrap_or_else(|_| panic!("HMAC accepts keys of any size"));
+    mac.update(public_artifact_payload(job_id, expires_at).as_bytes());
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+fn verify_public_artifact_signature(
+    signing_secret: &str,
+    job_id: &str,
+    expires_at: i64,
+    signature: &str,
+    now: i64,
+) -> bool {
+    if expires_at < now || signing_secret.is_empty() {
+        return false;
+    }
+    let Ok(provided) = URL_SAFE_NO_PAD.decode(signature) else {
+        return false;
+    };
+    let expected = sign_public_artifact(signing_secret, job_id, expires_at);
+    let Ok(expected) = URL_SAFE_NO_PAD.decode(expected) else {
+        return false;
+    };
+    constant_time_eq(&provided, &expected)
+}
+
+fn public_artifact_payload(job_id: &str, expires_at: i64) -> String {
+    format!("{job_id}.{expires_at}")
+}
+
 // ── Internal tick ─────────────────────────────────────────────────────────────
 
 /// `POST /internal/tick` — cron trigger from Supabase `pg_net`.
@@ -742,7 +974,10 @@ async fn internal_tick_handler(
     let aead_key = aead_key_from_state(&state.config)?;
     let pool = state.pool.clone();
     let force_private = state.config.youtube_force_private;
+    let tiktok_public_posting_enabled = state.config.tiktok_public_posting_enabled;
     let artifact_base_dir = state.config.artifact_base_dir.clone();
+    let supabase_url = state.config.supabase_url.clone();
+    let supabase_service_key = state.config.supabase_service_key.clone();
     let google_client_id = state.config.google_client_id.clone();
     let google_client_secret = state.config.google_client_secret.clone();
 
@@ -775,8 +1010,12 @@ async fn internal_tick_handler(
                         continue;
                     }
                     let resolver = ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
-                    let artifact_source =
-                        artifact_source::FileArtifactSource::new(artifact_base_dir.clone());
+                    let artifact_source = artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
+                        .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                            supabase_url.clone(),
+                            supabase_service_key.clone(),
+                            3600,
+                        ));
                     let yt_config = YouTubeClientConfig { force_private, ..Default::default() };
                     let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
                     let adapter = YouTubeUploadAdapter::new(client);
@@ -799,28 +1038,133 @@ async fn internal_tick_handler(
                         let _ = store.increment_youtube_quota(now);
                     }
                 }
-                Provider::TikTok | Provider::Instagram => {
-                    // Phase 6 domain adapters exist, but the live HTTP clients
-                    // (Tasks 3/6) need sandbox creds + app-review, so route these
-                    // through the BlockedUploadAdapter for now. This gives the job
-                    // a real FSM transition to RequiresAction with a clear reason
-                    // (instead of leaving it stuck Uploading after claim). When a
-                    // live client is wired, swap in the real adapter for eligible
-                    // accounts and keep this as the ineligible/pre-audit fallback.
-                    use awidat_social::upload_adapter::BlockedUploadAdapter;
-                    let reason = match job.provider {
-                        Provider::TikTok => "tiktok_live_client_pending",
-                        Provider::Instagram => "instagram_live_client_pending",
-                        Provider::YouTube => unreachable!(),
-                    };
-                    let adapter = BlockedUploadAdapter::new(job.provider.clone(), reason);
+                Provider::TikTok => {
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let eligible_for_public = tiktok_public_posting_enabled
+                        && store
+                        .connected_account(&job.connected_account_id)
+                        .map(|account| account.capabilities.public_posting)
+                        .unwrap_or(false);
+                    let artifact_source = artifact_source::FileArtifactSource::new(
+                        artifact_base_dir.clone(),
+                    )
+                    .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                        supabase_url.clone(),
+                        supabase_service_key.clone(),
+                        3600,
+                    ));
+                    let client = LiveTikTokUploadClient::new(resolver, artifact_source);
+                    let adapter =
+                        TikTokUploadAdapter::with_public_eligibility(client, eligible_for_public);
                     let upload = upload_request_for_job(&store, &job, now);
-                    if let Err(e) = SocialApi::execute_claimed_upload_job(
-                        &mut store,
-                        &adapter,
-                        upload,
-                    ) {
-                        tracing::warn!(job_id = %job.id, provider = ?job.provider, "blocked-adapter execute failed: {e}");
+                    if let Err(e) =
+                        SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    {
+                        tracing::warn!(job_id = %job.id, provider = ?job.provider, "TikTok execute failed: {e}");
+                    }
+                }
+                Provider::Instagram => {
+                    use awidat_social::upload_adapter::BlockedUploadAdapter;
+                    let mut upload = upload_request_for_job(&store, &job, now);
+                    let instagram_account_id = match store
+                        .connected_account(&job.connected_account_id)
+                        .map(|account| account.provider_account_id)
+                        .ok()
+                        .filter(|id| !id.trim().is_empty())
+                    {
+                        Some(id) => id,
+                        None => {
+                            let blocked = BlockedUploadAdapter::new(
+                                Provider::Instagram,
+                                "instagram_account_id_missing",
+                            );
+                            if let Err(e) =
+                                SocialApi::execute_claimed_upload_job(&mut store, &blocked, upload)
+                            {
+                                tracing::warn!(job_id = %job.id, provider = ?job.provider, "Instagram account blocker execute failed: {e}");
+                            }
+                            continue;
+                        }
+                    };
+                    let artifact_source = artifact_source::FileArtifactSource::new(
+                        artifact_base_dir.clone(),
+                    )
+                    .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                        supabase_url.clone(),
+                        supabase_service_key.clone(),
+                        3600,
+                    ));
+                    match artifact_source.provider_fetch_url(&job.artifact_ref) {
+                        Ok(url) => upload.artifact_ref = Some(url),
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "Instagram artifact URL resolution failed: {e}");
+                            let blocked = BlockedUploadAdapter::new(
+                                Provider::Instagram,
+                                "artifact_not_provider_fetchable",
+                            );
+                            if let Err(e) =
+                                SocialApi::execute_claimed_upload_job(&mut store, &blocked, upload)
+                            {
+                                tracing::warn!(job_id = %job.id, provider = ?job.provider, "Instagram artifact blocker execute failed: {e}");
+                            }
+                            continue;
+                        }
+                    }
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveInstagramUploadClient::new(resolver, instagram_account_id);
+                    let adapter = InstagramUploadAdapter::new(client);
+                    if let Err(e) =
+                        SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    {
+                        tracing::warn!(job_id = %job.id, provider = ?job.provider, "Instagram execute failed: {e}");
+                    }
+                }
+                Provider::TwitterX => {
+                    use awidat_social::upload_adapter::BlockedUploadAdapter;
+                    let mut upload = upload_request_for_job(&store, &job, now);
+                    let artifact_source = artifact_source::FileArtifactSource::new(
+                        artifact_base_dir.clone(),
+                    )
+                    .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                        supabase_url.clone(),
+                        supabase_service_key.clone(),
+                        3600,
+                    ));
+                    match artifact_source.provider_fetch_url(&job.artifact_ref) {
+                        Ok(url) => upload.artifact_ref = Some(url),
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "Twitter/X artifact URL resolution failed: {e}");
+                            let blocked = BlockedUploadAdapter::new(
+                                Provider::TwitterX,
+                                "artifact_not_provider_fetchable",
+                            );
+                            if let Err(e) =
+                                SocialApi::execute_claimed_upload_job(&mut store, &blocked, upload)
+                            {
+                                tracing::warn!(job_id = %job.id, provider = ?job.provider, "Twitter/X artifact blocker execute failed: {e}");
+                            }
+                            continue;
+                        }
+                    }
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveTwitterXUploadClient::new(resolver);
+                    let adapter = TwitterXUploadAdapter::new(client);
+                    if let Err(e) =
+                        SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    {
+                        tracing::warn!(job_id = %job.id, provider = ?job.provider, "Twitter/X execute failed: {e}");
                     }
                 }
             }
@@ -863,6 +1207,7 @@ fn upload_request_for_job(
         tags: string_array_field(&fields, "tags"),
         thumbnail_ref: string_field(&fields, "thumbnailRef")
             .or_else(|| string_field(&fields, "thumbnail_ref")),
+        artifact_ref: None,
         privacy: string_field(&fields, "privacy").map(|raw| parse_upload_privacy(&raw)),
         now,
     }
@@ -965,7 +1310,63 @@ async fn internal_poll_processing_handler(
                         }
                     }
                 }
-                Provider::TikTok | Provider::Instagram => {}
+                Provider::TikTok => {
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveTikTokStatusClient::new(resolver);
+                    let adapter = TikTokStatusAdapter::new(client);
+                    match SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now) {
+                        Ok(_) => advanced += 1,
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "TikTok poll status failed: {e}");
+                        }
+                    }
+                }
+                Provider::Instagram => {
+                    let instagram_account_id = match store
+                        .connected_account(&job.connected_account_id)
+                        .map(|account| account.provider_account_id)
+                        .ok()
+                        .filter(|id| !id.trim().is_empty())
+                    {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!(job_id = %job.id, "Instagram poll skipped: account id missing");
+                            continue;
+                        }
+                    };
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveInstagramStatusClient::new(resolver, instagram_account_id);
+                    let adapter = InstagramStatusAdapter::new(client);
+                    match SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now) {
+                        Ok(_) => advanced += 1,
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "Instagram poll status failed: {e}");
+                        }
+                    }
+                }
+                Provider::TwitterX => {
+                    let resolver = ServerAccessTokenResolver::new(
+                        pool.clone(),
+                        aead_key_clone(&aead_key),
+                        now,
+                    );
+                    let client = LiveTwitterXStatusClient::new(resolver);
+                    let adapter = TwitterXStatusAdapter::new(client);
+                    match SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now) {
+                        Ok(_) => advanced += 1,
+                        Err(e) => {
+                            tracing::warn!(job_id = %job.id, "Twitter/X poll status failed: {e}");
+                        }
+                    }
+                }
             }
         }
         Ok::<usize, String>(advanced)
@@ -1085,6 +1486,7 @@ pub(crate) fn parse_provider(s: &str) -> Result<Provider, (StatusCode, Json<serd
         "youtube" => Ok(Provider::YouTube),
         "tiktok" => Ok(Provider::TikTok),
         "instagram" => Ok(Provider::Instagram),
+        "twitter_x" | "twitter" | "x" => Ok(Provider::TwitterX),
         _ => Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("unknown provider: {s}")})),
@@ -1118,10 +1520,111 @@ pub(crate) fn provider_client_id(
                 Ok(config.google_client_id.clone())
             }
         }
-        Provider::TikTok | Provider::Instagram => Err((
-            StatusCode::NOT_IMPLEMENTED,
-            Json(serde_json::json!({"error": "provider not yet supported"})),
-        )),
+        Provider::TikTok => {
+            if config.tiktok_client_key.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "TikTok OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.tiktok_client_key.clone())
+            }
+        }
+        Provider::Instagram => {
+            if config.instagram_client_id.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "Instagram OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.instagram_client_id.clone())
+            }
+        }
+        Provider::TwitterX => {
+            if config.twitter_x_client_id.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "Twitter/X OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.twitter_x_client_id.clone())
+            }
+        }
+    }
+}
+
+pub(crate) fn provider_client_secret(
+    config: &ServerConfig,
+    provider: &Provider,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    match provider {
+        Provider::YouTube => {
+            if config.google_client_secret.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "Google OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.google_client_secret.clone())
+            }
+        }
+        Provider::TikTok => {
+            if config.tiktok_client_secret.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "TikTok OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.tiktok_client_secret.clone())
+            }
+        }
+        Provider::Instagram => {
+            if config.instagram_client_secret.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "Instagram OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.instagram_client_secret.clone())
+            }
+        }
+        Provider::TwitterX => {
+            if config.twitter_x_client_secret.is_empty() {
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error": "Twitter/X OAuth not configured"})),
+                ))
+            } else {
+                Ok(config.twitter_x_client_secret.clone())
+            }
+        }
+    }
+}
+
+fn token_endpoint(provider: &Provider) -> &'static str {
+    match provider {
+        Provider::YouTube => "https://oauth2.googleapis.com/token",
+        Provider::TikTok => "https://open.tiktokapis.com/v2/oauth/token/",
+        Provider::Instagram => "https://graph.facebook.com/v24.0/oauth/access_token",
+        Provider::TwitterX => "https://api.x.com/2/oauth2/token",
+    }
+}
+
+fn profile_endpoint(provider: &Provider) -> Option<&'static str> {
+    match provider {
+        Provider::YouTube => Some("https://www.googleapis.com/youtube/v3/channels"),
+        Provider::TikTok => Some("https://open.tiktokapis.com/v2/user/info/"),
+        Provider::Instagram => Some(
+            "https://graph.facebook.com/v24.0/me/accounts?fields=instagram_business_account{id,username,name}",
+        ),
+        Provider::TwitterX => Some("https://api.x.com/2/users/me?user.fields=username,name"),
+    }
+}
+
+#[cfg(test)]
+fn pending_live_client_reason(provider: &Provider) -> Option<&'static str> {
+    match provider {
+        Provider::YouTube | Provider::TikTok | Provider::Instagram | Provider::TwitterX => None,
     }
 }
 
@@ -1130,6 +1633,7 @@ pub(crate) fn provider_slug(provider: &Provider) -> &'static str {
         Provider::YouTube => "youtube",
         Provider::TikTok => "tiktok",
         Provider::Instagram => "instagram",
+        Provider::TwitterX => "twitter_x",
     }
 }
 
@@ -1161,7 +1665,9 @@ fn build_connected_account(
     scopes: &[String],
     now: i64,
 ) -> ConnectedAccount {
-    use awidat_social::eligibility::youtube_eligibility;
+    use awidat_social::eligibility::{
+        instagram_eligibility, tiktok_eligibility, twitter_x_eligibility, youtube_eligibility,
+    };
     use awidat_social::model::ConnectedAccountStatus;
 
     // Derive capabilities + eligibility from the GRANTED scopes (not defaults),
@@ -1173,10 +1679,16 @@ fn build_connected_account(
         Provider::YouTube => {
             youtube_eligibility(&provider_account_id, &display_name, None, &scope_refs)
         }
-        // TikTok/Instagram connect via their own callbacks (Phase 6); their
-        // eligibility is derived there. Until then, fall through to YouTube's
-        // shape is wrong — but only YouTube reaches this path today.
-        _ => youtube_eligibility(&provider_account_id, &display_name, None, &scope_refs),
+        Provider::TikTok => tiktok_eligibility(&provider_account_id, &display_name, &scope_refs),
+        Provider::Instagram => instagram_eligibility(
+            &provider_account_id,
+            &display_name,
+            true,
+            scope_refs.contains(&"instagram_content_publish"),
+        ),
+        Provider::TwitterX => {
+            twitter_x_eligibility(&provider_account_id, &display_name, None, &scope_refs)
+        }
     };
 
     ConnectedAccount {
@@ -1237,10 +1749,33 @@ mod tests {
     }
 
     #[test]
+    fn public_artifact_signature_rejects_tampering() {
+        let sig = sign_public_artifact("server-secret", "job_123", 1_000);
+
+        assert!(!verify_public_artifact_signature(
+            "server-secret",
+            "job_999",
+            1_000,
+            &sig,
+            999
+        ));
+        assert!(!verify_public_artifact_signature(
+            "wrong-secret",
+            "job_123",
+            1_000,
+            &sig,
+            999
+        ));
+    }
+
+    #[test]
     fn provider_slug_round_trips() {
         assert_eq!(provider_slug(&Provider::YouTube), "youtube");
         assert_eq!(provider_slug(&Provider::TikTok), "tiktok");
         assert_eq!(provider_slug(&Provider::Instagram), "instagram");
+        assert_eq!(provider_slug(&Provider::TwitterX), "twitter_x");
+        assert_eq!(parse_provider("x").unwrap(), Provider::TwitterX);
+        assert_eq!(parse_provider("twitter").unwrap(), Provider::TwitterX);
     }
 
     #[test]
@@ -1254,9 +1789,16 @@ mod tests {
             oauth_redirect_base: "https://app.example".into(),
             google_client_id: String::new(),
             google_client_secret: String::new(),
+            tiktok_client_key: String::new(),
+            tiktok_client_secret: String::new(),
+            instagram_client_id: String::new(),
+            instagram_client_secret: String::new(),
+            twitter_x_client_id: String::new(),
+            twitter_x_client_secret: String::new(),
             token_key_id: String::new(),
             token_key_hex: String::new(),
             youtube_force_private: true,
+            tiktok_public_posting_enabled: false,
             artifact_base_dir: String::new(),
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
@@ -1266,6 +1808,79 @@ mod tests {
             redirect_uri(&config, &Provider::YouTube),
             "https://app.example/oauth/callback/youtube"
         );
+    }
+
+    #[test]
+    fn provider_client_id_reads_config_for_each_major_platform() {
+        let config = ServerConfig {
+            service_shared_secret: String::new(),
+            social_firing_enabled: false,
+            supabase_url: String::new(),
+            supabase_service_key: String::new(),
+            storage_bucket: String::new(),
+            oauth_redirect_base: "https://app.example".into(),
+            google_client_id: "google-client".into(),
+            google_client_secret: String::new(),
+            tiktok_client_key: "tiktok-key".into(),
+            tiktok_client_secret: String::new(),
+            instagram_client_id: "instagram-client".into(),
+            instagram_client_secret: String::new(),
+            twitter_x_client_id: "twitter-client".into(),
+            twitter_x_client_secret: String::new(),
+            token_key_id: String::new(),
+            token_key_hex: String::new(),
+            youtube_force_private: true,
+            tiktok_public_posting_enabled: false,
+            artifact_base_dir: String::new(),
+            desktop_auth_token: String::new(),
+            desktop_user_id: "desktop-user".into(),
+            supabase_jwt_secret: String::new(),
+        };
+
+        assert_eq!(
+            provider_client_id(&config, &Provider::YouTube).unwrap(),
+            "google-client"
+        );
+        assert_eq!(
+            provider_client_id(&config, &Provider::TikTok).unwrap(),
+            "tiktok-key"
+        );
+        assert_eq!(
+            provider_client_id(&config, &Provider::Instagram).unwrap(),
+            "instagram-client"
+        );
+        assert_eq!(
+            provider_client_id(&config, &Provider::TwitterX).unwrap(),
+            "twitter-client"
+        );
+    }
+
+    #[test]
+    fn connected_account_builder_uses_provider_specific_eligibility() {
+        let account = build_connected_account(
+            "twitter_x:x_user_1".into(),
+            OwnerRef::User("user_1".into()),
+            Provider::TwitterX,
+            "x_user_1".into(),
+            "Creator".into(),
+            &[
+                "users.read".into(),
+                "tweet.write".into(),
+                "media.write".into(),
+            ],
+            100,
+        );
+
+        assert_eq!(account.provider, Provider::TwitterX);
+        assert!(account.capabilities.upload_video);
+        assert!(account.eligibility.eligible);
+    }
+
+    #[test]
+    fn live_clients_are_not_routed_to_pending_live_client_blocker() {
+        assert_eq!(pending_live_client_reason(&Provider::TikTok), None);
+        assert_eq!(pending_live_client_reason(&Provider::Instagram), None);
+        assert_eq!(pending_live_client_reason(&Provider::TwitterX), None);
     }
 
     #[test]

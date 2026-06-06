@@ -106,6 +106,7 @@ impl TokenRefreshService {
                 provider: provider.clone(),
                 code: refresh_token,
                 redirect_uri,
+                code_verifier: None,
             })
             .await
             .map_err(RefreshError::Exchange)?;
@@ -286,6 +287,7 @@ mod tests {
                     expires_in: 3600,
                     refresh_expires_in: None,
                 },
+                display_name: None,
             }),
         };
         let refreshed = TokenRefreshService::ensure_fresh_access_token(
@@ -357,6 +359,7 @@ mod tests {
                     expires_in: 3600,
                     refresh_expires_in: None,
                 },
+                display_name: None,
             }),
         };
         let count = TokenRefreshService::refresh_due_secrets(

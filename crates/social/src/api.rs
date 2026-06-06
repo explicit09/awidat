@@ -18,7 +18,7 @@ use crate::model::{
 use crate::oauth_url::OAuthProviderConfig;
 use crate::provider::{ProviderRegistry, ProviderState};
 use crate::publish_service::{
-    BindTargetInput, PublishService, PublishServiceError, ScheduleTargetInput,
+    BindTargetInput, PublishService, PublishServiceError, RescheduleJobInput, ScheduleTargetInput,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
@@ -330,6 +330,22 @@ pub struct ValidateTargetRequest {
     pub now: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateTargetResponse {
+    #[serde(flatten)]
+    pub target: CampaignVariantTarget,
+    pub validation_reasons: Vec<String>,
+}
+
+impl std::ops::Deref for ValidateTargetResponse {
+    type Target = CampaignVariantTarget;
+
+    fn deref(&self) -> &Self::Target {
+        &self.target
+    }
+}
+
 /// `POST /campaigns/:campaign_id/variants/:variant_id/schedule` body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScheduleTargetRequest {
@@ -337,6 +353,13 @@ pub struct ScheduleTargetRequest {
     pub job_id: String,
     pub artifact_ref: String,
     pub created_by: String,
+    pub now: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescheduleJobRequest {
+    pub scheduled_for: i64,
     pub now: i64,
 }
 
@@ -430,6 +453,8 @@ pub struct ExecuteUploadRequest {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
+    /// Optional provider-facing artifact URL, used by PULL-model providers.
+    pub artifact_ref: Option<String>,
     /// Resolved visibility the caller already derived from the campaign target.
     /// When `None`, [`SocialApi::execute_claimed_upload_job`] falls back to the
     /// connected account's `default_privacy`, then to `Private`.
@@ -446,11 +471,16 @@ pub struct SocialApi;
 impl SocialApi {
     /// `GET /social/providers`: list provider slots and capability summaries.
     pub fn providers(registry: &ProviderRegistry) -> Vec<ProviderSummary> {
-        [Provider::YouTube, Provider::TikTok, Provider::Instagram]
-            .iter()
-            .filter_map(|provider| registry.get(provider).ok())
-            .map(ProviderSummary::from_state)
-            .collect()
+        [
+            Provider::YouTube,
+            Provider::TikTok,
+            Provider::Instagram,
+            Provider::TwitterX,
+        ]
+        .iter()
+        .filter_map(|provider| registry.get(provider).ok())
+        .map(ProviderSummary::from_state)
+        .collect()
     }
 
     /// `GET /social/accounts`: list connected accounts for an owner.
@@ -574,7 +604,7 @@ impl SocialApi {
         registry: &ProviderRegistry,
         actor: &ApiActor,
         request: ValidateTargetRequest,
-    ) -> Result<CampaignVariantTarget, SocialApiError> {
+    ) -> Result<ValidateTargetResponse, SocialApiError> {
         let target = store.campaign_variant_target(&request.target_id)?;
         // Reject unknown providers before mutating any state.
         registry
@@ -582,9 +612,13 @@ impl SocialApi {
             .map_err(|err| SocialApiError::Publish(err.to_string()))?;
         let owner = account_owner(store, &target.connected_account_id)?;
         actor.authorize(&owner, TeamAction::SchedulePublish)?;
-        PublishService::validate_target(store, &owner, &request.target_id, request.now)?;
+        let report =
+            PublishService::validate_target(store, &owner, &request.target_id, request.now)?;
         let validated = store.campaign_variant_target(&request.target_id)?;
-        Ok(validated)
+        Ok(ValidateTargetResponse {
+            target: validated,
+            validation_reasons: report.reasons,
+        })
     }
 
     /// `POST /campaigns/:campaign_id/variants/:variant_id/schedule`: create a
@@ -657,6 +691,29 @@ impl SocialApi {
     ) -> Result<PublishJobResponse, SocialApiError> {
         authorize_job_owner(store, actor, owner, job_id, TeamAction::RetryPublish)?;
         let job = PublishService::retry_job(store, &owner.owner, job_id, now)?;
+        job_response(store, job)
+    }
+
+    /// `POST /publish-jobs/:id/reschedule`: change the due time for a
+    /// scheduled publish job. The server-side scheduler remains the firing
+    /// owner; this only updates the durable job timestamp it reads.
+    pub fn reschedule_job(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+        request: RescheduleJobRequest,
+    ) -> Result<PublishJobResponse, SocialApiError> {
+        authorize_job_owner(store, actor, owner, job_id, TeamAction::SchedulePublish)?;
+        let job = PublishService::reschedule_job(
+            store,
+            &owner.owner,
+            RescheduleJobInput {
+                job_id: job_id.to_string(),
+                scheduled_for: request.scheduled_for,
+                now: request.now,
+            },
+        )?;
         job_response(store, job)
     }
 
@@ -753,6 +810,7 @@ impl SocialApi {
             description: request.description,
             tags: request.tags,
             thumbnail_ref: request.thumbnail_ref,
+            artifact_ref: request.artifact_ref,
             privacy,
             now: request.now,
         };
@@ -961,7 +1019,12 @@ mod tests {
         let provider_ids: Vec<&Provider> = providers.iter().map(|p| &p.provider).collect();
         assert_eq!(
             provider_ids,
-            vec![&Provider::YouTube, &Provider::TikTok, &Provider::Instagram]
+            vec![
+                &Provider::YouTube,
+                &Provider::TikTok,
+                &Provider::Instagram,
+                &Provider::TwitterX
+            ]
         );
 
         let mut store = InMemorySocialStore::default();
@@ -1189,7 +1252,7 @@ mod tests {
             campaign_id: "campaign_1".into(),
             variant_id: "variant_1".into(),
             connected_account_id: account_id.into(),
-            platform_fields: serde_json::json!({"privacy": "private"}),
+            platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
             scheduled_for: 2_000,
             now: 1_000,
         }
@@ -1289,6 +1352,36 @@ mod tests {
     }
 
     #[test]
+    fn publish_api_validate_target_returns_reasons_for_invalid_metadata() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let mut request = bind_request("acct_1");
+        request.platform_fields = serde_json::json!({
+            "privacy": "private",
+            "title": ""
+        });
+        SocialApi::bind_target(&mut store, &user_actor(), request)
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+
+        let validated = SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+
+        assert_eq!(validated.validation_state, ValidationState::Invalid);
+        assert_eq!(validated.validation_reasons, vec!["title.required"]);
+    }
+
+    #[test]
     fn publish_api_bind_rejects_foreign_user() {
         let mut store = InMemorySocialStore::default();
         store
@@ -1369,6 +1462,53 @@ mod tests {
                 PublishServiceError::JobNotRetryable.to_string()
             ))
         );
+    }
+
+    #[test]
+    fn publish_api_reschedule_is_authorized_and_returns_audit_event() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        schedule_job(&mut store, &registry, &user_actor(), user_owner());
+
+        assert_eq!(
+            SocialApi::reschedule_job(
+                &mut store,
+                &other_user_actor(),
+                &ApiOwner {
+                    owner: user_owner()
+                },
+                "job_1",
+                RescheduleJobRequest {
+                    scheduled_for: 2_800,
+                    now: 1_500,
+                },
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+
+        let job = SocialApi::reschedule_job(
+            &mut store,
+            &user_actor(),
+            &ApiOwner {
+                owner: user_owner(),
+            },
+            "job_1",
+            RescheduleJobRequest {
+                scheduled_for: 2_800,
+                now: 1_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("reschedule job: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.scheduled_for, 2_800);
+        assert_eq!(
+            job.events.last().map(|event| &event.event_type),
+            Some(&PublishJobEventType::Rescheduled)
+        );
+        let json = serde_json::to_string(&job).unwrap_or_else(|err| panic!("serialize job: {err}"));
+        assert!(!json.contains("access_token"));
+        assert!(!json.contains("refresh_token"));
     }
 
     #[test]
@@ -1630,6 +1770,7 @@ mod tests {
             description: Some("Description".into()),
             tags: vec!["awidat".into()],
             thumbnail_ref: Some("render://thumb_1".into()),
+            artifact_ref: None,
             privacy: None,
             now: 2_000,
         }

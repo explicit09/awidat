@@ -1,5 +1,5 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM rust:1.82-slim AS builder
+FROM rust:1.95-slim AS builder
 
 # Install libssl for reqwest's TLS (rustls-tls is used but some crates pull in
 # openssl-sys at compile time on Linux).
@@ -12,8 +12,10 @@ WORKDIR /build
 # Copy the full workspace so cargo can resolve workspace dependencies.
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-# The social-server binary only needs these two workspace crates at link time.
-# We don't copy apps/ or vendor/ to keep the image small; they are not deps.
+# Cargo loads every workspace member manifest before building a package.
+COPY vendor/ vendor/
+COPY apps/desktop/src-tauri/ apps/desktop/src-tauri/
+# We don't copy the full desktop app; it is not a social-server dep.
 
 RUN cargo build --release -p awidat-social-server
 
@@ -32,6 +34,7 @@ COPY crates/social/migrations/ ./migrations/
 
 ENV BIND_ADDR="0.0.0.0:3000"
 ENV SOCIAL_FIRING_ENABLED="false"
+ENV SOCIAL_MIGRATIONS_DIR="/app/migrations"
 EXPOSE 3000
 
 ENTRYPOINT ["./awidat-social-server"]

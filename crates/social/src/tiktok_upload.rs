@@ -21,11 +21,16 @@ use crate::upload_status::{
     UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError, UploadStatusRequest,
     UploadStatusResult,
 };
+use crate::youtube_upload::{
+    AccessTokenResolver, ArtifactBody, ArtifactSource, ArtifactSourceError, YOUTUBE_MAX_BYTES,
+};
+use std::time::Duration;
 
 /// TikTok `privacy_level` values for the direct-post init call.
 pub const TIKTOK_SELF_ONLY: &str = "SELF_ONLY";
 pub const TIKTOK_PUBLIC: &str = "PUBLIC_TO_EVERYONE";
 pub const TIKTOK_FRIENDS: &str = "MUTUAL_FOLLOW_FRIENDS";
+const TIKTOK_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TikTokUploadRequest {
@@ -46,7 +51,7 @@ pub struct TikTokInitResponse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TikTokUploadClientError {
     MissingScope,
-    AccountNotEligible,
+    AccountNotEligible { reason: String },
     RateLimited,
     NetworkOrServer(String),
 }
@@ -261,9 +266,9 @@ fn tiktok_client_error(error: TikTokUploadClientError) -> UploadAdapterError {
         TikTokUploadClientError::MissingScope => UploadAdapterError::RequiresAction {
             reason: "missing_scope".into(),
         },
-        TikTokUploadClientError::AccountNotEligible => UploadAdapterError::RequiresAction {
-            reason: "account_not_eligible".into(),
-        },
+        TikTokUploadClientError::AccountNotEligible { reason } => {
+            UploadAdapterError::RequiresAction { reason }
+        }
         TikTokUploadClientError::RateLimited => UploadAdapterError::NetworkOrServer {
             message: "rate_limited".into(),
         },
@@ -279,6 +284,324 @@ fn tiktok_status_client_error(error: TikTokStatusClientError) -> UploadStatusAda
             UploadStatusAdapterError::NetworkOrServer { message }
         }
     }
+}
+
+pub const TIKTOK_API_BASE: &str = "https://open.tiktokapis.com";
+const TIKTOK_SINGLE_UPLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
+
+pub struct LiveTikTokUploadClient<R, A> {
+    token_resolver: R,
+    artifact_source: A,
+    api_base: String,
+    http: reqwest::Client,
+}
+
+impl<R: AccessTokenResolver, A: ArtifactSource> LiveTikTokUploadClient<R, A> {
+    pub fn new(token_resolver: R, artifact_source: A) -> Self {
+        Self::with_base(token_resolver, artifact_source, TIKTOK_API_BASE.to_string())
+    }
+
+    pub fn with_base(token_resolver: R, artifact_source: A, api_base: String) -> Self {
+        Self::with_base_and_timeout(
+            token_resolver,
+            artifact_source,
+            api_base,
+            TIKTOK_HTTP_TIMEOUT,
+        )
+    }
+
+    pub fn with_base_and_timeout(
+        token_resolver: R,
+        artifact_source: A,
+        api_base: String,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            token_resolver,
+            artifact_source,
+            api_base,
+            http: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        }
+    }
+
+    async fn do_init(
+        &self,
+        request: &TikTokUploadRequest,
+        token: String,
+        artifact: ArtifactBody,
+    ) -> Result<TikTokInitResponse, TikTokUploadClientError> {
+        if artifact.total_bytes == 0 {
+            return Err(TikTokUploadClientError::NetworkOrServer(
+                "tiktok upload artifact is empty".into(),
+            ));
+        }
+        if artifact.total_bytes > YOUTUBE_MAX_BYTES {
+            return Err(TikTokUploadClientError::NetworkOrServer(format!(
+                "file too large: {} bytes (max {})",
+                artifact.total_bytes, YOUTUBE_MAX_BYTES
+            )));
+        }
+        let url = format!(
+            "{}/v2/post/publish/video/init/",
+            self.api_base.trim_end_matches('/')
+        );
+        let chunk_size = tiktok_chunk_size(artifact.total_bytes);
+        let total_chunk_count = tiktok_total_chunk_count(artifact.total_bytes, chunk_size);
+        let body = serde_json::json!({
+            "post_info": {
+                "title": request.caption,
+                "privacy_level": request.privacy_level,
+                "disable_duet": false,
+                "disable_comment": false,
+                "disable_stitch": false,
+                "brand_content_toggle": false,
+                "brand_organic_toggle": false,
+                "is_aigc": false
+            },
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": artifact.total_bytes,
+                "chunk_size": chunk_size,
+                "total_chunk_count": total_chunk_count
+            }
+        });
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| TikTokUploadClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| TikTokUploadClientError::NetworkOrServer(e.to_string()))?;
+        let code = json["error"]["code"].as_str().unwrap_or("ok");
+        if status == 401 || code == "scope_not_authorized" || code == "access_token_invalid" {
+            return Err(TikTokUploadClientError::MissingScope);
+        }
+        if status == 403 || code == "unaudited_client_can_only_post_to_private_accounts" {
+            let reason = if code == "ok" || code.trim().is_empty() {
+                "account_not_eligible"
+            } else {
+                code
+            };
+            return Err(TikTokUploadClientError::AccountNotEligible {
+                reason: reason.to_string(),
+            });
+        }
+        if status == 429 || code == "rate_limit_exceeded" {
+            return Err(TikTokUploadClientError::RateLimited);
+        }
+        if !resp_status_success(status) || code != "ok" {
+            return Err(TikTokUploadClientError::NetworkOrServer(format!(
+                "tiktok init {status}: {json}"
+            )));
+        }
+        let publish_id = json["data"]["publish_id"]
+            .as_str()
+            .ok_or_else(|| {
+                TikTokUploadClientError::NetworkOrServer(
+                    "tiktok init response missing publish_id".into(),
+                )
+            })?
+            .to_string();
+        let upload_url = json["data"]["upload_url"]
+            .as_str()
+            .ok_or_else(|| {
+                TikTokUploadClientError::NetworkOrServer(
+                    "tiktok init response missing upload_url".into(),
+                )
+            })?
+            .to_string();
+        self.do_upload_file(&upload_url, artifact).await?;
+        Ok(TikTokInitResponse { publish_id })
+    }
+
+    async fn do_upload_file(
+        &self,
+        upload_url: &str,
+        artifact: ArtifactBody,
+    ) -> Result<(), TikTokUploadClientError> {
+        if artifact.total_bytes > TIKTOK_SINGLE_UPLOAD_MAX_BYTES {
+            return Err(TikTokUploadClientError::NetworkOrServer(format!(
+                "tiktok FILE_UPLOAD currently supports artifacts up to {} bytes; got {}",
+                TIKTOK_SINGLE_UPLOAD_MAX_BYTES, artifact.total_bytes
+            )));
+        }
+        let last_byte = artifact.total_bytes.saturating_sub(1);
+        let resp = self
+            .http
+            .put(upload_url)
+            .header("Content-Type", "video/mp4")
+            .header("Content-Length", artifact.total_bytes.to_string())
+            .header(
+                "Content-Range",
+                format!("bytes 0-{last_byte}/{}", artifact.total_bytes),
+            )
+            .body(artifact.data)
+            .send()
+            .await
+            .map_err(|e| TikTokUploadClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !resp_status_success(status) {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(TikTokUploadClientError::NetworkOrServer(format!(
+                "tiktok upload PUT {status}: {body}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl<R: AccessTokenResolver, A: ArtifactSource> TikTokUploadClient
+    for LiveTikTokUploadClient<R, A>
+{
+    fn init_video_publish(
+        &self,
+        request: &TikTokUploadRequest,
+    ) -> Result<TikTokInitResponse, TikTokUploadClientError> {
+        let token = self
+            .token_resolver
+            .bearer_for(&request.access_token_ref)
+            .map_err(|e| TikTokUploadClientError::NetworkOrServer(e.to_string()))?;
+        let artifact = self
+            .artifact_source
+            .open(&request.video_url)
+            .map_err(tiktok_artifact_error)?;
+        tokio::runtime::Handle::current().block_on(self.do_init(request, token, artifact))
+    }
+}
+
+fn tiktok_chunk_size(total_bytes: u64) -> u64 {
+    total_bytes.min(64 * 1024 * 1024)
+}
+
+fn tiktok_total_chunk_count(total_bytes: u64, chunk_size: u64) -> u64 {
+    let full_chunks = total_bytes / chunk_size;
+    let remainder = total_bytes % chunk_size;
+    if remainder == 0 {
+        full_chunks.max(1)
+    } else {
+        full_chunks + 1
+    }
+}
+
+fn tiktok_artifact_error(error: ArtifactSourceError) -> TikTokUploadClientError {
+    TikTokUploadClientError::NetworkOrServer(error.to_string())
+}
+
+pub struct LiveTikTokStatusClient<R> {
+    token_resolver: R,
+    api_base: String,
+    http: reqwest::Client,
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> LiveTikTokStatusClient<R> {
+    pub fn new(token_resolver: R) -> Self {
+        Self::with_base(token_resolver, TIKTOK_API_BASE.to_string())
+    }
+
+    pub fn with_base(token_resolver: R, api_base: String) -> Self {
+        Self {
+            token_resolver,
+            api_base,
+            http: reqwest::Client::builder()
+                .timeout(TIKTOK_HTTP_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        }
+    }
+
+    async fn do_fetch(
+        &self,
+        request: &TikTokStatusRequest,
+        token: String,
+    ) -> Result<TikTokStatusResponse, TikTokStatusClientError> {
+        let url = format!(
+            "{}/v2/post/publish/status/fetch/",
+            self.api_base.trim_end_matches('/')
+        );
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .json(&serde_json::json!({ "publish_id": request.publish_id }))
+            .send()
+            .await
+            .map_err(|e| TikTokStatusClientError::NetworkOrServer(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| TikTokStatusClientError::NetworkOrServer(e.to_string()))?;
+        let code = json["error"]["code"].as_str().unwrap_or("ok");
+        if !resp_status_success(status) || code != "ok" {
+            return Err(TikTokStatusClientError::NetworkOrServer(format!(
+                "tiktok status {status}: {json}"
+            )));
+        }
+
+        let data = &json["data"];
+        let publish_id = data["publish_id"]
+            .as_str()
+            .unwrap_or(&request.publish_id)
+            .to_string();
+        let state = match data["status"].as_str().unwrap_or("PROCESSING_UPLOAD") {
+            "PUBLISH_COMPLETE" | "SEND_TO_USER_INBOX" => TikTokProcessingState::Published,
+            "FAILED" | "PUBLISH_FAILED" => TikTokProcessingState::Failed,
+            _ => TikTokProcessingState::Processing,
+        };
+        let post_id = data["publicaly_available_post_id"]
+            .as_array()
+            .and_then(|ids| ids.first())
+            .and_then(|id| id.as_str())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                data["publicly_available_post_id"]
+                    .as_str()
+                    .map(ToOwned::to_owned)
+            });
+        let share_url = data["share_url"].as_str().map(ToOwned::to_owned);
+        let failure_reason = data["fail_reason"]
+            .as_str()
+            .or_else(|| data["failure_reason"].as_str())
+            .map(ToOwned::to_owned);
+
+        Ok(TikTokStatusResponse {
+            publish_id,
+            state,
+            share_url,
+            post_id,
+            failure_reason,
+        })
+    }
+}
+
+impl<R: crate::youtube_upload::AccessTokenResolver> TikTokStatusClient
+    for LiveTikTokStatusClient<R>
+{
+    fn fetch_status(
+        &self,
+        request: &TikTokStatusRequest,
+    ) -> Result<TikTokStatusResponse, TikTokStatusClientError> {
+        let token = self
+            .token_resolver
+            .bearer_for(&request.access_token_ref)
+            .map_err(|e| TikTokStatusClientError::NetworkOrServer(e.to_string()))?;
+        tokio::runtime::Handle::current().block_on(self.do_fetch(request, token))
+    }
+}
+
+fn resp_status_success(status: u16) -> bool {
+    (200..300).contains(&status)
 }
 
 #[cfg(test)]
@@ -429,10 +752,12 @@ mod tests {
             })
         );
         assert_eq!(
-            failing_adapter(TikTokUploadClientError::AccountNotEligible)
-                .upload(&request(UploadPrivacy::Private)),
+            failing_adapter(TikTokUploadClientError::AccountNotEligible {
+                reason: "url_ownership_unverified".into(),
+            })
+            .upload(&request(UploadPrivacy::Private)),
             Err(UploadAdapterError::RequiresAction {
-                reason: "account_not_eligible".into()
+                reason: "url_ownership_unverified".into()
             })
         );
         assert_eq!(
@@ -553,5 +878,204 @@ mod tests {
         let seen = adapter.client.seen.borrow().clone().expect("request seen");
         assert_eq!(seen.access_token_ref, "token-secret-ref");
         assert!(!seen.access_token_ref.contains("access_token"));
+    }
+
+    #[tokio::test]
+    async fn live_tiktok_upload_client_initializes_direct_post_with_file_upload() {
+        use crate::youtube_upload::{FixedArtifactSource, FixedTokenResolver};
+        use wiremock::matchers::{bearer_token, body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let upload_url = format!("{}/video/upload/session_1", server.uri());
+        let artifact = vec![7; 6 * 1024 * 1024 + 123];
+        let artifact_len = artifact.len() as u64;
+        let last_byte = artifact_len - 1;
+        Mock::given(method("POST"))
+            .and(path("/v2/post/publish/video/init/"))
+            .and(bearer_token("tt-access"))
+            .and(body_json(serde_json::json!({
+                "post_info": {
+                    "title": "Launch clip",
+                    "privacy_level": "SELF_ONLY",
+                    "disable_duet": false,
+                    "disable_comment": false,
+                    "disable_stitch": false,
+                    "brand_content_toggle": false,
+                    "brand_organic_toggle": false,
+                    "is_aigc": false
+                },
+                "source_info": {
+                    "source": "FILE_UPLOAD",
+                    "video_size": artifact_len,
+                    "chunk_size": artifact_len,
+                    "total_chunk_count": 1
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "publish_id": "v_pub_url~v2.123",
+                    "upload_url": upload_url
+                },
+                "error": { "code": "ok", "message": "", "log_id": "log_1" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/video/upload/session_1"))
+            .and(header("content-type", "video/mp4"))
+            .and(header("content-length", artifact_len.to_string()))
+            .and(header(
+                "content-range",
+                format!("bytes 0-{last_byte}/{artifact_len}"),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = LiveTikTokUploadClient::with_base(
+            FixedTokenResolver("tt-access".into()),
+            FixedArtifactSource(artifact),
+            server.uri(),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.init_video_publish(&TikTokUploadRequest {
+                video_url: "https://storage.example/render.mp4".into(),
+                caption: "Launch clip".into(),
+                privacy_level: TIKTOK_SELF_ONLY.into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.publish_id, "v_pub_url~v2.123");
+    }
+
+    #[tokio::test]
+    async fn live_tiktok_upload_client_preserves_forbidden_provider_code() {
+        use crate::youtube_upload::{FixedArtifactSource, FixedTokenResolver};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/post/publish/video/init/"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "data": {},
+                "error": {
+                    "code": "url_ownership_unverified",
+                    "message": "verify the URL domain",
+                    "log_id": "log_domain"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = LiveTikTokUploadClient::with_base(
+            FixedTokenResolver("tt-access".into()),
+            FixedArtifactSource(vec![1, 2, 3, 4]),
+            server.uri(),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.init_video_publish(&TikTokUploadRequest {
+                video_url: "https://storage.example/render.mp4".into(),
+                caption: "Launch clip".into(),
+                privacy_level: TIKTOK_SELF_ONLY.into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Err(TikTokUploadClientError::AccountNotEligible {
+                reason: "url_ownership_unverified".into(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn live_tiktok_upload_client_times_out_provider_init() {
+        use crate::youtube_upload::{FixedArtifactSource, FixedTokenResolver};
+        use std::time::Duration;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/post/publish/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+            .mount(&server)
+            .await;
+
+        let client = LiveTikTokUploadClient::with_base_and_timeout(
+            FixedTokenResolver("tt-access".into()),
+            FixedArtifactSource(vec![1, 2, 3, 4]),
+            server.uri(),
+            Duration::from_millis(50),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.init_video_publish(&TikTokUploadRequest {
+                video_url: "https://storage.example/render.mp4".into(),
+                caption: "Launch clip".into(),
+                privacy_level: TIKTOK_SELF_ONLY.into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(response, Err(TikTokUploadClientError::NetworkOrServer(_))),
+            "slow TikTok init should fail instead of blocking the scheduler tick"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_tiktok_status_client_maps_publish_complete() {
+        use crate::youtube_upload::FixedTokenResolver;
+        use wiremock::matchers::{bearer_token, body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/post/publish/status/fetch/"))
+            .and(bearer_token("tt-access"))
+            .and(body_json(serde_json::json!({
+                "publish_id": "v_pub_url~v2.123"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "publish_id": "v_pub_url~v2.123",
+                    "status": "PUBLISH_COMPLETE",
+                    "publicaly_available_post_id": ["7123456789"],
+                    "share_url": "https://www.tiktok.com/@creator/video/7123456789"
+                },
+                "error": { "code": "ok", "message": "", "log_id": "log_1" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client =
+            LiveTikTokStatusClient::with_base(FixedTokenResolver("tt-access".into()), server.uri());
+        let response = tokio::task::spawn_blocking(move || {
+            client.fetch_status(&TikTokStatusRequest {
+                publish_id: "v_pub_url~v2.123".into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.state, TikTokProcessingState::Published);
+        assert_eq!(response.post_id.as_deref(), Some("7123456789"));
+        assert_eq!(
+            response.share_url.as_deref(),
+            Some("https://www.tiktok.com/@creator/video/7123456789")
+        );
     }
 }

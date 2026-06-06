@@ -1,5 +1,6 @@
 use crate::eligibility::{
-    ProviderEligibilityReport, instagram_eligibility, tiktok_eligibility, youtube_eligibility,
+    ProviderEligibilityReport, instagram_eligibility, tiktok_eligibility, twitter_x_eligibility,
+    youtube_eligibility,
 };
 use crate::model::{AccountEligibility, Provider, ProviderCapabilities};
 use std::collections::BTreeMap;
@@ -73,6 +74,20 @@ impl MockProviderAdapter {
             is_professional,
         }
     }
+
+    pub fn twitter_x(
+        provider_account_id: impl Into<String>,
+        display_name: impl Into<String>,
+        handle: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: Provider::TwitterX,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: Some(handle.into()),
+            is_professional: false,
+        }
+    }
 }
 
 impl SocialProviderAdapter for MockProviderAdapter {
@@ -96,6 +111,12 @@ impl SocialProviderAdapter for MockProviderAdapter {
                 &self.display_name,
                 self.is_professional,
                 scopes.contains(&"instagram_content_publish"),
+            ),
+            Provider::TwitterX => twitter_x_eligibility(
+                &self.provider_account_id,
+                &self.display_name,
+                self.handle.as_deref(),
+                scopes,
             ),
         }
     }
@@ -169,6 +190,22 @@ impl ProviderRegistry {
             },
             AccountEligibility::blocked("instagram_professional_account_required"),
         ));
+        registry.insert(ProviderState::new(
+            ProviderDescriptor {
+                provider: Provider::TwitterX,
+                display_name: "Twitter/X",
+                scopes: vec!["users.read", "tweet.write", "media.write", "offline.access"],
+                capabilities: ProviderCapabilities {
+                    native_scheduling: false,
+                    queue_scheduling: true,
+                    upload_video: true,
+                    upload_thumbnail: false,
+                    public_posting: true,
+                    requires_user_consent: false,
+                },
+            },
+            AccountEligibility::eligible(),
+        ));
         registry
     }
 
@@ -198,11 +235,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_registry_exposes_all_three_provider_slots() {
+    fn default_registry_exposes_major_social_provider_slots() {
         let registry = ProviderRegistry::default_multi_platform();
         assert!(registry.get(&Provider::YouTube).is_ok());
         assert!(registry.get(&Provider::TikTok).is_ok());
         assert!(registry.get(&Provider::Instagram).is_ok());
+        assert!(registry.get(&Provider::TwitterX).is_ok());
     }
 
     #[test]
@@ -217,10 +255,15 @@ mod tests {
         let instagram = registry
             .get(&Provider::Instagram)
             .unwrap_or_else(|err| panic!("instagram provider missing: {err}"));
+        let twitter_x = registry
+            .get(&Provider::TwitterX)
+            .unwrap_or_else(|err| panic!("twitter/x provider missing: {err}"));
 
         assert!(youtube.eligibility.eligible);
         assert!(youtube.descriptor.capabilities.upload_video);
         assert!(youtube.descriptor.capabilities.native_scheduling);
+        assert!(twitter_x.eligibility.eligible);
+        assert!(twitter_x.descriptor.capabilities.upload_video);
         assert!(!tiktok.eligibility.eligible);
         assert!(!instagram.eligibility.eligible);
         assert_eq!(

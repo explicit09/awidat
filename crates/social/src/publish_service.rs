@@ -2,6 +2,7 @@ use crate::model::{
     CampaignVariantTarget, ConnectedAccount, ConnectedAccountStatus, OwnerRef, PublishJob,
     PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus, ValidationState,
 };
+use crate::platform_metadata::validate_platform_fields;
 use crate::store::{SocialStore, SocialStoreError};
 use thiserror::Error;
 
@@ -26,6 +27,13 @@ pub struct ScheduleTargetInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RescheduleJobInput {
+    pub job_id: String,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetValidationReport {
     pub state: ValidationState,
     pub reasons: Vec<String>,
@@ -45,6 +53,10 @@ pub enum PublishServiceError {
     JobNotCancellable,
     #[error("publish job cannot be retried from this state")]
     JobNotRetryable,
+    #[error("publish job cannot be rescheduled from this state")]
+    JobNotReschedulable,
+    #[error("publish job cannot be rescheduled into the past")]
+    RescheduleTimeInvalid,
     #[error("publish job id is already used by a different target")]
     JobIdConflict,
 }
@@ -233,6 +245,42 @@ impl PublishService {
         ))?;
         Ok(retry)
     }
+
+    pub fn reschedule_job(
+        store: &mut impl SocialStore,
+        owner: &OwnerRef,
+        input: RescheduleJobInput,
+    ) -> Result<PublishJob, PublishServiceError> {
+        let job = store.publish_job(&input.job_id)?;
+        let account = store.connected_account(&job.connected_account_id)?;
+        if account.owner != *owner {
+            return Err(PublishServiceError::OwnerMismatch);
+        }
+        if input.scheduled_for <= input.now {
+            return Err(PublishServiceError::RescheduleTimeInvalid);
+        }
+        if job.status != PublishJobStatus::Scheduled {
+            return Err(PublishServiceError::JobNotReschedulable);
+        }
+
+        let previous_scheduled_for = job.scheduled_for;
+        let rescheduled = job.reschedule(input.scheduled_for, input.now);
+        let event_id = reschedule_event_id(store, &rescheduled.id)?;
+        store.save_publish_job(rescheduled.clone())?;
+        store.append_publish_job_event(PublishJobEvent::new(
+            event_id,
+            rescheduled.id.clone(),
+            PublishJobEventType::Rescheduled,
+            PublishJobActorType::User,
+            "publish job rescheduled",
+            serde_json::json!({
+                "previous_scheduled_for": previous_scheduled_for,
+                "scheduled_for": input.scheduled_for,
+            }),
+            input.now,
+        ))?;
+        Ok(rescheduled)
+    }
 }
 
 fn is_user_retryable(job: &PublishJob) -> bool {
@@ -293,7 +341,12 @@ fn target_validation_state(
             vec!["scheduled_time_invalid".to_string()],
         )
     } else {
-        (ValidationState::Valid, Vec::new())
+        let metadata_reasons = validate_platform_fields(&target.provider, &target.platform_fields);
+        if metadata_reasons.is_empty() {
+            (ValidationState::Valid, Vec::new())
+        } else {
+            (ValidationState::Invalid, metadata_reasons)
+        }
     }
 }
 
@@ -304,6 +357,21 @@ fn retry_event_id(store: &impl SocialStore, job_id: &str) -> Result<String, Publ
         .filter(|event| event.event_type == PublishJobEventType::RetryQueued)
         .count();
     Ok(format!("event_{job_id}_retry_{}", retry_count + 1))
+}
+
+fn reschedule_event_id(
+    store: &impl SocialStore,
+    job_id: &str,
+) -> Result<String, PublishServiceError> {
+    let reschedule_count = store
+        .publish_job_events(job_id)?
+        .into_iter()
+        .filter(|event| event.event_type == PublishJobEventType::Rescheduled)
+        .count();
+    Ok(format!(
+        "event_{job_id}_rescheduled_{}",
+        reschedule_count + 1
+    ))
 }
 
 #[cfg(test)]
@@ -330,7 +398,7 @@ mod tests {
                 campaign_id: "campaign_1".into(),
                 variant_id: "variant_1".into(),
                 connected_account_id: "acct_1".into(),
-                platform_fields: serde_json::json!({"privacy": "private"}),
+                platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
                 scheduled_for: 2_000,
                 now: 1_000,
             },
@@ -358,7 +426,7 @@ mod tests {
                 campaign_id: "campaign_1".into(),
                 variant_id: "variant_1".into(),
                 connected_account_id: "acct_1".into(),
-                platform_fields: serde_json::json!({"privacy": "private"}),
+                platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
                 scheduled_for: 2_000,
                 now: 1_000,
             },
@@ -374,7 +442,7 @@ mod tests {
                     campaign_id: "campaign_2".into(),
                     variant_id: "variant_2".into(),
                     connected_account_id: "acct_2".into(),
-                    platform_fields: serde_json::json!({"privacy": "public"}),
+                    platform_fields: serde_json::json!({"privacy": "public", "title": "Launch clip"}),
                     scheduled_for: 3_000,
                     now: 1_100,
                 },
@@ -404,6 +472,80 @@ mod tests {
                 .validation_state,
             ValidationState::RequiresAction
         );
+    }
+
+    #[test]
+    fn validate_target_rejects_platform_metadata_before_scheduling() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        PublishService::bind_target(
+            &mut store,
+            &owner(),
+            BindTargetInput {
+                id: "target_1".into(),
+                campaign_id: "campaign_1".into(),
+                variant_id: "variant_1".into(),
+                connected_account_id: "acct_1".into(),
+                platform_fields: serde_json::json!({
+                    "privacy": "private",
+                    "title": "   "
+                }),
+                scheduled_for: 2_000,
+                now: 1_000,
+            },
+        )
+        .unwrap_or_else(|err| panic!("bind target: {err}"));
+
+        let report = PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+
+        assert_eq!(report.state, ValidationState::Invalid);
+        assert_eq!(report.reasons, vec!["title.required"]);
+        assert_eq!(
+            store
+                .campaign_variant_target("target_1")
+                .unwrap_or_else(|err| panic!("target: {err}"))
+                .validation_state,
+            ValidationState::Invalid
+        );
+    }
+
+    #[test]
+    fn validate_target_applies_twitter_x_text_limit() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account_for_provider(
+                "acct_x",
+                owner(),
+                Provider::TwitterX,
+                true,
+            ))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        PublishService::bind_target(
+            &mut store,
+            &owner(),
+            BindTargetInput {
+                id: "target_x".into(),
+                campaign_id: "campaign_1".into(),
+                variant_id: "variant_x".into(),
+                connected_account_id: "acct_x".into(),
+                platform_fields: serde_json::json!({
+                    "privacy": "public",
+                    "title": "x".repeat(281)
+                }),
+                scheduled_for: 2_000,
+                now: 1_000,
+            },
+        )
+        .unwrap_or_else(|err| panic!("bind target: {err}"));
+
+        let report = PublishService::validate_target(&mut store, &owner(), "target_x", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+
+        assert_eq!(report.state, ValidationState::Invalid);
+        assert_eq!(report.reasons, vec!["title.too_long"]);
     }
 
     #[test]
@@ -473,7 +615,7 @@ mod tests {
                 campaign_id: "campaign_2".into(),
                 variant_id: "variant_2".into(),
                 connected_account_id: "acct_2".into(),
-                platform_fields: serde_json::json!({"privacy": "private"}),
+                platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
                 scheduled_for: 2_500,
                 now: 1_000,
             },
@@ -530,7 +672,7 @@ mod tests {
                 campaign_id: "campaign_2".into(),
                 variant_id: "variant_2".into(),
                 connected_account_id: "acct_1".into(),
-                platform_fields: serde_json::json!({"privacy": "private"}),
+                platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
                 scheduled_for: 2_500,
                 now: 1_000,
             },
@@ -777,6 +919,101 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reschedule_job_updates_scheduled_time_and_appends_audit_event() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+        PublishService::schedule_target(
+            &mut store,
+            &owner(),
+            ScheduleTargetInput {
+                job_id: "job_1".into(),
+                target_id: "target_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"));
+
+        let job = PublishService::reschedule_job(
+            &mut store,
+            &owner(),
+            RescheduleJobInput {
+                job_id: "job_1".into(),
+                scheduled_for: 2_800,
+                now: 1_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("reschedule job: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::Scheduled);
+        assert_eq!(job.scheduled_for, 2_800);
+        assert_eq!(job.updated_at, 1_500);
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("events: {err}"));
+        assert_eq!(
+            events.last().map(|event| &event.event_type),
+            Some(&PublishJobEventType::Rescheduled)
+        );
+        assert_eq!(
+            events.last().map(|event| &event.metadata),
+            Some(&serde_json::json!({
+                "previous_scheduled_for": 2_000,
+                "scheduled_for": 2_800
+            }))
+        );
+    }
+
+    #[test]
+    fn reschedule_job_rejects_claimed_jobs() {
+        let mut store = InMemorySocialStore::default();
+        store
+            .save_connected_account(connected_account("acct_1", owner(), true))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        bind_target(&mut store);
+        PublishService::validate_target(&mut store, &owner(), "target_1", 1_100)
+            .unwrap_or_else(|err| panic!("validate target: {err}"));
+        PublishService::schedule_target(
+            &mut store,
+            &owner(),
+            ScheduleTargetInput {
+                job_id: "job_1".into(),
+                target_id: "target_1".into(),
+                artifact_ref: "render://artifact_1".into(),
+                created_by: "user_1".into(),
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("schedule target: {err}"));
+        let claimed = store
+            .publish_job("job_1")
+            .unwrap_or_else(|err| panic!("job: {err}"))
+            .claim_for_upload(2_050);
+        store
+            .save_publish_job(claimed)
+            .unwrap_or_else(|err| panic!("save claimed job: {err}"));
+
+        assert_eq!(
+            PublishService::reschedule_job(
+                &mut store,
+                &owner(),
+                RescheduleJobInput {
+                    job_id: "job_1".into(),
+                    scheduled_for: 2_800,
+                    now: 2_100,
+                },
+            ),
+            Err(PublishServiceError::JobNotReschedulable)
+        );
+    }
+
     fn owner() -> OwnerRef {
         OwnerRef::User("user_1".into())
     }
@@ -786,11 +1023,20 @@ mod tests {
     }
 
     fn connected_account(id: &str, account_owner: OwnerRef, eligible: bool) -> ConnectedAccount {
+        connected_account_for_provider(id, account_owner, Provider::YouTube, eligible)
+    }
+
+    fn connected_account_for_provider(
+        id: &str,
+        account_owner: OwnerRef,
+        provider: Provider,
+        eligible: bool,
+    ) -> ConnectedAccount {
         ConnectedAccount {
             id: id.into(),
             owner: account_owner,
-            provider: Provider::YouTube,
-            provider_account_id: "channel_1".into(),
+            provider,
+            provider_account_id: "provider_account_1".into(),
             display_name: "Awidat Channel".into(),
             handle: Some("@awidat".into()),
             avatar_url: None,
@@ -825,7 +1071,7 @@ mod tests {
                 campaign_id: "campaign_1".into(),
                 variant_id: "variant_1".into(),
                 connected_account_id: "acct_1".into(),
-                platform_fields: serde_json::json!({"privacy": "private"}),
+                platform_fields: serde_json::json!({"privacy": "private", "title": "Launch clip"}),
                 scheduled_for: 2_000,
                 now: 1_000,
             },

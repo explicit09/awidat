@@ -51,6 +51,7 @@ fn scopes_for(provider: &Provider) -> Vec<&'static str> {
         ],
         Provider::TikTok => vec!["user.info.basic", "video.publish"],
         Provider::Instagram => vec!["instagram_basic", "instagram_content_publish"],
+        Provider::TwitterX => vec!["users.read", "tweet.write", "media.write", "offline.access"],
     }
 }
 
@@ -61,7 +62,7 @@ fn authorization_url(
     scopes: &[&str],
 ) -> String {
     let scope_separator = match provider {
-        Provider::YouTube => " ",
+        Provider::YouTube | Provider::TwitterX => " ",
         Provider::TikTok | Provider::Instagram => ",",
     };
     let scope = scopes.join(scope_separator);
@@ -69,10 +70,11 @@ fn authorization_url(
         Provider::YouTube => "https://accounts.google.com/o/oauth2/v2/auth",
         Provider::TikTok => "https://www.tiktok.com/v2/auth/authorize/",
         Provider::Instagram => "https://www.facebook.com/v24.0/dialog/oauth",
+        Provider::TwitterX => "https://twitter.com/i/oauth2/authorize",
     };
     let client_key = match provider {
         Provider::TikTok => "client_key",
-        Provider::YouTube | Provider::Instagram => "client_id",
+        Provider::YouTube | Provider::Instagram | Provider::TwitterX => "client_id",
     };
 
     let mut params = vec![
@@ -85,6 +87,10 @@ fn authorization_url(
     if provider == &Provider::YouTube {
         params.push(("access_type", "offline"));
         params.push(("prompt", "consent"));
+    }
+    if provider == &Provider::TwitterX {
+        params.push(("code_challenge", raw_state));
+        params.push(("code_challenge_method", "plain"));
     }
 
     let query = params
@@ -227,5 +233,39 @@ mod tests {
                 .contains("redirect_uri=https%3A%2F%2Fapp.awidat.test%2Fsocial%2Foauth%2Fcallback")
         );
         assert!(request.authorization_url.contains("state=state-secret"));
+    }
+
+    #[test]
+    fn twitter_x_authorize_url_includes_pkce_and_write_scopes() {
+        let request = begin_provider_oauth(
+            "oauth_1",
+            OwnerRef::User("user_1".into()),
+            Provider::TwitterX,
+            &config(),
+            "state-secret",
+            "/campaigns/campaign_1".into(),
+            100,
+            200,
+        );
+
+        assert!(
+            request
+                .authorization_url
+                .starts_with("https://twitter.com/i/oauth2/authorize?")
+        );
+        assert!(request.authorization_url.contains("client_id=client_123"));
+        assert!(request.authorization_url.contains("tweet.write"));
+        assert!(request.authorization_url.contains("media.write"));
+        assert!(request.authorization_url.contains("offline.access"));
+        assert!(
+            request
+                .authorization_url
+                .contains("code_challenge=state-secret")
+        );
+        assert!(
+            request
+                .authorization_url
+                .contains("code_challenge_method=plain")
+        );
     }
 }

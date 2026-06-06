@@ -1099,7 +1099,9 @@ version = "0.1.0"
 dependencies = [
  "awidat-social",
  "axum",
+ "base64 0.22.1",
  "constant_time_eq 0.3.1",
+ "hmac 0.12.1",
  "jsonwebtoken",
  "postgres",
  "r2d2",
@@ -1108,11 +1110,14 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
+ "wiremock",
 ]
 
 [[package]]
@@ -12824,6 +12829,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",

@@ -109,6 +109,13 @@ impl PublishJob {
         self
     }
 
+    pub fn reschedule(mut self, scheduled_for: i64, now: i64) -> Self {
+        self.scheduled_for = scheduled_for;
+        self.status = PublishJobStatus::Scheduled;
+        self.updated_at = now;
+        self
+    }
+
     pub fn claim_for_upload(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Uploading;
         self.attempt_count = self.attempt_count.saturating_add(1);

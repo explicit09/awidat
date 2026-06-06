@@ -117,6 +117,38 @@ pub fn instagram_eligibility(
     }
 }
 
+pub fn twitter_x_eligibility(
+    provider_account_id: impl Into<String>,
+    display_name: impl Into<String>,
+    handle: Option<&str>,
+    scopes: &[&str],
+) -> ProviderEligibilityReport {
+    let has_write_scope = scopes.contains(&"tweet.write") || scopes.contains(&"media.write");
+    ProviderEligibilityReport {
+        profile: ProviderAccountProfile {
+            provider: Provider::TwitterX,
+            provider_account_id: provider_account_id.into(),
+            display_name: display_name.into(),
+            handle: handle.map(ToOwned::to_owned),
+            avatar_url: None,
+            account_kind: AccountKind::Creator,
+        },
+        capabilities: ProviderCapabilities {
+            native_scheduling: false,
+            queue_scheduling: true,
+            upload_video: has_write_scope,
+            upload_thumbnail: false,
+            public_posting: has_write_scope,
+            requires_user_consent: false,
+        },
+        eligibility: if has_write_scope {
+            AccountEligibility::eligible()
+        } else {
+            AccountEligibility::blocked("missing_twitter_x_write_scope")
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +232,15 @@ mod tests {
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.public_posting);
         assert_eq!(report.profile.account_kind, AccountKind::Professional);
+    }
+
+    #[test]
+    fn twitter_x_missing_write_scope_is_ineligible() {
+        let report = twitter_x_eligibility("x_1", "Creator", Some("@awidat"), &["users.read"]);
+        assert!(!report.eligibility.eligible);
+        assert_eq!(
+            report.eligibility.reasons,
+            vec!["missing_twitter_x_write_scope"]
+        );
     }
 }
