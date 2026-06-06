@@ -40,10 +40,87 @@ export type RenderTargetKind =
 export type RenderUploadState =
   | { state: "pending" }
   | { state: "uploading"; progress: number }
-  | { state: "scheduled"; job_id: string }
+  | { state: "scheduled"; job_id: string; scheduled_for?: number }
   | { state: "processing"; job_id: string }
   | { state: "published"; remote_url: string; remote_id: string }
   | { state: "failed"; reason: string; job_id?: string };
+
+export type UploadTargetActions = {
+  canRefresh: boolean;
+  canRetry: boolean;
+  canCancel: boolean;
+  canReschedule: boolean;
+  canOpenProviderUrl: boolean;
+};
+
+export type UploadTargetRetryMode = "server_job" | "republish";
+
+export function deriveUploadTargetActions(
+  state: RenderUploadState,
+): UploadTargetActions {
+  switch (state.state) {
+    case "scheduled":
+      return {
+        canRefresh: true,
+        canRetry: false,
+        canCancel: true,
+        canReschedule: true,
+        canOpenProviderUrl: false,
+      };
+    case "processing":
+      return {
+        canRefresh: true,
+        canRetry: false,
+        canCancel: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      };
+    case "published":
+      return {
+        canRefresh: false,
+        canRetry: false,
+        canCancel: false,
+        canReschedule: false,
+        canOpenProviderUrl: Boolean(state.remote_url),
+      };
+    case "failed":
+      return {
+        canRefresh: Boolean(state.job_id),
+        canRetry: true,
+        canCancel: false,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      };
+    case "pending":
+    case "uploading":
+      return {
+        canRefresh: false,
+        canRetry: false,
+        canCancel: false,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      };
+  }
+}
+
+export function deriveUploadTargetRetryMode(
+  state: RenderUploadState,
+  hasRenderOutput: boolean,
+): UploadTargetRetryMode | null {
+  if (state.state !== "failed") return null;
+  if (state.job_id) return "server_job";
+  return hasRenderOutput ? "republish" : null;
+}
+
+function hasActiveUpload(states?: Record<string, RenderUploadState>): boolean {
+  return Object.values(states ?? {}).some((state) =>
+    ["pending", "uploading", "scheduled", "processing"].includes(state.state),
+  );
+}
+
+function hasFailedUpload(states?: Record<string, RenderUploadState>): boolean {
+  return Object.values(states ?? {}).some((state) => state.state === "failed");
+}
 
 export type RenderQueueEntry = {
   /** Stable id; survives reload. */
@@ -54,6 +131,10 @@ export type RenderQueueEntry = {
   label: string;
   /** What kind of artifact this entry produces. */
   kind: RenderTargetKind;
+  /** Internal dependency render, not a user-selected delivery target. */
+  internal?: boolean;
+  /** Hidden source render that must complete before this visible entry can run. */
+  sourceEntryId?: string;
   /** Lifecycle. */
   status: "pending" | "running" | "done" | "failed" | "cancelled";
   /** 0–100 while running; undefined otherwise. */
@@ -100,6 +181,12 @@ export type RenderQueueEntry = {
    */
   uploadTargets?: string[];
   /**
+   * Concrete connected account choices for upload targets. Keyed by
+   * provider key; absent key means the server publish helper may use
+   * its provider-level fallback account.
+   */
+  uploadAccountIds?: Record<string, string>;
+  /**
    * Per-target lifecycle, keyed by provider key. Populated when the
    * worker registers targets with the social backend.
    */
@@ -136,6 +223,73 @@ export type RenderQueueEntry = {
   aiDisclosure?: AiDisclosure;
 };
 
+export function renderQueueVisibleEntries(
+  entries: RenderQueueEntry[],
+): RenderQueueEntry[] {
+  const activeTargets = new Set<string>();
+  const visible: RenderQueueEntry[] = [];
+  for (const entry of entries) {
+    if (entry.internal) continue;
+    if (isNonterminal(entry)) {
+      if (activeTargets.has(entry.targetId)) continue;
+      activeTargets.add(entry.targetId);
+    }
+    visible.push(entry);
+  }
+  return visible;
+}
+
+function sourceEntryFor(
+  entry: RenderQueueEntry,
+  entries?: RenderQueueEntry[],
+): RenderQueueEntry | null {
+  if (!entry.sourceEntryId || !entries) return null;
+  return entries.find((candidate) => candidate.id === entry.sourceEntryId) ?? null;
+}
+
+export function renderQueueStatusLabel(
+  entry: RenderQueueEntry,
+  entries?: RenderQueueEntry[],
+): string {
+  const source = sourceEntryFor(entry, entries);
+  if (
+    entry.status === "pending" &&
+    source &&
+    (source.status === "pending" || source.status === "running")
+  ) {
+    return "Preparing source";
+  }
+  if (entry.status === "done" && hasActiveUpload(entry.uploadStates)) {
+    return "Publishing";
+  }
+  if (entry.status === "done" && hasFailedUpload(entry.uploadStates)) {
+    return "Needs action";
+  }
+  if (entry.status === "done") {
+    return entry.reviewStatus === "pending" ? "Review" : "Done";
+  }
+  if (entry.status === "cancelled") return "Cancelled";
+  if (entry.status === "failed") return "Failed";
+  if (entry.status === "pending") return "Queued";
+  return "Running";
+}
+
+export function renderQueueApprovalCopy(entry: RenderQueueEntry): string | null {
+  if (entry.reviewStatus === "approved") {
+    if (hasActiveUpload(entry.uploadStates)) {
+      return "Render approved. Publishing is still in progress.";
+    }
+    if (hasFailedUpload(entry.uploadStates)) {
+      return "Render approved. Publishing needs action.";
+    }
+    return "Approved for delivery.";
+  }
+  if (entry.reviewStatus === "changes_requested") {
+    return "Changes requested. Re-edit before delivery.";
+  }
+  return null;
+}
+
 type State = {
   entries: RenderQueueEntry[];
   enqueue: (entries: RenderQueueEntry[]) => void;
@@ -154,6 +308,11 @@ type State = {
   clearTerminal: () => void;
   /** Set this entry's upload targets (provider keys). */
   setUploadTargets: (id: string, providers: string[]) => void;
+  /** Store selected connected-account ids for upload targets. */
+  setUploadAccountIds: (
+    id: string,
+    accountIdsByProvider: Record<string, string>,
+  ) => void;
   /**
    * Replace this entry's per-target upload state map. Called by the
    * server-backed publish path after each target state transition.
@@ -220,11 +379,48 @@ function persist(entries: RenderQueueEntry[]): void {
   }
 }
 
+function isNonterminal(entry: RenderQueueEntry): boolean {
+  return entry.status === "pending" || entry.status === "running";
+}
+
+function activeVisibleTargets(entries: RenderQueueEntry[]): Set<string> {
+  return new Set(
+    entries
+      .filter((entry) => !entry.internal && isNonterminal(entry))
+      .map((entry) => entry.targetId),
+  );
+}
+
+function suppressDuplicateActiveTargets(
+  existing: RenderQueueEntry[],
+  incoming: RenderQueueEntry[],
+): RenderQueueEntry[] {
+  const existingActiveTargets = activeVisibleTargets(existing);
+  if (existingActiveTargets.size === 0) return [...existing, ...incoming];
+
+  const blockedSourceIds = new Set(
+    incoming
+      .filter(
+        (entry) =>
+          !entry.internal &&
+          isNonterminal(entry) &&
+          existingActiveTargets.has(entry.targetId),
+      )
+      .map((entry) => entry.sourceEntryId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const filteredIncoming = incoming.filter((entry) => {
+    if (entry.internal) return !blockedSourceIds.has(entry.id);
+    return !(isNonterminal(entry) && existingActiveTargets.has(entry.targetId));
+  });
+  return [...existing, ...filteredIncoming];
+}
+
 export const useRenderQueueStore = create<State>((set) => ({
   entries: loadPersisted(),
   enqueue: (newEntries) => {
     set((state) => {
-      const next = [...state.entries, ...newEntries];
+      const next = suppressDuplicateActiveTargets(state.entries, newEntries);
       persist(next);
       return { entries: next };
     });
@@ -339,6 +535,15 @@ export const useRenderQueueStore = create<State>((set) => ({
               publishedUrls: {},
             }
           : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  setUploadAccountIds: (id, accountIdsByProvider) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, uploadAccountIds: accountIdsByProvider } : e,
       );
       persist(next);
       return { entries: next };

@@ -1,4 +1,5 @@
 import type { RenderQueueEntry } from "../app/renderQueue.ts";
+import { reasonCopy } from "../app/social/socialModel.ts";
 import type {
   UploadMetadata,
   UploadVisibility,
@@ -15,6 +16,7 @@ export type CampaignUploadRequest = {
   itemId: string;
   variantId: string;
   provider: CampaignPlatform;
+  accountId?: string;
   jobId: string;
   filePath: string;
   title: string;
@@ -26,6 +28,8 @@ type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<
 type ValidatedTarget = {
   validation_state?: string;
   validationState?: string;
+  validation_reasons?: string[];
+  validationReasons?: string[];
 };
 
 const VISIBILITIES = new Set<UploadVisibility>([
@@ -40,8 +44,30 @@ function visibilityFrom(value: unknown): UploadVisibility {
     : "private";
 }
 
+function tagsFrom(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+  return fallback;
+}
+
 function validationState(target: ValidatedTarget): string {
   return target.validation_state ?? target.validationState ?? "unknown";
+}
+
+function validationFailureReason(target: ValidatedTarget): string {
+  const reasons = target.validation_reasons ?? target.validationReasons ?? [];
+  const first = reasons[0];
+  return first ? reasonCopy(first) : validationState(target);
 }
 
 function itemForVariant(
@@ -67,7 +93,7 @@ function metadataFor(
     description: String(
       variant.platformFields.description ?? (item.description || item.caption),
     ),
-    tags: item.hashtags,
+    tags: tagsFrom(variant.platformFields.tags, item.hashtags),
     visibility: visibilityFrom(variant.platformFields.visibility),
     scheduledAt: variant.scheduledFor,
     thumbnailPath:
@@ -117,6 +143,7 @@ export function campaignUploadRequests(
       itemId: item.itemId,
       variantId: variant.variantId,
       provider: variant.platform,
+      accountId: variant.accountId ?? entry.uploadAccountIds?.[variant.platform],
       jobId: entry.jobId,
       filePath: entry.outputPath,
       title: item.title,
@@ -159,6 +186,30 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+function localArtifactRef(path: string): string {
+  return `file://${path}`;
+}
+
+function platformFieldsFromMetadata(
+  provider: CampaignPlatform,
+  metadata: UploadMetadata,
+  fallbackTitle: string,
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    privacy: metadata.visibility ?? "private",
+    title: metadata.title || fallbackTitle,
+    description: metadata.description ?? "",
+    tags: metadata.tags,
+  };
+  if (metadata.thumbnailPath) {
+    fields.thumbnailRef = localArtifactRef(metadata.thumbnailPath);
+  }
+  if (provider === "instagram") {
+    delete fields.title;
+  }
+  return fields;
+}
+
 /**
  * Publish the campaign's approved variants via the server. `scheduledFor`
  * defaults to "now" (fire on the next worker tick).
@@ -173,19 +224,33 @@ export async function publishCampaignViaServer(
   if (requests.length === 0) return [];
 
   const accounts = await invoke<AccountSummaryLite[]>("social_accounts");
-  // First upload-capable account per provider.
-  const accountFor = (provider: string): AccountSummaryLite | undefined =>
-    accounts.find((a) => a.provider === provider && a.capabilities.uploadVideo);
+  const accountFor = (
+    provider: string,
+    accountId: string | undefined,
+  ): AccountSummaryLite | undefined => {
+    if (accountId) {
+      return accounts.find(
+        (a) =>
+          a.id === accountId &&
+          a.provider === provider &&
+          a.capabilities.uploadVideo,
+      );
+    }
+    return accounts.find((a) => a.provider === provider && a.capabilities.uploadVideo);
+  };
 
   const scheduledFor = options.scheduledFor ?? nowSeconds();
   const results: ServerPublishResult[] = [];
 
   for (const req of requests) {
-    const account = accountFor(req.provider);
+    const account = accountFor(req.provider, req.accountId);
     if (!account) {
+      const error = req.accountId
+        ? `Selected ${req.provider} account is not connected or cannot upload video`
+        : `No upload-capable ${req.provider} account connected`;
       results.push({
         variantId: req.variantId,
-        error: `No upload-capable ${req.provider} account connected`,
+        error,
       });
       continue;
     }
@@ -197,11 +262,11 @@ export async function publishCampaignViaServer(
           campaignId: req.campaignId,
           variantId: req.variantId,
           connectedAccountId: account.id,
-          platformFields: {
-            privacy: req.metadata.visibility ?? "private",
-            title: req.title,
-            description: req.metadata.description ?? "",
-          },
+          platformFields: platformFieldsFromMetadata(
+            req.provider,
+            req.metadata,
+            req.title,
+          ),
           scheduledFor,
           now: nowSeconds(),
         },
@@ -214,7 +279,7 @@ export async function publishCampaignViaServer(
       if (validatedState !== "valid") {
         results.push({
           variantId: req.variantId,
-          error: `Not valid: ${validatedState}`,
+          error: `Not valid: ${validationFailureReason(validated)}`,
         });
         continue;
       }

@@ -19,11 +19,15 @@
 
 use awidat_social::api::{
     AccountSummary, BindTargetRequest, OAuthStartResponse, PublishJobResponse,
-    ScheduleTargetRequest, ValidateTargetRequest,
+    RescheduleJobRequest, ScheduleTargetRequest, ValidateTargetRequest, ValidateTargetResponse,
 };
 use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio_util::io::ReaderStream;
+
+const SOCIAL_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
+const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Authenticated HTTPS client for the social-publishing server.
 ///
@@ -68,11 +72,23 @@ impl SocialClient {
     /// Build a client from a base URL + dev bearer token. Trailing slashes on
     /// `base_url` are trimmed so route joins never double-slash.
     pub fn new(base_url: impl Into<String>, auth_token: impl Into<String>) -> Self {
+        Self::new_with_timeout(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT)
+    }
+
+    fn new_with_timeout(
+        base_url: impl Into<String>,
+        auth_token: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             base_url,
             auth_token: auth_token.into(),
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -136,7 +152,7 @@ impl SocialClient {
     pub async fn validate_target(
         &self,
         request: &ValidateTargetRequest,
-    ) -> Result<CampaignVariantTarget, String> {
+    ) -> Result<ValidateTargetResponse, String> {
         self.post_json("/social/targets/validate", request).await
     }
 
@@ -164,6 +180,16 @@ impl SocialClient {
     pub async fn retry_job(&self, job_id: &str) -> Result<PublishJobResponse, String> {
         let path = format!("/social/jobs/{job_id}/retry");
         self.post_empty(&path).await
+    }
+
+    /// `POST /social/jobs/{id}/reschedule`
+    pub async fn reschedule_job(
+        &self,
+        job_id: &str,
+        request: &RescheduleJobRequest,
+    ) -> Result<PublishJobResponse, String> {
+        let path = format!("/social/jobs/{job_id}/reschedule");
+        self.post_json(&path, request).await
     }
 
     /// `POST /social/jobs/{id}/upload-url`
@@ -201,6 +227,10 @@ impl SocialClient {
         let resp = self
             .http
             .put(url)
+            .timeout(SOCIAL_UPLOAD_TIMEOUT)
+            .header(reqwest::header::CONTENT_TYPE, "video/mp4")
+            .header(reqwest::header::CACHE_CONTROL, "max-age=3600")
+            .header("x-upsert", "false")
             .header(reqwest::header::CONTENT_LENGTH, len)
             .body(body)
             .send()
@@ -283,9 +313,8 @@ fn status_error(status: reqwest::StatusCode) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use awidat_social::model::{
-        AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef, ProviderCapabilities,
-    };
+    use awidat_social::model::{AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef};
+    use std::time::Duration;
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -421,6 +450,32 @@ mod tests {
         let client = SocialClient::new(server.uri(), "dev-token");
         let err = client.cancel_job("job_1").await.expect_err("must be 422");
         assert_eq!(err, "server returned 422");
+    }
+
+    #[tokio::test]
+    async fn job_requests_time_out_instead_of_hanging_controls() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(match_path("/social/jobs/job_1"))
+            .and(header("authorization", "Bearer dev-token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_json(serde_json::json!({})),
+            )
+            .mount(&server)
+            .await;
+
+        let client =
+            SocialClient::new_with_timeout(server.uri(), "dev-token", Duration::from_millis(20));
+        let err = client
+            .publish_job("job_1")
+            .await
+            .expect_err("must time out");
+        assert!(
+            err.contains("timed out") || err.contains("timeout"),
+            "unexpected timeout error: {err}"
+        );
     }
 
     #[tokio::test]

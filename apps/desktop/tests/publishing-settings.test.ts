@@ -15,19 +15,20 @@ import { strict as assert } from "node:assert";
 import {
   DEFAULT_PROVIDER_STATE,
   PROVIDERS,
+  providerDisplayName,
   primaryAction,
   statusText,
   type ProviderUiState,
 } from "../src/app/publishingSettingsModel.ts";
 
-// ---- PROVIDERS catalog has the three W5 platforms ----
+// ---- PROVIDERS catalog has the major publishing platforms ----
 {
-  assert.equal(PROVIDERS.length, 3, "three providers");
+  assert.equal(PROVIDERS.length, 4, "four providers");
   const keys = PROVIDERS.map((p) => p.key);
   assert.deepEqual(
     keys.sort(),
-    ["instagram", "tiktok", "youtube"],
-    "the publishing pipeline targets YouTube/TikTok/Instagram",
+    ["instagram", "tiktok", "twitter_x", "youtube"],
+    "the publishing pipeline targets YouTube/TikTok/Instagram/Twitter-X",
   );
   for (const p of PROVIDERS) {
     assert.ok(
@@ -35,6 +36,11 @@ import {
       `${p.key} dev console must be https`,
     );
   }
+  assert.deepEqual(
+    PROVIDERS.map((p) => providerDisplayName(p.key)),
+    ["YouTube", "TikTok", "Instagram", "Twitter/X"],
+    "connected-account and publishing defaults should share provider labels",
+  );
 }
 
 // ---- DEFAULT_PROVIDER_STATE is "fresh modal, nothing configured" ----

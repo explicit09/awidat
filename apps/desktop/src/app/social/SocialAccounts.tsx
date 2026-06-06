@@ -12,18 +12,18 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import {
   accountStatusLabel,
+  canViewAccountAudit,
+  canReconnect,
   eligibilitySummary,
   type AccountSummary,
   type Provider,
 } from "./socialModel";
 import { startConnect } from "./socialActions";
+import { SocialAudit } from "./SocialAudit";
+import { PROVIDERS, providerDisplayName } from "../publishingSettingsModel";
 import { Button, Inline, Stack } from "../../ui";
 
-const PROVIDER_LABELS: Record<Provider, string> = {
-  youtube: "YouTube",
-  tiktok: "TikTok",
-  instagram: "Instagram",
-};
+const SOCIAL_PROVIDERS = PROVIDERS.map((provider) => provider.key);
 
 // status → dot color token. Connected = success; needs-action = warning; the
 // rest = muted. Keeps the "dot + label" language, no full-color pills.
@@ -48,6 +48,7 @@ export function SocialAccounts() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Provider | null>(null);
   const [polling, setPolling] = useState(false);
+  const [auditAccountId, setAuditAccountId] = useState<string | null>(null);
   const pollTimers = useRef<number[]>([]);
 
   const refresh = useCallback(async () => {
@@ -132,7 +133,7 @@ export function SocialAccounts() {
 
       {/* Connect buttons */}
       <Inline gap="2" align="center" className="flex-wrap">
-        {(Object.keys(PROVIDER_LABELS) as Provider[]).map((p) => (
+        {SOCIAL_PROVIDERS.map((p) => (
           <Button
             key={p}
             variant="secondary"
@@ -140,7 +141,7 @@ export function SocialAccounts() {
             disabled={busy !== null}
             onClick={() => void connect(p)}
           >
-            {busy === p ? "Opening…" : `Connect ${PROVIDER_LABELS[p]}`}
+            {busy === p ? "Opening…" : `Connect ${providerDisplayName(p)}`}
           </Button>
         ))}
       </Inline>
@@ -162,41 +163,70 @@ export function SocialAccounts() {
 
       {/* Account list */}
       <Stack gap="1">
-        {accounts.map((a) => (
-          <Inline
-            key={a.id}
-            justify="between"
-            align="center"
-            gap="2"
-            className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
-          >
-            <Inline gap="2" align="center" className="min-w-0">
-              <span
-                aria-hidden="true"
-                className="inline-block h-2 w-2 rounded-full shrink-0"
-                style={{ backgroundColor: statusDotColor(a.status) }}
-              />
-              <Stack gap="0" className="min-w-0">
-                <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)] truncate">
-                  {a.displayName || a.providerAccountId}
-                </span>
-                <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                  {PROVIDER_LABELS[a.provider]} · {accountStatusLabel(a.status)}
-                  {!a.eligibility.eligible
-                    ? ` · ${eligibilitySummary(a.eligibility)}`
-                    : ""}
-                </span>
-              </Stack>
-            </Inline>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void disconnect(a.id)}
+        {accounts.map((a) => {
+          const auditOpen = auditAccountId === a.id;
+          return (
+            <Stack
+              key={a.id}
+              gap="2"
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
             >
-              Disconnect
-            </Button>
-          </Inline>
-        ))}
+              <Inline justify="between" align="center" gap="2">
+                <Inline gap="2" align="center" className="min-w-0">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-2 w-2 rounded-full shrink-0"
+                    style={{ backgroundColor: statusDotColor(a.status) }}
+                  />
+                  <Stack gap="0" className="min-w-0">
+                    <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)] truncate">
+                      {a.displayName || a.providerAccountId}
+                    </span>
+                    <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                      {providerDisplayName(a.provider)} · {accountStatusLabel(a.status)}
+                      {!a.eligibility.eligible
+                        ? ` · ${eligibilitySummary(a.eligibility)}`
+                        : ""}
+                    </span>
+                  </Stack>
+                </Inline>
+                <Inline gap="1" align="center">
+                  {canViewAccountAudit(a.status) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setAuditAccountId((current) =>
+                          current === a.id ? null : a.id,
+                        )
+                      }
+                    >
+                      {auditOpen ? "Hide audit" : "View audit"}
+                    </Button>
+                  )}
+                  {canReconnect(a.status) && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => void connect(a.provider)}
+                    >
+                      {busy === a.provider ? "Opening…" : "Reconnect"}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void disconnect(a.id)}
+                  >
+                    Disconnect
+                  </Button>
+                </Inline>
+              </Inline>
+              {auditOpen && <SocialAudit accountId={a.id} />}
+            </Stack>
+          );
+        })}
         {accounts.length === 0 && !error && !polling && (
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
             No accounts connected yet.

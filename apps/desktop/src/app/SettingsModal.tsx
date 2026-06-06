@@ -32,6 +32,7 @@ import { useMode } from "../state/mode";
 import { useSettings } from "../state/settings";
 import { useAuth } from "../state/auth";
 import { useWelcome } from "../state/welcome";
+import { WORKSPACE_SHORTCUTS } from "../state";
 import { Button, Inline, Stack } from "../ui";
 import type { IndexerConfigSnapshot } from "../shell";
 
@@ -49,8 +50,10 @@ const SHORTCUTS: ReadonlyArray<{ keys: string; label: string }> = [
   { keys: "⌘N", label: "New project" },
   { keys: "⌘O", label: "Open project" },
   { keys: "⌘I", label: "Import files" },
-  { keys: "⌘1", label: "Focus agent rail" },
-  { keys: "⌘2", label: "Focus media rail" },
+  ...WORKSPACE_SHORTCUTS.map((shortcut) => ({
+    keys: shortcut.keys,
+    label: `Open ${shortcut.label}`,
+  })),
   { keys: "⌘,", label: "Open settings" },
 ];
 
@@ -215,10 +218,9 @@ export function SettingsModal() {
           </Section>
 
           <Section title="Publishing">
-            {/* W5.A5 — provider connection rows + AI-disclosure toggle +
-                default-upload-targets pickers + BYO-credentials inputs.
-                Isolated in PublishingSettings.tsx so this modal stays
-                readable. */}
+            {/* Server-backed account connections + AI-disclosure toggle +
+                default-upload-targets pickers. Isolated in
+                PublishingSettings.tsx so this modal stays readable. */}
             <PublishingSettings />
           </Section>
 

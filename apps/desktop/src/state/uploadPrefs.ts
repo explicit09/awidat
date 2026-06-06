@@ -22,6 +22,7 @@ const SUPPORTED: ReadonlySet<DeliveryTargetKey> = new Set([
   "youtube",
   "tiktok",
   "instagram",
+  "twitter_x",
 ]);
 
 const STORAGE_KEY = "awidat.deliver.uploadPrefs.v1";
@@ -117,8 +118,8 @@ export const useUploadPrefs = create<UploadPrefsState>((set, get) => ({
   },
 }));
 
-/** Translate a set of selected DeliveryTargetKeys into the backend's
- *  provider keys. Identity for the three publisher targets — kept as
+/** Translate a selected DeliveryTargetKey into the backend's
+ *  provider key. Identity for publisher targets — kept as
  *  a function so future renames (e.g. "youtube_shorts") have one
  *  place to update. */
 export function providerKeyForTarget(key: DeliveryTargetKey): string | null {

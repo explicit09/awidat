@@ -25,15 +25,19 @@
 // per W5.A3's "no modal hops" UX rule.
 
 import { Image as ImageIcon, Upload as UploadIcon, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { cn, Inline, Stack } from "../../ui";
 import {
   PLATFORM_LIMITS,
+  applyPublishTiming,
   validateMetadata,
   visibilityOptionsFor,
   defaultMetadata,
+  publishTimingMode,
   useUploadMetadata,
   type MetadataValidationError,
+  type PublishTimingMode,
   type ProviderKey,
   type UploadMetadata,
   type UploadVisibility,
@@ -42,6 +46,12 @@ import {
   useAiDisclosure,
   truncatePrompt,
 } from "../../state/aiDisclosure";
+import {
+  selectedAccountIdForProvider,
+  uploadCapableAccountsForProvider,
+  useUploadAccountSelections,
+  type UploadAccountOption,
+} from "../../state/uploadAccountSelections";
 import { TARGET_META } from "./targetMeta";
 import type { DeliveryTargetKey } from "./types";
 
@@ -79,6 +89,32 @@ export function UploadMetadataForm({
   const [openTarget, setOpenTarget] = useState<DeliveryTargetKey | null>(
     publishingTargets[0] ?? null,
   );
+  const [accounts, setAccounts] = useState<UploadAccountOption[]>([]);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAccounts() {
+      try {
+        const loaded = await invoke<UploadAccountOption[]>("social_accounts");
+        if (!cancelled) {
+          setAccounts(loaded);
+          setAccountError(null);
+          setAccountsLoaded(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAccountError(error instanceof Error ? error.message : String(error));
+          setAccountsLoaded(true);
+        }
+      }
+    }
+    void loadAccounts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Keep the open target valid as the user toggles targets on/off.
   useEffect(() => {
     if (openTarget && !publishingTargets.includes(openTarget)) {
@@ -103,6 +139,9 @@ export function UploadMetadataForm({
             target={target}
             jobIdHint={jobIdHint}
             defaultTitle={defaultTitle}
+            accounts={accounts}
+            accountError={accountError}
+            accountsLoaded={accountsLoaded}
             isOpen={openTarget === target}
             onToggle={() =>
               setOpenTarget((cur) => (cur === target ? null : target))
@@ -194,7 +233,12 @@ export function AiDisclosureBanner({
 }
 
 function isPublishingTarget(key: DeliveryTargetKey): boolean {
-  return key === "youtube" || key === "tiktok" || key === "instagram";
+  return (
+    key === "youtube" ||
+    key === "tiktok" ||
+    key === "instagram" ||
+    key === "twitter_x"
+  );
 }
 
 /** One target's collapsible section. */
@@ -202,12 +246,18 @@ function UploadTargetSection({
   target,
   jobIdHint,
   defaultTitle,
+  accounts,
+  accountError,
+  accountsLoaded,
   isOpen,
   onToggle,
 }: {
   target: DeliveryTargetKey;
   jobIdHint: string;
   defaultTitle: string;
+  accounts: UploadAccountOption[];
+  accountError: string | null;
+  accountsLoaded: boolean;
   isOpen: boolean;
   onToggle: () => void;
 }) {
@@ -262,6 +312,9 @@ function UploadTargetSection({
             target={target}
             metadata={metadata}
             errors={errors}
+            accounts={accounts}
+            accountError={accountError}
+            accountsLoaded={accountsLoaded}
             onUpdate={update}
           />
         </div>
@@ -285,7 +338,7 @@ function summarizeMetadata(
     parts.push(metadata.title.slice(0, 28));
   }
   if (metadata.tags.length > 0) parts.push(`${metadata.tags.length} tags`);
-  if (metadata.scheduledAt) parts.push(`@ ${formatScheduleShort(metadata.scheduledAt)}`);
+  parts.push(metadata.scheduledAt ? `@ ${formatScheduleShort(metadata.scheduledAt)}` : "Post now");
   return parts.join(" · ");
 }
 
@@ -310,11 +363,17 @@ function MetadataFields({
   target,
   metadata,
   errors,
+  accounts,
+  accountError,
+  accountsLoaded,
   onUpdate,
 }: {
   target: DeliveryTargetKey;
   metadata: UploadMetadata;
   errors: MetadataValidationError[];
+  accounts: UploadAccountOption[];
+  accountError: string | null;
+  accountsLoaded: boolean;
   onUpdate: (next: Partial<UploadMetadata>) => void;
 }) {
   const isInstagram = target === "instagram";
@@ -325,6 +384,12 @@ function MetadataFields({
 
   return (
     <Stack gap="3">
+      <AccountSelector
+        target={target}
+        accounts={accounts}
+        error={accountError}
+        loaded={accountsLoaded}
+      />
       {!isInstagram ? (
         <Field
           label="Title"
@@ -383,8 +448,8 @@ function MetadataFields({
       )}
       <Field label="Schedule" error={errFor("schedule")?.message}>
         <ScheduleInput
-          value={metadata.scheduledAt}
-          onChange={(scheduledAt) => onUpdate({ scheduledAt })}
+          metadata={metadata}
+          onChange={(next) => onUpdate({ scheduledAt: next.scheduledAt })}
         />
       </Field>
       <Field label="Thumbnail">
@@ -394,6 +459,61 @@ function MetadataFields({
         />
       </Field>
     </Stack>
+  );
+}
+
+function AccountSelector({
+  target,
+  accounts,
+  error,
+  loaded,
+}: {
+  target: DeliveryTargetKey;
+  accounts: UploadAccountOption[];
+  error: string | null;
+  loaded: boolean;
+}) {
+  const selectedByProvider = useUploadAccountSelections((s) => s.byProvider);
+  const setSelected = useUploadAccountSelections((s) => s.setSelected);
+  const uploadCapable = uploadCapableAccountsForProvider(accounts, target);
+  const selectedAccountId = selectedAccountIdForProvider(
+    accounts,
+    target,
+    selectedByProvider[target],
+  );
+
+  useEffect(() => {
+    if (selectedAccountId && selectedByProvider[target] !== selectedAccountId) {
+      setSelected(target, selectedAccountId);
+    }
+  }, [selectedAccountId, selectedByProvider, setSelected, target]);
+
+  return (
+    <Field label="Account">
+      {error ? (
+        <span className="text-[var(--text-caption)] text-[var(--color-danger)]">
+          {error}
+        </span>
+      ) : uploadCapable.length > 0 ? (
+        <select
+          value={selectedAccountId ?? ""}
+          onChange={(event) => setSelected(target, event.currentTarget.value)}
+          className={fieldInputClass}
+        >
+          {uploadCapable.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.displayName || account.handle || account.providerAccountId || account.id}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+          {loaded
+            ? `No upload-capable ${TARGET_META[target].label} account connected.`
+            : "Checking connected accounts…"}
+        </span>
+      )}
+    </Field>
   );
 }
 
@@ -581,12 +701,14 @@ function VisibilityRadio({
  *  npm dep; emits a unix-epoch-seconds value to the store. The
  *  "Clear" affordance removes the schedule entirely. */
 function ScheduleInput({
-  value,
+  metadata,
   onChange,
 }: {
-  value: number | undefined;
-  onChange: (next: number | undefined) => void;
+  metadata: UploadMetadata;
+  onChange: (next: UploadMetadata) => void;
 }) {
+  const value = metadata.scheduledAt;
+  const mode = publishTimingMode(metadata);
   // datetime-local wants `YYYY-MM-DDTHH:mm` in the *user's* local
   // tz, no tz suffix. Convert from epoch seconds.
   const localStr = useMemo(() => {
@@ -604,40 +726,61 @@ function ScheduleInput({
     }
   }, [value]);
 
+  function setMode(nextMode: PublishTimingMode): void {
+    const nextScheduledAt =
+      nextMode === "scheduled"
+        ? value ?? Math.floor(Date.now() / 1000) + 3600
+        : undefined;
+    onChange(applyPublishTiming(metadata, nextMode, nextScheduledAt));
+  }
+
   return (
-    <Inline gap="2" align="center">
-      <input
-        type="datetime-local"
-        value={localStr}
-        onChange={(e) => {
-          const raw = e.target.value;
-          if (!raw) {
-            onChange(undefined);
-            return;
-          }
-          const parsed = new Date(raw);
-          if (Number.isNaN(parsed.getTime())) {
-            onChange(undefined);
-            return;
-          }
-          onChange(Math.floor(parsed.getTime() / 1000));
-        }}
-        className={cn(fieldInputClass, "max-w-[220px]")}
-      />
-      {value ? (
-        <button
-          type="button"
-          onClick={() => onChange(undefined)}
-          className="text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-        >
-          Clear
-        </button>
-      ) : (
-        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-          Publishes immediately when blank
-        </span>
-      )}
-    </Inline>
+    <Stack gap="2">
+      <Inline gap="1" align="center">
+        {(["now", "scheduled"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setMode(option)}
+            aria-pressed={mode === option}
+            className={cn(
+              "rounded-[var(--radius-xs)] border px-2 py-1 text-[var(--text-caption)] transition-colors",
+              mode === option
+                ? "border-[var(--color-brand)] bg-[var(--color-brand-muted)] text-[var(--color-text-primary)]"
+                : "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
+            )}
+          >
+            {option === "now" ? "Post now" : "Schedule"}
+          </button>
+        ))}
+      </Inline>
+      {mode === "scheduled" ? (
+        <input
+          type="datetime-local"
+          value={localStr}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (!raw) {
+              onChange(applyPublishTiming(metadata, "now"));
+              return;
+            }
+            const parsed = new Date(raw);
+            if (Number.isNaN(parsed.getTime())) {
+              onChange(applyPublishTiming(metadata, "now"));
+              return;
+            }
+            onChange(
+              applyPublishTiming(
+                metadata,
+                "scheduled",
+                Math.floor(parsed.getTime() / 1000),
+              ),
+            );
+          }}
+          className={cn(fieldInputClass, "max-w-[220px]")}
+        />
+      ) : null}
+    </Stack>
   );
 }
 

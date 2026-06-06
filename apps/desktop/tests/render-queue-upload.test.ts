@@ -8,7 +8,12 @@ import { strict as assert } from "node:assert";
 // localStorage isn't available in node by default; the store handles
 // that via a typeof check, so we don't shim it here.
 import {
+  deriveUploadTargetActions,
+  deriveUploadTargetRetryMode,
   newQueueId,
+  renderQueueApprovalCopy,
+  renderQueueStatusLabel,
+  renderQueueVisibleEntries,
   useRenderQueueStore,
   type RenderQueueEntry,
   type RenderUploadState,
@@ -52,6 +57,44 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   assert.deepEqual(stored?.publishedUrls, {});
 }
 
+// ---- enqueue ignores duplicate active visible targets and their hidden source ----
+{
+  resetStore();
+  const oldSource = sampleEntry({
+    id: "old_source",
+    label: "Source master render",
+    internal: true,
+  });
+  const oldTikTok = sampleEntry({
+    id: "old_tiktok",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    status: "pending",
+    sourceEntryId: "old_source",
+  });
+  const newSource = sampleEntry({
+    id: "new_source",
+    label: "Source master render",
+    internal: true,
+  });
+  const newTikTok = sampleEntry({
+    id: "new_tiktok",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    status: "pending",
+    sourceEntryId: "new_source",
+  });
+  useRenderQueueStore.getState().enqueue([oldSource, oldTikTok]);
+  useRenderQueueStore.getState().enqueue([newSource, newTikTok]);
+  assert.deepEqual(
+    useRenderQueueStore.getState().entries.map((entry) => entry.id),
+    ["old_source", "old_tiktok"],
+    "duplicate active target and its new hidden source should be ignored instead of stacked",
+  );
+}
+
 // ---- setUploadStates round-trips the wire shape ----
 {
   resetStore();
@@ -92,6 +135,26 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
     assert.equal(done.uploadStates.youtube.remote_url, "https://youtu.be/abc");
   }
   assert.equal(done?.publishedUrls?.youtube, "https://youtu.be/abc");
+}
+
+// ---- setUploadAccountIds stores concrete connected-account choices ----
+{
+  resetStore();
+  const entry = sampleEntry();
+  useRenderQueueStore.getState().enqueue([entry]);
+  useRenderQueueStore
+    .getState()
+    .setUploadAccountIds(entry.id, {
+      youtube: "acct_yt_b",
+      tiktok: "acct_tt_1",
+    });
+  const stored = useRenderQueueStore
+    .getState()
+    .entries.find((e) => e.id === entry.id);
+  assert.deepEqual(stored?.uploadAccountIds, {
+    youtube: "acct_yt_b",
+    tiktok: "acct_tt_1",
+  });
 }
 
 // ---- failed upload state stays terminal ----
@@ -158,6 +221,122 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   assert.equal(stored?.uploadStates, undefined);
 }
 
+// ---- render done + active upload reads as publishing, not complete ----
+{
+  const queuedUploadEntry = sampleEntry({
+    status: "done",
+    outputPath: "/tmp/tiktok.mp4",
+    reviewStatus: "approved",
+    uploadTargets: ["tiktok"],
+    uploadStates: {
+      tiktok: { state: "scheduled", job_id: "job_tiktok" },
+    },
+  });
+  assert.equal(
+    renderQueueStatusLabel(queuedUploadEntry),
+    "Publishing",
+    "a completed render with an active server publish must not show as Done",
+  );
+  assert.equal(
+    renderQueueApprovalCopy(queuedUploadEntry),
+    "Render approved. Publishing is still in progress.",
+    "approval copy should not imply delivery is complete while upload is active",
+  );
+}
+
+// ---- render done + failed upload reads as action needed, not complete ----
+{
+  const failedUploadEntry = sampleEntry({
+    status: "done",
+    outputPath: "/tmp/tiktok.mp4",
+    reviewStatus: "approved",
+    uploadTargets: ["tiktok"],
+    uploadStates: {
+      tiktok: {
+        state: "failed",
+        reason: "account_not_eligible",
+        job_id: "job_tiktok",
+      },
+    },
+  });
+  assert.equal(
+    renderQueueStatusLabel(failedUploadEntry),
+    "Needs action",
+    "a completed render with a failed server publish must not show as Done",
+  );
+  assert.equal(
+    renderQueueApprovalCopy(failedUploadEntry),
+    "Render approved. Publishing needs action.",
+    "approval copy should not imply delivery is complete after upload failure",
+  );
+}
+
+// ---- internal source renders stay out of the visible user queue ----
+{
+  const internalMaster = sampleEntry({
+    id: "internal_master",
+    label: "Source master render",
+    internal: true,
+  });
+  const tiktokEntry = sampleEntry({
+    id: "tiktok_entry",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+  });
+  assert.deepEqual(
+    renderQueueVisibleEntries([internalMaster, tiktokEntry]).map((entry) => entry.id),
+    ["tiktok_entry"],
+    "internal source renders should not appear as separate user-selected queue rows",
+  );
+}
+
+// ---- visible queue collapses stale duplicate active targets ----
+{
+  const firstTikTok = sampleEntry({
+    id: "first_tiktok",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    status: "pending",
+  });
+  const secondTikTok = sampleEntry({
+    id: "second_tiktok",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    status: "pending",
+  });
+  assert.deepEqual(
+    renderQueueVisibleEntries([firstTikTok, secondTikTok]).map((entry) => entry.id),
+    ["first_tiktok"],
+    "stale duplicate active targets should collapse to one visible row",
+  );
+}
+
+// ---- visible reframe reflects hidden source-render dependency ----
+{
+  const internalMaster = sampleEntry({
+    id: "internal_master",
+    label: "Source master render",
+    internal: true,
+    status: "running",
+    progress: 42,
+  });
+  const tiktokEntry = sampleEntry({
+    id: "tiktok_entry",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    sourceEntryId: "internal_master",
+  });
+  assert.equal(
+    renderQueueStatusLabel(tiktokEntry, [internalMaster, tiktokEntry]),
+    "Preparing source",
+    "TikTok should show source preparation instead of generic queued while its hidden source render runs",
+  );
+}
+
 // ---- replacing upload targets resets state to Pending ----
 {
   resetStore();
@@ -177,6 +356,77 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   assert.equal(stored?.uploadStates?.youtube?.state, "pending");
   assert.equal(stored?.uploadStates?.tiktok?.state, "pending");
   assert.deepEqual(stored?.publishedUrls, {});
+}
+
+// ---- upload target action derivation exposes durable server controls ----
+{
+  assert.deepEqual(
+    deriveUploadTargetActions({ state: "scheduled", job_id: "job_1" }),
+    {
+      canRefresh: true,
+      canRetry: false,
+      canCancel: true,
+      canReschedule: true,
+      canOpenProviderUrl: false,
+    },
+  );
+  assert.deepEqual(
+    deriveUploadTargetActions({ state: "processing", job_id: "job_2" }),
+    {
+      canRefresh: true,
+      canRetry: false,
+      canCancel: true,
+      canReschedule: false,
+      canOpenProviderUrl: false,
+    },
+  );
+  assert.deepEqual(
+    deriveUploadTargetActions({
+      state: "published",
+      remote_url: "https://provider.example/post",
+      remote_id: "post_1",
+    }),
+    {
+      canRefresh: false,
+      canRetry: false,
+      canCancel: false,
+      canReschedule: false,
+      canOpenProviderUrl: true,
+    },
+  );
+  assert.deepEqual(
+    deriveUploadTargetActions({ state: "failed", reason: "rate_limited", job_id: "job_3" }),
+    {
+      canRefresh: true,
+      canRetry: true,
+      canCancel: false,
+      canReschedule: false,
+      canOpenProviderUrl: false,
+    },
+  );
+}
+
+// ---- failed upload retry mode preserves server job ownership when possible ----
+{
+  assert.equal(
+    deriveUploadTargetRetryMode(
+      { state: "failed", reason: "rate_limited", job_id: "job_social_1" },
+      true,
+    ),
+    "server_job",
+  );
+  assert.equal(
+    deriveUploadTargetRetryMode({ state: "failed", reason: "network" }, true),
+    "republish",
+  );
+  assert.equal(
+    deriveUploadTargetRetryMode({ state: "failed", reason: "network" }, false),
+    null,
+  );
+  assert.equal(
+    deriveUploadTargetRetryMode({ state: "scheduled", job_id: "job_social_2" }, true),
+    null,
+  );
 }
 
 console.log("render-queue-upload: OK");

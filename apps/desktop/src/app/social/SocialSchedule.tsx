@@ -28,6 +28,8 @@ type CampaignVariantTarget = {
   scheduledFor?: number;
   validation_state?: ValidationState;
   validationState?: ValidationState;
+  validation_reasons?: string[];
+  validationReasons?: string[];
   created_at?: number;
   createdAt?: number;
   updated_at?: number;
@@ -56,6 +58,10 @@ function targetValidationState(
   target: CampaignVariantTarget,
 ): ValidationState {
   return target.validation_state ?? target.validationState ?? "invalid";
+}
+
+function targetValidationReasons(target: CampaignVariantTarget): string[] {
+  return target.validation_reasons ?? target.validationReasons ?? [];
 }
 
 export function SocialSchedule({
@@ -87,7 +93,7 @@ export function SocialSchedule({
           campaignId,
           variantId,
           connectedAccountId: accountId,
-          platformFields: { privacy: "private" },
+          platformFields: { privacy: "private", title: variantId },
           scheduledFor,
           now: nowSeconds(),
         },
@@ -98,11 +104,11 @@ export function SocialSchedule({
         { targetId: id, now: nowSeconds() },
       );
       const state = targetValidationState(validated);
-      // The command returns the updated target; reasons are derived from its
-      // state. A non-valid state means scheduling is blocked.
+      // The command returns the updated target plus server validation reasons.
+      // A non-valid state means scheduling is blocked.
       setReport({
         state,
-        reasons: state === "valid" ? [] : ["see account eligibility / scheduled time"],
+        reasons: state === "valid" ? [] : targetValidationReasons(validated),
       });
     } catch (e) {
       setError(String(e));

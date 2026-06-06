@@ -55,6 +55,23 @@ export type UploadMetadata = {
   thumbnailPath?: string;
 };
 
+export type PublishTimingMode = "now" | "scheduled";
+
+export function publishTimingMode(metadata: UploadMetadata): PublishTimingMode {
+  return metadata.scheduledAt === undefined ? "now" : "scheduled";
+}
+
+export function applyPublishTiming(
+  metadata: UploadMetadata,
+  mode: PublishTimingMode,
+  scheduledAt?: number,
+): UploadMetadata {
+  if (mode === "now") {
+    return { ...metadata, scheduledAt: undefined };
+  }
+  return { ...metadata, scheduledAt };
+}
+
 /** Compose a stable storage key for one `(jobId, provider)` pair. */
 function composeKey(jobId: string, provider: string): string {
   return `${jobId}::${provider}`;
@@ -83,6 +100,12 @@ export const PLATFORM_LIMITS = {
     descriptionMax: undefined as number | undefined,
     tagsTotalCharsMax: undefined as number | undefined,
     captionMax: 2200,
+  },
+  twitter_x: {
+    titleMax: 280,
+    descriptionMax: 280,
+    tagsTotalCharsMax: undefined as number | undefined,
+    captionMax: undefined as number | undefined,
   },
 } as const;
 

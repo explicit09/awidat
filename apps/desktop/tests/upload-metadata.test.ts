@@ -8,8 +8,10 @@
 import { strict as assert } from "node:assert";
 
 import {
+  applyPublishTiming,
   defaultMetadata,
   PLATFORM_LIMITS,
+  publishTimingMode,
   useUploadMetadata,
   validateMetadata,
   visibilityOptionsFor,
@@ -153,6 +155,27 @@ function resetStore(): void {
   assert.ok(errs.find((e) => e.code === "schedule.invalid"));
 }
 
+// ---- publish timing: explicit Post now clears scheduledAt ----
+{
+  const scheduled = {
+    ...defaultMetadata("TikTok"),
+    scheduledAt: 1_780_800_000,
+  };
+  assert.equal(publishTimingMode(defaultMetadata("TikTok")), "now");
+  assert.equal(publishTimingMode(scheduled), "scheduled");
+  assert.equal(
+    applyPublishTiming(scheduled, "now").scheduledAt,
+    undefined,
+    "Post now must remove any stale schedule timestamp",
+  );
+  assert.equal(
+    applyPublishTiming(defaultMetadata("TikTok"), "scheduled", 1_780_800_000)
+      .scheduledAt,
+    1_780_800_000,
+    "Schedule must persist the selected publish time",
+  );
+}
+
 // ---- visibilityOptionsFor: Instagram returns null, TikTok labels differ ----
 {
   assert.equal(
@@ -179,6 +202,8 @@ function resetStore(): void {
   assert.equal(PLATFORM_LIMITS.tiktok.titleMax, 150);
   assert.equal(PLATFORM_LIMITS.tiktok.descriptionMax, 4000);
   assert.equal(PLATFORM_LIMITS.instagram.captionMax, 2200);
+  assert.equal(PLATFORM_LIMITS.twitter_x.titleMax, 280);
+  assert.equal(PLATFORM_LIMITS.twitter_x.descriptionMax, 280);
 }
 
 // ---- useUploadMetadata.set + get round-trips by (jobId, provider) ----

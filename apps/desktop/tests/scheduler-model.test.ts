@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 
 import {
+  deriveSchedulerPostActions,
   deriveSchedulerPosts,
   formatSchedulerTime,
   schedulerStatusLabel,
@@ -64,6 +65,20 @@ assert.equal(posts[0].scheduledAt, 1_800);
 assert.equal(posts[0].jobId, "job_yt");
 assert.equal(posts[0].visibility, "public");
 assert.equal(posts[1].providerUrl, "https://tiktok.example/post/1");
+assert.deepEqual(deriveSchedulerPostActions(posts[0]), {
+  canRefresh: true,
+  canCancel: true,
+  canRetry: false,
+  canReschedule: true,
+  canOpenProviderUrl: false,
+});
+assert.deepEqual(deriveSchedulerPostActions(posts[1]), {
+  canRefresh: false,
+  canCancel: false,
+  canRetry: false,
+  canReschedule: false,
+  canOpenProviderUrl: true,
+});
 
 const targetFilteredEntry: RenderQueueEntry = {
   ...entry,
@@ -243,6 +258,64 @@ assert.deepEqual(
     "reauth:requires_action:youtube_reauth_required",
     "text:requires_action:token refresh failed; account needs reauth",
     "timeout:failed:upload timed out",
+  ],
+);
+assert.deepEqual(
+  deriveSchedulerPosts([actionNeededEntry], 1_700).map((post) => ({
+    provider: post.provider,
+    actions: deriveSchedulerPostActions(post),
+  })),
+  [
+    {
+      provider: "server",
+      actions: {
+        canRefresh: true,
+        canCancel: true,
+        canRetry: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      },
+    },
+    {
+      provider: "scope",
+      actions: {
+        canRefresh: true,
+        canCancel: true,
+        canRetry: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      },
+    },
+    {
+      provider: "reauth",
+      actions: {
+        canRefresh: true,
+        canCancel: true,
+        canRetry: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      },
+    },
+    {
+      provider: "text",
+      actions: {
+        canRefresh: true,
+        canCancel: true,
+        canRetry: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      },
+    },
+    {
+      provider: "timeout",
+      actions: {
+        canRefresh: true,
+        canCancel: true,
+        canRetry: true,
+        canReschedule: false,
+        canOpenProviderUrl: false,
+      },
+    },
   ],
 );
 assert.equal(schedulerStatusLabel("requires_action"), "Action needed");

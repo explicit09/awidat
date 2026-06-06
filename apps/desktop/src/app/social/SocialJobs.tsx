@@ -12,6 +12,7 @@ import {
   jobStatusLabel,
   canCancel,
   canRetry,
+  canReschedule,
   isTerminal,
   type PublishJob,
 } from "./socialModel";
@@ -20,8 +21,21 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+function toDateTimeLocal(secs: number): string {
+  const date = new Date(secs * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDateTimeLocal(value: string): number | null {
+  const millis = new Date(value).getTime();
+  if (!Number.isFinite(millis)) return null;
+  return Math.floor(millis / 1000);
+}
+
 export function SocialJobs({ jobIds }: { jobIds: string[] }) {
   const [jobs, setJobs] = useState<Record<string, PublishJob>>({});
+  const [rescheduleAt, setRescheduleAt] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const loadJob = useCallback(async (jobId: string) => {
@@ -66,6 +80,31 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
       }
     },
     [],
+  );
+
+  const reschedule = useCallback(
+    async (jobId: string) => {
+      const scheduledFor = fromDateTimeLocal(rescheduleAt[jobId] ?? "");
+      if (!scheduledFor) {
+        setError("Choose a valid reschedule time");
+        return;
+      }
+      try {
+        const job = await invoke<PublishJob>("social_reschedule_job", {
+          jobId,
+          args: { scheduledFor },
+        });
+        setJobs((prev) => ({ ...prev, [job.id]: job }));
+        setRescheduleAt((prev) => ({
+          ...prev,
+          [job.id]: toDateTimeLocal(job.scheduledFor),
+        }));
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [rescheduleAt],
   );
 
   const rows = jobIds.map((id) => jobs[id]).filter((j): j is PublishJob => !!j);
@@ -130,6 +169,24 @@ export function SocialJobs({ jobIds }: { jobIds: string[] }) {
               <button type="button" onClick={() => void retry(job.id)}>
                 Retry
               </button>
+            )}
+            {canReschedule(job.status) && (
+              <span className="social-jobs__reschedule">
+                <input
+                  type="datetime-local"
+                  value={rescheduleAt[job.id] ?? toDateTimeLocal(job.scheduledFor)}
+                  onChange={(event) =>
+                    setRescheduleAt((prev) => ({
+                      ...prev,
+                      [job.id]: event.currentTarget.value,
+                    }))
+                  }
+                  aria-label={`Reschedule ${job.id}`}
+                />
+                <button type="button" onClick={() => void reschedule(job.id)}>
+                  Reschedule
+                </button>
+              </span>
             )}
           </li>
         ))}

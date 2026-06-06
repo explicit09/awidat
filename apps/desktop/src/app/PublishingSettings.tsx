@@ -12,10 +12,6 @@
 //   2. Global publishing preferences — Auto-disclose AI toggle and the
 //      default-targets checkbox set. These persist across projects.
 //
-//   3. BYO OAuth-app credentials — `client_id` / `client_secret` inputs per
-//      provider. Still serve the legacy upload path that has not yet been
-//      replaced by the server-backed worker; retained until that cutover.
-//
 // Why a separate file: SettingsModal.tsx is already a stack of orthogonal
 // sections; the Publishing section is the heaviest, so isolating it keeps the
 // modal readable.
@@ -144,4 +140,3 @@ function DefaultTargetCheckbox({
     </label>
   );
 }
-

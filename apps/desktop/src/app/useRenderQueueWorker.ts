@@ -32,6 +32,7 @@ import {
   type AiDisclosure,
 } from "../state/aiDisclosure";
 import { publishRenderTargetsViaServer } from "./serverPublish";
+import { reasonCopy } from "./social/socialModel";
 
 type TimelineRenderInfo = {
   job_id: string;
@@ -59,6 +60,7 @@ type JobStatus = {
 type SocialPublishJob = {
   id: string;
   status: string;
+  scheduledFor?: number | null;
   providerPostId?: string | null;
   providerPostUrl?: string | null;
   normalizedError?: string | null;
@@ -103,19 +105,24 @@ function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
     job.status === "requires_action" ||
     job.status === "cancelled"
   ) {
+    const reason =
+      job.normalizedError ??
+      job.requiresActionReason ??
+      `server publish ${job.status}`;
     return {
       state: "failed",
-      reason:
-        job.normalizedError ??
-        job.requiresActionReason ??
-        `server publish ${job.status}`,
+      reason: reasonCopy(reason),
       job_id: job.id,
     };
   }
   if (job.status === "processing" || job.status === "uploading") {
     return { state: "processing", job_id: job.id };
   }
-  return { state: "scheduled", job_id: job.id };
+  return {
+    state: "scheduled",
+    job_id: job.id,
+    scheduled_for: job.scheduledFor ?? undefined,
+  };
 }
 
 export async function refreshServerUploadState(
@@ -159,9 +166,11 @@ export function useRenderQueueWorker(): void {
   const lastMasterPathRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const unsub = useRenderQueueStore.subscribe((state) => {
+    const drainQueue = () => {
       if (busyRef.current) return;
-      const pending = renderQueueSelectors.pending(state);
+      const pending = renderQueueSelectors.pending(
+        useRenderQueueStore.getState(),
+      );
       if (pending.length === 0) return;
       const next = pending[0];
       busyRef.current = true;
@@ -172,24 +181,13 @@ export function useRenderQueueWorker(): void {
         })
         .finally(() => {
           busyRef.current = false;
+          queueMicrotask(drainQueue);
         });
-    });
+    };
+    const unsub = useRenderQueueStore.subscribe(drainQueue);
     // Kick the worker once on mount in case there are pending entries
     // already (e.g. after page reload restoring localStorage).
-    const state = useRenderQueueStore.getState();
-    const pending = renderQueueSelectors.pending(state);
-    if (pending.length > 0 && !busyRef.current) {
-      const next = pending[0];
-      busyRef.current = true;
-      void runEntry(next, lastMasterPathRef)
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          useRenderQueueStore.getState().markFailed(next.id, message);
-        })
-        .finally(() => {
-          busyRef.current = false;
-        });
-    }
+    drainQueue();
     return () => unsub();
   }, []);
 }
@@ -328,6 +326,7 @@ async function maybeChainUploads(
       outputPath,
       title: entry.label,
       targets,
+      accountIdsByProvider: entry.uploadAccountIds,
       metadataByProvider,
       invoke,
       onState: (provider, state) => {
@@ -514,6 +513,7 @@ export async function retryUploadForTarget(
       outputPath: filePath,
       title: entry.label,
       targets: [provider],
+      accountIdsByProvider: entry.uploadAccountIds,
       metadataByProvider: { [provider]: metadata },
       invoke,
       onState: (_provider, state) => {

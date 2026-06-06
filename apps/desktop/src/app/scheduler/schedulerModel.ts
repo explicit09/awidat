@@ -31,6 +31,14 @@ export type SchedulerPost = {
   updatedAt: number;
 };
 
+export type SchedulerPostActions = {
+  canRefresh: boolean;
+  canCancel: boolean;
+  canRetry: boolean;
+  canReschedule: boolean;
+  canOpenProviderUrl: boolean;
+};
+
 const STATUS_LABELS: Record<SchedulerStatus, string> = {
   draft: "Draft",
   scheduled: "Scheduled",
@@ -44,6 +52,30 @@ const STATUS_LABELS: Record<SchedulerStatus, string> = {
 
 export function schedulerStatusLabel(status: SchedulerStatus): string {
   return STATUS_LABELS[status];
+}
+
+export function deriveSchedulerPostActions(
+  post: SchedulerPost,
+): SchedulerPostActions {
+  const hasJob = Boolean(post.jobId);
+  return {
+    canRefresh:
+      hasJob &&
+      (post.status === "scheduled" ||
+        post.status === "uploading" ||
+        post.status === "processing" ||
+        post.status === "failed" ||
+        post.status === "requires_action"),
+    canCancel:
+      hasJob &&
+      post.status !== "draft" &&
+      post.status !== "published" &&
+      post.status !== "cancelled",
+    canRetry:
+      hasJob && (post.status === "failed" || post.status === "requires_action"),
+    canReschedule: hasJob && post.status === "scheduled",
+    canOpenProviderUrl: Boolean(post.providerUrl),
+  };
 }
 
 export function deriveSchedulerPosts(

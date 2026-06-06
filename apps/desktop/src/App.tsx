@@ -11,6 +11,7 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
+import { summarizeEditorPublishing } from "./editor/publishingBridge";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
@@ -75,7 +76,7 @@ import { Footer as ChromeFooter } from "./shell/chrome/Footer";
 import { Landing } from "./shell/empty/Landing";
 import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
-import { useStageStore } from "./state";
+import { stageFromWorkspaceShortcut, useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useIndexReadinessStore } from "./state/indexReadiness";
 import { useEpisodesStore } from "./state/episodes";
@@ -88,11 +89,16 @@ import {
   providerKeyForTarget,
   useUploadPrefs,
 } from "./state/uploadPrefs";
+import {
+  shouldUploadRenderTarget,
+  useUploadAccountSelections,
+} from "./state/uploadAccountSelections";
 import { useUploadMetadata } from "./state/uploadMetadata";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import { SchedulerWorkspace } from "./app/scheduler/SchedulerWorkspace";
 import {
   DELIVERY_TARGETS,
+  renderQueueLabelForTarget,
   useDeliveryTargetsStore,
   type DeliveryTargetKey,
 } from "./app/deliveryTargets";
@@ -564,17 +570,32 @@ function App() {
     // is the provider key (`youtube` → YouTube), so we just gate on
     // whether the user toggled "Upload after render" for that target.
     const uploadEnabled = useUploadPrefs.getState().enabled;
+    const accountSelections = useUploadAccountSelections.getState().byProvider;
     // Per-target metadata the user drafted in the form (W5.A3). The
     // form persists under DRAFT_METADATA_JOB_ID; on enqueue we copy
     // the per-provider snapshots onto each entry's own id so the
     // worker can hand them to the backend on render-done.
     const metadataStore = useUploadMetadata.getState();
+    const entryIds = Object.fromEntries(
+      ordered.map((key) => [key, newQueueId(DELIVERY_TARGETS[key].kind)]),
+    ) as Partial<Record<DeliveryTargetKey, string>>;
     const entries: RenderQueueEntry[] = ordered.map((key) => {
       const spec = DELIVERY_TARGETS[key];
       const provider = providerKeyForTarget(key);
+      const internal = key === "youtube" && !selected.has("youtube");
+      const sourceEntryId =
+        !selected.has("youtube") && spec.kind === "video_reframe"
+          ? entryIds.youtube
+          : undefined;
       const uploadTargets =
-        provider && uploadEnabled.has(key) ? [provider] : undefined;
-      const entryId = newQueueId(spec.kind);
+        provider && shouldUploadRenderTarget(key, selected, uploadEnabled)
+          ? [provider]
+          : undefined;
+      const uploadAccountIds =
+        provider && uploadTargets && accountSelections[provider]
+          ? { [provider]: accountSelections[provider] }
+          : undefined;
+      const entryId = entryIds[key] ?? newQueueId(spec.kind);
       // Forward the user's draft metadata for this provider, if any,
       // onto the freshly-allocated entry id so the worker's
       // `useUploadMetadata.get(entry.id, provider)` lookup finds the
@@ -586,8 +607,10 @@ function App() {
       return {
         id: entryId,
         targetId: key,
-        label: spec.label,
+        label: renderQueueLabelForTarget(key, selected),
         kind: spec.kind,
+        internal,
+        sourceEntryId,
         status: "pending" as const,
         enqueuedAt: Date.now(),
         reframeWidth: spec.width,
@@ -595,6 +618,7 @@ function App() {
         reframeBitrateKbps: spec.videoBitrateKbps,
         stillKind: spec.stillKind,
         uploadTargets,
+        uploadAccountIds,
       };
     });
     useRenderQueueStore.getState().enqueue(entries);
@@ -919,20 +943,26 @@ function App() {
     });
   });
 
-  // Global keyboard shortcut: ⌘, (or Ctrl+, on non-mac) opens
-  // Settings. Mounted once at the App root so the modal can be
-  // opened from anywhere. The settings modal handles its own Esc.
+  // Global keyboard shortcuts: ⌘, (or Ctrl+, on non-mac) opens Settings;
+  // ⌘/Ctrl+1..5 jumps between workspace destinations.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      const isCommaShortcut = event.key === "," && (event.metaKey || event.ctrlKey);
+      const modifierPressed = event.metaKey || event.ctrlKey;
+      const isCommaShortcut = event.key === "," && modifierPressed;
       if (isCommaShortcut) {
         event.preventDefault();
         useSettings.getState().open();
+        return;
+      }
+      const nextStage = stageFromWorkspaceShortcut(event.key, modifierPressed);
+      if (nextStage) {
+        event.preventDefault();
+        setStage(nextStage);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [setStage]);
 
   useEffect(() => {
     if (demoMode) {
@@ -1552,6 +1582,7 @@ function App() {
       { key: "youtube", active: timelineDuration > 0 },
       { key: "tiktok", active: false },
       { key: "instagram", active: false },
+      { key: "twitter_x", active: false },
       { key: "captions", active: completedJobKinds.has("indexing") },
       { key: "cover", active: false },
       { key: "custom", active: false },
@@ -1560,6 +1591,8 @@ function App() {
   );
 
   const selectedDeliveryTargets = useDeliveryTargetsStore((s) => s.selected);
+  const selectedUploadTargets = useUploadPrefs((s) => s.enabled);
+  const selectedUploadAccounts = useUploadAccountSelections((s) => s.byProvider);
   const effectiveDeliveryTargets: DeliveryTarget[] = useMemo(
     () =>
       realDeliveryTargets.map((target) => ({
@@ -1567,6 +1600,15 @@ function App() {
         active: selectedDeliveryTargets.has(target.key as DeliveryTargetKey),
       })),
     [selectedDeliveryTargets, realDeliveryTargets],
+  );
+  const editorPublishingSummary = useMemo(
+    () =>
+      summarizeEditorPublishing({
+        selectedTargets: selectedDeliveryTargets,
+        uploadTargets: selectedUploadTargets,
+        accountSelections: selectedUploadAccounts,
+      }),
+    [selectedDeliveryTargets, selectedUploadTargets, selectedUploadAccounts],
   );
 
   const realPreflightFindings: PreflightFinding[] = useMemo(() => {
@@ -1969,7 +2011,10 @@ function App() {
         />
       </div>
     ) : (
-      <ClipInspector />
+      <ClipInspector
+        publishing={editorPublishingSummary}
+        onOpenDelivery={() => setStage("deliver")}
+      />
     );
   const stageIndex = (
     <IndexRail

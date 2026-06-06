@@ -7,7 +7,7 @@
 // `PublishJobResponse`, `AccountUsageAudit`). SRP: derivations here,
 // presentation in the `.tsx` files.
 
-export type Provider = "youtube" | "tiktok" | "instagram";
+export type Provider = "youtube" | "tiktok" | "instagram" | "twitter_x";
 
 export type OwnerRef = { user: string } | { workspace: string };
 
@@ -69,17 +69,67 @@ export function accountStatusLabel(status: AccountStatus): string {
   return STATUS_LABELS[status];
 }
 
+export function canReconnect(status: AccountStatus): boolean {
+  return status === "needs_reauth" || status === "missing_scope" || status === "revoked";
+}
+
+export function canViewAccountAudit(_status: AccountStatus): boolean {
+  return true;
+}
+
+export type ManualPublishFieldsInput = {
+  provider: Provider;
+  privacy: "private" | "unlisted" | "public";
+  title: string;
+  description: string;
+  tagsInput: string;
+  thumbnailPath: string;
+};
+
+export function buildPlatformFieldsForPublish(
+  input: ManualPublishFieldsInput,
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    privacy: input.privacy,
+    title: input.title,
+    description: input.description,
+    tags: parseTagsInput(input.tagsInput),
+  };
+  if (input.thumbnailPath.trim()) {
+    fields.thumbnailRef = `file://${input.thumbnailPath.trim()}`;
+  }
+  if (input.provider === "instagram") {
+    delete fields.title;
+  }
+  return fields;
+}
+
+function parseTagsInput(value: string): string[] {
+  const tags: string[] = [];
+  for (const raw of value.split(",")) {
+    const tag = raw.trim();
+    if (tag && !tags.includes(tag)) tags.push(tag);
+  }
+  return tags;
+}
+
 /** Maps facade reason codes to human copy. Extend as new codes appear. */
 const REASON_COPY: Record<string, string> = {
   account_not_eligible: "account not eligible",
   account_not_connected: "account not connected",
+  unaudited_client_can_only_post_to_private_accounts:
+    "TikTok app is in review mode; set the TikTok account to private, then retry",
+  url_ownership_unverified: "TikTok media URL domain is not verified",
   missing_publish_capability: "missing publish capability",
+  network_or_server_error: "temporary server/provider error",
   scheduled_time_invalid: "scheduled time is in the past",
   missing_youtube_upload_scope: "missing YouTube upload permission",
+  twitter_x_oauth_client_pending: "Twitter/X connection setup pending",
+  twitter_x_live_client_pending: "Twitter/X live publishing setup pending",
 };
 
 export function reasonCopy(code: string): string {
-  return REASON_COPY[code] ?? code.replace(/_/g, " ");
+  return REASON_COPY[code] ?? code.replace(/[_.]/g, " ");
 }
 
 export function eligibilitySummary(eligibility: Eligibility): string {
@@ -148,6 +198,10 @@ export function canCancel(status: PublishJobStatus): boolean {
 
 export function canRetry(status: PublishJobStatus): boolean {
   return status === "failed" || status === "requires_action";
+}
+
+export function canReschedule(status: PublishJobStatus): boolean {
+  return status === "scheduled";
 }
 
 /** A job is still "in flight" (server will advance it) until it reaches a

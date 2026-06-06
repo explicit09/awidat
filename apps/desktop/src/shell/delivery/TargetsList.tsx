@@ -24,6 +24,7 @@ const UPLOAD_CAPABLE_TARGETS: ReadonlySet<DeliveryTargetKey> = new Set([
   "youtube",
   "tiktok",
   "instagram",
+  "twitter_x",
 ]);
 
 /** `true` if this target maps to a publishing provider. */

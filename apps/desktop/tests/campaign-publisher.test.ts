@@ -8,6 +8,7 @@ import {
 } from "../src/campaign/manifest.ts";
 import {
   campaignUploadRequests,
+  publishCampaignViaServer,
   startCampaignUploads,
   type CampaignUploadRequest,
 } from "../src/campaign/publisher.ts";
@@ -74,7 +75,7 @@ const campaign = createCampaignManifest({
       platform: "tiktok",
       status: "approved",
       scheduledFor: 1_782_686_400,
-      platformFields: { visibility: "public" },
+      platformFields: { tags: "platform,override", visibility: "public" },
     }),
     createPlatformVariant({
       variantId: "variant-instagram",
@@ -107,9 +108,23 @@ assert.ok(tiktok);
 assert.equal(tiktok.jobId, "job-tiktok");
 assert.equal(tiktok.metadata.title, "Short clip");
 assert.equal(tiktok.metadata.description, "Short caption");
-assert.deepEqual(tiktok.metadata.tags, ["ai", "startup"]);
+assert.deepEqual(tiktok.metadata.tags, ["platform", "override"]);
 assert.equal(tiktok.metadata.visibility, "public");
 assert.equal(tiktok.metadata.scheduledAt, 1_782_686_400);
+
+{
+  const selectedAccountRequests = campaignUploadRequests(campaign, [
+    {
+      ...entries[0],
+      uploadAccountIds: { youtube: "acct-youtube-selected" },
+    },
+    entries[1],
+  ]);
+  const selectedYoutube = selectedAccountRequests.find(
+    (request) => request.provider === "youtube",
+  );
+  assert.equal(selectedYoutube?.accountId, "acct-youtube-selected");
+}
 
 // --- Behavioral tests for the upload start path -------------------------
 
@@ -179,6 +194,168 @@ const publishedSnapshot = {
   upload_states: { youtube: { state: "published", remote_url: "u" } },
   published_urls: { youtube: "u" },
 };
+
+// Server-backed campaign publishing forwards full platform metadata.
+{
+  const serverCampaign = createCampaignManifest({
+    campaignId: "campaign-server",
+    sourceAssetId: "/tmp/project",
+    campaignType: "podcast",
+    title: "Server",
+    items: [
+      createPublishableItem({
+        itemId: "item-render-youtube",
+        kind: "long_form",
+        title: "Full episode",
+        description: "Episode description",
+        hashtags: ["podcast", "launch"],
+        thumbnailPath: "/tmp/thumb.jpg",
+        artifactPath: "/tmp/youtube.mp4",
+        approvalState: "approved",
+      }),
+    ],
+    platformVariants: [
+      createPlatformVariant({
+        variantId: "variant-youtube",
+        itemId: "item-render-youtube",
+        platform: "youtube",
+        status: "approved",
+        platformFields: { visibility: "unlisted" },
+      }),
+    ],
+  });
+  const calls: { command: string; args?: Record<string, unknown> }[] = [];
+  const invoke = async <T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    calls.push({ command, args });
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct-youtube",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") {
+      const bindArgs = args?.args as { platformFields?: Record<string, unknown> };
+      assert.deepEqual(bindArgs.platformFields, {
+        privacy: "unlisted",
+        title: "Full episode",
+        description: "Episode description",
+        tags: ["podcast", "launch"],
+        thumbnailRef: "file:///tmp/thumb.jpg",
+      });
+      return { id: "target-server" } as T;
+    }
+    if (command === "social_validate_target") {
+      return { validationState: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job-server" } as T;
+    }
+    if (command === "social_upload_artifact") {
+      assert.deepEqual(args, {
+        jobId: "job-server",
+        filePath: "/tmp/youtube.mp4",
+      });
+      return undefined as T;
+    }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await publishCampaignViaServer(
+    serverCampaign,
+    [singleEntry],
+    invoke,
+    { scheduledFor: 1_800 },
+  );
+  assert.deepEqual(result, [{ variantId: "variant-youtube", jobId: "job-server" }]);
+  assert.deepEqual(
+    calls.map((call) => call.command),
+    [
+      "social_accounts",
+      "social_bind_target",
+      "social_validate_target",
+      "social_schedule_target",
+      "social_upload_artifact",
+    ],
+  );
+}
+
+// Server-backed campaign publishing binds the account selected on the render.
+{
+  const accountCampaign = createCampaignManifest({
+    campaignId: "campaign-account",
+    sourceAssetId: "/tmp/project",
+    campaignType: "podcast",
+    title: "Account",
+    items: [
+      createPublishableItem({
+        itemId: "item-render-youtube",
+        kind: "long_form",
+        title: "Full episode",
+        artifactPath: "/tmp/youtube.mp4",
+        approvalState: "approved",
+      }),
+    ],
+    platformVariants: [
+      createPlatformVariant({
+        variantId: "variant-youtube",
+        itemId: "item-render-youtube",
+        platform: "youtube",
+        status: "approved",
+      }),
+    ],
+  });
+  let boundAccountId: string | undefined;
+  const invoke = async <T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct-youtube-first",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+        {
+          id: "acct-youtube-selected",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") {
+      boundAccountId = (args?.args as { connectedAccountId?: string })
+        .connectedAccountId;
+      return { id: "target-account" } as T;
+    }
+    if (command === "social_validate_target") {
+      return { validationState: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job-account" } as T;
+    }
+    if (command === "social_upload_artifact") return undefined as T;
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await publishCampaignViaServer(
+    accountCampaign,
+    [
+      {
+        ...singleEntry,
+        uploadAccountIds: { youtube: "acct-youtube-selected" },
+      },
+    ],
+    invoke,
+    { scheduledFor: 1_800 },
+  );
+  assert.deepEqual(result, [{ variantId: "variant-youtube", jobId: "job-account" }]);
+  assert.equal(boundAccountId, "acct-youtube-selected");
+}
 
 // P2: campaignUploadRequests skips a target already published for the provider.
 {

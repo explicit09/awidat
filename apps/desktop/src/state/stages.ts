@@ -24,6 +24,19 @@ export const STAGES = ["edit", "deliver"] as const;
  */
 export type Stage = (typeof STAGES)[number] | "schedule" | "skills" | "history";
 
+/**
+ * Routable product surfaces shown in top-level workspace chrome.
+ * `STAGES` remains the linear edit -> deliver workflow; this list is the
+ * places a user can jump to directly from the product surface.
+ */
+export const WORKSPACE_DESTINATIONS = [
+  "edit",
+  "deliver",
+  "schedule",
+  "skills",
+  "history",
+] as const satisfies readonly Stage[];
+
 export const STAGE_LABEL: Record<Stage, string> = {
   edit: "Edit",
   deliver: "Deliver",
@@ -31,6 +44,18 @@ export const STAGE_LABEL: Record<Stage, string> = {
   skills: "Skills",
   history: "History",
 };
+
+export type WorkspaceShortcut = {
+  stage: Stage;
+  keys: string;
+  label: string;
+};
+
+export const WORKSPACE_SHORTCUTS = WORKSPACE_DESTINATIONS.map((stage, index) => ({
+  stage,
+  keys: `⌘${index + 1}`,
+  label: STAGE_LABEL[stage],
+})) as readonly WorkspaceShortcut[];
 
 /**
  * For the StageIndicator chrome: each stage can be at one of these visual states.
@@ -71,4 +96,16 @@ export function stageProgress(stage: Stage, current: Stage, visited: Set<Stage>)
   if (stage === current) return "current";
   if (visited.has(stage)) return "complete";
   return "upcoming";
+}
+
+export function stageFromWorkspaceShortcut(
+  key: string,
+  modifierPressed: boolean,
+): Stage | null {
+  if (!modifierPressed) return null;
+  const index = Number(key) - 1;
+  if (!Number.isInteger(index) || index < 0 || index >= WORKSPACE_DESTINATIONS.length) {
+    return null;
+  }
+  return WORKSPACE_DESTINATIONS[index] ?? null;
 }

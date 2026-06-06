@@ -14,8 +14,8 @@
 
 use awidat_social::api::{AccountSummary, OAuthStartResponse};
 use awidat_social::api::{
-    BindTargetRequest, ProviderSummary, PublishJobResponse, ScheduleTargetRequest, SocialApi,
-    ValidateTargetRequest,
+    BindTargetRequest, ProviderSummary, PublishJobResponse, RescheduleJobRequest,
+    ScheduleTargetRequest, SocialApi, ValidateTargetRequest, ValidateTargetResponse,
 };
 use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use awidat_social::provider::ProviderRegistry;
@@ -115,7 +115,7 @@ pub async fn social_validate_target(
     state: State<'_, AwidatState>,
     target_id: String,
     now: i64,
-) -> Result<CampaignVariantTarget, String> {
+) -> Result<ValidateTargetResponse, String> {
     client(&state)
         .await?
         .validate_target(&ValidateTargetRequest { target_id, now })
@@ -176,6 +176,31 @@ pub async fn social_retry_job(
     client(&state).await?.retry_job(&job_id).await
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescheduleArgs {
+    pub scheduled_for: i64,
+}
+
+#[tauri::command]
+pub async fn social_reschedule_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+    args: RescheduleArgs,
+) -> Result<PublishJobResponse, String> {
+    client(&state)
+        .await?
+        .reschedule_job(
+            &job_id,
+            &RescheduleJobRequest {
+                scheduled_for: args.scheduled_for,
+                // The server overwrites this with its own clock.
+                now: 0,
+            },
+        )
+        .await
+}
+
 #[tauri::command]
 pub async fn social_account_audit(
     state: State<'_, AwidatState>,
@@ -219,9 +244,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn providers_list_has_three_slots() {
+    fn providers_list_has_major_platform_slots() {
         let registry = ProviderRegistry::default_multi_platform();
-        assert_eq!(SocialApi::providers(&registry).len(), 3);
+        assert_eq!(SocialApi::providers(&registry).len(), 4);
     }
 
     #[test]

@@ -11,6 +11,10 @@ import {
   jobStatusLabel,
   canCancel,
   canRetry,
+  canReschedule,
+  canReconnect,
+  canViewAccountAudit,
+  buildPlatformFieldsForPublish,
   isTerminal,
 } from "../src/app/social/socialModel.ts";
 
@@ -29,6 +33,11 @@ assert.equal(eligibilitySummary({ eligible: false, reasons: [] }), "Not eligible
 
 // Reason copy falls back to a humanized code.
 assert.equal(reasonCopy("scheduled_time_invalid"), "scheduled time is in the past");
+assert.equal(
+  reasonCopy("twitter_x_oauth_client_pending"),
+  "Twitter/X connection setup pending",
+);
+assert.equal(reasonCopy("title.required"), "title required");
 assert.equal(reasonCopy("some_unknown_code"), "some unknown code");
 
 // Job status labels.
@@ -42,6 +51,51 @@ assert.equal(canCancel("cancelled"), false);
 assert.equal(canRetry("failed"), true);
 assert.equal(canRetry("requires_action"), true);
 assert.equal(canRetry("scheduled"), false);
+assert.equal(canReschedule("scheduled"), true);
+assert.equal(canReschedule("uploading"), false);
+assert.equal(canReschedule("published"), false);
+assert.equal(canReconnect("needs_reauth"), true);
+assert.equal(canReconnect("missing_scope"), true);
+assert.equal(canReconnect("revoked"), true);
+assert.equal(canReconnect("connected"), false);
+assert.equal(canReconnect("disabled"), false);
+assert.equal(canViewAccountAudit("connected"), true);
+assert.equal(canViewAccountAudit("needs_reauth"), true);
+assert.equal(canViewAccountAudit("disabled"), true);
+
+// Manual publish field builder keeps full platform metadata.
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "youtube",
+    privacy: "unlisted",
+    title: "Episode title",
+    description: "Episode description",
+    tagsInput: "podcast, launch, podcast",
+    thumbnailPath: "/tmp/thumb.jpg",
+  }),
+  {
+    privacy: "unlisted",
+    title: "Episode title",
+    description: "Episode description",
+    tags: ["podcast", "launch"],
+    thumbnailRef: "file:///tmp/thumb.jpg",
+  },
+);
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "instagram",
+    privacy: "private",
+    title: "Ignored title",
+    description: "Caption only",
+    tagsInput: "",
+    thumbnailPath: "",
+  }),
+  {
+    privacy: "private",
+    description: "Caption only",
+    tags: [],
+  },
+);
 
 // Terminal-state detection (drives passive polling — firing is server-side now).
 assert.equal(isTerminal("published"), true);

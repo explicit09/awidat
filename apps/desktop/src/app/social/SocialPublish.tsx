@@ -15,33 +15,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { SocialAccounts } from "./SocialAccounts";
 import { SocialJobs } from "./SocialJobs";
 import {
-  reasonCopy,
   type AccountSummary,
-  type PublishJob,
 } from "./socialModel";
 import { useRenderQueueStore } from "../renderQueue";
+import {
+  mergeSchedulerPublishResults,
+  publishSchedulerPostToAccounts,
+  type SchedulerPublishAccount,
+} from "../scheduler/schedulerPublish";
 import { Button, Card, Inline, Stack } from "../../ui";
 
 type UploadPrivacy = "private" | "unlisted" | "public";
 
-type ValidatedTarget = {
-  validation_state?: string;
-  validationState?: string;
-};
-
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-function randomId(prefix: string): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${prefix}-${hex}`;
-}
-
-function validationState(target: ValidatedTarget): string {
-  return target.validation_state ?? target.validationState ?? "unknown";
 }
 
 /** Format a unix-seconds value for a datetime-local input. */
@@ -63,10 +50,13 @@ export function SocialPublish() {
     [renderEntries],
   );
 
-  const [accountId, setAccountId] = useState<string>("");
+  const [accountIds, setAccountIds] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>("");
   const [privacy, setPrivacy] = useState<UploadPrivacy>("private");
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+  const [thumbnailPath, setThumbnailPath] = useState("");
   const [scheduledFor, setScheduledFor] = useState<number>(nowSeconds() + 600);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -87,76 +77,81 @@ export function SocialPublish() {
 
   // Default the selects once data arrives.
   useEffect(() => {
-    if (!accountId && accounts[0]) setAccountId(accounts[0].id);
-  }, [accounts, accountId]);
+    setAccountIds((current) => {
+      const uploadCapable = accounts.filter((account) => account.capabilities.uploadVideo);
+      const available = new Set(uploadCapable.map((account) => account.id));
+      const kept = current.filter((id) => available.has(id));
+      if (kept.length > 0) return kept;
+      return uploadCapable[0] ? [uploadCapable[0].id] : [];
+    });
+  }, [accounts]);
   useEffect(() => {
     if (!entryId && publishable[0]) setEntryId(publishable[0].id);
   }, [publishable, entryId]);
 
-  const selectedAccount = accounts.find((a) => a.id === accountId);
+  const selectedAccounts = accounts.filter((account) =>
+    accountIds.includes(account.id),
+  );
   const selectedEntry = publishable.find((e) => e.id === entryId);
-  const eligible = selectedAccount?.capabilities.uploadVideo === true;
+  const eligible = selectedAccounts.length > 0;
+  const firstSelectedProvider = selectedAccounts[0]?.provider;
+
+  useEffect(() => {
+    if (!firstSelectedProvider || !selectedEntry) return;
+    const metadata = selectedEntry.uploadMetadata?.[firstSelectedProvider];
+    setPrivacy(metadata?.visibility ?? "private");
+    setTitle(metadata?.title ?? "");
+    setDescription(metadata?.description ?? "");
+    setTagsInput(metadata?.tags.join(", ") ?? "");
+    setThumbnailPath(metadata?.thumbnailPath ?? "");
+    if (metadata?.scheduledAt) setScheduledFor(metadata.scheduledAt);
+  }, [firstSelectedProvider, selectedEntry?.id]);
 
   /** The full publish chain for one clip. */
   const publish = useCallback(async () => {
-    if (!selectedAccount || !selectedEntry?.outputPath) return;
+    if (selectedAccounts.length === 0 || !selectedEntry?.outputPath) return;
     setError(null);
     setBusy("Scheduling…");
     try {
-      // 1. bind the (synthetic single-clip) target to the account.
-      const targetId = randomId("target");
-      const campaignId = `adhoc-${selectedEntry.id}`;
-      const variantId = `clip-${selectedEntry.id}`;
-      await invoke("social_bind_target", {
-        args: {
-          targetId,
-          campaignId,
-          variantId,
-          connectedAccountId: selectedAccount.id,
-          platformFields: { privacy, title: title || selectedEntry.id },
-          scheduledFor,
-          now: nowSeconds(),
-        },
+      const results = await publishSchedulerPostToAccounts({
+        entry: selectedEntry,
+        accounts: selectedAccounts as SchedulerPublishAccount[],
+        title: title || selectedEntry.id,
+        description,
+        tagsInput,
+        thumbnailPath,
+        privacy,
+        scheduledFor,
+        invoke,
+        createdBy: "desktop-manual-publish",
+        campaignIdPrefix: "adhoc",
       });
+      const store = useRenderQueueStore.getState();
+      const latest = store.entries.find((entry) => entry.id === selectedEntry.id) ?? selectedEntry;
+      const patch = mergeSchedulerPublishResults(latest, results);
+      store.setUploadTargets(selectedEntry.id, patch.uploadTargets);
+      store.setUploadMetadata(selectedEntry.id, patch.uploadMetadata);
+      store.setUploadStates(selectedEntry.id, patch.uploadStates, patch.publishedUrls);
 
-      // 2. validate (eligibility + scheduled time).
-      const validated = await invoke<ValidatedTarget>(
-        "social_validate_target",
-        { targetId, now: nowSeconds() },
-      );
-      const validatedState = validationState(validated);
-      if (validatedState !== "valid") {
-        setError(`Not valid to schedule: ${reasonCopy(validatedState)}`);
-        setBusy(null);
-        return;
-      }
-
-      // 3. schedule → creates the publish job.
-      const jobId = randomId("job");
-      const job = await invoke<PublishJob>("social_schedule_target", {
-        args: {
-          targetId,
-          jobId,
-          artifactRef: "",
-          now: nowSeconds(),
-        },
-      });
-
-      // 4. upload the rendered file to the job (server mints a signed URL,
-      //    streams the bytes, records the artifact). The worker fires after.
-      setBusy("Uploading render…");
-      await invoke("social_upload_artifact", {
-        jobId: job.id,
-        filePath: selectedEntry.outputPath,
-      });
-
-      setJobIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]));
+      setJobIds((prev) => [
+        ...prev,
+        ...results.map((result) => result.jobId).filter((jobId) => !prev.includes(jobId)),
+      ]);
       setBusy(null);
     } catch (e) {
       setError(String(e));
       setBusy(null);
     }
-  }, [selectedAccount, selectedEntry, privacy, title, scheduledFor]);
+  }, [
+    selectedAccounts,
+    selectedEntry,
+    privacy,
+    title,
+    description,
+    tagsInput,
+    thumbnailPath,
+    scheduledFor,
+  ]);
 
   return (
     <Stack gap="4" className="p-4 max-w-[720px]">
@@ -192,23 +187,39 @@ export function SocialPublish() {
 
           {accounts.length > 0 && publishable.length > 0 && (
             <>
-              <Field label="Account">
-                <select
-                  className="social-select"
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.displayName} ({a.provider})
-                    </option>
-                  ))}
-                </select>
+              <Field label="Destinations">
+                <div className="grid gap-1">
+                  {accounts.map((account) => {
+                    const checked = accountIds.includes(account.id);
+                    return (
+                      <label
+                        key={account.id}
+                        className="flex min-h-[32px] items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2 py-1.5 text-[var(--text-body-sm)] text-[var(--color-text-secondary)]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!account.capabilities.uploadVideo}
+                          onChange={(event) => {
+                            const nextChecked = event.currentTarget.checked;
+                            setAccountIds((current) =>
+                              nextChecked
+                                ? [...new Set([...current, account.id])]
+                                : current.filter((id) => id !== account.id),
+                            );
+                          }}
+                        />
+                        <span className="min-w-0 truncate">
+                          {account.displayName} ({account.provider})
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
               </Field>
-              {!eligible && selectedAccount && (
+              {!eligible && (
                 <p className="text-[var(--text-caption)] text-[var(--color-text-danger,#f87171)]">
-                  This account can&apos;t upload video yet (reconnect or check
-                  permissions).
+                  Select at least one upload-capable account.
                 </p>
               )}
 
@@ -234,6 +245,34 @@ export function SocialPublish() {
                   onChange={(e) => setTitle(e.target.value)}
                 />
               </Field>
+
+              <Field label="Description">
+                <textarea
+                  className="social-input min-h-[76px]"
+                  value={description}
+                  placeholder="Caption or description"
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </Field>
+
+              <Inline gap="3" className="flex-wrap">
+                <Field label="Tags">
+                  <input
+                    className="social-input"
+                    value={tagsInput}
+                    placeholder="tag, tag"
+                    onChange={(e) => setTagsInput(e.target.value)}
+                  />
+                </Field>
+                <Field label="Thumbnail path">
+                  <input
+                    className="social-input"
+                    value={thumbnailPath}
+                    placeholder="/path/to/thumbnail.jpg"
+                    onChange={(e) => setThumbnailPath(e.target.value)}
+                  />
+                </Field>
+              </Inline>
 
               <Inline gap="3" className="flex-wrap">
                 <Field label="Privacy">
@@ -269,7 +308,7 @@ export function SocialPublish() {
                   disabled={!eligible || busy !== null}
                   onClick={() => void publish()}
                 >
-                  {busy ?? "Schedule + upload"}
+                  {busy ?? `Schedule + upload ${selectedAccounts.length}`}
                 </Button>
                 {error && (
                   <span
