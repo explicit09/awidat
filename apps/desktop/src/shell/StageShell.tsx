@@ -1,12 +1,14 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
 import { usePendingProposals } from "../timeline/pendingProposals";
 import { ProposalCard } from "./brief/ProposalCard";
 import { useTimelineStore } from "../timeline/store";
+import { useTimelineSelectionStore } from "../properties/store";
 import type { Stage } from "../state/stages";
-import { ChatStream } from "../agent/ChatStream";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
+import { ConversationPanel } from "./StageConversation";
+import type { MediaSuggestion } from "./CommandRail";
 import mark from "../brand/montage-mark.svg";
 
 /**
@@ -17,25 +19,25 @@ import mark from "../brand/montage-mark.svg";
  *   • The agent's proposals ride alongside as a swipeable glass deck,
  *     wired to the real useBriefProposalsStore (accept / reject).
  *   • A persistent command bar drives edits AND navigation.
- *   • Deliver / Schedule / Skills / History are summoned via the thin left dock
- *     (or command routes) and slide in as glass sheets over the dimmed
- *     stage — the command bar + dock persist, so context is never lost.
+ *   • Source tools live in a left pane; chat and output tools live in a
+ *     right pane. Larger destinations such as Schedule and Skills stay as
+ *     full-page surfaces.
  *
  * This component is pure layout: every real surface (preview, timeline,
  * delivery/skills/history) is passed in as a node by App.tsx, which owns
  * the data wiring. The proposal deck reads the store directly.
  */
 
-const ORANGE = "#FF7A18";
+const BRAND_RED = "#EF4444";
 
 const MEDIUM_COLOR: Record<string, string> = {
-  cut: "#67E8F9",
+  cut: "#EF4444",
   color: "#FCD34D",
-  broll: "#D8B4FE",
+  broll: "#FB7185",
   audio: "#CBD5E1",
-  transition: "#D8B4FE",
-  title: "#5EEAD4",
-  caption: "#5EEAD4",
+  transition: "#FB7185",
+  title: "#FCA5A5",
+  caption: "#FCA5A5",
   mixed: "#E2E8F0",
   other: "#94A3B8",
 };
@@ -43,38 +45,37 @@ function mediumColor(m: BriefMedium): string {
   return MEDIUM_COLOR[m] ?? "#94A3B8";
 }
 
-type DockItem = { id: Stage; glyph: string; label: string };
-const DOCK: DockItem[] = [
-  { id: "edit", glyph: "▶", label: "Stage" },
-  { id: "deliver", glyph: "↑", label: "Deliver" },
-  { id: "schedule", glyph: "◷", label: "Schedule" },
-  { id: "skills", glyph: "✦", label: "Skills" },
-  { id: "history", glyph: "◷", label: "History" },
-];
-
-// Summonable cockpit tools — slide in as a right-side glass panel over the
-// (still-visible) stage. Transcript leads: it's the click-a-word→seek surface.
+// Side-pane tools: source/context tools on the left, output/session tools on the right.
 type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
-type ToolItem = { id: ToolKey; glyph: string; label: string };
-const TOOLS: ToolItem[] = [
-  { id: "transcript", glyph: "¶", label: "Transcript" },
-  { id: "media", glyph: "▦", label: "Media" },
-  { id: "inspector", glyph: "⚙", label: "Inspector" },
-  { id: "index", glyph: "☰", label: "Index" },
-  { id: "vedit", glyph: "✎", label: "Vedit" },
+
+// Timeline strip sizing — fits the common V1 + A1 layout without vertical scroll.
+const TL_HEADER_PX = 40;
+const TL_RULER_PX = 22;
+const TL_ROW = 62;
+const TL_MIN_VISIBLE_TRACKS = 2;
+const TL_MIN_PX = TL_HEADER_PX + TL_RULER_PX + TL_MIN_VISIBLE_TRACKS * TL_ROW;
+const TL_MAX_VH = 0.58; // soft cap; beyond this the strip scrolls (never clips)
+
+const SIDE_PANE_W = 360;
+const SIDE_PANE_MIN_W = 260;
+const SIDE_PANE_MAX_W = 520;
+const SIDE_PANE_GUTTER = 12;
+type LeftPaneKey = "transcript" | "media" | "index";
+type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit";
+const LEFT_PANES: { id: LeftPaneKey; label: string }[] = [
+  { id: "media", label: "Media" },
+  { id: "transcript", label: "Transcript" },
+  { id: "index", label: "Index" },
 ];
-
-// Timeline strip sizing — fits ALL tracks without vertical scroll.
-const TL_BASE = 48; // header/padding chrome
-const TL_ROW = 58; // per-track lane height
-const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
-
-// Tool side-panel geometry — single source of truth (was 3 duplicated
-// magic numbers 372/380/380 that had to stay in sync by hand).
-const TOOL_W = 372; // panel width
-const TOOL_GUTTER = 12; // gap from the right edge
-const TOOL_DOCK_W = 44; // right dock width
-const TOOL_RESERVE = TOOL_W + TOOL_GUTTER + TOOL_DOCK_W + 12; // stage reflow when a tool is open
+const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
+  { id: "chat", label: "Chat" },
+  { id: "deliver", label: "Deliver" },
+  { id: "inspector", label: "Inspector" },
+  { id: "vedit", label: "Vedit" },
+];
+type PaneSide = "left" | "right";
+type PaneResize = { side: PaneSide; startX: number; startWidth: number };
+type TimelineResize = { startY: number; startHeight: number };
 
 export type StageShellProps = {
   hasProject: boolean;
@@ -85,7 +86,7 @@ export type StageShellProps = {
   timeline: ReactNode;
   /** Track count drives the timeline strip height (fit all, no scroll). */
   trackCount?: number;
-  /** Summonable cockpit tools, opened from the right-edge dock. */
+  /** Summonable cockpit tools, opened in the stage side panes. */
   tools?: {
     media: ReactNode;
     inspector: ReactNode;
@@ -105,6 +106,8 @@ export type StageShellProps = {
   onCommand: (text: string) => void;
   running: boolean;
   onCancel: () => void;
+  mediaSuggestions?: MediaSuggestion[];
+  onPickMedia?: (suggestion: MediaSuggestion) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -118,7 +121,7 @@ export function StageShell(props: StageShellProps) {
   const {
     hasProject, landing, preview, timeline, trackCount = 0, tools, autoInspect,
     deliver, schedule, skills, history,
-    stage, onStage, onCommand, running, onCancel,
+    stage, onStage, onCommand, running, onCancel, mediaSuggestions = [], onPickMedia,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -155,25 +158,35 @@ export function StageShell(props: StageShellProps) {
 
   const cur = pending[Math.min(active, Math.max(0, pending.length - 1))];
 
-  // Conversation home: the command bar expands into a glass thread.
-  // Auto-opens whenever the agent is working so its replies have a place
-  // to land (the gap the old cockpit's rail used to fill).
-  const [convoOpen, setConvoOpen] = useState(false);
+  // Stable editor panes: source/navigation tools on the left, chat/output
+  // tools on the right.
+  const devTool = (import.meta.env?.VITE_MONTAGE_TOOL as ToolKey | undefined) ?? null;
+  const [leftPane, setLeftPane] = useState<LeftPaneKey>(
+    devTool === "media" || devTool === "index" ? devTool : "transcript",
+  );
+  const [rightPane, setRightPane] = useState<RightPaneKey>(
+    devTool === "inspector" || devTool === "vedit" ? devTool : "chat",
+  );
+  const [leftPaneWidth, setLeftPaneWidth] = useState(SIDE_PANE_W);
+  const [rightPaneWidth, setRightPaneWidth] = useState(SIDE_PANE_W);
+  const [timelineHeightPx, setTimelineHeightPx] = useState(TL_MIN_PX);
+  const [timelineHeightManual, setTimelineHeightManual] = useState(false);
+  const paneResize = useRef<PaneResize | null>(null);
+  const timelineResize = useRef<TimelineResize | null>(null);
+  const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
   useEffect(() => {
-    if (running) setConvoOpen(true);
+    if (running) setRightPane("chat");
   }, [running]);
 
-  // Summonable tool side-panel — one open at a time.
-  // Dev-only: VITE_MONTAGE_TOOL pre-opens a tool (native screenshot verify).
-  const devTool = (import.meta.env?.VITE_MONTAGE_TOOL as ToolKey | undefined) ?? null;
-  const [tool, setTool] = useState<ToolKey | null>(devTool);
-  const toggleTool = (id: ToolKey) => setTool((t) => (t === id ? null : id));
+  useEffect(() => {
+    if (selectedClipKey && onStage_) setRightPane("inspector");
+  }, [onStage_, selectedClipKey]);
 
   // Auto-open the Inspector on the rising edge of a selection — never fight
   // the user (don't reopen if they've closed it while the selection holds).
   const prevAutoInspect = useRef(false);
   useEffect(() => {
-    if (autoInspect && !prevAutoInspect.current) setTool("inspector");
+    if (autoInspect && !prevAutoInspect.current) setRightPane("inspector");
     prevAutoInspect.current = !!autoInspect;
   }, [autoInspect]);
 
@@ -181,13 +194,73 @@ export function StageShell(props: StageShellProps) {
   // Falls back to the live store count if App didn't pass one.
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
   const tracks = trackCount || storeTrackCount;
-  const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
+  const autoTimelineHeightPx = clampTimelineHeight(
+    TL_HEADER_PX + TL_RULER_PX + Math.max(TL_MIN_VISIBLE_TRACKS, tracks) * TL_ROW,
+  );
+  useEffect(() => {
+    if (!timelineHeightManual) setTimelineHeightPx(autoTimelineHeightPx);
+  }, [autoTimelineHeightPx, timelineHeightManual]);
+  const timelineHeight = `${timelineHeightPx}px`;
+  const LEFT_PANE_RESERVE = leftPaneWidth + SIDE_PANE_GUTTER + 12;
+  const RIGHT_PANE_RESERVE = rightPaneWidth + SIDE_PANE_GUTTER + 12;
+  const paneBottom = `calc(36px + ${timelineHeight})`;
+
+  const beginPaneResize = (side: PaneSide, event: ReactPointerEvent<HTMLDivElement>) => {
+    paneResize.current = {
+      side,
+      startX: event.clientX,
+      startWidth: side === "left" ? leftPaneWidth : rightPaneWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const movePaneResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = paneResize.current;
+    if (!resize) return;
+    const delta = event.clientX - resize.startX;
+    const nextWidth = resize.side === "left"
+      ? resize.startWidth + delta
+      : resize.startWidth - delta;
+    const clamped = clamp(nextWidth, SIDE_PANE_MIN_W, SIDE_PANE_MAX_W);
+    if (resize.side === "left") {
+      setLeftPaneWidth(clamped);
+    } else {
+      setRightPaneWidth(clamped);
+    }
+  };
+  const endPaneResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    paneResize.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+  const beginTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    timelineResize.current = {
+      startY: event.clientY,
+      startHeight: timelineHeightPx,
+    };
+    setTimelineHeightManual(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = timelineResize.current;
+    if (!resize) return;
+    setTimelineHeightPx(clampTimelineHeight(resize.startHeight - (event.clientY - resize.startY)));
+  };
+  const endTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    timelineResize.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
 
   // Empty stage: a project is loaded but there's NO footage on the timeline
   // yet (no tracks) AND nothing proposed. "No proposals" alone is not empty —
   // the user may already have footage they're working with.
   const stageEmpty = pending.length === 0 && tracks === 0;
-  const node = tool ? toolNode(tool, tools) : null;
+  const leftNode = toolNode(leftPane, tools);
+  const rightNode = rightPane === "chat" ? null : rightPaneNode(rightPane, {
+    deliver, tools,
+  });
 
   const submit = () => {
     const text = draft.trim();
@@ -195,14 +268,20 @@ export function StageShell(props: StageShellProps) {
     // Command routes: bare destination words navigate; everything else
     // is an editorial instruction to the agent.
     const lower = text.toLowerCase().replace(/^\//, "");
-    if (lower === "transcript" || lower === "media" || lower === "inspector" || lower === "index" || lower === "vedit") {
-      onStage("edit"); // tools live on the Stage
-      setTool(lower as ToolKey);
-    } else if (lower === "deliver" || lower === "schedule" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
+    if (lower === "transcript" || lower === "media" || lower === "index") {
+      onStage("edit");
+      setLeftPane(lower as LeftPaneKey);
+    } else if (lower === "inspector" || lower === "vedit") {
+      onStage("edit");
+      setRightPane(lower as RightPaneKey);
+    } else if (lower === "deliver") {
+      onStage("edit");
+      setRightPane(lower as RightPaneKey);
+    } else if (lower === "history" || lower === "schedule" || lower === "skills" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
-      setConvoOpen(true); // show the thread so the reply is visible
+      setRightPane("chat"); // show the thread so the reply is visible
     }
     setDraft("");
   };
@@ -217,7 +296,7 @@ export function StageShell(props: StageShellProps) {
     <div className="relative z-10 h-full w-full overflow-hidden font-sans text-[var(--color-text-primary)]">
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3" data-tauri-drag-region>
-        <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(255,122,24,0.25), 0 4px 16px rgba(255,122,24,0.30)" }} />
+        <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(239,68,68,0.30), 0 4px 16px rgba(239,68,68,0.34)" }} />
         <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         {projectLabel ? (
           <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">
@@ -226,7 +305,7 @@ export function StageShell(props: StageShellProps) {
         ) : null}
         <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? ORANGE : "#20C997", boxShadow: `0 0 8px ${running ? ORANGE : "#20C997"}` }} />
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? BRAND_RED : "#20C997", boxShadow: `0 0 8px ${running ? BRAND_RED : "#20C997"}` }} />
             {running ? "working" : "ready"}
           </span>
           {timecode ? <span className="font-mono text-[11px] text-[var(--color-text-muted)]">{timecode}</span> : null}
@@ -236,90 +315,109 @@ export function StageShell(props: StageShellProps) {
         </div>
       </div>
 
-      {/* left dock */}
-      <div className="group/dock absolute left-3 top-1/2 z-40 -translate-y-1/2">
-        <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
-          {DOCK.map((d) => {
-            const on = stage === d.id;
-            return (
-              <button
-                key={d.id}
-                onClick={() => onStage(d.id)}
-                data-perf-stage-switch={d.id}
-                data-active={on ? "true" : "false"}
-                className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
-                style={{
-                  background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
-                  color: on ? "#1A0E04" : "var(--color-text-muted)",
-                  boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
-                }}>
-                <span className="grid w-5 place-items-center text-[13px]">{d.glyph}</span>
-                <span className="max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/dock:max-w-[80px] group-hover/dock:opacity-100">{d.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* right-edge tool dock — summon cockpit tools as a side panel.
-          Hidden while a destination sheet (deliver/schedule/skills/history) is open. */}
-      {tools && onStage_ ? (
+      {/* Left source pane — readable tabs for source/navigation tools. */}
+      {onStage_ ? (
         <div
-          className="group/tools absolute top-1/2 z-40 -translate-y-1/2 transition-[right] duration-300"
-          style={{ right: tool ? TOOL_W + TOOL_GUTTER + 8 : 12 }}
-        >
-          <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
-            {TOOLS.map((t) => {
-              const on = tool === t.id;
-              return (
-                <button key={t.id} onClick={() => toggleTool(t.id)}
-                  className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
-                  style={{
-                    background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
-                    color: on ? "#1A0E04" : "var(--color-text-muted)",
-                    boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
-                  }}>
-                  <span className="order-2 max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/tools:max-w-[90px] group-hover/tools:opacity-100">{t.label}</span>
-                  <span className="order-1 grid w-5 place-items-center text-[13px]">{t.glyph}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {/* tool side-panel — slides in from the right; the stage stays visible
-          to its left (NOT a full sheet like the destinations). */}
-      {tools && onStage_ && tool ? (
-        <div
-          className="stage-tool-panel glass glass-strong z-30 flex flex-col overflow-hidden"
+          className="stage-left-pane glass glass-strong z-30 flex flex-col overflow-hidden"
           style={{
             position: "absolute",
             top: 64,
-            bottom: 88,
-            right: TOOL_GUTTER,
-            left: "auto",
-            width: TOOL_W,
+            bottom: paneBottom,
+            left: SIDE_PANE_GUTTER,
+            right: "auto",
+            width: leftPaneWidth,
             maxWidth: "calc(100vw - 24px)",
-            borderRadius: 18,
+            borderRadius: 10,
           }}>
-          <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2.5">
-            <span className="text-[13px] font-semibold capitalize text-[var(--color-text-primary)]">{tool}</span>
-            <button onClick={() => setTool(null)} className="gk-close ml-auto" aria-label="Close">×</button>
+          <div className="stage-left-tabs flex items-center gap-1 overflow-x-auto border-b border-[var(--glass-border)] px-2 py-2">
+            {LEFT_PANES.map((pane) => (
+              <button
+                key={pane.id}
+                onClick={() => setLeftPane(pane.id)}
+                className="stage-left-tab"
+                data-active={leftPane === pane.id ? "true" : "false"}
+              >
+                {pane.label}
+              </button>
+            ))}
           </div>
-          <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">{node}</div>
+          <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">
+            {leftNode}
+          </div>
+          <div
+            className="stage-pane-resize stage-pane-resize-left"
+            onPointerDown={(event) => beginPaneResize("left", event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            role="separator"
+            aria-orientation="vertical"
+          />
         </div>
       ) : null}
 
-      {/* STAGE LAYER — preview hero + proposal deck (dims when a destination
-          opens). Bottom padding tracks the (track-sized) timeline height so
-          the hero flexes; right padding makes room for an open tool panel. */}
+      {/* Right output pane — DaVinci-style readable tabs for chat and
+          delivery/session output tools. */}
+      {onStage_ ? (
+        <div
+          className="stage-right-pane glass glass-strong z-30 flex flex-col overflow-hidden"
+          style={{
+            position: "absolute",
+            top: 64,
+            bottom: paneBottom,
+            right: SIDE_PANE_GUTTER,
+            left: "auto",
+            width: rightPaneWidth,
+            maxWidth: "calc(100vw - 24px)",
+            borderRadius: 10,
+          }}>
+          <div className="stage-right-tabs flex items-center gap-1 overflow-x-auto border-b border-[var(--glass-border)] px-2 py-2">
+            {RIGHT_PANES.map((pane) => (
+              <button
+                key={pane.id}
+                onClick={() => setRightPane(pane.id)}
+                className="stage-right-tab"
+                data-active={rightPane === pane.id ? "true" : "false"}
+              >
+                {pane.label}
+              </button>
+            ))}
+          </div>
+          <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">
+            {rightPane === "chat" ? (
+              <ConversationPanel
+                agentRead={agentRead}
+                draft={draft}
+                running={running}
+                onDraft={setDraft}
+                onSubmit={submit}
+                onCancel={onCancel}
+                mediaSuggestions={mediaSuggestions}
+                onPickMedia={onPickMedia}
+              />
+            ) : rightNode}
+          </div>
+          <div
+            className="stage-pane-resize stage-pane-resize-right"
+            onPointerDown={(event) => beginPaneResize("right", event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            role="separator"
+            aria-orientation="vertical"
+          />
+        </div>
+      ) : null}
+
+      {/* STAGE LAYER — preview hero + proposal deck. Bottom padding tracks the
+          timeline height; side padding makes room for open side panes. */}
       <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: convoOpen ? 120 : `calc(96px + 56px + ${timelineHeight})`,
-          paddingRight: tool ? TOOL_RESERVE : undefined,
+          paddingBottom: `calc(28px + ${timelineHeight})`,
+          paddingLeft: LEFT_PANE_RESERVE,
+          paddingRight: RIGHT_PANE_RESERVE,
         }}>
         <div className="relative flex min-w-0 flex-1 flex-col gap-2">
           <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
@@ -339,7 +437,7 @@ export function StageShell(props: StageShellProps) {
                       className="glass-cta rounded-xl px-4 py-2 text-[13px] font-semibold"
                     >Prepare a starting cut</button>
                     <button
-                      onClick={() => { onStage("edit"); setTool("media"); }}
+                      onClick={() => { onStage("edit"); setLeftPane("media"); }}
                       className="glass-ghost rounded-xl px-4 py-2 text-[13px]"
                     >Open media</button>
                   </div>
@@ -347,11 +445,6 @@ export function StageShell(props: StageShellProps) {
               </div>
             ) : null}
           </div>
-          {agentRead ? (
-            <div className="flex items-center gap-2 pl-1 text-[11px] text-[var(--color-text-muted)]">
-              <span className="text-[#FF9A45]">◇</span> {agentRead}
-            </div>
-          ) : null}
         </div>
 
         {pending.length > 0 && cur ? (
@@ -379,15 +472,23 @@ export function StageShell(props: StageShellProps) {
 
       {/* timeline glass strip — height grows with track count so every track
           is visible at once; past the soft cap it scrolls (never clips a
-          track). Hidden while the conversation panel is open so the two don't
-          fight for the bottom region. */}
-      {!convoOpen ? (
-        <div className="absolute inset-x-20 bottom-24 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? TOOL_RESERVE : undefined }}>
-          <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
-            {timeline}
-          </div>
+          track). Chat lives on the right, so the bottom timeline remains
+          available while the conversation is open. */}
+      <div className="absolute bottom-6 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", left: 0, right: 0 }}>
+        <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight, position: "relative" }}>
+          <div
+            className="stage-timeline-resize-handle"
+            onPointerDown={beginTimelineResize}
+            onPointerMove={moveTimelineResize}
+            onPointerUp={endTimelineResize}
+            onPointerCancel={endTimelineResize}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize timeline"
+          />
+          {timeline}
         </div>
-      ) : null}
+      </div>
 
       {/* destination sheets slide over the dimmed stage */}
       {visibleDestination ? (
@@ -410,47 +511,6 @@ export function StageShell(props: StageShellProps) {
         </div>
       ) : null}
 
-      {/* command bar + conversation home — edits, navigates, and shows
-          the agent's replies in a glass thread that grows from the bar */}
-      <div className="absolute inset-x-0 bottom-0 z-40 flex flex-col items-center px-8 pb-6">
-        {convoOpen ? (
-          <div className="glass glass-strong stage-convo mb-2 flex w-full max-w-[760px] flex-col overflow-hidden" style={{ borderRadius: 18, maxHeight: "min(46vh, 460px)" }}>
-            <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2">
-              <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">Conversation</span>
-              {agentRead ? <span className="text-[10px] text-[var(--color-text-muted)]">· {agentRead}</span> : null}
-              <button onClick={() => setConvoOpen(false)} className="glass-ghost ml-auto rounded-md px-2 py-0.5 text-[11px]">▾ collapse</button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <ChatStream />
-            </div>
-          </div>
-        ) : null}
-        <div className="glass glass-strong glass-reactive flex w-full max-w-[760px] items-center gap-3 rounded-2xl px-4 py-3" style={{ borderRadius: 18 }}>
-          <button
-            onClick={() => setConvoOpen((o) => !o)}
-            title={convoOpen ? "Hide conversation" : "Show conversation"}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg transition"
-            style={{ background: convoOpen ? "rgba(255,122,24,0.30)" : "rgba(255,122,24,0.16)", color: "#FF9A45" }}
-          >◇</button>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            placeholder="ask, trim, propose…  or type a destination: deliver · schedule · skills · history"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
-          />
-          <span className="hidden items-center gap-1 md:flex">
-            {(["deliver", "schedule", "skills", "history"] as Stage[]).map((s) => (
-              <button key={s} onClick={() => onStage(s)} className="glass-ghost rounded-lg px-2 py-1 text-[11px]">/{s}</button>
-            ))}
-          </span>
-          {running ? (
-            <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-xl text-[13px]">■</button>
-          ) : (
-            <button onClick={submit} className="glass-cta grid h-8 w-8 place-items-center rounded-xl text-[13px]">▸</button>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -458,4 +518,23 @@ export function StageShell(props: StageShellProps) {
 function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
   if (!tools) return null;
   return tools[key];
+}
+
+function rightPaneNode(
+  key: RightPaneKey,
+  nodes: Pick<StageShellProps, "deliver" | "tools">,
+): ReactNode {
+  if (key === "deliver") return nodes.deliver;
+  if (key === "inspector" || key === "vedit") return toolNode(key, nodes.tools);
+  return null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampTimelineHeight(value: number): number {
+  const viewportCap =
+    typeof window === "undefined" ? 520 : Math.max(TL_MIN_PX, Math.round(window.innerHeight * TL_MAX_VH));
+  return Math.round(clamp(value, TL_MIN_PX, viewportCap));
 }

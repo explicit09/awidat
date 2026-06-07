@@ -59,25 +59,25 @@ export function EmptyConversation() {
   return (
     <div className="flex flex-col h-full">
       <div
-        className="m-3 p-3 rounded-lg border border-[var(--color-border-subtle)]"
+        className="m-3 rounded-lg border border-[var(--color-border-subtle)] p-3"
         style={{
           background:
-            "linear-gradient(180deg, rgba(255,122,24,0.05), transparent), var(--color-surface-panel)",
+            "linear-gradient(180deg, rgba(239,68,68,0.05), transparent), var(--color-surface-panel)",
         }}
       >
-        <div className="text-[12px] font-semibold text-[var(--color-text-primary)] mb-1">
-          <span className="text-[var(--color-brand)]">▲</span> Montage
-          <span className="ml-2 text-[10px] text-[var(--color-text-muted)] font-normal">
-            · read AGENTS.md · {typeKey ?? "neutral"} mode
+        <div className="mb-1 text-[12px] font-semibold text-[var(--color-text-primary)]">
+          <span className="text-[var(--color-brand)]">◆</span> Montage
+          <span className="ml-2 font-mono text-[10px] font-normal text-[var(--color-text-muted)]">
+            {typeKey ?? "editor"} mode
           </span>
         </div>
-        <p className="text-[11px] text-[var(--color-text-secondary)] leading-snug m-0">
+        <p className="m-0 text-[11px] leading-snug text-[var(--color-text-secondary)]">
           {opener}
         </p>
       </div>
 
-      <div className="px-3 flex flex-col gap-1.5">
-        <div className="text-[9px] uppercase tracking-[0.08em] text-[var(--color-text-muted)] font-bold">
+      <div className="flex flex-col gap-1.5 px-3">
+        <div className="text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
           Try
         </div>
         {prompts.map((p) => (
@@ -86,7 +86,7 @@ export function EmptyConversation() {
             type="button"
             onClick={() => sendPrompt(p)}
             disabled={running || !current}
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] text-[11px] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)] hover:text-[var(--color-text-primary)] text-left disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-2.5 py-1.5 text-left text-[11px] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="text-[var(--color-brand)]">▸</span>
             <span>{p}</span>

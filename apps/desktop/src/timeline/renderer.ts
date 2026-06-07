@@ -2,7 +2,7 @@ import type { TitleStyling } from "../protocol";
 import { snapMoveDeltaS, type UserMoveDrag } from "./editMath.ts";
 import { formatBadgeNumber, formatTime, transitionLabel } from "./formatting.ts";
 import type { GhostRange } from "./ghostClipRanges.ts";
-import { CLIP_PADDING_X, LANE_HEIGHT, RULER_HEIGHT } from "./layout.ts";
+import { CLIP_PADDING_X, LANE_HEIGHT, RULER_HEIGHT, TRACK_HEADER_WIDTH, timeToX } from "./layout.ts";
 import {
   fillRoundedRect,
   pathRoundedRect,
@@ -29,21 +29,21 @@ const TOKEN = {
   laneAudio: "#0E1110",
   laneTitle: "#0E1219",
   /** --color-border-subtle */
-  borderSubtle: "#1F1F22",
+  borderSubtle: "#1F1F1F",
   /** --color-border */
-  border: "#2D2D30",
+  border: "#2A2A2A",
   /** --color-text-primary */
-  textPrimary: "#E6E6E6",
+  textPrimary: "#FFFFFF",
   /** --color-text-secondary */
-  textSecondary: "#B4B4B8",
+  textSecondary: "#D1D5DB",
   /** --color-text-muted */
-  textMuted: "#7A7A82",
-  /** --color-brand-secondary (cyan accents: selection, playhead, highlight) */
-  brandSecondary: "#38BDF8",
-  /** --color-brand-secondary-hover (lighter cyan) */
-  brandSecondaryHover: "#7DD3FC",
+  textMuted: "#8F949E",
+  /** --color-brand-secondary (red accents: selection, playhead, highlight) */
+  brandSecondary: "#EF4444",
+  /** --color-brand-secondary-hover (lighter red) */
+  brandSecondaryHover: "#FCA5A5",
   /** --color-brand-purple (transitions, motion family) */
-  brandPurple: "#A855F7",
+  brandPurple: "#FB7185",
   /** --color-viz-audio — slate-grey baseline for inactive audio */
   vizAudio: "#64748B",
   /** --color-job-ready-dot — green reserved for the active audio clip */
@@ -79,11 +79,6 @@ const SELECTION = {
 const FONT_SANS = '"Inter", ui-sans-serif, system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
 
-/** Width of the inline track-header pill drawn at the left edge of
- *  every lane (V1 / A1 / …). Sized so 3-character labels fit comfortably
- *  while leaving the rest of the lane free for clip content. */
-const TRACK_HEADER_WIDTH = 44;
-
 export function drawMoveGhost(
   ctx: CanvasRenderingContext2D,
   snapshot: TimelineSnapshot,
@@ -94,7 +89,7 @@ export function drawMoveGhost(
 ) {
   const dx = snapMoveDeltaS(snapshot, currentTime, drag, pps) * pps;
   const drawClip = (trackIndex: number, item: Extract<TimelineItem, { kind: "clip" }>) => {
-    const x = Math.round(item.track_start_s * pps + dx);
+    const x = Math.round(timeToX(item.track_start_s, pps) + dx);
     const y = RULER_HEIGHT + trackIndex * laneHeight + 4;
     const w = Math.max(2, Math.round(item.duration_s * pps));
     const h = laneHeight - 8;
@@ -141,6 +136,8 @@ export function drawRuler(
   ctx.beginPath();
   ctx.moveTo(0, RULER_HEIGHT - 0.5);
   ctx.lineTo(width, RULER_HEIGHT - 0.5);
+  ctx.moveTo(TRACK_HEADER_WIDTH - 0.5, 0);
+  ctx.lineTo(TRACK_HEADER_WIDTH - 0.5, RULER_HEIGHT);
   ctx.stroke();
 
   const desiredPx = 64;
@@ -161,7 +158,7 @@ export function drawRuler(
     ctx.strokeStyle = TOKEN.borderSubtle;
     ctx.beginPath();
     for (let t = 0; t <= duration + majorInterval; t += minorInterval) {
-      const x = Math.round(t * pps) + 0.5;
+      const x = Math.round(timeToX(t, pps)) + 0.5;
       if (x > width) break;
       ctx.moveTo(x, RULER_HEIGHT - 4);
       ctx.lineTo(x, RULER_HEIGHT);
@@ -174,7 +171,7 @@ export function drawRuler(
   ctx.textBaseline = "middle";
 
   for (let t = 0; t <= duration + majorInterval; t += majorInterval) {
-    const x = Math.round(t * pps) + 0.5;
+    const x = Math.round(timeToX(t, pps)) + 0.5;
     if (x > width) break;
     ctx.strokeStyle = TOKEN.border;
     ctx.beginPath();
@@ -235,7 +232,7 @@ export function drawTracks(
     ctx.stroke();
 
     for (const item of track.items) {
-      const x = Math.round(item.track_start_s * pps);
+      const x = Math.round(timeToX(item.track_start_s, pps));
       const w = Math.max(2, Math.round(item.duration_s * pps));
       const key = `${row}:${item.index}`;
       const flag =
@@ -821,7 +818,7 @@ function drawSingleGhost(
   laneHeight: number,
   offsetY: number,
 ) {
-  const x = Math.round(range.startS * pps);
+  const x = Math.round(timeToX(range.startS, pps));
   const w = Math.max(8, Math.round((range.endS - range.startS) * pps));
   const y = RULER_HEIGHT + range.trackIndex * laneHeight + 4 + offsetY;
   const h = laneHeight - 8 - offsetY;
@@ -891,7 +888,7 @@ export function drawPlayhead(
   currentTime: number,
   pps: number,
 ) {
-  const x = Math.round(currentTime * pps) + 0.5;
+  const x = Math.round(timeToX(currentTime, pps)) + 0.5;
   if (x < 0 || x > width) return;
   // Soft cyan halo so even a thin 1.5px shaft reads across light
   // thumbnail frames — without it the line vanishes on white peaks.

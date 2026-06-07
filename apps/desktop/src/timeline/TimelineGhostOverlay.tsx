@@ -22,7 +22,7 @@ import {
   type GhostAnchor,
   type GhostRange,
 } from "./ghostClipRanges.ts";
-import { RULER_HEIGHT } from "./layout.ts";
+import { RULER_HEIGHT, timeToX } from "./layout.ts";
 import { usePendingProposals } from "./pendingProposals.ts";
 import { useTimelineProposalFocus } from "./timelineProposalFocus.ts";
 import type { TimelineSnapshot } from "./store.ts";
@@ -210,7 +210,7 @@ function GhostAnchorOverlay({
   onReject,
 }: GhostAnchorOverlayProps) {
   const [hovered, setHovered] = useState(false);
-  const left = Math.round(anchor.startS * pps);
+  const left = Math.round(timeToX(anchor.startS, pps));
   const width = Math.max(40, Math.round((anchor.endS - anchor.startS) * pps));
   const top = RULER_HEIGHT + anchor.trackIndex * laneHeight + 4;
   const height = laneHeight - 8;
@@ -346,7 +346,7 @@ function GhostAnchorOverlay({
                 padding: "1px 6px",
                 borderRadius: 3,
                 background: "rgba(34,211,238,0.12)",
-                color: "#67E8F9",
+                color: "#FCA5A5",
                 border: "1px solid rgba(34,211,238,0.32)",
               }}
             >

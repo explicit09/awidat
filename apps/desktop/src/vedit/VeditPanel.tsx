@@ -106,7 +106,7 @@ export function VeditPanel() {
         <span className="vedit-count">
           {loading ? "Loading" : `${entries.length} saved`}
         </span>
-        <button type="button" onClick={load}>
+        <button type="button" className="glass-ghost px-2 py-1 text-[11px] font-semibold" onClick={load}>
           Refresh
         </button>
       </header>

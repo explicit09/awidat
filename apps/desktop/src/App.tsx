@@ -11,7 +11,6 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
-import { summarizeEditorPublishing } from "./editor/publishingBridge";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
@@ -1362,7 +1361,12 @@ function App() {
   function attachMediaPick(suggestion: MediaSuggestion) {
     setPickedMediaChips((prev) => {
       if (prev.some((c) => c.label === suggestion.chipLabel)) return prev;
-      return [...prev, { label: suggestion.chipLabel, kind: "media" as const }];
+      return [...prev, {
+        label: suggestion.chipLabel,
+        kind: "media" as const,
+        mediaId: suggestion.id,
+        mediaToken: suggestion.token,
+      }];
     });
   }
 
@@ -1630,8 +1634,6 @@ function App() {
   );
 
   const selectedDeliveryTargets = useDeliveryTargetsStore((s) => s.selected);
-  const selectedUploadTargets = useUploadPrefs((s) => s.enabled);
-  const selectedUploadAccounts = useUploadAccountSelections((s) => s.byProvider);
   const effectiveDeliveryTargets: DeliveryTarget[] = useMemo(
     () =>
       realDeliveryTargets.map((target) => ({
@@ -1640,16 +1642,6 @@ function App() {
       })),
     [selectedDeliveryTargets, realDeliveryTargets],
   );
-  const editorPublishingSummary = useMemo(
-    () =>
-      summarizeEditorPublishing({
-        selectedTargets: selectedDeliveryTargets,
-        uploadTargets: selectedUploadTargets,
-        accountSelections: selectedUploadAccounts,
-      }),
-    [selectedDeliveryTargets, selectedUploadTargets, selectedUploadAccounts],
-  );
-
   const realPreflightFindings: PreflightFinding[] = useMemo(() => {
     if (timelineSnapshot.preview_limitations.length > 0) {
       return timelineSnapshot.preview_limitations.map((limitation, index) => ({
@@ -1967,7 +1959,7 @@ function App() {
             if (effectiveDuration > 0) seekPreview(Math.max(0, Math.min(1, pct)) * effectiveDuration);
           }}
         >
-          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#FF7A18", boxShadow: "0 0 10px #FF7A18" }} />
+          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#EF4444", boxShadow: "0 0 10px #EF4444" }} />
         </div>
         <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">
           {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
@@ -1975,12 +1967,11 @@ function App() {
       </div>
     </div>
   );
-  // Bare timeline canvas — no Hybrid tab/zoom chrome in the Stage strip.
-  // `.stage-timeline` hides TimelinePane's internal header (track count /
-  // +Track / zoom) via glass.css so the strip reads as a clean ribbon.
+  // Bare timeline canvas — no Hybrid tabs in the Stage strip. TimelinePane's
+  // compact header stays visible for transport, track, and zoom controls.
   const stageTimeline = (
     <div className="stage-timeline h-full w-full overflow-hidden">
-      <TimelinePane />
+      <TimelinePane previewRate={previewRate} onPreviewRate={setPreviewRate} />
     </div>
   );
 
@@ -2051,10 +2042,7 @@ function App() {
         />
       </div>
     ) : (
-      <ClipInspector
-        publishing={editorPublishingSummary}
-        onOpenDelivery={() => setStage("deliver")}
-      />
+      <ClipInspector />
     );
   const stageIndex = (
     <IndexRail
@@ -2106,6 +2094,8 @@ function App() {
           if (!isTauri()) return;
           invoke("cancel_turn").catch((e) => console.warn("cancel_turn failed", e));
         }}
+        mediaSuggestions={mediaSuggestions}
+        onPickMedia={attachMediaPick}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject
@@ -2716,6 +2706,7 @@ function ProjectMediaPanel({
   onRefreshGeneratedMedia: () => void;
   onPlaceGeneratedMedia: (entry: GeneratedMediaEntry) => void;
 }) {
+  const selectedMediaStem = useMediaStore((s) => s.selectedStem);
   const indexedCount = media.filter((item) => item.status === "indexed").length;
   const activeCount = media.filter((item) => item.status === "indexing" || item.status === "processing" || item.status === "partial").length;
   const mediaState = sourceCount === 0
@@ -2832,7 +2823,8 @@ function ProjectMediaPanel({
               event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
-            className="glass-content cursor-pointer px-3 py-2 text-left"
+            className="stage-media-item glass-content cursor-pointer px-3 py-2 text-left"
+            data-selected={item.stem === selectedMediaStem ? "true" : "false"}
             title={item.title}
             draggable={item.assetId !== undefined}
             onDragStart={(event) => {

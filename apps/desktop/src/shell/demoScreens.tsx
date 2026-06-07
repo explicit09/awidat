@@ -670,8 +670,8 @@ function ProductConceptBoard() {
 
         <section className="grid min-h-0 grid-cols-[1.24fr_0.76fr] gap-3">
           <div className="relative rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] p-2.5">
-            <div className="absolute bottom-4 left-[8%] right-[8%] border-t border-dashed border-[rgba(56,189,248,0.45)]" />
-            <div className="absolute bottom-1 left-1/2 z-20 -translate-x-1/2 rounded-full border border-[rgba(56,189,248,0.45)] bg-[#07111B] px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-brand-secondary)]">
+            <div className="absolute bottom-4 left-[8%] right-[8%] border-t border-dashed border-[rgba(239,68,68,0.45)]" />
+            <div className="absolute bottom-1 left-1/2 z-20 -translate-x-1/2 rounded-full border border-[rgba(239,68,68,0.45)] bg-[#07111B] px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-brand-secondary)]">
               Evidence & Feedback Loop
             </div>
             <div className="mb-2 flex items-baseline justify-between">
@@ -1293,7 +1293,7 @@ function SemanticLaneRow({ lane }: { lane: ChannelLane }) {
                   : "rgba(59,130,246,0.75)"
                 : lane.paletteKey === "confidence"
                   ? "rgba(34,197,94,0.7)"
-                  : "rgba(56,189,248,0.4)";
+                  : "rgba(239,68,68,0.4)";
           return (
             <span
               key={`${lane.id}-${index}`}
@@ -1379,7 +1379,7 @@ function SemanticTimelineWorkspace() {
       <main className="grid min-h-0 grid-rows-[200px_minmax(0,1fr)_168px]">
         <section className="relative border-b border-[var(--color-border-subtle)] bg-black">
           <DemoImage src={podcastWide} label="Selected segment · 03:41:12 — 03:46:08 (4.9s)" />
-          <div className="absolute inset-y-0 left-[42%] w-[18%] border-x-2 border-[var(--color-brand-secondary)] bg-[rgba(56,189,248,0.08)]" />
+          <div className="absolute inset-y-0 left-[42%] w-[18%] border-x-2 border-[var(--color-brand-secondary)] bg-[rgba(239,68,68,0.08)]" />
         </section>
         <SemanticTranscriptPanel segments={reviewSegments} />
         <section className="border-t border-[var(--color-border-subtle)]">

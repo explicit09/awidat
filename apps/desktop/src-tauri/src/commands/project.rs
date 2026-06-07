@@ -246,6 +246,13 @@ pub struct ProjectEpisodesSummary {
     pub episodes: Vec<ProjectEpisodeSummary>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPreviewMedia {
+    kind: &'static str,
+    path: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectEpisodeSummary {
     pub id: String,
@@ -479,6 +486,138 @@ pub async fn recent_projects() -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// Return one representative thumbnail frame for a project-manager tile.
+#[tauri::command]
+pub async fn project_thumbnail(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    let root = PathBuf::from(path);
+    if !root.is_dir() || !root.join("project.otio.json").is_file() {
+        return Ok(None);
+    }
+
+    let thumbnails = root.join(".awidat").join("thumbnails");
+    let Some(frame) = first_project_thumbnail(&thumbnails).await? else {
+        return Ok(None);
+    };
+
+    if let Err(e) = app
+        .asset_protocol_scope()
+        .allow_directory(&thumbnails, true)
+    {
+        tracing::warn!(
+            error = %e,
+            path = %thumbnails.display(),
+            "failed to allow project-manager thumbnail scope",
+        );
+    }
+
+    Ok(Some(frame.to_string_lossy().into_owned()))
+}
+
+/// Return the best available local preview media for a project-manager tile.
+#[tauri::command]
+pub async fn project_preview_media(
+    app: AppHandle,
+    path: String,
+) -> Result<Option<ProjectPreviewMedia>, String> {
+    let root = PathBuf::from(path);
+    if !root.is_dir() || !root.join("project.otio.json").is_file() {
+        return Ok(None);
+    }
+
+    let proxies = root.join(".awidat").join("proxies");
+    if let Some(proxy) = first_project_proxy(&proxies).await? {
+        if let Err(e) = app.asset_protocol_scope().allow_directory(&proxies, true) {
+            tracing::warn!(
+                error = %e,
+                path = %proxies.display(),
+                "failed to allow project-manager proxy scope",
+            );
+        }
+        return Ok(Some(ProjectPreviewMedia {
+            kind: "video",
+            path: proxy.to_string_lossy().into_owned(),
+        }));
+    }
+
+    project_thumbnail(app, root.to_string_lossy().into_owned())
+        .await
+        .map(|path| {
+            path.map(|path| ProjectPreviewMedia {
+                kind: "image",
+                path,
+            })
+        })
+}
+
+async fn first_project_proxy(root: &Path) -> Result<Option<PathBuf>, String> {
+    let mut entries = match fs::read_dir(root).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read proxies root: {e}")),
+    };
+
+    let mut proxies = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("read proxy entry: {e}"))?
+    {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".mp4") {
+            proxies.push(path);
+        }
+    }
+
+    proxies.sort();
+    Ok(proxies.into_iter().next())
+}
+
+async fn first_project_thumbnail(root: &Path) -> Result<Option<PathBuf>, String> {
+    let mut dirs = match fs::read_dir(root).await {
+        Ok(dirs) => dirs,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read thumbnails root: {e}")),
+    };
+
+    let mut frames = Vec::new();
+    while let Some(dir) = dirs
+        .next_entry()
+        .await
+        .map_err(|e| format!("read thumbnails entry: {e}"))?
+    {
+        let file_type = dir
+            .file_type()
+            .await
+            .map_err(|e| format!("read thumbnails entry type: {e}"))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let mut entries = fs::read_dir(dir.path())
+            .await
+            .map_err(|e| format!("read thumbnail dir: {e}"))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("read thumbnail frame: {e}"))?
+        {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with("frame-") && name.ends_with(".jpg") {
+                frames.push(path);
+            }
+        }
+    }
+
+    frames.sort();
+    Ok(frames.get(frames.len() / 2).cloned())
 }
 
 /// Push a path to the front of the recents list, dedup, cap to

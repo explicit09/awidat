@@ -28,7 +28,7 @@ export function IndexRailCreator(props: IndexRailCreatorProps) {
         <button
           type="button"
           onClick={() => setShowDetails(false)}
-          className="border-b border-[var(--glass-border)] px-3 py-2 text-left text-[11px] font-semibold text-[#FF9A45] transition-colors hover:bg-[rgba(255,255,255,0.04)]"
+          className="border-b border-[var(--glass-border)] px-3 py-2 text-left text-[11px] font-semibold text-[#FCA5A5] transition-colors hover:bg-[rgba(255,255,255,0.04)]"
         >
           ▴ Hide signal details
         </button>
@@ -67,7 +67,7 @@ function SummaryCard({ model, isReady }: { model: RailModel; isReady: boolean })
     .join(" · ");
 
   return (
-    <div className="glass-content flex flex-col gap-2 bg-gradient-to-br from-[color-mix(in_srgb,#FF7A18_14%,var(--glass-content))] to-[var(--glass-content)] px-3 py-3">
+    <div className="glass-content flex flex-col gap-2 bg-gradient-to-br from-[color-mix(in_srgb,#EF4444_14%,var(--glass-content))] to-[var(--glass-content)] px-3 py-3">
       <div className="flex items-start justify-between gap-2">
         <h4 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
           {title}
@@ -83,11 +83,11 @@ function SummaryCard({ model, isReady }: { model: RailModel; isReady: boolean })
           className="h-full rounded-full transition-[width] duration-300"
           style={{
             width: `${percent}%`,
-            background: isReady ? "#5EEAD4" : "#FF7A18",
+            background: isReady ? "#5EEAD4" : "#EF4444",
             boxShadow: isReady
               ? "0 0 8px rgba(94,234,212,0.55)"
               : percent >= 100
-                ? "0 0 8px rgba(255,122,24,0.55)"
+                ? "0 0 8px rgba(239,68,68,0.55)"
                 : "none",
           }}
         />

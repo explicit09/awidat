@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useTimelineStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
@@ -12,9 +13,20 @@ import { useProjectStore } from "../app/state";
 import { ProposalActions } from "./ProposalActions";
 import { TIMELINE_CHANGED_EVENT } from "../protocol";
 import { TimelineSurface } from "./TimelineSurface.tsx";
+import { computePps } from "./layout.ts";
 import { countCompletedTimelineEdits } from "./refreshActivity.ts";
 
-export function TimelinePane() {
+type TimelinePaneProps = {
+  previewRate?: number;
+  onPreviewRate?: (rate: number) => void;
+};
+
+const PLAYBACK_RATES = [1, 1.5, 2] as const;
+
+export function TimelinePane({
+  previewRate = 1,
+  onPreviewRate,
+}: TimelinePaneProps = {}) {
   const projectReady = useProjectStore((s) => s.current !== null);
   const projectRoot = useProjectStore((s) => s.current);
   const snapshot = useTimelineStore((s) => s.snapshot);
@@ -54,6 +66,7 @@ export function TimelinePane() {
   }, [completedEdits, projectReady, refresh]);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageWidth, setStageWidth] = useState(0);
   // Mouse-wheel handlers — must be non-passive so cmd/ctrl+wheel can
   // preventDefault before the browser's page-zoom kicks in. React's
   // synthetic wheel handler is passive in modern React, so we attach
@@ -111,6 +124,16 @@ export function TimelinePane() {
     };
   }, []);
 
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const updateWidth = () => setStageWidth(el.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (!projectReady) {
     return null;
   }
@@ -118,14 +141,24 @@ export function TimelinePane() {
   return (
     <section className="timeline-pane">
       <header className="timeline-header">
-        <span className="timeline-label">Timeline</span>
-        <span className="timeline-meta">
-          {snapshot.tracks.length === 0
-            ? "no tracks yet"
-            : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
-        </span>
-        <AddTrackButton />
-        <ZoomControls />
+        <div className="timeline-header-left">
+          <span className="timeline-label">Timeline</span>
+          <span className="timeline-meta">
+            {snapshot.tracks.length === 0
+              ? "no tracks yet"
+              : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
+          </span>
+          <AddTrackButton />
+        </div>
+        <div className="timeline-header-center">
+          <TimelineTransportControls
+            previewRate={previewRate}
+            setPreviewRate={onPreviewRate}
+          />
+        </div>
+        <div className="timeline-header-right">
+          <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
+        </div>
       </header>
       <div className="timeline-stage" ref={stageRef}>
         <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
@@ -135,10 +168,87 @@ export function TimelinePane() {
   );
 }
 
+function TimelineTransportControls({
+  previewRate,
+  setPreviewRate,
+}: {
+  previewRate: number;
+  setPreviewRate?: (rate: number) => void;
+}) {
+  const isPlaying = useMediaStore((s) => s.isPlaying);
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const timelineDurationS = useMediaStore((s) => s.timelineDurationS);
+  const sourceDurationS = useMediaStore((s) => s.durationS);
+  const setPlaying = useMediaStore((s) => s.setPlaying);
+  const requestSeek = useMediaStore((s) => s.requestSeek);
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const previewDurationS = timelineDurationS > 0 ? timelineDurationS : sourceDurationS;
+  const requestPreviewSeek = (timeS: number) => {
+    if (timelineDurationS > 0) {
+      requestTimelineSeek(timeS);
+    } else {
+      requestSeek(timeS);
+    }
+  };
+
+  const toggle = () => {
+    if (isPlaying) {
+      setPlaying(false);
+      return;
+    }
+    if (timelineDurationS > 0 && timelineTime >= timelineDurationS) {
+      requestPreviewSeek(0);
+    }
+    setPlaying(true);
+  };
+
+  return (
+    <div className="timeline-transport-controls" aria-label="Timeline playback controls">
+      <button
+        type="button"
+        onClick={() => requestPreviewSeek(0)}
+        aria-label="Jump to start"
+        title="Jump to start"
+      >
+        <SkipBack className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={isPlaying ? "Pause timeline" : "Play timeline"}
+        title="Space"
+      >
+        {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+      </button>
+      <button
+        type="button"
+        onClick={() => requestPreviewSeek(previewDurationS)}
+        aria-label="Jump to end"
+        title="Jump to end"
+        disabled={previewDurationS <= 0}
+      >
+        <SkipForward className="h-3.5 w-3.5" />
+      </button>
+      <select
+        aria-label="Playback speed"
+        value={String(previewRate)}
+        onChange={(event) => setPreviewRate?.(Number(event.currentTarget.value))}
+        disabled={!setPreviewRate}
+      >
+        {PLAYBACK_RATES.map((rate) => (
+          <option key={rate} value={rate}>
+            {rate}x
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 /** Compact +/−/fit controls for horizontal time-zoom and vertical
  *  track-zoom. Sits in the timeline header. Keyboard shortcuts still
  *  drive the same store actions for users who prefer the menu. */
-function ZoomControls() {
+function ZoomControls({ pps }: { pps: number }) {
   const zoom = useTimelineStore((s) => s.zoom);
   const trackZoom = useTimelineStore((s) => s.trackZoom);
   const zoomIn = useTimelineStore((s) => s.zoomIn);
@@ -152,10 +262,13 @@ function ZoomControls() {
       <div className="timeline-zoom-group" title="Horizontal zoom (Cmd/Ctrl + wheel)">
         <button type="button" onClick={zoomOut} aria-label="Zoom out">−</button>
         <button type="button" onClick={fitZoom} aria-label="Reset zoom">
-          {zoom.toFixed(2)}×
+          Fit
         </button>
         <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
       </div>
+      <span className="timeline-zoom-readout" title={`${zoom.toFixed(2)}x zoom`}>
+        {pps.toFixed(1)} px/s
+      </span>
       <div className="timeline-zoom-group" title="Track height">
         <button type="button" onClick={trackZoomOut} aria-label="Shrink tracks">▾</button>
         <button type="button" onClick={fitTrackZoom} aria-label="Reset track height">

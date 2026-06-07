@@ -4,32 +4,32 @@
 
 :root {
   color-scheme: dark;
-  --bg: #080908;
-  --bg-elev: #111311;
-  --bg-elev2: #191b18;
-  --bg-elev3: #242720;
-  --surface-panel: #0d0f0d;
-  --surface-panel-2: #141713;
-  --surface-sunken: #050605;
-  --surface-toolbar: #11140f;
-  --surface-hover: #20241e;
-  --border: #30352d;
-  --border-soft: rgba(238, 232, 205, 0.08);
-  --border-strong: rgba(238, 232, 205, 0.18);
-  --text: #eee8d7;
-  --text-muted: #a49f91;
-  --text-faint: #706d63;
-  --accent: #5fa8ff;
-  --accent-strong: #91d7ff;
-  --accent-cool: #71b7a6;
+  --bg: #0D0D0D;
+  --bg-elev: #111111;
+  --bg-elev2: #1A1A1A;
+  --bg-elev3: #242424;
+  --surface-panel: #141414;
+  --surface-panel-2: #1A1A1A;
+  --surface-sunken: #050505;
+  --surface-toolbar: #111111;
+  --surface-hover: #242424;
+  --border: #2A2A2A;
+  --border-soft: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #FFFFFF;
+  --text-muted: #D1D5DB;
+  --text-faint: #6B7280;
+  --accent: #EF4444;
+  --accent-strong: #FB7185;
+  --accent-cool: #FCA5A5;
   --ok: #71c587;
   --err: #ef7168;
   --warn: #e4ae52;
-  --proposal: #78b8ff;
-  --proposal-soft: rgba(120, 184, 255, 0.13);
-  --rail: #0b0d0b;
+  --proposal: #EF4444;
+  --proposal-soft: rgba(239, 68, 68, 0.13);
+  --rail: #0A0A0A;
   --viewer: #020302;
-  --focus-ring: 0 0 0 2px rgba(145, 215, 255, 0.32);
+  --focus-ring: 0 0 0 2px rgba(239, 68, 68, 0.36);
   --shadow-lg: 0 18px 55px rgba(0, 0, 0, 0.52);
   --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.32);
   --radius-sm: 4px;
@@ -225,10 +225,10 @@ button {
   position: sticky;
   top: 0;
   z-index: 3;
-  border: 1px solid rgba(104, 183, 255, 0.35);
+  border: 1px solid rgba(239, 68, 68, 0.35);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(104, 183, 255, 0.11), rgba(104, 183, 255, 0.035)),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.11), rgba(239, 68, 68, 0.035)),
     rgba(12, 17, 24, 0.96);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
   padding: 7px 10px;
@@ -418,7 +418,7 @@ button {
 
 .session-row-active {
   border-color: var(--accent);
-  background: rgba(104, 183, 255, 0.11);
+  background: rgba(239, 68, 68, 0.11);
 }
 
 .session-empty {
@@ -1718,7 +1718,7 @@ button {
 }
 
 .action-bar button:hover:not(:disabled) {
-  border-color: rgba(104, 183, 255, 0.7);
+  border-color: rgba(239, 68, 68, 0.7);
   background: var(--bg-elev2);
 }
 
@@ -1888,7 +1888,7 @@ button {
   border-color: var(--border);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 0 0 1px rgba(104, 183, 255, 0.05);
+    0 0 0 1px rgba(239, 68, 68, 0.05);
 }
 
 .sidebar-pane {
@@ -2159,13 +2159,34 @@ button {
 }
 
 .timeline-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: transparent;
   flex-shrink: 0;
+}
+
+.timeline-header-left,
+.timeline-header-center,
+.timeline-header-right {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.timeline-header-left {
+  gap: 8px;
+}
+
+.timeline-header-center {
+  justify-content: center;
+}
+
+.timeline-header-right {
+  justify-content: flex-end;
 }
 
 .timeline-label {
@@ -2183,7 +2204,51 @@ button {
 .timeline-zoom-controls {
   display: inline-flex;
   gap: 8px;
-  margin-left: auto;
+}
+
+.timeline-transport-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.timeline-transport-controls button,
+.timeline-transport-controls select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elev2, var(--bg-elev));
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.timeline-transport-controls button {
+  min-width: 26px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.timeline-transport-controls select {
+  min-width: 48px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.timeline-transport-controls button:hover,
+.timeline-transport-controls select:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.timeline-transport-controls button:disabled,
+.timeline-transport-controls select:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .timeline-zoom-group {
@@ -2214,6 +2279,19 @@ button {
 
 .timeline-zoom-group button + button {
   border-left: 1px solid var(--border);
+}
+
+.timeline-zoom-readout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 7px;
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .timeline-add-track-button {
@@ -2272,6 +2350,30 @@ button {
   position: relative;
 }
 
+.stage-timeline-resize-handle {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 30;
+  height: 8px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.stage-timeline-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 2px 44% auto 44%;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.stage-timeline-resize-handle:hover::before {
+  opacity: 1;
+}
+
 .timeline-canvas-wrap {
   width: 100%;
   height: auto;
@@ -2313,7 +2415,7 @@ button {
 }
 
 .timeline-cut-badge {
-  border: 1px solid rgba(145, 215, 255, 0.52);
+  border: 1px solid rgba(251, 113, 133, 0.52);
   background: rgba(8, 16, 24, 0.9);
   color: #b8dcff;
   text-transform: uppercase;
@@ -2626,7 +2728,7 @@ button {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   background:
-    linear-gradient(90deg, rgba(95, 168, 255, 0.1), transparent 42%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.1), transparent 42%),
     #090d11;
   gap: 10px;
 }
@@ -2678,19 +2780,26 @@ button {
 }
 
 .media-asset-select {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 3px 6px;
+  background: rgba(10, 10, 18, 0.86);
+  color: var(--color-text-primary);
+  border: 1px solid rgba(251, 113, 133, 0.32);
+  border-radius: 8px;
+  padding: 4px 8px;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   max-width: 60%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .media-asset-select:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: rgba(251, 113, 133, 0.56);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.media-asset-select option {
+  background: #0D0D12;
+  color: var(--color-text-primary);
 }
 
 .media-stage {
@@ -2701,7 +2810,7 @@ button {
   padding: 12px;
   gap: 8px;
   background:
-    radial-gradient(circle at center top, rgba(104, 183, 255, 0.055), transparent 280px),
+    radial-gradient(circle at center top, rgba(239, 68, 68, 0.055), transparent 280px),
     var(--viewer);
 }
 
@@ -2709,10 +2818,10 @@ button {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  border: 1px solid rgba(104, 183, 255, 0.26);
+  border: 1px solid rgba(239, 68, 68, 0.26);
   border-radius: 6px;
   padding: 8px 10px;
-  background: rgba(104, 183, 255, 0.08);
+  background: rgba(239, 68, 68, 0.08);
   color: #c6e2ff;
   font-size: 12px;
   line-height: 1.35;
@@ -3768,7 +3877,7 @@ button {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background:
-    linear-gradient(90deg, rgba(95, 168, 255, 0.075), transparent 55%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.075), transparent 55%),
     #0b0f12;
 }
 
@@ -3871,9 +3980,9 @@ button {
 .properties-warning {
   margin: 2px 0 8px;
   padding: 9px 10px;
-  border: 1px solid rgba(104, 183, 255, 0.28);
+  border: 1px solid rgba(239, 68, 68, 0.28);
   border-radius: 7px;
-  background: rgba(104, 183, 255, 0.08);
+  background: rgba(239, 68, 68, 0.08);
   color: #b8dcff;
   font-size: 12px;
   line-height: 1.4;
@@ -3891,10 +4000,10 @@ button {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
-  border: 1px solid rgba(104, 183, 255, 0.32);
+  border: 1px solid rgba(239, 68, 68, 0.32);
   border-radius: 999px;
   padding: 2px 7px;
-  background: rgba(104, 183, 255, 0.1);
+  background: rgba(239, 68, 68, 0.1);
   color: var(--accent);
   font-size: 10px;
   font-weight: 800;
@@ -4087,8 +4196,8 @@ button {
 }
 
 .properties-apply {
-  border: 1px solid rgba(104, 183, 255, 0.35);
-  background: rgba(104, 183, 255, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
   color: var(--accent);
   border-radius: 5px;
   padding: 4px 7px;
@@ -4099,7 +4208,7 @@ button {
 }
 
 .properties-apply:hover {
-  background: rgba(104, 183, 255, 0.18);
+  background: rgba(239, 68, 68, 0.18);
   border-color: var(--accent);
 }
 
@@ -4116,8 +4225,8 @@ button {
 }
 
 .properties-secondary:hover {
-  border-color: rgba(104, 183, 255, 0.35);
-  background: rgba(104, 183, 255, 0.09);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.09);
   color: var(--accent);
 }
 
@@ -4930,7 +5039,7 @@ button {
 
 .app-shell {
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.055), transparent 110px),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.055), transparent 110px),
     linear-gradient(90deg, rgba(91, 211, 217, 0.035), transparent 38%),
     var(--bg);
 }
@@ -4958,10 +5067,10 @@ button {
   height: 18px;
   border: 1px solid var(--accent);
   background:
-    linear-gradient(90deg, transparent 45%, rgba(95, 168, 255, 0.4) 45% 55%, transparent 55%),
-    linear-gradient(180deg, transparent 45%, rgba(95, 168, 255, 0.4) 45% 55%, transparent 55%),
+    linear-gradient(90deg, transparent 45%, rgba(239, 68, 68, 0.4) 45% 55%, transparent 55%),
+    linear-gradient(180deg, transparent 45%, rgba(239, 68, 68, 0.4) 45% 55%, transparent 55%),
     #0a0b09;
-  box-shadow: 0 0 18px rgba(95, 168, 255, 0.2);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.2);
 }
 
 .app-brand h1 {
@@ -5046,8 +5155,8 @@ button {
 
 .project-type-badge {
   color: var(--accent-strong);
-  border-color: rgba(95, 168, 255, 0.45);
-  background: rgba(95, 168, 255, 0.11);
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.11);
 }
 
 .project-banner button,
@@ -5106,7 +5215,7 @@ button {
   padding: 8px 14px;
   gap: 8px;
   background:
-    linear-gradient(90deg, rgba(95, 168, 255, 0.14), transparent 34%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.14), transparent 34%),
     linear-gradient(180deg, rgba(238, 232, 205, 0.04), transparent),
     #080d12;
   border-bottom-color: var(--border-strong);
@@ -5128,8 +5237,8 @@ button {
 }
 
 .command-group-primary button:first-child {
-  background: linear-gradient(180deg, rgba(145, 215, 255, 0.22), rgba(95, 168, 255, 0.1)), #08131d;
-  border-color: rgba(95, 168, 255, 0.48);
+  background: linear-gradient(180deg, rgba(251, 113, 133, 0.22), rgba(239, 68, 68, 0.1)), #08131d;
+  border-color: rgba(239, 68, 68, 0.48);
   color: var(--accent-strong);
 }
 
@@ -5150,7 +5259,7 @@ button {
 
 .status-pill-proposal {
   color: var(--proposal);
-  border-color: rgba(120, 184, 255, 0.55);
+  border-color: rgba(239, 68, 68, 0.55);
   background: var(--proposal-soft);
 }
 
@@ -5174,7 +5283,6 @@ button {
 
 .permission-mode select,
 .properties-select,
-.media-asset-select,
 .field input[type="text"],
 .project-form input,
 .input-form input,
@@ -5206,7 +5314,7 @@ button {
 
 .workspace-center {
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.045), transparent 45%),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.045), transparent 45%),
     var(--viewer);
   border-right-color: var(--border-strong);
 }
@@ -5227,7 +5335,7 @@ button {
   display: grid;
   grid-template-columns: 68px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto;
-  border-right-color: rgba(95, 168, 255, 0.24);
+  border-right-color: rgba(239, 68, 68, 0.24);
 }
 
 .workspace-chat > :not(.sidebar-tabs) {
@@ -5289,13 +5397,13 @@ button {
 
 .sidebar-tabs button.sidebar-tab-active {
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.24), rgba(95, 168, 255, 0.06)),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.24), rgba(239, 68, 68, 0.06)),
     var(--surface-panel-2);
-  border-color: rgba(95, 168, 255, 0.42);
+  border-color: rgba(239, 68, 68, 0.42);
   color: var(--accent-strong);
   box-shadow:
     inset 3px 0 0 var(--accent),
-    0 0 24px rgba(95, 168, 255, 0.12);
+    0 0 24px rgba(239, 68, 68, 0.12);
 }
 
 .session-bar,
@@ -5351,9 +5459,9 @@ button {
 .item-proposal,
 .item-plan,
 .item-approval {
-  border-color: rgba(120, 184, 255, 0.58);
+  border-color: rgba(239, 68, 68, 0.58);
   background:
-    linear-gradient(90deg, rgba(120, 184, 255, 0.12), transparent 42%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.12), transparent 42%),
     rgba(20, 23, 19, 0.96);
 }
 
@@ -5402,7 +5510,7 @@ button {
 .proposal-actions-primary,
 .modal-footer button.primary,
 .note-broll-use {
-  background: linear-gradient(180deg, rgba(145, 215, 255, 0.18), rgba(95, 168, 255, 0.05)), #5fa8ff;
+  background: linear-gradient(180deg, rgba(251, 113, 133, 0.18), rgba(239, 68, 68, 0.05)), #ef4444;
   border-color: var(--accent);
   color: #171309;
 }
@@ -5420,7 +5528,7 @@ button {
   padding: 18px;
   background:
     linear-gradient(180deg, rgba(238, 232, 205, 0.035), transparent 70px),
-    radial-gradient(circle at 50% 2%, rgba(95, 168, 255, 0.08), transparent 32%),
+    radial-gradient(circle at 50% 2%, rgba(239, 68, 68, 0.08), transparent 32%),
     var(--viewer);
 }
 
@@ -5438,7 +5546,7 @@ button {
   inset: -1px;
   z-index: 2;
   pointer-events: none;
-  border: 1px solid rgba(95, 168, 255, 0.26);
+  border: 1px solid rgba(239, 68, 68, 0.26);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.035),
     inset 0 -42px 80px rgba(0, 0, 0, 0.32);
@@ -5494,13 +5602,13 @@ button {
   min-height: 42px;
   padding: 9px 14px;
   background:
-    linear-gradient(90deg, rgba(95, 168, 255, 0.12), transparent 50%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.12), transparent 50%),
     #0a0d11;
 }
 
 .timeline-stage {
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.035), transparent 40px),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.035), transparent 40px),
     var(--surface-sunken);
 }
 
@@ -5514,9 +5622,9 @@ button {
   top: 7px;
   max-width: min(920px, calc(100% - 24px));
   padding: 8px;
-  border-color: rgba(120, 184, 255, 0.72);
+  border-color: rgba(239, 68, 68, 0.72);
   background:
-    linear-gradient(180deg, rgba(120, 184, 255, 0.12), rgba(8, 9, 8, 0.03)),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.12), rgba(8, 9, 8, 0.03)),
     rgba(13, 15, 13, 0.96);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
@@ -5538,7 +5646,7 @@ button {
 
 .proposal-handle {
   background: var(--proposal);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 0 16px rgba(120, 184, 255, 0.42);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 0 16px rgba(239, 68, 68, 0.42);
 }
 
 .properties-body {
@@ -5725,8 +5833,8 @@ button {
   text-transform: uppercase;
   font-weight: 600;
   color: var(--accent-cool);
-  background: rgba(95, 168, 255, 0.08);
-  border: 1px solid rgba(95, 168, 255, 0.18);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.18);
   border-radius: 999px;
 }
 
@@ -5760,13 +5868,13 @@ button {
 }
 
 .transcript-word:hover {
-  background: rgba(95, 168, 255, 0.16);
+  background: rgba(239, 68, 68, 0.16);
 }
 
 .transcript-word.transcript-word-active {
-  background: rgba(95, 168, 255, 0.85);
+  background: rgba(239, 68, 68, 0.85);
   color: #ffffff;
-  box-shadow: 0 0 0 1px rgba(95, 168, 255, 0.9), 0 2px 14px rgba(95, 168, 255, 0.35);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.9), 0 2px 14px rgba(239, 68, 68, 0.35);
   font-weight: 500;
 }
 
@@ -5792,23 +5900,23 @@ button {
 .transcript-segment.transcript-segment-active {
   background: linear-gradient(
     90deg,
-    rgba(95, 168, 255, 0.10),
-    rgba(95, 168, 255, 0.02) 60%,
+    rgba(239, 68, 68, 0.10),
+    rgba(239, 68, 68, 0.02) 60%,
     transparent
   );
-  border-left-color: rgba(95, 168, 255, 0.9);
+  border-left-color: rgba(239, 68, 68, 0.9);
 }
 
 .transcript-segment:has(.transcript-word-active) .transcript-time {
-  color: rgba(95, 168, 255, 0.95);
+  color: rgba(239, 68, 68, 0.95);
   opacity: 1;
   font-weight: 600;
 }
 
 .transcript-segment:has(.transcript-word-active) .transcript-speaker {
-  border-color: rgba(95, 168, 255, 0.55);
+  border-color: rgba(239, 68, 68, 0.55);
   color: rgba(180, 210, 255, 0.95);
-  background: rgba(95, 168, 255, 0.16);
+  background: rgba(239, 68, 68, 0.16);
 }
 
 /* The transcript-speaker is now clickable to rename. The button
@@ -5825,8 +5933,8 @@ button {
   transition: background-color 100ms ease, border-color 100ms ease;
 }
 .transcript-segment .transcript-speaker-button:hover {
-  background: rgba(95, 168, 255, 0.16);
-  border-color: rgba(95, 168, 255, 0.35);
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .transcript-segment .transcript-speaker-input {
@@ -5839,8 +5947,8 @@ button {
   font: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
-  background: rgba(95, 168, 255, 0.20);
-  border: 1px solid rgba(95, 168, 255, 0.6);
+  background: rgba(239, 68, 68, 0.20);
+  border: 1px solid rgba(239, 68, 68, 0.6);
 }
 
 /* Narrow panel — collapse the gutter, push timestamp inline as a
@@ -6142,7 +6250,7 @@ button {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.09), transparent),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.09), transparent),
     rgba(14, 17, 14, 0.88);
 }
 
@@ -6187,7 +6295,7 @@ button {
   grid-template-columns: clamp(260px, 22vw, 360px) minmax(420px, 1fr) clamp(220px, 16vw, 300px);
   border-bottom: 1px solid var(--border-strong);
   background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.045), transparent 180px),
+    linear-gradient(180deg, rgba(239, 68, 68, 0.045), transparent 180px),
     var(--bg);
 }
 
@@ -6269,7 +6377,7 @@ button {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background:
-    linear-gradient(90deg, rgba(95, 168, 255, 0.18), transparent 34%),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.18), transparent 34%),
     rgba(238, 232, 205, 0.035);
 }
 
@@ -7164,7 +7272,7 @@ button {
   background: var(--color-text-muted);
 }
 .montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="manual"] {
-  background: #5fa8ff;
+  background: #ef4444;
 }
 .montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="copilot"] {
   background: #fbbf24;
@@ -7714,7 +7822,7 @@ button {
 /* ---- Slider: cyan active accent, muted at rest (refine to exact tokens) ---- */
 .properties-slider-pro::-webkit-slider-thumb,
 .properties-slider-pro::-moz-range-thumb {
-  background: #67E8F9;
+  background: #FCA5A5;
   border: 1px solid var(--color-border-active);
 }
 .properties-slider-pro:hover::-webkit-slider-thumb {
@@ -7753,7 +7861,7 @@ button {
 }
 
 .properties-apply {
-  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
+  background: linear-gradient(180deg, #FB7185, #EF4444 60%, #DC2626);
   border: 1px solid rgba(255, 180, 120, 0.55);
   color: #1A0E04;
   font-weight: 650;
@@ -7763,7 +7871,7 @@ button {
 }
 .properties-apply:hover:not(:disabled) {
   filter: brightness(1.06);
-  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
+  background: linear-gradient(180deg, #FB7185, #EF4444 60%, #DC2626);
   border-color: rgba(255, 180, 120, 0.55);
   color: #1A0E04;
   box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 8px 28px rgba(255, 122, 24, 0.44),
@@ -7868,7 +7976,7 @@ button {
   box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.10);
 }
 .vedit-current .vedit-kicker {
-  color: #67E8F9;
+  color: #FCA5A5;
 }
 
 .vedit-entry summary:hover {

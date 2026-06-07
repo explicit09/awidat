@@ -1,5 +1,5 @@
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
-import { LANE_HEIGHT, RULER_HEIGHT } from "./layout.ts";
+import { LANE_HEIGHT, RULER_HEIGHT, timeToX } from "./layout.ts";
 
 export type EditorialMarker = {
   key: string;
@@ -20,7 +20,7 @@ export function buildCutBadges(
     if (!located) continue;
     out.push({
       key: `cut-${boundary.key}`,
-      x: Math.max(2, located.item.track_start_s * pps - 10),
+      x: Math.max(2, timeToX(located.item.track_start_s, pps) - 10),
       y: RULER_HEIGHT + located.trackIndex * laneHeight + 2,
       label: shortCutLabel(boundary.cut_type),
       title: [
@@ -50,7 +50,7 @@ export function buildSplitOffsets(
       if (item.audio_lead_s !== null && item.audio_lead_s > 0) {
         out.push({
           key: `lead-${item.clip_uuid}`,
-          x: Math.max(2, item.track_start_s * pps + 4),
+          x: Math.max(2, timeToX(item.track_start_s, pps) + 4),
           y,
           label: `J +${formatMarkerSeconds(item.audio_lead_s)}`,
           title: splitOffsetTitle("Audio lead", item.audio_lead_s, item),
@@ -59,7 +59,7 @@ export function buildSplitOffsets(
       if (item.audio_trail_s !== null && item.audio_trail_s > 0) {
         out.push({
           key: `trail-${item.clip_uuid}`,
-          x: Math.max(2, (item.track_start_s + item.duration_s) * pps - 50),
+          x: Math.max(2, timeToX(item.track_start_s + item.duration_s, pps) - 50),
           y,
           label: `L +${formatMarkerSeconds(item.audio_trail_s)}`,
           title: splitOffsetTitle("Audio trail", item.audio_trail_s, item),

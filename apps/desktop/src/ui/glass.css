@@ -3,7 +3,7 @@
  *
  * A dark-first liquid-glass system layered on top of tokens.css. The
  * editorial AI is presented as light moving through frosted glass: the
- * orange brand becomes living ambient light (drifting orbs behind the
+ * red brand becomes living ambient light (drifting fields behind the
  * UI) rather than flat button paint.
  *
  * Depth model (three planes):
@@ -26,11 +26,11 @@
      Cool blue-grey, genuinely translucent so the colored atmosphere
      reads THROUGH the frost. These are deliberately light + see-through
      — a near-opaque charcoal panel just looks like the old flat UI. */
-  --glass-tint-1: rgba(30, 34, 48, 0.42);   /* primary panels / chrome */
-  --glass-tint-2: rgba(34, 38, 54, 0.55);   /* raised glass (modals)   */
-  --glass-tint-3: rgba(26, 30, 44, 0.30);   /* faint glass (overlays)  */
-  --glass-content: rgba(26, 30, 42, 0.66);  /* z2 content — tinted, still readable */
-  --glass-content-hover: rgba(38, 44, 60, 0.74);
+  --glass-tint-1: rgba(20, 20, 20, 0.54);   /* primary panels / chrome */
+  --glass-tint-2: rgba(26, 26, 26, 0.68);   /* raised glass (modals)   */
+  --glass-tint-3: rgba(18, 18, 18, 0.38);   /* faint glass (overlays)  */
+  --glass-content: rgba(26, 26, 26, 0.76);  /* z2 content — tinted, still readable */
+  --glass-content-hover: rgba(36, 36, 36, 0.84);
 
   /* ---- glass edges & light (brighter so the lip clearly catches light) ---- */
   --glass-border: rgba(255, 255, 255, 0.14);
@@ -48,15 +48,15 @@
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.30);
   --glass-shadow-lift: 0 16px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.34);
 
-  /* ---- brand light (orange as ambient, not paint) — vivid so it
+  /* ---- brand light (red as ambient, not paint) — vivid so it
      actually bleeds through the frosted panels ---- */
-  --orb-warm: rgba(255, 122, 24, 0.95);   /* montage orange */
-  --orb-amber: rgba(255, 184, 72, 0.75);
-  --orb-cool: rgba(20, 184, 166, 0.70);   /* teal counter-light for tension */
-  --orb-violet: rgba(139, 92, 246, 0.62); /* deep violet accent */
-  --glow-brand: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 0 24px rgba(255, 122, 24, 0.30);
-  --glow-cyan: 0 0 0 1px rgba(56, 189, 248, 0.40), 0 0 20px rgba(56, 189, 248, 0.22);
-  --glow-violet: 0 0 0 1px rgba(168, 85, 247, 0.40), 0 0 20px rgba(168, 85, 247, 0.22);
+  --orb-warm: rgba(239, 68, 68, 0.92);
+  --orb-amber: rgba(251, 113, 133, 0.64);
+  --orb-cool: rgba(107, 114, 128, 0.42);
+  --orb-violet: rgba(185, 28, 28, 0.56);
+  --glow-brand: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 0 24px rgba(239, 68, 68, 0.30);
+  --glow-cyan: 0 0 0 1px rgba(239, 68, 68, 0.40), 0 0 20px rgba(239, 68, 68, 0.22);
+  --glow-violet: 0 0 0 1px rgba(251, 113, 133, 0.40), 0 0 20px rgba(251, 113, 133, 0.22);
 
   /* cursor-reactive sheen position (updated by useCursorGlass) */
   --glass-mx: 50%;
@@ -156,19 +156,19 @@
 .glow-cyan { box-shadow: var(--glow-cyan); }
 .glow-violet { box-shadow: var(--glow-violet); }
 
-/* brand CTA: filled orange that radiates rather than sits flat */
+/* brand CTA: filled red that radiates rather than sits flat */
 .glass-cta {
-  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
-  color: #1A0E04;
-  border: 1px solid rgba(255, 180, 120, 0.55);
-  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.30), 0 6px 20px rgba(255, 122, 24, 0.34),
+  background: linear-gradient(180deg, #FB7185, #EF4444 60%, #DC2626);
+  color: #FFFFFF;
+  border: 1px solid rgba(252, 165, 165, 0.58);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.30), 0 6px 20px rgba(239, 68, 68, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.35);
   font-weight: 650;
   transition: box-shadow 0.2s ease, transform 0.12s ease, filter 0.2s ease;
 }
 .glass-cta:hover {
   filter: brightness(1.06);
-  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 8px 28px rgba(255, 122, 24, 0.48),
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 8px 28px rgba(239, 68, 68, 0.48),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 .glass-cta:active { transform: translateY(1px) scale(0.99); }
@@ -196,11 +196,11 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  /* deep blue-charcoal base, not pure black, so the frost reads as glass */
+  /* deep neutral base, with red light concentrated around the work surface */
   background:
-    radial-gradient(ellipse at 22% 18%, #1a1530 0%, transparent 55%),
-    radial-gradient(ellipse at 82% 88%, #0c2230 0%, transparent 55%),
-    #0a0a12;
+    radial-gradient(ellipse at 22% 18%, #320E12 0%, transparent 55%),
+    radial-gradient(ellipse at 82% 88%, #1F1113 0%, transparent 55%),
+    #050505;
   pointer-events: none;
 }
 .atmosphere__orb {
@@ -387,15 +387,293 @@ html, body, #root { background: #0a0a12; }
   .panel { background: rgba(18, 18, 22, 0.94) !important; }
 }
 
-/* Stage timeline strip: hide TimelinePane's internal header (track count,
-   +Track, zoom) — the Stage wants a clean ribbon, not cockpit chrome. */
-.stage-timeline .timeline-header { display: none !important; }
+/* Stage timeline strip: compact glass toolbar instead of the older
+   cockpit chrome, keeping zoom / fit controls visible in the Stage. */
+.stage-timeline .timeline-header {
+  min-height: 32px !important;
+  padding: 4px 8px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: rgba(10, 10, 18, 0.62) !important;
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+}
+.stage-timeline .timeline-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+.stage-timeline .timeline-meta {
+  font-size: 10px;
+}
+.stage-timeline .timeline-add-track-button,
+.stage-timeline .timeline-zoom-group button {
+  min-height: 24px;
+  border-radius: 7px;
+}
 .stage-timeline > * { height: 100%; }
 
-/* Stage conversation panel: let ChatStream breathe inside the glass.
-   Strip its solid cockpit background so the frost shows through. */
-.stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
-.stage-convo .sticky-user-prompt { background: rgba(255,255,255,0.04); border-radius: 10px; }
+/* Project manager — startup surface when no project is open. */
+.pm-shell {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(239, 68, 68, 0.10), transparent 22%),
+    radial-gradient(circle at 86% 8%, rgba(255, 255, 255, 0.045), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 24%),
+    #0d0d0d;
+}
+
+.pm-glass {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.075), transparent 42%),
+    rgba(26, 26, 26, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+}
+
+.pm-sidebar {
+  border-radius: 14px;
+}
+
+.pm-project-card {
+  position: relative;
+  display: block;
+  min-width: 0;
+  border-radius: 14px;
+  padding: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 42%),
+    rgba(26, 26, 26, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
+}
+
+.pm-project-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(239, 68, 68, 0.46);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.40), 0 0 32px rgba(239, 68, 68, 0.14);
+}
+
+.pm-project-frame {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: #111;
+}
+
+/* Stage conversation panel: compact assistant UI inside Montage glass. */
+.stage-convo .chat-items {
+  background: transparent !important;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.stage-chat-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.stage-convo .item {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: none;
+}
+.stage-convo .item-text {
+  background: transparent;
+  border-color: transparent;
+  padding: 8px 2px;
+}
+.stage-convo .item-user {
+  align-self: flex-end;
+  max-width: min(78%, 540px);
+  background: rgba(239, 68, 68, 0.20);
+  border-color: rgba(251, 113, 133, 0.24);
+}
+.stage-convo .item-user .item-meta {
+  display: none;
+}
+.stage-convo .item-user .item-body {
+  color: var(--color-text-primary);
+}
+.stage-convo .item-meta {
+  color: var(--color-text-muted);
+}
+.stage-convo .markdown table {
+  width: 100%;
+}
+.stage-convo .sticky-user-prompt {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.10);
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.stage-chat-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.045);
+  color: var(--color-text-muted);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+.stage-chat-icon:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.18);
+  color: var(--color-text-primary);
+}
+.stage-chat-icon[data-active="true"] {
+  border-color: rgba(251,113,133,0.42);
+  background: rgba(239,68,68,0.18);
+  color: #FCA5A5;
+}
+
+.stage-left-tabs,
+.stage-right-tabs {
+  scrollbar-width: none;
+}
+.stage-left-tabs::-webkit-scrollbar,
+.stage-right-tabs::-webkit-scrollbar {
+  display: none;
+}
+.stage-left-tab,
+.stage-right-tab {
+  min-height: 26px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+.stage-left-tab:hover,
+.stage-right-tab:hover {
+  background: rgba(255,255,255,0.055);
+  border-color: rgba(255,255,255,0.10);
+  color: var(--color-text-primary);
+}
+.stage-left-tab[data-active="true"],
+.stage-right-tab[data-active="true"] {
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(251,113,133,0.34);
+  color: #FFFFFF;
+}
+
+.stage-pane-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.stage-pane-resize::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background 0.16s ease, box-shadow 0.16s ease;
+}
+.stage-pane-resize:hover::after {
+  background: rgba(251,113,133,0.42);
+  box-shadow: 0 0 10px rgba(239,68,68,0.28);
+}
+.stage-pane-resize-left {
+  right: -4px;
+}
+.stage-pane-resize-right {
+  left: -4px;
+}
+
+.stage-chat-composer,
+.stage-chat-composer:focus,
+.stage-chat-composer:focus-within,
+.stage-chat-composer *:focus,
+.stage-chat-composer *:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.stage-chat-card {
+  border-color: rgba(255,255,255,0.10);
+}
+.stage-chat-card:focus-within {
+  border-color: rgba(251,113,133,0.24);
+  box-shadow: none;
+}
+.stage-chat-input {
+  border: 0;
+  min-height: 38px;
+  max-height: 132px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.stage-chat-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.stage-chat-composer .awidat-mention-picker {
+  position: absolute;
+  left: 8px;
+  right: 48px;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--glass-tint-2);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-shadow: var(--glass-shadow-lift);
+}
+.stage-chat-composer .awidat-mention-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-align: left;
+}
+.stage-chat-composer .awidat-mention-item:hover,
+.stage-chat-composer .awidat-mention-item.is-active {
+  background: rgba(239,68,68,0.16);
+  border-color: rgba(251,113,133,0.30);
+  color: var(--color-text-primary);
+}
+.stage-chat-composer .awidat-mention-item-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+.stage-chat-composer .awidat-mention-item-detail {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
 
 /* Stage tool side-panel: make reused cockpit surfaces (transcript, media,
    inspector, index, vedit) FILL the panel instead of collapsing to their
@@ -405,6 +683,72 @@ html, body, #root { background: #0a0a12; }
 .stage-tool-body .media-empty,
 .stage-tool-body .properties-pane,
 .stage-tool-body .index-rail { background: transparent !important; }
+.stage-tool-body .glass-content,
+.stage-tool-body .panel,
+.stage-tool-body .card {
+  border-radius: 8px;
+}
+.stage-tool-body button:not(.stage-left-tab):not(.stage-right-tab):not(.stage-pane-resize):not(.gk-close) {
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.045);
+  color: var(--color-text-secondary);
+  min-height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+.stage-tool-body input,
+.stage-tool-body textarea,
+.stage-tool-body select {
+  border-radius: 8px !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(10, 10, 18, 0.72) !important;
+  color: var(--color-text-primary) !important;
+  font-size: 12px;
+}
+.stage-tool-body button:not(.stage-left-tab):not(.stage-right-tab):not(.stage-pane-resize):not(.gk-close):hover:not(:disabled) {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(251,113,133,0.26);
+  color: var(--color-text-primary);
+}
+.stage-tool-body button:not(.stage-left-tab):not(.stage-right-tab):not(.stage-pane-resize):not(.gk-close):disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+.stage-tool-body .stage-media-item {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(10, 10, 18, 0.52);
+}
+.stage-tool-body .stage-media-item:hover {
+  border-color: rgba(251, 113, 133, 0.28);
+  background: rgba(255, 255, 255, 0.07);
+}
+.stage-tool-body .stage-media-item[data-selected="true"] {
+  border-color: rgba(251, 113, 133, 0.48);
+  background: rgba(239,68,68,0.22);
+  box-shadow: inset 3px 0 0 #EF4444, 0 12px 28px rgba(0, 0, 0, 0.26);
+}
+.stage-tool-body .transcript-action-button,
+.stage-tool-body .properties-apply,
+.stage-tool-body .properties-secondary,
+.stage-tool-body .properties-danger-pro,
+.stage-tool-body .vedit-restore-button {
+  border-radius: 7px !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: none !important;
+}
+.stage-tool-body .transcript-action-button:hover,
+.stage-tool-body .properties-apply:hover:not(:disabled),
+.stage-tool-body .properties-secondary:hover:not(:disabled),
+.stage-tool-body .properties-danger-pro:hover:not(:disabled),
+.stage-tool-body .vedit-restore-button:hover:not(:disabled) {
+  border-color: rgba(251, 113, 133, 0.30) !important;
+  background: rgba(239, 68, 68, 0.12) !important;
+  color: var(--color-text-primary) !important;
+}
 
 /* =====================================================================
    GLASS CONTROL KIT — one canonical vocabulary for every surface so the
@@ -463,7 +807,7 @@ html, body, #root { background: #0a0a12; }
 .gk-pill--mint   { color: #5EEAD4; background: rgba(45, 212, 191, 0.16); }
 .gk-pill--amber  { color: #FCD34D; background: rgba(245, 158, 11, 0.16); }
 .gk-pill--red    { color: #FCA5A5; background: rgba(220, 100, 95, 0.16); }
-.gk-pill--orange { color: #FF9A45; background: rgba(255, 122, 24, 0.16); }
+.gk-pill--orange { color: #FCA5A5; background: rgba(239, 68, 68, 0.16); }
 .gk-pill--muted  { color: var(--color-text-muted); background: rgba(255, 255, 255, 0.06); }
 
 /* Consistent thin scrollbar inside glass surfaces. */

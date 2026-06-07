@@ -1,5 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <rect x="0" y="0" width="1024" height="1024" rx="256" fill="#0F1110"/>
-  <rect x="0.5" y="0.5" width="1023" height="1023" rx="255.5" fill="none" stroke="#2A2C2B" stroke-width="1"/>
-  <polygon points="512,210 814,778 210,778" fill="#FF7A18"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Montage mark">
+  <defs>
+    <linearGradient id="montage-red-a" x1="188" y1="178" x2="782" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FB7185"/>
+      <stop offset="0.46" stop-color="#EF4444"/>
+      <stop offset="1" stop-color="#B91C1C"/>
+    </linearGradient>
+    <linearGradient id="montage-red-b" x1="836" y1="178" x2="242" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF3131"/>
+      <stop offset="0.54" stop-color="#EF4444"/>
+      <stop offset="1" stop-color="#991B1B"/>
+    </linearGradient>
+    <linearGradient id="montage-fold" x1="300" y1="620" x2="724" y2="404" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#991B1B" stop-opacity="0.10"/>
+      <stop offset="0.45" stop-color="#7F1D1D" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.10"/>
+    </linearGradient>
+    <filter id="montage-shadow" x="96" y="154" width="832" height="716" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="36" flood-color="#EF4444" flood-opacity="0.22"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000000" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+  <g filter="url(#montage-shadow)">
+    <path d="M152 259C152 216.5 203.4 195.2 233.4 225.2L512 503.8L790.6 225.2C820.6 195.2 872 216.5 872 259V725C872 771.3 816 794.5 783.3 761.8L512 490.5L240.7 761.8C208 794.5 152 771.3 152 725V259Z" fill="url(#montage-red-a)"/>
+    <path d="M512 503.8L790.6 225.2C820.6 195.2 872 216.5 872 259V725C872 771.3 816 794.5 783.3 761.8L512 490.5V503.8Z" fill="url(#montage-red-b)"/>
+    <path d="M240.7 761.8L512 490.5L783.3 761.8C816 794.5 872 771.3 872 725V690L512 330L152 690V725C152 771.3 208 794.5 240.7 761.8Z" fill="url(#montage-fold)"/>
+  </g>
 </svg>

@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 
 import { drawTracks } from "./renderer.ts";
+import { TRACK_HEADER_WIDTH } from "./layout.ts";
 import type { TimelineItem } from "../protocol/generated/TimelineItem.ts";
 
 /** A clip item with only the fields drawItem reads; cast through unknown
@@ -40,6 +41,7 @@ function clip(
 function recordingCtx() {
   const fills: string[] = [];
   const strokes: string[] = [];
+  const fillRects: Array<{ x: number; y: number; w: number; h: number; style: string }> = [];
   let fillStyle = "";
   let strokeStyle = "";
   const ctx = {
@@ -58,7 +60,10 @@ function recordingCtx() {
     lineWidth: 1,
     font: "",
     textBaseline: "top",
-    fillRect: () => fills.push(fillStyle),
+    fillRect: (x: number, y: number, w: number, h: number) => {
+      fills.push(fillStyle);
+      fillRects.push({ x, y, w, h, style: fillStyle });
+    },
     fillText: () => {},
     strokeRect: () => strokes.push(strokeStyle),
     beginPath: () => {},
@@ -76,7 +81,7 @@ function recordingCtx() {
     measureText: (t: string) => ({ width: t.length * 6 }) as TextMetrics,
     createLinearGradient: () => ({ addColorStop: () => {} }),
   } as unknown as CanvasRenderingContext2D;
-  return { ctx, fills, strokes };
+  return { ctx, fills, strokes, fillRects };
 }
 
 const tracks = [
@@ -110,6 +115,21 @@ console.log("# davinci clip colours");
 }
 console.log("  ok  per-track clip body + accent stripe colours");
 
+console.log("# track rail offset");
+{
+  const { ctx, fillRects } = recordingCtx();
+  drawTracks(ctx, 600, tracks, 20, {});
+  assert.ok(
+    fillRects.some((rect) => rect.x === TRACK_HEADER_WIDTH && rect.w === 100),
+    "first clip should begin after the fixed track-label rail",
+  );
+  assert.ok(
+    !fillRects.some((rect) => rect.x === 0 && rect.w === 100),
+    "first clip must not draw underneath the track-label rail",
+  );
+}
+console.log("  ok  clips start after the fixed label rail");
+
 console.log("# davinci selection ring");
 {
   const { ctx, strokes } = recordingCtx();
@@ -119,7 +139,7 @@ console.log("# davinci selection ring");
     "selected clip should paint the red-orange ring",
   );
   assert.ok(
-    !strokes.includes("#38BDF8"),
+    !strokes.includes("#EF4444"),
     "selection ring must no longer use the old cyan brand colour",
   );
 }

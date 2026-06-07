@@ -22,7 +22,7 @@ export function SafeAreaPreview() {
           <img src={podcastWide} alt="" className="absolute inset-0 h-full w-full object-cover opacity-55" />
           <div className="absolute inset-0 bg-black/30" />
           {/* YouTube 16:9 safe area */}
-          <div className="absolute inset-[10%] border border-[rgba(56,189,248,0.55)]" />
+          <div className="absolute inset-[10%] border border-[rgba(239,68,68,0.55)]" />
           {/* TikTok 9:16 safe area (vertical strip) */}
           <div className="absolute inset-y-[6%] left-[36%] right-[36%] border border-[rgba(168,85,247,0.65)] bg-[rgba(168,85,247,0.08)]" />
           {/* Caption safe band */}

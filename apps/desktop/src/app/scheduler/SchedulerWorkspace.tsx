@@ -150,7 +150,7 @@ export function SchedulerWorkspace() {
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[12px] font-semibold uppercase text-[var(--color-text-muted)]">
-              <CalendarDays className="h-4 w-4 text-[#FF9A45]" />
+              <CalendarDays className="h-4 w-4 text-[#FCA5A5]" />
               Calendar workspace
             </div>
             <h2 className="mt-1 m-0 text-[22px] font-bold tracking-[0] text-[var(--color-text-primary)]">
@@ -159,7 +159,7 @@ export function SchedulerWorkspace() {
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <span className="glass-ghost inline-flex items-center gap-2 rounded-lg px-3 py-2 font-mono text-[12px] text-[var(--color-text-secondary)]">
-              <Clock3 className="h-3.5 w-3.5 text-[#FF9A45]" />
+              <Clock3 className="h-3.5 w-3.5 text-[#FCA5A5]" />
               {formatGmtOffset()}
             </span>
           </div>
@@ -242,7 +242,7 @@ function ModeButton({
       onClick={onClick}
       className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-[12px] font-semibold transition ${
         active
-          ? "bg-[rgba(255,122,24,0.18)] text-[#FFB073]"
+          ? "bg-[rgba(239,68,68,0.18)] text-[#FCA5A5]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
       }`}
     >
@@ -303,7 +303,7 @@ function CalendarView({
                     onClick={() => onSelectPost(post.id)}
                     className={`min-h-[34px] rounded-md border px-2 py-1 text-left transition ${
                       post.id === selectedPostId
-                        ? "border-[#FF9A45] bg-[rgba(255,122,24,0.18)]"
+                        ? "border-[#FCA5A5] bg-[rgba(239,68,68,0.18)]"
                         : "border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] hover:border-[var(--glass-border-strong)]"
                     }`}
                   >
@@ -354,7 +354,7 @@ function QueueView({
           onClick={() => onSelectPost(post.id)}
           className={`grid min-h-[78px] grid-cols-[minmax(0,1fr)_128px_104px] items-center gap-3 rounded-lg border px-3 py-3 text-left transition ${
             post.id === selectedPostId
-              ? "border-[#FF9A45] bg-[rgba(255,122,24,0.14)]"
+              ? "border-[#FCA5A5] bg-[rgba(239,68,68,0.14)]"
               : "border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] hover:border-[var(--glass-border-strong)]"
           }`}
         >
@@ -570,7 +570,7 @@ function ReviewDrawer({
       <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 border-b border-[var(--glass-border)] px-4 py-3">
           <div className="flex items-center gap-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-            <FileVideo className="h-4 w-4 text-[#FF9A45]" />
+            <FileVideo className="h-4 w-4 text-[#FCA5A5]" />
             Review drawer
           </div>
         </div>
@@ -587,7 +587,7 @@ function ReviewDrawer({
           <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
             <div className="rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] p-3">
               <div className="flex items-start gap-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[rgba(255,122,24,0.16)] text-[#FFB073]">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[rgba(239,68,68,0.16)] text-[#FCA5A5]">
                   <CalendarDays className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -620,7 +620,7 @@ function ReviewDrawer({
                     href={post.providerUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex max-w-full items-center gap-1 text-[#7DD3FC] hover:text-[#BAE6FD]"
+                    className="inline-flex max-w-full items-center gap-1 text-[#FCA5A5] hover:text-[#FECACA]"
                   >
                     <span className="truncate">{post.providerUrl}</span>
                     <ExternalLink className="h-3 w-3 shrink-0" />
@@ -1260,7 +1260,7 @@ function SchedulerComposer({
                   metadataValidationErrors.length > 0
                 }
                 onClick={() => void submit()}
-                className="self-end rounded-md border border-[rgba(255,122,24,0.42)] bg-[rgba(255,122,24,0.14)] px-3 py-1.5 text-[12px] font-semibold text-[#FFB073] hover:bg-[rgba(255,122,24,0.2)] disabled:cursor-wait disabled:opacity-60"
+                className="self-end rounded-md border border-[rgba(239,68,68,0.42)] bg-[rgba(239,68,68,0.14)] px-3 py-1.5 text-[12px] font-semibold text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.2)] disabled:cursor-wait disabled:opacity-60"
               >
                 {busy ? "Scheduling" : `Schedule ${selectedAccounts.length}`}
               </button>
@@ -1394,7 +1394,7 @@ function TikTokInteractionControls({
               onChange={(event) =>
                 onChange({ ...value, [option.key]: event.currentTarget.checked })
               }
-              className="h-3.5 w-3.5 accent-[#FF7A18]"
+              className="h-3.5 w-3.5 accent-[#EF4444]"
             />
             <span className="min-w-0 truncate">{option.label}</span>
           </label>
@@ -1436,7 +1436,7 @@ function StatusPill({ status }: { status: SchedulerStatus }) {
 function EmptyWorkspace() {
   return (
     <div className="mt-4 rounded-lg border border-dashed border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] p-8 text-center">
-      <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-[rgba(255,122,24,0.14)] text-[#FFB073]">
+      <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-[rgba(239,68,68,0.14)] text-[#FCA5A5]">
         <CalendarDays className="h-6 w-6" />
       </div>
       <h3 className="mt-4 m-0 text-[15px] font-bold text-[var(--color-text-primary)]">

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { computeCanvasLayout } from "./canvasLayout.ts";
+import { TRACK_HEADER_WIDTH } from "./layout.ts";
 import type { TimelineSnapshot } from "./store.ts";
 
 function snapshot(duration_s: number, trackCount: number): TimelineSnapshot {
@@ -30,7 +31,7 @@ assert.deepEqual(
     cssHeight: 146,
     cssWidth: 200,
     lanesCount: 2,
-    pps: 19.2,
+    pps: 14,
     totalDuration: 10,
     laneHeight: 62,
   },
@@ -48,12 +49,15 @@ assert.deepEqual(
     cssHeight: 208,
     cssWidth: 200,
     lanesCount: 3,
-    pps: 9.6,
+    pps: 7,
     totalDuration: 20,
     laneHeight: 62,
   },
 );
 console.log("  ok  uses proposed duration and track count when proposal is larger");
+
+assert.equal(TRACK_HEADER_WIDTH, 52);
+console.log("  ok  reserves a fixed label rail before timeline content");
 
 assert.deepEqual(
   computeCanvasLayout({

@@ -34,7 +34,12 @@ import type { PermissionMode } from "../protocol";
  * (start_turn / cancel_turn / respond_user_input) happens at App.tsx cutover.
  */
 
-export type ContextChip = { label: string; kind?: "media" | "selection" | "project" | "lens" };
+export type ContextChip = {
+  label: string;
+  kind?: "media" | "selection" | "project" | "lens";
+  mediaId?: string;
+  mediaToken?: string;
+};
 
 export type PlanItem = {
   id: string;

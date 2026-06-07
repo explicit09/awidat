@@ -44,7 +44,7 @@ function brollDisclosureLabel(metadata: BrollDisclosureMetadata): string {
 export const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: string }> = {
   cut: {
     label: "Cut",
-    className: "bg-[rgba(34,211,238,0.12)] text-[#67E8F9] border-[rgba(34,211,238,0.32)]",
+    className: "bg-[rgba(34,211,238,0.12)] text-[#FCA5A5] border-[rgba(34,211,238,0.32)]",
   },
   color: {
     label: "Color",

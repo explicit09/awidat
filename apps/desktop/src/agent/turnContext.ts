@@ -1,6 +1,8 @@
 export type ContextChip = {
   label: string;
   kind?: "media" | "selection" | "project" | "lens";
+  mediaId?: string;
+  mediaToken?: string;
 };
 
 export type ChatSessionSummary = {
@@ -42,7 +44,7 @@ function contextLine(chip: ContextChip): string | null {
     case "project":
       return `project: ${stripPrefix(label, "Project:")}`;
     case "media":
-      return `media: ${label}`;
+      return mediaContextLine(label, chip);
     case "selection":
       return `selection: ${label}`;
     case "lens":
@@ -50,6 +52,13 @@ function contextLine(chip: ContextChip): string | null {
     default:
       return label;
   }
+}
+
+function mediaContextLine(label: string, chip: ContextChip): string {
+  const details: string[] = [];
+  if (chip.mediaId?.trim()) details.push(`asset_id=${chip.mediaId.trim()}`);
+  if (chip.mediaToken?.trim()) details.push(`token=@${chip.mediaToken.trim()}`);
+  return details.length > 0 ? `media: ${label} | ${details.join(" | ")}` : `media: ${label}`;
 }
 
 function stripPrefix(value: string, prefix: string): string {

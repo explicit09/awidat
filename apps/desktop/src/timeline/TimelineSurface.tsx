@@ -27,7 +27,7 @@ import {
   buildRollDragOps,
   buildTrimDragOps,
 } from "./editOps";
-import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT } from "./layout.ts";
+import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT, timeToX, xToTime } from "./layout.ts";
 import { collectDeletedKeys, collectHighlightKeys } from "./proposalDiffKeys.ts";
 import {
   drawGhostClips,
@@ -295,21 +295,21 @@ function TimelineCanvas({
         if (item && item.kind === "clip") {
           const edgeX =
             edgeHover.side === "start"
-              ? item.track_start_s * pps
-              : (item.track_start_s + item.duration_s) * pps;
+              ? timeToX(item.track_start_s, pps)
+              : timeToX(item.track_start_s + item.duration_s, pps);
           const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
-          ctx.fillStyle = "rgba(56, 189, 248, 0.62)";
+          ctx.fillStyle = "rgba(239, 68, 68, 0.62)";
           ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
         }
       }
 
-      // Live drag-edge phantom — 2px cyan line at the dragged x so it
+      // Live drag-edge phantom — 2px red line at the dragged x so it
       // stays consistent with the selection / hover language above.
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
         const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
-        ctx.fillStyle = "#38BDF8";
+        ctx.fillStyle = "#EF4444";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
@@ -373,7 +373,7 @@ function TimelineCanvas({
     if (!canvas) return 0;
     const rect = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    const t = x / Math.max(0.001, ppsRef.current);
+    const t = xToTime(x, ppsRef.current);
     // Clamp to project duration so we don't ask the player to seek
     // past the end (HTMLMediaElement clamps anyway, but this keeps
     // the visual feedback clean).

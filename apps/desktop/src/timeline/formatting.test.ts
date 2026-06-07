@@ -7,7 +7,7 @@ import {
 import { computePps } from "./layout.ts";
 
 console.log("# computePps");
-assert.equal(computePps(60, 728, 1), 12);
+assert.equal(computePps(60, 728, 1), 11.133333333333333);
 assert.equal(computePps(2, 1200, 4), 96);
 assert.equal(computePps(0, 500, 1), 12);
 console.log("  ok  fits duration to width and caps zoomed pixels-per-second");
