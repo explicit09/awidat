@@ -29,6 +29,7 @@ use tokio_util::io::ReaderStream;
 
 const SOCIAL_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const WORKSPACE_ID_HEADER: &str = "x-montage-workspace-id";
 
 /// Authenticated HTTPS client for the social-publishing server.
 ///
@@ -39,6 +40,7 @@ const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub struct SocialClient {
     base_url: String,
     auth_token: String,
+    workspace_id: Option<String>,
     http: reqwest::Client,
 }
 
@@ -76,6 +78,16 @@ impl SocialClient {
         Self::new_with_timeout(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT)
     }
 
+    pub fn new_for_workspace(
+        base_url: impl Into<String>,
+        auth_token: impl Into<String>,
+        workspace_id: impl Into<String>,
+    ) -> Self {
+        let mut client = Self::new(base_url, auth_token);
+        client.workspace_id = non_empty_string(workspace_id.into());
+        client
+    }
+
     fn new_with_timeout(
         base_url: impl Into<String>,
         auth_token: impl Into<String>,
@@ -89,6 +101,7 @@ impl SocialClient {
         Self {
             base_url,
             auth_token: auth_token.into(),
+            workspace_id: None,
             http,
         }
     }
@@ -107,7 +120,13 @@ impl SocialClient {
             return None;
         }
         let auth_token = std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").unwrap_or_default();
-        Some(Self::new(base_url, auth_token))
+        match std::env::var("MONTAGE_SOCIAL_WORKSPACE_ID")
+            .ok()
+            .and_then(non_empty_string)
+        {
+            Some(workspace_id) => Some(Self::new_for_workspace(base_url, auth_token, workspace_id)),
+            None => Some(Self::new(base_url, auth_token)),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -268,9 +287,7 @@ impl SocialClient {
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
-            .http
-            .get(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.get(self.url(path)))
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -283,9 +300,7 @@ impl SocialClient {
         body: &B,
     ) -> Result<T, String> {
         let resp = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.post(self.url(path)))
             .json(body)
             .send()
             .await
@@ -295,13 +310,19 @@ impl SocialClient {
 
     async fn post_empty<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.post(self.url(path)))
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
         Self::decode(resp).await
+    }
+
+    fn authenticated(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = request.bearer_auth(&self.auth_token);
+        match &self.workspace_id {
+            Some(workspace_id) => request.header(WORKSPACE_ID_HEADER, workspace_id),
+            None => request,
+        }
     }
 
     /// Map a response into the typed DTO, or a stable error string. A non-2xx
@@ -327,6 +348,15 @@ fn status_error(status: reqwest::StatusCode) -> String {
         "unauthorized".to_string()
     } else {
         format!("server returned {}", status.as_u16())
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -391,6 +421,24 @@ mod tests {
         assert_eq!(accounts[0].status, ConnectedAccountStatus::Connected);
         assert_eq!(accounts[0].account_kind, AccountKind::Channel);
         assert_eq!(accounts[0].owner, OwnerRef::User("local-user".into()));
+    }
+
+    #[tokio::test]
+    async fn accounts_sends_workspace_header_when_configured() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(match_path("/social/accounts"))
+            .and(header("authorization", "Bearer dev-token"))
+            .and(header("x-montage-workspace-id", "workspace_1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([account_json()])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = SocialClient::new_for_workspace(server.uri(), "dev-token", "workspace_1");
+        let accounts = client.accounts().await.expect("accounts ok");
+        assert_eq!(accounts.len(), 1);
     }
 
     #[tokio::test]
