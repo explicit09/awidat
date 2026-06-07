@@ -15,6 +15,7 @@
 //! - service: `"montage.publishing"`
 //! - account: `"<provider>-<kind>"` (e.g. `"youtube-access_token"`,
 //!   `"tiktok-refresh_token"`, `"instagram-client_secret"`)
+//! - reads fall back to the pre-rename `"awidat.publishing"` service.
 //!
 //! Keeping each kind as its own entry — instead of one JSON blob per
 //! provider — makes deletes precise (you can revoke just the refresh
@@ -56,6 +57,7 @@ use keyring::Entry;
 /// Credential Manager on Windows) groups every montage publishing entry
 /// under the same namespace.
 const SERVICE: &str = "montage.publishing";
+const LEGACY_SERVICE: &str = "awidat.publishing";
 
 /// Which slot inside a provider's credential set this entry maps to.
 ///
@@ -188,11 +190,18 @@ impl Keychain {
         kind: TokenKind,
     ) -> Result<Option<String>, KeychainError> {
         let account = Self::account(provider, kind);
-        backend::read(self.service, &account).map_err(|reason| KeychainError {
-            provider: provider.to_string(),
-            kind,
-            reason,
-        })
+        for service in [self.service, LEGACY_SERVICE] {
+            if let Some(value) =
+                backend::read(service, &account).map_err(|reason| KeychainError {
+                    provider: provider.to_string(),
+                    kind,
+                    reason,
+                })?
+            {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 
     /// Delete the entry at `(provider, kind)`. Idempotent — missing
@@ -503,5 +512,37 @@ mod tests {
         // rename here strands every existing user's stored credentials.
         let kc = Keychain::new();
         assert_eq!(kc.service(), "montage.publishing");
+    }
+
+    #[test]
+    fn read_falls_back_to_legacy_awidat_publishing_service() {
+        install_mock_backend();
+        let kc = Keychain::new();
+        let provider = unique_provider("legacy-read");
+        let account = Keychain::account(&provider, TokenKind::RefreshToken);
+        backend::store(LEGACY_SERVICE, &account, "legacy-refresh").expect("store legacy");
+
+        let got = kc
+            .read_token(&provider, TokenKind::RefreshToken)
+            .expect("read legacy");
+
+        assert_eq!(got.as_deref(), Some("legacy-refresh"));
+    }
+
+    #[test]
+    fn current_publishing_service_wins_over_legacy_service() {
+        install_mock_backend();
+        let kc = Keychain::new();
+        let provider = unique_provider("current-wins");
+        let account = Keychain::account(&provider, TokenKind::AccessToken);
+        backend::store(LEGACY_SERVICE, &account, "legacy-access").expect("store legacy");
+        kc.store_token(&provider, TokenKind::AccessToken, "current-access")
+            .expect("store current");
+
+        let got = kc
+            .read_token(&provider, TokenKind::AccessToken)
+            .expect("read current");
+
+        assert_eq!(got.as_deref(), Some("current-access"));
     }
 }

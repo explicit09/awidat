@@ -21,6 +21,8 @@ use tracing::trace;
 
 /// Service name we register all entries under in the OS keychain.
 pub const SERVICE: &str = "montage";
+/// Legacy service name used before the Montage rename.
+pub const LEGACY_SERVICE: &str = "awidat";
 
 /// Errors talking to the keychain. Missing-secret is *not* an error — see
 /// [`get`] which returns `Ok(None)`.
@@ -39,7 +41,8 @@ pub enum SecretError {
 }
 
 /// Fetch a secret. Tries `env_var_name` first, then the OS keychain entry
-/// `(SERVICE, account)`. Returns `Ok(None)` if neither is set —
+/// `(SERVICE, account)`, then the legacy `(LEGACY_SERVICE, account)`.
+/// Returns `Ok(None)` if none are set —
 /// callers decide whether absence is fatal.
 pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
     if let Ok(value) = std::env::var(env_var_name)
@@ -49,21 +52,30 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
         return Ok(Some(value));
     }
 
-    let entry = keyring::Entry::new(SERVICE, account).map_err(|e| SecretError::Backend {
-        account: account.into(),
-        source: e,
-    })?;
-    match entry.get_password() {
-        Ok(value) => {
-            trace!(account, "secret resolved from keychain");
-            Ok(Some(value))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(SecretError::Backend {
+    for service in secret_read_services() {
+        let entry = keyring::Entry::new(service, account).map_err(|e| SecretError::Backend {
             account: account.into(),
             source: e,
-        }),
+        })?;
+        match entry.get_password() {
+            Ok(value) => {
+                trace!(account, service, "secret resolved from keychain");
+                return Ok(Some(value));
+            }
+            Err(keyring::Error::NoEntry) => {}
+            Err(e) => {
+                return Err(SecretError::Backend {
+                    account: account.into(),
+                    source: e,
+                });
+            }
+        }
     }
+    Ok(None)
+}
+
+fn secret_read_services() -> [&'static str; 2] {
+    [SERVICE, LEGACY_SERVICE]
 }
 
 /// Store a secret in the keychain under `(SERVICE, account)`. Overwrites
@@ -141,5 +153,11 @@ mod tests {
         // If anyone changes this, they need to migrate users. Loud test
         // catches it in review.
         assert_eq!(SERVICE, "montage");
+    }
+
+    #[test]
+    fn legacy_service_name_is_read_fallback() {
+        assert_eq!(LEGACY_SERVICE, "awidat");
+        assert_eq!(secret_read_services(), ["montage", "awidat"]);
     }
 }

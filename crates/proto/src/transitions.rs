@@ -1283,7 +1283,18 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
 
 /// Find a phase-one transition by stable id.
 pub fn lookup_builtin_transition(id: &str) -> Option<&'static BuiltinTransition> {
-    BUILTIN_TRANSITIONS.iter().find(|t| t.id == id)
+    BUILTIN_TRANSITIONS
+        .iter()
+        .find(|t| t.id == id || legacy_awidat_id_matches(id, t.id))
+}
+
+fn legacy_awidat_id_matches(candidate: &str, montage_id: &str) -> bool {
+    let Some(legacy_suffix) = candidate.strip_prefix("awidat.") else {
+        return false;
+    };
+    montage_id
+        .strip_prefix("montage.")
+        .is_some_and(|montage_suffix| legacy_suffix == montage_suffix)
 }
 
 /// Backends this transition can render through. Built-ins with an
@@ -3009,6 +3020,20 @@ mod tests {
         assert_eq!(
             resolve_ffmpeg_xfade("montage.composite").unwrap(),
             Some("fade")
+        );
+    }
+
+    #[test]
+    fn resolves_legacy_awidat_transition_ids_to_builtin_transitions() {
+        let transition = lookup_builtin_transition("awidat.cross_dissolve").unwrap();
+        assert_eq!(transition.id, "montage.cross_dissolve");
+        assert_eq!(
+            resolve_ffmpeg_xfade("awidat.cross_dissolve").unwrap(),
+            Some("fade")
+        );
+        assert_eq!(
+            resolve_audio_policy("awidat.cross_dissolve").unwrap(),
+            TransitionAudioPolicy::Crossfade
         );
     }
 
