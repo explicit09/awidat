@@ -10801,6 +10801,14 @@ fn build_timeline_render_spec_inner(
             metadata,
         });
     }
+    let stream_copy_blockers = stream_copy_eligibility.blockers.clone();
+    let original_segment_count = segs.len();
+    let (coalesced_segs, coalesced_segment_count) = if transitions.is_empty() {
+        coalesce_adjacent_plain_segments_for_reencode(segs)
+    } else {
+        (segs, 0)
+    };
+    segs = coalesced_segs;
     let browser_broadcast_overlay = if let Some(overlay) = broadcast_overlay.as_ref()
         && overlay.config.enabled
         && !overlay.config.short_form_mode
@@ -10878,7 +10886,21 @@ fn build_timeline_render_spec_inner(
     );
     let backend = backend_evidence.backend.clone();
     let mut metadata = backend_evidence.metadata_pairs();
-    insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_eligibility.blockers);
+    if coalesced_segment_count > 0 {
+        metadata.insert(
+            "timeline_input_segment_count".into(),
+            original_segment_count.to_string(),
+        );
+        metadata.insert(
+            "timeline_render_segment_count".into(),
+            segs.len().to_string(),
+        );
+        metadata.insert(
+            "timeline_coalesced_segment_count".into(),
+            coalesced_segment_count.to_string(),
+        );
+    }
+    insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_blockers);
     tag_unapplied_master_loudnorm(project_root, &mut metadata);
     if let Some(section) = section {
         trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
@@ -11013,6 +11035,54 @@ fn segment_container_can_copy_to_mp4(segment: &TimelineSegment) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4v")
         })
+}
+
+fn coalesce_adjacent_plain_segments_for_reencode(
+    segments: Vec<TimelineSegment>,
+) -> (Vec<TimelineSegment>, usize) {
+    let mut coalesced = Vec::<TimelineSegment>::with_capacity(segments.len());
+    let mut merged_count = 0usize;
+
+    for segment in segments {
+        if let Some(previous) = coalesced.last_mut()
+            && can_coalesce_adjacent_plain_segments(previous, &segment)
+        {
+            previous.duration_s += segment.duration_s;
+            previous.source_available_end_s = segment.source_available_end_s;
+            if !segment.clip_name.is_empty() {
+                if previous.clip_name.is_empty() {
+                    previous.clip_name = segment.clip_name;
+                } else {
+                    previous.clip_name.push_str(" + ");
+                    previous.clip_name.push_str(&segment.clip_name);
+                }
+            }
+            merged_count += 1;
+            continue;
+        }
+        coalesced.push(segment);
+    }
+
+    (coalesced, merged_count)
+}
+
+fn can_coalesce_adjacent_plain_segments(
+    previous: &TimelineSegment,
+    next: &TimelineSegment,
+) -> bool {
+    const EPSILON_S: f64 = 1e-6;
+    previous.asset_path == next.asset_path
+        && previous.duration_s.is_finite()
+        && previous.duration_s > 0.0
+        && next.duration_s.is_finite()
+        && next.duration_s > 0.0
+        && (previous.start_s + previous.duration_s - next.start_s).abs() <= EPSILON_S
+        && !segment_has_render_transform(previous)
+        && !segment_has_render_transform(next)
+        && !previous.audio_muted
+        && !next.audio_muted
+        && previous.audio_removed_ranges.is_empty()
+        && next.audio_removed_ranges.is_empty()
 }
 
 fn segment_has_render_transform(segment: &TimelineSegment) -> bool {
@@ -11319,6 +11389,37 @@ mod tests {
         ));
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_adjacent_source_ranges(dir: &Path) -> PathBuf {
+        let asset_rel = "raw/x.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+
+        let mut first = Clip::empty("c1".to_string());
+        first.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        first.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut second = Clip::empty("c2".to_string());
+        second.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        second.source_range = Some(OtioRange::new(
+            RationalTime::new(2.0 * 24.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(first));
+        track.children.push(TrackChild::Clip(second));
         let mut tl = Timeline::empty("p");
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
@@ -12089,6 +12190,32 @@ mod tests {
                 .map(String::as_str),
             Some("0")
         );
+    }
+
+    #[test]
+    fn adjacent_source_ranges_coalesce_for_reencode_after_stream_copy_check() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_adjacent_source_ranges(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+        let input_count = spec.args.windows(2).filter(|w| w[0] == "-i").count();
+
+        assert_eq!(
+            spec.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(spec.total_duration_s, Some(4.0));
+        assert_eq!(input_count, 1, "argv should open the source once: {cmd}");
+        assert!(
+            cmd.contains("concat=n=1:v=1:a=1"),
+            "coalesced timeline should render as one segment: {cmd}"
+        );
+        assert!(
+            cmd.contains("libx264"),
+            "coalescing should not turn the multi-clip timeline into stream-copy: {cmd}"
+        );
+        assert_eq!(spec.input_paths, vec![dir.path().join("raw/x.mp4")]);
     }
 
     #[test]
