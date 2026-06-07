@@ -35,7 +35,7 @@ pub fn profile_for(provider: &Provider) -> PlatformMetadataProfile {
         Provider::TwitterX => PlatformMetadataProfile {
             title_required: true,
             title_max: Some(280),
-            description_max: Some(280),
+            description_max: None,
             tags_total_max: None,
             caption_max: None,
         },
@@ -136,5 +136,17 @@ mod tests {
             }),
         );
         assert_eq!(reasons, vec!["title.too_long"]);
+    }
+
+    #[test]
+    fn twitter_x_profile_ignores_unused_description_field() {
+        let reasons = validate_platform_fields(
+            &Provider::TwitterX,
+            &serde_json::json!({
+                "title": "post text",
+                "description": "x".repeat(281)
+            }),
+        );
+        assert_eq!(reasons, Vec::<String>::new());
     }
 }

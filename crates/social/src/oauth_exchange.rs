@@ -137,6 +137,7 @@ impl GoogleOAuthExchange {
             access_token,
             refresh_token,
             expires_in,
+            refresh_expires_in: None,
         })
     }
 }
@@ -148,6 +149,8 @@ pub struct RefreshedTokens {
     /// Present only if the provider rotated the refresh token.
     pub refresh_token: Option<String>,
     pub expires_in: i64,
+    /// Present only if the provider advertises a new refresh-token lifetime.
+    pub refresh_expires_in: Option<i64>,
 }
 
 // ── TikTok / Instagram / Twitter/X ───────────────────────────────────────────
@@ -171,6 +174,85 @@ impl PlatformOAuthExchange {
             config,
             client: reqwest::Client::new(),
         }
+    }
+
+    /// Exchange a stored platform refresh token for a fresh access token.
+    ///
+    /// TikTok and Twitter/X both use the same token endpoint as authorization
+    /// code exchange with `grant_type=refresh_token`; parameter names differ
+    /// only for TikTok's `client_key`.
+    pub async fn refresh_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<RefreshedTokens, OAuthExchangeError> {
+        let params = match self.config.provider {
+            Provider::TikTok => vec![
+                ("client_key", self.config.client_id.clone()),
+                ("client_secret", self.config.client_secret.clone()),
+                ("grant_type", "refresh_token".to_string()),
+                ("refresh_token", refresh_token.to_string()),
+            ],
+            Provider::TwitterX => vec![
+                ("client_id", self.config.client_id.clone()),
+                ("client_secret", self.config.client_secret.clone()),
+                ("grant_type", "refresh_token".to_string()),
+                ("refresh_token", refresh_token.to_string()),
+            ],
+            Provider::Instagram => {
+                return Err(OAuthExchangeError::InvalidResponse(
+                    "Instagram refresh token flow is not configured".into(),
+                ));
+            }
+            Provider::YouTube => {
+                return Err(OAuthExchangeError::InvalidResponse(
+                    "use GoogleOAuthExchange for YouTube".into(),
+                ));
+            }
+        };
+
+        let resp = self
+            .client
+            .post(&self.config.token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| OAuthExchangeError::Http(e.to_string()))?;
+
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+
+        if !status.is_success() {
+            if body.contains("invalid_grant") {
+                return Err(OAuthExchangeError::InvalidGrant(body));
+            }
+            return Err(OAuthExchangeError::Http(format!(
+                "token endpoint {}: {body}",
+                status.as_u16()
+            )));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+        if let Some(message) = oauth_error_message(&json) {
+            if message.contains("invalid_grant") {
+                return Err(OAuthExchangeError::InvalidGrant(message));
+            }
+            return Err(OAuthExchangeError::Http(format!(
+                "token endpoint oauth error: {message}"
+            )));
+        }
+
+        Ok(RefreshedTokens {
+            access_token: string_field(&json, "access_token")?,
+            refresh_token: json["refresh_token"].as_str().map(ToOwned::to_owned),
+            expires_in: json["expires_in"]
+                .as_i64()
+                .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing expires_in".into()))?,
+            refresh_expires_in: json["refresh_expires_in"].as_i64(),
+        })
     }
 }
 
@@ -827,5 +909,84 @@ pub mod tests {
             output.token_response.scopes,
             "users.read tweet.write media.write offline.access"
         );
+    }
+
+    #[tokio::test]
+    async fn platform_refresh_exchanges_tiktok_refresh_token() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("client_key=tiktok-key"))
+            .and(body_string_contains("client_secret=tiktok-secret"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains("refresh_token=tt-refresh-old"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tt-access-new",
+                "refresh_token": "tt-refresh-new",
+                "expires_in": 86400,
+                "refresh_expires_in": 31536000
+            })))
+            .mount(&server)
+            .await;
+
+        let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+            provider: Provider::TikTok,
+            client_id: "tiktok-key".into(),
+            client_secret: "tiktok-secret".into(),
+            token_endpoint: format!("{}/oauth/token", server.uri()),
+            profile_endpoint: None,
+        });
+
+        let refreshed = exchange
+            .refresh_access_token("tt-refresh-old")
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.access_token, "tt-access-new");
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("tt-refresh-new"));
+        assert_eq!(refreshed.expires_in, 86400);
+        assert_eq!(refreshed.refresh_expires_in, Some(31536000));
+    }
+
+    #[tokio::test]
+    async fn platform_refresh_exchanges_twitter_x_refresh_token() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/oauth2/token"))
+            .and(body_string_contains("client_id=x-client"))
+            .and(body_string_contains("client_secret=x-secret"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains("refresh_token=x-refresh-old"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "x-access-new",
+                "refresh_token": "x-refresh-new",
+                "expires_in": 7200
+            })))
+            .mount(&server)
+            .await;
+
+        let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+            provider: Provider::TwitterX,
+            client_id: "x-client".into(),
+            client_secret: "x-secret".into(),
+            token_endpoint: format!("{}/2/oauth2/token", server.uri()),
+            profile_endpoint: None,
+        });
+
+        let refreshed = exchange
+            .refresh_access_token("x-refresh-old")
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.access_token, "x-access-new");
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("x-refresh-new"));
+        assert_eq!(refreshed.expires_in, 7200);
+        assert_eq!(refreshed.refresh_expires_in, None);
     }
 }

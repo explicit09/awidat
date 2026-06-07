@@ -284,6 +284,7 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
             thumbnail_ref: Some("render://thumb_e2e".into()),
             artifact_ref: None,
             privacy: None,
+            tiktok_interactions: Default::default(),
             now: 5_100,
         },
     )

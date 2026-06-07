@@ -22,7 +22,7 @@ use crate::upload_status::{
     UploadStatusResult,
 };
 use crate::youtube_upload::{
-    AccessTokenResolver, ArtifactBody, ArtifactSource, ArtifactSourceError, YOUTUBE_MAX_BYTES,
+    AccessTokenResolver, ArtifactBody, ArtifactSource, ArtifactSourceError,
 };
 use std::time::Duration;
 
@@ -39,6 +39,9 @@ pub struct TikTokUploadRequest {
     pub caption: String,
     /// Resolved TikTok `privacy_level` (already clamped where required).
     pub privacy_level: String,
+    pub disable_duet: bool,
+    pub disable_comment: bool,
+    pub disable_stitch: bool,
     pub access_token_ref: String,
 }
 
@@ -182,6 +185,9 @@ impl<C: TikTokUploadClient> UploadAdapter for TikTokUploadAdapter<C> {
             caption,
             privacy_level: tiktok_privacy_level(&request.privacy, self.eligible_for_public)
                 .to_string(),
+            disable_duet: request.tiktok_interactions.disable_duet,
+            disable_comment: request.tiktok_interactions.disable_comment,
+            disable_stitch: request.tiktok_interactions.disable_stitch,
             access_token_ref: request.access_token_ref.clone(),
         };
         let response = self
@@ -338,11 +344,8 @@ impl<R: AccessTokenResolver, A: ArtifactSource> LiveTikTokUploadClient<R, A> {
                 "tiktok upload artifact is empty".into(),
             ));
         }
-        if artifact.total_bytes > YOUTUBE_MAX_BYTES {
-            return Err(TikTokUploadClientError::NetworkOrServer(format!(
-                "file too large: {} bytes (max {})",
-                artifact.total_bytes, YOUTUBE_MAX_BYTES
-            )));
+        if artifact.total_bytes > TIKTOK_SINGLE_UPLOAD_MAX_BYTES {
+            return Err(tiktok_size_error(artifact.total_bytes));
         }
         let url = format!(
             "{}/v2/post/publish/video/init/",
@@ -354,9 +357,9 @@ impl<R: AccessTokenResolver, A: ArtifactSource> LiveTikTokUploadClient<R, A> {
             "post_info": {
                 "title": request.caption,
                 "privacy_level": request.privacy_level,
-                "disable_duet": false,
-                "disable_comment": false,
-                "disable_stitch": false,
+                "disable_duet": request.disable_duet,
+                "disable_comment": request.disable_comment,
+                "disable_stitch": request.disable_stitch,
                 "brand_content_toggle": false,
                 "brand_organic_toggle": false,
                 "is_aigc": false
@@ -430,10 +433,7 @@ impl<R: AccessTokenResolver, A: ArtifactSource> LiveTikTokUploadClient<R, A> {
         artifact: ArtifactBody,
     ) -> Result<(), TikTokUploadClientError> {
         if artifact.total_bytes > TIKTOK_SINGLE_UPLOAD_MAX_BYTES {
-            return Err(TikTokUploadClientError::NetworkOrServer(format!(
-                "tiktok FILE_UPLOAD currently supports artifacts up to {} bytes; got {}",
-                TIKTOK_SINGLE_UPLOAD_MAX_BYTES, artifact.total_bytes
-            )));
+            return Err(tiktok_size_error(artifact.total_bytes));
         }
         let last_byte = artifact.total_bytes.saturating_sub(1);
         let resp = self
@@ -495,6 +495,12 @@ fn tiktok_total_chunk_count(total_bytes: u64, chunk_size: u64) -> u64 {
 
 fn tiktok_artifact_error(error: ArtifactSourceError) -> TikTokUploadClientError {
     TikTokUploadClientError::NetworkOrServer(error.to_string())
+}
+
+fn tiktok_size_error(actual_bytes: u64) -> TikTokUploadClientError {
+    TikTokUploadClientError::NetworkOrServer(format!(
+        "tiktok FILE_UPLOAD currently supports artifacts up to {TIKTOK_SINGLE_UPLOAD_MAX_BYTES} bytes; got {actual_bytes}"
+    ))
 }
 
 pub struct LiveTikTokStatusClient<R> {
@@ -608,6 +614,7 @@ fn resp_status_success(status: u16) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::youtube_upload::{ArtifactBody, ArtifactSource};
     use std::cell::RefCell;
 
     fn request(privacy: UploadPrivacy) -> UploadRequest {
@@ -621,6 +628,7 @@ mod tests {
             tags: vec!["awidat".into()],
             thumbnail_ref: None,
             privacy,
+            tiktok_interactions: Default::default(),
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
         }
@@ -630,6 +638,17 @@ mod tests {
     struct RecordingTikTokClient {
         seen: RefCell<Option<TikTokUploadRequest>>,
         error: Option<TikTokUploadClientError>,
+    }
+
+    struct OversizedArtifactSource;
+
+    impl ArtifactSource for OversizedArtifactSource {
+        fn open(&self, _artifact_ref: &str) -> Result<ArtifactBody, ArtifactSourceError> {
+            Ok(ArtifactBody {
+                total_bytes: TIKTOK_SINGLE_UPLOAD_MAX_BYTES + 1,
+                data: Vec::new(),
+            })
+        }
     }
 
     impl TikTokUploadClient for RecordingTikTokClient {
@@ -663,6 +682,25 @@ mod tests {
         assert_eq!(seen.caption, "Launch clip");
         assert_eq!(seen.privacy_level, TIKTOK_PUBLIC);
         assert_eq!(seen.access_token_ref, "token-secret-ref");
+    }
+
+    #[test]
+    fn upload_forwards_tiktok_interaction_settings() {
+        let adapter =
+            TikTokUploadAdapter::with_public_eligibility(RecordingTikTokClient::default(), true);
+        let mut upload_request = request(UploadPrivacy::Private);
+        upload_request.tiktok_interactions.disable_duet = true;
+        upload_request.tiktok_interactions.disable_comment = true;
+        upload_request.tiktok_interactions.disable_stitch = true;
+
+        adapter
+            .upload(&upload_request)
+            .unwrap_or_else(|err| panic!("upload: {err:?}"));
+
+        let seen = adapter.client.seen.borrow().clone().expect("request seen");
+        assert!(seen.disable_duet);
+        assert!(seen.disable_comment);
+        assert!(seen.disable_stitch);
     }
 
     #[test]
@@ -943,6 +981,9 @@ mod tests {
                 video_url: "https://storage.example/render.mp4".into(),
                 caption: "Launch clip".into(),
                 privacy_level: TIKTOK_SELF_ONLY.into(),
+                disable_duet: false,
+                disable_comment: false,
+                disable_stitch: false,
                 access_token_ref: "token_secret:acct_1".into(),
             })
         })
@@ -951,6 +992,55 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.publish_id, "v_pub_url~v2.123");
+    }
+
+    #[tokio::test]
+    async fn live_tiktok_upload_client_rejects_oversized_artifact_before_init() {
+        use crate::youtube_upload::FixedTokenResolver;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/post/publish/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "publish_id": "should_not_start",
+                    "upload_url": format!("{}/video/upload/session_1", server.uri())
+                },
+                "error": { "code": "ok", "message": "", "log_id": "log_1" }
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = LiveTikTokUploadClient::with_base(
+            FixedTokenResolver("tt-access".into()),
+            OversizedArtifactSource,
+            server.uri(),
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.init_video_publish(&TikTokUploadRequest {
+                video_url: "https://storage.example/render.mp4".into(),
+                caption: "Launch clip".into(),
+                privacy_level: TIKTOK_SELF_ONLY.into(),
+                disable_duet: false,
+                disable_comment: false,
+                disable_stitch: false,
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Err(TikTokUploadClientError::NetworkOrServer(format!(
+                "tiktok FILE_UPLOAD currently supports artifacts up to {} bytes; got {}",
+                TIKTOK_SINGLE_UPLOAD_MAX_BYTES,
+                TIKTOK_SINGLE_UPLOAD_MAX_BYTES + 1
+            )))
+        );
     }
 
     #[tokio::test]
@@ -983,6 +1073,9 @@ mod tests {
                 video_url: "https://storage.example/render.mp4".into(),
                 caption: "Launch clip".into(),
                 privacy_level: TIKTOK_SELF_ONLY.into(),
+                disable_duet: false,
+                disable_comment: false,
+                disable_stitch: false,
                 access_token_ref: "token_secret:acct_1".into(),
             })
         })
@@ -1022,6 +1115,9 @@ mod tests {
                 video_url: "https://storage.example/render.mp4".into(),
                 caption: "Launch clip".into(),
                 privacy_level: TIKTOK_SELF_ONLY.into(),
+                disable_duet: false,
+                disable_comment: false,
+                disable_stitch: false,
                 access_token_ref: "token_secret:acct_1".into(),
             })
         })

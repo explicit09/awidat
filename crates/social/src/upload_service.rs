@@ -6,7 +6,9 @@ use crate::model::{
 use crate::store::{SocialStore, SocialStoreError};
 use crate::token::TokenSecret;
 use crate::token_refresh::{TokenRefreshError, TokenRefresher};
-use crate::upload_adapter::{UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest};
+use crate::upload_adapter::{
+    TikTokInteractionSettings, UploadAdapter, UploadAdapterError, UploadPrivacy, UploadRequest,
+};
 use thiserror::Error;
 
 /// Default lead time for the at-fire-time refresh: refresh a token that expires
@@ -24,9 +26,10 @@ impl TokenRefresher for NoopTokenRefresher {
         secret: &TokenSecret,
         _now: i64,
     ) -> Result<TokenSecret, TokenRefreshError> {
-        // Never called: execute_claimed_job only refreshes when is_access_expiring
-        // AND a real refresher is wired. Returning the secret unchanged is safe.
-        Ok(secret.clone())
+        let _ = secret;
+        Err(TokenRefreshError::Unavailable(
+            "token refresher not configured for provider".into(),
+        ))
     }
 }
 
@@ -65,6 +68,7 @@ pub struct ExecuteUploadInput {
     /// Resolved visibility for this upload, derived upstream from the campaign
     /// target / account defaults. The worker no longer hard-codes `Private`.
     pub privacy: UploadPrivacy,
+    pub tiktok_interactions: TikTokInteractionSettings,
     pub now: i64,
 }
 
@@ -206,6 +210,15 @@ impl UploadService {
                         input.now,
                     );
                 }
+                Err(TokenRefreshError::Unavailable(_)) => {
+                    return Self::flip_needs_reauth(
+                        store,
+                        job,
+                        &account.id,
+                        "refresh_not_configured",
+                        input.now,
+                    );
+                }
                 Err(TokenRefreshError::Transient(message)) => {
                     // Treat like a retryable provider failure: requeue with
                     // backoff (or fail terminally once exhausted). The job is
@@ -234,6 +247,7 @@ impl UploadService {
             tags: input.tags,
             thumbnail_ref: input.thumbnail_ref,
             privacy: input.privacy,
+            tiktok_interactions: input.tiktok_interactions,
             scheduled_for: Some(job.scheduled_for),
             access_token_ref: format!("token_secret:{}", account.id),
         };
@@ -595,6 +609,7 @@ mod tests {
                 thumbnail_ref: Some("render://thumb_1".into()),
                 artifact_ref: None,
                 privacy: UploadPrivacy::Private,
+                tiktok_interactions: Default::default(),
                 now: 2_000,
             },
         )
@@ -660,6 +675,7 @@ mod tests {
                 thumbnail_ref: None,
                 artifact_ref: None,
                 privacy: UploadPrivacy::Private,
+                tiktok_interactions: Default::default(),
                 now: 2_000,
             },
         )
@@ -794,6 +810,7 @@ mod tests {
                     thumbnail_ref: None,
                     artifact_ref: None,
                     privacy: UploadPrivacy::Private,
+                    tiktok_interactions: Default::default(),
                     now: 2_000,
                 },
             ),
@@ -824,6 +841,7 @@ mod tests {
                 thumbnail_ref: None,
                 artifact_ref: None,
                 privacy: UploadPrivacy::Private,
+                tiktok_interactions: Default::default(),
                 now: 2_000,
             },
         )
@@ -873,6 +891,7 @@ mod tests {
                     thumbnail_ref: None,
                     artifact_ref: None,
                     privacy: UploadPrivacy::Private,
+                    tiktok_interactions: Default::default(),
                     now: 2_000,
                 },
             ),
@@ -1102,6 +1121,30 @@ mod tests {
     }
 
     #[test]
+    fn missing_refresher_for_expired_token_requires_reauth_without_provider_call() {
+        let mut store = store_with_expiring_token(1_500, Some(1_000_000));
+        let adapter = RecordingUploadAdapter::published();
+
+        let job = UploadService::execute_claimed_job(&mut store, &adapter, execute_input())
+            .unwrap_or_else(|err| panic!("execute upload: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("refresh_not_configured")
+        );
+        assert_eq!(
+            adapter.call_count(),
+            0,
+            "provider must not see expired token"
+        );
+        let account = store
+            .connected_account("acct_1")
+            .unwrap_or_else(|err| panic!("load account: {err}"));
+        assert_eq!(account.status, ConnectedAccountStatus::NeedsReauth);
+    }
+
+    #[test]
     fn non_expiring_token_skips_refresh() {
         // Access token far in the future → refresher never called.
         let mut store = store_with_expiring_token(1_000_000, Some(1_000_000));
@@ -1219,6 +1262,7 @@ mod tests {
             thumbnail_ref: None,
             artifact_ref: None,
             privacy: UploadPrivacy::Private,
+            tiktok_interactions: Default::default(),
             now: 2_000,
         }
     }

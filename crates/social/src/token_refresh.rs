@@ -54,6 +54,10 @@ pub enum TokenRefreshError {
     /// The refresh token is gone or the provider rejected it (`invalid_grant`).
     /// The account must be flipped to `NeedsReauth`; do not retry.
     InvalidGrant(String),
+    /// The caller did not wire a provider refresher for this execution path.
+    /// The account must reconnect or wait until that provider has refresh
+    /// support; do not call the provider with an expired access token.
+    Unavailable(String),
     /// A transient network/server error; the upload may be retried later.
     Transient(String),
 }
@@ -62,6 +66,7 @@ impl std::fmt::Display for TokenRefreshError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidGrant(s) => write!(f, "refresh rejected (invalid_grant): {s}"),
+            Self::Unavailable(s) => write!(f, "refresh unavailable: {s}"),
             Self::Transient(s) => write!(f, "refresh transient error: {s}"),
         }
     }

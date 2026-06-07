@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const TWITTER_X_API_BASE: &str = "https://api.x.com";
 pub const TWITTER_X_VIDEO_MEDIA_TYPE: &str = "video/mp4";
 pub const TWITTER_X_VIDEO_MEDIA_CATEGORY: &str = "tweet_video";
+pub const TWITTER_X_VIDEO_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TwitterXUploadRequest {
@@ -259,6 +260,7 @@ pub struct LiveTwitterXUploadClient<R> {
     token_resolver: R,
     api_base: String,
     http: reqwest::Client,
+    max_video_bytes: u64,
 }
 
 pub struct LiveTwitterXStatusClient<R> {
@@ -321,7 +323,7 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXStatusClient<R> 
             .http
             .get(url)
             .bearer_auth(token)
-            .query(&[("command", "STATUS"), ("media_id", media_id)])
+            .query(&[("media_id", media_id)])
             .send()
             .await
             .map_err(|e| TwitterXStatusClientError::NetworkOrServer(e.to_string()))?;
@@ -374,6 +376,21 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
             token_resolver,
             api_base,
             http: reqwest::Client::new(),
+            max_video_bytes: TWITTER_X_VIDEO_MAX_BYTES,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_base_and_max_video_bytes(
+        token_resolver: R,
+        api_base: String,
+        max_video_bytes: u64,
+    ) -> Self {
+        Self {
+            token_resolver,
+            api_base,
+            http: reqwest::Client::new(),
+            max_video_bytes,
         }
     }
 
@@ -417,10 +434,23 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
                 "twitter_x media fetch {status}"
             )));
         }
-        resp.bytes()
+        if let Some(total_bytes) = declared_content_length(&resp)
+            && total_bytes > self.max_video_bytes
+        {
+            return Err(twitter_x_size_error(self.max_video_bytes, total_bytes));
+        }
+        let media = resp
+            .bytes()
             .await
             .map(|bytes| bytes.to_vec())
-            .map_err(|e| TwitterXUploadClientError::NetworkOrServer(e.to_string()))
+            .map_err(|e| TwitterXUploadClientError::NetworkOrServer(e.to_string()))?;
+        if media.len() as u64 > self.max_video_bytes {
+            return Err(twitter_x_size_error(
+                self.max_video_bytes,
+                media.len() as u64,
+            ));
+        }
+        Ok(media)
     }
 
     async fn init_media(
@@ -428,17 +458,18 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         total_bytes: usize,
         token: &str,
     ) -> Result<String, TwitterXUploadClientError> {
-        let json = self
-            .post_media_form(
-                &[
-                    ("command", "INIT".to_string()),
-                    ("media_type", TWITTER_X_VIDEO_MEDIA_TYPE.to_string()),
-                    ("total_bytes", total_bytes.to_string()),
-                    ("media_category", TWITTER_X_VIDEO_MEDIA_CATEGORY.to_string()),
-                ],
-                None,
-                token,
-            )
+        let url = format!(
+            "{}/2/media/upload/initialize",
+            self.api_base.trim_end_matches('/')
+        );
+        let json =
+            self.send_media_request(self.http.post(url).bearer_auth(token).json(
+                &serde_json::json!({
+                    "media_type": TWITTER_X_VIDEO_MEDIA_TYPE,
+                    "total_bytes": total_bytes,
+                    "media_category": TWITTER_X_VIDEO_MEDIA_CATEGORY,
+                }),
+            ))
             .await?;
         json["data"]["id"]
             .as_str()
@@ -456,16 +487,19 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         media: Vec<u8>,
         token: &str,
     ) -> Result<(), TwitterXUploadClientError> {
+        let url = format!(
+            "{}/2/media/upload/{}/append",
+            self.api_base.trim_end_matches('/'),
+            media_id
+        );
+        let form = reqwest::multipart::Form::new()
+            .text("segment_index", "0")
+            .part(
+                "media",
+                reqwest::multipart::Part::bytes(media).file_name("render.mp4"),
+            );
         let _ = self
-            .post_media_form(
-                &[
-                    ("command", "APPEND".to_string()),
-                    ("media_id", media_id.to_string()),
-                    ("segment_index", "0".to_string()),
-                ],
-                Some(media),
-                token,
-            )
+            .send_media_request(self.http.post(url).bearer_auth(token).multipart(form))
             .await?;
         Ok(())
     }
@@ -475,15 +509,13 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         media_id: &str,
         token: &str,
     ) -> Result<bool, TwitterXUploadClientError> {
+        let url = format!(
+            "{}/2/media/upload/{}/finalize",
+            self.api_base.trim_end_matches('/'),
+            media_id
+        );
         let json = self
-            .post_media_form(
-                &[
-                    ("command", "FINALIZE".to_string()),
-                    ("media_id", media_id.to_string()),
-                ],
-                None,
-                token,
-            )
+            .send_media_request(self.http.post(url).bearer_auth(token))
             .await?;
         let state = json["data"]["processing_info"]["state"]
             .as_str()
@@ -491,28 +523,11 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         Ok(matches!(state, "pending" | "in_progress"))
     }
 
-    async fn post_media_form(
+    async fn send_media_request(
         &self,
-        fields: &[(&str, String)],
-        media: Option<Vec<u8>>,
-        token: &str,
+        request: reqwest::RequestBuilder,
     ) -> Result<serde_json::Value, TwitterXUploadClientError> {
-        let url = format!("{}/2/media/upload", self.api_base.trim_end_matches('/'));
-        let mut form = reqwest::multipart::Form::new();
-        for (name, value) in fields {
-            form = form.text((*name).to_string(), value.clone());
-        }
-        if let Some(bytes) = media {
-            form = form.part(
-                "media",
-                reqwest::multipart::Part::bytes(bytes).file_name("render.mp4"),
-            );
-        }
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(token)
-            .multipart(form)
+        let resp = request
             .send()
             .await
             .map_err(|e| TwitterXUploadClientError::NetworkOrServer(e.to_string()))?;
@@ -559,6 +574,20 @@ fn twitter_x_error(status: u16, json: &serde_json::Value) -> Option<TwitterXUplo
         )));
     }
     None
+}
+
+fn twitter_x_size_error(max_bytes: u64, actual_bytes: u64) -> TwitterXUploadClientError {
+    TwitterXUploadClientError::NetworkOrServer(format!(
+        "twitter_x tweet_video supports media up to {max_bytes} bytes; got {actual_bytes}"
+    ))
+}
+
+fn declared_content_length(resp: &reqwest::Response) -> Option<u64> {
+    resp.headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .or_else(|| resp.content_length())
 }
 
 async fn create_tweet(
@@ -638,6 +667,7 @@ mod tests {
             tags: vec![],
             thumbnail_ref: None,
             privacy: UploadPrivacy::Public,
+            tiktok_interactions: Default::default(),
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
         }
@@ -654,27 +684,28 @@ mod tests {
 
         let api = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/2/media/upload"))
+            .and(path("/2/media/upload/initialize"))
             .and(bearer_token("x-access"))
-            .and(body_string_contains("INIT"))
+            .and(body_json(serde_json::json!({
+                "media_type": "video/mp4",
+                "total_bytes": 4,
+                "media_category": "tweet_video"
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": { "id": "media_123", "media_key": "13_media_123" }
             })))
             .mount(&api)
             .await;
         Mock::given(method("POST"))
-            .and(path("/2/media/upload"))
+            .and(path("/2/media/upload/media_123/append"))
             .and(bearer_token("x-access"))
-            .and(body_string_contains("APPEND"))
-            .and(body_string_contains("media_123"))
+            .and(body_string_contains("segment_index"))
             .respond_with(ResponseTemplate::new(204))
             .mount(&api)
             .await;
         Mock::given(method("POST"))
-            .and(path("/2/media/upload"))
+            .and(path("/2/media/upload/media_123/finalize"))
             .and(bearer_token("x-access"))
-            .and(body_string_contains("FINALIZE"))
-            .and(body_string_contains("media_123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": { "id": "media_123" }
             })))
@@ -712,6 +743,49 @@ mod tests {
             Some("https://x.com/i/web/status/tweet_123")
         );
         assert!(!response.processing);
+    }
+
+    #[tokio::test]
+    async fn live_twitter_x_upload_client_rejects_oversized_media_before_init() {
+        let media = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/render.mp4"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1, 2, 3, 4]))
+            .mount(&media)
+            .await;
+
+        let api = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/initialize"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "should_not_init" }
+            })))
+            .expect(0)
+            .mount(&api)
+            .await;
+
+        let client = LiveTwitterXUploadClient::with_base_and_max_video_bytes(
+            FixedTokenResolver("x-access".into()),
+            api.uri(),
+            3,
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            client.create_post_with_media(&TwitterXUploadRequest {
+                media_url: format!("{}/render.mp4", media.uri()),
+                text: "Launch clip".into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Err(TwitterXUploadClientError::NetworkOrServer(format!(
+                "twitter_x tweet_video supports media up to {} bytes; got {}",
+                3, 4
+            )))
+        );
     }
 
     #[test]
@@ -763,7 +837,6 @@ mod tests {
         let api = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/2/media/upload"))
-            .and(query_param("command", "STATUS"))
             .and(query_param("media_id", "media_123"))
             .and(bearer_token("x-access"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

@@ -36,6 +36,19 @@ impl CampaignVariantTarget {
         self.updated_at = now;
         self
     }
+
+    pub fn update_metadata(
+        mut self,
+        platform_fields: serde_json::Value,
+        scheduled_for: i64,
+        now: i64,
+    ) -> Self {
+        self.platform_fields = platform_fields;
+        self.scheduled_for = scheduled_for;
+        self.validation_state = ValidationState::Pending;
+        self.updated_at = now;
+        self
+    }
 }
 
 impl PublishJob {

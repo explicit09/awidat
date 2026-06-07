@@ -10,6 +10,14 @@ pub enum UploadPrivacy {
     Public,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TikTokInteractionSettings {
+    pub disable_duet: bool,
+    pub disable_comment: bool,
+    pub disable_stitch: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadRequest {
     pub job_id: String,
@@ -21,6 +29,8 @@ pub struct UploadRequest {
     pub tags: Vec<String>,
     pub thumbnail_ref: Option<String>,
     pub privacy: UploadPrivacy,
+    #[serde(default)]
+    pub tiktok_interactions: TikTokInteractionSettings,
     pub scheduled_for: Option<i64>,
     #[serde(rename = "token_ref")]
     pub access_token_ref: String,
@@ -147,6 +157,7 @@ mod tests {
             tags: vec!["awidat".into()],
             thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
             privacy: UploadPrivacy::Private,
+            tiktok_interactions: Default::default(),
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
         };
@@ -181,6 +192,7 @@ mod tests {
             tags: Vec::new(),
             thumbnail_ref: None,
             privacy: UploadPrivacy::Private,
+            tiktok_interactions: Default::default(),
             scheduled_for: None,
             access_token_ref: "token-secret-ref".into(),
         };

@@ -716,6 +716,7 @@ mod tests {
                 tags: vec!["awidat".into()],
                 thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
                 privacy: UploadPrivacy::Private,
+                tiktok_interactions: Default::default(),
                 scheduled_for: Some(2_000),
                 access_token_ref: "token-secret-ref".into(),
             })
@@ -742,6 +743,7 @@ mod tests {
             tags: Vec::new(),
             thumbnail_ref: None,
             privacy: UploadPrivacy::Private,
+            tiktok_interactions: Default::default(),
             scheduled_for: None,
             access_token_ref: "token-secret-ref".into(),
         };
@@ -825,6 +827,7 @@ mod tests {
             tags: vec!["awidat".into()],
             thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
             privacy: UploadPrivacy::Private,
+            tiktok_interactions: Default::default(),
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
         }
