@@ -24,7 +24,7 @@ use montage_social::{
         ValidateTargetResponse,
     },
     auth_context::JwtVerifier,
-    model::{AccountUsageAudit, WorkspaceMemberRole},
+    model::{AccountUsageAudit, TeamAction, WorkspaceMemberRole},
     oauth_url::OAuthProviderConfig,
     pg_store::PgSocialStore,
     store::SocialStore,
@@ -435,7 +435,13 @@ pub(crate) async fn fire_due_job_handler(
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -474,7 +480,13 @@ pub(crate) async fn poll_processing_job_handler(
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -546,12 +558,18 @@ pub(crate) async fn upload_url_handler(
 ) -> HttpResult<UploadUrlResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
 
-    // Authorize: the caller must be able to read the job (owner match).
+    // Authorize: staging rendered bytes is part of the publish workflow.
     let pool = state.pool.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -631,8 +649,13 @@ pub(crate) async fn upload_complete_handler(
 
     let job = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
-        // Authorize via the read path before mutating anything.
-        SocialApi::publish_job(&store, &actor, &owner, &job_id)?;
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id,
+            TeamAction::SchedulePublish,
+        )?;
         let mut job = store.publish_job(&job_id)?;
         // Regenerated server-side — the client cannot influence this path.
         job.artifact_ref = artifact_storage_ref(&bucket, &job_id);
