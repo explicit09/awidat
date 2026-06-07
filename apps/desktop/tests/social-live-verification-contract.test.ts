@@ -1,8 +1,13 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
-const contract = readFileSync("docs/social-server/live-verification.html", "utf8");
-const readme = readFileSync("docs/social-server/README.md", "utf8");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const readRepoFile = (path: string) => readFileSync(resolve(repoRoot, path), "utf8");
+
+const contract = readRepoFile("docs/social-server/live-verification.html");
+const readme = readRepoFile("docs/social-server/README.md");
 
 for (const provider of ["YouTube", "TikTok", "Instagram", "Twitter/X"]) {
   assert.match(
