@@ -163,9 +163,8 @@ impl CodexSession {
 ///      `skills/` dir via the running binary's grandparent (works in
 ///      `cargo tauri dev`; packaged builds will need a separate
 ///      resolver later when we ship installers).
-///   2. user roots — `~/Library/Application Support/montage/skills`
-///      (macOS / Windows `%APPDATA%`) via `dirs::config_dir`, plus
-///      the legacy `~/.montage/skills/` for power users.
+///   2. user roots — legacy Awidat skill folders, then
+///      `~/.montage/skills`, then platform config skill folders.
 ///   3. project — `<project>/skills/` — per-project overrides win
 ///      over both user and bundled. Lets a project ship its own
 ///      editorial loadout.
@@ -484,15 +483,21 @@ fn parse_three_part(s: &str) -> Option<(u32, u32, u32)> {
 ///     - macOS   → `~/Library/Application Support/montage/skills`
 ///     - Linux   → `~/.config/montage/skills`
 ///     - Windows → `%APPDATA%\montage\skills`
-///   - the legacy `~/.montage/skills/` for power users who prefer to
-///     keep everything under their home dir.
+///   - home-dir roots: legacy `~/.awidat/skills` followed by
+///     `~/.montage/skills`.
 fn user_skill_roots() -> Vec<PathBuf> {
+    user_skill_roots_from(dirs::home_dir(), dirs::config_dir())
+}
+
+fn user_skill_roots_from(home_dir: Option<PathBuf>, config_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".montage/skills")) {
-        roots.push(legacy);
+    if let Some(home) = home_dir {
+        roots.push(home.join(".awidat/skills"));
+        roots.push(home.join(".montage/skills"));
     }
-    if let Some(cfg) = dirs::config_dir().map(|c| c.join("montage/skills")) {
-        roots.push(cfg);
+    if let Some(cfg) = config_dir {
+        roots.push(cfg.join("awidat/skills"));
+        roots.push(cfg.join("montage/skills"));
     }
     roots
 }
@@ -720,6 +725,24 @@ mod tests {
         .expect("catalog non-empty");
         assert!(rendered.contains("user-desc"), "user must override bundled");
         assert!(!rendered.contains("bundled-desc"));
+    }
+
+    #[test]
+    fn user_skill_roots_include_legacy_awidat_locations_before_montage() {
+        let roots = user_skill_roots_from(
+            Some(PathBuf::from("/home/user")),
+            Some(PathBuf::from("/config")),
+        );
+
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/home/user/.awidat/skills"),
+                PathBuf::from("/home/user/.montage/skills"),
+                PathBuf::from("/config/awidat/skills"),
+                PathBuf::from("/config/montage/skills"),
+            ]
+        );
     }
 
     // ---- Wave 5 B2 — version + provenance pinning ----
