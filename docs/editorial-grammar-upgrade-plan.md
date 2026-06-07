@@ -1,7 +1,7 @@
-# Awidat Editorial Grammar Upgrade Plan
+# Montage Editorial Grammar Upgrade Plan
 
 This plan turns the lessons from the four editing videos into an
-implementation roadmap for Awidat. The core shift is from "can the
+implementation roadmap for Montage. The core shift is from "can the
 agent perform this timeline operation?" to "does the agent understand
 why this cut, split edit, cutaway, or transition belongs here?"
 
@@ -23,9 +23,9 @@ The four videos converge on the same editing grammar:
 - Cutaways can be literal continuity covers or intellectual/thematic
   montage. Those modes should not be conflated.
 
-## Current Awidat Strengths
+## Current Montage Strengths
 
-Awidat already has several pieces of the right system:
+Montage already has several pieces of the right system:
 
 - `SemanticTransitionSpec` stores transition id, family, intent, energy,
   direction, params, and composition metadata in
@@ -50,7 +50,7 @@ Awidat already has several pieces of the right system:
 ### 1. Cuts Are Not First-Class Editorial Objects
 
 Transitions have semantic metadata; hard cuts do not. A cut can be made
-or checked, but Awidat cannot persist "this boundary is a cut on
+or checked, but Montage cannot persist "this boundary is a cut on
 action", "this is an eyeline match", or "this is a smash cut for
 contrast."
 
@@ -94,7 +94,7 @@ Impact:
 ### 4. Continuity Checking Is Defensive, Not Expressive
 
 `assess_continuity` answers whether a proposed edit is clean, risky, or
-dirty. It does not yet answer which better edit Awidat should make.
+dirty. It does not yet answer which better edit Montage should make.
 
 Needed upgrade:
 
@@ -120,14 +120,14 @@ more signals to support the grammar from the videos:
 The current registry covers useful basics, but the video lessons point
 to additional transition families:
 
-- `awidat.whip_pan_left`
-- `awidat.whip_pan_right`
-- `awidat.pass_by_left`
-- `awidat.pass_by_right`
-- `awidat.iris_open`
-- `awidat.iris_close`
-- `awidat.match_dissolve`
-- `awidat.invisible_cut`
+- `montage.whip_pan_left`
+- `montage.whip_pan_right`
+- `montage.pass_by_left`
+- `montage.pass_by_right`
+- `montage.iris_open`
+- `montage.iris_close`
+- `montage.match_dissolve`
+- `montage.invisible_cut`
 
 These should not be added as decorative choices only. Each needs
 `best_for`, `avoid_for`, duration defaults, direction, audio policy, and
@@ -136,7 +136,7 @@ fallback lowering.
 ### 7. B-Roll Is Literal, But Montage Needs a Separate Mode
 
 The bundled b-roll skill correctly avoids abstract metaphorical cutaways
-for normal cover work. Awidat also needs a separate thematic montage
+for normal cover work. Montage also needs a separate thematic montage
 mode for intellectual or associative editing.
 
 The safe split:
@@ -217,7 +217,7 @@ pub enum AudioRelation {
 
 Store cut metadata at the timeline boundary level, not as fake
 transition nodes. A hard cut should remain a hard cut. The most robust
-storage shape is timeline-level Awidat metadata keyed by adjacent clip
+storage shape is timeline-level Montage metadata keyed by adjacent clip
 UUIDs:
 
 ```json
@@ -329,11 +329,11 @@ Add organic and editorial transitions only with usage metadata:
 
 | Id | Purpose | Avoid When |
 | --- | --- | --- |
-| `awidat.whip_pan_left/right` | camera-motion bridge, energy, location jump | static dialogue, serious tone |
-| `awidat.pass_by_left/right` | object/person wipes frame, invisible move | no occlusion/mask signal |
-| `awidat.iris_open/close` | stylized reveal, vintage/comic grammar | documentary realism |
-| `awidat.match_dissolve` | visual echo, time/memory bridge | unrelated images |
-| `awidat.invisible_cut` | hide a cut on occlusion/dark frame | visible mismatch |
+| `montage.whip_pan_left/right` | camera-motion bridge, energy, location jump | static dialogue, serious tone |
+| `montage.pass_by_left/right` | object/person wipes frame, invisible move | no occlusion/mask signal |
+| `montage.iris_open/close` | stylized reveal, vintage/comic grammar | documentary realism |
+| `montage.match_dissolve` | visual echo, time/memory bridge | unrelated images |
+| `montage.invisible_cut` | hide a cut on occlusion/dark frame | visible mismatch |
 
 Phase-one lowering can be approximate through existing primitives:
 blur, push, wipe, opacity, flash, and zoom. The important contract is
@@ -392,7 +392,7 @@ remove the requirement that every visible transition has an intent.
 Deliverables:
 
 - Finalize `SemanticCutSpec` schema.
-- Decide exact metadata storage under `metadata.awidat`.
+- Decide exact metadata storage under `metadata.montage`.
 - Decide whether split-edit ops lower to explicit audio tracks or to
   clip-level effects first.
 - Add this plan to the engineering docs and link it from transition docs
@@ -416,7 +416,7 @@ Deliverables:
 
 Exit criteria:
 
-- Awidat can preserve and display "this boundary is a cutaway/cut on
+- Montage can preserve and display "this boundary is a cutaway/cut on
   action/match cut" without adding a transition.
 
 ### Phase 2: First-Class Split Edits
@@ -464,7 +464,7 @@ Deliverables:
 
 Exit criteria:
 
-- Awidat can recommend cut-on-action, match cut, screen-direction
+- Montage can recommend cut-on-action, match cut, screen-direction
   transition, and pass-by/invisible-cut candidates from indexed data.
 
 ### Phase 5: Transition Registry Expansion
@@ -494,7 +494,7 @@ Deliverables:
 
 Exit criteria:
 
-- A user can see not only what edit exists, but why Awidat thinks it is
+- A user can see not only what edit exists, but why Montage thinks it is
   there.
 
 ### Phase 7: Editorial Evals
@@ -632,8 +632,8 @@ implemented in the worktree:
   that safe smoke validates on every run.
 - Python safe smoke can now also validate a mounted real project
   `index/composition-model/**/*.json` tree via
-  `AWIDAT_COMPOSITION_MODEL_PROJECT` and
-  `AWIDAT_COMPOSITION_MODEL_MIN_REGIONS`, giving the model-backed
+  `MONTAGE_COMPOSITION_MODEL_PROJECT` and
+  `MONTAGE_COMPOSITION_MODEL_MIN_REGIONS`, giving the model-backed
   composition rollout a schema and minimum-coverage gate before live
   eval thresholds are tuned.
 - Bundled skills have started to separate literal b-roll from thematic
@@ -697,10 +697,10 @@ implemented in the worktree:
   follow-up proposal, so rejected recommendations no longer block
   user-adjusted follow-up flows in the proposal UI.
 - The live eval tier now has mounted real-project assessor proposal
-  fixture hooks. `AWIDAT_REAL_ASSESSOR_PROPOSAL_FIXTURE` can point to a
+  fixture hooks. `MONTAGE_REAL_ASSESSOR_PROPOSAL_FIXTURE` can point to a
   JSON file or directory, and real projects can provide
-  `.awidat/eval/assessor-proposal-flow.json` plus additional
-  `.awidat/eval/assessor-proposals/*.json` fixtures. The eval applies
+  `.montage/eval/assessor-proposal-flow.json` plus additional
+  `.montage/eval/assessor-proposals/*.json` fixtures. The eval applies
   every discovered final EDL to the mounted real timeline while
   asserting rejected snippets are absent and accepted follow-up snippets
   are present. Each assessor proposal fixture must include at least one
@@ -711,21 +711,21 @@ implemented in the worktree:
   `final_edl_must_contain` and `final_edl_must_not_contain` assertions
   must also be non-empty so they cannot pass vacuously.
   Real-corpus runs can set
-  `AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES` to fail when the mounted
+  `MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES` to fail when the mounted
   corpus does not include enough tuned proposal-flow fixtures.
 - A checked-in
   `crates/eval/fixtures/real/assessor-proposal-flow.sample.json` manifest
   gives real-corpus runners an executable example for that lifecycle
   fixture format, and eval unit coverage now mounts it at the default
-  `.awidat/eval/assessor-proposal-flow.json` path to exercise live
+  `.montage/eval/assessor-proposal-flow.json` path to exercise live
   scenario discovery. A second checked-in directory-layout sample under
   `crates/eval/fixtures/real/assessor-proposals/` keeps the multi-fixture
   discovery path executable too.
 - The live eval tier now also has a mounted transition-planner fixture
-  hook. `AWIDAT_REAL_TRANSITION_PLANNER_FIXTURE` can point to a JSON
+  hook. `MONTAGE_REAL_TRANSITION_PLANNER_FIXTURE` can point to a JSON
   file or directory, and real projects can provide
-  `.awidat/eval/transition-planner-flow.json` plus additional
-  `.awidat/eval/transition-planners/*.json` fixtures. Each fixture runs
+  `.montage/eval/transition-planner-flow.json` plus additional
+  `.montage/eval/transition-planners/*.json` fixtures. Each fixture runs
   `transition_context` on a real adjacent clip boundary, feeds the
   packet to `plan_transition`, checks the expected hard-cut or
   visible-transition recommendation, parses the returned EDL fragment,
@@ -737,13 +737,13 @@ implemented in the worktree:
   transition cases must provide a `transition_id` and prove it appears in
   the EDL fragment. Checked-in sample manifests cover single-file
   discovery plus directory-layout hard-cut and motion-cover cases, and
-  `AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES` can fail undercovered
+  `MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES` can fail undercovered
   corpus runs.
 - The live eval tier now also has a mounted rough-assembly fixture hook.
-  `AWIDAT_REAL_ROUGH_ASSEMBLY_FIXTURE` can point to a JSON file or
+  `MONTAGE_REAL_ROUGH_ASSEMBLY_FIXTURE` can point to a JSON file or
   directory, and real projects can provide
-  `.awidat/eval/rough-assembly-flow.json` plus additional
-  `.awidat/eval/rough-assemblies/*.json` fixtures. Each fixture can
+  `.montage/eval/rough-assembly-flow.json` plus additional
+  `.montage/eval/rough-assemblies/*.json` fixtures. Each fixture can
   provide a final rough-cut EDL plus structural expectations for clip
   ranges, semantic cut boundaries, delivery metadata, forbidden ops, and
   optional proposal history. Proposal-history final-EDL assertion
@@ -753,7 +753,7 @@ implemented in the worktree:
   with matching clip UUIDs, and
   `crates/eval/fixtures/real/rough-assemblies/` now includes the
   corresponding directory-layout sample. Real-corpus runs can set
-  `AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES` to fail when the mounted
+  `MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES` to fail when the mounted
   corpus does not include enough tuned rough-assembly fixtures.
 - The live eval tier now includes a real-corpus `assess_edit_quality`
   visual-context check that fails configured corpora lacking shot
@@ -764,43 +764,43 @@ implemented in the worktree:
 - The same live visual-context gate now counts model-backed composition
   sources separately from lightweight heuristic labels. Real corpus runs
   can require a minimum number of `composition_source: model:*` shots via
-  `AWIDAT_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS`, making the final
+  `MONTAGE_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS`, making the final
   model-indexer rollout verifiable instead of silently passing on
   heuristic sidecars.
 - The live visual-context gate now also counts actual
   `index/composition-model` regions via
-  `AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS`, so corpus runs can
+  `MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS`, so corpus runs can
   prove valid model sidecars exist instead of only trusting copied model
   labels in `index/shot`. The live count now uses the same region
   contract as Python safe smoke: `model:*` source, valid time range,
   bounded confidence, and controlled subject/depth/framing labels.
   Invalid model-region tolerance defaults to zero and can be relaxed
   only through
-  `AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS`. Coverage
+  `MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS`. Coverage
   summaries report valid and invalid composition-model region counts
   separately, so corpus tuning can distinguish missing model output from
   model output that failed the contract. The Python safe smoke preflight
   now reports the same valid/invalid region distinction with sample
   path/reason diagnostics before the Rust live eval runs, and the
   workflow maps the same minimum-region and max-invalid thresholds into
-  `AWIDAT_COMPOSITION_MODEL_MIN_REGIONS` and
-  `AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS`. Python safe smoke now
+  `MONTAGE_COMPOSITION_MODEL_MIN_REGIONS` and
+  `MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS`. Python safe smoke now
   also accepts the real-corpus variable names as fallbacks, and a
   real-corpus minimum-region value of `0` keeps the Python preflight
   disabled to match the workflow condition. If any Python project-tree
   threshold is configured, safe smoke requires
-  `AWIDAT_COMPOSITION_MODEL_PROJECT` or `AWIDAT_REAL_CORPUS` instead of
+  `MONTAGE_COMPOSITION_MODEL_PROJECT` or `MONTAGE_REAL_CORPUS` instead of
   silently skipping the configured gate. Rust live eval threshold parsing
   now fails malformed integers and metadata ratios outside `[0, 1]`
   instead of silently weakening gates through default fallback.
 - The real-corpus GitHub eval workflow now forwards the visual,
   composition-model, assessor-proposal, transition-planner, and
   rough-assembly gate variables into the self-hosted corpus run. It
-  now refuses an empty `AWIDAT_REAL_CORPUS` path and requires that path
-  to be an existing Awidat project directory with `project.otio.json`
+  now refuses an empty `MONTAGE_REAL_CORPUS` path and requires that path
+  to be an existing Montage project directory with `project.otio.json`
   before optional sidecar preflight or live eval execution. When
-  `AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS` is non-zero, the
-  workflow runs Python safe smoke against `AWIDAT_REAL_CORPUS` before
+  `MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS` is non-zero, the
+  workflow runs Python safe smoke against `MONTAGE_REAL_CORPUS` before
   the Rust live eval so model sidecar contract failures stop the corpus
   job early. The same workflow contract is now checked by Python safe
   smoke, so CI catches accidental removal of the real-corpus gate
@@ -822,12 +822,12 @@ Completion audit evidence:
   composition and shot handoff so `composition_source: model:*` reaches
   `assess_edit_quality`.
 - Strict safe smoke validates the unified corpus model tree with
-  `AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS=1`, reporting one
+  `MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS=1`, reporting one
   composition-model file, 373 valid model regions, and zero invalid
   regions.
 - Strict live eval validates the same corpus with
-  `AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS=1`,
-  `AWIDAT_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS=1`, and minimum
+  `MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS=1`,
+  `MONTAGE_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS=1`, and minimum
   fixture gates for assessor proposal, transition planner, and rough
   assembly, reporting 8 passed, 0 failed, and 0 skipped scenarios.
 - The live visual-context gate now proves 373 metadata shots out of 373
@@ -870,7 +870,7 @@ This upgrade is complete when:
 | Required area | Covered in this plan |
 | --- | --- |
 | Four video-editing lessons | `Source Lessons`, `Gaps`, and `Editorial Evals` |
-| Current codebase gap audit | `Current Awidat Strengths` and `Gaps` |
+| Current codebase gap audit | `Current Montage Strengths` and `Gaps` |
 | Semantic cut metadata | `Semantic Cut Model`, Phase 1 |
 | Split edits | `EDL Operations`, Phase 2 |
 | Edit-quality tooling | `Edit Quality Tooling`, Phase 3 |

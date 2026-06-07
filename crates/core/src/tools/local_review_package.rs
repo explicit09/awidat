@@ -2,7 +2,7 @@
 //! from a rendered output path and the latest vedit commit metadata.
 //!
 //! This is intentionally local-first: it writes a JSON artifact under
-//! `<project>/.awidat/review-packages/` and does not attempt third-party
+//! `<project>/.montage/review-packages/` and does not attempt third-party
 //! sync or ingestion.
 
 use async_trait::async_trait;
@@ -40,7 +40,7 @@ impl ToolHandler for LocalReviewPackageTool {
                 "properties": {
                     "render_path": {
                         "type": "string",
-                        "description": "Rendered review asset to reference. Absolute or project-relative to `.awidat` project root."
+                        "description": "Rendered review asset to reference. Absolute or project-relative to `.montage` project root."
                     },
                     "tags": {
                         "type": "array",
@@ -91,7 +91,7 @@ const DESCRIPTION: &str = "\
 Author a local review package from a rendered output path. The package links that \
 asset to the latest vedit commit, including commit header, commit hash, timeline hash, \
 generated time, tags, and the commit reasoning body. The package is written as JSON \
-under `<project>/.awidat/review-packages/` and returned as a JSON object.
+under `<project>/.montage/review-packages/` and returned as a JSON object.
 \
 If you are handing off a review render to a collaborator, use this tool before \
 you share the file manually; third-party review APIs are intentionally not part of \
@@ -148,10 +148,10 @@ mod tests {
             project_root,
             events_tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

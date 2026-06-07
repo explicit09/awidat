@@ -1,7 +1,7 @@
 //! Kalman-based smoothing for subject-aware reframe paths.
 //!
 //! The lowering path stores raw evidence keyframes in
-//! [`awidat_proto::professional::ReframePath`]. Different smoothing levels
+//! [`montage_proto::professional::ReframePath`]. Different smoothing levels
 //! (see [`ReframeSmoothing`]) are realized at render time so the authored
 //! path stays untouched and can be re-smoothed simply by re-rendering with
 //! a different policy.
@@ -12,7 +12,7 @@
 //! the middle of the path (the backward pass cancels the filter's group
 //! delay).
 
-use awidat_proto::professional::{ReframeKeyframe, ReframeSmoothing};
+use montage_proto::professional::{ReframeKeyframe, ReframeSmoothing};
 
 /// Process / measurement noise variances driving the Kalman update.
 #[derive(Debug, Clone, Copy)]

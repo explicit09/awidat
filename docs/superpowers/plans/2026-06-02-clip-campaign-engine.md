@@ -6,7 +6,7 @@
 
 **Architecture:** Add a small `apps/desktop/src/campaign/` module above the existing delivery/render queue code. The campaign layer owns the manifest shape, local campaign store, and pure planning helpers; the delivery UI reads that state and reuses existing upload metadata and render queue concepts.
 
-**Tech Stack:** TypeScript, React, Zustand, existing desktop localStorage persistence, Node strip-types tests, existing Awidat delivery target and render queue stores.
+**Tech Stack:** TypeScript, React, Zustand, existing desktop localStorage persistence, Node strip-types tests, existing Montage delivery target and render queue stores.
 
 ---
 
@@ -397,7 +397,7 @@ import type {
   PlatformVariantStatus,
 } from "./manifest";
 
-const STORAGE_KEY = "awidat.campaigns.v1";
+const STORAGE_KEY = "montage.campaigns.v1";
 
 type CampaignState = {
   campaigns: CampaignManifest[];

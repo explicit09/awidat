@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use awidat_config::McpServer;
-use awidat_mcp::{Client, ClientInfo, McpError, ServerConfig};
+use montage_config::McpServer;
+use montage_mcp::{Client, ClientInfo, McpError, ServerConfig};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -95,7 +95,7 @@ impl McpHost {
     }
 
     /// Build a host pre-populated with every entry from a
-    /// [`awidat_config::Config`]'s `mcp.servers` collection. The most
+    /// [`montage_config::Config`]'s `mcp.servers` collection. The most
     /// common entry point — `Session::new` calls this with the
     /// merged user+project config.
     ///
@@ -237,8 +237,8 @@ impl McpHost {
     }
 }
 
-/// Build an [`awidat_mcp::ServerConfig`] from the user-facing
-/// [`awidat_config::McpServer`] schema. Resolves relative `cwd`
+/// Build an [`montage_mcp::ServerConfig`] from the user-facing
+/// [`montage_config::McpServer`] schema. Resolves relative `cwd`
 /// fields against `project_root`, matching the index dispatcher.
 fn server_config_from(server: &McpServer, project_root: &std::path::Path) -> ServerConfig {
     let cwd = server.cwd.as_ref().map(|c| {
@@ -288,10 +288,10 @@ mod tests {
             args: vec!["run".into()],
             env: HashMap::new(),
             cwd: None,
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: true,
             depends_on: vec![],
-            resource_class: awidat_config::IndexerResourceClass::Light,
+            resource_class: montage_config::IndexerResourceClass::Light,
             indexer_group: None,
         };
         let host = McpHost::from_servers(
@@ -321,10 +321,10 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             cwd: None,
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: false,
             depends_on: vec![],
-            resource_class: awidat_config::IndexerResourceClass::Light,
+            resource_class: montage_config::IndexerResourceClass::Light,
             indexer_group: None,
         };
         let enabled = McpServer {
@@ -333,10 +333,10 @@ mod tests {
             args: vec!["run".into()],
             env: HashMap::new(),
             cwd: None,
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: true,
             depends_on: vec![],
-            resource_class: awidat_config::IndexerResourceClass::Light,
+            resource_class: montage_config::IndexerResourceClass::Light,
             indexer_group: None,
         };
         let host = McpHost::from_servers(
@@ -363,10 +363,10 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             cwd: Some(std::path::PathBuf::from("python")),
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: true,
             depends_on: vec![],
-            resource_class: awidat_config::IndexerResourceClass::Light,
+            resource_class: montage_config::IndexerResourceClass::Light,
             indexer_group: None,
         };
         let cfg = server_config_from(&server, std::path::Path::new("/proj"));

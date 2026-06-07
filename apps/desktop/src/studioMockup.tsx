@@ -5,7 +5,7 @@ import "./ui/glass.css";
 import { AmbientBackground, useCursorGlass } from "./ui/glass";
 
 /* ====================================================================
-   Awidat "Stage" — NEW 2026 UX (v2, product-driven decisions).
+   Montage "Stage" — NEW 2026 UX (v2, product-driven decisions).
 
    Core bet: the command bar is the OS of the app. One input drives
    BOTH editing ("trim filler") and navigation ("deliver"). Destinations
@@ -209,7 +209,7 @@ function Stage() {
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3">
         <Mark />
-        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">AWIDAT</span>
+        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">new_cast · <span className="text-[var(--color-text-secondary)]">podcast</span></span>
         <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"><span className="h-1.5 w-1.5 rounded-full bg-[#20C997] shadow-[0_0_8px_#20C997]" /> ready</span>

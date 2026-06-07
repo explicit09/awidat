@@ -1,4 +1,4 @@
-"""Audio-energy indexer for Awidat.
+"""Audio-energy indexer for Montage.
 
 Reads the asset's audio track and emits two signals the agent uses for
 editorial decisions:
@@ -31,7 +31,7 @@ from typing import Any
 import numpy as np
 import pyloudnorm as pyln
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "audio-energy"
 INDEXER_VERSION = "0.1.0"
@@ -68,15 +68,15 @@ class _LoadedAudio:
 
 
 def _ffmpeg_path() -> str:
-    """Locate ffmpeg. Prefer $AWIDAT_FFMPEG, fall back to PATH."""
-    explicit = os.environ.get("AWIDAT_FFMPEG")
+    """Locate ffmpeg. Prefer $MONTAGE_FFMPEG, fall back to PATH."""
+    explicit = os.environ.get("MONTAGE_FFMPEG")
     if explicit:
         return explicit
     found = shutil.which("ffmpeg")
     if found:
         return found
     raise RuntimeError(
-        "ffmpeg not found on PATH; install ffmpeg or set AWIDAT_FFMPEG=/path/to/ffmpeg"
+        "ffmpeg not found on PATH; install ffmpeg or set MONTAGE_FFMPEG=/path/to/ffmpeg"
     )
 
 
@@ -92,7 +92,7 @@ def _load_mono(path: str) -> _LoadedAudio:
     Why not soundfile/libsndfile: it only handles WAV/FLAC/Ogg. Real
     podcast/interview footage arrives as MOV/MP4/HEVC/AAC; libsndfile
     rejects them with "Format not recognised". ffmpeg is already a
-    hard dependency for awidat (rendering), so we shell out to it
+    hard dependency for montage (rendering), so we shell out to it
     here for decode too.
 
     Output: 32-bit float PCM, mono, resampled to _TARGET_SR.
@@ -109,7 +109,7 @@ def _load_mono(path: str) -> _LoadedAudio:
         "-f", "f32le",          # raw 32-bit float little-endian
         "-",                    # to stdout
     ]
-    tmp = tempfile.NamedTemporaryFile(prefix="awidat-audio-", suffix=".f32", delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="montage-audio-", suffix=".f32", delete=False)
     tmp_path = Path(tmp.name)
     tmp.close()
     try:

@@ -1,7 +1,7 @@
 """Lightweight VFX producer contracts.
 
 These helpers do not run trackers or segmentation models. They validate
-request-shaped inputs and emit dictionaries that match Awidat's
+request-shaped inputs and emit dictionaries that match Montage's
 `TrackingPackage` sidecar shape closely enough for tests, planning, and
 future producer integration.
 """

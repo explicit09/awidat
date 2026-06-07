@@ -17,7 +17,7 @@ COPY vendor/ vendor/
 COPY apps/desktop/src-tauri/ apps/desktop/src-tauri/
 # We don't copy the full desktop app; it is not a social-server dep.
 
-RUN cargo build --release -p awidat-social-server
+RUN cargo build --release -p montage-social-server
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /build/target/release/awidat-social-server ./
+COPY --from=builder /build/target/release/montage-social-server ./
 # Copy migrations so the boot-time migrator can find them.
 COPY crates/social/migrations/ ./migrations/
 
@@ -37,4 +37,4 @@ ENV SOCIAL_FIRING_ENABLED="false"
 ENV SOCIAL_MIGRATIONS_DIR="/app/migrations"
 EXPOSE 3000
 
-ENTRYPOINT ["./awidat-social-server"]
+ENTRYPOINT ["./montage-social-server"]

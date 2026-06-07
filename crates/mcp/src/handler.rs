@@ -3,10 +3,10 @@
 //!
 //! `rmcp` requires the client to provide a handler implementing
 //! [`rmcp::ClientHandler`]; the default impl is a no-op for every callback
-//! and reports `ClientInfo::default()`. We override [`AwidatHandler::get_info`]
+//! and reports `ClientInfo::default()`. We override [`MontageHandler::get_info`]
 //! so the handshake announces our app name+version, and override
-//! [`AwidatHandler::on_progress`] so per-request progress subscribers
-//! (registered via [`AwidatHandler::register_progress`]) see
+//! [`MontageHandler::on_progress`] so per-request progress subscribers
+//! (registered via [`MontageHandler::register_progress`]) see
 //! `notifications/progress` frames keyed to their progress token.
 //!
 //! All other server-initiated notifications (logging, cancellation echoes,
@@ -56,17 +56,17 @@ const BACKLOG_CAP: usize = 64;
 /// progress token rmcp injected on the originating request.
 type ProgressMap = Arc<Mutex<HashMap<i64, ProgressSlot>>>;
 
-/// `ClientHandler` for awidat. Cheaply cloneable — both the
+/// `ClientHandler` for montage. Cheaply cloneable — both the
 /// `RunningService` and the per-call subscription registration share one.
 #[derive(Clone, Default)]
-pub(crate) struct AwidatHandler {
+pub(crate) struct MontageHandler {
     progress: ProgressMap,
     /// `ClientInfo` returned to rmcp during the handshake. `None` until
     /// [`Self::set_client_info`] is called by `Client::initialize`.
     client_info: Arc<Mutex<Option<ClientInfo>>>,
 }
 
-impl AwidatHandler {
+impl MontageHandler {
     /// Pre-load the `ClientInfo` rmcp will emit during the handshake.
     /// Must be called before `serve(transport)` is awaited.
     pub(crate) async fn set_client_info(&self, info: ClientInfo) {
@@ -96,7 +96,7 @@ impl AwidatHandler {
     }
 }
 
-impl ClientHandler for AwidatHandler {
+impl ClientHandler for MontageHandler {
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,

@@ -14,19 +14,19 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use awidat_core::tools::{
+use chrono::Utc;
+use montage_core::tools::{
     apply_edl::ApplyEdlTool, find_moment::FindMomentTool, inspect_clip::InspectClipTool,
     read_index::ReadIndexTool, view_timeline::ViewTimelineTool,
 };
-use awidat_core::{ToolContext, ToolHandler, ToolInvocation, ToolRegistry};
-use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-use awidat_proto::index::{AssetId, IndexerEntry, Manifest};
-use awidat_proto::otio::{
+use montage_core::{ToolContext, ToolHandler, ToolInvocation, ToolRegistry};
+use montage_proto::index::{AssetId, IndexerEntry, Manifest};
+use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+use montage_proto::otio::{
     Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::{Project, files};
-use chrono::Utc;
+use montage_proto::project::{Project, files};
 use tokio::sync::broadcast;
 
 /// Seeds a temp project with:
@@ -37,7 +37,7 @@ fn seed_project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut project = Project::init(dir.path()).expect("Project::init");
 
-    // Build a 3-clip video track. Each clip gets an awidat anchor with
+    // Build a 3-clip video track. Each clip gets an montage anchor with
     // a transcript snippet so find_moment + apply_edl can resolve.
     let snippets = [
         "and that's when she said the thing about Stripe",
@@ -54,12 +54,12 @@ fn seed_project() -> tempfile::TempDir {
             RationalTime::new(5.0 * 24.0, 24.0),
         ));
         clip.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(AwAnchor {
                     transcript_snippet: Some((*snip).to_string()),
                     ..AwAnchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };
@@ -135,15 +135,15 @@ fn ctx_at(root: &Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
 
         approval_tx: None,
-        sandbox_mode: awidat_core::tool::SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        sandbox_mode: montage_core::tool::SandboxMode::Default,
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }

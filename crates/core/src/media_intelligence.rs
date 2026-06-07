@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
-use awidat_index::sidecar_path;
-use awidat_proto::index::AssetId;
-use awidat_proto::professional::{
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_index::sidecar_path;
+use montage_proto::index::AssetId;
+use montage_proto::professional::{
     MediaIntelligenceAggregateState, MediaIntelligenceAsset, MediaIntelligenceLayer,
     MediaIntelligenceLayerKind, MediaIntelligenceLayerStatus, MediaIntelligencePackage,
 };

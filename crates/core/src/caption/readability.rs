@@ -305,7 +305,7 @@ fn split_point(c: &Cue) -> f64 {
 
 /// Flatten a Whisper-style transcript JSON into segmentation input words.
 ///
-/// Prefers the canonical **top-level `/words[]`** array — awidat's whisper
+/// Prefers the canonical **top-level `/words[]`** array — montage's whisper
 /// sidecar puts every word there, with `/segments[*]` carrying only
 /// text+timing (no nested words). Falls back to per-segment
 /// `/segments[*]/words[*]`, then to segment-level text when no word timings
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn words_from_transcript_prefers_top_level_words_array() {
-        // awidat's real whisper sidecar shape: words at the top level, segments
+        // montage's real whisper sidecar shape: words at the top level, segments
         // carry only text+timing (no nested words).
         let t = serde_json::json!({
             "words": [

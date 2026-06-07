@@ -2,12 +2,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, Gap, MediaReference, RationalTime, Stack, StackChild,
     TimeRange, Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 
 fn media_clip(name: &str, asset: &str, duration_s: f64) -> Clip {
@@ -27,7 +27,7 @@ fn project_with_region_blur_emits_crop_blur_overlay() {
     fs::write(dir.path().join("raw/a.mp4"), b"stub").unwrap();
 
     let mut clip = media_clip("clip-a", "raw/a.mp4", 4.0);
-    let mut effect = Effect::new("awidat.region_blur");
+    let mut effect = Effect::new("montage.region_blur");
     effect
         .metadata
         .insert("shape".to_string(), serde_json::json!("ellipse"));
@@ -86,7 +86,7 @@ fn full_frame_overlay_with_blend_mode_uses_blend_filter() {
 
     let base = media_clip("base", "raw/a.mp4", 4.0);
     let mut overlay = media_clip("overlay", "raw/b.mp4", 2.0);
-    let mut overlay_effect = Effect::new("awidat.video_overlay");
+    let mut overlay_effect = Effect::new("montage.video_overlay");
     overlay_effect
         .metadata
         .insert("blend_mode".to_string(), serde_json::json!("screen"));

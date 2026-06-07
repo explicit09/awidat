@@ -468,7 +468,7 @@ fn parse_ass_time_ms(s: &str) -> Option<u64> {
 
 /// Production [`CaptionFrameSampler`] backed by ffmpeg raw-grayscale frame
 /// extraction. Each `sample` call shells out to `ffmpeg` via
-/// [`awidat_render::extract_frame_raw_gray`].
+/// [`montage_render::extract_frame_raw_gray`].
 pub struct FfmpegFrameSampler {
     render_output: PathBuf,
 }
@@ -483,9 +483,10 @@ impl FfmpegFrameSampler {
 #[async_trait::async_trait]
 impl CaptionFrameSampler for FfmpegFrameSampler {
     async fn sample(&self, t_s: f64) -> Result<DecodedFrame, ScorerError> {
-        let (width, height, luma) = awidat_render::extract_frame_raw_gray(&self.render_output, t_s)
-            .await
-            .map_err(|_| ScorerError::SamplerUnavailable("ffmpeg_extract_failed"))?;
+        let (width, height, luma) =
+            montage_render::extract_frame_raw_gray(&self.render_output, t_s)
+                .await
+                .map_err(|_| ScorerError::SamplerUnavailable("ffmpeg_extract_failed"))?;
         Ok(DecodedFrame {
             width,
             height,

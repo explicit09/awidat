@@ -2,7 +2,7 @@
 
 /**
  * Clip-level media overlay styling, lifted off
- * `awidat.video_overlay` effect metadata.
+ * `montage.video_overlay` effect metadata.
  */
 export type VideoOverlayStyling = {
 /**

@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ProtoError;
-use crate::awidat_meta::{AwidatClipMetadata, AwidatMarkerMetadata, AwidatTimelineMetadata};
 use crate::error::JsonPath;
+use crate::montage_meta::{MontageClipMetadata, MontageMarkerMetadata, MontageTimelineMetadata};
 use crate::otio::time::{RationalTime, TimeRange};
 
 // --------- Timeline ---------------------------------------------------------
@@ -36,7 +36,7 @@ pub struct Timeline {
     /// emitted at this position via [`stack_at_root`]).
     #[serde(with = "stack_at_root")]
     pub tracks: Stack,
-    /// OTIO `metadata` blob; we model `awidat` strongly and keep the rest as
+    /// OTIO `metadata` blob; we model `montage` strongly and keep the rest as
     /// a `serde_json::Value` map so we don't lose round-trip data from other
     /// tools.
     #[serde(default)]
@@ -46,7 +46,7 @@ pub struct Timeline {
 impl Timeline {
     /// Build a fresh empty timeline named `name` with no tracks.
     ///
-    /// Seeds `metadata.awidat.version` with the current Awidat project format
+    /// Seeds `metadata.montage.version` with the current Montage project format
     /// version (`PLAN.md` §3) so every fresh project carries a version pin
     /// from creation. Without this, schema migrations later have no anchor to
     /// distinguish "v0.1" from "unversioned legacy", and ambiguous projects
@@ -58,9 +58,9 @@ impl Timeline {
             global_start_time: None,
             tracks: Stack::empty("tracks"),
             metadata: TimelineMetadata {
-                awidat: Some(crate::awidat_meta::AwidatTimelineMetadata {
-                    version: crate::AWIDAT_PROJECT_VERSION.to_string(),
-                    ..crate::awidat_meta::AwidatTimelineMetadata::default()
+                montage: Some(crate::montage_meta::MontageTimelineMetadata {
+                    version: crate::MONTAGE_PROJECT_VERSION.to_string(),
+                    ..crate::montage_meta::MontageTimelineMetadata::default()
                 }),
                 other: HashMap::new(),
             },
@@ -77,16 +77,39 @@ impl Timeline {
     }
 }
 
-/// Strongly-typed `metadata.awidat` block on a [`Timeline`], plus an opaque
+/// Strongly-typed `metadata.montage` block on a [`Timeline`], plus an opaque
 /// passthrough for other namespaces.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct TimelineMetadata {
-    /// Awidat-specific metadata. Strongly typed.
+    /// Montage-specific metadata. Strongly typed.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub awidat: Option<AwidatTimelineMetadata>,
+    pub montage: Option<MontageTimelineMetadata>,
     /// Other tools' metadata. Preserved on round-trip.
     #[serde(flatten)]
     pub other: HashMap<String, serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for TimelineMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawTimelineMetadata {
+            #[serde(default)]
+            montage: Option<MontageTimelineMetadata>,
+            #[serde(default)]
+            awidat: Option<MontageTimelineMetadata>,
+            #[serde(flatten)]
+            other: HashMap<String, serde_json::Value>,
+        }
+
+        let raw = RawTimelineMetadata::deserialize(deserializer)?;
+        Ok(Self {
+            montage: raw.montage.or(raw.awidat),
+            other: raw.other,
+        })
+    }
 }
 
 // --------- Stack ------------------------------------------------------------
@@ -107,7 +130,7 @@ pub struct Stack {
     /// Optional source range.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_range: Option<TimeRange>,
-    /// Free metadata. (No strongly-typed awidat fields here in v1.)
+    /// Free metadata. (No strongly-typed montage fields here in v1.)
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
@@ -219,7 +242,7 @@ pub struct Track {
     /// Optional source range.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_range: Option<TimeRange>,
-    /// Track-level metadata. v1 has no strongly-typed awidat fields here;
+    /// Track-level metadata. v1 has no strongly-typed montage fields here;
     /// kept as a free map for forward-compat.
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -368,9 +391,9 @@ impl Clip {
 /// Strongly-typed clip metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClipMetadata {
-    /// Awidat-specific metadata.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub awidat: Option<AwidatClipMetadata>,
+    /// Montage-specific metadata.
+    #[serde(skip_serializing_if = "Option::is_none", default, alias = "awidat")]
+    pub montage: Option<MontageClipMetadata>,
     /// Other tools' metadata, preserved on round-trip.
     #[serde(flatten)]
     pub other: HashMap<String, serde_json::Value>,
@@ -519,7 +542,7 @@ pub struct Effect {
     /// Effect display name.
     #[serde(default)]
     pub name: String,
-    /// Effect type identifier. Convention: `"awidat.<kind>"` for our own.
+    /// Effect type identifier. Convention: `"montage.<kind>"` for our own.
     pub effect_name: String,
     /// Effect parameters. Always an object per OTIO; untyped to the engine
     /// and specialized inside whatever applies the effect.
@@ -568,7 +591,7 @@ pub struct Transition {
     #[serde(default)]
     pub name: String,
     /// Transition kind id. Convention: `"SMPTE_Dissolve"` (the OTIO standard
-    /// crossfade tag), `"awidat.fade_in"`, etc.
+    /// crossfade tag), `"montage.fade_in"`, etc.
     #[serde(default)]
     pub transition_type: String,
     /// Amount of the next clip used before the cut.
@@ -628,7 +651,7 @@ pub struct Marker {
     /// [`Self::name`]: name is a label, comment is a sentence.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub comment: Option<String>,
-    /// Strongly-typed awidat metadata + flatten passthrough.
+    /// Strongly-typed montage metadata + flatten passthrough.
     #[serde(default)]
     pub metadata: MarkerMetadata,
 }
@@ -655,9 +678,9 @@ impl Marker {
 /// Strongly-typed marker metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MarkerMetadata {
-    /// Awidat-specific marker metadata.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub awidat: Option<AwidatMarkerMetadata>,
+    /// Montage-specific marker metadata.
+    #[serde(skip_serializing_if = "Option::is_none", default, alias = "awidat")]
+    pub montage: Option<MontageMarkerMetadata>,
     /// Pass-through for other namespaces.
     #[serde(flatten)]
     pub other: HashMap<String, serde_json::Value>,
@@ -666,7 +689,7 @@ pub struct MarkerMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::awidat_meta::Anchor;
+    use crate::montage_meta::Anchor;
 
     fn rt(value: f64, rate: f64) -> RationalTime {
         RationalTime::new(value, rate)
@@ -686,29 +709,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_timeline_seeds_awidat_namespace() {
-        // Per `PLAN.md` §3, `metadata.awidat.version` must be present from
+    fn empty_timeline_seeds_montage_namespace() {
+        // Per `PLAN.md` §3, `metadata.montage.version` must be present from
         // creation so future schema migrations have an anchor.
         let t = Timeline::empty("ep-001");
-        let awidat = t
+        let montage = t
             .metadata
-            .awidat
+            .montage
             .as_ref()
-            .expect("awidat namespace must be seeded by Timeline::empty");
-        assert_eq!(awidat.version, crate::AWIDAT_PROJECT_VERSION);
-        assert!(awidat.source_assets.is_empty());
-        assert!(awidat.anchors.is_empty());
+            .expect("montage namespace must be seeded by Timeline::empty");
+        assert_eq!(montage.version, crate::MONTAGE_PROJECT_VERSION);
+        assert!(montage.source_assets.is_empty());
+        assert!(montage.anchors.is_empty());
 
         // Also verify it's in the serialized JSON.
         let json = serde_json::to_string(&t).unwrap();
         assert!(
-            json.contains("\"awidat\""),
-            "fresh timeline JSON must contain awidat namespace, got: {json}"
+            json.contains("\"montage\""),
+            "fresh timeline JSON must contain montage namespace, got: {json}"
         );
         assert!(
             json.contains(&format!(
                 "\"version\":\"{}\"",
-                crate::AWIDAT_PROJECT_VERSION
+                crate::MONTAGE_PROJECT_VERSION
             )),
             "fresh timeline JSON must contain version pin, got: {json}"
         );
@@ -768,28 +791,28 @@ mod tests {
     }
 
     #[test]
-    fn marker_with_awidat_meta_roundtrips() {
+    fn marker_with_montage_meta_roundtrips() {
         let mut m = Marker::new("laugh-at-4-12", tr(99.0, 0.0, 24.0));
         m.color = Some("YELLOW".into());
-        m.metadata.awidat = Some(AwidatMarkerMetadata {
+        m.metadata.montage = Some(MontageMarkerMetadata {
             category: Some("laugh".into()),
             note: Some("biggest laugh in episode".into()),
-            ..AwidatMarkerMetadata::default()
+            ..MontageMarkerMetadata::default()
         });
         let json = serde_json::to_string(&m).unwrap();
         let back: Marker = serde_json::from_str(&json).unwrap();
         assert_eq!(back.color.as_deref(), Some("YELLOW"));
-        let am = back.metadata.awidat.unwrap();
+        let am = back.metadata.montage.unwrap();
         assert_eq!(am.category.as_deref(), Some("laugh"));
     }
 
     #[test]
     fn effect_serializes_with_schema() {
-        let e = Effect::new("awidat.color_correction");
+        let e = Effect::new("montage.color_correction");
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("Effect.1"));
         let back: Effect = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.effect_name, "awidat.color_correction");
+        assert_eq!(back.effect_name, "montage.color_correction");
     }
 
     #[test]
@@ -812,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn awidat_anchors_roundtrip_in_timeline_metadata() {
+    fn montage_anchors_roundtrip_in_timeline_metadata() {
         let mut t = Timeline::empty("ep");
         let mut anchors = HashMap::new();
         anchors.insert(
@@ -823,18 +846,116 @@ mod tests {
                 ..Anchor::default()
             },
         );
-        t.metadata.awidat = Some(AwidatTimelineMetadata {
-            version: crate::AWIDAT_PROJECT_VERSION.to_string(),
+        t.metadata.montage = Some(MontageTimelineMetadata {
+            version: crate::MONTAGE_PROJECT_VERSION.to_string(),
             source_assets: vec!["raw/ep.mp4".into()],
             anchors,
             edit_plan_id: Some("plan-001".into()),
-            ..AwidatTimelineMetadata::default()
+            ..MontageTimelineMetadata::default()
         });
         let json = serde_json::to_string(&t).unwrap();
         let back: Timeline = serde_json::from_str(&json).unwrap();
-        let am = back.metadata.awidat.unwrap();
+        let am = back.metadata.montage.unwrap();
         assert_eq!(am.anchors.len(), 1);
         assert!(am.anchors.contains_key("c-1"));
+    }
+
+    #[test]
+    fn legacy_awidat_timeline_metadata_deserializes_as_montage() {
+        let json = serde_json::json!({
+            "OTIO_SCHEMA": "Timeline.1",
+            "name": "legacy",
+            "tracks": {
+                "OTIO_SCHEMA": "Stack.1",
+                "name": "tracks",
+                "children": []
+            },
+            "metadata": {
+                "awidat": {
+                    "version": "0.1.0",
+                    "source_assets": ["raw/legacy.mp4"],
+                    "anchors": {
+                        "clip-1": {
+                            "transcript_snippet": "legacy anchor"
+                        }
+                    },
+                    "edit_plan_id": "plan-legacy"
+                }
+            }
+        });
+
+        let timeline: Timeline = serde_json::from_value(json).unwrap();
+        let metadata = timeline
+            .metadata
+            .montage
+            .as_ref()
+            .expect("legacy metadata.awidat should populate typed montage metadata");
+        assert_eq!(metadata.source_assets, vec!["raw/legacy.mp4"]);
+        assert_eq!(metadata.edit_plan_id.as_deref(), Some("plan-legacy"));
+        assert_eq!(
+            metadata
+                .anchors
+                .get("clip-1")
+                .and_then(|anchor| anchor.transcript_snippet.as_deref()),
+            Some("legacy anchor")
+        );
+        assert!(!timeline.metadata.other.contains_key("awidat"));
+
+        let serialized = serde_json::to_value(&timeline).unwrap();
+        assert!(serialized["metadata"].get("montage").is_some());
+        assert!(serialized["metadata"].get("awidat").is_none());
+    }
+
+    #[test]
+    fn legacy_awidat_clip_and_marker_metadata_deserialize_as_montage() {
+        let clip_json = serde_json::json!({
+            "name": "legacy clip",
+            "media_reference": {
+                "OTIO_SCHEMA": "MissingReference.1",
+                "name": ""
+            },
+            "metadata": {
+                "awidat": {
+                    "anchor": {
+                        "transcript_snippet": "clip anchor"
+                    }
+                }
+            }
+        });
+        let clip: Clip = serde_json::from_value(clip_json).unwrap();
+        assert_eq!(
+            clip.metadata
+                .montage
+                .as_ref()
+                .and_then(|metadata| metadata.anchor.as_ref())
+                .and_then(|anchor| anchor.transcript_snippet.as_deref()),
+            Some("clip anchor")
+        );
+        assert!(!clip.metadata.other.contains_key("awidat"));
+
+        let marker_json = serde_json::json!({
+            "OTIO_SCHEMA": "Marker.2",
+            "name": "legacy marker",
+            "marked_range": {
+                "start_time": { "value": 0.0, "rate": 24.0 },
+                "duration": { "value": 0.0, "rate": 24.0 }
+            },
+            "metadata": {
+                "awidat": {
+                    "category": "laugh",
+                    "note": "legacy marker"
+                }
+            }
+        });
+        let marker: Marker = serde_json::from_value(marker_json).unwrap();
+        let metadata = marker
+            .metadata
+            .montage
+            .as_ref()
+            .expect("legacy marker metadata should populate typed montage metadata");
+        assert_eq!(metadata.category.as_deref(), Some("laugh"));
+        assert_eq!(metadata.note.as_deref(), Some("legacy marker"));
+        assert!(!marker.metadata.other.contains_key("awidat"));
     }
 
     #[test]
@@ -849,7 +970,7 @@ mod tests {
         let mut clip = Clip::empty("c1");
         clip.media_reference = MediaReference::External(ExternalReference::new("raw/foo.mp4"));
         clip.markers.push(Marker::new("m", tr(0.0, 0.0, 24.0)));
-        clip.effects.push(Effect::new("awidat.fade_in"));
+        clip.effects.push(Effect::new("montage.fade_in"));
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip));
         let mut t = Timeline::empty("ep");

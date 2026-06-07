@@ -758,7 +758,7 @@ pub mod tests {
                     expires_in: 3600,
                     refresh_expires_in: None,
                 },
-                display_name: Some("Awidat Channel".into()),
+                display_name: Some("Montage Channel".into()),
             }),
         };
 
@@ -872,7 +872,7 @@ pub mod tests {
                 "data": {
                     "user": {
                         "open_id": "open_id_1",
-                        "display_name": "Awidat Creator",
+                        "display_name": "Montage Creator",
                         "avatar_url": "https://example.com/avatar.jpg"
                     }
                 }
@@ -899,7 +899,7 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(output.token_response.provider_account_id, "open_id_1");
-        assert_eq!(output.display_name.as_deref(), Some("Awidat Creator"));
+        assert_eq!(output.display_name.as_deref(), Some("Montage Creator"));
     }
 
     #[tokio::test]

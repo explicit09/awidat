@@ -1,6 +1,6 @@
 //! Short-form clip candidate derivation.
 
-use awidat_proto::professional::{
+use montage_proto::professional::{
     ClipCandidate, ClipCandidateAssembly, ClipCandidateAsset, ClipCandidatePackage,
     ClipCandidateScoreComponent, FusedMoment, SourceRange, UnderstandingAsset,
 };

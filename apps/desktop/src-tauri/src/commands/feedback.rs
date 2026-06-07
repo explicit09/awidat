@@ -2,7 +2,7 @@
 //!
 //! When a user rejects a Brief proposal (cut / broll / audio / …) we
 //! persist a structured record under
-//! `<project>/.awidat/feedback.jsonl`. The localStorage History store
+//! `<project>/.montage/feedback.jsonl`. The localStorage History store
 //! remains the UI source of truth; this file is the AGENT-facing source
 //! — Wave 5 C3 will inject recent entries into the next agent turn so
 //! the feedback loop stops being silent.
@@ -50,7 +50,7 @@ use tokio::io::AsyncWriteExt;
 /// blowing up the file.
 pub const MAX_ENTRIES: usize = 200;
 
-const DIR_NAME: &str = ".awidat";
+const DIR_NAME: &str = ".montage";
 const FILE_NAME: &str = "feedback.jsonl";
 
 /// One row in the JSONL log. Mirrors the fields a downstream agent
@@ -75,8 +75,8 @@ pub struct FeedbackEntry {
     pub reason: Option<String>,
 }
 
-/// Append one entry to `<project>/.awidat/feedback.jsonl`. Creates the
-/// `.awidat/` directory and the file when missing. Returns once the
+/// Append one entry to `<project>/.montage/feedback.jsonl`. Creates the
+/// `.montage/` directory and the file when missing. Returns once the
 /// bytes are flushed to disk.
 ///
 /// We use `OpenOptions { append: true, create: true }` so concurrent
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn load_recent_feedback_sync_returns_empty_when_dir_missing() {
-        // No `.awidat/` subdir at all — the missing-file branch fires.
+        // No `.montage/` subdir at all — the missing-file branch fires.
         let tmp = tempfile::tempdir().unwrap();
         let out = load_recent_feedback_sync(tmp.path(), 5);
         assert!(out.is_empty());

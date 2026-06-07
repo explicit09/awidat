@@ -92,7 +92,7 @@ function GeneratedMediaJobCard({
       draggable={usable}
       onDragStart={(event) => {
         if (!entry.video_path) return;
-        event.dataTransfer.setData("application/x-awidat-media", entry.video_path);
+        event.dataTransfer.setData("application/x-montage-media", entry.video_path);
         event.dataTransfer.setData("text/plain", entry.video_path);
         event.dataTransfer.effectAllowed = "copy";
       }}

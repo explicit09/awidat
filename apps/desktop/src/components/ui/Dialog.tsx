@@ -26,8 +26,8 @@ type ContentProps = {
 export function DialogContent({ children, className }: ContentProps) {
   return (
     <RadixDialog.Portal>
-      <RadixDialog.Overlay className="awidat-dialog-overlay" />
-      <RadixDialog.Content className={clsx("awidat-dialog", className)}>
+      <RadixDialog.Overlay className="montage-dialog-overlay" />
+      <RadixDialog.Content className={clsx("montage-dialog", className)}>
         {children}
       </RadixDialog.Content>
     </RadixDialog.Portal>

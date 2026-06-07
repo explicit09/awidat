@@ -2,7 +2,7 @@
 //! `respond_user_input`.
 //!
 //! The desktop now drives codex via an in-process app-server bridge
-//! ([`awidat_codex_bridge::CodexAppServer`]). One bridge per open
+//! ([`montage_codex_bridge::CodexAppServer`]). One bridge per open
 //! project, lazily constructed on the first `start_turn` and rebuilt
 //! when the project changes (see [`crate::commands::project`]).
 //!
@@ -12,24 +12,24 @@
 //! user clicks, and `respond_approval` / `respond_user_input` route
 //! the answer back through the bridge's `pending` map.
 
-use awidat_codex_bridge::ApprovalDecision;
+use montage_codex_bridge::ApprovalDecision;
 use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_session::CodexSession;
 use crate::events::emit_item;
-use crate::state::{AwidatState, TurnHandle, ViewState};
-use awidat_desktop_protocol::{Id, Item};
+use crate::state::{MontageState, TurnHandle, ViewState};
+use montage_desktop_protocol::{Id, Item};
 
 /// Drive one turn end-to-end. Ensures a live `CodexSession` exists for
 /// the open project (launching one on first call, tearing down + relaunching
 /// on project switch), then asks the bridge to start a turn. The bridge's
-/// background pump task emits `awidat://item-event` and `awidat://turn-end`
+/// background pump task emits `montage://item-event` and `montage://turn-end`
 /// as codex makes progress.
 #[tauri::command]
 pub async fn start_turn(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     input: String,
     context: Option<Vec<String>>,
 ) -> Result<String, String> {
@@ -140,10 +140,10 @@ pub async fn start_turn(
 
 /// Cancel the in-flight turn. Asks the bridge to issue
 /// `ClientRequest::TurnInterrupt`. The bridge's pump task will emit
-/// `awidat://turn-end` once codex acknowledges. No-op if no turn is
+/// `montage://turn-end` once codex acknowledges. No-op if no turn is
 /// running.
 #[tauri::command]
-pub async fn cancel_turn(state: State<'_, AwidatState>) -> Result<(), String> {
+pub async fn cancel_turn(state: State<'_, MontageState>) -> Result<(), String> {
     let turn_id = match state.turn.lock().await.take() {
         Some(handle) => handle.id,
         None => return Ok(()),
@@ -171,7 +171,7 @@ pub async fn cancel_turn(state: State<'_, AwidatState>) -> Result<(), String> {
 /// the React `ApprovalCard`'s strings).
 #[tauri::command]
 pub async fn respond_approval(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     call_id: String,
     decision: String,
 ) -> Result<(), String> {
@@ -192,7 +192,7 @@ pub async fn respond_approval(
 /// `ToolRequestUserInputResponse` shape (first question, single answer).
 #[tauri::command]
 pub async fn respond_user_input(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     call_id: String,
     reply: String,
 ) -> Result<(), String> {

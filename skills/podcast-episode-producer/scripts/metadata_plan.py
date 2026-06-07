@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a podcast publishing metadata package from awidat sidecars."""
+"""Create a podcast publishing metadata package from montage sidecars."""
 
 from __future__ import annotations
 

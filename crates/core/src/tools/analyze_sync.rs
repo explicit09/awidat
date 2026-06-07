@@ -77,7 +77,7 @@ impl ToolHandler for AnalyzeSyncTool {
             })?;
         validate_rel("reference_asset", &reference_asset)?;
         let reference_path = ctx.project_root.join(&reference_asset);
-        let reference_probe = awidat_render::probe_media(&reference_path)
+        let reference_probe = montage_render::probe_media(&reference_path)
             .await
             .map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
@@ -89,7 +89,7 @@ impl ToolHandler for AnalyzeSyncTool {
                 "analyze_sync: reference asset {reference_asset:?} has no audio stream"
             )));
         }
-        let reference_wave = awidat_render::generate_waveform(
+        let reference_wave = montage_render::generate_waveform(
             &reference_path,
             bucket_count,
             CancellationToken::new(),
@@ -117,7 +117,7 @@ impl ToolHandler for AnalyzeSyncTool {
                 continue;
             }
             let candidate_path = ctx.project_root.join(&candidate);
-            let probe = match awidat_render::probe_media(&candidate_path).await {
+            let probe = match montage_render::probe_media(&candidate_path).await {
                 Ok(p) => p,
                 Err(e) => {
                     blockers.push(serde_json::json!({ "asset": candidate, "reason": format!("ffprobe failed: {e}") }));
@@ -129,7 +129,7 @@ impl ToolHandler for AnalyzeSyncTool {
                     .push(serde_json::json!({ "asset": candidate, "reason": "no audio stream" }));
                 continue;
             }
-            let wave = match awidat_render::generate_waveform(
+            let wave = match montage_render::generate_waveform(
                 &candidate_path,
                 bucket_count,
                 CancellationToken::new(),

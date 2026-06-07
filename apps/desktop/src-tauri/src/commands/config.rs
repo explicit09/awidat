@@ -3,17 +3,17 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use awidat_config::{Config, McpServerKind};
+use montage_config::{Config, McpServerKind};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Read the merged indexer configuration the desktop will use for
 /// `index_project`, plus the global/project paths where users can override it.
 #[tauri::command]
 pub async fn read_indexer_config(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<IndexerConfigSnapshot, String> {
     let project_root = state.project_root.lock().await.clone();
     indexer_config_snapshot(project_root).await
@@ -25,7 +25,7 @@ pub async fn read_indexer_config(
 /// user-level concern; desktop toggles should not change every project by accident.
 #[tauri::command]
 pub async fn set_project_indexer_enabled(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: SetProjectIndexerEnabledArgs,
 ) -> Result<IndexerConfigSnapshot, String> {
     let project_root = state
@@ -45,7 +45,7 @@ pub async fn set_project_indexer_enabled(
         .ok_or_else(|| format!("unknown indexer '{}'", args.name))?;
     server.enabled = args.enabled;
 
-    let project_path = awidat_config::project_config_path(&project_root);
+    let project_path = montage_config::project_config_path(&project_root);
     let mut project_config = if project_path.exists() {
         Config::load_file(&project_path).map_err(|e| format!("load project config: {e}"))?
     } else {
@@ -89,12 +89,12 @@ async fn indexer_config_snapshot(
         .map(|server| server.name.as_str())
         .collect();
 
-    let global_path = awidat_config::global_config_path()
+    let global_path = montage_config::global_config_path()
         .map_err(|e| format!("global config path: {e}"))?
         .map(|path| path.display().to_string());
     let project_path = project_root
         .as_deref()
-        .map(awidat_config::project_config_path)
+        .map(montage_config::project_config_path)
         .map(|path| path.display().to_string());
 
     let indexers = merged

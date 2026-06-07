@@ -1,11 +1,11 @@
 //! Typed editorial intent layer above the EDL apply pipeline.
 //!
 //! This mirrors the reference editor's `EditorIntent -> Command -> Execute`
-//! shape while preserving Awidat's single mutation path: commands lower to an
+//! shape while preserving Montage's single mutation path: commands lower to an
 //! [`EdlEnvelope`] and execute through [`super::apply`].
 
-use awidat_proto::otio::Timeline;
-use awidat_proto::professional::SourceRange;
+use montage_proto::otio::Timeline;
+use montage_proto::professional::SourceRange;
 use serde::{Deserialize, Serialize};
 
 use super::anchor::AnchorContext;
@@ -135,7 +135,7 @@ impl EditorialCommand {
         self.envelope
     }
 
-    /// Execute the command through Awidat's existing EDL apply pipeline.
+    /// Execute the command through Montage's existing EDL apply pipeline.
     pub fn execute(
         &self,
         timeline: &Timeline,

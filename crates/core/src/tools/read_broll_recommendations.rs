@@ -1,7 +1,7 @@
 //! `read_broll_recommendations` tool - scored B-roll opportunities.
 
 use async_trait::async_trait;
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -31,7 +31,7 @@ struct ReadBrollRecommendationsResponse {
     asset_count: usize,
     recommendation_count: usize,
     summary_for_agent: String,
-    recommendations: awidat_proto::professional::BrollRecommendationPackage,
+    recommendations: montage_proto::professional::BrollRecommendationPackage,
 }
 
 #[async_trait]
@@ -142,7 +142,7 @@ fn asset_ids(
 }
 
 fn filter_by_min_score(
-    package: &mut awidat_proto::professional::BrollRecommendationPackage,
+    package: &mut montage_proto::professional::BrollRecommendationPackage,
     min_score: f64,
 ) {
     for asset in &mut package.assets {
@@ -179,10 +179,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

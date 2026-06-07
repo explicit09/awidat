@@ -1,10 +1,10 @@
 [project]
 name = "topic-mcp"
 version = "0.1.0"
-description = "Awidat topic-segmentation indexer (sentence-embedding boundaries + optional LLM labels)."
+description = "Montage topic-segmentation indexer (sentence-embedding boundaries + optional LLM labels)."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     "sentence-transformers>=3,<4",
     "numpy>=1.26,<3",
 ]

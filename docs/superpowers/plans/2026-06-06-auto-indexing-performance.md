@@ -4,9 +4,9 @@
 
 **Goal:** Make every media-bin import enqueue scoped, staged indexing immediately, while generated B-roll receives lightweight semantic sidecars and machine-aware scheduling keeps average laptops responsive.
 
-**Architecture:** Keep the existing `awidat_index::run` dispatcher as the execution engine. Add a desktop indexing planner around it that resolves explicit imported asset IDs, selects indexer tiers, applies machine profile policy, and falls back to whole-project indexing when scoped resolution is unreliable. Generated media uses the existing `.awidat/generated-media/registry.json` as source of truth and writes an `index/generated-description/<asset>.json` sidecar when a generated video reaches success.
+**Architecture:** Keep the existing `montage_index::run` dispatcher as the execution engine. Add a desktop indexing planner around it that resolves explicit imported asset IDs, selects indexer tiers, applies machine profile policy, and falls back to whole-project indexing when scoped resolution is unreliable. Generated media uses the existing `.montage/generated-media/registry.json` as source of truth and writes an `index/generated-description/<asset>.json` sidecar when a generated video reaches success.
 
-**Tech Stack:** Rust workspace, Tauri desktop commands, `awidat-index` dispatcher, `awidat-config` indexer metadata, `awidat-core` generated-media registry, focused Rust unit tests.
+**Tech Stack:** Rust workspace, Tauri desktop commands, `montage-index` dispatcher, `montage-config` indexer metadata, `montage-core` generated-media registry, focused Rust unit tests.
 
 ---
 
@@ -15,8 +15,8 @@
 - Modify `apps/desktop/src-tauri/src/commands/index.rs`: add scoped asset resolution, `IndexMode`, tier/profile planner, and a new `index_project_assets_at_root` entrypoint that wraps the existing dispatcher.
 - Modify `apps/desktop/src-tauri/src/commands/import.rs`: pass imported asset IDs into the scoped index entrypoint instead of invoking whole-project indexing after every import batch.
 - Modify `crates/core/src/generated_media/registry.rs`: add generated-description sidecar writer helpers using existing registry records.
-- Modify `crates/core/src/awidat_mcp/tools/start_generated_media_job.rs`: write description sidecars for mock generated media that is immediately succeeded.
-- Modify `crates/core/src/awidat_mcp/tools/poll_generated_media_job.rs`: write description sidecars when OpenRouter polling transitions a generated media record to `Succeeded`.
+- Modify `crates/core/src/montage_mcp/tools/start_generated_media_job.rs`: write description sidecars for mock generated media that is immediately succeeded.
+- Modify `crates/core/src/montage_mcp/tools/poll_generated_media_job.rs`: write description sidecars when OpenRouter polling transitions a generated media record to `Succeeded`.
 - Add focused tests in the same Rust modules. Use existing in-module test style and avoid broad desktop or Python smoke tests.
 
 ---
@@ -89,7 +89,7 @@ fn resolve_assets_for_request_falls_back_to_all_raw_assets_when_scoped_input_is_
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib resolve_scoped_assets -- --nocapture
+cargo test -p montage-desktop --lib resolve_scoped_assets -- --nocapture
 ```
 
 Expected: compilation fails because `resolve_scoped_assets`, `resolve_assets_for_request`, `ScopedFallback`, and `ResolvedIndexScope` do not exist.
@@ -173,7 +173,7 @@ fn resolve_scoped_assets(project_root: &Path, asset_ids: &[String]) -> Result<Ve
             return Err(format!("missing scoped asset: {id}"));
         }
         out.push(AssetInput {
-            id: awidat_proto::index::AssetId::new(clean),
+            id: montage_proto::index::AssetId::new(clean),
             path,
         });
     }
@@ -186,7 +186,7 @@ fn resolve_scoped_assets(project_root: &Path, asset_ids: &[String]) -> Result<Ve
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib resolve_scoped_assets -- --nocapture
+cargo test -p montage-desktop --lib resolve_scoped_assets -- --nocapture
 ```
 
 Expected: all scoped resolution tests pass.
@@ -239,7 +239,7 @@ fn project_relative_asset_ids_reject_paths_outside_project() {
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib project_relative_asset_ids -- --nocapture
+cargo test -p montage-desktop --lib project_relative_asset_ids -- --nocapture
 ```
 
 Expected: compilation fails because `project_relative_asset_ids` does not exist.
@@ -272,7 +272,7 @@ In `apps/desktop/src-tauri/src/commands/index.rs`, add this public function next
 ```rust
 pub async fn index_project_assets_at_root(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
     asset_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -285,7 +285,7 @@ Rename the body of `index_project_at_root` into:
 ```rust
 async fn index_project_at_root_with_assets(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
     scoped_asset_ids: Option<Vec<String>>,
 ) -> Result<(), String> {
@@ -298,7 +298,7 @@ Keep the existing public `index_project_at_root` as:
 ```rust
 pub async fn index_project_at_root(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
 ) -> Result<(), String> {
     index_project_at_root_with_assets(app, state, project_root, None).await
@@ -349,8 +349,8 @@ if let Err(e) = result {
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib project_relative_asset_ids -- --nocapture
-cargo test -p awidat-desktop --lib resolve_scoped_assets -- --nocapture
+cargo test -p montage-desktop --lib project_relative_asset_ids -- --nocapture
+cargo test -p montage-desktop --lib resolve_scoped_assets -- --nocapture
 ```
 
 Expected: import helper and scoped resolution tests pass.
@@ -430,7 +430,7 @@ fn machine_profile_defaults_to_average_on_low_core_count() {
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib fast_context_keeps_agent_critical_indexers_first -- --nocapture
+cargo test -p montage-desktop --lib fast_context_keeps_agent_critical_indexers_first -- --nocapture
 ```
 
 Expected: compilation fails because `IndexMode`, `MachineProfile`, `plan_indexers_for_mode`, and `profile_for_signals` do not exist.
@@ -523,9 +523,9 @@ plan_indexers_for_mode(&mut servers, mode, current_machine_profile());
 Run:
 
 ```bash
-cargo test -p awidat-desktop --lib fast_context -- --nocapture
-cargo test -p awidat-desktop --lib full_context -- --nocapture
-cargo test -p awidat-desktop --lib machine_profile -- --nocapture
+cargo test -p montage-desktop --lib fast_context -- --nocapture
+cargo test -p montage-desktop --lib full_context -- --nocapture
+cargo test -p montage-desktop --lib machine_profile -- --nocapture
 ```
 
 Expected: planner tests pass.
@@ -543,8 +543,8 @@ git commit -m "feat(indexing): plan fast context tiers"
 
 **Files:**
 - Modify: `crates/core/src/generated_media/registry.rs`
-- Modify: `crates/core/src/awidat_mcp/tools/start_generated_media_job.rs`
-- Modify: `crates/core/src/awidat_mcp/tools/poll_generated_media_job.rs`
+- Modify: `crates/core/src/montage_mcp/tools/start_generated_media_job.rs`
+- Modify: `crates/core/src/montage_mcp/tools/poll_generated_media_job.rs`
 
 - [ ] **Step 1: Write failing generated-description sidecar test**
 
@@ -581,7 +581,7 @@ fn generated_description_sidecar_uses_registry_record() {
 Run:
 
 ```bash
-cargo test -p awidat-core generated_description_sidecar_uses_registry_record -- --nocapture
+cargo test -p montage-core generated_description_sidecar_uses_registry_record -- --nocapture
 ```
 
 Expected: compilation fails because `write_generated_description_sidecar` does not exist.
@@ -664,9 +664,9 @@ if matches!(record.state, GeneratedMediaState::Succeeded) {
 Run:
 
 ```bash
-cargo test -p awidat-core generated_description_sidecar -- --nocapture
-cargo test -p awidat-core start_generated_media_job -- --nocapture
-cargo test -p awidat-core poll_generated_media_job -- --nocapture
+cargo test -p montage-core generated_description_sidecar -- --nocapture
+cargo test -p montage-core start_generated_media_job -- --nocapture
+cargo test -p montage-core poll_generated_media_job -- --nocapture
 ```
 
 Expected: generated-description sidecar test and existing generated media tests pass.
@@ -674,7 +674,7 @@ Expected: generated-description sidecar test and existing generated media tests 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/core/src/generated_media/registry.rs crates/core/src/awidat_mcp/tools/start_generated_media_job.rs crates/core/src/awidat_mcp/tools/poll_generated_media_job.rs
+git add crates/core/src/generated_media/registry.rs crates/core/src/montage_mcp/tools/start_generated_media_job.rs crates/core/src/montage_mcp/tools/poll_generated_media_job.rs
 git commit -m "feat(indexing): describe generated media for agents"
 ```
 
@@ -691,7 +691,7 @@ git commit -m "feat(indexing): describe generated media for agents"
 Run:
 
 ```bash
-rg -n "insert_media_on_timeline|index_project|index_project_assets|start_indexing" apps/desktop/src apps/desktop/src-tauri/src crates/core/src/awidat_mcp/tools
+rg -n "insert_media_on_timeline|index_project|index_project_assets|start_indexing" apps/desktop/src apps/desktop/src-tauri/src crates/core/src/montage_mcp/tools
 ```
 
 Expected: `insert_media_on_timeline` paths do not invoke `index_project`, `index_project_assets_at_root`, or `start_indexing`.
@@ -715,7 +715,7 @@ git commit -m "docs(indexing): record timeline trigger verification"
 
 ## Verification Evidence
 
-- `rg -n "insert_media_on_timeline|index_project|index_project_assets|start_indexing" apps/desktop/src apps/desktop/src-tauri/src crates/core/src/awidat_mcp/tools` confirmed timeline insertion does not trigger indexing; import commands own auto-indexing.
+- `rg -n "insert_media_on_timeline|index_project|index_project_assets|start_indexing" apps/desktop/src apps/desktop/src-tauri/src crates/core/src/montage_mcp/tools` confirmed timeline insertion does not trigger indexing; import commands own auto-indexing.
 
 ---
 
@@ -739,16 +739,16 @@ Expected: exits 0. Stable Rust may print `imports_granularity` warnings; those a
 Run:
 
 ```bash
-cargo test -p awidat-index
-cargo test -p awidat-core generated_description_sidecar -- --nocapture
-cargo test -p awidat-core generated_media -- --nocapture
-cargo test -p awidat-desktop --lib resolve_scoped_assets -- --nocapture
-cargo test -p awidat-desktop --lib project_relative_asset_ids -- --nocapture
-cargo test -p awidat-desktop --lib fast_context -- --nocapture
-cargo test -p awidat-desktop --lib machine_profile -- --nocapture
+cargo test -p montage-index
+cargo test -p montage-core generated_description_sidecar -- --nocapture
+cargo test -p montage-core generated_media -- --nocapture
+cargo test -p montage-desktop --lib resolve_scoped_assets -- --nocapture
+cargo test -p montage-desktop --lib project_relative_asset_ids -- --nocapture
+cargo test -p montage-desktop --lib fast_context -- --nocapture
+cargo test -p montage-desktop --lib machine_profile -- --nocapture
 ```
 
-Expected: all selected tests pass. The ignored `awidat-index` Python end-to-end test remains ignored unless the Python workspace is synced.
+Expected: all selected tests pass. The ignored `montage-index` Python end-to-end test remains ignored unless the Python workspace is synced.
 
 - [ ] **Step 3: Inspect final diff**
 

@@ -5,9 +5,9 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use awidat_core::edl::{AnchorContext, apply, parse};
-use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-use awidat_proto::otio::{
+use montage_core::edl::{AnchorContext, apply, parse};
+use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+use montage_proto::otio::{
     Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
@@ -27,12 +27,12 @@ fn base_timeline() -> Timeline {
             RationalTime::new(10.0 * 24.0, 24.0),
         ));
         clip.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(AwAnchor {
                     transcript_snippet: Some((*snip).to_string()),
                     ..AwAnchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };

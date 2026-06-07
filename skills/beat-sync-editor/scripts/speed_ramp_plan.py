@@ -57,7 +57,7 @@ def plan_speed_ramps(
     )
 
     return {
-        "effect": "awidat.time_remap",
+        "effect": "montage.time_remap",
         "accent_beats": accent_indices,
         "nominal_speed": 1.0,
         "speed_points": [
@@ -120,8 +120,8 @@ def build_time_remap_curve(speed_points: list[tuple[float, float]], duration_s: 
 
 
 def format_set_effect_edl(*, anchor: str, plan: dict, rationale: str | None = None) -> str:
-    if plan.get("effect") != "awidat.time_remap":
-        raise ValueError("plan effect must be awidat.time_remap")
+    if plan.get("effect") != "montage.time_remap":
+        raise ValueError("plan effect must be montage.time_remap")
     curve = plan.get("curve")
     if not isinstance(curve, list) or len(curve) < 2:
         raise ValueError("plan curve must contain at least two points")
@@ -129,7 +129,7 @@ def format_set_effect_edl(*, anchor: str, plan: dict, rationale: str | None = No
     lines = [
         "*** Set Effect",
         f"@@ anchor: {anchor}",
-        "+ effect: awidat.time_remap",
+        "+ effect: montage.time_remap",
         f"+ params_json: {json.dumps({'curve': curve})}",
     ]
     if rationale:

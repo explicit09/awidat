@@ -37,8 +37,8 @@ const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * Mirror of the Rust `SkillEntry` returned by `list_skills`.
  *
  * `provenance` identifies which discovery layer the skill came from:
- *   - "bundled" → ships with Awidat (lowest priority)
- *   - "user"    → ~/Library/Application Support/awidat/skills (etc.)
+ *   - "bundled" → ships with Montage (lowest priority)
+ *   - "user"    → ~/Library/Application Support/montage/skills (etc.)
  *   - "project" → <project>/skills/  (highest priority — wins on name conflict)
  */
 export type SkillProvenance = "bundled" | "user" | "project";
@@ -489,7 +489,7 @@ function SheetProvenanceChip({
       label: "bundled",
       className:
         "border-[var(--glass-border)] bg-[var(--color-surface-input)] text-[var(--color-text-muted)]",
-      title: "Ships with Awidat",
+      title: "Ships with Montage",
     },
     user: {
       label: "user",
@@ -823,7 +823,7 @@ function CreateSkillModal({
               className="h-[30px] w-full rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 text-[var(--text-body-sm)] text-[var(--color-text-primary)]"
             >
               <option value="user">
-                User · ~/Library/Application Support/awidat/skills/
+                User · ~/Library/Application Support/montage/skills/
               </option>
               <option value="project" disabled={!projectRoot}>
                 Project ·{" "}
@@ -1175,7 +1175,7 @@ function ProvenanceChip({ provenance }: { provenance: SkillProvenance }) {
       label: "bundled",
       className:
         "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-muted)]",
-      title: "Ships with Awidat",
+      title: "Ships with Montage",
     },
     user: {
       label: "user",

@@ -2,7 +2,7 @@
 name: {{name}}
 description: {{description}}
 version: "0.1.0"
-awidat_min_version: "0.1.0"
+montage_min_version: "0.1.0"
 when_to_use: |
   Activate when the user wants X or when the project type is Y.
 ---
@@ -24,7 +24,7 @@ Brief overview of what this skill does and when it should run.
 
 ## Rationale rules
 
-Every proposal you emit MUST include a `rationale` field per Awidat's
+Every proposal you emit MUST include a `rationale` field per Montage's
 contract (see L1 catalog). Example: `"Trimmed 0.4s — silence > 300ms
 threshold from AGENTS.md podcast defaults."`
 

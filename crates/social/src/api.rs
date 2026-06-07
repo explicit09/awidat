@@ -34,7 +34,7 @@ use crate::upload_status::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// The authenticated Awidat caller and the workspace roles known to the caller.
+/// The authenticated Montage caller and the workspace roles known to the caller.
 ///
 /// This is the app-level identity. It is intentionally separate from social
 /// provider OAuth credentials: it decides *which user or workspace* is making
@@ -64,7 +64,7 @@ impl ApiActor {
     }
 }
 
-/// The owner a request targets: a single Awidat user or a shared workspace.
+/// The owner a request targets: a single Montage user or a shared workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiOwner {
     pub owner: OwnerRef,
@@ -983,7 +983,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -993,8 +993,8 @@ mod tests {
             owner,
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -1085,7 +1085,7 @@ mod tests {
 
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "acct_1");
-        assert_eq!(accounts[0].display_name, "Awidat Channel");
+        assert_eq!(accounts[0].display_name, "Montage Channel");
 
         let json = serde_json::to_string(&accounts)
             .unwrap_or_else(|err| panic!("serialize accounts: {err}"));
@@ -1859,7 +1859,7 @@ mod tests {
             job_id: "job_1".into(),
             title: "Launch clip".into(),
             description: Some("Description".into()),
-            tags: vec!["awidat".into()],
+            tags: vec!["montage".into()],
             thumbnail_ref: Some("render://thumb_1".into()),
             artifact_ref: None,
             privacy: None,

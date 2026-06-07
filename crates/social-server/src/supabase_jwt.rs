@@ -12,8 +12,8 @@
 //! network fetch of the project JWKS and a cache, and is only required once a
 //! project opts into asymmetric signing keys.
 
-use awidat_social::auth_context::{AuthClaims, AuthContextError, JwtVerifier};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use montage_social::auth_context::{AuthClaims, AuthContextError, JwtVerifier};
 use serde::Deserialize;
 
 /// The subset of a Supabase Auth JWT we trust after verification.

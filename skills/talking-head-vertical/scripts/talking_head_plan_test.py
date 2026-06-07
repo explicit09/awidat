@@ -140,7 +140,7 @@ class TalkingHeadPlanTest(unittest.TestCase):
         self.assertEqual(plan["readiness"]["status"], "ready_for_review")
         self.assertIn("Set Output Format", plan["edl"])
         self.assertIn("@@ anchor: clip_uuid=clip-1", plan["edl"])
-        self.assertIn("awidat.reframe", plan["edl"])
+        self.assertIn("montage.reframe", plan["edl"])
         self.assertIn("Split Clip", plan["edl"])
         self.assertIn("Insert Caption", plan["edl"])
         self.assertIn("Set Parameter Animation", plan["edl"])
@@ -156,7 +156,7 @@ class TalkingHeadPlanTest(unittest.TestCase):
         )
 
         self.assertEqual(plan["layout"]["strategy"], "keep_native_vertical")
-        self.assertNotIn("awidat.reframe", plan["edl"])
+        self.assertNotIn("montage.reframe", plan["edl"])
 
     def test_face_overlap_moves_captions_to_safe_empty_space(self):
         planner = load_script()

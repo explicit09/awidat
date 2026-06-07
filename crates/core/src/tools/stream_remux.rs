@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::professional::{StreamExportContract, StreamExportMode, StreamExportSpec};
-use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
+use montage_proto::professional::{StreamExportContract, StreamExportMode, StreamExportSpec};
+use montage_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -171,7 +171,7 @@ impl ToolHandler for StreamRemuxTool {
             streams: args.streams,
             metadata: args.metadata,
         };
-        let argv = awidat_render::professional::plan_stream_export_args(
+        let argv = montage_render::professional::plan_stream_export_args(
             &input_path,
             &contract,
             &output_path,
@@ -186,20 +186,19 @@ impl ToolHandler for StreamRemuxTool {
         })?;
         let remux_evidence = manifest.manifest.metadata.clone();
         let render_metadata = manifest.manifest.metadata.clone();
-        awidat_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest).map_err(
-            |e| {
+        montage_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest)
+            .map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
                     "stream_remux: failed to write render manifest {}: {e}",
                     manifest.manifest_path.display()
                 ))
-            },
-        )?;
+            })?;
 
         let job_id = ctx
             .job_manager
             .start(RenderJobSpec {
                 args: argv,
-                backend: awidat_render::RenderBackendKind::StreamExportRemux,
+                backend: montage_render::RenderBackendKind::StreamExportRemux,
                 total_duration_s: None,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: output_path.clone(),
@@ -243,13 +242,13 @@ struct StreamRemuxManifestInput<'a> {
 
 struct BuiltStreamRemuxManifest {
     manifest_path: PathBuf,
-    manifest: awidat_render::RenderExecutionManifest,
+    manifest: montage_render::RenderExecutionManifest,
 }
 
 fn build_stream_remux_manifest(
     input: StreamRemuxManifestInput<'_>,
 ) -> Result<BuiltStreamRemuxManifest, FunctionCallError> {
-    let ffmpeg_path = awidat_render::ffmpeg_path().map_err(|e| {
+    let ffmpeg_path = montage_render::ffmpeg_path().map_err(|e| {
         FunctionCallError::RespondToModel(format!("stream_remux: failed to locate ffmpeg: {e}"))
     })?;
     let mut replay_argv = vec![ffmpeg_path.to_string_lossy().into_owned()];
@@ -257,33 +256,33 @@ fn build_stream_remux_manifest(
     let project_path = input.project_root.join("project.otio.json");
     let project_hash = optional_file_hash(&project_path)?;
     let metadata = stream_remux_metadata(input.contract);
-    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+    let manifest = montage_render::planned_at_now(montage_render::RenderExecutionManifestInput {
         created_at: String::new(),
-        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        montage_version: env!("CARGO_PKG_VERSION").into(),
         project_root: input.project_root.to_string_lossy().into_owned(),
         project_hash,
         timeline_hash: None,
-        backend: awidat_render::RenderBackendKind::StreamExportRemux,
-        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+        backend: montage_render::RenderBackendKind::StreamExportRemux,
+        replay: montage_render::RenderReplayPlan::FfmpegArgv {
             argv: replay_argv,
             cwd: Some(input.project_root.to_string_lossy().into_owned()),
         },
         inputs: vec![
-            awidat_render::fingerprint_file(input.input_path, true).map_err(|e| {
+            montage_render::fingerprint_file(input.input_path, true).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
                     "stream_remux: failed to fingerprint input {}: {e}",
                     input.input_path.display()
                 ))
             })?,
         ],
-        outputs: vec![awidat_render::output_artifact(input.output_path, true)],
+        outputs: vec![montage_render::output_artifact(input.output_path, true)],
         sidecars: Vec::new(),
         limitations: Vec::new(),
         verification: None,
         metadata,
     });
     Ok(BuiltStreamRemuxManifest {
-        manifest_path: awidat_render::manifest_path_for_output(input.output_path),
+        manifest_path: montage_render::manifest_path_for_output(input.output_path),
         manifest,
     })
 }
@@ -315,7 +314,7 @@ fn stream_remux_metadata(contract: &StreamExportContract) -> BTreeMap<String, St
         ("all_streams_copy".into(), all_streams_copy.to_string()),
     ]);
     metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
-        &awidat_render::RenderBackendKind::StreamExportRemux,
+        &montage_render::RenderBackendKind::StreamExportRemux,
     ));
     metadata
 }
@@ -342,7 +341,7 @@ fn optional_file_hash(path: &Path) -> Result<Option<String>, FunctionCallError> 
     if !path.is_file() {
         return Ok(None);
     }
-    let fingerprint = awidat_render::fingerprint_file(path, true).map_err(|e| {
+    let fingerprint = montage_render::fingerprint_file(path, true).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
             "stream_remux: failed to fingerprint project file {}: {e}",
             path.display()
@@ -373,7 +372,7 @@ mapping and can be replayed deterministically.";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::professional::{StreamExportSpec, StreamKind};
+    use montage_proto::professional::{StreamExportSpec, StreamKind};
 
     #[test]
     fn stream_remux_metadata_records_mixed_stream_contracts() {

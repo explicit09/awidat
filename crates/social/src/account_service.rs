@@ -136,7 +136,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -146,8 +146,8 @@ mod tests {
             owner: account_owner,
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,

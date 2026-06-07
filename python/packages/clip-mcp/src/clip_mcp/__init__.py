@@ -1,4 +1,4 @@
-"""CLIP frame indexer for Awidat.
+"""CLIP frame indexer for Montage.
 
 Samples one frame per second from the source video, encodes each through
 ViT-B-32 (OpenAI weights, via open_clip), and writes the 512-dim
@@ -38,7 +38,7 @@ import open_clip
 import torch
 from PIL import Image
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "clip"
 INDEXER_VERSION = "0.1.0"
@@ -282,7 +282,7 @@ def encode_text(query: str) -> np.ndarray:
 
 # Register the extra tool *after* the IndexerServer has built its
 # FastMCP instance. This is the official path to "an indexer with one
-# additional non-indexer tool"; the awidat-mcp shim deliberately keeps
+# additional non-indexer tool"; the montage-mcp shim deliberately keeps
 # the indexer surface clean and lets indexers reach into _mcp for the
 # few cases where they need to expose more (cross-indexer queries,
 # warm-cache reuse). Document the pattern in INDEX_SCHEMA.md if a

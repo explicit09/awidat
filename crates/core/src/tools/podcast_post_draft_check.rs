@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -344,7 +344,7 @@ does not mutate the timeline.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange, Timeline, Track, TrackChild, TrackKind,
     };
@@ -356,10 +356,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

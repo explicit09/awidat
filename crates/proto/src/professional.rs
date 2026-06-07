@@ -347,7 +347,7 @@ impl SourceRange {
     }
 }
 
-/// Awidat-owned transcript alignment package derived from one transcript sidecar.
+/// Montage-owned transcript alignment package derived from one transcript sidecar.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptAlignmentPackage {
     /// Source asset id, usually a project-relative path under `raw/`.
@@ -1993,7 +1993,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Returns true when Awidat currently previews and renders this
+/// Returns true when Montage currently previews and renders this
 /// animation target as an executable runtime animation.
 pub fn is_runtime_parameter_animation_target(target: &AnimationTarget) -> bool {
     match target {
@@ -2029,13 +2029,13 @@ pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
     "overlay.scale",
     "overlay.rotation_deg",
     "overlay.blur",
-    "awidat.blur.radius_px",
-    "awidat.shake.intensity_px",
-    "awidat.shake.frequency_hz",
-    "awidat.warp.k1",
-    "awidat.warp.k2",
-    "awidat.warp.center_x",
-    "awidat.warp.center_y",
+    "montage.blur.radius_px",
+    "montage.shake.intensity_px",
+    "montage.shake.frequency_hz",
+    "montage.warp.k1",
+    "montage.warp.k2",
+    "montage.warp.center_x",
+    "montage.warp.center_y",
 ];
 
 /// Runtime effect parameter exposed through the generic
@@ -2053,39 +2053,39 @@ pub struct RuntimeEffectParameter {
 /// Effect parameters executable by the current preview/render runtime.
 pub const RUNTIME_EFFECT_PARAMETERS: &[RuntimeEffectParameter] = &[
     RuntimeEffectParameter {
-        effect_id: "awidat.blur",
+        effect_id: "montage.blur",
         param: "radius_px",
-        canonical: "awidat.blur.radius_px",
+        canonical: "montage.blur.radius_px",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.shake",
+        effect_id: "montage.shake",
         param: "intensity_px",
-        canonical: "awidat.shake.intensity_px",
+        canonical: "montage.shake.intensity_px",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.shake",
+        effect_id: "montage.shake",
         param: "frequency_hz",
-        canonical: "awidat.shake.frequency_hz",
+        canonical: "montage.shake.frequency_hz",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.warp",
+        effect_id: "montage.warp",
         param: "k1",
-        canonical: "awidat.warp.k1",
+        canonical: "montage.warp.k1",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.warp",
+        effect_id: "montage.warp",
         param: "k2",
-        canonical: "awidat.warp.k2",
+        canonical: "montage.warp.k2",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.warp",
+        effect_id: "montage.warp",
         param: "center_x",
-        canonical: "awidat.warp.center_x",
+        canonical: "montage.warp.center_x",
     },
     RuntimeEffectParameter {
-        effect_id: "awidat.warp",
+        effect_id: "montage.warp",
         param: "center_y",
-        canonical: "awidat.warp.center_y",
+        canonical: "montage.warp.center_y",
     },
 ];
 
@@ -2293,7 +2293,7 @@ fn validate_parameter_animation_value(
                 ),
             ));
         }
-        "overlay.blur" | "awidat.blur.radius_px" | "awidat.shake.intensity_px"
+        "overlay.blur" | "montage.blur.radius_px" | "montage.shake.intensity_px"
             if keyframe.value < 0.0 =>
         {
             diagnostics.push(ProfessionalDiagnostic::error(
@@ -2304,7 +2304,7 @@ fn validate_parameter_animation_value(
                 ),
             ));
         }
-        "awidat.shake.frequency_hz" if keyframe.value <= 0.0 => {
+        "montage.shake.frequency_hz" if keyframe.value <= 0.0 => {
             diagnostics.push(ProfessionalDiagnostic::error(
                 CapabilityArea::ParameterAnimation,
                 format!(
@@ -2313,7 +2313,7 @@ fn validate_parameter_animation_value(
                 ),
             ));
         }
-        "awidat.warp.center_x" | "awidat.warp.center_y"
+        "montage.warp.center_x" | "montage.warp.center_y"
             if !(0.0..=1.0).contains(&keyframe.value) =>
         {
             diagnostics.push(ProfessionalDiagnostic::error(
@@ -6038,26 +6038,26 @@ mod tests {
     #[test]
     fn runtime_effect_parameter_aliases_are_executable() {
         assert!(is_runtime_clip_parameter(
-            "effects.awidat.blur.params.radius_px"
+            "effects.montage.blur.params.radius_px"
         ));
         assert!(is_runtime_clip_parameter(
-            "effects.awidat.shake.params.intensity_px"
+            "effects.montage.shake.params.intensity_px"
         ));
         assert!(is_runtime_clip_parameter(
-            "effects.awidat.shake.params.frequency_hz"
+            "effects.montage.shake.params.frequency_hz"
         ));
-        assert!(is_runtime_clip_parameter("effects.awidat.warp.params.k1"));
+        assert!(is_runtime_clip_parameter("effects.montage.warp.params.k1"));
         assert!(is_runtime_clip_parameter(
-            "effects.awidat.warp.params.center_x"
+            "effects.montage.warp.params.center_x"
         ));
 
         assert_eq!(
-            canonical_runtime_clip_parameter("effects.awidat.blur.params.radius_px"),
-            Some("awidat.blur.radius_px")
+            canonical_runtime_clip_parameter("effects.montage.blur.params.radius_px"),
+            Some("montage.blur.radius_px")
         );
         assert_eq!(
-            canonical_runtime_clip_parameter("effects.awidat.warp.params.center_y"),
-            Some("awidat.warp.center_y")
+            canonical_runtime_clip_parameter("effects.montage.warp.params.center_y"),
+            Some("montage.warp.center_y")
         );
         assert_eq!(
             canonical_runtime_clip_parameter("effects.unknown.params.amount"),
@@ -6096,7 +6096,7 @@ mod tests {
             id: "bad-blur".to_string(),
             target: AnimationTarget::ClipParameter {
                 clip_id: "clip-a".to_string(),
-                parameter: "effects.awidat.blur.params.radius_px".to_string(),
+                parameter: "effects.montage.blur.params.radius_px".to_string(),
             },
             keyframes: vec![Keyframe::linear(0.0, -1.0)],
             pre_extrapolation: ExtrapolationMode::Hold,

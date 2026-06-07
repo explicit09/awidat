@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use awidat_config::{IndexerResourceClass, McpServer};
-use awidat_mcp::{Client, ClientInfo, ServerConfig};
-use awidat_proto::index::{AssetId, IndexSidecar, IndexerEntry, Manifest};
-use awidat_proto::project::files;
 use chrono::Utc;
 use futures::stream::{FuturesUnordered, StreamExt};
+use montage_config::{IndexerResourceClass, McpServer};
+use montage_mcp::{Client, ClientInfo, ServerConfig};
+use montage_proto::index::{AssetId, IndexSidecar, IndexerEntry, Manifest};
+use montage_proto::project::files;
 use thiserror::Error;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{info, warn};
@@ -273,7 +273,7 @@ pub struct AssetInput {
 /// parallel. Writes sidecars + updates the manifest in `<project>/index/`.
 ///
 /// `client_info` is what we tell each MCP server about ourselves during
-/// `initialize`. Typically `{ name: "awidat", version: env!("CARGO_PKG_VERSION") }`.
+/// `initialize`. Typically `{ name: "montage", version: env!("CARGO_PKG_VERSION") }`.
 ///
 /// Concurrency: bounded by `max_concurrent` (typically the number of
 /// physical cores). 0 disables the limit.
@@ -1190,7 +1190,7 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             cwd: None,
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: true,
             depends_on,
             resource_class: class,
@@ -1310,7 +1310,7 @@ mod tests {
         assert!(usage.can_launch(IndexerResourceClass::Light));
         assert!(usage.can_launch(IndexerResourceClass::Vision));
         // The run loop's inflight cap, not ResourceUsage, enforces
-        // AWIDAT_INDEX_CONCURRENCY=1. ResourceUsage only models RAM classes.
+        // MONTAGE_INDEX_CONCURRENCY=1. ResourceUsage only models RAM classes.
     }
 
     #[tokio::test]

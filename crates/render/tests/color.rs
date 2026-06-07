@@ -3,12 +3,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -29,7 +29,7 @@ fn write_project_with_color_effect(dir: &Path, include_lut: bool) {
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
 
-    let mut color = Effect::new("awidat.color_correction");
+    let mut color = Effect::new("montage.color_correction");
     color
         .metadata
         .insert("exposure_ev".to_string(), serde_json::json!(0.5));
@@ -45,7 +45,7 @@ fn write_project_with_color_effect(dir: &Path, include_lut: bool) {
     clip_a.effects.push(color);
 
     if include_lut {
-        let mut lut = Effect::new("awidat.lut");
+        let mut lut = Effect::new("montage.lut");
         lut.metadata.insert(
             "lut_path".to_string(),
             serde_json::json!("luts/show-look.cube"),
@@ -83,7 +83,7 @@ fn write_project_with_source_color_effect(dir: &Path) {
         RationalTime::new(0.0, 24.0),
         RationalTime::new(2.0 * 24.0, 24.0),
     ));
-    let mut source_color = Effect::new("awidat.source_color");
+    let mut source_color = Effect::new("montage.source_color");
     source_color
         .metadata
         .insert("transfer".to_string(), serde_json::json!("smpte2084"));
@@ -175,7 +175,7 @@ fn write_project_with_lut_strength(dir: &Path, strength: f64) {
         RationalTime::new(0.0, 24.0),
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
-    let mut lut = Effect::new("awidat.lut");
+    let mut lut = Effect::new("montage.lut");
     lut.metadata.insert(
         "lut_path".to_string(),
         serde_json::json!("luts/show-look.cube"),
@@ -227,7 +227,7 @@ fn write_project_with_color_pipeline(dir: &Path) {
         RationalTime::new(0.0, 24.0),
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
-    let mut cp = Effect::new("awidat.color_pipeline");
+    let mut cp = Effect::new("montage.color_pipeline");
     cp.metadata.insert(
         "clip_input_space".to_string(),
         serde_json::json!("arri_logc4"),

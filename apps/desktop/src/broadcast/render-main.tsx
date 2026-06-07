@@ -13,9 +13,9 @@ type RenderPayload = {
 
 declare global {
   interface Window {
-    __AWIDAT_OVERLAY_PAYLOAD__?: RenderPayload;
-    __AWIDAT_SET_OVERLAY_TIME__?: (time: number) => void;
-    __AWIDAT_OVERLAY_READY__?: boolean;
+    __MONTAGE_OVERLAY_PAYLOAD__?: RenderPayload;
+    __MONTAGE_SET_OVERLAY_TIME__?: (time: number) => void;
+    __MONTAGE_OVERLAY_READY__?: boolean;
   }
 }
 
@@ -23,18 +23,18 @@ function fileAssetUrl(projectRoot: string | null, relPath: string | null): strin
   if (!projectRoot || !relPath) return null;
   if (relPath.startsWith("/") || relPath.includes("..")) return null;
   const encoded = relPath.split("/").map(encodeURIComponent).join("/");
-  return `/__awidat_asset__/${encoded}`;
+  return `/__montage_asset__/${encoded}`;
 }
 
 function OverlayRenderApp({ payload }: { payload: RenderPayload }) {
   const [time, setTime] = useState(0);
 
   useEffect(() => {
-    window.__AWIDAT_SET_OVERLAY_TIME__ = setTime;
-    window.__AWIDAT_OVERLAY_READY__ = true;
+    window.__MONTAGE_SET_OVERLAY_TIME__ = setTime;
+    window.__MONTAGE_OVERLAY_READY__ = true;
     return () => {
-      delete window.__AWIDAT_SET_OVERLAY_TIME__;
-      window.__AWIDAT_OVERLAY_READY__ = false;
+      delete window.__MONTAGE_SET_OVERLAY_TIME__;
+      window.__MONTAGE_OVERLAY_READY__ = false;
     };
   }, []);
 
@@ -57,10 +57,10 @@ function OverlayRenderApp({ payload }: { payload: RenderPayload }) {
 }
 
 const root = document.getElementById("root");
-const payload = window.__AWIDAT_OVERLAY_PAYLOAD__;
+const payload = window.__MONTAGE_OVERLAY_PAYLOAD__;
 
 if (!root || !payload) {
-  throw new Error("missing Awidat overlay render payload");
+  throw new Error("missing Montage overlay render payload");
 }
 
 createRoot(root).render(<OverlayRenderApp payload={payload} />);

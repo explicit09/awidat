@@ -2,7 +2,7 @@
 // desktop surfaces. JSX-free so it can be exercised by
 // `apps/desktop/tests/social-model.test.ts` without React or Tauri.
 //
-// Field names are the camelCase serde mirror of the `awidat-social`
+// Field names are the camelCase serde mirror of the `montage-social`
 // `SocialApi` response DTOs (`AccountSummary`, `ProviderSummary`,
 // `PublishJobResponse`, `AccountUsageAudit`). SRP: derivations here,
 // presentation in the `.tsx` files.

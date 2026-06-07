@@ -11,7 +11,7 @@ Required evidence:
 - Metadata validation: title, description, tags, thumbnail, privacy, and schedule validation output.
 - Metadata edit: proof that a saved metadata change revalidates the bound target through `social_update_target` before firing.
 - Private or sandbox publish: private or unlisted upload job id and provider response.
-- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Awidat was closed.
+- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Montage was closed.
 - Status polling: `social_publish_job` history through terminal state.
 - Provider URL: final private/unlisted YouTube URL.
 - Audit history: account/job audit events.

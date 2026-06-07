@@ -1,4 +1,4 @@
-# awidat looks catalog — agent-facing manifest of every named look
+# montage looks catalog — agent-facing manifest of every named look
 # the color-corrector skill can plan and generate.
 #
 # Each entry is purely metadata. The actual RGB transforms live in
@@ -13,8 +13,8 @@
 #      `transforms = { ... }` dict at the bottom of that function.
 #
 # `default_input_space` and `default_output_space` use stable ids
-# from `awidat-effects::KNOWN_COLOR_SPACES` so the agent can wire
-# the catalog directly into an `awidat.color_pipeline` effect.
+# from `montage-effects::KNOWN_COLOR_SPACES` so the agent can wire
+# the catalog directly into an `montage.color_pipeline` effect.
 
 schema_version = 1
 catalog_name = "color-corrector v1"

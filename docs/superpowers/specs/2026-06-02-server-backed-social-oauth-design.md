@@ -2,7 +2,7 @@
 
 ## Summary
 
-Awidat needs a server-owned social account layer so web users can connect their
+Montage needs a server-owned social account layer so web users can connect their
 own YouTube, TikTok, and Instagram accounts, then schedule campaign posts
 through those accounts. This auth is separate from Codex/OpenAI auth. Codex auth
 answers "who powers the agent"; social OAuth answers "which creator account can
@@ -16,7 +16,7 @@ contracts from the beginning.
 
 ## Goals
 
-- Let every Awidat user connect their own YouTube, TikTok, and Instagram
+- Let every Montage user connect their own YouTube, TikTok, and Instagram
   accounts through backend OAuth flows.
 - Store social tokens encrypted on the server, never in project files or
   desktop-local campaign manifests.
@@ -37,14 +37,14 @@ contracts from the beginning.
 - Do not store raw provider tokens in campaign manifests, logs, analytics, or
   frontend state.
 - Do not build a generic social scheduler detached from campaign variants and
-  Awidat's render/proof pipeline.
+  Montage's render/proof pipeline.
 
 ## System Boundary
 
 The server owns social identity and posting state:
 
 ```text
-Awidat user/session
+Montage user/session
   -> OAuth connection session
     -> Connected social account
       -> Campaign variant target
@@ -124,7 +124,7 @@ Token rows are server-internal. Application APIs should never return them.
 
 ### `campaign_variant_targets`
 
-The server-side binding between an Awidat campaign variant and a social account.
+The server-side binding between an Montage campaign variant and a social account.
 
 - `id`
 - `campaign_id`
@@ -298,7 +298,7 @@ Scheduled posting is server-side:
 - Token refresh happens before publish if the access token is near expiry.
 - Expired, revoked, or under-scoped accounts move jobs to `requires_action`.
 - Provider-native scheduling is used when reliable and supported; otherwise the
-  Awidat queue waits and publishes at the requested time.
+  Montage queue waits and publishes at the requested time.
 
 ## Security
 

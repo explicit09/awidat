@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from awidat_mcp import IndexAssetRequest, Sidecar
+from montage_mcp import IndexAssetRequest, Sidecar
 from composition_mcp import (
     INDEXER_VERSION as COMPOSITION_VERSION,
     SCHEMA_VERSION as COMPOSITION_SCHEMA,

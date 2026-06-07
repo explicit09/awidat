@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use awidat_proto::index::AssetId;
+use montage_proto::index::AssetId;
 use serde::{Deserialize, Serialize};
 
 use crate::{IndexReport, PairOutcome, PairTelemetry};

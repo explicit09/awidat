@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -351,9 +351,11 @@ async fn verify_render_output(
     let mut gates = Vec::new();
     add_missing_media_gate(&mut gates, project_root, &timeline_manifest);
 
-    let probe = awidat_render::probe_media(output_path).await.map_err(|e| {
-        FunctionCallError::RespondToModel(format!("verify_render: ffprobe failed: {e}"))
-    })?;
+    let probe = montage_render::probe_media(output_path)
+        .await
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!("verify_render: ffprobe failed: {e}"))
+        })?;
     push_gate(
         &mut gates,
         "has_video_stream",
@@ -405,7 +407,7 @@ async fn verify_render_output(
     add_manifest_caption_evidence_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
     add_caption_rendered_output_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
 
-    let silence_ranges = awidat_render::generate_silences(
+    let silence_ranges = montage_render::generate_silences(
         output_path,
         options.silence_threshold_db,
         options.max_unexpected_silence_s,
@@ -438,7 +440,7 @@ async fn verify_render_output(
         }),
     );
 
-    let black_ranges = awidat_render::generate_black_frames(
+    let black_ranges = montage_render::generate_black_frames(
         output_path,
         0.98,
         options.black_min_duration_s,
@@ -607,7 +609,7 @@ fn requires_caption_manifest_metadata(backend: &str) -> bool {
 
 async fn maybe_run_caption_scorer(
     output_path: &Path,
-    probe: &awidat_render::MediaProbe,
+    probe: &montage_render::MediaProbe,
     manifest: Option<&mut RenderManifestEvidence>,
     caption_summary: &crate::captions::CaptionSummary,
     sampler_override: Option<&dyn crate::caption_rendered_output_scorer::CaptionFrameSampler>,
@@ -864,7 +866,7 @@ fn collect_render_manifest_evidence(
     output_path: &Path,
     gates: &mut Vec<VerificationGate>,
 ) -> Result<Option<RenderManifestEvidence>, FunctionCallError> {
-    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    let manifest_path = montage_render::manifest_path_for_output(output_path);
     if !manifest_path.is_file() {
         push_gate(
             gates,
@@ -875,15 +877,15 @@ fn collect_render_manifest_evidence(
         );
         return Ok(None);
     }
-    let manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+    let manifest = montage_render::read_render_manifest(&manifest_path).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
             "verify_render: read render manifest {}: {e}",
             manifest_path.display()
         ))
     })?;
     let replay_kind = match &manifest.replay {
-        awidat_render::RenderReplayPlan::FfmpegArgv { .. } => "ffmpeg_argv",
-        awidat_render::RenderReplayPlan::Unsupported { .. } => "unsupported",
+        montage_render::RenderReplayPlan::FfmpegArgv { .. } => "ffmpeg_argv",
+        montage_render::RenderReplayPlan::Unsupported { .. } => "unsupported",
     };
     let backend = serde_json::to_value(&manifest.backend)
         .ok()
@@ -924,10 +926,10 @@ fn collect_render_manifest_evidence(
 
 fn add_render_manifest_required_artifacts_gate(
     gates: &mut Vec<VerificationGate>,
-    manifest: &awidat_render::RenderExecutionManifest,
+    manifest: &montage_render::RenderExecutionManifest,
     manifest_path: &Path,
 ) {
-    match awidat_render::validate_replay_manifest(manifest, manifest_path) {
+    match montage_render::validate_replay_manifest(manifest, manifest_path) {
         Ok(()) => push_gate(
             gates,
             "render_manifest_required_artifacts_valid",
@@ -946,12 +948,12 @@ fn add_render_manifest_required_artifacts_gate(
             });
             if let Some(object) = details.as_object_mut() {
                 match &error {
-                    awidat_render::RenderReplayError::MissingRequiredArtifact {
+                    montage_render::RenderReplayError::MissingRequiredArtifact {
                         kind,
                         artifact,
                         ..
                     }
-                    | awidat_render::RenderReplayError::FingerprintMismatch {
+                    | montage_render::RenderReplayError::FingerprintMismatch {
                         kind,
                         artifact,
                         ..
@@ -976,7 +978,7 @@ fn add_render_manifest_required_artifacts_gate(
 fn add_libass_sidecar_evidence_gate(
     gates: &mut Vec<VerificationGate>,
     metadata: &BTreeMap<String, String>,
-    sidecars: &[awidat_render::RenderSidecarFingerprint],
+    sidecars: &[montage_render::RenderSidecarFingerprint],
 ) {
     let claimed_count = metadata
         .get("libass_caption_count")
@@ -1052,7 +1054,7 @@ fn add_libass_layout_evidence_gate(
 
 fn add_render_feature_evidence_gate(
     gates: &mut Vec<VerificationGate>,
-    backend: &awidat_render::RenderBackendKind,
+    backend: &montage_render::RenderBackendKind,
     metadata: &BTreeMap<String, String>,
 ) {
     let expected = crate::capabilities::render_feature_metadata_for_backend(backend);
@@ -1228,21 +1230,21 @@ fn attach_verification_summary(
     report_path: &Path,
     report: &VerifyRenderReport,
 ) -> Result<(), FunctionCallError> {
-    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    let manifest_path = montage_render::manifest_path_for_output(output_path);
     if !manifest_path.is_file() {
         return Ok(());
     }
-    let mut manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+    let mut manifest = montage_render::read_render_manifest(&manifest_path).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
             "verify_render: read render manifest {}: {e}",
             manifest_path.display()
         ))
     })?;
-    manifest.verification = Some(awidat_render::RenderVerificationSummary {
+    manifest.verification = Some(montage_render::RenderVerificationSummary {
         status: if report.passed { "passed" } else { "failed" }.into(),
         report_path: report_path.to_string_lossy().into_owned(),
     });
-    awidat_render::write_render_manifest(&manifest_path, &manifest).map_err(|e| {
+    montage_render::write_render_manifest(&manifest_path, &manifest).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
             "verify_render: update render manifest {}: {e}",
             manifest_path.display()
@@ -1344,7 +1346,7 @@ fn collect_track_manifest(
 }
 
 fn collect_clip_manifest(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     timeline_start_s: f64,
     ranges: &mut Vec<SourceRangeEntry>,
     missing: &mut Vec<MissingMediaEntry>,
@@ -1419,10 +1421,10 @@ fn collect_clip_manifest(
     }
 }
 
-fn is_generated_overlay_clip(clip: &awidat_proto::otio::Clip) -> bool {
+fn is_generated_overlay_clip(clip: &montage_proto::otio::Clip) -> bool {
     clip.effects.iter().any(|effect| {
-        effect.effect_name == "awidat.title"
-            || effect.effect_name == "awidat.annotation"
+        effect.effect_name == "montage.title"
+            || effect.effect_name == "montage.annotation"
             || matches!(
                 effect
                     .metadata
@@ -1435,7 +1437,7 @@ fn is_generated_overlay_clip(clip: &awidat_proto::otio::Clip) -> bool {
 
 fn push_probe(
     probes: &mut Vec<BoundaryProbe>,
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     asset: &str,
     export_time_s: f64,
     expected_source_time_s: f64,
@@ -1454,7 +1456,7 @@ fn retain_quick_probes(probes: &mut Vec<BoundaryProbe>) {
     probes.retain(|probe| probe.label != "mid");
 }
 
-fn clip_duration_s(clip: &awidat_proto::otio::Clip) -> f64 {
+fn clip_duration_s(clip: &montage_proto::otio::Clip) -> f64 {
     clip.source_range
         .as_ref()
         .map(|range| range.duration.to_seconds())
@@ -1510,7 +1512,7 @@ async fn add_source_duration_gate(
         if !path.is_file() {
             continue;
         }
-        match awidat_render::probe_duration_s(&path).await {
+        match montage_render::probe_duration_s(&path).await {
             Ok(Some(duration_s))
                 if range.source_end_s > duration_s + DEFAULT_SOURCE_RANGE_TOLERANCE_S =>
             {
@@ -1635,8 +1637,8 @@ fn add_boundary_probe_gate(
     gates: &mut Vec<VerificationGate>,
     duration_s: Option<f64>,
     probes: &[BoundaryProbe],
-    unexpected_silences: &[awidat_render::SilenceRange],
-    long_black_ranges: &[awidat_render::BlackFrameRange],
+    unexpected_silences: &[montage_render::SilenceRange],
+    long_black_ranges: &[montage_render::BlackFrameRange],
 ) {
     let checks = probes
         .iter()
@@ -1679,8 +1681,8 @@ fn add_cut_boundary_self_eval_gate(
     gates: &mut Vec<VerificationGate>,
     duration_s: Option<f64>,
     boundaries: &[CutBoundary],
-    unexpected_silences: &[awidat_render::SilenceRange],
-    long_black_ranges: &[awidat_render::BlackFrameRange],
+    unexpected_silences: &[montage_render::SilenceRange],
+    long_black_ranges: &[montage_render::BlackFrameRange],
 ) {
     let checks = boundaries
         .iter()
@@ -1857,7 +1859,7 @@ fn newest_render(project_root: &Path) -> Result<PathBuf, FunctionCallError> {
 }
 
 const DESCRIPTION: &str = "\
-Verify an existing rendered MP4 against the current Awidat timeline. \
+Verify an existing rendered MP4 against the current Montage timeline. \
 Checks duration, audio/video stream presence, missing media, long black \
 segments, long unexpected silence, source-range manifest consistency, and \
 edited-boundary probes, caption evidence, and adjacent render manifests. \
@@ -1869,11 +1871,11 @@ output_path here.";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use std::process::Command;
 
     fn range(start_s: f64, duration_s: f64) -> TimeRange {
@@ -1892,14 +1894,14 @@ mod tests {
 
     #[test]
     fn collect_timeline_manifest_tracks_duration_and_boundaries() {
-        let mut timeline = awidat_proto::otio::Timeline::empty("verify");
+        let mut timeline = montage_proto::otio::Timeline::empty("verify");
         let mut track = Track::empty("v1", TrackKind::Video);
         track
             .children
             .push(TrackChild::Clip(clip("intro", "raw/source.mp4", 1.0, 2.0)));
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 0.5, 24.0,
             )));
         track
@@ -1957,7 +1959,7 @@ mod tests {
 
     #[test]
     fn missing_reference_clip_fails_missing_media_gate() {
-        let mut timeline = awidat_proto::otio::Timeline::empty("verify");
+        let mut timeline = montage_proto::otio::Timeline::empty("verify");
         let mut track = Track::empty("v1", TrackKind::Video);
         let mut planned = Clip::empty("planned b-roll");
         planned.source_range = Some(range(0.0, 1.0));
@@ -2136,7 +2138,7 @@ mod tests {
             at_s: 2.5,
             gap_s: 0.0,
         }];
-        let silences = vec![awidat_render::SilenceRange {
+        let silences = vec![montage_render::SilenceRange {
             start_s: 2.45,
             end_s: 2.55,
             db_floor: -80.0,
@@ -2155,7 +2157,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_render_reports_synthetic_render_gates() {
-        if awidat_render::ffmpeg_path().is_err() || awidat_render::ffprobe_path().is_err() {
+        if montage_render::ffmpeg_path().is_err() || montage_render::ffprobe_path().is_err() {
             return;
         }
 
@@ -2166,7 +2168,7 @@ mod tests {
         let source_path = raw_dir.join("source.mp4");
         synthesize_fixture(&source_path, 1.2, false).unwrap();
 
-        let mut timeline = awidat_proto::otio::Timeline::empty("verify");
+        let mut timeline = montage_proto::otio::Timeline::empty("verify");
         let mut track = Track::empty("v1", TrackKind::Video);
         track
             .children
@@ -2178,18 +2180,18 @@ mod tests {
         let output_path = dir.path().join("renders").join("out.mp4");
         std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
         synthesize_fixture(&output_path, 1.2, false).unwrap();
-        let manifest_path = awidat_render::manifest_path_for_output(&output_path);
-        let manifest = awidat_render::RenderExecutionManifest::planned(
-            awidat_render::RenderExecutionManifestInput {
+        let manifest_path = montage_render::manifest_path_for_output(&output_path);
+        let manifest = montage_render::RenderExecutionManifest::planned(
+            montage_render::RenderExecutionManifestInput {
                 created_at: "2026-05-24T00:00:00Z".into(),
-                awidat_version: "test".into(),
+                montage_version: "test".into(),
                 project_root: dir.path().to_string_lossy().into_owned(),
                 project_hash: None,
                 timeline_hash: None,
-                backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
-                replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+                backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
+                replay: montage_render::RenderReplayPlan::FfmpegArgv {
                     argv: vec![
-                        awidat_render::ffmpeg_path()
+                        montage_render::ffmpeg_path()
                             .unwrap()
                             .to_string_lossy()
                             .into_owned(),
@@ -2199,8 +2201,8 @@ mod tests {
                     ],
                     cwd: Some(dir.path().to_string_lossy().into_owned()),
                 },
-                inputs: vec![awidat_render::fingerprint_file(&source_path, true).unwrap()],
-                outputs: vec![awidat_render::output_artifact(&output_path, true)],
+                inputs: vec![montage_render::fingerprint_file(&source_path, true).unwrap()],
+                outputs: vec![montage_render::output_artifact(&output_path, true)],
                 sidecars: Vec::new(),
                 limitations: Vec::new(),
                 verification: None,
@@ -2221,7 +2223,7 @@ mod tests {
                 ]),
             },
         );
-        awidat_render::write_render_manifest(&manifest_path, &manifest).unwrap();
+        montage_render::write_render_manifest(&manifest_path, &manifest).unwrap();
 
         let report = verify_render_output(dir.path(), &output_path, VerifyRenderOptions::default())
             .await
@@ -2258,7 +2260,7 @@ mod tests {
         } else {
             format!("testsrc=size=160x90:rate=24:duration={duration_s}")
         };
-        let status = Command::new(awidat_render::ffmpeg_path().unwrap())
+        let status = Command::new(montage_render::ffmpeg_path().unwrap())
             .arg("-loglevel")
             .arg("error")
             .arg("-y")

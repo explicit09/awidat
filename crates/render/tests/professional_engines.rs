@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::professional::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
     DeliveryPreflightInput, DeliveryProfile, ExportOutputSettings, ExportPreset, ExpressionLink,
@@ -15,7 +15,7 @@ use awidat_proto::professional::{
     StreamExportSpec, StreamKind, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
     TrackSidecar, TrackingPackage,
 };
-use awidat_render::professional::{
+use montage_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, SubjectReframeRequest,
     TemplateAnimation, TrackCorrection, TrackedInsertRequest, TrackerObservation, TrackerRegion,
     TrackingEvidence, TrackingRequest, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
@@ -29,7 +29,7 @@ use awidat_render::professional::{
     lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
     plan_stream_export_args, summarize_color_finishing, summarize_tracking_package,
 };
-use awidat_render::{RenderBackendKind, RenderJobSpec, TitleAnimation, TitlePosition};
+use montage_render::{RenderBackendKind, RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
 
 fn test_render_job_spec() -> RenderJobSpec {
@@ -827,7 +827,7 @@ fn audio_energy_expression_drives_expected_scale_samples() {
 
 #[test]
 fn composition_lowering_emits_supported_filters_and_explicit_limitations() {
-    let graph = awidat_proto::professional::CompositionGraph {
+    let graph = montage_proto::professional::CompositionGraph {
         id: "comp-1".into(),
         nodes: vec![
             node("input", "media_input", json!({"asset_id": "clip-a"})),
@@ -878,7 +878,7 @@ fn composition_lowering_emits_supported_filters_and_explicit_limitations() {
 
 #[test]
 fn composition_graph_cycle_fails_validation() {
-    let graph = awidat_proto::professional::CompositionGraph {
+    let graph = montage_proto::professional::CompositionGraph {
         id: "cycle-graph".into(),
         nodes: vec![
             node("a", "transform", json!({})),
@@ -898,12 +898,12 @@ fn composition_graph_cycle_fails_validation() {
 
 #[test]
 fn unsupported_composition_node_persists_with_limitation() {
-    let graph = awidat_proto::professional::CompositionGraph {
+    let graph = montage_proto::professional::CompositionGraph {
         id: "unsupported-graph".into(),
         nodes: vec![
-            awidat_proto::professional::CompositionNode {
+            montage_proto::professional::CompositionNode {
                 id: "plugin-node".into(),
-                node_type: awidat_proto::professional::CompositionNodeType::Unsupported,
+                node_type: montage_proto::professional::CompositionNodeType::Unsupported,
                 params: map([("plugin", json!("third-party-glow"))]),
             },
             node("output", "output", json!({})),
@@ -928,17 +928,17 @@ fn particle_and_scene3d_nodes_persist_with_explicit_limitations() {
         nodes: vec![
             CompositionNode {
                 id: "scene".into(),
-                node_type: awidat_proto::professional::CompositionNodeType::Scene3d,
+                node_type: montage_proto::professional::CompositionNodeType::Scene3d,
                 ..CompositionNode::default()
             },
             CompositionNode {
                 id: "sparks".into(),
-                node_type: awidat_proto::professional::CompositionNodeType::ParticleEmitter,
+                node_type: montage_proto::professional::CompositionNodeType::ParticleEmitter,
                 ..CompositionNode::default()
             },
             CompositionNode {
                 id: "output".into(),
-                node_type: awidat_proto::professional::CompositionNodeType::Output,
+                node_type: montage_proto::professional::CompositionNodeType::Output,
                 ..CompositionNode::default()
             },
         ],
@@ -962,13 +962,13 @@ fn particle_and_scene3d_nodes_persist_with_explicit_limitations() {
 
 #[test]
 fn composition_graph_inspection_returns_compact_review_summary() {
-    let graph = awidat_proto::professional::CompositionGraph {
+    let graph = montage_proto::professional::CompositionGraph {
         id: "inspect-graph".into(),
         nodes: vec![
             node("input", "media_input", json!({"asset_id": "clip-a"})),
-            awidat_proto::professional::CompositionNode {
+            montage_proto::professional::CompositionNode {
                 id: "plugin-node".into(),
-                node_type: awidat_proto::professional::CompositionNodeType::Unsupported,
+                node_type: montage_proto::professional::CompositionNodeType::Unsupported,
                 params: map([("plugin", json!("third-party-glow"))]),
             },
             node("output", "output", json!({})),
@@ -1296,7 +1296,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
     let matrix = effect_parameter_capability_matrix();
     let saturation = match matrix
         .iter()
-        .find(|entry| entry.effect == "awidat.color_correction" && entry.parameter == "saturation")
+        .find(|entry| entry.effect == "montage.color_correction" && entry.parameter == "saturation")
     {
         Some(entry) => entry,
         None => panic!("saturation capability"),
@@ -1307,7 +1307,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
     assert!(saturation.renderable);
     let blur = match matrix
         .iter()
-        .find(|entry| entry.effect == "awidat.video_overlay" && entry.parameter == "blur")
+        .find(|entry| entry.effect == "montage.video_overlay" && entry.parameter == "blur")
     {
         Some(entry) => entry,
         None => panic!("overlay blur capability"),
@@ -1319,7 +1319,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
 
     let shake = match matrix
         .iter()
-        .find(|entry| entry.effect == "awidat.shake" && entry.parameter == "intensity_px")
+        .find(|entry| entry.effect == "montage.shake" && entry.parameter == "intensity_px")
     {
         Some(entry) => entry,
         None => panic!("shake intensity capability"),
@@ -1331,7 +1331,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
 
     let clip_blur = match matrix
         .iter()
-        .find(|entry| entry.effect == "awidat.blur" && entry.parameter == "radius_px")
+        .find(|entry| entry.effect == "montage.blur" && entry.parameter == "radius_px")
     {
         Some(entry) => entry,
         None => panic!("clip blur capability"),
@@ -1343,7 +1343,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
 
     let warp = match matrix
         .iter()
-        .find(|entry| entry.effect == "awidat.warp" && entry.parameter == "k1")
+        .find(|entry| entry.effect == "montage.warp" && entry.parameter == "k1")
     {
         Some(entry) => entry,
         None => panic!("warp k1 capability"),
@@ -1357,7 +1357,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
         id: "anim-bad-scale".into(),
         target: AnimationTarget::ClipParameter {
             clip_id: "clip-a".into(),
-            parameter: "awidat.video_overlay.scale".into(),
+            parameter: "montage.video_overlay.scale".into(),
         },
         keyframes: vec![Keyframe::linear(0.0, 0.0)],
         pre_extrapolation: ExtrapolationMode::Hold,
@@ -1372,7 +1372,7 @@ fn effect_parameter_registry_reports_units_and_validation() {
     };
 
     assert_eq!(diagnostic.kind, "invalid_effect_parameter_value");
-    assert!(diagnostic.message.contains("awidat.video_overlay.scale"));
+    assert!(diagnostic.message.contains("montage.video_overlay.scale"));
 }
 
 #[test]
@@ -1443,7 +1443,7 @@ fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
         .parameter_animations
         .iter()
         .map(|animation| match &animation.target {
-            awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
+            montage_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
                 format!("{clip_id}/{parameter}")
             }
             other => format!("{other:?}"),
@@ -1491,7 +1491,7 @@ fn focus_highlight_template_lowers_to_overlay_scale_and_opacity() {
         .parameter_animations
         .iter()
         .map(|animation| match &animation.target {
-            awidat_proto::professional::AnimationTarget::ClipParameter { parameter, .. } => {
+            montage_proto::professional::AnimationTarget::ClipParameter { parameter, .. } => {
                 parameter.as_str()
             }
             _ => "",
@@ -1626,7 +1626,7 @@ fn motion_template_safe_area_violation_surfaces_diagnostic() {
 
 #[test]
 fn accepting_motion_package_writes_explicit_animation_records() {
-    let mut metadata = AwidatTimelineMetadata::default();
+    let mut metadata = MontageTimelineMetadata::default();
     let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
 
     match apply_motion_package(&mut metadata, package, MotionPackageDecision::Accept) {
@@ -1643,7 +1643,7 @@ fn accepting_motion_package_writes_explicit_animation_records() {
 
 #[test]
 fn rejecting_motion_package_preserves_project_records_and_learning_signal() {
-    let mut metadata = AwidatTimelineMetadata::default();
+    let mut metadata = MontageTimelineMetadata::default();
     let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
 
     match apply_motion_package(&mut metadata, package, MotionPackageDecision::Reject) {
@@ -1660,9 +1660,9 @@ fn rejecting_motion_package_preserves_project_records_and_learning_signal() {
 
 #[test]
 fn motion_package_conflict_is_reported_before_apply() {
-    let mut metadata = AwidatTimelineMetadata {
+    let mut metadata = MontageTimelineMetadata {
         parameter_animations: vec![package_animation("existing", "clip-a", "title.opacity")],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
 
@@ -1728,11 +1728,11 @@ fn color_grade_stack_lowers_to_current_color_correction_plan() {
 #[test]
 fn color_review_package_summarizes_groups_and_contact_sheet_artifacts() {
     let state = ColorFinishingState {
-        reference_stills: vec![awidat_proto::professional::ReferenceStill {
+        reference_stills: vec![montage_proto::professional::ReferenceStill {
             id: "ref-1".into(),
             source: "stills/ref-1.jpg".into(),
         }],
-        shot_groups: vec![awidat_proto::professional::ShotGroup {
+        shot_groups: vec![montage_proto::professional::ShotGroup {
             id: "scene-1".into(),
             clip_ids: vec!["a".into(), "b".into()],
         }],
@@ -2020,21 +2020,21 @@ fn node(
     id: &str,
     kind: &str,
     params: serde_json::Value,
-) -> awidat_proto::professional::CompositionNode {
-    awidat_proto::professional::CompositionNode {
+) -> montage_proto::professional::CompositionNode {
+    montage_proto::professional::CompositionNode {
         id: id.into(),
         node_type: match kind {
-            "media_input" => awidat_proto::professional::CompositionNodeType::MediaInput,
-            "transform" => awidat_proto::professional::CompositionNodeType::Transform,
-            "merge" => awidat_proto::professional::CompositionNodeType::Merge,
-            "mask" => awidat_proto::professional::CompositionNodeType::Mask,
-            "matte" => awidat_proto::professional::CompositionNodeType::Matte,
-            "text" => awidat_proto::professional::CompositionNodeType::Text,
-            "blur" => awidat_proto::professional::CompositionNodeType::Blur,
-            "color" => awidat_proto::professional::CompositionNodeType::Color,
-            "tracker_bind" => awidat_proto::professional::CompositionNodeType::TrackerBind,
-            "corner_pin" => awidat_proto::professional::CompositionNodeType::CornerPin,
-            "output" => awidat_proto::professional::CompositionNodeType::Output,
+            "media_input" => montage_proto::professional::CompositionNodeType::MediaInput,
+            "transform" => montage_proto::professional::CompositionNodeType::Transform,
+            "merge" => montage_proto::professional::CompositionNodeType::Merge,
+            "mask" => montage_proto::professional::CompositionNodeType::Mask,
+            "matte" => montage_proto::professional::CompositionNodeType::Matte,
+            "text" => montage_proto::professional::CompositionNodeType::Text,
+            "blur" => montage_proto::professional::CompositionNodeType::Blur,
+            "color" => montage_proto::professional::CompositionNodeType::Color,
+            "tracker_bind" => montage_proto::professional::CompositionNodeType::TrackerBind,
+            "corner_pin" => montage_proto::professional::CompositionNodeType::CornerPin,
+            "output" => montage_proto::professional::CompositionNodeType::Output,
             other => panic!("node kind {other}"),
         },
         params: match params.as_object() {
@@ -2044,8 +2044,8 @@ fn node(
     }
 }
 
-fn edge(from: &str, to: &str) -> awidat_proto::professional::CompositionEdge {
-    awidat_proto::professional::CompositionEdge {
+fn edge(from: &str, to: &str) -> montage_proto::professional::CompositionEdge {
+    montage_proto::professional::CompositionEdge {
         from: from.into(),
         to: to.into(),
         input: None,
@@ -2087,10 +2087,10 @@ fn package_animation(
     id: &str,
     clip_id: &str,
     parameter: &str,
-) -> awidat_proto::professional::ParameterAnimation {
-    awidat_proto::professional::ParameterAnimation {
+) -> montage_proto::professional::ParameterAnimation {
+    montage_proto::professional::ParameterAnimation {
         id: id.into(),
-        target: awidat_proto::professional::AnimationTarget::ClipParameter {
+        target: montage_proto::professional::AnimationTarget::ClipParameter {
             clip_id: clip_id.into(),
             parameter: parameter.into(),
         },

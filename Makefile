@@ -19,7 +19,7 @@ python-smoke:
 python-smoke-audio:
 	python3 python/scripts/smoke_indexers.py --safe --audio-energy
 
-# Awidat desktop (Tauri) — install frontend deps + run dev shell.
+# Montage desktop (Tauri) — install frontend deps + run dev shell.
 # Frontend deps live under apps/desktop/node_modules; the Rust
 # backend builds via cargo-tauri's `tauri dev` invocation.
 desktop-deps:

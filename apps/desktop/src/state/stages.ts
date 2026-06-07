@@ -70,10 +70,10 @@ export type StageStore = {
   reset: () => void;
 };
 
-/** Dev-only: boot straight into a stage via `VITE_AWIDAT_STAGE=deliver`
+/** Dev-only: boot straight into a stage via `VITE_MONTAGE_STAGE=deliver`
  *  (used for native screenshot tours; ignored in production builds). */
 const DEV_INITIAL_STAGE = ((): Stage => {
-  const v = import.meta.env?.VITE_AWIDAT_STAGE as string | undefined;
+  const v = import.meta.env?.VITE_MONTAGE_STAGE as string | undefined;
   return v === "deliver" || v === "schedule" || v === "skills" || v === "history" ? v : "edit";
 })();
 

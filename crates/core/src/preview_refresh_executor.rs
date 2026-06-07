@@ -1,10 +1,10 @@
 //! Production [`PreviewRefreshExecutor`] backed by ffmpeg.
 //!
 //! Dispatches each `PreviewCacheRefreshTask` to the matching
-//! `awidat_render` helper by `artifact_kind`:
-//! - `proxy`     → `awidat_render::transcode_proxy`
-//! - `thumbnails`→ `awidat_render::generate_thumbnails`
-//! - `waveform`  → `awidat_render::generate_waveform` + JSON sidecar write
+//! `montage_render` helper by `artifact_kind`:
+//! - `proxy`     → `montage_render::transcode_proxy`
+//! - `thumbnails`→ `montage_render::generate_thumbnails`
+//! - `waveform`  → `montage_render::generate_waveform` + JSON sidecar write
 //!
 //! The waveform sidecar shape (`{ "buckets": [f32, ...], "duration_s": f64 }`)
 //! matches the desktop's `WaveformSidecar` schema so existing readers do not
@@ -22,7 +22,7 @@ use crate::preview_cache::{PreviewCacheRefreshTask, PreviewRefreshError, Preview
 pub const DEFAULT_WAVEFORM_BUCKET_COUNT: usize = 2048;
 
 /// Production executor that resolves source media via `project_root + asset_id`
-/// and dispatches to the appropriate `awidat_render` helper for the task's
+/// and dispatches to the appropriate `montage_render` helper for the task's
 /// `artifact_kind`. Unknown kinds surface as an executor error so callers
 /// see the misconfiguration immediately instead of silently skipping work.
 pub struct FfmpegPreviewRefreshExecutor {
@@ -73,14 +73,16 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
         let source = self.source_path(&task.asset_id);
         let artifact = Path::new(&task.artifact_path);
         match task.artifact_kind.as_str() {
-            "proxy" => awidat_render::transcode_proxy(&source, artifact, None, self.cancel.clone())
-                .await
-                .map_err(|e| PreviewRefreshError::Executor {
-                    task_id: task.task_id.clone(),
-                    message: format!("transcode_proxy: {e}"),
-                }),
+            "proxy" => {
+                montage_render::transcode_proxy(&source, artifact, None, self.cancel.clone())
+                    .await
+                    .map_err(|e| PreviewRefreshError::Executor {
+                        task_id: task.task_id.clone(),
+                        message: format!("transcode_proxy: {e}"),
+                    })
+            }
             "thumbnails" => {
-                awidat_render::generate_thumbnails(&source, artifact, self.cancel.clone())
+                montage_render::generate_thumbnails(&source, artifact, self.cancel.clone())
                     .await
                     .map_err(|e| PreviewRefreshError::Executor {
                         task_id: task.task_id.clone(),
@@ -88,7 +90,7 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
                     })
             }
             "waveform" => {
-                let wave = awidat_render::generate_waveform(
+                let wave = montage_render::generate_waveform(
                     &source,
                     self.waveform_bucket_count,
                     self.cancel.clone(),

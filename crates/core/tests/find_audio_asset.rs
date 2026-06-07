@@ -8,8 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_core::tools::find_audio_asset::{FindAudioAssetTool, find_audio_assets};
-use awidat_core::{ToolContext, ToolHandler, ToolInvocation};
+use montage_core::tools::find_audio_asset::{FindAudioAssetTool, find_audio_assets};
+use montage_core::{ToolContext, ToolHandler, ToolInvocation};
 use tokio::sync::broadcast;
 
 fn ctx_at(root: &Path) -> ToolContext {
@@ -18,14 +18,14 @@ fn ctx_at(root: &Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
-        sandbox_mode: awidat_core::tool::SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        sandbox_mode: montage_core::tool::SandboxMode::Default,
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }

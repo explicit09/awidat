@@ -1,12 +1,12 @@
 [package]
-name = "awidat-proto"
+name = "montage-proto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_proto"
+name = "montage_proto"
 path = "src/lib.rs"
 
 [dependencies]

@@ -11,9 +11,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use awidat_core::context::ContextualUserFragment;
-use awidat_core::edl;
-use awidat_core::skills::SkillRegistry;
+use montage_core::context::ContextualUserFragment;
+use montage_core::edl;
+use montage_core::skills::SkillRegistry;
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -408,7 +408,7 @@ fn color_corrector_skill_is_graph_native() {
     }
 
     // Bundled shaper LUTs for camera Log encodings — agents
-    // reference these on `awidat.color_pipeline.shaper_lut` when
+    // reference these on `montage.color_pipeline.shaper_lut` when
     // the clip's input space is log. If the files vanish, the
     // skill instructions become a lie.
     let shapers_dir = workspace_root().join("skills/color-corrector/shapers");
@@ -613,7 +613,7 @@ fn l1_catalog_exposes_metadata_without_l2_or_l3_content() {
     assert!(catalog.contains("viral-clip-extractor"));
     assert!(catalog.contains("Find and build 30-90 second social clips"));
     assert!(
-        !catalog.contains("This is an awidat advantage"),
+        !catalog.contains("This is an montage advantage"),
         "L1 catalog must not include SKILL.md body text"
     );
     assert!(

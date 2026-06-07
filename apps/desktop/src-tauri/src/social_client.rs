@@ -1,4 +1,4 @@
-//! Thin authenticated HTTPS client of the `awidat-social-server`.
+//! Thin authenticated HTTPS client of the `montage-social-server`.
 //!
 //! Phase 5 moves the desktop's social-publishing path off the in-process
 //! `SocialApi` + local SQLite store and onto the server (Phases 1-4). This
@@ -7,7 +7,7 @@
 //!
 //! Every method:
 //! - attaches `Authorization: Bearer <auth_token>` (the pre-Phase-7 dev token),
-//! - sends/receives the **re-exported `awidat_social::api` DTOs** so client and
+//! - sends/receives the **re-exported `montage_social::api` DTOs** so client and
 //!   server agree on exactly one serde shape (the big reuse win), and
 //! - maps a non-2xx response to a stable error string (`401` → `"unauthorized"`)
 //!   the frontend can branch on, never leaking a token or response body.
@@ -17,12 +17,12 @@
 //! render never loads fully into RAM (mirrors the streaming concern documented
 //! on the `MediaServer` state).
 
-use awidat_social::api::{
+use montage_social::api::{
     AccountSummary, BindTargetRequest, OAuthStartResponse, PublishJobResponse,
     RescheduleJobRequest, ScheduleTargetRequest, UpdateTargetRequest, ValidateTargetRequest,
     ValidateTargetResponse,
 };
-use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
+use montage_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio_util::io::ReaderStream;
@@ -33,7 +33,7 @@ const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Authenticated HTTPS client for the social-publishing server.
 ///
 /// Cheap to clone — `reqwest::Client` is an `Arc` internally — so it can be
-/// stashed behind a `Mutex<Option<_>>` in `AwidatState` and handed to every
+/// stashed behind a `Mutex<Option<_>>` in `MontageState` and handed to every
 /// `social_*` command.
 #[derive(Clone)]
 pub struct SocialClient {
@@ -97,16 +97,16 @@ impl SocialClient {
     ///
     /// Per RECONCILIATION G6 there is no per-field desktop config struct, so the
     /// server URL + dev token are read from env at setup time (mirroring how
-    /// `project_root` defaults from `AWIDAT_DESKTOP_PROJECT`). Returns `None`
-    /// when `AWIDAT_SOCIAL_SERVER_URL` is unset, so the desktop boots fine
+    /// `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). Returns `None`
+    /// when `MONTAGE_SOCIAL_SERVER_URL` is unset, so the desktop boots fine
     /// without the server configured — the `social_*` commands then surface a
     /// clear "social client not initialized" error if used.
     pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var("AWIDAT_SOCIAL_SERVER_URL").ok()?;
+        let base_url = std::env::var("MONTAGE_SOCIAL_SERVER_URL").ok()?;
         if base_url.trim().is_empty() {
             return None;
         }
-        let auth_token = std::env::var("AWIDAT_SOCIAL_AUTH_TOKEN").unwrap_or_default();
+        let auth_token = std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").unwrap_or_default();
         Some(Self::new(base_url, auth_token))
     }
 
@@ -334,7 +334,9 @@ fn status_error(status: reqwest::StatusCode) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use awidat_social::model::{AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef};
+    use montage_social::model::{
+        AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef,
+    };
     use std::time::Duration;
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -347,8 +349,8 @@ mod tests {
             "owner": { "user": "local-user" },
             "provider": "youtube",
             "providerAccountId": "channel_1",
-            "displayName": "Awidat Channel",
-            "handle": "@awidat",
+            "displayName": "Montage Channel",
+            "handle": "@montage",
             "avatarUrl": null,
             "accountKind": "channel",
             "status": "connected",
@@ -384,7 +386,7 @@ mod tests {
         let accounts = client.accounts().await.expect("accounts ok");
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "acct_1");
-        assert_eq!(accounts[0].display_name, "Awidat Channel");
+        assert_eq!(accounts[0].display_name, "Montage Channel");
         assert_eq!(accounts[0].provider, Provider::YouTube);
         assert_eq!(accounts[0].status, ConnectedAccountStatus::Connected);
         assert_eq!(accounts[0].account_kind, AccountKind::Channel);

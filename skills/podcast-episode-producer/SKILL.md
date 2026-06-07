@@ -83,7 +83,7 @@ rendering.
 - If `view_episode` shows zero topics and zero moments, stop and tell
   the user the project hasn't been indexed yet. Don't try to edit raw
   footage without the brain.
-- Use awidat's richer index set when present: topic for chapter
+- Use montage's richer index set when present: topic for chapter
   structure, editorial-moments for hooks/payoffs, shot for visual
   texture, face/gaze for direct-address moments, frame-quality for
   usable thumbnails, and CLIP/shot tools for cutaways.
@@ -392,7 +392,7 @@ or the source material genuinely demands it.
 ## Common failure modes (and recovery)
 
 - **find_beat returns 0 moments**: the editorial-moments indexer
-  hasn't run. Tell the user to run `awidat index --indexer
+  hasn't run. Tell the user to run `montage index --indexer
   editorial-moments` and pause.
 - **find_episode_start returns no recommendation**: the whisper index
   is missing or the intro is ambiguous. Use `find_moment` to search for

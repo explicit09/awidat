@@ -12,9 +12,9 @@
 //!   1. Bundled (`<repo>/skills/` in dev) — same walk-up resolution
 //!      `bundled_skill_root()` in codex_session uses.
 //!   2. User overrides under the platform config dir
-//!      (`~/Library/Application Support/awidat/skills` on macOS,
-//!      `~/.config/awidat/skills` on Linux, `%APPDATA%\awidat\skills`
-//!      on Windows) plus the legacy `~/.awidat/skills`.
+//!      (`~/Library/Application Support/montage/skills` on macOS,
+//!      `~/.config/montage/skills` on Linux, `%APPDATA%\montage\skills`
+//!      on Windows) plus the legacy `~/.montage/skills`.
 //!   3. Project-root override (`<project>/skills/`) when present —
 //!      a per-project workflow trumps user + bundled.
 //!
@@ -23,17 +23,17 @@
 //! showing where the skill came from. The provenance reflects which
 //! layer the registry actually resolved the skill from after overrides.
 //!
-//! Both commands use the existing `awidat_core::skills::SkillRegistry`
+//! Both commands use the existing `montage_core::skills::SkillRegistry`
 //! parser — we don't reimplement YAML frontmatter parsing here.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use awidat_core::skills::{SkillRegistry, is_hidden_skill_dir};
+use montage_core::skills::{SkillRegistry, is_hidden_skill_dir};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// One skill row for the Skills surface. Mirrors the L1 fields from
 /// `SkillMeta` plus the absolute path so the frontend can show "where
@@ -91,7 +91,7 @@ impl Provenance {
 /// Errors are non-fatal — malformed skills are skipped and logged.
 /// An empty list is a valid response (no bundled skills found).
 #[tauri::command]
-pub async fn list_skills(state: State<'_, AwidatState>) -> Result<Vec<SkillEntry>, String> {
+pub async fn list_skills(state: State<'_, MontageState>) -> Result<Vec<SkillEntry>, String> {
     let project_root = state.project_root.lock().await.clone();
     tokio::task::spawn_blocking(move || Ok(collect_skills(project_root)))
         .await
@@ -104,7 +104,7 @@ pub async fn list_skills(state: State<'_, AwidatState>) -> Result<Vec<SkillEntry
 /// from the `list_skills` result.
 #[tauri::command]
 pub async fn read_skill_body(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     name: String,
 ) -> Result<String, String> {
     let project_root = state.project_root.lock().await.clone();
@@ -241,7 +241,7 @@ fn collect_skills(project_root: Option<PathBuf>) -> Vec<SkillEntry> {
 }
 
 /// Per-project skills directory. We mirror the convention used by
-/// `awidat skills run` — a project can drop a `skills/` folder at
+/// `montage skills run` — a project can drop a `skills/` folder at
 /// its root to override or add editorial workflows.
 fn project_skill_root(project_root: PathBuf) -> Option<PathBuf> {
     let candidate = project_root.join("skills");
@@ -256,14 +256,14 @@ fn project_skill_root(project_root: PathBuf) -> Option<PathBuf> {
 /// command file is self-contained and doesn't reach into private
 /// helpers in the session module.
 ///
-/// Order matches the session module (legacy `~/.awidat/skills` then
+/// Order matches the session module (legacy `~/.montage/skills` then
 /// the platform config dir). The "primary" user skills dir — the one
 /// the Skills tab opens via `reveal_user_skills_dir` and auto-creates
 /// on first launch — is `user_skills_primary_dir`, which always
 /// resolves to the platform `dirs::config_dir()` location.
 fn user_skill_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".awidat/skills")) {
+    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".montage/skills")) {
         roots.push(legacy);
     }
     if let Some(cfg) = user_skills_primary_dir() {
@@ -276,11 +276,11 @@ fn user_skill_roots() -> Vec<PathBuf> {
 /// the editor as "the place to drop new skills". Lives under
 /// `dirs::config_dir()` so it follows the platform convention:
 ///
-///   macOS   → `~/Library/Application Support/awidat/skills`
-///   Linux   → `~/.config/awidat/skills`
-///   Windows → `%APPDATA%\awidat\skills`
+///   macOS   → `~/Library/Application Support/montage/skills`
+///   Linux   → `~/.config/montage/skills`
+///   Windows → `%APPDATA%\montage\skills`
 fn user_skills_primary_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|c| c.join("awidat").join("skills"))
+    dirs::config_dir().map(|c| c.join("montage").join("skills"))
 }
 
 /// Ensure the per-user skills directory exists and return its absolute
@@ -328,7 +328,7 @@ pub async fn ensure_user_skills_dir() -> Result<String, String> {
 ///   - filesystem IO failures
 #[tauri::command]
 pub async fn create_skill(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     target: String,
     name: String,
     description: String,
@@ -441,7 +441,7 @@ pub async fn skills_authoring_guide_path() -> Result<String, String> {
 }
 
 /// Mirror of `codex_session::bundled_skill_root`. In `cargo tauri
-/// dev` the binary lives at `<repo>/target/debug/awidat-desktop`, so
+/// dev` the binary lives at `<repo>/target/debug/montage-desktop`, so
 /// the skills dir is `<repo>/skills`. Walk up three dirs from the
 /// binary path.
 fn bundled_skill_root() -> Option<PathBuf> {

@@ -1,26 +1,26 @@
 [package]
-name = "awidat-core"
+name = "montage-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_core"
+name = "montage_core"
 path = "src/lib.rs"
 
 [dependencies]
-awidat-proto = { workspace = true }
-awidat-secrets = { workspace = true }
-awidat-index = { workspace = true }
-awidat-render = { workspace = true }
-awidat-effects = { workspace = true }
-awidat-lut = { workspace = true }
-awidat-config = { workspace = true }
-awidat-mcp = { workspace = true }
-awidat-sandboxing = { workspace = true }
-# Server-side rmcp for the in-process Awidat MCP server (codex
-# registers it via [mcp_servers.awidat] and spawns it as a child
+montage-proto = { workspace = true }
+montage-secrets = { workspace = true }
+montage-index = { workspace = true }
+montage-render = { workspace = true }
+montage-effects = { workspace = true }
+montage-lut = { workspace = true }
+montage-config = { workspace = true }
+montage-mcp = { workspace = true }
+montage-sandboxing = { workspace = true }
+# Server-side rmcp for the in-process Montage MCP server (codex
+# registers it via [mcp_servers.montage] and spawns it as a child
 # process over stdio). Features mirror crates/mcp's client features;
 # the macros feature wants "server" + "schemars" + "base64" because
 # rmcp 0.15's model/tool.rs references handler::server unconditionally.

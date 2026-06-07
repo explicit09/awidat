@@ -62,13 +62,13 @@ Prefer the CLI planners that emit one kept-range EDL, then apply that EDL
 once with `apply_edl`:
 
 ```bash
-awidat plan-transcript-setup-edl <project> [--asset <asset-or-clip>]
-awidat plan-dead-air-edl <project> --min-duration-s 0.8 --silence-threshold-db -40 --keep-padding-s 0.3 [--asset <asset-or-clip>]
-awidat plan-false-start-edl <project> [--asset <asset-or-clip>]
-awidat plan-transcript-cleanup-edl <project> --min-filler-ratio 0.35 --min-filler-tokens 2 [--asset <asset-or-clip>]
+montage plan-transcript-setup-edl <project> [--asset <asset-or-clip>]
+montage plan-dead-air-edl <project> --min-duration-s 0.8 --silence-threshold-db -40 --keep-padding-s 0.3 [--asset <asset-or-clip>]
+montage plan-false-start-edl <project> [--asset <asset-or-clip>]
+montage plan-transcript-cleanup-edl <project> --min-filler-ratio 0.35 --min-filler-tokens 2 [--asset <asset-or-clip>]
 ```
 
-Use `cargo run -p awidat-cli -- ...` instead of `awidat ...` when
+Use `cargo run -p montage-cli -- ...` instead of `montage ...` when
 running from a development checkout that does not have the CLI on PATH.
 
 Apply only one planner output at a time, then call `view_timeline` and

@@ -30,7 +30,7 @@ from typing import Any
 import face_recognition
 import numpy as np
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "gaze"
 INDEXER_VERSION = "0.1.0"
@@ -82,7 +82,7 @@ def _read_face_sidecar(
                 return json.loads(candidate.read_text()).get("data", {})
             except (OSError, json.JSONDecodeError):
                 return None
-        if (ancestor / ".awidat").exists():
+        if (ancestor / ".montage").exists():
             return None
     return None
 

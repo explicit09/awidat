@@ -4,9 +4,9 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use awidat_proto::awidat_meta::{TimelineMarker, TimelineMarkerCategory};
-use awidat_proto::otio::{Clip, Marker, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::montage_meta::{TimelineMarker, TimelineMarkerCategory};
+use montage_proto::otio::{Clip, Marker, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -251,7 +251,7 @@ fn collect_metadata_markers(
     args: &ListMarkersArgs,
     markers: &mut Vec<MarkerEntry>,
 ) {
-    let Some(metadata) = timeline.metadata.awidat.as_ref() else {
+    let Some(metadata) = timeline.metadata.montage.as_ref() else {
         return;
     };
     if args.include_timeline.unwrap_or(true) {
@@ -284,7 +284,7 @@ fn clip_marker_entry(
     time_s: f64,
     duration_s: f64,
 ) -> MarkerEntry {
-    let metadata = marker.metadata.awidat.as_ref();
+    let metadata = marker.metadata.montage.as_ref();
     MarkerEntry {
         scope: "clip",
         marker_id: marker_metadata_id(marker).map(ToOwned::to_owned),
@@ -380,7 +380,7 @@ fn marker_overlaps_window(
 fn marker_metadata_id(marker: &Marker) -> Option<&str> {
     marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("id"))
         .and_then(serde_json::Value::as_str)
@@ -411,7 +411,7 @@ fn child_duration_s(child: &TrackChild) -> f64 {
     }
 }
 
-fn stack_duration_s(stack: &awidat_proto::otio::Stack) -> f64 {
+fn stack_duration_s(stack: &montage_proto::otio::Stack) -> f64 {
     stack
         .children
         .iter()
@@ -451,8 +451,8 @@ fn _suppress_unused(p: &Path) -> &Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::{AwidatMarkerMetadata, GuideTrack};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{GuideTrack, MontageMarkerMetadata};
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
     };
     use tokio::sync::broadcast;
@@ -463,10 +463,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -501,16 +501,16 @@ mod tests {
             ),
         );
         marker.comment = Some("Clip note".into());
-        let mut marker_metadata = AwidatMarkerMetadata {
+        let mut marker_metadata = MontageMarkerMetadata {
             category: Some("select".into()),
             note: Some("Metadata note".into()),
-            ..AwidatMarkerMetadata::default()
+            ..MontageMarkerMetadata::default()
         };
         marker_metadata.extra.insert(
             "id".into(),
             serde_json::Value::String("marker-0-0-0".into()),
         );
-        marker.metadata.awidat = Some(marker_metadata);
+        marker.metadata.montage = Some(marker_metadata);
         clip.markers.push(marker);
         track.children.push(TrackChild::Clip(clip));
         project
@@ -522,7 +522,7 @@ mod tests {
         let metadata = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .get_or_insert_with(Default::default);
         metadata.timeline_markers.push(TimelineMarker {
             id: "timeline-hook".into(),

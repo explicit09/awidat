@@ -13,13 +13,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::{
+use montage_proto::project::files;
+use montage_render::{
     MeasuredLoudnorm, build_master_loudnorm_apply_spec, build_master_loudnorm_measure_spec,
 };
 use std::fs;
@@ -45,7 +45,7 @@ fn write_project_with_master_loudnorm(dir: &Path) {
     stack.children.push(StackChild::Track(track));
     tl.tracks = stack;
 
-    let mut meta = AwidatTimelineMetadata::default();
+    let mut meta = MontageTimelineMetadata::default();
     meta.extra.insert(
         "master_loudnorm".into(),
         serde_json::json!({
@@ -54,7 +54,7 @@ fn write_project_with_master_loudnorm(dir: &Path) {
             "target_tp": -1.5,
         }),
     );
-    tl.metadata.awidat = Some(meta);
+    tl.metadata.montage = Some(meta);
 
     fs::write(
         dir.join(files::OTIO),
@@ -162,7 +162,7 @@ fn parse_loudnorm_measure_json_extracts_values() {
     "target_offset" : "0.40"
 }
 "#;
-    let m = awidat_render::parse_loudnorm_measure_json(stderr).unwrap();
+    let m = montage_render::parse_loudnorm_measure_json(stderr).unwrap();
     assert!(
         (m.measured_i - -19.74).abs() < 1e-6,
         "measured_i={}",

@@ -19,7 +19,7 @@ import { MotionAnimationControl } from "./MotionAnimationControl";
 import { Slider } from "./Slider";
 import { CollapsiblePanel, type RevealLevel } from "../ui/primitives/CollapsiblePanel";
 
-/** Default values when a clip carries no awidat.volume / awidat.speed effect.
+/** Default values when a clip carries no montage.volume / montage.speed effect.
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
 const DEFAULT_VOLUME = 1.0;
 const DEFAULT_SPEED = 1.0;
@@ -324,40 +324,40 @@ type TitleAnimation =
 type TimelineCutBoundary = import("../protocol").TimelineCutBoundary;
 
 const TRANSITION_KIND_OPTIONS = [
-  { value: "awidat.cross_dissolve", label: "Cross Dissolve" },
-  { value: "awidat.match_dissolve", label: "Match Dissolve" },
+  { value: "montage.cross_dissolve", label: "Cross Dissolve" },
+  { value: "montage.match_dissolve", label: "Match Dissolve" },
   { value: "SMPTE_Dissolve", label: "SMPTE Dissolve" },
-  { value: "awidat.fade_black", label: "Fade Black" },
-  { value: "awidat.flash_white", label: "Flash White" },
-  { value: "awidat.wipe_left", label: "Wipe Left" },
-  { value: "awidat.wipe_right", label: "Wipe Right" },
-  { value: "awidat.slide_left", label: "Slide Left" },
-  { value: "awidat.slide_right", label: "Slide Right" },
-  { value: "awidat.smooth_push_left", label: "Smooth Push Left" },
-  { value: "awidat.motion_blur", label: "Motion Blur" },
-  { value: "awidat.whip_pan_left", label: "Whip Pan Left" },
-  { value: "awidat.whip_pan_right", label: "Whip Pan Right" },
-  { value: "awidat.pass_by_left", label: "Pass-By Left" },
-  { value: "awidat.pass_by_right", label: "Pass-By Right" },
-  { value: "awidat.iris_open", label: "Iris Open" },
-  { value: "awidat.iris_close", label: "Iris Close" },
-  { value: "awidat.invisible_cut", label: "Invisible Cut" },
-  { value: "awidat.zoom_in", label: "Zoom In" },
-  { value: "awidat.pixelize", label: "Pixelize" },
-  { value: "awidat.radial", label: "Radial" },
+  { value: "montage.fade_black", label: "Fade Black" },
+  { value: "montage.flash_white", label: "Flash White" },
+  { value: "montage.wipe_left", label: "Wipe Left" },
+  { value: "montage.wipe_right", label: "Wipe Right" },
+  { value: "montage.slide_left", label: "Slide Left" },
+  { value: "montage.slide_right", label: "Slide Right" },
+  { value: "montage.smooth_push_left", label: "Smooth Push Left" },
+  { value: "montage.motion_blur", label: "Motion Blur" },
+  { value: "montage.whip_pan_left", label: "Whip Pan Left" },
+  { value: "montage.whip_pan_right", label: "Whip Pan Right" },
+  { value: "montage.pass_by_left", label: "Pass-By Left" },
+  { value: "montage.pass_by_right", label: "Pass-By Right" },
+  { value: "montage.iris_open", label: "Iris Open" },
+  { value: "montage.iris_close", label: "Iris Close" },
+  { value: "montage.invisible_cut", label: "Invisible Cut" },
+  { value: "montage.zoom_in", label: "Zoom In" },
+  { value: "montage.pixelize", label: "Pixelize" },
+  { value: "montage.radial", label: "Radial" },
 ];
 const HIGH_ATTENTION_TRANSITIONS = new Set([
-  "awidat.flash_white",
-  "awidat.motion_blur",
-  "awidat.whip_pan_left",
-  "awidat.whip_pan_right",
-  "awidat.pass_by_left",
-  "awidat.pass_by_right",
-  "awidat.iris_open",
-  "awidat.iris_close",
-  "awidat.zoom_in",
-  "awidat.pixelize",
-  "awidat.radial",
+  "montage.flash_white",
+  "montage.motion_blur",
+  "montage.whip_pan_left",
+  "montage.whip_pan_right",
+  "montage.pass_by_left",
+  "montage.pass_by_right",
+  "montage.iris_open",
+  "montage.iris_close",
+  "montage.zoom_in",
+  "montage.pixelize",
+  "montage.radial",
 ]);
 
 function TransitionEditor({
@@ -453,7 +453,7 @@ function TransitionEditor({
         )}
         {repeatedHighAttention >= 2 && (
           <div className="properties-warning">
-            {formatIntentLabel(transition.effect_name.replace(/^awidat\./, ""))} appears{" "}
+            {formatIntentLabel(transition.effect_name.replace(/^montage\./, ""))} appears{" "}
             {repeatedHighAttention} times in this 30s window. Repeated high-attention
             transitions can read as style drift.
           </div>

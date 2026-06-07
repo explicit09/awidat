@@ -41,13 +41,13 @@ export const RUNTIME_CLIP_PARAMETERS = [
   "overlay.scale",
   "overlay.rotation_deg",
   "overlay.blur",
-  "awidat.blur.radius_px",
-  "awidat.shake.intensity_px",
-  "awidat.shake.frequency_hz",
-  "awidat.warp.k1",
-  "awidat.warp.k2",
-  "awidat.warp.center_x",
-  "awidat.warp.center_y",
+  "montage.blur.radius_px",
+  "montage.shake.intensity_px",
+  "montage.shake.frequency_hz",
+  "montage.warp.k1",
+  "montage.warp.k2",
+  "montage.warp.center_x",
+  "montage.warp.center_y",
 ] as const;
 
 const PHASE_3A_PARAMETERS = new Set<string>(RUNTIME_CLIP_PARAMETERS);

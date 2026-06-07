@@ -26,16 +26,16 @@ pub struct OpenRouterVideoConfig {
 impl OpenRouterVideoConfig {
     /// Build config from environment variables.
     pub fn from_env(model: Option<String>) -> Result<Self, OpenRouterError> {
-        Self::from_secret_store(model, awidat_secrets::get)
+        Self::from_secret_store(model, montage_secrets::get)
     }
 
     fn from_secret_store(
         model: Option<String>,
-        get: impl Fn(&str, &str) -> Result<Option<String>, awidat_secrets::SecretError>,
+        get: impl Fn(&str, &str) -> Result<Option<String>, montage_secrets::SecretError>,
     ) -> Result<Self, OpenRouterError> {
         let api_key = get(
-            awidat_secrets::env_vars::OPENROUTER_API_KEY,
-            awidat_secrets::accounts::OPENROUTER_API_KEY,
+            montage_secrets::env_vars::OPENROUTER_API_KEY,
+            montage_secrets::accounts::OPENROUTER_API_KEY,
         )?
         .ok_or(OpenRouterError::MissingApiKey)?;
         let model = model
@@ -107,7 +107,7 @@ pub async fn submit_video_job(
         .post(url)
         .bearer_auth(&config.api_key)
         .header("Content-Type", "application/json")
-        .header("X-OpenRouter-Title", "Awidat")
+        .header("X-OpenRouter-Title", "Montage")
         .json(&body)
         .send()
         .await?;
@@ -280,7 +280,7 @@ pub enum OpenRouterError {
     MissingOutputUrl,
     /// OS keychain lookup failed.
     #[error(transparent)]
-    Secret(#[from] awidat_secrets::SecretError),
+    Secret(#[from] montage_secrets::SecretError),
     /// Local filesystem write failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -327,8 +327,8 @@ mod tests {
     #[test]
     fn config_reads_api_key_from_secret_store() {
         let config = OpenRouterVideoConfig::from_secret_store(None, |env, account| {
-            assert_eq!(env, awidat_secrets::env_vars::OPENROUTER_API_KEY);
-            assert_eq!(account, awidat_secrets::accounts::OPENROUTER_API_KEY);
+            assert_eq!(env, montage_secrets::env_vars::OPENROUTER_API_KEY);
+            assert_eq!(account, montage_secrets::accounts::OPENROUTER_API_KEY);
             Ok(Some("secret".into()))
         })
         .unwrap();

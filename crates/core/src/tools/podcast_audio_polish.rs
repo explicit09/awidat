@@ -1,7 +1,7 @@
 //! `podcast_audio_polish` tool — forced audio finishing pass for podcasts.
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -170,8 +170,8 @@ impl ToolHandler for PodcastAudioPolishTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::MontageTimelineMetadata;
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };
@@ -183,10 +183,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -209,8 +209,8 @@ mod tests {
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
         timeline.tracks = stack;
-        timeline.metadata.awidat = Some(AwidatTimelineMetadata::default());
-        timeline.metadata.awidat.as_mut().unwrap().extra.insert(
+        timeline.metadata.montage = Some(MontageTimelineMetadata::default());
+        timeline.metadata.montage.as_mut().unwrap().extra.insert(
             "audio_measurements".into(),
             serde_json::json!({
                 "master": {

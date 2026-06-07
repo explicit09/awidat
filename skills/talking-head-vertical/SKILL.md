@@ -1,6 +1,6 @@
 ---
 name: talking-head-vertical
-description: Build a modern vertical talking-head short using Awidat evidence, subject-aware layout, tight natural pacing, captions, emphasis motion, and reviewable EDL.
+description: Build a modern vertical talking-head short using Montage evidence, subject-aware layout, tight natural pacing, captions, emphasis motion, and reviewable EDL.
 version: 0.1.0
 tier: editorial
 tools_allowlist:
@@ -32,7 +32,7 @@ It should feel edited for one speaker looking at the viewer: stable
 subject-aware framing, fast but human pacing, captions that avoid the
 face, and subtle emphasis only where it helps.
 
-This skill composes Awidat's existing evidence and tools. Do not cut,
+This skill composes Montage's existing evidence and tools. Do not cut,
 crop, caption, or render media with ad hoc FFmpeg commands. Use the
 helper script for deterministic planning, then apply its EDL through
 `apply_edl`.
@@ -107,7 +107,7 @@ Layout decisions:
   The `keep_native_vertical` strategy means keep native vertical footage
   instead of adding an unnecessary crop.
 - Reframe horizontal footage to 9:16 around the speaker using
-  `awidat.reframe` or `plan_reframe` evidence.
+  `montage.reframe` or `plan_reframe` evidence.
 - Repair vertical framing when the source is vertical but the face is
   too low/high or unstable.
 - Reserve negative space for captions or keyword overlays only when the
@@ -181,6 +181,6 @@ Before reporting the draft is ready:
   pauses.
 - Captions are phrase-level, safe-area aware, and face-safe.
 - Emphasis motion is subtle and sparse.
-- All changes are represented as Awidat EDL operations.
+- All changes are represented as Montage EDL operations.
 - `view_timeline`, `vedit_diff`, and render/readiness verification have
   been checked or the exact blocker is reported.

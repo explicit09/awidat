@@ -1,6 +1,6 @@
-//! Helpers for tests that drive the awidat MCP test-server subprocess.
+//! Helpers for tests that drive the montage MCP test-server subprocess.
 //!
-//! The `awidat-mcp-test-server` binary lives in `crates/mcp/test-server/`
+//! The `montage-mcp-test-server` binary lives in `crates/mcp/test-server/`
 //! and is built as a side effect of `cargo test`. We locate it via the
 //! `CARGO_BIN_EXE_*` env var Cargo sets — but Cargo only sets that for
 //! tests inside the same crate that declares the `[[bin]]`. Cross-crate
@@ -11,17 +11,17 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use awidat_mcp::ServerConfig;
+use montage_mcp::ServerConfig;
 
-/// Build a [`ServerConfig`] that launches the awidat MCP test-server in the
+/// Build a [`ServerConfig`] that launches the montage MCP test-server in the
 /// given mode (`"normal"`, `"hang_on_call"`, `"progress_then_reply"`, …).
 ///
 /// `binary_path` must be the absolute path to the test-server binary,
-/// typically `env!("CARGO_BIN_EXE_awidat-mcp-test-server")` from a test
+/// typically `env!("CARGO_BIN_EXE_montage-mcp-test-server")` from a test
 /// inside `crates/mcp`.
 pub fn test_server_config(binary_path: &Path, mode: &str) -> ServerConfig {
     let mut env = HashMap::new();
-    env.insert("AWIDAT_MCP_TEST_MODE".into(), mode.into());
+    env.insert("MONTAGE_MCP_TEST_MODE".into(), mode.into());
     ServerConfig {
         name: format!("test-{mode}"),
         command: binary_path.to_string_lossy().into_owned(),

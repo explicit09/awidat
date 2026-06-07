@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Awidat Resolve Workflow Research</title>
+  <title>Montage Resolve Workflow Research</title>
   <style>
     :root {
       color-scheme: light;
@@ -164,8 +164,8 @@
 <body>
   <main>
     <header>
-      <h1>Awidat Resolve Workflow Research</h1>
-      <p class="lede">Separate research pass for the nine DaVinci Resolve tutorial videos supplied on 2026-05-16. This report is intentionally separate from the earlier editorial grammar work. It focuses on what professional editors do in tools like Resolve and Premiere, what Awidat already covers, and where Awidat should improve before implementation planning.</p>
+      <h1>Montage Resolve Workflow Research</h1>
+      <p class="lede">Separate research pass for the nine DaVinci Resolve tutorial videos supplied on 2026-05-16. This report is intentionally separate from the earlier editorial grammar work. It focuses on what professional editors do in tools like Resolve and Premiere, what Montage already covers, and where Montage should improve before implementation planning.</p>
       <div class="notice">
         <strong>Companion JSON:</strong> <code>docs/research/resolve-workflow-analysis.json</code><br>
         <strong>Method:</strong> YouTube metadata and available English captions were collected with <code>yt-dlp</code>. Full transcripts are not embedded here; this artifact keeps structured notes and implementation-oriented findings.
@@ -177,15 +177,15 @@
       <div class="grid">
         <article class="card soft">
           <h3>North Star</h3>
-          <p>Awidat should be an agent editor that produces professional-quality edits for people who are not professional editors. The user asks for an outcome; the agent inspects, decides, edits, reviews, and delivers.</p>
+          <p>Montage should be an agent editor that produces professional-quality edits for people who are not professional editors. The user asks for an outcome; the agent inspects, decides, edits, reviews, and delivers.</p>
         </article>
         <article class="card soft">
           <h3>What Resolve Makes Obvious</h3>
-          <p>Resolve is useful as a map of professional editing work: organize media, assemble the cut, composite, grade, mix, and deliver. Awidat does not need to look like Resolve, but it must cover the work.</p>
+          <p>Resolve is useful as a map of professional editing work: organize media, assemble the cut, composite, grade, mix, and deliver. Montage does not need to look like Resolve, but it must cover the work.</p>
         </article>
         <article class="card soft">
-          <h3>What Awidat Already Does Well</h3>
-          <p>Awidat already has an agent-native EDL path, semantic cut intent, J/L split edit metadata, transitions, titles, captions, color controls, audio controls, indexers, proposals, notes, and render support.</p>
+          <h3>What Montage Already Does Well</h3>
+          <p>Montage already has an agent-native EDL path, semantic cut intent, J/L split edit metadata, transitions, titles, captions, color controls, audio controls, indexers, proposals, notes, and render support.</p>
         </article>
         <article class="card soft">
           <h3>Main Gap</h3>
@@ -218,7 +218,7 @@
             <li>Use them to discover the complete capability surface of professional editing.</li>
             <li>Map the pipeline professional editors move through before deciding which agent logic to automate.</li>
             <li>Translate visible editor controls into agent tools, evidence models, and decision policies.</li>
-            <li>Prefer Awidat-native workflows when the agent can remove manual burden.</li>
+            <li>Prefer Montage-native workflows when the agent can remove manual burden.</li>
             <li>Measure success by whether a professional editor would recognize the result as intentional, clean, paced, watchable, and deliverable.</li>
           </ul>
         </article>
@@ -286,15 +286,15 @@
     </section>
 
     <section>
-      <h2>Current Awidat Strengths</h2>
+      <h2>Current Montage Strengths</h2>
       <div class="grid two">
         <article class="card">
           <h3>Agent-Native Editing Core</h3>
-          <p><code>crates/core/src/tools/apply_edl.rs</code> and <code>crates/core/src/edl/op.rs</code> give Awidat a structured, approval-gated mutation path. The EDL operation set is broad: trim, split, insert, move, b-roll, PiP, transitions, cut intent, audio, color, LUT, title, caption, output format, loudness, and package metadata.</p>
+          <p><code>crates/core/src/tools/apply_edl.rs</code> and <code>crates/core/src/edl/op.rs</code> give Montage a structured, approval-gated mutation path. The EDL operation set is broad: trim, split, insert, move, b-roll, PiP, transitions, cut intent, audio, color, LUT, title, caption, output format, loudness, and package metadata.</p>
         </article>
         <article class="card">
           <h3>Intent Preservation</h3>
-          <p><code>crates/proto/src/awidat_meta.rs</code> already stores semantic hard-cut metadata and split-edit metadata. The desktop timeline and inspector expose cut badges plus J/L offset markers.</p>
+          <p><code>crates/proto/src/montage_meta.rs</code> already stores semantic hard-cut metadata and split-edit metadata. The desktop timeline and inspector expose cut badges plus J/L offset markers.</p>
         </article>
         <article class="card">
           <h3>Evidence Architecture</h3>
@@ -313,49 +313,49 @@
         <article class="card gap">
           <h3>1. Media Pool, Bins, and Asset Metadata</h3>
           <p class="severity high">High</p>
-          <p>Resolve starts with organized media. Awidat imports, proxies, and indexes assets, but lacks first-class bins, smart collections, editable asset tags, source review status, relink/offline state, and agent-queryable selection sets.</p>
+          <p>Resolve starts with organized media. Montage imports, proxies, and indexes assets, but lacks first-class bins, smart collections, editable asset tags, source review status, relink/offline state, and agent-queryable selection sets.</p>
           <p><strong>Direction:</strong> add an asset catalog layer separate from timeline clips.</p>
         </article>
         <article class="card gap">
           <h3>2. Workflow Modes or Task Lenses</h3>
           <p class="severity medium">Medium</p>
-          <p>Resolve's pages make task context explicit. Awidat uses panes, which is flexible but less task-directed.</p>
+          <p>Resolve's pages make task context explicit. Montage uses panes, which is flexible but less task-directed.</p>
           <p><strong>Direction:</strong> add lightweight task lenses for media, assembly, VFX, color, audio, and delivery without copying Resolve chrome.</p>
         </article>
         <article class="card gap">
           <h3>3. General Keyframes</h3>
           <p class="severity high">High</p>
-          <p>Resolve animates inspector properties with keyframes and splines. Awidat has title animation presets and static effect params, but no general animated parameter model.</p>
+          <p>Resolve animates inspector properties with keyframes and splines. Montage has title animation presets and static effect params, but no general animated parameter model.</p>
           <p><strong>Direction:</strong> introduce a parameter animation schema for title transform, opacity, scale, position, volume, and later arbitrary effects.</p>
         </article>
         <article class="card gap">
           <h3>4. Node Compositing Model</h3>
           <p class="severity high">High</p>
-          <p>Fusion work is a DAG of media, merge, mask, transform, tracker, and output nodes. Awidat's graph-native effects are still flat clip/timeline effects.</p>
+          <p>Fusion work is a DAG of media, merge, mask, transform, tracker, and output nodes. Montage's graph-native effects are still flat clip/timeline effects.</p>
           <p><strong>Direction:</strong> start with a small serializable composition graph for overlays and tracked inserts.</p>
         </article>
         <article class="card gap">
           <h3>5. Tracking, Masks, and Mattes</h3>
           <p class="severity high">High</p>
-          <p>Resolve tutorials repeatedly use point, planar, surface, and 3D tracking plus masks/mattes. Awidat has motion and composition evidence, but not reusable track paths or mask shapes.</p>
+          <p>Resolve tutorials repeatedly use point, planar, surface, and 3D tracking plus masks/mattes. Montage has motion and composition evidence, but not reusable track paths or mask shapes.</p>
           <p><strong>Direction:</strong> add tracker and mask sidecar contracts before UI.</p>
         </article>
         <article class="card gap">
           <h3>6. Color Match Workflow</h3>
           <p class="severity medium-high">Medium High</p>
-          <p>Awidat has color analysis, sliders, and LUTs. Resolve color work also expects scopes, reference stills, shot groups, grade consistency, and before/after review.</p>
+          <p>Montage has color analysis, sliders, and LUTs. Resolve color work also expects scopes, reference stills, shot groups, grade consistency, and before/after review.</p>
           <p><strong>Direction:</strong> turn color correction into a review workflow with references and contact sheets.</p>
         </article>
         <article class="card gap">
           <h3>7. Mixer-Depth Audio</h3>
           <p class="severity medium">Medium</p>
-          <p>Awidat has good audio primitives: fades, gain, ducking, FX, loudness, and waveforms. It lacks a mixer-style surface with meters, buses, automation lanes, and audio review packages.</p>
+          <p>Montage has good audio primitives: fades, gain, ducking, FX, loudness, and waveforms. It lacks a mixer-style surface with meters, buses, automation lanes, and audio review packages.</p>
           <p><strong>Direction:</strong> expose dialogue/music/SFX roles and mixer task lens on top of existing primitives.</p>
         </article>
         <article class="card gap">
           <h3>8. Delivery Profiles and Render Queue</h3>
           <p class="severity medium">Medium</p>
-          <p>Resolve treats delivery as a workspace. Awidat has export and render jobs but lacks named profiles, batch queue, platform validation, preflight, and package manifests.</p>
+          <p>Resolve treats delivery as a workspace. Montage has export and render jobs but lacks named profiles, batch queue, platform validation, preflight, and package manifests.</p>
           <p><strong>Direction:</strong> add data-driven delivery profiles and preflight checks.</p>
         </article>
         <article class="card gap">
@@ -367,7 +367,7 @@
         <article class="card gap">
           <h3>10. Reusable Motion Graphics</h3>
           <p class="severity medium-high">Medium High</p>
-          <p>Awidat supports titles and broadcast overlays, but Resolve workflows expect editable title templates, text animation, write-on effects, textures, particles, and 3D-like generators.</p>
+          <p>Montage supports titles and broadcast overlays, but Resolve workflows expect editable title templates, text animation, write-on effects, textures, particles, and 3D-like generators.</p>
           <p><strong>Direction:</strong> start with reusable lower-third/title templates and parameterized text animations.</p>
         </article>
       </div>
@@ -386,7 +386,7 @@
         <tbody>
           <tr>
             <td>Research Discussion</td>
-            <td>Decide which Resolve/Premiere-class capabilities define the professional editing pipeline Awidat must support before a complete autonomous editor brain can orchestrate it.</td>
+            <td>Decide which Resolve/Premiere-class capabilities define the professional editing pipeline Montage must support before a complete autonomous editor brain can orchestrate it.</td>
             <td>All gaps; especially the required tool substrate and workflow modes versus task lenses.</td>
           </tr>
           <tr>
@@ -421,10 +421,10 @@
     <section>
       <h2>Discussion Questions</h2>
       <ul class="small-list">
-        <li>For each professional editor capability, should Awidat expose a manual control, an agent tool, or both?</li>
+        <li>For each professional editor capability, should Montage expose a manual control, an agent tool, or both?</li>
         <li>Which professional editing pipeline components must exist before the autonomous decision layer can be reliable?</li>
         <li>What professional editing decisions should the agent eventually make without requiring the user to know editing terminology?</li>
-        <li>Should Awidat expose Resolve-like workflow modes, or keep panes and add agent task lenses?</li>
+        <li>Should Montage expose Resolve-like workflow modes, or keep panes and add agent task lenses?</li>
         <li>Do we want a full node graph eventually, or a smaller composition graph focused on tracked overlays, titles, masks, and reusable effects?</li>
         <li>Should the next implementation plan prioritize media organization and delivery profiles, keyframes and motion graphics, or autonomous edit-decision planning first?</li>
         <li>How much manual direct manipulation should the desktop gain while keeping the agent as the primary editor?</li>

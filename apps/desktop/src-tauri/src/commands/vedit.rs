@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::events::emit_timeline_changed;
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,7 +122,7 @@ pub struct VeditBlameEntry {
 
 #[tauri::command]
 pub async fn list_vedit_commits(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     limit: Option<usize>,
 ) -> Result<Vec<VeditCommitEntry>, String> {
     let project_root = state
@@ -131,9 +131,9 @@ pub async fn list_vedit_commits(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let entries = awidat_core::vc::log(&repo, limit.unwrap_or(30).min(200))
+    let entries = montage_core::vc::log(&repo, limit.unwrap_or(30).min(200))
         .map_err(|e| format!("read vedit log: {e}"))?;
     Ok(entries
         .into_iter()
@@ -150,7 +150,7 @@ pub async fn list_vedit_commits(
 
 #[tauri::command]
 pub async fn diff_vedit_refs(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     from_ref: Option<String>,
     to_ref: Option<String>,
 ) -> Result<VeditDiffResponse, String> {
@@ -160,16 +160,16 @@ pub async fn diff_vedit_refs(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let diff = awidat_core::vc::diff_refs(&repo, from_ref.as_deref(), to_ref.as_deref())
+    let diff = montage_core::vc::diff_refs(&repo, from_ref.as_deref(), to_ref.as_deref())
         .map_err(|e| format!("read vedit diff: {e}"))?;
     diff_response(diff)
 }
 
 #[tauri::command]
 pub async fn changed_vedit_clip_ids(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     from_ref: Option<String>,
     to_ref: Option<String>,
 ) -> Result<VeditChangedClipIdsResponse, String> {
@@ -179,16 +179,16 @@ pub async fn changed_vedit_clip_ids(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let diff = awidat_core::vc::diff_refs(&repo, from_ref.as_deref(), to_ref.as_deref())
+    let diff = montage_core::vc::diff_refs(&repo, from_ref.as_deref(), to_ref.as_deref())
         .map_err(|e| format!("read vedit changed clip ids: {e}"))?;
     Ok(changed_clip_ids_response(diff))
 }
 
 #[tauri::command]
 pub async fn preflight_vedit_merge(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     source_ref: String,
     target_ref: Option<String>,
 ) -> Result<VeditMergePreflightResponse, String> {
@@ -206,24 +206,24 @@ pub async fn preflight_vedit_merge(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let preflight = awidat_core::vc::merge_preflight(&repo, &source_ref, target_ref)
+    let preflight = montage_core::vc::merge_preflight(&repo, &source_ref, target_ref)
         .map_err(|e| format!("preflight vedit merge: {e}"))?;
     Ok(merge_preflight_response(preflight))
 }
 
 #[tauri::command]
-pub async fn list_vedit_tags(state: State<'_, AwidatState>) -> Result<Vec<VeditTagEntry>, String> {
+pub async fn list_vedit_tags(state: State<'_, MontageState>) -> Result<Vec<VeditTagEntry>, String> {
     let project_root = state
         .project_root
         .lock()
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let tags = awidat_core::vc::list_tags(&repo).map_err(|e| format!("read vedit tags: {e}"))?;
+    let tags = montage_core::vc::list_tags(&repo).map_err(|e| format!("read vedit tags: {e}"))?;
     Ok(tags
         .into_iter()
         .map(|tag| VeditTagEntry {
@@ -235,7 +235,7 @@ pub async fn list_vedit_tags(state: State<'_, AwidatState>) -> Result<Vec<VeditT
 
 #[tauri::command]
 pub async fn tag_vedit_ref(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     name: String,
     refstr: Option<String>,
 ) -> Result<VeditTagEntry, String> {
@@ -249,10 +249,10 @@ pub async fn tag_vedit_ref(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
     let refstr = refstr.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let tag = awidat_core::vc::tag_ref(&repo, &name, refstr)
+    let tag = montage_core::vc::tag_ref(&repo, &name, refstr)
         .map_err(|e| format!("write vedit tag: {e}"))?;
     Ok(VeditTagEntry {
         name: tag.name,
@@ -262,7 +262,7 @@ pub async fn tag_vedit_ref(
 
 #[tauri::command]
 pub async fn list_vedit_branches(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<VeditBranchEntry>, String> {
     let project_root = state
         .project_root
@@ -270,10 +270,10 @@ pub async fn list_vedit_branches(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
     let branches =
-        awidat_core::vc::list_branches(&repo).map_err(|e| format!("read vedit branches: {e}"))?;
+        montage_core::vc::list_branches(&repo).map_err(|e| format!("read vedit branches: {e}"))?;
     Ok(branches
         .into_iter()
         .map(|branch| VeditBranchEntry {
@@ -286,7 +286,7 @@ pub async fn list_vedit_branches(
 
 #[tauri::command]
 pub async fn create_vedit_branch(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     name: String,
     start_ref: Option<String>,
 ) -> Result<VeditBranchEntry, String> {
@@ -300,13 +300,13 @@ pub async fn create_vedit_branch(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
     let start_ref = start_ref
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let branch = awidat_core::vc::create_branch(&repo, &name, start_ref)
+    let branch = montage_core::vc::create_branch(&repo, &name, start_ref)
         .map_err(|e| format!("create vedit branch: {e}"))?;
     Ok(VeditBranchEntry {
         name: branch.name,
@@ -318,7 +318,7 @@ pub async fn create_vedit_branch(
 #[tauri::command]
 pub async fn checkout_vedit_branch(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     branch: String,
 ) -> Result<VeditCheckoutResponse, String> {
     let branch = branch.trim().to_string();
@@ -331,9 +331,9 @@ pub async fn checkout_vedit_branch(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let checkout = awidat_core::vc::checkout_branch(&repo, &branch)
+    let checkout = montage_core::vc::checkout_branch(&repo, &branch)
         .map_err(|e| format!("checkout vedit branch: {e}"))?;
     emit_timeline_changed(&app, &project_root);
     Ok(VeditCheckoutResponse {
@@ -345,7 +345,7 @@ pub async fn checkout_vedit_branch(
 
 #[tauri::command]
 pub async fn show_vedit_commit(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     refstr: String,
 ) -> Result<VeditShowResponse, String> {
     let refstr = refstr.trim().to_string();
@@ -358,9 +358,9 @@ pub async fn show_vedit_commit(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let details = awidat_core::vc::show_commit(&repo, &refstr)
+    let details = montage_core::vc::show_commit(&repo, &refstr)
         .map_err(|e| format!("show vedit commit: {e}"))?;
     let diff = diff_response(details.diff)?;
     Ok(VeditShowResponse {
@@ -376,7 +376,7 @@ pub async fn show_vedit_commit(
 
 #[tauri::command]
 pub async fn blame_vedit_clip(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     clip_id: String,
     start_ref: Option<String>,
     limit: Option<usize>,
@@ -391,10 +391,10 @@ pub async fn blame_vedit_clip(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
     let limit = limit.unwrap_or(200).min(500);
-    let entries = awidat_core::vc::blame_clip(&repo, &clip_id, start_ref.as_deref(), limit)
+    let entries = montage_core::vc::blame_clip(&repo, &clip_id, start_ref.as_deref(), limit)
         .map_err(|e| format!("blame vedit clip: {e}"))?;
     entries
         .into_iter()
@@ -420,7 +420,7 @@ pub async fn blame_vedit_clip(
 #[tauri::command]
 pub async fn restore_vedit_ref(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     refstr: String,
 ) -> Result<VeditRestoreResponse, String> {
     let refstr = refstr.trim().to_string();
@@ -433,15 +433,15 @@ pub async fn restore_vedit_ref(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = awidat_core::vc::open_or_init(&project_root)
+    let repo = montage_core::vc::open_or_init(&project_root)
         .map_err(|e| format!("open vedit repo: {e}"))?;
-    let restored = awidat_core::vc::restore_working_timeline(&repo, &refstr)
+    let restored = montage_core::vc::restore_working_timeline(&repo, &refstr)
         .map_err(|e| format!("restore vedit ref: {e}"))?;
     let header = format!("Restore timeline to {}", short_hash(&restored.commit_hash));
     // Restore is user-initiated from the desktop history panel — stamp
     // the seat-holder on the audit commit so blame views show who
     // rolled the timeline back.
-    let audit = awidat_core::vc::commit_current_timeline_as(
+    let audit = montage_core::vc::commit_current_timeline_as(
         &repo,
         &header,
         Some("Restored project.otio.json from the desktop timeline history panel."),
@@ -466,7 +466,7 @@ fn short_hash(hash: &str) -> String {
 }
 
 fn merge_preflight_response(
-    preflight: awidat_core::vc::MergePreflight,
+    preflight: montage_core::vc::MergePreflight,
 ) -> VeditMergePreflightResponse {
     let next_step = if preflight.is_mergeable {
         "A future bounded merge can proceed under the non-overlapping clip-id rule.".to_string()
@@ -489,8 +489,8 @@ fn merge_preflight_response(
     }
 }
 
-fn changed_clip_ids_response(diff: awidat_core::vc::CommittedDiff) -> VeditChangedClipIdsResponse {
-    let changed_clip_ids = awidat_core::vc::changed_clip_ids(&diff)
+fn changed_clip_ids_response(diff: montage_core::vc::CommittedDiff) -> VeditChangedClipIdsResponse {
+    let changed_clip_ids = montage_core::vc::changed_clip_ids(&diff)
         .into_iter()
         .collect::<Vec<_>>();
     VeditChangedClipIdsResponse {
@@ -503,9 +503,9 @@ fn changed_clip_ids_response(diff: awidat_core::vc::CommittedDiff) -> VeditChang
     }
 }
 
-fn diff_response(diff: awidat_core::vc::CommittedDiff) -> Result<VeditDiffResponse, String> {
+fn diff_response(diff: montage_core::vc::CommittedDiff) -> Result<VeditDiffResponse, String> {
     let change_count = diff.len();
-    let changed_clip_ids = awidat_core::vc::changed_clip_ids(&diff)
+    let changed_clip_ids = montage_core::vc::changed_clip_ids(&diff)
         .into_iter()
         .collect::<Vec<_>>();
     let changes =
@@ -523,15 +523,15 @@ fn diff_response(diff: awidat_core::vc::CommittedDiff) -> Result<VeditDiffRespon
     })
 }
 
-/// Resolve the [`awidat_core::vc::CommitAuthor`] to stamp on a
+/// Resolve the [`montage_core::vc::CommitAuthor`] to stamp on a
 /// desktop-initiated commit.
 ///
 /// Desktop sessions are real-user sessions: the seat-holder is the
 /// person on the keyboard. Until we wire a richer in-process identity
-/// (Tauri state, profile, etc.) the env vars `AWIDAT_USER_NAME` /
-/// `AWIDAT_USER_EMAIL` are the only signal — `git`-style configuration
+/// (Tauri state, profile, etc.) the env vars `MONTAGE_USER_NAME` /
+/// `MONTAGE_USER_EMAIL` are the only signal — `git`-style configuration
 /// for the seat. When neither is set the caller passes `None` and the
-/// `*_as` variants fall back to the "awidat agent" default, matching
+/// `*_as` variants fall back to the "montage agent" default, matching
 /// pre-slice behavior.
 ///
 /// Kept in `vedit.rs` so all desktop call sites (the apply_edl write
@@ -539,8 +539,8 @@ fn diff_response(diff: awidat_core::vc::CommittedDiff) -> Result<VeditDiffRespon
 /// the restore-audit commit here) share one decision point — DRY rule:
 /// every piece of logic should have a single, unambiguous,
 /// authoritative representation.
-pub(crate) fn desktop_commit_author() -> Option<awidat_core::vc::CommitAuthor> {
-    awidat_core::vc::CommitAuthor::from_env()
+pub(crate) fn desktop_commit_author() -> Option<montage_core::vc::CommitAuthor> {
+    montage_core::vc::CommitAuthor::from_env()
 }
 
 #[cfg(test)]
@@ -585,20 +585,20 @@ mod tests {
     fn merge_preflight_response_reports_overlap_without_merging() {
         let dir = tempfile::tempdir().unwrap();
         write_otio(dir.path(), 240.0);
-        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
-        let base = awidat_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
-        awidat_core::vc::create_branch(&repo, "alt-tight", Some(&base.commit_hash)).unwrap();
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
+        let base = montage_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
+        montage_core::vc::create_branch(&repo, "alt-tight", Some(&base.commit_hash)).unwrap();
 
         write_otio(dir.path(), 120.0);
-        awidat_core::vc::commit_current_timeline(&repo, "Trim shot-a on main", None).unwrap();
+        montage_core::vc::commit_current_timeline(&repo, "Trim shot-a on main", None).unwrap();
 
-        awidat_core::vc::checkout_branch(&repo, "alt-tight").unwrap();
+        montage_core::vc::checkout_branch(&repo, "alt-tight").unwrap();
         write_otio(dir.path(), 180.0);
-        awidat_core::vc::commit_current_timeline(&repo, "Trim shot-a on alternate", None).unwrap();
-        let preflight = awidat_core::vc::merge_preflight(
+        montage_core::vc::commit_current_timeline(&repo, "Trim shot-a on alternate", None).unwrap();
+        let preflight = montage_core::vc::merge_preflight(
             &repo,
             "alt-tight",
-            Some(awidat_core::vc::DEFAULT_BRANCH),
+            Some(montage_core::vc::DEFAULT_BRANCH),
         )
         .unwrap();
 
@@ -616,12 +616,12 @@ mod tests {
     fn changed_clip_ids_response_sorts_ids_and_counts_diff_shapes() {
         let dir = tempfile::tempdir().unwrap();
         write_otio(dir.path(), 240.0);
-        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
-        let first = awidat_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
+        let first = montage_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
         write_otio(dir.path(), 120.0);
-        let second = awidat_core::vc::commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
+        let second = montage_core::vc::commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
         let diff =
-            awidat_core::vc::diff_refs(&repo, Some(&first.commit_hash), Some(&second.commit_hash))
+            montage_core::vc::diff_refs(&repo, Some(&first.commit_hash), Some(&second.commit_hash))
                 .unwrap();
 
         let response = super::changed_clip_ids_response(diff);
@@ -636,12 +636,12 @@ mod tests {
     fn diff_response_includes_changed_clip_ids_for_review_rows() {
         let dir = tempfile::tempdir().unwrap();
         write_otio(dir.path(), 240.0);
-        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
-        let first = awidat_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
+        let first = montage_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
         write_otio(dir.path(), 120.0);
-        let second = awidat_core::vc::commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
+        let second = montage_core::vc::commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
         let diff =
-            awidat_core::vc::diff_refs(&repo, Some(&first.commit_hash), Some(&second.commit_hash))
+            montage_core::vc::diff_refs(&repo, Some(&first.commit_hash), Some(&second.commit_hash))
                 .unwrap();
 
         let response = super::diff_response(diff).unwrap();
@@ -654,7 +654,7 @@ mod tests {
     // ---- desktop author attribution -----------------------------------
     // Regression guard for the follow-up to A3: the desktop apply_edl
     // write paths (and the restore-audit commit) must stamp the
-    // env-configured seat-holder on the commit, NOT the "awidat agent"
+    // env-configured seat-holder on the commit, NOT the "montage agent"
     // default. We exercise the author-resolution helper directly +
     // the `_as` commit entry point — the same code path the handlers
     // use after this slice.
@@ -662,11 +662,11 @@ mod tests {
     #[test]
     fn desktop_commit_author_resolves_from_env_callback() {
         let env = |k: &str| match k {
-            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
-            "AWIDAT_USER_EMAIL" => Some("alice@example.com".to_string()),
+            "MONTAGE_USER_NAME" => Some("Alice".to_string()),
+            "MONTAGE_USER_EMAIL" => Some("alice@example.com".to_string()),
             _ => None,
         };
-        let author = awidat_core::vc::CommitAuthor::from_env_with(env)
+        let author = montage_core::vc::CommitAuthor::from_env_with(env)
             .expect("env-resolved author must be present");
         assert_eq!(author.name, "Alice");
         assert_eq!(author.email, "alice@example.com");
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn desktop_commit_author_is_none_when_env_unset() {
         let env = |_: &str| None::<String>;
-        assert!(awidat_core::vc::CommitAuthor::from_env_with(env).is_none());
+        assert!(montage_core::vc::CommitAuthor::from_env_with(env).is_none());
     }
 
     #[test]
@@ -683,10 +683,10 @@ mod tests {
         // Half-configured env (only the name) must NOT pair a real
         // name with a missing email — mirror resolver semantics.
         let half_env = |k: &str| match k {
-            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
+            "MONTAGE_USER_NAME" => Some("Alice".to_string()),
             _ => None,
         };
-        assert!(awidat_core::vc::CommitAuthor::from_env_with(half_env).is_none());
+        assert!(montage_core::vc::CommitAuthor::from_env_with(half_env).is_none());
     }
 
     #[test]
@@ -696,18 +696,18 @@ mod tests {
         // point so the commit is stamped with the user, not the agent.
         let dir = tempfile::tempdir().unwrap();
         write_otio(dir.path(), 240.0);
-        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
 
         let env = |k: &str| match k {
-            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
-            "AWIDAT_USER_EMAIL" => Some("alice@example.com".to_string()),
+            "MONTAGE_USER_NAME" => Some("Alice".to_string()),
+            "MONTAGE_USER_EMAIL" => Some("alice@example.com".to_string()),
             _ => None,
         };
-        let seat_author = awidat_core::vc::CommitAuthor::from_env_with(env);
+        let seat_author = montage_core::vc::CommitAuthor::from_env_with(env);
         assert!(seat_author.is_some(), "env should resolve to an author");
 
         let descriptions = vec!["Trim shot-a by 1.0s".to_string()];
-        let outcome = awidat_core::vc::auto_commit_apply_as(
+        let outcome = montage_core::vc::auto_commit_apply_as(
             &repo,
             &descriptions,
             Some("desktop apply_edl test"),
@@ -715,12 +715,12 @@ mod tests {
         )
         .expect("auto_commit_apply_as");
 
-        let entries = awidat_core::vc::log(&repo, 1).unwrap();
+        let entries = montage_core::vc::log(&repo, 1).unwrap();
         let head = entries.first().expect("at least one commit");
         assert_eq!(head.commit_hash, outcome.commit_hash);
         assert_eq!(
             head.author.name, "Alice",
-            "desktop apply_edl must attribute to the seat-holder, not 'awidat agent'"
+            "desktop apply_edl must attribute to the seat-holder, not 'montage agent'"
         );
         assert_eq!(head.author.email, "alice@example.com");
     }
@@ -731,21 +731,21 @@ mod tests {
         // and the `_as` resolver chain falls back to the default.
         let dir = tempfile::tempdir().unwrap();
         write_otio(dir.path(), 240.0);
-        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
 
         let none_env = |_: &str| None::<String>;
-        let seat_author = awidat_core::vc::CommitAuthor::from_env_with(none_env);
+        let seat_author = montage_core::vc::CommitAuthor::from_env_with(none_env);
         assert!(seat_author.is_none());
 
-        awidat_core::vc::auto_commit_apply_as(
+        montage_core::vc::auto_commit_apply_as(
             &repo,
             &["Trim shot-a by 0.5s".to_string()],
             None,
             seat_author,
         )
         .unwrap();
-        let head = awidat_core::vc::log(&repo, 1).unwrap().pop().unwrap();
-        assert_eq!(head.author.name, "awidat agent");
-        assert_eq!(head.author.email, "agent@awidat.local");
+        let head = montage_core::vc::log(&repo, 1).unwrap().pop().unwrap();
+        assert_eq!(head.author.name, "montage agent");
+        assert_eq!(head.author.email, "agent@montage.local");
     }
 }

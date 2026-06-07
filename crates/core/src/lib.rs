@@ -1,17 +1,17 @@
-//! Awidat editorial core — tool implementations, project state, and the
+//! Montage editorial core — tool implementations, project state, and the
 //! supporting types the codex-driven harness in `vendor/codex-rs/` calls
 //! into.
 //!
 //! Step 8e/W: the legacy in-process agent loop (`session`, `orchestrator`,
 //! `compact`, the hand-rolled `anthropic` client, the `rollout` recorder,
-//! and the `awidat_md` system-prompt assembler) was deleted in this step.
+//! and the `montage_md` system-prompt assembler) was deleted in this step.
 //! The codex subprocess in `vendor/codex-rs/` is now the only agent loop.
 //! What remains here:
 //! - [`error::FunctionCallError`] — tool dispatch result shape, copied
 //!   verbatim from `vendor/codex-rs/core/src/function_tool.rs`.
-//! - [`tools`] — in-process tool implementations the `awidat_mcp` MCP
+//! - [`tools`] — in-process tool implementations the `montage_mcp` MCP
 //!   wrappers delegate into.
-//! - [`awidat_mcp`] — MCP-server tool definitions codex invokes.
+//! - [`montage_mcp`] — MCP-server tool definitions codex invokes.
 //! - [`events`] — `SessionEvent` / `SessionError` shape kept for forward
 //!   compatibility while consumers migrate to codex's event stream.
 
@@ -46,7 +46,6 @@
     )
 )]
 
-pub mod awidat_mcp;
 pub mod broll_recommendations;
 pub mod capabilities;
 pub mod capability_metadata;
@@ -68,6 +67,7 @@ pub mod lessons;
 pub mod mcp_host;
 pub mod media_catalog_mutation;
 pub mod media_intelligence;
+pub mod montage_mcp;
 pub mod notes;
 pub mod pexels;
 pub mod preview_cache;

@@ -27,7 +27,7 @@ export interface MustKeepRange {
   markedAt: number;
 }
 
-export const STORAGE_KEY = "awidat:transcript-annotations";
+export const STORAGE_KEY = "montage:transcript-annotations";
 
 interface StorageAdapter {
   getItem(k: string): string | null;

@@ -3,30 +3,30 @@
 //! Renders one blended RGBA frame at a given progress through a
 //! transition window, returning a `data:image/png;base64,…` URL the
 //! webview drops straight into an `<img src>`. Shares the same
-//! [`awidat_render_gpu::GpuTransitionRenderer`] code path as the
+//! [`montage_render_gpu::GpuTransitionRenderer`] code path as the
 //! offline export composer, so what the user sees while scrubbing
 //! matches what the final render produces.
 //!
 //! The shader expensive part — wgpu adapter/device/pipeline init —
 //! runs once per shader and lives in
-//! [`crate::state::AwidatState::gpu_preview_renderers`]. The cheap
+//! [`crate::state::MontageState::gpu_preview_renderers`]. The cheap
 //! per-frame path is: pull one RGBA frame from each side with
-//! [`awidat_render::FrameProvider`], hand them to the cached
+//! [`montage_render::FrameProvider`], hand them to the cached
 //! renderer, PNG-encode the result, base64-stringify.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use awidat_proto::transitions::{builtin_transition_composition, resolve_composition_gpu_shader};
-use awidat_render::FrameProvider;
-use awidat_render_gpu::{
+use base64::Engine;
+use montage_proto::transitions::{builtin_transition_composition, resolve_composition_gpu_shader};
+use montage_render::FrameProvider;
+use montage_render_gpu::{
     FrameParams, GpuError, GpuTransitionRenderer, TransitionShader, encode_rgba_to_png,
 };
-use base64::Engine;
 use serde::Deserialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Arguments for [`render_transition_preview_frame`].
 #[derive(Debug, Deserialize)]
@@ -39,7 +39,7 @@ pub struct RenderPreviewArgs {
     pub to_proxy_path: String,
     /// Source-time on the incoming clip at this preview frame.
     pub to_source_s: f64,
-    /// Stable awidat transition id (e.g. `awidat.match_dissolve`).
+    /// Stable montage transition id (e.g. `montage.match_dissolve`).
     pub transition_id: String,
     /// Transition progress in `[0.0, 1.0]`.
     pub progress: f64,
@@ -58,7 +58,7 @@ pub struct RenderPreviewArgs {
 /// the transition has no GPU shader.
 #[tauri::command]
 pub async fn render_transition_preview_frame(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: RenderPreviewArgs,
 ) -> Result<String, String> {
     // Resolve the transition id to a GPU shader. Returns "" (empty
@@ -144,7 +144,7 @@ async fn pull_one_rgba_frame(
 }
 
 async fn renderer_for(
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     shader: TransitionShader,
 ) -> Result<Arc<GpuTransitionRenderer>, String> {
     let mut cache = state.gpu_preview_renderers.lock().await;
@@ -167,7 +167,7 @@ async fn renderer_for(
     Ok(arc)
 }
 
-/// Map an awidat transition id to its GPU shader if the composition
+/// Map an montage transition id to its GPU shader if the composition
 /// resolves to one. Mirrors what the planner does at render time, so
 /// preview and export agree.
 fn resolve_shader_for_id(id: &str) -> Option<TransitionShader> {
@@ -176,13 +176,13 @@ fn resolve_shader_for_id(id: &str) -> Option<TransitionShader> {
     TransitionShader::from_proto_id(shader_id)
 }
 
-/// Map an awidat transition id to its primary `extra_params[0]` value
-/// at `progress`. Built-in compositions like `awidat.match_dissolve`
+/// Map an montage transition id to its primary `extra_params[0]` value
+/// at `progress`. Built-in compositions like `montage.match_dissolve`
 /// embed a `ParamCurve` on a Blur primitive; the shader reads it from
 /// the uniform. For shaders that don't consume params, this returns
 /// zeros, which is harmless.
 fn extra_params_for(id: &str, progress: f64) -> [f32; 4] {
-    use awidat_proto::transitions::{TransitionPrimitiveOp, luma_mask_kind_slot};
+    use montage_proto::transitions::{TransitionPrimitiveOp, luma_mask_kind_slot};
     let mut params = [0.0f32; 4];
     let Some(composition) = builtin_transition_composition(id) else {
         return params;
@@ -263,7 +263,7 @@ mod tests {
         // the preview frontend's hardcoded `GPU_ROUTED_TRANSITION_IDS`
         // honest — if the backend resolution ever stops returning
         // Blur for match_dissolve, this test catches it.
-        let shader = resolve_shader_for_id("awidat.match_dissolve");
+        let shader = resolve_shader_for_id("montage.match_dissolve");
         assert_eq!(shader, Some(TransitionShader::Blur));
     }
 
@@ -273,13 +273,13 @@ mod tests {
         // returns as the cross_dissolve shader id. Frontend currently
         // falls back to CSS for it (CSS handles plain opacity well),
         // but the resolution should still succeed.
-        let shader = resolve_shader_for_id("awidat.cross_dissolve");
+        let shader = resolve_shader_for_id("montage.cross_dissolve");
         assert_eq!(shader, Some(TransitionShader::CrossDissolve));
     }
 
     #[test]
     fn unknown_transition_id_returns_none() {
-        let shader = resolve_shader_for_id("awidat.does_not_exist");
+        let shader = resolve_shader_for_id("montage.does_not_exist");
         assert!(shader.is_none());
     }
 
@@ -291,7 +291,7 @@ mod tests {
         // At outer progress = 0.5 we're at primitive-local progress
         // ≈ (0.5 - 0.18) / (0.82 - 0.18) ≈ 0.5, where the curve
         // sits on its plateau at ~0.18.
-        let params = extra_params_for("awidat.match_dissolve", 0.5);
+        let params = extra_params_for("montage.match_dissolve", 0.5);
         assert!(
             (params[0] - 0.18).abs() < 0.02,
             "expected ~0.18 at mid-progress, got {}",
@@ -299,7 +299,7 @@ mod tests {
         );
         // At outer progress = 0 we're before the primitive's window,
         // so all zeros.
-        let params = extra_params_for("awidat.match_dissolve", 0.0);
+        let params = extra_params_for("montage.match_dissolve", 0.0);
         assert_eq!(params, [0.0, 0.0, 0.0, 0.0]);
     }
 }

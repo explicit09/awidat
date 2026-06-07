@@ -16,7 +16,7 @@
 //! target.
 //!
 //! The whole capability is **opt-in**: nothing here runs unless the caller
-//! sets the `AWIDAT_LEVEL_DIALOGUE` env var (or passes the flag through
+//! sets the `MONTAGE_LEVEL_DIALOGUE` env var (or passes the flag through
 //! [`dialogue_leveling_enabled`]). Default render behavior is unchanged.
 //!
 //! Design notes
@@ -42,7 +42,7 @@ pub const DEFAULT_DIALOGUE_TARGET_TP: f64 = -1.5;
 
 /// Env var that opts a render into automatic per-clip dialogue leveling.
 /// Any non-empty value other than `0`/`false` enables it.
-pub const LEVEL_DIALOGUE_ENV: &str = "AWIDAT_LEVEL_DIALOGUE";
+pub const LEVEL_DIALOGUE_ENV: &str = "MONTAGE_LEVEL_DIALOGUE";
 
 /// True iff the process environment opts into dialogue leveling. Keeps the
 /// default render path untouched: the feature is off unless the operator

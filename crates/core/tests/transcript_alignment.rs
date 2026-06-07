@@ -1,15 +1,15 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 //! Transcript Alignment v2 foundation tests.
 
-use awidat_core::transcript_alignment::{
+use montage_core::transcript_alignment::{
     PhraseGroupingOptions, apply_transcript_correction, map_transcript_range_to_timeline,
     normalize_whisper_alignment, revert_transcript_edit,
 };
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, ExternalReference, Gap, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::professional::{TranscriptCorrection, TranscriptCorrectionTarget};
+use montage_proto::professional::{TranscriptCorrection, TranscriptCorrectionTarget};
 
 fn sidecar(words: serde_json::Value) -> serde_json::Value {
     serde_json::json!({

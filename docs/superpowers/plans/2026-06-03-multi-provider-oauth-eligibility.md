@@ -4,7 +4,7 @@
 
 **Goal:** Implement Phase 2 of the server-backed social OAuth design: provider-specific OAuth, profile normalization, token refresh planning, and eligibility/capability results for YouTube, TikTok, and Instagram.
 
-**Architecture:** Extend `awidat-social` with provider-specific server contracts and mocked adapters. This phase does not add a web server, database migrations, or live provider HTTP calls; it creates the request/response and validation surfaces that a future server route can call. OAuth tokens still remain server-only values, represented by sanitized token bundle structs and the token envelope boundary from Phase 1.
+**Architecture:** Extend `montage-social` with provider-specific server contracts and mocked adapters. This phase does not add a web server, database migrations, or live provider HTTP calls; it creates the request/response and validation surfaces that a future server route can call. OAuth tokens still remain server-only values, represented by sanitized token bundle structs and the token envelope boundary from Phase 1.
 
 **Tech Stack:** Rust 2024 workspace crate, `serde`, `serde_json`, `base64`, `sha2`, `thiserror`, deterministic unit tests, no live network calls in CI.
 
@@ -72,7 +72,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -130,7 +130,7 @@ mod tests {
 
         assert!(request.authorization_url.starts_with("https://www.facebook.com/v24.0/dialog/oauth?"));
         assert!(request.authorization_url.contains("scope=instagram_basic%2Cinstagram_content_publish"));
-        assert!(request.authorization_url.contains("redirect_uri=https%3A%2F%2Fapp.awidat.test%2Fsocial%2Foauth%2Fcallback"));
+        assert!(request.authorization_url.contains("redirect_uri=https%3A%2F%2Fapp.montage.test%2Fsocial%2Foauth%2Fcallback"));
     }
 }
 ```
@@ -140,7 +140,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social oauth_url::tests
+cargo test -p montage-social oauth_url::tests
 ```
 
 Expected: FAIL with unresolved `begin_provider_oauth`.
@@ -259,7 +259,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -317,7 +317,7 @@ mod tests {
 
         assert!(request.authorization_url.starts_with("https://www.facebook.com/v24.0/dialog/oauth?"));
         assert!(request.authorization_url.contains("scope=instagram_basic%2Cinstagram_content_publish"));
-        assert!(request.authorization_url.contains("redirect_uri=https%3A%2F%2Fapp.awidat.test%2Fsocial%2Foauth%2Fcallback"));
+        assert!(request.authorization_url.contains("redirect_uri=https%3A%2F%2Fapp.montage.test%2Fsocial%2Foauth%2Fcallback"));
     }
 }
 ```
@@ -338,7 +338,7 @@ pub mod token;
 Run:
 
 ```bash
-cargo test -p awidat-social oauth_url::tests
+cargo test -p montage-social oauth_url::tests
 ```
 
 Expected: PASS, three OAuth URL tests pass.
@@ -417,7 +417,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social token_bundle::tests
+cargo test -p montage-social token_bundle::tests
 ```
 
 Expected: FAIL with unresolved `OAuthTokenResponse` and `from_oauth_response`.
@@ -530,7 +530,7 @@ pub mod token_bundle;
 Run:
 
 ```bash
-cargo test -p awidat-social token_bundle::tests
+cargo test -p montage-social token_bundle::tests
 ```
 
 Expected: PASS, two token bundle tests pass.
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn youtube_channel_profile_is_upload_eligible() {
-        let report = youtube_eligibility("channel_1", "Awidat", Some("@awidat"));
+        let report = youtube_eligibility("channel_1", "Montage", Some("@montage"));
         assert!(report.eligibility.eligible);
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.native_scheduling);
@@ -616,7 +616,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social eligibility::tests
+cargo test -p montage-social eligibility::tests
 ```
 
 Expected: FAIL with unresolved eligibility helper functions.
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn youtube_channel_profile_is_upload_eligible() {
-        let report = youtube_eligibility("channel_1", "Awidat", Some("@awidat"));
+        let report = youtube_eligibility("channel_1", "Montage", Some("@montage"));
         assert!(report.eligibility.eligible);
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.native_scheduling);
@@ -793,7 +793,7 @@ pub mod token_bundle;
 Run:
 
 ```bash
-cargo test -p awidat-social eligibility::tests
+cargo test -p montage-social eligibility::tests
 ```
 
 Expected: PASS, four eligibility tests pass.
@@ -819,7 +819,7 @@ Append to `crates/social/src/provider.rs` tests:
 ```rust
 #[test]
 fn youtube_adapter_reports_profile_and_capabilities() {
-    let adapter = MockProviderAdapter::youtube("channel_1", "Awidat");
+    let adapter = MockProviderAdapter::youtube("channel_1", "Montage");
     let report = adapter.fetch_capabilities(&["https://www.googleapis.com/auth/youtube.upload"]);
     assert!(report.eligibility.eligible);
     assert_eq!(report.profile.provider_account_id, "channel_1");
@@ -849,7 +849,7 @@ fn instagram_adapter_reports_professional_requirement() {
 Run:
 
 ```bash
-cargo test -p awidat-social provider::tests
+cargo test -p montage-social provider::tests
 ```
 
 Expected: FAIL with unresolved `MockProviderAdapter`.
@@ -950,7 +950,7 @@ impl SocialProviderAdapter for MockProviderAdapter {
 Run:
 
 ```bash
-cargo test -p awidat-social provider::tests
+cargo test -p montage-social provider::tests
 ```
 
 Expected: PASS, existing and new provider tests pass.
@@ -974,17 +974,17 @@ git commit -m "feat(social): add provider eligibility adapter"
 Run:
 
 ```bash
-cargo test -p awidat-social
+cargo test -p montage-social
 ```
 
-Expected: PASS, all `awidat-social` tests pass.
+Expected: PASS, all `montage-social` tests pass.
 
 - [ ] **Step 2: Run clippy**
 
 Run:
 
 ```bash
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo clippy -p montage-social --all-targets -- -D warnings
 ```
 
 Expected: PASS with no warnings.

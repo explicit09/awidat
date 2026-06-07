@@ -6,20 +6,20 @@
 
 use std::path::Path;
 
-use awidat_desktop_protocol::Item;
+use montage_desktop_protocol::Item;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tracing::warn;
 
 /// Carries one [`Item`] per event.
-pub const ITEM_EVENT: &str = "awidat://item";
+pub const ITEM_EVENT: &str = "montage://item";
 
 /// Fires once per turn when the run-loop returns.
-pub const TURN_END_EVENT: &str = "awidat://turn-end";
+pub const TURN_END_EVENT: &str = "montage://turn-end";
 
 /// Fires when the backend mutates `project.otio.json` outside the
 /// agent tool-result stream, e.g. first-import auto-insert.
-pub const TIMELINE_CHANGED_EVENT: &str = "awidat://timeline-changed";
+pub const TIMELINE_CHANGED_EVENT: &str = "montage://timeline-changed";
 
 /// Wraps an [`Item`] for transport over Tauri's event bus. Adds an
 /// envelope so we can grow it (turn-id, thread-id correlation) later
@@ -30,7 +30,7 @@ pub struct ItemEvent {
     pub item: Item,
 }
 
-/// Payload emitted to `awidat://turn-end` when the run-loop returns.
+/// Payload emitted to `montage://turn-end` when the run-loop returns.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEndEvent {
@@ -74,23 +74,23 @@ pub fn emit_timeline_changed(app: &AppHandle, project_root: &Path) {
 /// [`JobEmitter::ok`] / [`JobEmitter::err`] / [`JobEmitter::cancelled`].
 pub struct JobEmitter {
     app: AppHandle,
-    id: awidat_desktop_protocol::Id,
-    kind: awidat_desktop_protocol::JobKind,
+    id: montage_desktop_protocol::Id,
+    kind: montage_desktop_protocol::JobKind,
 }
 
 impl JobEmitter {
     /// Emit a `Started` lifecycle event and return the emitter.
     pub fn start(
         app: AppHandle,
-        id: awidat_desktop_protocol::Id,
-        kind: awidat_desktop_protocol::JobKind,
+        id: montage_desktop_protocol::Id,
+        kind: montage_desktop_protocol::JobKind,
         status: impl Into<String>,
     ) -> Self {
         emit_item(
             &app,
             Item::Job {
                 id: id.clone(),
-                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                phase: montage_desktop_protocol::ItemLifecycle::Started,
                 job_kind: kind,
                 percent: None,
                 status: status.into(),
@@ -107,7 +107,7 @@ impl JobEmitter {
             &self.app,
             Item::Job {
                 id: self.id.clone(),
-                phase: awidat_desktop_protocol::ItemLifecycle::Delta,
+                phase: montage_desktop_protocol::ItemLifecycle::Delta,
                 job_kind: self.kind,
                 percent,
                 status: status.into(),
@@ -125,11 +125,11 @@ impl JobEmitter {
             &self.app,
             Item::Job {
                 id: self.id,
-                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                phase: montage_desktop_protocol::ItemLifecycle::Completed,
                 job_kind: self.kind,
                 percent: Some(100),
                 status: summary.clone().unwrap_or_else(|| "done".into()),
-                result: Some(awidat_desktop_protocol::JobResult::Ok { summary }),
+                result: Some(montage_desktop_protocol::JobResult::Ok { summary }),
                 output_path,
             },
         );
@@ -147,11 +147,11 @@ impl JobEmitter {
             &self.app,
             Item::Job {
                 id: self.id,
-                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                phase: montage_desktop_protocol::ItemLifecycle::Completed,
                 job_kind: self.kind,
                 percent: None,
                 status: message.clone(),
-                result: Some(awidat_desktop_protocol::JobResult::Err { message }),
+                result: Some(montage_desktop_protocol::JobResult::Err { message }),
                 output_path: None,
             },
         );
@@ -163,11 +163,11 @@ impl JobEmitter {
             &self.app,
             Item::Job {
                 id: self.id,
-                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                phase: montage_desktop_protocol::ItemLifecycle::Completed,
                 job_kind: self.kind,
                 percent: None,
                 status: "cancelled".into(),
-                result: Some(awidat_desktop_protocol::JobResult::Cancelled),
+                result: Some(montage_desktop_protocol::JobResult::Cancelled),
                 output_path: None,
             },
         );

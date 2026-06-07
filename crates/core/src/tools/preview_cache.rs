@@ -60,7 +60,7 @@ impl ToolHandler for PreviewCacheStatusTool {
                     "persist_refresh_plan": {
                         "type": "boolean",
                         "default": false,
-                        "description": "Persist the selected refresh plan to .awidat/preview-cache/refresh-plan.json without generating media."
+                        "description": "Persist the selected refresh plan to .montage/preview-cache/refresh-plan.json without generating media."
                     }
                 }
             }),
@@ -133,10 +133,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -287,7 +287,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&output.content).unwrap();
         let lifecycle_path = dir
             .path()
-            .join(".awidat")
+            .join(".montage")
             .join("preview-cache")
             .join("refresh-plan.json");
 

@@ -1,14 +1,14 @@
-//! The Awidat ↔ codex authentication boundary.
+//! The Montage ↔ codex authentication boundary.
 //!
-//! Awidat's agent is powered by the vendored codex harness, which authenticates
+//! Montage's agent is powered by the vendored codex harness, which authenticates
 //! to OpenAI two ways: **Sign in with ChatGPT** (OAuth — spends the user's
 //! ChatGPT plan) or an **API key** (billed at standard API rates). This crate is
 //! the single, UI-agnostic place that drives codex's own auth machinery
-//! ([`codex_login`]) so awidat surfaces (desktop, CLI) can present an in-app
+//! ([`codex_login`]) so montage surfaces (desktop, CLI) can present an in-app
 //! auth-mode chooser without reimplementing OAuth, token refresh, or storage.
 //!
 //! Everything is written *where codex reads it* — the same `CODEX_HOME` and the
-//! same credential store mode — so a login performed through awidat is
+//! same credential store mode — so a login performed through montage is
 //! immediately visible to the running agent.
 //!
 //! ## The one policy-sensitive knob
@@ -36,7 +36,7 @@ pub use codex_login::{AuthCredentialsStoreMode, ShutdownHandle};
 
 /// Environment variable that overrides which OAuth client id ChatGPT sign-in
 /// uses. Empty/unset falls back to codex's first-party client.
-pub const OAUTH_CLIENT_ID_ENV: &str = "AWIDAT_OAUTH_CLIENT_ID";
+pub const OAUTH_CLIENT_ID_ENV: &str = "MONTAGE_OAUTH_CLIENT_ID";
 
 /// The OAuth client id used for "Sign in with ChatGPT".
 ///

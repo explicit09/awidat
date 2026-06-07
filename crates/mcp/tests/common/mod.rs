@@ -9,14 +9,14 @@
 
 use std::path::PathBuf;
 
-use awidat_mcp::{ClientInfo, ServerConfig};
-use awidat_test_support::mcp::test_server_config;
+use montage_mcp::{ClientInfo, ServerConfig};
+use montage_test_support::mcp::test_server_config;
 
-/// Absolute path to the `awidat-mcp-test-server` binary Cargo built for
+/// Absolute path to the `montage-mcp-test-server` binary Cargo built for
 /// this test run. Cargo only sets `CARGO_BIN_EXE_*` for tests inside the
 /// declaring crate, so this lookup must live here (not in test-support).
 pub fn test_server_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_awidat-mcp-test-server"))
+    PathBuf::from(env!("CARGO_BIN_EXE_montage-mcp-test-server"))
 }
 
 /// `ServerConfig` for the test-server in the given mode.
@@ -27,7 +27,7 @@ pub fn cfg(mode: &str) -> ServerConfig {
 /// Standard `ClientInfo` for tests.
 pub fn client_info() -> ClientInfo {
     ClientInfo {
-        name: "awidat-test".into(),
+        name: "montage-test".into(),
         version: "0.0.1".into(),
     }
 }

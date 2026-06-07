@@ -31,14 +31,14 @@ job in `.github/workflows/evals.yml`.
 The guarded full setup command is:
 
 ```bash
-AWIDAT_RUN_FULL_INDEXER_SMOKE=1 python3 python/scripts/smoke_indexers.py --full
+MONTAGE_RUN_FULL_INDEXER_SMOKE=1 python3 python/scripts/smoke_indexers.py --full
 ```
 
 That only syncs the full Python dependency workspace. Use the manual
 real-asset commands below for model-backed indexers after accepting any
 required model gates.
 
-The `cargo test -p awidat-index --test end_to_end -- --ignored` test exercises
+The `cargo test -p montage-index --test end_to_end -- --ignored` test exercises
 `audio-energy-mcp` only, because it has no model downloads and no API keys —
 which means it's the only indexer cheap enough to run on every commit.
 
@@ -62,7 +62,7 @@ python3 python/scripts/download_whisper_cpp_model.py
 The script writes:
 
 ```text
-~/.cache/awidat/whisper.cpp/ggml-large-v3-turbo-q5_0.bin
+~/.cache/montage/whisper.cpp/ggml-large-v3-turbo-q5_0.bin
 ```
 
 Useful environment variables:
@@ -90,7 +90,7 @@ transformers, opencv). On first model use, models also download:
 
 | Indexer | First-run download | Where it lands |
 |---|---|---|
-| whisper.cpp fast backend (`ggml-large-v3-turbo-q5_0`) | ~550MB | `~/.cache/awidat/whisper.cpp/` |
+| whisper.cpp fast backend (`ggml-large-v3-turbo-q5_0`) | ~550MB | `~/.cache/montage/whisper.cpp/` |
 | whisper (`large-v3-turbo`) | ~1.6GB | `~/.cache/huggingface/hub/` |
 | whisper (`small.en` fallback) | ~470MB | same |
 | whisper diarization (`pyannote/speaker-diarization-community-1`) | ~30MB | same; requires `HF_TOKEN` and accepting the model EULA at <https://huggingface.co/pyannote/speaker-diarization-community-1> |
@@ -104,12 +104,12 @@ transformers, opencv). On first model use, models also download:
 Drop a real podcast/interview asset under a temp project's `raw/`, then:
 
 ```bash
-PROJ=/tmp/awidat-smoke
-mkdir -p "$PROJ/raw" "$PROJ/.awidat"
+PROJ=/tmp/montage-smoke
+mkdir -p "$PROJ/raw" "$PROJ/.montage"
 cp ~/Downloads/your-real-asset.wav "$PROJ/raw/"
 
 # Configure the indexers (substitute your absolute paths).
-cat > "$PROJ/.awidat/config.toml" <<EOF
+cat > "$PROJ/.montage/config.toml" <<EOF
 [[mcp.servers]]
 name = "audio-energy"
 command = "$HOME/.local/bin/uv"
@@ -192,9 +192,9 @@ kind = "indexer"
 EOF
 
 # Initialize and run.
-awidat init "$PROJ" || true        # safe to skip if already initialized
-awidat index "$PROJ"
-awidat validate "$PROJ"
+montage init "$PROJ" || true        # safe to skip if already initialized
+montage index "$PROJ"
+montage validate "$PROJ"
 ```
 
 Then inspect the sidecars:
@@ -234,36 +234,36 @@ Overlapping model regions override the heuristic fields emitted by
 
 To validate a real indexed project after a model-backed classifier has
 written `index/composition-model` sidecars, point the safe smoke at the
-project root. `AWIDAT_REAL_CORPUS` is accepted as the same project-root
+project root. `MONTAGE_REAL_CORPUS` is accepted as the same project-root
 fallback used by the live eval workflow:
 
 ```bash
-AWIDAT_COMPOSITION_MODEL_PROJECT="$PROJ" \
-AWIDAT_COMPOSITION_MODEL_MIN_REGIONS=25 \
+MONTAGE_COMPOSITION_MODEL_PROJECT="$PROJ" \
+MONTAGE_COMPOSITION_MODEL_MIN_REGIONS=25 \
 python3 python/scripts/smoke_safe.py
 ```
 
 The invalid-region tolerance defaults to zero. Safe smoke accepts
-`AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS` as the fallback for
-`AWIDAT_COMPOSITION_MODEL_MIN_REGIONS`, matching the real-corpus
+`MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS` as the fallback for
+`MONTAGE_COMPOSITION_MODEL_MIN_REGIONS`, matching the real-corpus
 workflow mapping; a value of `0` keeps that gate disabled, matching the
 workflow condition. For a temporary rollout window, set
-`AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS` to the same value as
-`AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS`; the
+`MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS` to the same value as
+`MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS`; the
 real-corpus workflow forwards that value automatically. If
-`AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS` is forwarded as blank but
-`AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS` is set, the
+`MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS` is forwarded as blank but
+`MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS` is set, the
 safe smoke uses the real-corpus value as the fallback. Blank optional
 threshold environment variables otherwise use defaults, so unset GitHub
 repository variables do not break the preflight. If any composition-model
-project-tree threshold is set, either `AWIDAT_COMPOSITION_MODEL_PROJECT`
-or `AWIDAT_REAL_CORPUS` must also be set; otherwise the safe smoke fails
+project-tree threshold is set, either `MONTAGE_COMPOSITION_MODEL_PROJECT`
+or `MONTAGE_REAL_CORPUS` must also be set; otherwise the safe smoke fails
 instead of silently skipping the configured gate.
 
 The project-tree check stays schema-only: it reads every
 `index/composition-model/**/*.json` sidecar, validates the same region
 contract as the checked-in sample, and fails if the total model-region
-count is below `AWIDAT_COMPOSITION_MODEL_MIN_REGIONS`. If sidecars are
+count is below `MONTAGE_COMPOSITION_MODEL_MIN_REGIONS`. If sidecars are
 present but invalid, the failure summarizes valid and invalid region
 counts and includes sample path/reason diagnostics so model rollouts can
 distinguish missing output from contract-breaking output.
@@ -277,18 +277,18 @@ sidecars include `thumbnail_score` per sampled frame and ranked
 LUFS for delivery loudness review.
 
 Safe smoke also preflights mounted real-corpus fixture coverage when
-`AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES`,
-`AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES`, or
-`AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES` is non-zero. It requires
-`AWIDAT_REAL_CORPUS` to point at a project directory with
+`MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES`,
+`MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES`, or
+`MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES` is non-zero. It requires
+`MONTAGE_REAL_CORPUS` to point at a project directory with
 `project.otio.json`, then counts the default single fixture file and
-`.awidat/eval/<fixture-kind>/*.json` directory layout before Rust parses
+`.montage/eval/<fixture-kind>/*.json` directory layout before Rust parses
 and applies the fixtures.
 
 ## Topic indexer cross-dependency
 
 `topic-mcp` reads the whisper sidecar from disk to derive boundaries. If
-you run `awidat index --indexer topic` before whisper has produced a
+you run `montage index --indexer topic` before whisper has produced a
 transcript, the sidecar will contain `topics: []` and a `note` explaining
 what to do next. This is intentional — the engine doesn't model dependency
 order between indexers; the agent does.
@@ -301,6 +301,6 @@ To enable speaker labels:
    <https://huggingface.co/pyannote/speaker-diarization-community-1>.
 2. `export HF_TOKEN=hf_...` (or set in the indexer's `[mcp.servers.env]`
    block).
-3. Re-run `awidat index --indexer whisper`.
+3. Re-run `montage index --indexer whisper`.
 
 To opt out entirely: `WHISPER_DIARIZE=false` in the indexer env.

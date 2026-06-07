@@ -193,7 +193,7 @@ pub async fn build_timeline_raw_stream_render(
     let stem = output_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("awidat_raw_stream");
+        .unwrap_or("montage_raw_stream");
     let video_temp = parent.join(format!(".{stem}.video.mp4"));
     let audio_temp = parent.join(format!(".{stem}.audio.aac"));
 
@@ -279,8 +279,8 @@ fn convert_inputs(
 /// primitive whose parameters drive a GPU shader, and return the
 /// shader's input curves packed into `[ParamCurve; 4]`. Slots not used
 /// by the chosen shader stay at `Const(0.0)`.
-fn extract_param_curves(plan: &TransitionPlan) -> [awidat_proto::transitions::ParamCurve; 4] {
-    use awidat_proto::transitions::{ParamCurve, TransitionPrimitiveOp};
+fn extract_param_curves(plan: &TransitionPlan) -> [montage_proto::transitions::ParamCurve; 4] {
+    use montage_proto::transitions::{ParamCurve, TransitionPrimitiveOp};
     let default = || {
         [
             ParamCurve::Const(0.0),
@@ -395,7 +395,7 @@ mod tests {
         from: usize,
         kind: &str,
         duration_s: f64,
-        shader: awidat_render_gpu::TransitionShader,
+        shader: montage_render_gpu::TransitionShader,
     ) -> TransitionPlan {
         TransitionPlan {
             from_segment_index: from,
@@ -426,23 +426,23 @@ mod tests {
     fn dispatch_detects_gpu_transitions() {
         let with_gpu = vec![tp_gpu(
             0,
-            "awidat.cross_dissolve",
+            "montage.cross_dissolve",
             0.3,
-            awidat_render_gpu::TransitionShader::CrossDissolve,
+            montage_render_gpu::TransitionShader::CrossDissolve,
         )];
         assert!(should_route_through_raw_stream(&with_gpu));
 
-        let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
+        let without_gpu = vec![tp_no_gpu(0, "montage.cross_dissolve", 0.3)];
         assert!(!should_route_through_raw_stream(&without_gpu));
 
         let mixed = vec![
             tp_gpu(
                 0,
-                "awidat.cross_dissolve",
+                "montage.cross_dissolve",
                 0.3,
-                awidat_render_gpu::TransitionShader::CrossDissolve,
+                montage_render_gpu::TransitionShader::CrossDissolve,
             ),
-            tp_no_gpu(1, "awidat.cross_dissolve", 0.3),
+            tp_no_gpu(1, "montage.cross_dissolve", 0.3),
         ];
         assert!(!should_route_through_raw_stream(&mixed));
 
@@ -454,11 +454,11 @@ mod tests {
     fn selected_timeline_backend_reflects_gpu_transition_content() {
         let with_gpu = vec![tp_gpu(
             0,
-            "awidat.match_dissolve",
+            "montage.match_dissolve",
             0.3,
-            awidat_render_gpu::TransitionShader::CrossDissolve,
+            montage_render_gpu::TransitionShader::CrossDissolve,
         )];
-        let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
+        let without_gpu = vec![tp_no_gpu(0, "montage.cross_dissolve", 0.3)];
 
         assert_eq!(
             select_timeline_render_backend(&with_gpu),
@@ -475,11 +475,11 @@ mod tests {
         let mixed = vec![
             tp_gpu(
                 0,
-                "awidat.match_dissolve",
+                "montage.match_dissolve",
                 0.3,
-                awidat_render_gpu::TransitionShader::CrossDissolve,
+                montage_render_gpu::TransitionShader::CrossDissolve,
             ),
-            tp_no_gpu(1, "awidat.cross_dissolve", 0.3),
+            tp_no_gpu(1, "montage.cross_dissolve", 0.3),
         ];
 
         let evidence = select_timeline_render_backend_evidence(&mixed, 0);
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn timeline_backend_evidence_records_libass_caption_reason() {
-        let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
+        let without_gpu = vec![tp_no_gpu(0, "montage.cross_dissolve", 0.3)];
 
         let evidence = select_timeline_render_backend_evidence(&without_gpu, 2);
 
@@ -528,11 +528,11 @@ mod tests {
         let transitions = vec![
             tp_gpu(
                 0,
-                "awidat.cross_dissolve",
+                "montage.cross_dissolve",
                 0.3,
-                awidat_render_gpu::TransitionShader::CrossDissolve,
+                montage_render_gpu::TransitionShader::CrossDissolve,
             ),
-            tp_no_gpu(1, "awidat.cross_dissolve", 0.3),
+            tp_no_gpu(1, "montage.cross_dissolve", 0.3),
         ];
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.mp4");
@@ -565,9 +565,9 @@ mod tests {
         let segments = vec![ts(a, 0.0, 1.0), ts(b, 0.0, 1.0)];
         let transitions = vec![tp_gpu(
             0,
-            "awidat.cross_dissolve",
+            "montage.cross_dissolve",
             0.4,
-            awidat_render_gpu::TransitionShader::CrossDissolve,
+            montage_render_gpu::TransitionShader::CrossDissolve,
         )];
 
         let result =
@@ -633,10 +633,10 @@ mod tests {
                 );
             }
             Err(RawStreamRenderError::VideoCompose(ComposeError::Gpu(
-                awidat_render_gpu::GpuError::NoAdapter(_),
+                montage_render_gpu::GpuError::NoAdapter(_),
             )))
             | Err(RawStreamRenderError::VideoCompose(ComposeError::Gpu(
-                awidat_render_gpu::GpuError::NoDevice(_),
+                montage_render_gpu::GpuError::NoDevice(_),
             ))) => {
                 eprintln!("skipping: no GPU adapter in this environment");
             }

@@ -1,6 +1,6 @@
-//! Filesystem fixtures: temp dirs and initialized awidat projects.
+//! Filesystem fixtures: temp dirs and initialized montage projects.
 
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use tempfile::TempDir;
 
 /// Unique per-test temp directory. The returned [`TempDir`] cleans on drop —
@@ -9,12 +9,12 @@ pub fn tmp_dir() -> TempDir {
     tempfile::tempdir().expect("tempdir creation failed; check disk")
 }
 
-/// Initialize a fresh awidat project at a unique temp path. Returns the
+/// Initialize a fresh montage project at a unique temp path. Returns the
 /// in-memory [`Project`] alongside the [`TempDir`] guard. Drop the guard
 /// (or let it go out of scope) to remove the project from disk.
 ///
 /// ```
-/// # use awidat_test_support::fixture;
+/// # use montage_test_support::fixture;
 /// let (project, _guard) = fixture::project();
 /// assert_eq!(project.timeline.otio_schema, "Timeline.1");
 /// ```

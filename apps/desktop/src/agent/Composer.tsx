@@ -95,7 +95,7 @@ export function Composer({ projectReady }: Props) {
         onKeyDown={onKeyDown}
         title="Command-Enter sends. Esc cancels a running turn."
         placeholder={
-          projectReady ? "Message Awidat" : "Open a project to start chatting"
+          projectReady ? "Message Montage" : "Open a project to start chatting"
         }
         rows={1}
         disabled={running || !projectReady}

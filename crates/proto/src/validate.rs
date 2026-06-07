@@ -483,7 +483,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        p.push(format!("awidat-vt-{nanos}-{}-{n}", std::process::id()));
+        p.push(format!("montage-vt-{nanos}-{}-{n}", std::process::id()));
         p
     }
 

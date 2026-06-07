@@ -1,4 +1,4 @@
-//! Tauri-side glue around [`awidat_codex_bridge::CodexAppServer`].
+//! Tauri-side glue around [`montage_codex_bridge::CodexAppServer`].
 //!
 //! - [`TauriEmitter`] adapts Tauri's [`AppHandle`] to the bridge's
 //!   [`ItemEmitter`] trait so the bridge can push `Item`s onto our
@@ -8,17 +8,17 @@
 //!   project switch (see [`crate::commands::project`]).
 //!
 //! The MCP server sibling-binary lookup mirrors
-//! `crates/cli/src/chat_codex_cmd.rs::awidat_mcp_overrides` (sibling
-//! of `current_exe()`'s parent, named `awidat-mcp-server`). Unlike
-//! the CLI, we can't assume `current_exe()` is `awidat` — in a
+//! `crates/cli/src/chat_codex_cmd.rs::montage_mcp_overrides` (sibling
+//! of `current_exe()`'s parent, named `montage-mcp-server`). Unlike
+//! the CLI, we can't assume `current_exe()` is `montage` — in a
 //! packaged Tauri build it's the app bundle binary. The MCP server
 //! still has to live next to it for `cargo tauri dev` to find it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use awidat_codex_bridge::{BridgeError, CodexAppServer, ItemEmitter};
-use awidat_desktop_protocol::Item;
+use montage_codex_bridge::{BridgeError, CodexAppServer, ItemEmitter};
+use montage_desktop_protocol::Item;
 use tauri::{AppHandle, Manager};
 
 use crate::events::{emit_item, emit_timeline_changed, emit_turn_end};
@@ -48,7 +48,7 @@ impl ItemEmitter for TauriEmitter {
     fn emit_turn_end(&self, turn_id: String, error: Option<String>) {
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
-            let state = app.state::<crate::state::AwidatState>();
+            let state = app.state::<crate::state::MontageState>();
             let mut guard = state.turn.lock().await;
             if guard.as_ref().map(|turn| turn.id.as_str()) == Some(turn_id.as_str()) {
                 guard.take();
@@ -64,7 +64,7 @@ impl ItemEmitter for TauriEmitter {
 }
 
 /// Live bridge + the project it was launched against. Stored in
-/// [`crate::state::AwidatState`] inside an `Option`; `None` means no
+/// [`crate::state::MontageState`] inside an `Option`; `None` means no
 /// project is open or the previous session was torn down.
 pub struct CodexSession {
     pub bridge: CodexAppServer,
@@ -90,19 +90,19 @@ impl CodexSession {
         let mcp_server_path = resolve_mcp_server_binary();
         // Loud failure on the user-facing event bus when the sibling
         // binary is missing — silently falling back to "codex with no
-        // Awidat tools" produces an agent that runs shell commands
+        // Montage tools" produces an agent that runs shell commands
         // instead of view_timeline / apply_edl. That mode is unhelpful
         // for editing; surface it before the user wastes a turn on it.
         if mcp_server_path.is_none() {
-            let warning = "awidat-mcp-server binary missing next to awidat-desktop. \
-                The agent will fall back to shell-only and won't use Awidat tools \
+            let warning = "montage-mcp-server binary missing next to montage-desktop. \
+                The agent will fall back to shell-only and won't use Montage tools \
                 (view_timeline, apply_edl, etc.). Build it with \
-                `cargo build -p awidat-cli --bin awidat-mcp-server`.";
+                `cargo build -p montage-cli --bin montage-mcp-server`.";
             tracing::error!("{warning}");
             crate::events::emit_item(
                 &app,
-                awidat_desktop_protocol::Item::Error {
-                    id: awidat_desktop_protocol::Id::new("awidat-mcp-missing"),
+                montage_desktop_protocol::Item::Error {
+                    id: montage_desktop_protocol::Id::new("montage-mcp-missing"),
                     message: warning.to_string(),
                 },
             );
@@ -112,24 +112,24 @@ impl CodexSession {
         // Other). Reads project type from the OTIO and assembles the
         // matching playbook; rides on `developer_instructions` so the
         // agent gets it without us touching codex's base prompt.
-        let developer_instructions = Some(awidat_core::system_prompt::assemble_for_project(
+        let developer_instructions = Some(montage_core::system_prompt::assemble_for_project(
             &project_root,
         ));
         // Progressive-disclosure skills catalog. L1 (name + description)
         // lands in every turn input as a contextual fragment; the agent
         // calls `load_skill(name='...')` for the L2 body. User-installed
-        // skills under ~/Library/Application Support/awidat/skills and
-        // ~/.config/awidat/skills override bundled. See
+        // skills under ~/Library/Application Support/montage/skills and
+        // ~/.config/montage/skills override bundled. See
         // crates/core/src/skills.rs for the discovery rules.
         //
-        // The catalog is filtered against `<project>/.awidat/skills.json`
+        // The catalog is filtered against `<project>/.montage/skills.json`
         // so skills the editor has explicitly disabled in the Skills tab
         // never reach the agent's loadout. Missing/malformed file means
         // "load everything" — see `commands::skill_config` for the
         // schema and fail-mode rules.
         let skills_catalog = render_skills_catalog(&project_root);
         // Recent rejection feedback (Wave 5 C3). Reads the last
-        // MAX_FEEDBACK_ENTRIES entries from `.awidat/feedback.jsonl` and
+        // MAX_FEEDBACK_ENTRIES entries from `.montage/feedback.jsonl` and
         // renders the `<recent_feedback>` L1 fragment. Missing /
         // empty log → None, in which case the bridge skips the section
         // entirely instead of emitting an empty header.
@@ -155,22 +155,22 @@ impl CodexSession {
 /// contextual fragment ready to prepend to a turn input. Returns
 /// `None` if no skills are installed (then nothing gets prepended).
 ///
-/// Discovery hierarchy from `awidat_core::skills` (lowest priority
+/// Discovery hierarchy from `montage_core::skills` (lowest priority
 /// first; later layers override earlier by skill name, replacing the
 /// entry entirely — not a field-by-field merge):
 ///   1. bundled — `<repo>/skills` in dev; in a packaged build,
-///      `<install>/share/awidat/skills`. We pick the repo-relative
+///      `<install>/share/montage/skills`. We pick the repo-relative
 ///      `skills/` dir via the running binary's grandparent (works in
 ///      `cargo tauri dev`; packaged builds will need a separate
 ///      resolver later when we ship installers).
-///   2. user roots — `~/Library/Application Support/awidat/skills`
+///   2. user roots — `~/Library/Application Support/montage/skills`
 ///      (macOS / Windows `%APPDATA%`) via `dirs::config_dir`, plus
-///      the legacy `~/.awidat/skills/` for power users.
+///      the legacy `~/.montage/skills/` for power users.
 ///   3. project — `<project>/skills/` — per-project overrides win
 ///      over both user and bundled. Lets a project ship its own
 ///      editorial loadout.
 ///
-/// Skills listed in `<project>/.awidat/skills.json` under `disabled`
+/// Skills listed in `<project>/.montage/skills.json` under `disabled`
 /// are removed from the catalog before rendering — the agent never
 /// learns they exist. Missing or malformed config = "nothing disabled".
 ///
@@ -191,11 +191,11 @@ fn render_skills_catalog(project_root: &Path) -> Option<String> {
     )
 }
 
-/// Current Awidat core version — used to gate skills that declare a
-/// minimum compatibility version via `SkillMeta::awidat_min_version`.
+/// Current Montage core version — used to gate skills that declare a
+/// minimum compatibility version via `SkillMeta::montage_min_version`.
 /// Sourced from the desktop crate's package version at compile time.
 /// Skills declaring a higher minimum are skipped with a warning.
-const AWIDAT_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MONTAGE_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Discover the most recent `<= MAX_FEEDBACK_ENTRIES` rejection rows
 /// and render the L1 fragment ready to prepend to a turn input.
@@ -210,7 +210,7 @@ const AWIDAT_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn render_recent_feedback(project_root: &Path) -> Option<String> {
     let entries = crate::commands::feedback::load_recent_feedback_sync(
         project_root,
-        awidat_core::context::MAX_FEEDBACK_ENTRIES,
+        montage_core::context::MAX_FEEDBACK_ENTRIES,
     );
     render_recent_feedback_from_entries(&entries)
 }
@@ -221,7 +221,7 @@ fn render_recent_feedback(project_root: &Path) -> Option<String> {
 fn render_recent_feedback_from_entries(
     entries: &[crate::commands::feedback::FeedbackEntry],
 ) -> Option<String> {
-    use awidat_core::context::{ContextualUserFragment, RecentFeedbackFragment};
+    use montage_core::context::{ContextualUserFragment, RecentFeedbackFragment};
     if entries.is_empty() {
         return None;
     }
@@ -259,7 +259,7 @@ fn render_skills_catalog_from_roots(
     disabled: &[String],
     pinned: &[crate::commands::skill_config::PinnedSkill],
 ) -> Option<String> {
-    use awidat_core::context::{AvailableSkillsFragment, ContextualUserFragment};
+    use montage_core::context::{AvailableSkillsFragment, ContextualUserFragment};
 
     // Build a name → resolved (skill, provenance) map by walking each
     // layer ourselves. We can't use `SkillRegistry::discover_many`
@@ -300,16 +300,16 @@ fn render_skills_catalog_from_roots(
             None => resolve_default(name, &layers),
         };
         let Some(skill) = resolved else { continue };
-        // Compatibility gate. A skill that needs a newer Awidat than
+        // Compatibility gate. A skill that needs a newer Montage than
         // we're running is silently skipped with a warning; the
         // editor sees a missing entry on the Skills tab card (handled
         // there) and the agent never learns it existed.
-        if !is_compatible(&skill.meta.awidat_min_version) {
+        if !is_compatible(&skill.meta.montage_min_version) {
             tracing::warn!(
                 skill = %name,
-                required = ?skill.meta.awidat_min_version,
-                current = %AWIDAT_CORE_VERSION,
-                "skipping skill: requires newer Awidat core"
+                required = ?skill.meta.montage_min_version,
+                current = %MONTAGE_CORE_VERSION,
+                "skipping skill: requires newer Montage core"
             );
             continue;
         }
@@ -329,9 +329,9 @@ fn render_skills_catalog_from_roots(
 /// matches the discovery hierarchy. Used by `render_skills_catalog_from_roots`
 /// for per-skill layer selection during pin resolution.
 struct LayeredSkills {
-    bundled: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
-    user: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
-    project: std::collections::BTreeMap<String, awidat_core::skills::Skill>,
+    bundled: std::collections::BTreeMap<String, montage_core::skills::Skill>,
+    user: std::collections::BTreeMap<String, montage_core::skills::Skill>,
+    project: std::collections::BTreeMap<String, montage_core::skills::Skill>,
 }
 
 fn collect_layered_skills(
@@ -339,9 +339,9 @@ fn collect_layered_skills(
     user_roots: &[PathBuf],
     project_root: Option<&Path>,
 ) -> LayeredSkills {
-    use awidat_core::skills::SkillRegistry;
+    use montage_core::skills::SkillRegistry;
     let load =
-        |root: Option<&Path>| -> std::collections::BTreeMap<String, awidat_core::skills::Skill> {
+        |root: Option<&Path>| -> std::collections::BTreeMap<String, montage_core::skills::Skill> {
             let mut out = std::collections::BTreeMap::new();
             let Some(root) = root else {
                 return out;
@@ -357,7 +357,7 @@ fn collect_layered_skills(
             out
         };
 
-    // User roots may be multiple paths (legacy `~/.awidat/skills` +
+    // User roots may be multiple paths (legacy `~/.montage/skills` +
     // platform config dir) — later wins on name conflict, mirroring
     // the previous overlay behavior.
     let mut user_map = std::collections::BTreeMap::new();
@@ -380,7 +380,7 @@ fn collect_layered_skills(
 fn resolve_default<'a>(
     name: &str,
     layers: &'a LayeredSkills,
-) -> Option<&'a awidat_core::skills::Skill> {
+) -> Option<&'a montage_core::skills::Skill> {
     layers
         .project
         .get(name)
@@ -396,9 +396,9 @@ fn resolve_pinned<'a>(
     name: &str,
     pin: &crate::commands::skill_config::PinnedSkill,
     layers: &'a LayeredSkills,
-) -> Option<&'a awidat_core::skills::Skill> {
+) -> Option<&'a montage_core::skills::Skill> {
     // Candidate list filtered by provenance.
-    let candidates: Vec<(&str, Option<&awidat_core::skills::Skill>)> =
+    let candidates: Vec<(&str, Option<&montage_core::skills::Skill>)> =
         match pin.provenance.as_deref() {
             Some("bundled") => vec![("bundled", layers.bundled.get(name))],
             Some("user") => vec![("user", layers.user.get(name))],
@@ -439,8 +439,8 @@ fn resolve_pinned<'a>(
     None
 }
 
-/// Compatibility check — returns `true` when the running Awidat is
-/// at or above the skill's declared `awidat_min_version`. Skills
+/// Compatibility check — returns `true` when the running Montage is
+/// at or above the skill's declared `montage_min_version`. Skills
 /// without a declared minimum always pass.
 ///
 /// Versions are normalized to three `u32` components for an ordered
@@ -451,7 +451,7 @@ fn is_compatible(min_version: &Option<String>) -> bool {
     let Some(required) = min_version.as_deref() else {
         return true;
     };
-    let current = parse_three_part(AWIDAT_CORE_VERSION);
+    let current = parse_three_part(MONTAGE_CORE_VERSION);
     let needed = parse_three_part(required);
     match (current, needed) {
         (Some(c), Some(n)) => c >= n,
@@ -479,19 +479,19 @@ fn parse_three_part(s: &str) -> Option<(u32, u32, u32)> {
 
 /// Per-user skills directories, in priority order (later entries win
 /// on name conflicts). Two layers:
-///   - `dirs::config_dir()` joined with `awidat/skills` — the platform
+///   - `dirs::config_dir()` joined with `montage/skills` — the platform
 ///     idiomatic location:
-///     - macOS   → `~/Library/Application Support/awidat/skills`
-///     - Linux   → `~/.config/awidat/skills`
-///     - Windows → `%APPDATA%\awidat\skills`
-///   - the legacy `~/.awidat/skills/` for power users who prefer to
+///     - macOS   → `~/Library/Application Support/montage/skills`
+///     - Linux   → `~/.config/montage/skills`
+///     - Windows → `%APPDATA%\montage\skills`
+///   - the legacy `~/.montage/skills/` for power users who prefer to
 ///     keep everything under their home dir.
 fn user_skill_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".awidat/skills")) {
+    if let Some(legacy) = dirs::home_dir().map(|h| h.join(".montage/skills")) {
         roots.push(legacy);
     }
-    if let Some(cfg) = dirs::config_dir().map(|c| c.join("awidat/skills")) {
+    if let Some(cfg) = dirs::config_dir().map(|c| c.join("montage/skills")) {
         roots.push(cfg);
     }
     roots
@@ -510,7 +510,7 @@ fn project_skill_root(project_root: &Path) -> Option<PathBuf> {
 }
 
 /// Best-effort bundled-skills root. In `cargo tauri dev` the binary
-/// lives at `<repo>/target/debug/awidat-desktop`, so the skills dir
+/// lives at `<repo>/target/debug/montage-desktop`, so the skills dir
 /// is `<repo>/skills`. Walk up three dirs from the binary path.
 fn bundled_skill_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -526,21 +526,21 @@ fn bundled_skill_root() -> Option<PathBuf> {
     }
 }
 
-/// Resolve the sibling `awidat-mcp-server` binary path so the bridge
-/// can inject it as a `mcp_servers.awidat.command` config override.
+/// Resolve the sibling `montage-mcp-server` binary path so the bridge
+/// can inject it as a `mcp_servers.montage.command` config override.
 ///
 /// `None` means we couldn't find it; the bridge then runs codex
 /// without our MCP tools (matching the pre-step-3 behavior).
 fn resolve_mcp_server_binary() -> Option<PathBuf> {
     let self_exe = std::env::current_exe().ok()?;
     let parent = self_exe.parent()?;
-    let candidate = parent.join("awidat-mcp-server");
+    let candidate = parent.join("montage-mcp-server");
     if candidate.exists() {
         Some(candidate)
     } else {
         tracing::warn!(
             path = %candidate.display(),
-            "awidat-mcp-server sibling binary missing; agent will run without Awidat tools"
+            "montage-mcp-server sibling binary missing; agent will run without Montage tools"
         );
         None
     }
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn render_skills_catalog_ignores_unknown_disabled_names() {
-        // A stale entry in `.awidat/skills.json` (e.g. for a skill that
+        // A stale entry in `.montage/skills.json` (e.g. for a skill that
         // got removed) must not break the catalog for the survivors.
         let bundled = make_skills_root(&["alpha-skill"]);
         let rendered = render_skills_catalog_from_roots(
@@ -859,8 +859,8 @@ mod tests {
         assert!(out.is_none(), "unknown provenance must skip the skill");
     }
 
-    /// Compatibility gate — a skill requiring a future Awidat is
-    /// silently dropped with a warning. Since `AWIDAT_CORE_VERSION`
+    /// Compatibility gate — a skill requiring a future Montage is
+    /// silently dropped with a warning. Since `MONTAGE_CORE_VERSION`
     /// is sourced from the package's cargo version we can't pick a
     /// universally "newer" constant without coupling to it, so we
     /// use a 99.x.x sentinel that's safely in the future.
@@ -871,7 +871,7 @@ mod tests {
         fs::create_dir_all(&sd).unwrap();
         fs::write(
             sd.join("SKILL.md"),
-            "---\nname: future-skill\ndescription: needs newer Awidat\nawidat_min_version: \"99.0.0\"\n---\n\nbody\n",
+            "---\nname: future-skill\ndescription: needs newer Montage\nmontage_min_version: \"99.0.0\"\n---\n\nbody\n",
         )
         .unwrap();
         let out = render_skills_catalog_from_roots(Some(dir.path()), &[], None, &[], &[]);
@@ -890,7 +890,7 @@ mod tests {
         fs::create_dir_all(&sd).unwrap();
         fs::write(
             sd.join("SKILL.md"),
-            "---\nname: safe-skill\ndescription: compat\nawidat_min_version: \"0.0.0\"\n---\n\nbody\n",
+            "---\nname: safe-skill\ndescription: compat\nmontage_min_version: \"0.0.0\"\n---\n\nbody\n",
         )
         .unwrap();
         let rendered = render_skills_catalog_from_roots(Some(dir.path()), &[], None, &[], &[])
@@ -1018,12 +1018,12 @@ mod tests {
         assert!(out.is_none(), "fresh project must skip the section");
     }
 
-    /// Integration: write two rows to `.awidat/feedback.jsonl`, the
+    /// Integration: write two rows to `.montage/feedback.jsonl`, the
     /// session-launch helper must surface them in the rendered fragment.
     #[test]
     fn render_recent_feedback_reads_jsonl_log_at_launch() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".awidat");
+        let dir = tmp.path().join(".montage");
         std::fs::create_dir_all(&dir).unwrap();
         // ts ascending in the file; the sync reader reverses to
         // newest-first, so "newer" appears above "older" in the output.

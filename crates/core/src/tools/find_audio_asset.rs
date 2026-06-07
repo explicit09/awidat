@@ -23,7 +23,7 @@
 //! can hand the result straight to ffmpeg / apply_edl.
 //!
 //! Pack discovery order (first hit wins):
-//!   1. `AWIDAT_AUDIO_PACK_ROOT` env var — for tests and packaging.
+//!   1. `MONTAGE_AUDIO_PACK_ROOT` env var — for tests and packaging.
 //!   2. `<workspace>/assets/audio` baked from `CARGO_MANIFEST_DIR`
 //!      at compile time — covers `cargo run` / `cargo test`.
 //!   3. `<exe-dir>/assets/audio` — co-located install layout.
@@ -148,7 +148,7 @@ impl ToolHandler for FindAudioAssetTool {
                     "pack_root": null,
                     "results": [],
                     "more_available": false,
-                    "note": "No audio pack found. Set AWIDAT_AUDIO_PACK_ROOT or ship assets/audio/."
+                    "note": "No audio pack found. Set MONTAGE_AUDIO_PACK_ROOT or ship assets/audio/."
                 });
                 return Ok(ToolOutput::text(body.to_string()));
             }
@@ -347,7 +347,7 @@ fn filter_and_rank(
 /// list instead of a tool crash).
 fn resolve_pack_root() -> Option<PathBuf> {
     // 1. Explicit override — tests + packaged installs.
-    if let Ok(env_root) = std::env::var("AWIDAT_AUDIO_PACK_ROOT") {
+    if let Ok(env_root) = std::env::var("MONTAGE_AUDIO_PACK_ROOT") {
         let p = PathBuf::from(env_root);
         if p.join("index.json").is_file() {
             return Some(p);

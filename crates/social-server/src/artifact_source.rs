@@ -1,4 +1,4 @@
-use awidat_social::youtube_upload::{
+use montage_social::youtube_upload::{
     ArtifactBody, ArtifactSource, ArtifactSourceError, YOUTUBE_MAX_BYTES,
 };
 use std::path::{Path, PathBuf};

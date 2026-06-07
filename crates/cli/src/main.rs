@@ -1,4 +1,4 @@
-//! `awidat` binary entry point.
+//! `montage` binary entry point.
 //!
 //! Subcommands today: `init`, `validate`, `index`, `version`. Future
 //! (`chat`, `render`, `skills`) land in later weeks per `PLAN.md` §15.
@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{self, Context, Result, bail};
-use awidat_proto::project::Project;
-use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
+use montage_proto::project::Project;
+use montage_proto::validate::{ValidationWarning, validate_project};
 
 mod agent_delegate_cmd;
 mod apply_edl_cmd;
@@ -31,7 +31,7 @@ mod upgrade_cmd;
 /// Top-level CLI.
 #[derive(Parser, Debug)]
 #[command(
-    name = "awidat",
+    name = "montage",
     version,
     about = "Terminal-first, agent-native video editing harness.",
     long_about = None,
@@ -77,7 +77,7 @@ enum Command {
         /// working directory.
         #[arg(long)]
         at: Option<PathBuf>,
-        /// Skip the post-creation `awidat index` run. Useful when
+        /// Skip the post-creation `montage index` run. Useful when
         /// dropping multiple assets before a single batch index pass.
         #[arg(long)]
         no_index: bool,
@@ -88,7 +88,7 @@ enum Command {
         #[arg(long)]
         link: bool,
     },
-    /// Validate an existing project: OTIO + awidat namespace + edit-plan +
+    /// Validate an existing project: OTIO + montage namespace + edit-plan +
     /// index manifest.
     Validate {
         /// Project directory.
@@ -225,10 +225,10 @@ enum Command {
     },
     /// Open a non-interactive agent turn against a project. The
     /// initial prompt comes from `prompt`, args, or stdin; the agent
-    /// streams its reply, may call Awidat tools, and exits when the
+    /// streams its reply, may call Montage tools, and exits when the
     /// turn finishes.
     Chat {
-        /// Project directory. Sets AWIDAT_PROJECT_ROOT so the Awidat
+        /// Project directory. Sets MONTAGE_PROJECT_ROOT so the Montage
         /// MCP server and TUI panel see the right project.
         path: PathBuf,
         /// First user message. Omit to read from stdin.
@@ -251,8 +251,8 @@ enum Command {
     /// indexer sidebar mounted. Ctrl-C cancels the in-flight turn;
     /// Ctrl-D / `:q` exits.
     Tui {
-        /// Project directory. Sets AWIDAT_PROJECT_ROOT so the
-        /// Awidat MCP server and TUI panel see the right project.
+        /// Project directory. Sets MONTAGE_PROJECT_ROOT so the
+        /// Montage MCP server and TUI panel see the right project.
         path: PathBuf,
         /// Optional initial prompt to seed the first turn.
         prompt: Option<String>,
@@ -267,8 +267,8 @@ enum Command {
         #[arg(long = "config", short = 'c', value_name = "key=value")]
         config_overrides: Vec<String>,
     },
-    /// Stash the Anthropic API key in the OS keychain so `awidat chat`
-    /// and `awidat tui` work without ANTHROPIC_API_KEY in the env.
+    /// Stash the Anthropic API key in the OS keychain so `montage chat`
+    /// and `montage tui` work without ANTHROPIC_API_KEY in the env.
     /// Reads the key from stdin to avoid shell history.
     SecretsSet {
         /// Account name. Defaults to `anthropic_api_key`.
@@ -294,11 +294,11 @@ enum Command {
         skip_uv_sync: bool,
     },
     /// Distill or display learned style from past sessions.
-    /// `awidat lessons learn` reads every captured editorial decision
+    /// `montage lessons learn` reads every captured editorial decision
     /// (recorded automatically when you Allow / Deny a modal in the
-    /// TUI) and writes patterns to `~/.config/awidat/learned-style.md`.
+    /// TUI) and writes patterns to `~/.config/montage/learned-style.md`.
     /// That file is auto-spliced into the system prompt at session
-    /// start. `awidat lessons show` prints the current file.
+    /// start. `montage lessons show` prints the current file.
     Lessons {
         /// What to do.
         #[command(subcommand)]
@@ -317,21 +317,21 @@ enum Command {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Print the version of the awidat binary.
+    /// Print the version of the montage binary.
     Version,
 }
 
-/// Sub-action for `awidat lessons`.
+/// Sub-action for `montage lessons`.
 #[derive(Subcommand, Debug)]
 enum LessonsAction {
     /// Read every captured editorial decision and rewrite
-    /// `~/.config/awidat/learned-style.md` with the distilled patterns.
+    /// `~/.config/montage/learned-style.md` with the distilled patterns.
     Learn,
     /// Print the current `learned-style.md` body.
     Show,
 }
 
-/// Sub-action for `awidat skills`.
+/// Sub-action for `montage skills`.
 #[derive(Subcommand, Debug)]
 enum SkillsAction {
     /// List installed skills (bundled + user-installed).
@@ -340,7 +340,7 @@ enum SkillsAction {
     /// The agent calls `load_skill(name=...)` itself on its first
     /// response to fetch the playbook.
     Run {
-        /// Skill name (must match an entry in `awidat skills list`).
+        /// Skill name (must match an entry in `montage skills list`).
         name: String,
         /// Project directory.
         project: PathBuf,
@@ -416,7 +416,7 @@ fn main() -> ExitCode {
                 prompt,
                 model,
                 project_root: project,
-                display_name: "awidat skills run",
+                display_name: "montage skills run",
             });
         }
         _ => {}
@@ -587,22 +587,22 @@ fn cmd_secrets_set(account: &str) -> Result<()> {
     if value.is_empty() {
         return Err(anyhow::anyhow!("empty API key"));
     }
-    awidat_secrets::set(account, &value)
+    montage_secrets::set(account, &value)
         .with_context(|| format!("failed to store secret '{account}' in keychain"))?;
     eprintln!("stored '{account}' in keychain ({} chars)", value.len());
     Ok(())
 }
 
 fn print_version() {
-    println!("awidat {}", env!("CARGO_PKG_VERSION"));
+    println!("montage {}", env!("CARGO_PKG_VERSION"));
     println!(
         "supported OTIO schemas: {}",
-        awidat_proto::project::supported_schema_summary()
+        montage_proto::project::supported_schema_summary()
     );
 }
 
 fn cmd_replay_render(manifest: &std::path::Path) -> Result<()> {
-    let outcome = awidat_render::replay_render_manifest(manifest)
+    let outcome = montage_render::replay_render_manifest(manifest)
         .with_context(|| format!("failed to replay render manifest {}", manifest.display()))?;
     println!("replay manifest: {}", outcome.manifest_path.display());
     println!("status: {}", outcome.status);
@@ -618,14 +618,14 @@ fn cmd_replay_render(manifest: &std::path::Path) -> Result<()> {
 fn cmd_init(path: &std::path::Path) -> Result<()> {
     let project = Project::init(path)
         .with_context(|| format!("failed to initialize project at {}", path.display()))?;
-    let learned_format = awidat_core::lessons::apply_learned_project_format_defaults(path)
+    let learned_format = montage_core::lessons::apply_learned_project_format_defaults(path)
         .map_err(|e| {
             anyhow::anyhow!(
                 "failed to apply learned project-format defaults at {}: {e}",
                 path.display()
             )
         })?;
-    println!("Initialized awidat project at {}", project.root.display());
+    println!("Initialized montage project at {}", project.root.display());
     println!(
         "  - project.otio.json (Timeline.1, name = {:?})",
         project.timeline.name
@@ -646,21 +646,21 @@ fn cmd_init(path: &std::path::Path) -> Result<()> {
         "  - index/manifest.json ({} indexers)",
         project.manifest.as_ref().map_or(0, |m| m.indexers.len())
     );
-    println!("  - renders/, .awidat/");
+    println!("  - renders/, .montage/");
     println!();
-    let cfg = awidat_config::Config::load(Some(path)).unwrap_or_default();
+    let cfg = montage_config::Config::load(Some(path)).unwrap_or_default();
     let indexer_count = cfg.indexers().count();
     println!("Next steps:");
     println!("  1. Drop source media under {}/raw/", path.display());
     println!(
-        "  2. Run `awidat index {}` — uses {} bundled indexer(s).",
+        "  2. Run `montage index {}` — uses {} bundled indexer(s).",
         path.display(),
         indexer_count
     );
     println!("     Override or disable any default in:");
-    println!("       ~/.config/awidat/config.toml          (global)");
+    println!("       ~/.config/montage/config.toml          (global)");
     println!(
-        "       {}/.awidat/config.toml      (per-project)",
+        "       {}/.montage/config.toml      (per-project)",
         path.display()
     );
     println!("     Example overlay (turn off whisper for music-only assets):");
@@ -688,11 +688,11 @@ fn cmd_validate(path: &std::path::Path) -> Result<()> {
         s.indexer_count, s.sidecar_count
     );
     println!(
-        "  Awidat metadata version: {}",
+        "  Montage metadata version: {}",
         project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .map_or("(none)", |m| m.version.as_str())
     );

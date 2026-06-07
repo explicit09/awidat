@@ -2,7 +2,7 @@
 
 ## Problem
 
-Awidat should make imported media useful to the agent as soon as it enters the
+Montage should make imported media useful to the agent as soon as it enters the
 media bin. Today the desktop backend already starts a post-import chain after
 `import_local`, `import_locals`, and `import_url`, but indexing is still shaped
 as a coarse project-wide run. Users can perceive indexing as tied to "Add to
@@ -23,7 +23,7 @@ consume indexed context, not start it.
   transcript, audio/waveform/silence, scenes, then topics/moments, then heavier
   visual intelligence.
 - Keep generated B-roll/media out of the expensive default source-media index
-  path when Awidat already knows what it generated. The generation pipeline
+  path when Montage already knows what it generated. The generation pipeline
   should write a compact descriptive sidecar for the agent immediately.
 - Adapt scheduling to average machines and powerful machines without requiring
   users to tune environment variables.

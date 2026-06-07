@@ -563,7 +563,7 @@ function TimelineCanvas({
 
   function onDragOver(e: React.DragEvent<HTMLCanvasElement>) {
     if (proposal) return;
-    if (e.dataTransfer.types.includes("application/x-awidat-media")) {
+    if (e.dataTransfer.types.includes("application/x-montage-media")) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
     }
@@ -571,7 +571,7 @@ function TimelineCanvas({
 
   async function onDrop(e: React.DragEvent<HTMLCanvasElement>) {
     if (proposal) return;
-    const assetId = e.dataTransfer.getData("application/x-awidat-media");
+    const assetId = e.dataTransfer.getData("application/x-montage-media");
     if (!assetId) return;
     e.preventDefault();
     try {

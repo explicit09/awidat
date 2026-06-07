@@ -12,7 +12,7 @@ import type { Item } from "../protocol";
 type AgentState = {
   /** Items in arrival order. Append-only at the back; in-place upsert by id. */
   items: Item[];
-  /** True from invoke('start_turn') until awidat://turn-end fires. */
+  /** True from invoke('start_turn') until montage://turn-end fires. */
   running: boolean;
   /**
    * Turn id of the currently in-flight turn. Cleared when the matching

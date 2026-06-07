@@ -3,7 +3,7 @@
  * z-index needs to clear the proposal toolbar (which sits at z-3
  * in App.css). */
 
-.awidat-tooltip {
+.montage-tooltip {
   background: var(--bg-elev);
   color: var(--text);
   border: 1px solid var(--border);
@@ -21,16 +21,16 @@
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.awidat-tooltip[data-state="delayed-open"],
-.awidat-tooltip[data-state="instant-open"] {
-  animation-name: awidat-tooltip-in;
+.montage-tooltip[data-state="delayed-open"],
+.montage-tooltip[data-state="instant-open"] {
+  animation-name: montage-tooltip-in;
 }
 
-.awidat-tooltip[data-state="closed"] {
-  animation-name: awidat-tooltip-out;
+.montage-tooltip[data-state="closed"] {
+  animation-name: montage-tooltip-out;
 }
 
-.awidat-tooltip-arrow {
+.montage-tooltip-arrow {
   fill: var(--bg-elev);
   /* Radix's arrow is a single triangle; the border CSS doesn't
    * apply to SVG, so we accept a tiny visual seam between content
@@ -38,7 +38,7 @@
 }
 
 /* Tooltip kbd-shortcut hint, e.g. "Reject (Esc)". */
-.awidat-tooltip kbd {
+.montage-tooltip kbd {
   background: var(--bg);
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -49,7 +49,7 @@
   font-size: 10px;
 }
 
-@keyframes awidat-tooltip-in {
+@keyframes montage-tooltip-in {
   from {
     opacity: 0;
     transform: translateY(2px);
@@ -60,7 +60,7 @@
   }
 }
 
-@keyframes awidat-tooltip-out {
+@keyframes montage-tooltip-out {
   from {
     opacity: 1;
   }

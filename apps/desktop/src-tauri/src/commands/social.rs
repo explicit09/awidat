@@ -1,6 +1,6 @@
 //! Server-backed social publishing Tauri commands.
 //!
-//! Phase 5: each command is a thin translation to the `awidat-social-server`
+//! Phase 5: each command is a thin translation to the `montage-social-server`
 //! over HTTPS via [`SocialClient`]. The desktop holds **no secrets** — no
 //! token-encryption key, no `client_secret`, no local OAuth listener, no local
 //! provider upload. OAuth is initiated by opening the system browser to the
@@ -12,25 +12,25 @@
 //! `social_providers` stays static: it is pure registry data (provider slots +
 //! capability summaries) carrying no secrets. It can move server-side later.
 
-use awidat_social::api::{AccountSummary, OAuthStartResponse};
-use awidat_social::api::{
+use montage_social::api::{AccountSummary, OAuthStartResponse};
+use montage_social::api::{
     BindTargetRequest, ProviderSummary, PublishJobResponse, RescheduleJobRequest,
     ScheduleTargetRequest, SocialApi, UpdateTargetRequest, ValidateTargetRequest,
     ValidateTargetResponse,
 };
-use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
-use awidat_social::provider::ProviderRegistry;
+use montage_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
+use montage_social::provider::ProviderRegistry;
 use tauri::State;
 
 use crate::social_client::SocialClient;
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Clones the initialized social client out of state, or returns a stable error
-/// string when the server URL was never configured (`AWIDAT_SOCIAL_SERVER_URL`
+/// string when the server URL was never configured (`MONTAGE_SOCIAL_SERVER_URL`
 /// unset at startup). `SocialClient` is cheap to clone (the inner
 /// `reqwest::Client` is an `Arc`), so we clone-and-drop the lock rather than
 /// hold it across the network round-trip.
-async fn client(state: &State<'_, AwidatState>) -> Result<SocialClient, String> {
+async fn client(state: &State<'_, MontageState>) -> Result<SocialClient, String> {
     state
         .social_client
         .lock()
@@ -46,7 +46,9 @@ pub async fn social_providers() -> Result<Vec<ProviderSummary>, String> {
 }
 
 #[tauri::command]
-pub async fn social_accounts(state: State<'_, AwidatState>) -> Result<Vec<AccountSummary>, String> {
+pub async fn social_accounts(
+    state: State<'_, MontageState>,
+) -> Result<Vec<AccountSummary>, String> {
     client(&state).await?.accounts().await
 }
 
@@ -61,7 +63,7 @@ pub struct OAuthStartArgs {
 
 #[tauri::command]
 pub async fn social_oauth_start(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: OAuthStartArgs,
 ) -> Result<OAuthStartResponse, String> {
     client(&state)
@@ -72,7 +74,7 @@ pub async fn social_oauth_start(
 
 #[tauri::command]
 pub async fn social_disconnect_account(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     account_id: String,
 ) -> Result<AccountSummary, String> {
     client(&state).await?.disconnect_account(&account_id).await
@@ -94,7 +96,7 @@ pub struct BindArgs {
 
 #[tauri::command]
 pub async fn social_bind_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: BindArgs,
 ) -> Result<CampaignVariantTarget, String> {
     client(&state)
@@ -122,7 +124,7 @@ pub struct UpdateTargetArgs {
 
 #[tauri::command]
 pub async fn social_update_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: UpdateTargetArgs,
 ) -> Result<CampaignVariantTarget, String> {
     client(&state)
@@ -138,7 +140,7 @@ pub async fn social_update_target(
 
 #[tauri::command]
 pub async fn social_validate_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     target_id: String,
     now: i64,
 ) -> Result<ValidateTargetResponse, String> {
@@ -163,7 +165,7 @@ pub struct ScheduleArgs {
 
 #[tauri::command]
 pub async fn social_schedule_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: ScheduleArgs,
 ) -> Result<PublishJobResponse, String> {
     client(&state)
@@ -180,7 +182,7 @@ pub async fn social_schedule_target(
 
 #[tauri::command]
 pub async fn social_publish_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     client(&state).await?.publish_job(&job_id).await
@@ -188,7 +190,7 @@ pub async fn social_publish_job(
 
 #[tauri::command]
 pub async fn social_cancel_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     client(&state).await?.cancel_job(&job_id).await
@@ -196,7 +198,7 @@ pub async fn social_cancel_job(
 
 #[tauri::command]
 pub async fn social_retry_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     client(&state).await?.retry_job(&job_id).await
@@ -204,7 +206,7 @@ pub async fn social_retry_job(
 
 #[tauri::command]
 pub async fn social_fire_due_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     client(&state).await?.fire_due_job(&job_id).await
@@ -212,7 +214,7 @@ pub async fn social_fire_due_job(
 
 #[tauri::command]
 pub async fn social_poll_publish_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     client(&state).await?.poll_publish_job(&job_id).await
@@ -226,7 +228,7 @@ pub struct RescheduleArgs {
 
 #[tauri::command]
 pub async fn social_reschedule_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     args: RescheduleArgs,
 ) -> Result<PublishJobResponse, String> {
@@ -245,7 +247,7 @@ pub async fn social_reschedule_job(
 
 #[tauri::command]
 pub async fn social_account_audit(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     account_id: String,
 ) -> Result<AccountUsageAudit, String> {
     client(&state).await?.account_audit(&account_id).await
@@ -261,7 +263,7 @@ pub async fn social_account_audit(
 /// server-side (pg_cron fires it). Returns the refreshed job.
 #[tauri::command]
 pub async fn social_upload_artifact(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     file_path: String,
 ) -> Result<PublishJobResponse, String> {

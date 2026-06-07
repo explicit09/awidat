@@ -1,25 +1,25 @@
 //! Color-scopes IPC for the desktop UI.
 //!
 //! Thin wrapper around
-//! [`awidat_core::tools::color_scopes::extract_and_compute_color_scopes`]
+//! [`montage_core::tools::color_scopes::extract_and_compute_color_scopes`]
 //! — the same pipeline the `color_scopes` agent tool calls — so the
 //! human-facing scope dock and the agent's evidence reads stay in
 //! lockstep.
 //!
 //! Path validation rule: the requested asset must live under the
 //! currently-loaded project root. Proxies (which the media pane
-//! plays) all live under `<project>/.awidat/proxies/`, so passing a
+//! plays) all live under `<project>/.montage/proxies/`, so passing a
 //! proxy path works without any special casing on the frontend.
 
 use std::path::PathBuf;
 
-use awidat_core::tools::color_scopes::{
+use montage_core::tools::color_scopes::{
     self, ColorScopeSnapshot, DEFAULT_SCOPE_BINS, DEFAULT_SCOPE_MAX_WIDTH,
 };
 use serde::Deserialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Arguments for [`get_color_scopes`].
 #[derive(Debug, Deserialize)]
@@ -47,7 +47,7 @@ pub struct GetColorScopesArgs {
 /// "scopes unavailable" without crashing the dock.
 #[tauri::command]
 pub async fn get_color_scopes(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: GetColorScopesArgs,
 ) -> Result<ColorScopeSnapshot, String> {
     let project_root = state

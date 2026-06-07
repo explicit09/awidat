@@ -2,10 +2,10 @@
 //
 // Mirrors the small surface of `useSettings`: open-state plus the current
 // `AuthStatus` snapshot and the async actions that drive the Tauri `auth_*`
-// commands (which wrap the `awidat-auth` crate / codex-login).
+// commands (which wrap the `montage-auth` crate / codex-login).
 //
 // This is "who powers the agent" auth — distinct from the publishing OAuth in
-// PublishingSettings ("awidat acting on your behalf toward YouTube").
+// PublishingSettings ("montage acting on your behalf toward YouTube").
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

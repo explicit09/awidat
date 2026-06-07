@@ -140,7 +140,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -235,9 +235,9 @@ mod tests {
         assert!(request.authorization_url.contains("force_reauth=true"));
         assert!(request.authorization_url.contains("client_id=client_123"));
         assert!(
-            request
-                .authorization_url
-                .contains("redirect_uri=https%3A%2F%2Fapp.awidat.test%2Fsocial%2Foauth%2Fcallback")
+            request.authorization_url.contains(
+                "redirect_uri=https%3A%2F%2Fapp.montage.test%2Fsocial%2Foauth%2Fcallback"
+            )
         );
         assert!(request.authorization_url.contains("state=state-secret"));
     }

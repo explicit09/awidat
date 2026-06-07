@@ -7,13 +7,13 @@
 //! Both surface as [`Item::Job`] in the chat stream (Started → Delta →
 //! Completed) so the user sees progress in the same timeline as agent
 //! activity. Both honour the per-job [`CancellationToken`] held in
-//! `AwidatState::jobs`, so the frontend can call `cancel_job(id)` to
+//! `MontageState::jobs`, so the frontend can call `cancel_job(id)` to
 //! abort a long download.
 
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use awidat_desktop_protocol::{Id, JobKind};
+use montage_desktop_protocol::{Id, JobKind};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
@@ -21,7 +21,7 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Copy or symlink an existing local file into `<project>/raw/`.
 /// Emits an `Item::Job` (kind = `LocalImport`) for visibility, even
@@ -36,7 +36,7 @@ use crate::state::{AwidatState, JobHandle};
 #[tauri::command]
 pub async fn import_local(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     src_path: String,
     link: bool,
 ) -> Result<String, String> {
@@ -94,7 +94,7 @@ pub async fn import_local(
 #[tauri::command]
 pub async fn import_locals(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     src_paths: Vec<String>,
     link: bool,
 ) -> Result<Vec<String>, String> {
@@ -170,7 +170,7 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
 
 fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: Vec<PathBuf>) {
     tokio::spawn(async move {
-        let state = app.state::<AwidatState>();
+        let state = app.state::<MontageState>();
         let asset_ids = match asset_ids_for_post_import(&project_root, &assets) {
             Ok(asset_ids) => asset_ids,
             Err(e) => {
@@ -182,7 +182,7 @@ fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: V
             let app = app.clone();
             let project_root = project_root.clone();
             tokio::spawn(async move {
-                let state = app.state::<AwidatState>();
+                let state = app.state::<MontageState>();
                 if let Err(e) = crate::commands::index::index_project_assets_at_root(
                     &app,
                     &state,
@@ -230,11 +230,11 @@ fn asset_ids_for_post_import(
 
 async fn process_imported_asset(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &std::path::Path,
     asset: &std::path::Path,
 ) -> Result<(), String> {
-    let probe = awidat_render::probe_media(asset)
+    let probe = montage_render::probe_media(asset)
         .await
         .map_err(|e| format!("probe imported media: {e}"))?;
 
@@ -413,7 +413,7 @@ async fn run_local_import(
 #[tauri::command]
 pub async fn import_url(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     url: String,
 ) -> Result<String, String> {
     let project_root = state
@@ -591,7 +591,7 @@ fn parse_progress(line: &str) -> Option<ParsedProgress> {
     })
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -602,7 +602,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

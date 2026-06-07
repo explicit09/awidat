@@ -1,8 +1,8 @@
 //! Integration test for the two-pass master loudnorm orchestrator.
 //!
-//! Verifies that [`awidat_render::run_master_loudnorm_render`] threads the
+//! Verifies that [`montage_render::run_master_loudnorm_render`] threads the
 //! measure → parse → apply workflow correctly without actually invoking
-//! ffmpeg. A mock [`awidat_render::RenderJobRunner`] returns a canned
+//! ffmpeg. A mock [`montage_render::RenderJobRunner`] returns a canned
 //! pass-1 stderr containing the loudnorm JSON; the orchestrator must:
 //!
 //! 1. Submit the measure spec first (with `print_format=json` and the null
@@ -17,13 +17,13 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::{
+use montage_proto::project::files;
+use montage_render::{
     RenderJobRunner, RenderJobRunnerError, RenderJobSpec, RenderRunnerOutput,
     run_master_loudnorm_render,
 };
@@ -48,7 +48,7 @@ fn write_project_with_master_loudnorm(dir: &Path) {
     stack.children.push(StackChild::Track(track));
     tl.tracks = stack;
 
-    let mut meta = AwidatTimelineMetadata::default();
+    let mut meta = MontageTimelineMetadata::default();
     meta.extra.insert(
         "master_loudnorm".into(),
         serde_json::json!({
@@ -57,7 +57,7 @@ fn write_project_with_master_loudnorm(dir: &Path) {
             "target_tp": -1.5,
         }),
     );
-    tl.metadata.awidat = Some(meta);
+    tl.metadata.montage = Some(meta);
 
     std::fs::write(
         dir.join(files::OTIO),

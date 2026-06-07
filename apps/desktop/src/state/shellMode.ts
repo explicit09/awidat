@@ -10,7 +10,7 @@ import { create } from "zustand";
  */
 export type ShellMode = "stage" | "cockpit";
 
-const KEY = "awidat:shell-mode";
+const KEY = "montage:shell-mode";
 
 function load(): ShellMode {
   try {

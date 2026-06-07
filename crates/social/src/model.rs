@@ -277,8 +277,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -292,7 +292,7 @@ mod tests {
 
         let json = serde_json::to_string(&account)
             .unwrap_or_else(|err| panic!("serialize account: {err}"));
-        assert!(json.contains("Awidat Channel"));
+        assert!(json.contains("Montage Channel"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
     }

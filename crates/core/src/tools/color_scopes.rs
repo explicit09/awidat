@@ -348,7 +348,7 @@ async fn extract_rgb_frame(
 ) -> Result<ColorScopeInput, FunctionCallError> {
     let (source_width, source_height) = probe_video_dimensions(asset_path).await?;
     let (width, height) = scaled_dimensions(source_width, source_height, max_width);
-    let ffmpeg = awidat_render::ffmpeg_path().map_err(|e| {
+    let ffmpeg = montage_render::ffmpeg_path().map_err(|e| {
         FunctionCallError::RespondToModel(format!("color_scopes: ffmpeg unavailable: {e}"))
     })?;
     let output = Command::new(ffmpeg)
@@ -395,7 +395,7 @@ async fn extract_rgb_frame(
 }
 
 async fn probe_video_dimensions(asset_path: &Path) -> Result<(usize, usize), FunctionCallError> {
-    let ffprobe = awidat_render::ffprobe_path().map_err(|e| {
+    let ffprobe = montage_render::ffprobe_path().map_err(|e| {
         FunctionCallError::RespondToModel(format!("color_scopes: ffprobe unavailable: {e}"))
     })?;
     let output = Command::new(ffprobe)

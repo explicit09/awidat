@@ -2,7 +2,7 @@
 
 ## Problem (gap #4)
 
-Awidat cannot natively produce branded animated graphics: custom-font cards,
+Montage cannot natively produce branded animated graphics: custom-font cards,
 animated social icons, vector/motion overlays (intro/outro stings,
 lower-thirds, animated stat cards, social handles, subscribe bumpers). The
 native MotionScene lane only lowers a constrained subset — text/drawtext,
@@ -14,7 +14,7 @@ MotionScene *video* layers are explicitly **not** lowered:
   layers) pushes a `"layer kind is stored but not lowered by the native
   MotionScene renderer yet"` limitation.
 - `docs/motion-scene-remotion-backend.md:24-27` — "Video/media layers stay
-  stored in `metadata.awidat.motion_scenes` and must report explicit
+  stored in `metadata.montage.motion_scenes` and must report explicit
   limitations until they have preview and render lowering. Actual footage
   should continue to use the existing B-roll/PiP/media overlay path."
 - `crates/proto/src/transitions.rs:499-500` — `TransitionBackend::Remotion`
@@ -74,7 +74,7 @@ see `crates/render/src/timeline.rs:5112-5124`.
 A dedicated `Insert Motion Asset` op is **not** warranted (YAGNI): it would
 duplicate the PiP/B-roll surface. If product later wants motion-graphic clips to
 be *visually distinct* in the editor or to auto-carry template provenance, add a
-thin `metadata.awidat.motion_asset` tag on the inserted clip rather than a new
+thin `metadata.montage.motion_asset` tag on the inserted clip rather than a new
 op.
 
 ## Transparency / alpha through render
@@ -161,7 +161,7 @@ compositions parameterized by props**, rendered offline. The contract:
 This deliberately mirrors the **native** templating that already exists for
 text/rect cards — `EdlOp::InstantiateMotionTemplate`
 (`crates/core/src/edl/op.rs`, applied at `crates/core/src/edl/apply.rs:1150-1209`
-via `awidat_render::professional::fill_motion_template` /
+via `montage_render::professional::fill_motion_template` /
 `lower_motion_template`). Native templates fill text + rectangle slots and lower
 to drawtext/drawbox; *branded animated* templates fill the same kind of
 slot-value map but render offline to an alpha asset. The two share the mental

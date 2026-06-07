@@ -54,8 +54,8 @@ call `vedit_diff` and verify the diff matches the beat plan.
 
 ### 3. Motivate transitions and speed
 
-Use `awidat.cross_dissolve` or `SMPTE_Dissolve` for soft phrase
-changes, `awidat.fade_black` only for intentional starts/ends or
+Use `montage.cross_dissolve` or `SMPTE_Dissolve` for soft phrase
+changes, `montage.fade_black` only for intentional starts/ends or
 chapter resets, and speed accents only on drops or action peaks. To plan
 speed accents, run:
 
@@ -71,11 +71,11 @@ python3 <skill-root>/scripts/speed_ramp_plan.py \
   --rationale "speed accents on downbeats"
 ```
 
-The script outputs an `awidat.time_remap` effect plan with a concrete
+The script outputs an `montage.time_remap` effect plan with a concrete
 `curve` and, when `--edl-anchor` is present, prints an applyable
 `Set Effect` operation. That path works today; switch to the dedicated
 `Set Time Remap` EDL op once that op is available. Do not use legacy
-`awidat.fade_in/out` between ordinary adjacent clips, and do not add
+`montage.fade_in/out` between ordinary adjacent clips, and do not add
 decorative transitions unsupported by `apply_edl`.
 
 ### 4. Verify

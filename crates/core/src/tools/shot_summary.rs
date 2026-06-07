@@ -11,7 +11,7 @@
 //! stabilization, etc.
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -67,7 +67,7 @@ impl ToolHandler for ShotSummaryTool {
         let walker = walk_indexer(&ctx.project_root, "shot").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "shot_summary: shot sidecars not readable ({e}). \
-                 Run `awidat index --indexer shot <project>` and retry."
+                 Run `montage index --indexer shot <project>` and retry."
             ))
         })?;
 
@@ -160,10 +160,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

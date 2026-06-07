@@ -6,7 +6,7 @@
 
 **Architecture:** This first slice adds a new StageShell destination named `schedule`, then mounts a Scheduler workspace component from `App.tsx`. The workspace derives `SchedulerPost` view models from existing `RenderQueueEntry.uploadStates`, `uploadMetadata`, and `publishedUrls`; no new scheduling writes, OAuth flows, or server commands are introduced in this slice.
 
-**Tech Stack:** React 19, TypeScript, Zustand render queue store, existing Awidat StageShell, Node `--experimental-strip-types` test harness.
+**Tech Stack:** React 19, TypeScript, Zustand render queue store, existing Montage StageShell, Node `--experimental-strip-types` test harness.
 
 Spec: `docs/superpowers/specs/2026-06-05-scheduler-workspace-design.md`.
 
@@ -63,7 +63,7 @@ const entry: RenderQueueEntry = {
     youtube: {
       title: "YouTube launch title",
       description: "Long-form description",
-      tags: ["awidat"],
+      tags: ["montage"],
       visibility: "public",
       scheduledAt: 1_800,
       thumbnailPath: undefined,
@@ -739,8 +739,8 @@ Run:
 
 ```bash
 cd apps/desktop
-AWIDAT_SOCIAL_SERVER_URL=http://127.0.0.1:3000 \
-AWIDAT_SOCIAL_AUTH_TOKEN=local-dev-token \
+MONTAGE_SOCIAL_SERVER_URL=http://127.0.0.1:3000 \
+MONTAGE_SOCIAL_AUTH_TOKEN=local-dev-token \
 pnpm tauri dev
 ```
 

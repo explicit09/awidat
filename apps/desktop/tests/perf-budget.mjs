@@ -100,7 +100,7 @@ try {
   });
   await ctx.addInitScript(`
     try {
-      localStorage.setItem("awidat:welcome:shown", new Date().toISOString());
+      localStorage.setItem("montage:welcome:shown", new Date().toISOString());
     } catch {}
   `);
   const page = await ctx.newPage();
@@ -182,14 +182,14 @@ try {
   console.log(`  project shell visible: ${projectShellMs} ms (budget ${BUDGETS.projectShellMs})`);
 
   await projectPage.waitForFunction(() => {
-    const calls = window.__awidatIpcCalls ?? [];
+    const calls = window.__montageIpcCalls ?? [];
     return ["current_project_root", "read_timeline", "list_source_media", "list_proxies"].every(
       (command) => calls.some((call) => call.command === command),
     );
   });
-  const calls = await projectPage.evaluate(() => window.__awidatIpcCalls ?? null);
+  const calls = await projectPage.evaluate(() => window.__montageIpcCalls ?? null);
   if (!Array.isArray(calls)) {
-    throw new Error("loaded-project harness did not expose __awidatIpcCalls");
+    throw new Error("loaded-project harness did not expose __montageIpcCalls");
   }
   for (const command of ["current_project_root", "read_timeline", "list_source_media", "list_proxies"]) {
     if (!calls.some((call) => call.command === command)) {

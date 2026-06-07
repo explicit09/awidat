@@ -1,13 +1,13 @@
 //! Agent-callable asset catalog and source review mutators.
 
 use async_trait::async_trait;
-use awidat_proto::professional::{SelectDecision, SourceRange, SourceSelect};
-use awidat_proto::project::Project;
+use montage_proto::professional::{SelectDecision, SourceRange, SourceSelect};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::media_catalog_mutation::{
-    CatalogMutationError, create_bin, ensure_asset_catalog, ensure_awidat_metadata,
+    CatalogMutationError, create_bin, ensure_asset_catalog, ensure_montage_metadata,
     move_asset_to_bin,
 };
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
@@ -233,7 +233,7 @@ fn handle_create_bin(
     ctx: ToolContext,
 ) -> Result<ToolOutput, FunctionCallError> {
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         create_bin(meta, args.id, args.name, args.parent_id).map_err(catalog_error)?;
         Ok(serde_json::json!({"status": "created"}))
     })
@@ -244,7 +244,7 @@ fn handle_move_to_bin(
     ctx: ToolContext,
 ) -> Result<ToolOutput, FunctionCallError> {
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         move_asset_to_bin(meta, &args.asset_id, args.bin_id).map_err(catalog_error)?;
         Ok(serde_json::json!({"status": "moved", "asset_id": args.asset_id}))
     })
@@ -260,7 +260,7 @@ fn handle_rename_asset(
         ));
     }
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         let catalog = ensure_asset_catalog(meta);
         let asset = catalog
             .assets
@@ -276,7 +276,7 @@ fn handle_rename_asset(
 
 fn handle_tag_asset(args: TagAssetArgs, ctx: ToolContext) -> Result<ToolOutput, FunctionCallError> {
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         let catalog = ensure_asset_catalog(meta);
         let asset = catalog
             .assets
@@ -311,7 +311,7 @@ fn handle_rate_asset(
         ));
     }
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         let catalog = ensure_asset_catalog(meta);
         let asset = catalog
             .assets
@@ -339,7 +339,7 @@ fn handle_mark_select(
         ));
     }
     mutate_project(&ctx, |project| {
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         {
             let catalog = ensure_asset_catalog(meta);
             if !catalog.assets.iter().any(|asset| asset.id == args.asset_id) {
@@ -420,12 +420,12 @@ fn slug(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::professional::{AssetReadiness, AssetRecord, AssetRole, SelectDecision};
-    use awidat_proto::project::Project;
+    use montage_proto::professional::{AssetReadiness, AssetRecord, AssetRole, SelectDecision};
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
-    use crate::media_catalog_mutation::{ensure_awidat_metadata, upsert_asset};
+    use crate::media_catalog_mutation::{ensure_montage_metadata, upsert_asset};
 
     fn ctx_at(root: &std::path::Path) -> ToolContext {
         let (tx, _) = broadcast::channel(8);
@@ -433,10 +433,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -455,7 +455,7 @@ mod tests {
 
     fn init_project_with_asset(root: &std::path::Path) {
         let mut project = Project::init(root).unwrap();
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         upsert_asset(
             meta,
             AssetRecord {
@@ -499,7 +499,7 @@ mod tests {
         let catalog = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .asset_catalog
@@ -553,7 +553,7 @@ mod tests {
         let asset = &project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .asset_catalog
@@ -591,7 +591,7 @@ mod tests {
         let select_id = body["select_id"].as_str().unwrap();
 
         let project = Project::read(dir.path()).unwrap();
-        let meta = project.timeline.metadata.awidat.as_ref().unwrap();
+        let meta = project.timeline.metadata.montage.as_ref().unwrap();
         assert_eq!(meta.selects.len(), 1);
         assert_eq!(meta.selects[0].decision, SelectDecision::Favorite);
         assert_eq!(meta.selects[0].reason.as_deref(), Some("clean delivery"));

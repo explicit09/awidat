@@ -1,4 +1,4 @@
-"""Topic-segmentation indexer for Awidat.
+"""Topic-segmentation indexer for Montage.
 
 Reads the transcript sidecar produced by `whisper-mcp` (sibling under
 `<project>/index/whisper/<asset>.json`), runs sentence-embedding boundary
@@ -17,7 +17,7 @@ have.
 This indexer reads a sibling sidecar — a controlled cross-indexer
 dependency. If the transcript is absent we emit `topics: []` with a
 descriptive `note`, and the engine moves on. The agent can re-run
-`awidat index --indexer topic` after `whisper` finishes.
+`montage index --indexer topic` after `whisper` finishes.
 
 Schema version: "1".
 """
@@ -34,7 +34,7 @@ from typing import Any
 
 import numpy as np
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "topic"
 INDEXER_VERSION = "0.1.0"
@@ -97,9 +97,9 @@ def _find_transcript_path(
         candidate = ancestor / "index" / "whisper" / f"{asset_id}.json"
         if candidate.exists():
             return candidate
-        # Stop if we found the project root (.awidat/ marker) without
+        # Stop if we found the project root (.montage/ marker) without
         # finding the transcript.
-        if (ancestor / ".awidat").exists():
+        if (ancestor / ".montage").exists():
             return None
     return None
 
@@ -396,11 +396,11 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         # Raising surfaces an MCP `is_error: true` to the engine,
         # which leaves no sidecar on disk so the next dispatcher
         # pass re-tries this pair. The agent / user re-runs
-        # `awidat index --indexer topic` after whisper completes.
+        # `montage index --indexer topic` after whisper completes.
         raise RuntimeError(
             f"transcript sidecar not found at "
             f"<project>/index/whisper/{req.asset_id}.json; run whisper-mcp "
-            f"first then re-run `awidat index --indexer topic`."
+            f"first then re-run `montage index --indexer topic`."
         )
 
     transcript = json.loads(transcript_path.read_text())

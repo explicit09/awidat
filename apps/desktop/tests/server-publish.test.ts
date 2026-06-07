@@ -31,7 +31,7 @@ async function invoke<T>(
       privacy: "private",
       title: "Clip title",
       description: "Clip description",
-      tags: ["awidat", "launch"],
+      tags: ["montage", "launch"],
       thumbnailRef: "file:///tmp/thumb.jpg",
     });
     return { id: "target_1", validation_state: "pending" } as T;
@@ -85,7 +85,7 @@ async function invoke<T>(
       youtube: {
         title: "Clip title",
         description: "Clip description",
-        tags: ["awidat", "launch"],
+        tags: ["montage", "launch"],
         visibility: "private",
         scheduledAt: undefined,
         thumbnailPath: "/tmp/thumb.jpg",

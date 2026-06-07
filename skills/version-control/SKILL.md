@@ -19,7 +19,7 @@ tools_allowlist:
 
 # Version control (vedit)
 
-awidat persists timeline history via vedit — a content-addressed
+montage persists timeline history via vedit — a content-addressed
 commit graph for OTIO timelines, alongside the project at
 `<project>/.vedit/`. Every commit captures the timeline plus the
 agent's reasoning at that point in time. This is the audit trail
@@ -41,7 +41,7 @@ Load this skill when the user asks any of:
 
 - A vedit repo lives at `<project>/.vedit/`. It's created
   automatically when needed.
-- Every session, awidat stamps a `session-start` branch at
+- Every session, montage stamps a `session-start` branch at
   whatever HEAD is — so the question "what did you change THIS
   session?" has a stable answer: `vedit_diff` (default args).
 - **Every accepted `apply_edl` envelope auto-commits.** The header

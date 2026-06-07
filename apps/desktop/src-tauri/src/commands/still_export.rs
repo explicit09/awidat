@@ -8,16 +8,16 @@
 //!     Written with the timecode in the filename so multiple frames
 //!     coexist.
 //!
-//! Both run through `awidat_render::extract_frame` (a single ffmpeg
+//! Both run through `montage_render::extract_frame` (a single ffmpeg
 //! `-ss <t> -frames:v 1` invocation) — no transcoding pipeline.
 
 use std::path::PathBuf;
 
-use awidat_render::{ImageFormat, extract_frame};
+use montage_render::{ImageFormat, extract_frame};
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Output kind for the still export.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -47,7 +47,7 @@ pub struct StillExportInfo {
 /// the Deliver page doesn't yet expose a resize control for stills.
 #[tauri::command]
 pub async fn export_still(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     asset_path: String,
     t_s: f64,
     kind: StillKind,

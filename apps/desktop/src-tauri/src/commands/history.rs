@@ -18,12 +18,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use awidat_desktop_protocol::{Id, Item, ItemLifecycle};
 use chrono::{DateTime, Utc};
+use montage_desktop_protocol::{Id, Item, ItemLifecycle};
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +61,7 @@ pub struct ChatHistory {
 /// recorded `cwd` matches the currently-open project. Newest-first.
 #[tauri::command]
 pub async fn list_chat_sessions(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<ChatSessionSummary>, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
@@ -92,7 +92,7 @@ pub async fn list_chat_sessions(
 /// the React shell the messages emitted in prior turns so a
 /// project re-open doesn't blank the chat.
 #[tauri::command]
-pub async fn load_chat_history(state: State<'_, AwidatState>) -> Result<ChatHistory, String> {
+pub async fn load_chat_history(state: State<'_, MontageState>) -> Result<ChatHistory, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => {
@@ -146,7 +146,7 @@ pub async fn load_chat_history(state: State<'_, AwidatState>) -> Result<ChatHist
 /// what `list_chat_sessions` returned.
 #[tauri::command]
 pub async fn load_chat_session(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     log_path: String,
 ) -> Result<ChatHistory, String> {
     let path = PathBuf::from(&log_path);
@@ -171,7 +171,7 @@ pub async fn load_chat_session(
 /// signal to clear its in-memory item list; the real `thread_id`
 /// materializes when codex assigns one on the next `thread/start`.
 #[tauri::command]
-pub async fn start_new_chat_session(state: State<'_, AwidatState>) -> Result<ChatHistory, String> {
+pub async fn start_new_chat_session(state: State<'_, MontageState>) -> Result<ChatHistory, String> {
     if let Some(session) = state.codex.lock().await.take() {
         if let Err(e) = session.bridge.shutdown().await {
             tracing::warn!(error = %e, "codex bridge shutdown during start_new_chat_session");
@@ -189,7 +189,7 @@ pub async fn start_new_chat_session(state: State<'_, AwidatState>) -> Result<Cha
 #[tauri::command]
 pub async fn resume_chat_session(
     app: tauri::AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     log_path: String,
 ) -> Result<ChatHistory, String> {
     if state.turn.lock().await.is_some() {
@@ -247,7 +247,7 @@ pub async fn resume_chat_session(
 /// instead of silently no-op'ing.
 #[tauri::command]
 pub async fn rename_chat_session(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     log_path: String,
     new_title: String,
 ) -> Result<(), String> {
@@ -261,7 +261,7 @@ pub async fn rename_chat_session(
 /// out of scope for this pass.
 #[tauri::command]
 pub async fn delete_chat_session(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     log_path: String,
 ) -> Result<(), String> {
     let _ = (state, log_path);
@@ -584,7 +584,7 @@ fn extract_function_output(payload: &serde_json::Value) -> String {
 }
 
 /// Look up the active codex bridge's thread id, if any.
-async fn current_live_thread_id(state: &State<'_, AwidatState>) -> Option<String> {
+async fn current_live_thread_id(state: &State<'_, MontageState>) -> Option<String> {
     state
         .codex
         .lock()

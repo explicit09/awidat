@@ -146,16 +146,16 @@ pub fn build_capability_manifest(
 /// Return the render feature capability that corresponds to a selected
 /// execution backend.
 pub fn render_feature_for_backend(
-    backend: &awidat_render::RenderBackendKind,
+    backend: &montage_render::RenderBackendKind,
 ) -> Option<RenderFeatureCapability> {
     let feature_id = match backend {
-        awidat_render::RenderBackendKind::AssetPreview => "asset_preview_render",
-        awidat_render::RenderBackendKind::AssetSegmentStreamCopy => "stream_copy_remux",
-        awidat_render::RenderBackendKind::AssetFullReencode => "asset_full_reencode",
-        awidat_render::RenderBackendKind::TimelineFfmpegReencode => "ffmpeg_timeline_export",
-        awidat_render::RenderBackendKind::TimelineRawStreamGpu => "gpu_transition_raw_stream",
-        awidat_render::RenderBackendKind::PackageExport => "delivery_package_export",
-        awidat_render::RenderBackendKind::StreamExportRemux => "stream_copy_remux",
+        montage_render::RenderBackendKind::AssetPreview => "asset_preview_render",
+        montage_render::RenderBackendKind::AssetSegmentStreamCopy => "stream_copy_remux",
+        montage_render::RenderBackendKind::AssetFullReencode => "asset_full_reencode",
+        montage_render::RenderBackendKind::TimelineFfmpegReencode => "ffmpeg_timeline_export",
+        montage_render::RenderBackendKind::TimelineRawStreamGpu => "gpu_transition_raw_stream",
+        montage_render::RenderBackendKind::PackageExport => "delivery_package_export",
+        montage_render::RenderBackendKind::StreamExportRemux => "stream_copy_remux",
     };
     render_feature_capabilities()
         .into_iter()
@@ -164,7 +164,7 @@ pub fn render_feature_for_backend(
 
 /// Stable metadata fields for the render feature selected by a backend.
 pub fn render_feature_metadata_for_backend(
-    backend: &awidat_render::RenderBackendKind,
+    backend: &montage_render::RenderBackendKind,
 ) -> BTreeMap<String, String> {
     let Some(feature) = render_feature_for_backend(backend) else {
         return BTreeMap::new();
@@ -199,7 +199,7 @@ fn support_level_name(level: SupportLevel) -> &'static str {
 }
 
 fn effect_capabilities() -> Vec<EffectCapability> {
-    let mut effects: Vec<EffectCapability> = awidat_effects::EFFECTS
+    let mut effects: Vec<EffectCapability> = montage_effects::EFFECTS
         .iter()
         .map(|effect| EffectCapability {
             id: effect.id.into(),
@@ -457,7 +457,7 @@ fn render_feature_capabilities() -> Vec<RenderFeatureCapability> {
                 vec![
                     "reports per-artifact refresh_tasks with task_id, estimated_weight, artifact paths, and missing/stale reasons"
                         .into(),
-                    "refresh execution now runs against the `PreviewRefreshExecutor` trait via `run_preview_cache_refresh`, persists per-task lifecycle state to `.awidat/preview-cache/refresh-plan.json`, and resumes from prior pending tasks; cross-process file locking is not yet implemented"
+                    "refresh execution now runs against the `PreviewRefreshExecutor` trait via `run_preview_cache_refresh`, persists per-task lifecycle state to `.montage/preview-cache/refresh-plan.json`, and resumes from prior pending tasks; cross-process file locking is not yet implemented"
                         .into(),
                     "does not generate artifacts; it is the agent-facing readiness/preflight view"
                         .into(),
@@ -482,44 +482,44 @@ fn render_feature_capabilities() -> Vec<RenderFeatureCapability> {
     ]
 }
 
-fn effect_scope(scope: awidat_effects::EffectScope) -> &'static str {
+fn effect_scope(scope: montage_effects::EffectScope) -> &'static str {
     match scope {
-        awidat_effects::EffectScope::Clip => "clip",
-        awidat_effects::EffectScope::Track => "track",
-        awidat_effects::EffectScope::Timeline => "timeline",
+        montage_effects::EffectScope::Clip => "clip",
+        montage_effects::EffectScope::Track => "track",
+        montage_effects::EffectScope::Timeline => "timeline",
     }
 }
 
-fn media_kind(kind: awidat_effects::MediaKind) -> &'static str {
+fn media_kind(kind: montage_effects::MediaKind) -> &'static str {
     match kind {
-        awidat_effects::MediaKind::Video => "video",
-        awidat_effects::MediaKind::Audio => "audio",
-        awidat_effects::MediaKind::Both => "both",
+        montage_effects::MediaKind::Video => "video",
+        montage_effects::MediaKind::Audio => "audio",
+        montage_effects::MediaKind::Both => "both",
     }
 }
 
-fn effect_phase(phase: awidat_effects::EffectPhase) -> &'static str {
+fn effect_phase(phase: montage_effects::EffectPhase) -> &'static str {
     match phase {
-        awidat_effects::EffectPhase::Source => "source",
-        awidat_effects::EffectPhase::Clip => "clip",
-        awidat_effects::EffectPhase::Transform => "transform",
-        awidat_effects::EffectPhase::Transition => "transition",
-        awidat_effects::EffectPhase::TimelineOverlay => "timeline_overlay",
-        awidat_effects::EffectPhase::Output => "output",
+        montage_effects::EffectPhase::Source => "source",
+        montage_effects::EffectPhase::Clip => "clip",
+        montage_effects::EffectPhase::Transform => "transform",
+        montage_effects::EffectPhase::Transition => "transition",
+        montage_effects::EffectPhase::TimelineOverlay => "timeline_overlay",
+        montage_effects::EffectPhase::Output => "output",
     }
 }
 
-fn effect_support(support: awidat_effects::SupportStatus) -> &'static str {
+fn effect_support(support: montage_effects::SupportStatus) -> &'static str {
     match support {
-        awidat_effects::SupportStatus::Stable => "stable",
-        awidat_effects::SupportStatus::Experimental => "experimental",
-        awidat_effects::SupportStatus::Unavailable => "unavailable",
+        montage_effects::SupportStatus::Stable => "stable",
+        montage_effects::SupportStatus::Experimental => "experimental",
+        montage_effects::SupportStatus::Unavailable => "unavailable",
     }
 }
 
-fn effect_backend(backend: awidat_effects::BackendKind) -> &'static str {
+fn effect_backend(backend: montage_effects::BackendKind) -> &'static str {
     match backend {
-        awidat_effects::BackendKind::FfmpegNative => "ffmpeg_native",
-        awidat_effects::BackendKind::SemanticOnly => "semantic_only",
+        montage_effects::BackendKind::FfmpegNative => "ffmpeg_native",
+        montage_effects::BackendKind::SemanticOnly => "semantic_only",
     }
 }

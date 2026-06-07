@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plan graph-native look regions and generated LUTs from color indexes.
 
-This is the bridge between color analysis and renderable Awidat EDL:
+This is the bridge between color analysis and renderable Montage EDL:
 
 1. Read the project OTIO timeline.
 2. Read one or more color-analysis sidecars.
@@ -119,9 +119,9 @@ class ClipRef:
     source_end_s: float
     track_start_s: float
     track_end_s: float
-    # Stable color-space id from awidat-effects::KNOWN_COLOR_SPACES.
+    # Stable color-space id from montage-effects::KNOWN_COLOR_SPACES.
     # Defaults to `rec709_g24` when the clip has no explicit
-    # `awidat.color_pipeline.clip_input_space` — that's the implicit
+    # `montage.color_pipeline.clip_input_space` — that's the implicit
     # contract for Rec.709-delivered footage that was correct
     # without color management.
     clip_input_space: str = "rec709_g24"
@@ -138,7 +138,7 @@ class RegionPlan:
     recommended range for that look; the planner emits it on the
     EDL `Apply LUT` op so render mixes the LUT with the source
     instead of slamming on at 100%. `None` means "let
-    awidat.lut default to full strength" (legacy behavior).
+    montage.lut default to full strength" (legacy behavior).
     """
 
     clip: ClipRef
@@ -182,11 +182,11 @@ def fmt_num(value: float) -> str:
 
 
 def clip_uuid(clip: dict[str, Any]) -> str | None:
-    awidat = clip.get("metadata", {}).get("awidat", {})
-    value = awidat.get("clip_uuid")
+    montage = clip.get("metadata", {}).get("montage", {})
+    value = montage.get("clip_uuid")
     if isinstance(value, str) and value:
         return value
-    extra = awidat.get("extra", {})
+    extra = montage.get("extra", {})
     value = extra.get("clip_uuid")
     return value if isinstance(value, str) and value else None
 
@@ -200,17 +200,17 @@ def external_asset(clip: dict[str, Any]) -> str | None:
 
 
 def read_clip_input_space(clip: dict[str, Any]) -> str:
-    """Pull `awidat.color_pipeline.clip_input_space` off `clip` so the
+    """Pull `montage.color_pipeline.clip_input_space` off `clip` so the
     planner knows what space the source pixels live in. Falls back
     to `rec709_g24` — the implicit assumption for footage the
     project never tagged.
 
-    Only `awidat.color_pipeline` is consulted, not the legacy
-    `awidat.lut` effect, because `clip_input_space` is a property
+    Only `montage.color_pipeline` is consulted, not the legacy
+    `montage.lut` effect, because `clip_input_space` is a property
     of the source, not of any particular grade.
     """
     for effect in clip.get("effects", []) or []:
-        if effect.get("effect_name") != "awidat.color_pipeline":
+        if effect.get("effect_name") != "montage.color_pipeline":
             continue
         metadata = effect.get("metadata") or {}
         value = metadata.get("clip_input_space")
@@ -421,7 +421,7 @@ def choose_look(
 
 
 def strength_for(look_id: str) -> float | None:
-    """Recommended `awidat.lut.strength` for a look — midpoint of
+    """Recommended `montage.lut.strength` for a look — midpoint of
     the catalog range, clamped to `[0.0, 1.0]`. Returns `None` when
     the look isn't in the catalog (caller skips emitting strength,
     so the legacy "full strength" default applies).
@@ -820,7 +820,7 @@ def write_markdown(path: Path, plan: dict[str, Any]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", required=True, help="Awidat project root")
+    parser.add_argument("--project", required=True, help="Montage project root")
     parser.add_argument("--color-index", action="append", required=True, help="color-analysis sidecar JSON")
     parser.add_argument("--style", default="natural", choices=["natural", "cinematic", "warm", "cool", "punchy"])
     parser.add_argument("--output-edl", required=True)

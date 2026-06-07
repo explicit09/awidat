@@ -11,7 +11,7 @@
 //!   3. apply_edl(...) to commit the cut
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -78,7 +78,7 @@ impl ToolHandler for InspectMomentTool {
         let walker = walk_indexer(&ctx.project_root, "editorial-moments").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "inspect_moment: editorial-moments sidecars not readable ({e}). \
-                 Run `awidat index --indexer editorial-moments <project>` and retry."
+                 Run `montage index --indexer editorial-moments <project>` and retry."
             ))
         })?;
         let mut hit: Option<(String, serde_json::Value, Vec<serde_json::Value>)> = None;
@@ -204,10 +204,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

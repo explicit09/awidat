@@ -104,7 +104,7 @@ pub fn begin_chatgpt_login(env: &AuthEnv) -> Result<LoginHandle, AuthError> {
 }
 
 /// Codex writes `auth.json` into `CODEX_HOME`; create it if a fresh user hasn't
-/// run codex yet, so the first sign-in through awidat doesn't fail on a missing
+/// run codex yet, so the first sign-in through montage doesn't fail on a missing
 /// directory.
 fn ensure_home(codex_home: &Path) -> Result<(), AuthError> {
     std::fs::create_dir_all(codex_home).map_err(AuthError::Io)

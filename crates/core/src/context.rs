@@ -119,7 +119,7 @@ playbook when a skill matches the user's request.\n";
 /// Trigger + use rules block. Same purpose as codex's
 /// `SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS` — the prose tells the
 /// model when to use a skill and how to follow it. Tighter than
-/// codex's because awidat skills are smaller in scope (editorial
+/// codex's because montage skills are smaller in scope (editorial
 /// workflows, not arbitrary code-gen recipes).
 const SKILLS_HOW_TO_USE: &str = "  - Trigger: if the user's request matches a skill's description \
 (e.g. \"tighten this interview\" → interview-tightener), call \
@@ -173,7 +173,7 @@ review.\n";
 /// block the bridge prepends to every `start_turn` input.
 ///
 /// Wave 5 task C3. The desktop builds this from
-/// `<project>/.awidat/feedback.jsonl` (the rejection log Wave 5 C2 ships)
+/// `<project>/.montage/feedback.jsonl` (the rejection log Wave 5 C2 ships)
 /// at session-launch time, capped at [`MAX_FEEDBACK_ENTRIES`] entries
 /// newest-first.
 ///

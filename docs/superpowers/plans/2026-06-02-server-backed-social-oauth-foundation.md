@@ -4,7 +4,7 @@
 
 **Goal:** Build the first server-backed social OAuth foundation for YouTube, TikTok, and Instagram as a reusable Rust domain crate.
 
-**Architecture:** Add a focused `awidat-social` crate that owns provider/account/job domain types, OAuth session validation, token-secret redaction/encryption boundaries, provider capability contracts, and publish job state transitions. This plan deliberately avoids choosing the final web framework or database; it creates the testable service boundary that a future HTTP server can mount.
+**Architecture:** Add a focused `montage-social` crate that owns provider/account/job domain types, OAuth session validation, token-secret redaction/encryption boundaries, provider capability contracts, and publish job state transitions. This plan deliberately avoids choosing the final web framework or database; it creates the testable service boundary that a future HTTP server can mount.
 
 **Tech Stack:** Rust 2024 workspace crate, `serde`, `chrono`, `sha2`, `base64`, `thiserror`, unit tests, workspace clippy lints.
 
@@ -23,7 +23,7 @@ This plan implements Phase 1 of `docs/superpowers/specs/2026-06-02-server-backed
 - Create `crates/social/src/token.rs`: encrypted token-secret envelope and test key provider boundary.
 - Create `crates/social/src/provider.rs`: provider adapter trait, registry, capabilities, eligibility, normalized errors.
 - Create `crates/social/src/job.rs`: publish job construction, idempotency keys, state transition helpers.
-- Modify `Cargo.toml`: add `crates/social` to workspace members and `awidat-social` to workspace dependencies.
+- Modify `Cargo.toml`: add `crates/social` to workspace members and `montage-social` to workspace dependencies.
 
 ## Task 1: Add Crate Skeleton And Core Models
 
@@ -56,8 +56,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -71,7 +71,7 @@ mod tests {
 
         let json = serde_json::to_string(&account)
             .unwrap_or_else(|err| panic!("serialize account: {err}"));
-        assert!(json.contains("Awidat Channel"));
+        assert!(json.contains("Montage Channel"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
     }
@@ -83,10 +83,10 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social model::tests::provider_keys_are_stable
+cargo test -p montage-social model::tests::provider_keys_are_stable
 ```
 
-Expected: FAIL with `package ID specification 'awidat-social' did not match any packages`.
+Expected: FAIL with `package ID specification 'montage-social' did not match any packages`.
 
 - [ ] **Step 3: Add the crate manifest and workspace entries**
 
@@ -94,7 +94,7 @@ Create `crates/social/Cargo.toml`:
 
 ```toml
 [package]
-name = "awidat-social"
+name = "montage-social"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -143,7 +143,7 @@ members = [
 Add the dependency entry near other owned crates:
 
 ```toml
-awidat-social = { path = "crates/social" }
+montage-social = { path = "crates/social" }
 ```
 
 - [ ] **Step 4: Implement the public module surface and models**
@@ -284,8 +284,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -299,7 +299,7 @@ mod tests {
 
         let json = serde_json::to_string(&account)
             .unwrap_or_else(|err| panic!("serialize account: {err}"));
-        assert!(json.contains("Awidat Channel"));
+        assert!(json.contains("Montage Channel"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
     }
@@ -329,7 +329,7 @@ Create empty module files so the crate compiles:
 Run:
 
 ```bash
-cargo test -p awidat-social model::tests
+cargo test -p montage-social model::tests
 ```
 
 Expected: PASS, two model tests pass.
@@ -437,7 +437,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social oauth::tests
+cargo test -p montage-social oauth::tests
 ```
 
 Expected: FAIL with missing `OAuthConnection::start`, `matches_state`, and `validate_callback`.
@@ -505,7 +505,7 @@ fn hash_state(raw_state: &str) -> String {
 Run:
 
 ```bash
-cargo test -p awidat-social oauth::tests
+cargo test -p montage-social oauth::tests
 ```
 
 Expected: PASS, three OAuth tests pass.
@@ -593,7 +593,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social token::tests
+cargo test -p montage-social token::tests
 ```
 
 Expected: FAIL with missing `TestKeyProvider`, `TokenSecret::encrypt`, and `decrypt_access_token`.
@@ -695,7 +695,7 @@ This is a test/local key boundary, not production crypto. The production server 
 Run:
 
 ```bash
-cargo test -p awidat-social token::tests
+cargo test -p montage-social token::tests
 ```
 
 Expected: PASS, two token tests pass.
@@ -782,7 +782,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social provider::tests
+cargo test -p montage-social provider::tests
 ```
 
 Expected: FAIL with missing `ProviderRegistry`.
@@ -875,7 +875,7 @@ impl ProviderRegistry {
 Run:
 
 ```bash
-cargo test -p awidat-social provider::tests
+cargo test -p montage-social provider::tests
 ```
 
 Expected: PASS, two provider tests pass.
@@ -963,7 +963,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests
+cargo test -p montage-social job::tests
 ```
 
 Expected: FAIL with missing `PublishJob` and `PublishJobStatus`.
@@ -1103,7 +1103,7 @@ fn idempotency_key(
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests
+cargo test -p montage-social job::tests
 ```
 
 Expected: PASS, two job tests pass.
@@ -1127,10 +1127,10 @@ git commit -m "feat(social): add campaign publish jobs"
 Run:
 
 ```bash
-cargo test -p awidat-social
+cargo test -p montage-social
 ```
 
-Expected: PASS, all `awidat-social` unit tests pass.
+Expected: PASS, all `montage-social` unit tests pass.
 
 - [ ] **Step 2: Run formatting check**
 
@@ -1147,7 +1147,7 @@ Expected: PASS with no formatting diffs.
 Run:
 
 ```bash
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo clippy -p montage-social --all-targets -- -D warnings
 ```
 
 Expected: PASS with no warnings.

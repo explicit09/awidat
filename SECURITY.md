@@ -1,6 +1,6 @@
 # Security Policy
 
-Awidat is early-stage local-first software. Please do not report security
+Montage is early-stage local-first software. Please do not report security
 issues through public GitHub issues.
 
 ## Reporting a Vulnerability
@@ -25,10 +25,10 @@ In scope:
 - Local file access, project sandboxing, and path traversal issues.
 - Secret handling and credential storage.
 - Desktop app command execution boundaries.
-- Vendored runtime behavior that Awidat exposes directly.
+- Vendored runtime behavior that Montage exposes directly.
 
 Out of scope:
 
-- Vulnerabilities requiring arbitrary local code execution before Awidat starts.
-- Issues in third-party services or model providers outside Awidat's control.
+- Vulnerabilities requiring arbitrary local code execution before Montage starts.
+- Issues in third-party services or model providers outside Montage's control.
 - Social engineering or phishing reports.

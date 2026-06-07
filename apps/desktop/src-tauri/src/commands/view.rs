@@ -1,17 +1,17 @@
 //! Media-pane view-state plumbing. The frontend pushes the current
-//! playback position into AwidatState whenever the user scrubs or
+//! playback position into MontageState whenever the user scrubs or
 //! play state changes; `start_turn` reads it and prefixes a context
 //! line onto user input so the agent knows what's on screen.
 
 use tauri::State;
 
-use crate::state::{AwidatState, ViewState};
+use crate::state::{MontageState, ViewState};
 
 /// Frontend → backend push of the media pane's current state.
 /// Called from MediaPane on scrub / play / pause / select.
 #[tauri::command]
 pub async fn set_view_state(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     stem: String,
     current_time_s: f64,
     is_playing: bool,

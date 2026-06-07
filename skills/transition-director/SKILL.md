@@ -1,6 +1,6 @@
 ---
 name: transition-director
-description: Choose and apply motivated video transitions using Awidat's semantic transition ids, OTIO metadata, and FFmpeg-supported phase-one renderer.
+description: Choose and apply motivated video transitions using Montage's semantic transition ids, OTIO metadata, and FFmpeg-supported phase-one renderer.
 version: 0.1.0
 tier: creative
 tools_allowlist:
@@ -54,35 +54,35 @@ split edit, b-roll cover, or a non-directional transition.
 
 Use these stable ids in `Insert Transition`:
 
-- `awidat.cross_dissolve` for soft time passage, topic drift, or gentle emotional transitions.
-- `awidat.match_dissolve` for visual echo, memory bridge, or a true
+- `montage.cross_dissolve` for soft time passage, topic drift, or gentle emotional transitions.
+- `montage.match_dissolve` for visual echo, memory bridge, or a true
   graphic match between related images.
-- `awidat.fade_black` for a heavier reset, ending, or chapter break.
-- `awidat.flash_white` for a bright beat hit, reveal, or energetic jump.
-- `awidat.wipe_left` / `awidat.wipe_right` for graphic movement between related scenes.
-- `awidat.slide_left` / `awidat.slide_right` for spatial movement or screen-direction continuity.
-- `awidat.smooth_push_left` for a cleaner, less abrupt directional push.
-- `awidat.motion_blur` for a very short motion cover when motion is the
+- `montage.fade_black` for a heavier reset, ending, or chapter break.
+- `montage.flash_white` for a bright beat hit, reveal, or energetic jump.
+- `montage.wipe_left` / `montage.wipe_right` for graphic movement between related scenes.
+- `montage.slide_left` / `montage.slide_right` for spatial movement or screen-direction continuity.
+- `montage.smooth_push_left` for a cleaner, less abrupt directional push.
+- `montage.motion_blur` for a very short motion cover when motion is the
   problem but screen direction is unknown.
-- `awidat.whip_pan_left` / `awidat.whip_pan_right` for very short
+- `montage.whip_pan_left` / `montage.whip_pan_right` for very short
   motion-blur covers when source footage already has fast lateral
   motion. Do not use them for static dialogue.
-- `awidat.pass_by_left` / `awidat.pass_by_right` for an occlusion or
+- `montage.pass_by_left` / `montage.pass_by_right` for an occlusion or
   frame-filling pass-by that naturally masks a scene move.
-- `awidat.iris_open` / `awidat.iris_close` for deliberate vintage,
+- `montage.iris_open` / `montage.iris_close` for deliberate vintage,
   comic, or stylized reveal/closure grammar. Avoid documentary realism.
-- `awidat.invisible_cut` for an occlusion, dark-frame, or mask cut that
+- `montage.invisible_cut` for an occlusion, dark-frame, or mask cut that
   should hide the edit without reading as a visible effect.
-- `awidat.zoom_in` for energetic punch-ins or forward momentum.
-- `awidat.pixelize` for tech/glitch moments only.
-- `awidat.radial` for stylized reveals; use sparingly.
-- `awidat.composite` for an on-the-spot custom recipe expressed with
+- `montage.zoom_in` for energetic punch-ins or forward momentum.
+- `montage.pixelize` for tech/glitch moments only.
+- `montage.radial` for stylized reveals; use sparingly.
+- `montage.composite` for an on-the-spot custom recipe expressed with
   `composition_json`.
 
 Use `SMPTE_Dissolve` only for older/simple EDL compatibility. Use no
-transition for `awidat.hard_cut`; just leave the cut as-is.
+transition for `montage.hard_cut`; just leave the cut as-is.
 Do not author raw FFmpeg transition names such as `fadeblack`,
-`slideleft`, or `wipeleft`; use registered `awidat.*` ids instead.
+`slideleft`, or `wipeleft`; use registered `montage.*` ids instead.
 Phase-one FFmpeg rendering aliases some semantic ids: match-dissolve
 renders like cross-dissolve, whip directions collapse to horizontal
 blur, and invisible-cut is a fast fade rather than a true mask.
@@ -90,9 +90,9 @@ blur, and invisible-cut is a fast fade rather than a true mask.
 ## On-The-Spot Compositions
 
 When a cut needs a custom feel, author it as `composition_json`: a
-data-only recipe over stable primitives. This is how Awidat makes
+data-only recipe over stable primitives. This is how Montage makes
 transitions on the spot without generating arbitrary backend code.
-Use `+ id: awidat.composite` and `+ kind: awidat.composite` for these
+Use `+ id: montage.composite` and `+ kind: montage.composite` for these
 one-off recipes unless the recipe is simply annotating a named preset.
 
 Allowed primitives:
@@ -106,7 +106,7 @@ Allowed primitives:
 - `shake`
 - `chromatic_split`
 - `pixelize`
-- `atomic` with a stable registered `awidat.*` transition id
+- `atomic` with a stable registered `montage.*` transition id
 
 Do not emit raw FFmpeg filter graphs, GLSL, shell commands, plugin code,
 or generated backend code inside an edit. If the desired transition
@@ -115,20 +115,20 @@ outside the normal editing flow.
 
 ## Selection Rules
 
-- Dialogue, serious emotion, or tight reasoning: hard cut or `awidat.cross_dissolve`.
+- Dialogue, serious emotion, or tight reasoning: hard cut or `montage.cross_dissolve`.
 - Speaker handoff: prefer `Set Audio Lead` / `Set Audio Trail`; a
   transition is not an audio continuity repair.
 - Same-camera or same-angle jump cut: do not use a dissolve to hide the
   seam. Prefer a reframe, punch-in, cutaway, or b-roll cover.
-- Beat hit, laugh, reveal, or high-energy turn: `awidat.flash_white`, `awidat.zoom_in`, or a short slide.
+- Beat hit, laugh, reveal, or high-energy turn: `montage.flash_white`, `montage.zoom_in`, or a short slide.
 - Motion mismatch or camera direction: choose slide/wipe direction that follows existing motion.
-- Pass-by object or full-frame occlusion: use `awidat.pass_by_left/right`
-  or `awidat.invisible_cut` only when the indexed/inspected frames show
+- Pass-by object or full-frame occlusion: use `montage.pass_by_left/right`
+  or `montage.invisible_cut` only when the indexed/inspected frames show
   a real mask opportunity.
-- Vintage/comic/stylized reveal: use `awidat.iris_open/close` only when
+- Vintage/comic/stylized reveal: use `montage.iris_open/close` only when
   the project style calls for that grammar.
-- Topic/chapter boundary: `awidat.cross_dissolve` for soft, `awidat.fade_black` for strong.
-- Tech/product/glitch context: `awidat.pixelize`, short duration only.
+- Topic/chapter boundary: `montage.cross_dissolve` for soft, `montage.fade_black` for strong.
+- Tech/product/glitch context: `montage.pixelize`, short duration only.
 - If neither clip has extra handles for overlap, avoid a transition or repair handles first.
 - Avoid repeating the same visible transition twice in a row or making
   every transition the same length unless repetition is the style.
@@ -160,7 +160,7 @@ when the boundary itself does not need a transition.
 
 ## Handles And Alignment
 
-By default, transitions are centered on the cut. In OTIO/Awidat terms:
+By default, transitions are centered on the cut. In OTIO/Montage terms:
 
 - `in_offset_s` consumes incoming pre-roll from the next clip before the cut.
 - `out_offset_s` consumes outgoing post-roll from the previous clip after the cut.
@@ -177,8 +177,8 @@ to widen the source range. Do not keep retrying the same transition.
 *** Begin EDL
 *** Insert Transition
 @@ between: clip_uuid=clip-a and clip_uuid=clip-b
-+ id: awidat.composite
-+ kind: awidat.composite
++ id: montage.composite
++ kind: montage.composite
 + family: custom
 + intent: hide_motion_jump
 + energy: 0.700

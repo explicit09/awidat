@@ -1,7 +1,7 @@
 //! `transcript_pack` tool — compact transcript evidence for planning.
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -96,7 +96,7 @@ impl ToolHandler for TranscriptPackTool {
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };
@@ -110,10 +110,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -158,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn transcript_pack_tool_returns_bounded_json() {
         let dir = tempfile::tempdir().unwrap();
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         write_sidecar(
             dir.path(),
             "raw/a.mp4",
@@ -194,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn transcript_pack_tool_defaults_to_timeline_visible_words() {
         let dir = tempfile::tempdir().unwrap();
-        let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
+        let mut project = montage_proto::project::Project::init(dir.path()).unwrap();
         project.timeline = timeline_with_clip("raw/a.mp4", 1.0, 1.0);
         project.write(dir.path()).unwrap();
         write_sidecar(

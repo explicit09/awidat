@@ -14,13 +14,13 @@
 //!
 //! The single-pass mode (via [`crate::timeline::LoudnessTargetPlan`]) is
 //! the default; this module is purely additive and opt-in via
-//! `metadata.awidat.extra["master_loudnorm"]` on the timeline.
+//! `metadata.montage.extra["master_loudnorm"]` on the timeline.
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::Timeline as OtioTimeline;
-use awidat_proto::project::files;
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::Timeline as OtioTimeline;
+use montage_proto::project::files;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -29,7 +29,7 @@ use crate::timeline::{RenderTimelineError, build_timeline_render_spec};
 
 /// Render-side projection of the proto `MasterLoudnorm` settings.
 ///
-/// Mirrors [`awidat_proto::professional::MasterLoudnorm`] but stays in
+/// Mirrors [`montage_proto::professional::MasterLoudnorm`] but stays in
 /// the render crate so callers don't need to import proto types just to
 /// build a two-pass spec.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -83,7 +83,7 @@ pub enum MasterLoudnormError {
     #[error("timeline parse failed: {0}")]
     OtioParse(String),
     /// Timeline metadata is missing the `master_loudnorm` settings.
-    #[error("timeline has no master_loudnorm settings on metadata.awidat.extra")]
+    #[error("timeline has no master_loudnorm settings on metadata.montage.extra")]
     MissingSettings,
     /// `master_loudnorm` settings are present but malformed or out-of-range.
     #[error("master_loudnorm settings are invalid: {0}")]
@@ -117,15 +117,15 @@ pub fn read_master_loudnorm_plan(
         serde_json::from_str(&raw).map_err(|e| MasterLoudnormError::OtioParse(e.to_string()))?;
     Ok(tl
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(read_master_loudnorm_from_meta))
 }
 
 /// Extract a [`MasterLoudnormPlan`] off the timeline's
-/// `metadata.awidat.extra["master_loudnorm"]` JSON value.
+/// `metadata.montage.extra["master_loudnorm"]` JSON value.
 pub fn read_master_loudnorm_from_meta(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
 ) -> Option<MasterLoudnormPlan> {
     let value = metadata.extra.get("master_loudnorm")?;
     serde_json::from_value::<MasterLoudnormPlan>(value.clone())

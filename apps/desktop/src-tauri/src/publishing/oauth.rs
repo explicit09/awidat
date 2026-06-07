@@ -48,7 +48,7 @@ pub fn fresh_state() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("awidat-{nanos:x}-{seq:x}")
+    format!("montage-{nanos:x}-{seq:x}")
 }
 
 /// Url-encode one query value.
@@ -348,7 +348,7 @@ mod tests {
         let a = fresh_state();
         let b = fresh_state();
         assert_ne!(a, b);
-        assert!(a.starts_with("awidat-"));
+        assert!(a.starts_with("montage-"));
     }
 
     #[test]

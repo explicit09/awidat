@@ -61,7 +61,7 @@ export function ProjectBanner({ onChange }: Props) {
       const picked = await openDialog({
         directory: true,
         multiple: false,
-        title: "Open Awidat project",
+        title: "Open Montage project",
       });
       if (typeof picked === "string") {
         await invoke("set_project_root", { path: picked });
@@ -106,7 +106,7 @@ export function ProjectBanner({ onChange }: Props) {
       <div className="project-path-group">
         <strong className="project-name">{current ? basename(current) : "No project"}</strong>
         <code className="project-path">
-          {current ?? "Open or create an Awidat project"}
+          {current ?? "Open or create an Montage project"}
         </code>
       </div>
       {projectType && current && (

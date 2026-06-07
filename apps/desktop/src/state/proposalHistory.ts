@@ -2,7 +2,7 @@
  * useProposalHistoryStore — the persisted log of proposal decisions.
  *
  * Why this exists (Wave 3 T4):
- *   Awidat's editorial flow is propose → ghost overlay → accept/reject/
+ *   Montage's editorial flow is propose → ghost overlay → accept/reject/
  *   revise. The pending stack in `useBriefProposalsStore` is the LIVE
  *   view; once a decision lands the entry vanishes. This store keeps
  *   the audit trail — "git for video edits" — so the History tab can
@@ -17,7 +17,7 @@
  *   and isolates this surface from backend churn.
  *
  * Persistence:
- *   - Zustand `persist` middleware → `awidat:proposal-history`.
+ *   - Zustand `persist` middleware → `montage:proposal-history`.
  *   - Scoped per-project: entries carry `projectPath`; readers filter.
  *   - LRU-capped per project (Wave 4 W4.5): each accept stamps an inline
  *     OTIO snapshot for the History tab's ↺ Restore action. Snapshots
@@ -52,7 +52,7 @@ export type HistoryDecision = "accepted" | "rejected" | "revised" | "restored";
  * carries an inline OTIO snapshot (timeline.json string); typical
  * snapshots run a few KB but can hit ~50 KB on busy timelines. 100
  * entries × ~10 KB = ~1 MB worst case, comfortably under the browser's
- * ~5 MB localStorage budget shared across all Awidat state.
+ * ~5 MB localStorage budget shared across all Montage state.
  *
  * Exported so tests can exercise eviction without redefining the cap.
  */
@@ -108,7 +108,7 @@ type PersistedShape = {
   entries: HistoryEntry[];
 };
 
-const STORAGE_KEY = "awidat:proposal-history";
+const STORAGE_KEY = "montage:proposal-history";
 
 interface HistoryState {
   /** Flat log, newest first. Bounded only by user volume. */

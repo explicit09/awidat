@@ -53,7 +53,7 @@ pub struct CacheControl {
 }
 
 impl CacheControl {
-    /// 5-minute ephemeral cache. The right default for an awidat session.
+    /// 5-minute ephemeral cache. The right default for an montage session.
     pub fn ephemeral() -> Self {
         Self {
             kind: "ephemeral".into(),

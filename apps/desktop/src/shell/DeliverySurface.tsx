@@ -55,7 +55,7 @@ export type {
  *  so a reload survives; on Export, App.tsx copies the drafts onto
  *  each enqueued `RenderQueueEntry.id` so the worker can hand the
  *  per-provider metadata to the backend at upload time. */
-export const DRAFT_METADATA_JOB_ID = "awidat.deliver.draft";
+export const DRAFT_METADATA_JOB_ID = "montage.deliver.draft";
 
 /**
  * DeliverySurface — concept Screen 7.
@@ -906,7 +906,7 @@ function ExportConfirmDialog({
               </div>
             ) : null}
             <p className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              After export finishes, Awidat will keep the output in review until you mark it good.
+              After export finishes, Montage will keep the output in review until you mark it good.
             </p>
           </Stack>
         </div>

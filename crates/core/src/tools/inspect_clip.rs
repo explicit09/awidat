@@ -7,8 +7,8 @@
 //! (we'd need an image-return shape — see `view_frame` in phase 4D).
 
 use async_trait::async_trait;
-use awidat_index::{SidecarError, read_sidecar};
-use awidat_proto::index::AssetId;
+use montage_index::{SidecarError, read_sidecar};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -124,7 +124,7 @@ impl ToolHandler for InspectClipTool {
         if !any {
             return Err(FunctionCallError::RespondToModel(format!(
                 "inspect_clip: no indexer sidecars found for '{asset}'. Run \
-                 `awidat index` first."
+                 `montage index` first."
             )));
         }
 
@@ -165,11 +165,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

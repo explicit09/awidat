@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 // TimelineItem / TimelineTrack / TimelineSnapshot are generated from
 // the Rust protocol crate via ts-rs — drift is impossible because
-// `cargo test -p awidat-desktop-protocol` re-exports them on every
+// `cargo test -p montage-desktop-protocol` re-exports them on every
 // build. The frontend re-exports them here so existing call sites
 // don't have to learn a new import path.
 export type {
@@ -45,7 +45,7 @@ const TRACK_ZOOM_MAX = 3;
 const ZOOM_STEP = 1.25;
 const TRACK_ZOOM_STEP = 1.15;
 
-const PERSIST_KEY = "awidat.timeline.zoom.v1";
+const PERSIST_KEY = "montage.timeline.zoom.v1";
 
 type PersistedShape = {
   zoom?: number;

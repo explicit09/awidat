@@ -109,9 +109,9 @@ impl Client {
     /// Resolve the key from `PEXELS_API_KEY` or the `pexels_api_key`
     /// keychain entry, then build a client with default config.
     pub fn from_env_or_keychain(config: ClientConfig) -> Result<Self, PexelsError> {
-        let key = awidat_secrets::get(
-            awidat_secrets::env_vars::PEXELS_API_KEY,
-            awidat_secrets::accounts::PEXELS_API_KEY,
+        let key = montage_secrets::get(
+            montage_secrets::env_vars::PEXELS_API_KEY,
+            montage_secrets::accounts::PEXELS_API_KEY,
         )
         .map_err(|e| PexelsError::Keychain(e.to_string()))?
         .ok_or(PexelsError::MissingApiKey)?;

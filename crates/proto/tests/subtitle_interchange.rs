@@ -1,6 +1,6 @@
 //! Subtitle interchange contract tests.
 
-use awidat_proto::subtitle::{
+use montage_proto::subtitle::{
     SubtitleCue, SubtitleFormat, SubtitleTrack, TranscriptSegment, format_srt, format_vtt,
     parse_srt, parse_vtt,
 };

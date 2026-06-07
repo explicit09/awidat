@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_index::sidecar_path;
-use awidat_proto::index::AssetId;
-use awidat_proto::professional::{
+use montage_index::sidecar_path;
+use montage_proto::index::AssetId;
+use montage_proto::professional::{
     FusedMoment, FusedScene, SourceRange, UnderstandingAsset, UnderstandingEvidenceKind,
     UnderstandingEvidenceRef, UnderstandingPackage,
 };

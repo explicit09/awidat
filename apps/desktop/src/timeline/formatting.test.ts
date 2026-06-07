@@ -13,8 +13,8 @@ assert.equal(computePps(0, 500, 1), 12);
 console.log("  ok  fits duration to width and caps zoomed pixels-per-second");
 
 console.log("# transitionLabel");
-assert.equal(transitionLabel("awidat.cross_dissolve"), "Dissolve");
-assert.equal(transitionLabel("awidat.flash_white"), "Flash");
+assert.equal(transitionLabel("montage.cross_dissolve"), "Dissolve");
+assert.equal(transitionLabel("montage.flash_white"), "Flash");
 assert.equal(transitionLabel("custom_wipe"), "custom wipe");
 console.log("  ok  maps known effects and prettifies fallback names");
 

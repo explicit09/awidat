@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Awidat.
+Thanks for helping improve Montage.
 
 ## Development Setup
 
@@ -14,13 +14,20 @@ Prerequisites:
 Useful checks:
 
 ```bash
-make check
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace --all-targets
 python3 python/scripts/smoke_indexers.py --safe
-pnpm --dir apps/desktop exec tsc --noEmit
+pnpm --dir apps/desktop test
 ```
 
 Run the narrowest relevant check first, then broader checks when the change
 touches shared behavior.
+
+`make check` remains the historical full Rust gate and includes
+`cargo test --workspace`, which currently exercises vendored Codex tests as
+well as Montage crates. Prefer targeted `cargo test -p <crate>` runs unless
+the change is meant to validate the whole vendored workspace.
 
 ## Pull Requests
 
@@ -32,7 +39,7 @@ touches shared behavior.
 
 ## Style
 
-Awidat follows the workspace lints in `Cargo.toml`. Avoid `unwrap` and
+Montage follows the workspace lints in `Cargo.toml`. Avoid `unwrap` and
 `expect` in production Rust unless a nearby pattern explicitly allows it.
 
 Generated files under `apps/desktop/src/protocol/generated/` should be updated

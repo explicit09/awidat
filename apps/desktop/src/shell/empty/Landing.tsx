@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import mark from "../../brand/awidat-mark.svg";
+import mark from "../../brand/montage-mark.svg";
 import { useProjectStore } from "../../app/state";
 import { MENU_COMMANDS, emitMenuCommand } from "../../app/menuCommands";
 
@@ -59,13 +59,13 @@ export function Landing() {
         className="drop-shadow-[0_0_24px_rgba(255,122,24,0.30)] mb-3"
       />
       <div className="font-mono text-[13px] tracking-[0.16em] text-[var(--color-text-primary)] mb-5">
-        AWIDAT
+        MONTAGE
       </div>
       <h1 className="text-[16px] font-bold text-[var(--color-text-primary)] mb-1">
         Open a project to start editing
       </h1>
       <p className="text-[12px] text-[var(--color-text-muted)] max-w-[38ch] mb-5">
-        Awidat needs a project to index your media and run the agent. Drop a
+        Montage needs a project to index your media and run the agent. Drop a
         file anywhere in the window, or pick one of these.
       </p>
       <div className="flex flex-wrap gap-2 justify-center">

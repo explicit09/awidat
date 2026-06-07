@@ -6,10 +6,10 @@
 //! b-roll, or a motivated transition.
 
 use async_trait::async_trait;
-use awidat_index::read_sidecar;
-use awidat_proto::index::AssetId;
-use awidat_proto::otio::{StackChild, TrackChild};
-use awidat_proto::project::Project;
+use montage_index::read_sidecar;
+use montage_proto::index::AssetId;
+use montage_proto::otio::{StackChild, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -563,7 +563,7 @@ fn transition_tags(transition: &str) -> Vec<String> {
         "transition_id:{}",
         normalize_editorial_tag(transition)
     )];
-    if let Some(definition) = awidat_proto::transitions::lookup_builtin_transition(transition) {
+    if let Some(definition) = montage_proto::transitions::lookup_builtin_transition(transition) {
         tags.push(format!(
             "transition_family:{}",
             normalize_editorial_tag(definition.family)
@@ -592,18 +592,18 @@ fn motion_transition(
             .as_deref()
             .or_else(|| requested_direction(objective))
         {
-            Some("left") => "awidat.pass_by_left",
-            Some("right") => "awidat.pass_by_right",
-            _ => "awidat.invisible_cut",
+            Some("left") => "montage.pass_by_left",
+            Some("right") => "montage.pass_by_right",
+            _ => "montage.invisible_cut",
         };
     }
 
     match requested_direction(objective)
         .or_else(|| visual_context.and_then(|context| context.dominant_direction.as_deref()))
     {
-        Some("right") => "awidat.whip_pan_right",
-        Some("left") => "awidat.whip_pan_left",
-        _ => "awidat.motion_blur",
+        Some("right") => "montage.whip_pan_right",
+        Some("left") => "montage.whip_pan_left",
+        _ => "montage.motion_blur",
     }
 }
 
@@ -731,7 +731,7 @@ fn string_field(shot: &serde_json::Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn count_recent_transitions(timeline: &awidat_proto::otio::Timeline, at_s: f64) -> usize {
+fn count_recent_transitions(timeline: &montage_proto::otio::Timeline, at_s: f64) -> usize {
     let window_start_s = (at_s - 30.0).max(0.0);
     let mut count = 0_usize;
     for stack_child in &timeline.tracks.children {
@@ -895,7 +895,7 @@ mod tests {
         );
         assert_eq!(rec.action, "cover_or_cut_on_action");
         assert!(rec.broll);
-        assert_eq!(rec.transition, Some("awidat.motion_blur"));
+        assert_eq!(rec.transition, Some("montage.motion_blur"));
     }
 
     #[test]
@@ -936,7 +936,7 @@ mod tests {
             },
             &LearnedEditorialPreferences::default(),
         );
-        assert_eq!(rec.transition, Some("awidat.whip_pan_right"));
+        assert_eq!(rec.transition, Some("montage.whip_pan_right"));
     }
 
     #[test]
@@ -977,7 +977,7 @@ mod tests {
             },
             &LearnedEditorialPreferences::default(),
         );
-        assert_eq!(pass_by.transition, Some("awidat.pass_by_left"));
+        assert_eq!(pass_by.transition, Some("montage.pass_by_left"));
 
         let invisible = recommend_edit(
             &[rule("mid_motion", Verdict::Dirty)],
@@ -1015,7 +1015,7 @@ mod tests {
             },
             &LearnedEditorialPreferences::default(),
         );
-        assert_eq!(invisible.transition, Some("awidat.invisible_cut"));
+        assert_eq!(invisible.transition, Some("montage.invisible_cut"));
     }
 
     #[test]
@@ -1116,7 +1116,7 @@ mod tests {
         );
         assert_ne!(rec.action, "use_match_cut");
         assert_eq!(rec.cut_type, "cut_on_action");
-        assert_eq!(rec.transition, Some("awidat.whip_pan_right"));
+        assert_eq!(rec.transition, Some("montage.whip_pan_right"));
     }
 
     #[test]
@@ -1153,7 +1153,7 @@ mod tests {
             },
             &learned,
         );
-        assert_eq!(rec.transition, Some("awidat.whip_pan_right"));
+        assert_eq!(rec.transition, Some("montage.whip_pan_right"));
         assert_eq!(rec.intent, "hide_motion_jump");
     }
 

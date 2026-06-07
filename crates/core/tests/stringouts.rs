@@ -10,12 +10,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_core::media_catalog_mutation::{create_bin, ensure_awidat_metadata};
-use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use awidat_core::tools::create_stringout::CreateStringoutTool;
-use awidat_core::tools::list_bins::ListBinsTool;
-use awidat_core::tools::list_stringouts::ListStringoutsTool;
-use awidat_proto::project::Project;
+use montage_core::media_catalog_mutation::{create_bin, ensure_montage_metadata};
+use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
+use montage_core::tools::create_stringout::CreateStringoutTool;
+use montage_core::tools::list_bins::ListBinsTool;
+use montage_core::tools::list_stringouts::ListStringoutsTool;
+use montage_proto::project::Project;
 use std::path::Path;
 use tokio::sync::broadcast;
 
@@ -25,14 +25,14 @@ fn ctx_at(root: &Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
         sandbox_mode: SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }
@@ -47,7 +47,7 @@ fn invoke(name: &str, args: serde_json::Value) -> ToolInvocation {
 
 fn init_project_with_bins(root: &Path) {
     let mut project = Project::init(root).unwrap();
-    let meta = ensure_awidat_metadata(&mut project.timeline);
+    let meta = ensure_montage_metadata(&mut project.timeline);
     create_bin(meta, "scene-1".into(), "Scene 1".into(), None).unwrap();
     create_bin(meta, "broll".into(), "B-roll".into(), None).unwrap();
     project.write(root).unwrap();
@@ -143,7 +143,7 @@ async fn create_stringout_rejects_duplicate_id() {
         .unwrap_err();
     assert!(matches!(
         err,
-        awidat_core::FunctionCallError::RespondToModel(msg) if msg.contains("already exists")
+        montage_core::FunctionCallError::RespondToModel(msg) if msg.contains("already exists")
     ));
 }
 
@@ -163,7 +163,7 @@ async fn create_stringout_requires_non_empty_id() {
         .unwrap_err();
     assert!(matches!(
         err,
-        awidat_core::FunctionCallError::RespondToModel(_)
+        montage_core::FunctionCallError::RespondToModel(_)
     ));
 }
 

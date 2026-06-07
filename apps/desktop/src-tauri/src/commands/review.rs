@@ -1,8 +1,8 @@
-use awidat_core::review::LocalReviewPackage;
+use montage_core::review::LocalReviewPackage;
 use serde::Deserialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +52,7 @@ pub struct AuthorLocalReviewPackageArgs {
 /// Build a local review package for a rendered output path.
 #[tauri::command]
 pub async fn author_local_review_package(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: AuthorLocalReviewPackageArgs,
 ) -> Result<LocalReviewPackageResponse, String> {
     if args.render_path.trim().is_empty() {
@@ -66,7 +66,7 @@ pub async fn author_local_review_package(
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
 
-    let package = awidat_core::review::build_local_review_package(
+    let package = montage_core::review::build_local_review_package(
         &project_root,
         &args.render_path,
         args.tags,

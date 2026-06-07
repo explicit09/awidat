@@ -4,7 +4,7 @@
 
 **Goal:** Finish Phase 4B upload lifecycle contracts and Phase 5 team/agency controls for the server-backed social publishing domain.
 
-**Architecture:** Keep this as framework-neutral `awidat-social` domain code. Phase 4B adds mocked status polling/finalization contracts after a provider upload returns `Processing`; Phase 5 adds role policy, per-account defaults, and usage audit storage/services without adding a web-server or UI layer.
+**Architecture:** Keep this as framework-neutral `montage-social` domain code. Phase 4B adds mocked status polling/finalization contracts after a provider upload returns `Processing`; Phase 5 adds role policy, per-account defaults, and usage audit storage/services without adding a web-server or UI layer.
 
 **Tech Stack:** Rust, `serde`, `serde_json`, existing `SocialStore`, in-memory store, SQLite store, mocked provider clients.
 
@@ -67,7 +67,7 @@ The tests should seed an `InMemorySocialStore` with a `Processing` job that alre
 Run:
 
 ```bash
-cargo test -p awidat-social upload_status::tests
+cargo test -p montage-social upload_status::tests
 ```
 
 Expected: FAIL because `upload_status` does not exist.
@@ -96,7 +96,7 @@ Rules:
 Run:
 
 ```bash
-cargo test -p awidat-social upload_status::tests
+cargo test -p montage-social upload_status::tests
 ```
 
 Expected: PASS.
@@ -126,7 +126,7 @@ Add tests for:
 Run:
 
 ```bash
-cargo test -p awidat-social youtube_upload::tests::youtube_status
+cargo test -p montage-social youtube_upload::tests::youtube_status
 ```
 
 Expected: FAIL because the status client boundary does not exist.
@@ -147,7 +147,7 @@ Implement `UploadStatusAdapter` for `YouTubeStatusAdapter<C>` using mocked clien
 Run:
 
 ```bash
-cargo test -p awidat-social youtube_upload::tests::youtube_status
+cargo test -p montage-social youtube_upload::tests::youtube_status
 ```
 
 Expected: PASS.
@@ -179,7 +179,7 @@ Add tests for:
 Run:
 
 ```bash
-cargo test -p awidat-social team_service::tests::role_policy
+cargo test -p montage-social team_service::tests::role_policy
 ```
 
 Expected: FAIL because team service/types do not exist.
@@ -203,7 +203,7 @@ Rules:
 Run:
 
 ```bash
-cargo test -p awidat-social team_service::tests::role_policy
+cargo test -p montage-social team_service::tests::role_policy
 ```
 
 Expected: PASS.
@@ -237,7 +237,7 @@ Add tests for:
 Run:
 
 ```bash
-cargo test -p awidat-social team_service::tests::account_defaults_and_audit
+cargo test -p montage-social team_service::tests::account_defaults_and_audit
 ```
 
 Expected: FAIL because defaults/audit storage does not exist.
@@ -264,7 +264,7 @@ SQLite should store defaults and member roles as JSON payload tables and list pu
 Run:
 
 ```bash
-cargo test -p awidat-social team_service::tests::account_defaults_and_audit
+cargo test -p montage-social team_service::tests::account_defaults_and_audit
 ```
 
 Expected: PASS.
@@ -286,7 +286,7 @@ git commit -m "feat(social): add account defaults and usage audit"
 Run:
 
 ```bash
-cargo test -p awidat-social upload_status::tests youtube_upload::tests::youtube_status team_service::tests
+cargo test -p montage-social upload_status::tests youtube_upload::tests::youtube_status team_service::tests
 ```
 
 - [ ] **Step 2: Run full social verification**
@@ -294,8 +294,8 @@ cargo test -p awidat-social upload_status::tests youtube_upload::tests::youtube_
 Run:
 
 ```bash
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

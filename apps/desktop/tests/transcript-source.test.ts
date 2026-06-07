@@ -101,7 +101,7 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 60,
     }),
@@ -133,7 +133,7 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 60,
     }),
@@ -154,13 +154,13 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 30,
     }),
     makeClipItem({
       clipUuid: "clip-b",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 30,
       durationS: 30,
     }),
@@ -182,7 +182,7 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 60,
     }),
@@ -266,7 +266,7 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 60,
     }),
@@ -280,13 +280,13 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 0,
       durationS: 10,
     }),
     makeClipItem({
       clipUuid: "clip-b",
-      proxyPath: "/proj/.awidat/proxies/foo.mp4",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
       sourceStartS: 20,
       durationS: 10,
     }),
@@ -303,7 +303,7 @@ function snapshotWithClips(
   const snap = snapshotWithClips([
     makeClipItem({
       clipUuid: "clip-a",
-      proxyPath: "/proj/.awidat/proxies/bar.mp4",
+      proxyPath: "/proj/.montage/proxies/bar.mp4",
       sourceStartS: 0,
       durationS: 30,
     }),

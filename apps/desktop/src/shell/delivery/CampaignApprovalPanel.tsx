@@ -88,7 +88,7 @@ export function CampaignApprovalPanel({
     setPublishing(true);
     setPublishError(null);
     try {
-      // Server-backed path (Phase 5): publishes through the awidat-social server
+      // Server-backed path (Phase 5): publishes through the montage-social server
       // and the OAuth-connected account, not the legacy desktop-local uploader.
       const results = await publishCampaignViaServer(
         active,

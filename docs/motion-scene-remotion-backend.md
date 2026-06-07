@@ -1,6 +1,6 @@
 # MotionScene and Remotion Backend Fit
 
-Awidat's native MotionScene lane should remain the first renderer agents target
+Montage's native MotionScene lane should remain the first renderer agents target
 for procedural visuals that can be represented in the local schema. The native
 path keeps previews immediate in the desktop app, keeps render limitations
 visible in preflight, and lets simple layers lower through the existing timeline
@@ -20,7 +20,7 @@ Current native subset:
   `overlay.x`, `overlay.y`, `overlay.scale`, `overlay.opacity`, and
   `overlay.rotation_deg`; still-image render lowering uses these keyframes
   natively.
-- Video/media layers stay stored in `metadata.awidat.motion_scenes` and must
+- Video/media layers stay stored in `metadata.montage.motion_scenes` and must
   report explicit limitations until they have preview and render lowering.
   Actual footage should continue to use the existing B-roll/PiP/media overlay
   path.

@@ -3,18 +3,18 @@
 **Date:** 2026-06-04
 **Status:** Approved (brainstorming) → ready for implementation plan
 **Feature:** captions (iteration 3, phase 1)
-**Branch base:** `feat/awidat-editorial-upgrades`
+**Branch base:** `feat/montage-editorial-upgrades`
 **Builds on:** iterations 1 & 2 specs (readability/cross-format; native render/placement)
 
 ---
 
 ## 1. Goal
 
-Give awidat an **agent-native caption style system**: a compact style schema + a curated
+Give montage an **agent-native caption style system**: a compact style schema + a curated
 library of **preset templates** that the agent applies (user can pick/override) — delivering
 the looks short-form editors actually use (esp. the **active-word "pop"** highlight), without
 becoming a 25-knob manual control panel. Plus the **9:16 vertical-output fix** so short-form
-renders on a correct canvas. Prove via awidat-native renders the user signs off on.
+renders on a correct canvas. Prove via montage-native renders the user signs off on.
 
 Non-goal (this phase): exposing every CapCut knob for manual tweaking; rotation, character
 spacing, glow, animated templates — deferred until a real reel needs them (YAGNI).
@@ -131,7 +131,7 @@ shape from `Set Output Format`.
   for Upper); `ActiveWordPop` emits one Dialogue per word with exactly one `\c`-highlighted word and
   N dialogues for N words; whole-cue/word-by-word paths unchanged.
 - **render unit:** 9:16 output format → vertical canvas dimensions.
-- **regression:** scoped `awidat-core` + `awidat-render` suites green (disk memory).
+- **regression:** scoped `montage-core` + `montage-render` suites green (disk memory).
 - **end-to-end (manual proof, sign-off):** (a) long-form Episode rendered with `clean_white` and
   `boxed`; (b) a **synthetic vertical clip** (crop/scale an uncaptioned Episode slice to 1080x1920)
   rendered short-form with `word_pop` — vertical canvas, UPPER bold captions, the active word
@@ -159,7 +159,7 @@ round-trip) remain separate.
   its own task sequence; the plan isolates it as the first component so it can be validated alone.
 - **Synthetic vertical clip** — center-crop may cut subjects; acceptable for a style proof (not a
   framing proof). Render to a clean (no-apostrophe) path per the path-escaping chip.
-- **Disk**: scoped builds/tests only (`-p awidat-core -p awidat-render`, `CARGO_INCREMENTAL=0`).
+- **Disk**: scoped builds/tests only (`-p montage-core -p montage-render`, `CARGO_INCREMENTAL=0`).
 
 ## 9. Open items for review time
 

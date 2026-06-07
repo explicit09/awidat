@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use awidat_proto::professional::{MotionScene, MotionSceneLayer, MotionSceneLayerKind};
+use montage_proto::professional::{MotionScene, MotionSceneLayer, MotionSceneLayerKind};
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;

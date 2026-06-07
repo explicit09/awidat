@@ -2,7 +2,7 @@
 //! commands against them.
 //!
 //! Discovery order (matches what every Rust ffmpeg wrapper does in
-//! 2026): the `AWIDAT_FFMPEG` / `AWIDAT_FFPROBE` env overrides first,
+//! 2026): the `MONTAGE_FFMPEG` / `MONTAGE_FFPROBE` env overrides first,
 //! then `which ffmpeg` / `which ffprobe`. We do not bundle a static
 //! ffmpeg binary — that's a v2 packaging concern.
 //!
@@ -42,7 +42,7 @@ pub struct MediaProbe {
 pub enum FfmpegError {
     /// Couldn't find the binary.
     #[error(
-        "could not locate '{which}': set AWIDAT_FFMPEG (or AWIDAT_FFPROBE) or install via your package manager"
+        "could not locate '{which}': set MONTAGE_FFMPEG (or MONTAGE_FFPROBE) or install via your package manager"
     )]
     NotFound {
         /// Either `"ffmpeg"` or `"ffprobe"`.
@@ -89,7 +89,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub fn ffmpeg_path() -> Result<PathBuf, FfmpegError> {
     static CACHE: OnceLock<Result<PathBuf, ()>> = OnceLock::new();
     CACHE
-        .get_or_init(|| resolve_binary("ffmpeg", "AWIDAT_FFMPEG"))
+        .get_or_init(|| resolve_binary("ffmpeg", "MONTAGE_FFMPEG"))
         .clone()
         .map_err(|_| FfmpegError::NotFound { which: "ffmpeg" })
 }
@@ -98,7 +98,7 @@ pub fn ffmpeg_path() -> Result<PathBuf, FfmpegError> {
 pub fn ffprobe_path() -> Result<PathBuf, FfmpegError> {
     static CACHE: OnceLock<Result<PathBuf, ()>> = OnceLock::new();
     CACHE
-        .get_or_init(|| resolve_binary("ffprobe", "AWIDAT_FFPROBE"))
+        .get_or_init(|| resolve_binary("ffprobe", "MONTAGE_FFPROBE"))
         .clone()
         .map_err(|_| FfmpegError::NotFound { which: "ffprobe" })
 }
@@ -658,7 +658,7 @@ pub enum TranscodeProgress {
 }
 
 /// Caller-supplied progress sink for [`transcode_proxy`]. Same
-/// shape as `awidat_index::ProgressCallback` (Arc-wrapped trait
+/// shape as `montage_index::ProgressCallback` (Arc-wrapped trait
 /// object, sync `Fn`, `Send + Sync + 'static`) so the desktop can
 /// wrap it the same way.
 pub type TranscodeProgressCallback =

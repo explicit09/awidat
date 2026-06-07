@@ -16,8 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::transitions::ParamCurve;
-use awidat_render_gpu::{FrameParams, GpuError, GpuTransitionRenderer, TransitionShader};
+use montage_proto::transitions::ParamCurve;
+use montage_render_gpu::{FrameParams, GpuError, GpuTransitionRenderer, TransitionShader};
 use thiserror::Error;
 
 use crate::frame_io::{FrameEncoder, FrameIoError, FrameProvider};
@@ -715,10 +715,10 @@ mod tests {
             duration_s: 0.5,
             shader: TransitionShader::CrossDissolve,
             param_curves: [
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
             ],
         }];
         let err = composer
@@ -770,10 +770,10 @@ mod tests {
                 duration_s: 0.4,
                 shader: TransitionShader::CrossDissolve,
                 param_curves: [
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
                 ],
             },
             RawStreamTransition {
@@ -781,10 +781,10 @@ mod tests {
                 duration_s: 0.4,
                 shader: TransitionShader::CrossDissolve,
                 param_curves: [
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
-                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
+                    montage_proto::transitions::ParamCurve::Const(0.0),
                 ],
             },
         ];
@@ -889,20 +889,20 @@ mod tests {
         assert!(status.success(), "testsrc synth must succeed");
 
         let blur_curve = ParamCurve::Keyframes(vec![
-            awidat_proto::transitions::Keyframe {
+            montage_proto::transitions::Keyframe {
                 t: 0.0,
                 v: 0.0,
-                easing: awidat_proto::transitions::TransitionEasing::Linear,
+                easing: montage_proto::transitions::TransitionEasing::Linear,
             },
-            awidat_proto::transitions::Keyframe {
+            montage_proto::transitions::Keyframe {
                 t: 0.5,
                 v: 0.95,
-                easing: awidat_proto::transitions::TransitionEasing::Linear,
+                easing: montage_proto::transitions::TransitionEasing::Linear,
             },
-            awidat_proto::transitions::Keyframe {
+            montage_proto::transitions::Keyframe {
                 t: 1.0,
                 v: 0.0,
-                easing: awidat_proto::transitions::TransitionEasing::Linear,
+                easing: montage_proto::transitions::TransitionEasing::Linear,
             },
         ]);
 

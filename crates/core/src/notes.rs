@@ -2,7 +2,7 @@
 //!
 //! Notes the agent surfaces (dead air, filler words, false starts,
 //! continuity warnings, b-roll suggestions) live in
-//! `<project>/.awidat/notes.json`. The frontend's NotesPanel reads
+//! `<project>/.montage/notes.json`. The frontend's NotesPanel reads
 //! the file on project load + writes back when the user clicks
 //! Dismiss / Resolve. Notes persist across sessions so the user
 //! can pick up where they left off.
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Filename inside `.awidat/`.
+/// Filename inside `.montage/`.
 pub const NOTES_FILE: &str = "notes.json";
 
 /// One persisted editorial note. Mirrors the protocol's
@@ -134,9 +134,9 @@ impl NotesFile {
     }
 }
 
-/// Path to `<project>/.awidat/notes.json`.
+/// Path to `<project>/.montage/notes.json`.
 pub fn notes_file_path(project_root: &Path) -> PathBuf {
-    project_root.join(".awidat").join(NOTES_FILE)
+    project_root.join(".montage").join(NOTES_FILE)
 }
 
 /// Load notes from disk. Returns empty on missing/corrupted
@@ -161,11 +161,11 @@ pub fn load_notes(project_root: &Path) -> NotesFile {
     }
 }
 
-/// Persist notes to disk. Creates `.awidat/` if missing.
+/// Persist notes to disk. Creates `.montage/` if missing.
 pub fn save_notes(project_root: &Path, file: &NotesFile) -> Result<(), String> {
     let path = notes_file_path(project_root);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create .awidat: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create .montage: {e}"))?;
     }
     let json = serde_json::to_vec_pretty(file).map_err(|e| format!("serialize notes: {e}"))?;
     std::fs::write(&path, json).map_err(|e| format!("write notes: {e}"))?;

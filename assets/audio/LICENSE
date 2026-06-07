@@ -3,7 +3,7 @@ CC0 1.0 Universal (Public Domain Dedication)
 The audio files under `assets/audio/sfx/` in this directory are
 synthetic sound effects generated entirely from mathematical
 oscillators and noise (ffmpeg lavfi `sine` / `aevalsrc`). They are
-contributed to the public domain under CC0 1.0 by the awidat
+contributed to the public domain under CC0 1.0 by the montage
 project authors.
 
 You may use, copy, modify, and distribute these files, including

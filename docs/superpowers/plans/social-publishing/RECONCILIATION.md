@@ -7,7 +7,7 @@ here, **this file wins**. Apply these before executing any phase.
 
 ## D1 — Server execution model: sync domain core + async server shell (RESOLVED)
 
-**Decision:** Keep `awidat-social` synchronous and untouched (the `SocialStore`
+**Decision:** Keep `montage-social` synchronous and untouched (the `SocialStore`
 trait, `SocialApi`, `PublishService`, `UploadService`, the FSM — all the merged,
 tested code stays as-is). The new server is async only at its shell.
 
@@ -19,7 +19,7 @@ tested code stays as-is). The new server is async only at its shell.
   (tokio-postgres's blocking sibling) with a blocking connection pool (`r2d2` +
   `r2d2_postgres`), NOT async `sqlx`. This lets the sync trait stay sync with no
   bridge gymnastics and no `await_holding_lock` risk.
-- The async server shell (`awidat-social-server`: axum + reqwest for provider
+- The async server shell (`montage-social-server`: axum + reqwest for provider
   HTTP) calls domain logic via `tokio::task::spawn_blocking(move || {
   SocialApi::...(&mut store, ...) })`. Provider HTTP that is async (reqwest)
   lives in the server/leaf clients; the FSM calls them via the adapter trait,
@@ -113,11 +113,11 @@ creates and reuses Phase 4's cron-secret scheme. Update Phase 7
   struct (preferred: keep the domain struct stable, hold backoff policy in the
   server worker).
 - **G6 (Phase 5):** there is **no** per-field desktop config struct in
-  `commands/config.rs`. Add `AWIDAT_SOCIAL_SERVER_URL` via `awidat_config::Config`
+  `commands/config.rs`. Add `MONTAGE_SOCIAL_SERVER_URL` via `montage_config::Config`
   (or an env var read at command time), not a non-existent config-field pattern.
 - **G7 (Phase 5):** feature-gating the legacy `apps/desktop/src-tauri/src/publishing/`
   dir is a larger refactor — it's wired into `commands/publishing.rs` and
-  `AwidatState.upload_queue` (state.rs:105) and the render-queue auto-upload TS
+  `MontageState.upload_queue` (state.rs:105) and the render-queue auto-upload TS
   tests. Confirm nothing live depends on `set_render_upload_targets` /
   `start_uploads_for_job` / `poll_upload_states` before gating; budget it.
 - **G8 (Phase 4 concurrency):** the Postgres `claim_due_publish_jobs` (Phase 1

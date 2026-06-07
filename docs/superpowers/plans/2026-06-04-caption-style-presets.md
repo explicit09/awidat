@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An agent-native caption **style preset** system (weight, casing, color, active-word highlight, background box) carried via an extensible `style_json` blob and rendered by libass, plus the **9:16 vertical-output fix**, proven by awidat-native renders.
+**Goal:** An agent-native caption **style preset** system (weight, casing, color, active-word highlight, background box) carried via an extensible `style_json` blob and rendered by libass, plus the **9:16 vertical-output fix**, proven by montage-native renders.
 
 **Architecture:** Core `caption::styles` grows a rich `CaptionStyleSpec` + a named preset registry; `plan_captions`/scene-aware pick a preset and serialize it into the caption EDL as `style_json`; the EDL parser carries it on `InsertCaption`; `apply` lowers it to a render-side `CaptionRenderStyle` on `TitlePlan`; `ass.rs` honors it (Style row + a new active-word-pop emission). Separately, fix the render so `Set Output Format 9:16` yields a vertical canvas.
 
-**Tech Stack:** Rust (`awidat-core`, `awidat-render`), serde_json, ffmpeg/libass. Spec: `docs/superpowers/specs/2026-06-04-caption-style-presets-design.md`.
+**Tech Stack:** Rust (`montage-core`, `montage-render`), serde_json, ffmpeg/libass. Spec: `docs/superpowers/specs/2026-06-04-caption-style-presets-design.md`.
 
-**Conventions (disk memory):** every cargo command prefixed `CARGO_INCREMENTAL=0`, scoped `-p awidat-core` / `-p awidat-render`; never `--workspace`. Commit trailer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`. Render proofs from a clean (no-apostrophe) path.
+**Conventions (disk memory):** every cargo command prefixed `CARGO_INCREMENTAL=0`, scoped `-p montage-core` / `-p montage-render`; never `--workspace`. Commit trailer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`. Render proofs from a clean (no-apostrophe) path.
 
 ---
 
@@ -20,7 +20,7 @@
 - Modify: `crates/core/src/edl/op.rs`, `crates/core/src/edl/parser.rs`, `crates/core/src/edl/apply.rs` — carry `style_json` on `InsertCaption` → `TitlePlan.caption_style`.
 - Modify: `crates/render/src/timeline.rs` (`TitlePlan`) — add `caption_style: Option<CaptionRenderStyle>`; define `CaptionRenderStyle`.
 - Modify: `crates/render/src/ass.rs` — honor style + active-word-pop emission.
-- Modify: `crates/core/src/awidat_mcp/tools/plan_captions.rs` — `preset` arg + default selection.
+- Modify: `crates/core/src/montage_mcp/tools/plan_captions.rs` — `preset` arg + default selection.
 - Modify: `video_editing_transcripts/knowledge/captions/SKILL.md` — preset docs.
 
 ---
@@ -29,7 +29,7 @@
 
 **Files:** Modify `crates/render/src/timeline.rs`
 
-Evidence (already gathered): a timeline whose `metadata.awidat` carries `output_format = {aspect_ratio:"9:16"}` (flattened into `extra`) still renders 1920×1080. `timeline_render_canvas` (line ~107) reads `extra["output_format"]["aspect_ratio"]` → `from_aspect_ratio` (1080×1920 for "9:16"), and `collect_timeline_full_plan` (~line 2027) returns that `canvas` into `build_timeline_render_spec_inner`. So the break is between loaded metadata and applied output dimensions.
+Evidence (already gathered): a timeline whose `metadata.montage` carries `output_format = {aspect_ratio:"9:16"}` (flattened into `extra`) still renders 1920×1080. `timeline_render_canvas` (line ~107) reads `extra["output_format"]["aspect_ratio"]` → `from_aspect_ratio` (1080×1920 for "9:16"), and `collect_timeline_full_plan` (~line 2027) returns that `canvas` into `build_timeline_render_spec_inner`. So the break is between loaded metadata and applied output dimensions.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -39,8 +39,8 @@ Add to the `#[cfg(test)] mod tests` in `timeline.rs`:
 #[test]
 fn nine_sixteen_output_format_yields_vertical_canvas() {
     // A timeline carrying output_format 9:16 must conform to a vertical canvas.
-    use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-    let mut md = AwidatTimelineMetadata::default();
+    use montage_proto::montage_meta::MontageTimelineMetadata;
+    let mut md = MontageTimelineMetadata::default();
     md.extra.insert(
         "output_format".into(),
         serde_json::json!({"aspect_ratio": "9:16", "platform": "vertical_short", "safe_area": "mobile"}),
@@ -51,7 +51,7 @@ fn nine_sixteen_output_format_yields_vertical_canvas() {
     // And the round-trip through serde (flatten) must preserve it, since the CLI
     // path loads the timeline from disk before computing the canvas.
     let json = serde_json::to_string(&md).unwrap();
-    let back: AwidatTimelineMetadata = serde_json::from_str(&json).unwrap();
+    let back: MontageTimelineMetadata = serde_json::from_str(&json).unwrap();
     let canvas2 = timeline_render_canvas(Some(&back));
     assert_eq!((canvas2.width, canvas2.height), (1080, 1920), "9:16 must survive serde round-trip");
 }
@@ -59,25 +59,25 @@ fn nine_sixteen_output_format_yields_vertical_canvas() {
 
 - [ ] **Step 2: Run — see which assertion fails**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render nine_sixteen_output_format -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render nine_sixteen_output_format -- --nocapture`
 The in-memory assertion likely passes; the **serde round-trip** assertion is the suspect (flatten may not repopulate `extra["output_format"]` on deserialize, or `from_aspect_ratio` isn't reached). Whichever fails localizes the bug.
 
 - [ ] **Step 3: Diagnose + fix (driven by the failing assertion)**
 
 Use `superpowers:systematic-debugging`. Likely causes and the targeted fix:
-- **If the round-trip assertion fails** (most likely): the flattened `output_format` key isn't landing back in `extra` on deserialize (e.g. another field consumes it, or `extra` isn't `#[serde(flatten)] HashMap`). Fix in `crates/proto/src/awidat_meta.rs` so unknown top-level awidat keys round-trip into `extra` (or add a typed `output_format` field read by `timeline_render_canvas`). If you add a typed field, update `timeline_render_canvas` to read it.
+- **If the round-trip assertion fails** (most likely): the flattened `output_format` key isn't landing back in `extra` on deserialize (e.g. another field consumes it, or `extra` isn't `#[serde(flatten)] HashMap`). Fix in `crates/proto/src/montage_meta.rs` so unknown top-level montage keys round-trip into `extra` (or add a typed `output_format` field read by `timeline_render_canvas`). If you add a typed field, update `timeline_render_canvas` to read it.
 - **If both canvas assertions pass** but the real render is still 16:9: the canvas is correct but not applied to output dimensions — trace `build_timeline_render_spec_inner` → the conform/scale/pad + encoder output dims, and ensure they use `canvas.width`/`canvas.height` (not `TIMELINE_RENDER_WIDTH/HEIGHT`). Add an assertion in the test on the produced `RenderJobSpec`'s output dimensions if reachable.
 
 Make the minimal change that turns both assertions green. Do NOT change the 16:9 default behavior.
 
 - [ ] **Step 4: Run — verify PASS**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render nine_sixteen_output_format -- --nocapture` → PASS.
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render -- --nocapture` → existing render tests stay green (16:9 default unchanged).
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render nine_sixteen_output_format -- --nocapture` → PASS.
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render -- --nocapture` → existing render tests stay green (16:9 default unchanged).
 
 - [ ] **Step 5: Clippy + commit**
 
-`CARGO_INCREMENTAL=0 cargo clippy -p awidat-render --all-targets -- -D warnings 2>&1 | tail -5` → clean (if the proto crate changed, also `cargo clippy -p awidat-proto`).
+`CARGO_INCREMENTAL=0 cargo clippy -p montage-render --all-targets -- -D warnings 2>&1 | tail -5` → clean (if the proto crate changed, also `cargo clippy -p montage-proto`).
 ```bash
 git add -A
 git commit -m "fix(render): honor Set Output Format 9:16 -> vertical canvas
@@ -105,7 +105,7 @@ pub enum RevealMode {
     ActiveWordPop,
 }
 ```
-Build: `CARGO_INCREMENTAL=0 cargo build -p awidat-core` — fix any non-exhaustive `match RevealMode` arms (e.g. in `caption::edl`/`plan_captions`) by treating `ActiveWordPop` like `WordByWord` for now (it also needs word timings); the render handles the visual difference. Re-run `cargo test -p awidat-core caption::` to confirm green.
+Build: `CARGO_INCREMENTAL=0 cargo build -p montage-core` — fix any non-exhaustive `match RevealMode` arms (e.g. in `caption::edl`/`plan_captions`) by treating `ActiveWordPop` like `WordByWord` for now (it also needs word timings); the render handles the visual difference. Re-run `cargo test -p montage-core caption::` to confirm green.
 
 - [ ] **Step 2: Write the failing tests for the rich spec + presets**
 
@@ -145,7 +145,7 @@ Replace the `styles.rs` tests module additions (keep existing tests) with these 
 
 - [ ] **Step 3: Run — verify FAIL** (`CaptionWeight`/`CaptionCasing`/`CaptionBackground`/`resolve_preset`/`preset_names` not found, spec fields missing).
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core caption::styles -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core caption::styles -- --nocapture`
 
 - [ ] **Step 4: Implement the rich spec + registry**
 
@@ -225,7 +225,7 @@ Update the existing `resolve_style(format, mood)` to delegate to presets: `minim
 
 - [ ] **Step 5: Run — verify PASS** + caption suite green.
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core caption:: -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core caption:: -- --nocapture`
 
 - [ ] **Step 6: Clippy + commit**
 
@@ -259,7 +259,7 @@ Add to `edl.rs` tests:
     }
 ```
 
-- [ ] **Step 2: Run — FAIL.** `CARGO_INCREMENTAL=0 cargo test -p awidat-core caption::edl -- --nocapture`
+- [ ] **Step 2: Run — FAIL.** `CARGO_INCREMENTAL=0 cargo test -p montage-core caption::edl -- --nocapture`
 
 - [ ] **Step 3: Implement**
 
@@ -314,13 +314,13 @@ In `parser.rs` tests (near the existing InsertCaption parse test), add:
 ```
 (Adjust `parse_edl`/`EdlEnvelope` names to the actual parser API used by existing parser tests in this file.)
 
-- [ ] **Step 3: Run — FAIL.** `CARGO_INCREMENTAL=0 cargo test -p awidat-core parses_caption_style_json -- --nocapture`
+- [ ] **Step 3: Run — FAIL.** `CARGO_INCREMENTAL=0 cargo test -p montage-core parses_caption_style_json -- --nocapture`
 
 - [ ] **Step 4: Implement parsing**
 
 In `parser.rs`, the `OpKind::InsertCaption => { ... Ok(EdlOp::InsertCaption { ... }) }` block (~line 1279–1320): read the optional field with the existing JSON helper used for `word_timings_json` (`take_field_json::<serde_json::Value>` / the optional variant) keyed `style_json`, and pass it into the constructed `EdlOp::InsertCaption { ..., style_json }`. Mirror exactly how `word_timings_json` is read (optional, default None).
 
-- [ ] **Step 5: Run — PASS** + edl parser suite green (`cargo test -p awidat-core edl::`).
+- [ ] **Step 5: Run — PASS** + edl parser suite green (`cargo test -p montage-core edl::`).
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -375,7 +375,7 @@ In `apply.rs` tests, extend the Insert Caption apply test (or add one): apply an
 
 In `apply.rs`, `apply_insert_caption` (and its `EdlOp::InsertCaption` match arm at ~line 780) now receives `style_json`. Store it on the caption node's effect metadata (key `caption_style`) alongside the existing caption fields, so the render's caption→TitlePlan construction can read it into `TitlePlan.caption_style` (deserialize the JSON into `CaptionRenderStyle`; on error → None). Wire the render path that builds `TitlePlan` from caption clips to populate `caption_style` from that metadata.
 
-- [ ] **Step 5: Run — PASS** + `cargo test -p awidat-core edl::` and `cargo test -p awidat-render` green.
+- [ ] **Step 5: Run — PASS** + `cargo test -p montage-core edl::` and `cargo test -p montage-render` green.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -496,7 +496,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 8: Planner/skill pick the preset
 
-**Files:** Modify `crates/core/src/awidat_mcp/tools/plan_captions.rs`, `crates/core/src/scene_aware_short_form.rs`
+**Files:** Modify `crates/core/src/montage_mcp/tools/plan_captions.rs`, `crates/core/src/scene_aware_short_form.rs`
 
 - [ ] **Step 1: Failing test (plan_captions preset arg)**
 
@@ -521,15 +521,15 @@ In `plan_captions.rs` tests:
 
 - [ ] **Step 3: Implement**
 
-Add `pub preset: Option<String>` to `PlanCaptionsArgs` (`#[serde(default)]`). In `run`, resolve the spec: if `preset` is Some and `resolve_preset` returns Some, use it; else fall back to the existing `resolve_style(format, mood)` default (which now maps to presets). Pass the resolved spec to `build_caption_edl_lines`. Update the `DESCRIPTION` + the MCP `#[tool]` arg doc in `awidat_mcp/mod.rs` to mention `preset` (optional; `preset_names()` values).
+Add `pub preset: Option<String>` to `PlanCaptionsArgs` (`#[serde(default)]`). In `run`, resolve the spec: if `preset` is Some and `resolve_preset` returns Some, use it; else fall back to the existing `resolve_style(format, mood)` default (which now maps to presets). Pass the resolved spec to `build_caption_edl_lines`. Update the `DESCRIPTION` + the MCP `#[tool]` arg doc in `montage_mcp/mod.rs` to mention `preset` (optional; `preset_names()` values).
 
 For `scene_aware_short_form` `build_edl_fragment`: choose the preset for short-form captions — `word_pop` (energetic short-form) by default; pass its spec to `build_caption_edl_lines` (replacing the hardcoded `CaptionStyleSpec { font_size: 56, ... }`). Keep a brief comment.
 
-- [ ] **Step 4: Run — PASS** + `cargo test -p awidat-core plan_captions scene_aware_short_form` green (update any test asserting the old hardcoded font/white spec).
+- [ ] **Step 4: Run — PASS** + `cargo test -p montage-core plan_captions scene_aware_short_form` green (update any test asserting the old hardcoded font/white spec).
 
 - [ ] **Step 5: Commit**
 ```bash
-git add crates/core/src/awidat_mcp/tools/plan_captions.rs crates/core/src/awidat_mcp/mod.rs crates/core/src/scene_aware_short_form.rs
+git add crates/core/src/montage_mcp/tools/plan_captions.rs crates/core/src/montage_mcp/mod.rs crates/core/src/scene_aware_short_form.rs
 git commit -m "feat(caption): preset selection in plan_captions + short-form word_pop default
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -551,8 +551,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Files:** none.
 
 - [ ] `cargo fmt --all` then `cargo fmt --all -- --check` (nightly-config warnings OK).
-- [ ] `CARGO_INCREMENTAL=0 cargo clippy -p awidat-core -p awidat-render --all-targets -- -D warnings 2>&1 | tail -6` → clean (add `-p awidat-proto` if it changed in Task 1).
-- [ ] `CARGO_INCREMENTAL=0 cargo test -p awidat-core -p awidat-render 2>&1 | grep -E "test result:|FAILED" | tail` → 0 failed.
+- [ ] `CARGO_INCREMENTAL=0 cargo clippy -p montage-core -p montage-render --all-targets -- -D warnings 2>&1 | tail -6` → clean (add `-p montage-proto` if it changed in Task 1).
+- [ ] `CARGO_INCREMENTAL=0 cargo test -p montage-core -p montage-render 2>&1 | grep -E "test result:|FAILED" | tail` → 0 failed.
 - [ ] Commit any fmt fixups.
 
 ---
@@ -561,7 +561,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Files:** none. Render from a clean (no-apostrophe) path. No `ANTHROPIC_API_KEY` needed.
 
-- [ ] **Step 1: Build CLI** — `CARGO_INCREMENTAL=0 cargo build -p awidat-cli --bin awidat`.
+- [ ] **Step 1: Build CLI** — `CARGO_INCREMENTAL=0 cargo build -p montage-cli --bin montage`.
 - [ ] **Step 2: Make a synthetic raw vertical clip** from an uncaptioned Episode slice:
   `ffmpeg -y -i "/Volumes/Explicit's Hard Drive/capproof_src/ep1_60s.mp4" -t 20 -vf "crop=ih*9/16:ih,scale=1080:1920" -c:v libx264 -preset veryfast -crf 20 -c:a aac /Users/explicit/vshort_src.mp4` (center-crop to 9:16, 20s).
 - [ ] **Step 3: Long-form preset renders** (clean path project, reuse the `clean_white` and `boxed` presets via `plan_captions preset=...`): index whisper (out-of-band per the warm env), generate EDL for each preset via a throwaway `crates/core/examples/*.rs` harness (DELETE before finishing), `apply-edl` + `render`. Confirm clean_white and boxed look right.

@@ -24,7 +24,7 @@ const entry: RenderQueueEntry = {
     youtube: {
       title: "YouTube launch title",
       description: "Long-form description",
-      tags: ["awidat"],
+      tags: ["montage"],
       visibility: "public",
       scheduledAt: 1_800,
       thumbnailPath: undefined,
@@ -70,7 +70,7 @@ assert.equal(posts[0].scheduledAt, 1_800);
 assert.equal(posts[0].jobId, "job_yt");
 assert.equal(posts[0].targetId, "target_yt");
 assert.equal(posts[0].visibility, "public");
-assert.deepEqual(posts[0].tags, ["awidat"]);
+assert.deepEqual(posts[0].tags, ["montage"]);
 assert.equal(posts[0].thumbnailPath, undefined);
 assert.equal(posts[1].providerUrl, "https://tiktok.example/post/1");
 assert.deepEqual(posts[1].tiktokInteractions, {

@@ -1,20 +1,20 @@
 //! `create_stringout` tool — append a new named stringout.
 //!
 //! Slice C2 (wave3-bin-aware). Persists a new
-//! [`awidat_proto::professional::Stringout`] entry into
-//! [`awidat_proto::awidat_meta::AwidatTimelineMetadata::stringouts`]
+//! [`montage_proto::professional::Stringout`] entry into
+//! [`montage_proto::montage_meta::MontageTimelineMetadata::stringouts`]
 //! without disturbing any existing ones. Multiple parallel stringouts
 //! (per arc, alt-cut, cold-open, etc.) are now first-class.
 //!
 //! Mutating tool. Approval-keyed by stringout id.
 
 use async_trait::async_trait;
-use awidat_proto::professional::Stringout;
-use awidat_proto::project::Project;
+use montage_proto::professional::Stringout;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::media_catalog_mutation::ensure_awidat_metadata;
+use crate::media_catalog_mutation::ensure_montage_metadata;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 
@@ -93,7 +93,7 @@ impl ToolHandler for CreateStringoutTool {
             ))
         })?;
 
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         if meta.stringouts.iter().any(|s| s.id == id) {
             return Err(FunctionCallError::RespondToModel(format!(
                 "create_stringout: stringout {id} already exists"
@@ -135,7 +135,7 @@ if a stringout with that id already exists.\
 mod tests {
     use std::path::Path;
 
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -147,10 +147,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -188,7 +188,7 @@ mod tests {
         let stringouts = &project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .stringouts;

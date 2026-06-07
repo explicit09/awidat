@@ -1,4 +1,4 @@
-//! `awidat new` — one-command project creation.
+//! `montage new` — one-command project creation.
 //!
 //! Combines `init` + asset acquisition + (optional) indexing + a
 //! starter `AGENTS.md`. The Cursor / Claude Code / npm playbook for
@@ -10,10 +10,10 @@
 //! - `--import-channel <URL>` — yt-dlp downloads the latest N items
 //!   from a playlist/channel into `raw/`. Bound with `--limit <N>`
 //!   and/or `--after <YYYY-MM-DD>`.
-//! - omit `--import`/`--import-channel` — same as `awidat init`, but
+//! - omit `--import`/`--import-channel` — same as `montage init`, but
 //!   with the friendlier next-step output and a starter AGENTS.md.
 //!
-//! Default behavior runs `awidat index` synchronously after the
+//! Default behavior runs `montage index` synchronously after the
 //! source lands, so the user sees the wall time honestly. Pass
 //! `--no-index` to skip indexing (useful when dropping multiple
 //! assets before a single batch index pass).
@@ -22,14 +22,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use awidat_proto::awidat_meta::AwidatClipMetadata;
-use awidat_proto::otio::{
+use montage_proto::montage_meta::MontageClipMetadata;
+use montage_proto::otio::{
     Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 
-/// CLI args for `awidat new`. Wired into the clap subcommand in
+/// CLI args for `montage new`. Wired into the clap subcommand in
 /// `main.rs`.
 pub struct NewArgs {
     /// Project name. Used as the directory name under `cwd` (or
@@ -49,7 +49,7 @@ pub struct NewArgs {
     /// Where to create the project dir. Defaults to the current
     /// working directory.
     pub at: Option<PathBuf>,
-    /// Skip the post-creation `awidat index` run.
+    /// Skip the post-creation `montage index` run.
     pub no_index: bool,
     /// Skip writing a starter `AGENTS.md`.
     pub no_md: bool,
@@ -77,11 +77,11 @@ pub fn run(args: NewArgs) -> Result<()> {
         }
     }
 
-    println!("Creating awidat project at {}", project_dir.display());
+    println!("Creating montage project at {}", project_dir.display());
     let project = Project::init(&project_dir)
         .with_context(|| format!("failed to init project at {}", project_dir.display()))?;
-    println!("  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .awidat/");
-    let learned_format = awidat_core::lessons::apply_learned_project_format_defaults(&project_dir)
+    println!("  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .montage/");
+    let learned_format = montage_core::lessons::apply_learned_project_format_defaults(&project_dir)
         .map_err(|e| {
             anyhow!(
                 "failed to apply learned project-format defaults at {}: {e}",
@@ -154,11 +154,11 @@ pub fn run(args: NewArgs) -> Result<()> {
             println!("  • Drop source media under {}/raw/", project_dir.display());
         }
         println!(
-            "  • awidat index {} — runs the bundled 10 indexers",
+            "  • montage index {} — runs the bundled 10 indexers",
             project_dir.display()
         );
         println!(
-            "  • awidat tui {}      — chat with the editor",
+            "  • montage tui {}      — chat with the editor",
             project_dir.display()
         );
         return Ok(());
@@ -167,7 +167,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     println!();
     println!("Running indexers (this can take 20+ minutes for hour-long video)...");
     println!(
-        "Press Ctrl-C to stop and resume later with `awidat index {}`.",
+        "Press Ctrl-C to stop and resume later with `montage index {}`.",
         project_dir.display()
     );
     println!();
@@ -176,7 +176,7 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     println!();
     println!("All done. Open the editor:");
-    println!("  awidat tui {}", project_dir.display());
+    println!("  montage tui {}", project_dir.display());
     Ok(())
 }
 
@@ -442,15 +442,15 @@ fn attach_imported_asset_to_timeline(project_dir: &Path, imported_asset: &Path) 
     clip.source_range = Some(available_range);
     clip.media_reference = MediaReference::External(reference);
     clip.metadata = ClipMetadata {
-        awidat: Some(AwidatClipMetadata {
-            reasoning: Some("Initial clip created from awidat new --import.".to_string()),
+        montage: Some(MontageClipMetadata {
+            reasoning: Some("Initial clip created from montage new --import.".to_string()),
             extra: [(
                 "clip_uuid".to_string(),
                 serde_json::Value::String(slug_clip_uuid(&clip_name)),
             )]
             .into_iter()
             .collect(),
-            ..AwidatClipMetadata::default()
+            ..MontageClipMetadata::default()
         }),
         ..ClipMetadata::default()
     };
@@ -458,7 +458,7 @@ fn attach_imported_asset_to_timeline(project_dir: &Path, imported_asset: &Path) 
     let mut track = Track::empty("V1", TrackKind::Video);
     track.children.push(TrackChild::Clip(clip));
     project.timeline.tracks.children = vec![StackChild::Track(track)];
-    if let Some(metadata) = project.timeline.metadata.awidat.as_mut()
+    if let Some(metadata) = project.timeline.metadata.montage.as_mut()
         && !metadata
             .source_assets
             .iter()
@@ -558,7 +558,7 @@ fn human_size(p: &Path) -> String {
 const AGENTS_MD_TEMPLATE: &str = "\
 # Project conventions
 
-This file is read by awidat at session start and added to the agent's \
+This file is read by montage at session start and added to the agent's \
 system prompt. Use it to record editorial conventions, ground rules, \
 and per-episode constraints. Edit freely; remove sections you don't \
 need. Subdirectories may also have their own `AGENTS.md` for narrower \

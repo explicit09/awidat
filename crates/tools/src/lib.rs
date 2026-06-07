@@ -1,4 +1,4 @@
-//! Awidat tool registry and tool implementations.
+//! Montage tool registry and tool implementations.
 //!
 //! Week 1 stub. Real tools (`apply_edl`, `view_timeline`, ...) land in Week 4
 //! per `PLAN.md` §6 / §15.

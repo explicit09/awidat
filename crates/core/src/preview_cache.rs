@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
 use serde::{Deserialize, Serialize};
 
 use crate::proxy::{proxy_is_fresh, proxy_path_for};
@@ -613,7 +613,7 @@ pub async fn run_preview_cache_refresh(
 /// Project-local path for the durable preview-cache refresh lifecycle.
 pub fn preview_cache_refresh_lifecycle_path(project_root: &Path) -> PathBuf {
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("preview-cache")
         .join("refresh-plan.json")
 }
@@ -626,7 +626,7 @@ pub fn thumbnails_dir_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("thumbnails")
         .join(format!("{stem}-{:08x}", stable_path_hash(asset_path)))
 }
@@ -639,7 +639,7 @@ pub fn waveform_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("waveforms")
         .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_path)))
 }

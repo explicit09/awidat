@@ -13,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAgentStore } from "../agent/store";
 import type { Item } from "../protocol";
 
-/** Subset of `awidat_render::JobStatus` we actually consume. */
+/** Subset of `montage_render::JobStatus` we actually consume. */
 type JobStatus = {
   id: string;
   state: "queued" | "running" | "done" | "failed" | "cancelled";

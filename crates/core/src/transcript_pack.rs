@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use awidat_index::walk_indexer;
-use awidat_proto::otio::{MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
+use montage_index::walk_indexer;
+use montage_proto::otio::{MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
 use serde::Serialize;
 
 /// Maximum words emitted per asset when no caller override is supplied.
@@ -80,7 +80,7 @@ pub struct TranscriptPackWord {
 pub fn build_transcript_pack(
     project_root: &Path,
     options: TranscriptPackOptions,
-) -> Result<TranscriptPack, awidat_index::SidecarError> {
+) -> Result<TranscriptPack, montage_index::SidecarError> {
     build_transcript_pack_with_filter(project_root, options, None)
 }
 
@@ -89,7 +89,7 @@ pub fn build_timeline_transcript_pack(
     project_root: &Path,
     timeline: &Timeline,
     options: TranscriptPackOptions,
-) -> Result<TranscriptPack, awidat_index::SidecarError> {
+) -> Result<TranscriptPack, montage_index::SidecarError> {
     let ranges = timeline_visible_source_ranges(timeline);
     build_transcript_pack_with_filter(project_root, options, Some(&ranges))
 }
@@ -98,7 +98,7 @@ fn build_transcript_pack_with_filter(
     project_root: &Path,
     options: TranscriptPackOptions,
     visible_ranges: Option<&[VisibleSourceRange]>,
-) -> Result<TranscriptPack, awidat_index::SidecarError> {
+) -> Result<TranscriptPack, montage_index::SidecarError> {
     let max_words = options
         .max_words_per_asset
         .unwrap_or(DEFAULT_MAX_WORDS_PER_ASSET)
@@ -206,7 +206,7 @@ fn collect_track_visible_ranges(track: &Track, ranges: &mut Vec<VisibleSourceRan
 }
 
 fn collect_clip_visible_range(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     ranges: &mut Vec<VisibleSourceRange>,
 ) {
     let MediaReference::External(reference) = &clip.media_reference else {
@@ -318,7 +318,7 @@ fn pack_text(segments: &[TranscriptPackSegment], words: &[TranscriptPackWord]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };

@@ -1,6 +1,6 @@
 //! B-roll recommendation derivation from fused understanding.
 
-use awidat_proto::professional::{
+use montage_proto::professional::{
     BrollAssetStrategy, BrollInsertionPlan, BrollRecommendation, BrollRecommendationAsset,
     BrollRecommendationCategory, BrollRecommendationPackage, BrollRecommendationScoreComponent,
     FusedMoment, SourceRange, UnderstandingAsset,

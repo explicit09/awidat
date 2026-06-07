@@ -1,5 +1,5 @@
-use awidat_core::awidat_mcp::context::McpToolCtx;
-use awidat_core::awidat_mcp::tools::plan_sound_design::{PlanSoundDesignArgs, run};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::plan_sound_design::{PlanSoundDesignArgs, run};
 use std::error::Error;
 
 fn ctx() -> McpToolCtx {
@@ -67,7 +67,7 @@ fn motion_transition_plan_requests_whoosh_and_parseable_audio_edl() -> Result<()
     assert!(edl.contains("+ at_s: 11.900"));
     assert!(edl.contains("*** Set Loudness Target"));
     assert!(edl.contains("+ integrated_lufs: -14.000"));
-    awidat_core::edl::parse(&edl.replace("<asset from find_audio_asset>", "raw/whoosh.wav"))?;
+    montage_core::edl::parse(&edl.replace("<asset from find_audio_asset>", "raw/whoosh.wav"))?;
 
     let followups = body
         .pointer("/follow_up_tools")
@@ -110,7 +110,7 @@ fn dialogue_bed_plan_adds_ambience_bridge_and_l_cut() -> Result<(), Box<dyn Erro
     assert!(edl.contains("*** Set Audio Trail"));
     assert!(edl.contains("@@ anchor: clip_uuid=outgoing-clip"));
     assert!(edl.contains("*** Insert Clip"));
-    awidat_core::edl::parse(&edl.replace("<asset from find_audio_asset>", "raw/room.wav"))?;
+    montage_core::edl::parse(&edl.replace("<asset from find_audio_asset>", "raw/room.wav"))?;
     Ok(())
 }
 

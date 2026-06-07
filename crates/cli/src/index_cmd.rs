@@ -1,5 +1,5 @@
-//! `awidat index` subcommand: load config, build the asset list, dispatch
-//! the indexer pool via `awidat-index`, print a summary.
+//! `montage index` subcommand: load config, build the asset list, dispatch
+//! the indexer pool via `montage-index`, print a summary.
 //!
 //! Asset discovery: when `--asset` is omitted we walk `<project>/raw/`
 //! recursively and treat every regular file as a candidate. Filter by
@@ -10,12 +10,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use awidat_config::{Config, McpServer};
-use awidat_index::{
+use montage_config::{Config, McpServer};
+use montage_index::{
     AssetInput, IndexReport, PairOutcome, media_files::collect_raw_media_inputs, run as dispatch,
 };
-use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
+use montage_mcp::ClientInfo;
+use montage_proto::index::AssetId;
 
 pub fn run(
     project_root: &Path,
@@ -30,13 +30,13 @@ pub fn run(
         ));
     }
     let config = Config::load(Some(project_root))
-        .with_context(|| "failed to load awidat config (global and/or project)")?;
+        .with_context(|| "failed to load montage config (global and/or project)")?;
 
     let mut servers: Vec<McpServer> = config.indexers().cloned().collect();
     if servers.is_empty() {
         return Err(anyhow!(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
-             to your `<project>/.awidat/config.toml` or `~/.config/awidat/config.toml`."
+             to your `<project>/.montage/config.toml` or `~/.config/montage/config.toml`."
         ));
     }
     if !indexer_filter.is_empty() {
@@ -71,7 +71,7 @@ pub fn run(
     println!();
 
     let client_info = ClientInfo {
-        name: "awidat".into(),
+        name: "montage".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     };
 

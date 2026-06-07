@@ -1,7 +1,7 @@
 //! `plan_reframe` agent tool.
 //!
 //! Read-only planner for static subject-aware reframes. The tool emits an
-//! `awidat.reframe` EDL fragment for `apply_edl`; it does not mutate the
+//! `montage.reframe` EDL fragment for `apply_edl`; it does not mutate the
 //! timeline itself.
 
 use async_trait::async_trait;
@@ -191,7 +191,7 @@ fn build_plan(args: &PlanReframeArgs) -> Result<serde_json::Value, FunctionCallE
         "*** Begin EDL\n\
          *** Set Effect\n\
          + anchor: clip_uuid={clip_id}\n\
-         + effect: awidat.reframe\n\
+         + effect: montage.reframe\n\
          + params_json: {params_json}\n\
          + rationale: {rationale}\n\
          *** End EDL\n"
@@ -290,7 +290,7 @@ fn fmt_json_number(value: f64) -> String {
 
 const DESCRIPTION: &str = "\
 Plan a static subject-aware reframe for vertical, square, or social \
-delivery. Returns an EDL fragment that sets the `awidat.reframe` clip \
+delivery. Returns an EDL fragment that sets the `montage.reframe` clip \
 effect; the agent must pass that fragment to `apply_edl` to mutate the \
 timeline. Use this after `find_speaker_oncam`, gaze/face evidence, or \
 manual subject-center evidence identifies where the important subject sits \

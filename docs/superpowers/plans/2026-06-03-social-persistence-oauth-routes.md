@@ -4,7 +4,7 @@
 
 **Goal:** Build Phase 3A of the server-backed social publishing pipeline: durable social account persistence plus route-shaped OAuth/account service methods for YouTube, TikTok, and Instagram.
 
-**Architecture:** Keep implementation inside `awidat-social` because this repository does not yet have a dedicated web server crate. Add a storage boundary, a SQLite-backed implementation using the workspace `rusqlite` dependency, and a framework-neutral service layer whose methods map directly to the planned HTTP APIs. This phase does not add live provider HTTP, upload execution, queue workers, desktop UI, or an Axum/HTTP server.
+**Architecture:** Keep implementation inside `montage-social` because this repository does not yet have a dedicated web server crate. Add a storage boundary, a SQLite-backed implementation using the workspace `rusqlite` dependency, and a framework-neutral service layer whose methods map directly to the planned HTTP APIs. This phase does not add live provider HTTP, upload execution, queue workers, desktop UI, or an Axum/HTTP server.
 
 **Tech Stack:** Rust 2024 workspace crate, `serde`, `serde_json`, `thiserror`, `rusqlite`, deterministic unit tests, no live network calls in CI.
 
@@ -74,8 +74,8 @@ mod tests {
             owner,
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -202,7 +202,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social store::tests
+cargo test -p montage-social store::tests
 ```
 
 Expected: FAIL with unresolved `InMemorySocialStore` and store methods.
@@ -370,7 +370,7 @@ pub mod store;
 Run:
 
 ```bash
-cargo test -p awidat-social store::tests
+cargo test -p montage-social store::tests
 ```
 
 Expected: PASS.
@@ -412,8 +412,8 @@ mod tests {
             owner,
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -485,7 +485,7 @@ mod tests {
             .connected_accounts_for_owner(&OwnerRef::User("user_1".into()))
             .unwrap_or_else(|err| panic!("list accounts: {err}"));
         assert_eq!(accounts.len(), 1);
-        assert_eq!(accounts[0].display_name, "Awidat");
+        assert_eq!(accounts[0].display_name, "Montage");
         assert_eq!(
             store
                 .token_secret_for_account("acct_1")
@@ -538,7 +538,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social sqlite_store::tests
+cargo test -p montage-social sqlite_store::tests
 ```
 
 Expected: FAIL with unresolved `SqliteSocialStore`.
@@ -620,7 +620,7 @@ Serialize full records as JSON payloads for this phase, while also storing index
 Run:
 
 ```bash
-cargo test -p awidat-social sqlite_store::tests
+cargo test -p montage-social sqlite_store::tests
 ```
 
 Expected: PASS.
@@ -681,7 +681,7 @@ mod tests {
     fn config() -> OAuthProviderConfig {
         OAuthProviderConfig {
             client_id: "client_123".into(),
-            redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+            redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
         }
     }
 
@@ -691,8 +691,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -827,7 +827,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social account_service::tests
+cargo test -p montage-social account_service::tests
 ```
 
 Expected: FAIL with unresolved `SocialAccountService`.
@@ -930,7 +930,7 @@ pub mod account_service;
 Run:
 
 ```bash
-cargo test -p awidat-social account_service::tests
+cargo test -p montage-social account_service::tests
 ```
 
 Expected: PASS.
@@ -952,7 +952,7 @@ git commit -m "feat(social): add oauth account service"
 Run:
 
 ```bash
-cargo test -p awidat-social
+cargo test -p montage-social
 ```
 
 Expected: PASS.
@@ -962,7 +962,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo clippy -p montage-social --all-targets -- -D warnings
 ```
 
 Expected: PASS.

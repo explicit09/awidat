@@ -28,7 +28,7 @@ struct ReadMediaIntelligenceResponse {
     blocked_asset_count: usize,
     offline_asset_count: usize,
     summary_for_agent: String,
-    package: awidat_proto::professional::MediaIntelligencePackage,
+    package: montage_proto::professional::MediaIntelligencePackage,
 }
 
 #[async_trait]
@@ -88,19 +88,19 @@ impl ToolHandler for ReadMediaIntelligenceTool {
 
         let ready_asset_count = count_state(
             &package,
-            awidat_proto::professional::MediaIntelligenceAggregateState::Ready,
+            montage_proto::professional::MediaIntelligenceAggregateState::Ready,
         );
         let processing_asset_count = count_state(
             &package,
-            awidat_proto::professional::MediaIntelligenceAggregateState::Processing,
+            montage_proto::professional::MediaIntelligenceAggregateState::Processing,
         );
         let blocked_asset_count = count_state(
             &package,
-            awidat_proto::professional::MediaIntelligenceAggregateState::Blocked,
+            montage_proto::professional::MediaIntelligenceAggregateState::Blocked,
         );
         let offline_asset_count = count_state(
             &package,
-            awidat_proto::professional::MediaIntelligenceAggregateState::Offline,
+            montage_proto::professional::MediaIntelligenceAggregateState::Offline,
         );
         let response = ReadMediaIntelligenceResponse {
             status: response_status(
@@ -131,8 +131,8 @@ impl ToolHandler for ReadMediaIntelligenceTool {
 }
 
 fn count_state(
-    package: &awidat_proto::professional::MediaIntelligencePackage,
-    state: awidat_proto::professional::MediaIntelligenceAggregateState,
+    package: &montage_proto::professional::MediaIntelligencePackage,
+    state: montage_proto::professional::MediaIntelligenceAggregateState,
 ) -> usize {
     package
         .assets
@@ -191,10 +191,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

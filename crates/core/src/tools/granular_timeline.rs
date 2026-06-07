@@ -590,7 +590,7 @@ impl_granular_tool!(
             "anchor": anchor_schema(),
             "volume": {"type": "number", "description": "Linear audio gain."},
             "speed": {"type": "number", "description": "Playback speed factor."},
-            "effect": {"type": "string", "description": "Optional awidat.* effect id."},
+            "effect": {"type": "string", "description": "Optional montage.* effect id."},
             "params": {"type": "object", "description": "Effect params for effect."},
             "rationale": {"type": "string"},
             "dry_run": dry_run_schema(),
@@ -800,12 +800,12 @@ fn reasoning_schema() -> serde_json::Value {
 mod tests {
     use std::sync::Arc;
 
-    use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tempfile::TempDir;
 
     use super::*;
@@ -824,10 +824,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tokio::sync::broadcast::channel(8).0,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -852,12 +852,12 @@ mod tests {
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
             clip.metadata = ClipMetadata {
-                awidat: Some(AwidatClipMetadata {
+                montage: Some(MontageClipMetadata {
                     anchor: Some(AwAnchor {
                         transcript_snippet: Some((*snip).to_string()),
                         ..AwAnchor::default()
                     }),
-                    ..AwidatClipMetadata::default()
+                    ..MontageClipMetadata::default()
                 }),
                 ..ClipMetadata::default()
             };
@@ -1118,15 +1118,15 @@ mod tests {
             .iter()
             .map(|effect| effect.effect_name.as_str())
             .collect::<Vec<_>>();
-        assert!(effect_names.contains(&"awidat.volume"));
-        assert!(effect_names.contains(&"awidat.speed"));
+        assert!(effect_names.contains(&"montage.volume"));
+        assert!(effect_names.contains(&"montage.speed"));
 
         let StackChild::Track(audio) = &project.timeline.tracks.children[1] else {
             panic!("expected audio track")
         };
         let controls = audio
             .metadata
-            .get("awidat_audio")
+            .get("montage_audio")
             .and_then(serde_json::Value::as_object)
             .expect("track audio controls should be written");
         assert_eq!(

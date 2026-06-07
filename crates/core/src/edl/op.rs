@@ -8,14 +8,16 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use awidat_proto::awidat_meta::{BrandKit, BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
-use awidat_proto::professional::{
+use montage_proto::montage_meta::{
+    BrandKit, BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec,
+};
+use montage_proto::professional::{
     AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, MotionScene, ParameterAnimation, PipelineReadinessReport,
     PlannerPassContract, PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange,
     SourceSelect, Stringout, TrackingPackage, WorkflowLens,
 };
-use awidat_proto::transitions::SemanticTransitionSpec;
+use montage_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
 
 /// One change in an EDL envelope.
@@ -312,7 +314,7 @@ pub enum EdlOp {
         /// When set, this overrides `alignment`.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         out_offset_s: Option<f64>,
-        /// Optional Awidat semantic transition metadata. When present,
+        /// Optional Montage semantic transition metadata. When present,
         /// this is persisted on the OTIO transition's metadata so the
         /// agent's editorial intent survives render/export round trips.
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -334,7 +336,7 @@ pub enum EdlOp {
     /// Set per-clip audio volume. `value` is a linear gain multiplier
     /// where `0.0` mutes the clip, `1.0` is unity (no change), and
     /// values above 1.0 amplify (clipping risk). The apply layer
-    /// stamps an `awidat.volume` Effect on the clip; render emits
+    /// stamps an `montage.volume` Effect on the clip; render emits
     /// `volume=<value>` on that segment's audio stream before concat.
     /// Re-applying replaces the existing effect rather than stacking.
     SetVolume {
@@ -344,7 +346,7 @@ pub enum EdlOp {
         value: f64,
     },
     /// Mute a clip's audio while keeping its picture. Stamps
-    /// `ClipAudioOverride.muted` in the clip's awidat metadata; render
+    /// `ClipAudioOverride.muted` in the clip's montage metadata; render
     /// routes the timeline onto the decoupled audio path and emits
     /// silence for this clip's slot. Unlike `Set Volume 0` (a mixable
     /// level that still leaves the muxed stream present), this holds the
@@ -375,7 +377,7 @@ pub enum EdlOp {
         clear: bool,
     },
     /// Set per-clip audio fades in seconds. Replaces the existing
-    /// `awidat.audio_fade` effect on the clip.
+    /// `montage.audio_fade` effect on the clip.
     SetAudioFade {
         /// Anchor identifying the clip.
         anchor: Anchor,
@@ -462,15 +464,15 @@ pub enum EdlOp {
         /// Effect configuration.
         fx: AudioFxConfig,
     },
-    /// Set a generic graph-native Awidat effect on a clip. The `effect`
-    /// id must be registered in `awidat-effects`; `params` are
+    /// Set a generic graph-native Montage effect on a clip. The `effect`
+    /// id must be registered in `montage-effects`; `params` are
     /// validated against that registry before the OTIO `Effect.1` is
     /// stamped. Re-applying a non-stackable effect replaces the prior
     /// same-id effect.
     SetEffect {
         /// Anchor identifying the clip.
         anchor: Anchor,
-        /// Stable effect id, e.g. `awidat.color_correction`.
+        /// Stable effect id, e.g. `montage.color_correction`.
         effect: String,
         /// Raw effect parameters from `params_json`.
         #[serde(default)]
@@ -494,7 +496,7 @@ pub enum EdlOp {
         factor: f64,
     },
     /// Set a clip-level time remap curve. The apply layer stamps an
-    /// `awidat.time_remap` Effect on the clip; render can then lower the
+    /// `montage.time_remap` Effect on the clip; render can then lower the
     /// keyed curve into retiming filters. Re-applying replaces the prior
     /// time remap.
     SetTimeRemap {
@@ -504,7 +506,7 @@ pub enum EdlOp {
         curve: Vec<serde_json::Value>,
     },
     /// Insert a held frame at a clip-local source time. The apply layer
-    /// stamps an `awidat.freeze` Effect on the clip and render splices
+    /// stamps an `montage.freeze` Effect on the clip and render splices
     /// the hold into the segment.
     SetFreeze {
         /// Anchor identifying the clip.
@@ -521,7 +523,7 @@ pub enum EdlOp {
         audio_behavior: Option<String>,
     },
     /// Set clip-level color correction controls. The apply layer stamps
-    /// an `awidat.color_correction` Effect on the clip; render converts
+    /// an `montage.color_correction` Effect on the clip; render converts
     /// those normalized controls into FFmpeg video filters before speed,
     /// titles, and concat. Re-applying replaces the prior correction.
     SetColorCorrection {
@@ -543,7 +545,7 @@ pub enum EdlOp {
         highlights: Option<f64>,
     },
     /// Apply a 3D LUT to a clip. The LUT path is project-relative and
-    /// stored as an `awidat.lut` Effect so render can emit `lut3d`.
+    /// stored as an `montage.lut` Effect so render can emit `lut3d`.
     /// Re-applying replaces the prior LUT, making looks mutable.
     ApplyLut {
         /// Anchor identifying the clip.
@@ -568,14 +570,14 @@ pub enum EdlOp {
     },
     /// Insert a title overlay on the project's "Titles" track. The
     /// titles track auto-creates on first insert (Video kind, flagged
-    /// via metadata.awidat.extra["track_role"] = "titles") so the
+    /// via metadata.montage.extra["track_role"] = "titles") so the
     /// render pipeline can route these clips into `drawtext` filters
     /// instead of trying to decode them as media.
     ///
     /// `start_s` / `end_s` are absolute timeline-time seconds — when
     /// the overlay should appear and disappear over the underlying
     /// composition. The synthesized title clip carries an
-    /// `awidat.title` Effect whose metadata holds all the styling
+    /// `montage.title` Effect whose metadata holds all the styling
     /// fields below.
     InsertTitle {
         /// Title appears at this timeline-time, in seconds.
@@ -698,7 +700,7 @@ pub enum EdlOp {
     },
     /// Insert a burned-in caption overlay on the project's Titles
     /// track. Captions are represented as graph nodes, not a render
-    /// sidecar: the apply layer creates a clip with an `awidat.title`
+    /// sidecar: the apply layer creates a clip with an `montage.title`
     /// effect whose metadata carries `role = "caption"` plus caption
     /// styling. Render currently maps this through the same drawtext
     /// path as titles.
@@ -1066,7 +1068,7 @@ pub enum ProfessionalTimelineEdit {
 /// Selector for clip-level OTIO markers.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarkerSelector {
-    /// Durable marker id from `metadata.awidat.extra.id`.
+    /// Durable marker id from `metadata.montage.extra.id`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub marker_id: Option<String>,
     /// Optional clip anchor used to disambiguate label/time selectors.
@@ -1465,7 +1467,7 @@ pub enum AnnotationKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "anchor_kind", rename_all = "snake_case")]
 pub enum Anchor {
-    /// Match a clip whose `awidat.anchor.transcript_snippet` (or marker
+    /// Match a clip whose `montage.anchor.transcript_snippet` (or marker
     /// metadata) contains this substring.
     TranscriptSnippet {
         /// The text to look for.

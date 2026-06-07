@@ -124,7 +124,7 @@ function SummaryStats({ model }: { model: RailModel }) {
 function BodyParagraph() {
   return (
     <p className="text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
-      Awidat is reading your media. As soon as it's done, the agent can propose cleanup
+      Montage is reading your media. As soon as it's done, the agent can propose cleanup
       edits.
     </p>
   );

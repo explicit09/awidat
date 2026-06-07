@@ -1,6 +1,6 @@
 //! Shared transcript cleanup heuristic tests.
 
-use awidat_core::transcript_cleanup::{
+use montage_core::transcript_cleanup::{
     CleanupConfig, TranscriptSegment, TranscriptWord, default_filler_tokens, false_start_ranges,
     filler_dense_ranges, normalize_transcript_token,
 };

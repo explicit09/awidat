@@ -36,7 +36,7 @@ export const CENTER_MODE_LABEL: Record<CenterMode, string> = {
   timeline: "Timeline",
 };
 
-export const STORAGE_KEY = "awidat:center-mode";
+export const STORAGE_KEY = "montage:center-mode";
 
 interface StorageAdapter {
   getItem(k: string): string | null;

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_render::{OutputPathPolicy, OutputPathSafetyError, validate_render_output_path};
+use montage_render::{OutputPathPolicy, OutputPathSafetyError, validate_render_output_path};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

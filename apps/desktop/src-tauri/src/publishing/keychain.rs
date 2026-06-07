@@ -12,7 +12,7 @@
 //! Each `(provider, token kind)` pair is one keychain entry under a
 //! fixed service name:
 //!
-//! - service: `"awidat.publishing"`
+//! - service: `"montage.publishing"`
 //! - account: `"<provider>-<kind>"` (e.g. `"youtube-access_token"`,
 //!   `"tiktok-refresh_token"`, `"instagram-client_secret"`)
 //!
@@ -53,9 +53,9 @@ use keyring::Entry;
 
 /// Stable service name registered with every OS backend. Constant per
 /// app so the OS UI (Keychain Access on macOS, `seahorse` on Linux,
-/// Credential Manager on Windows) groups every awidat publishing entry
+/// Credential Manager on Windows) groups every montage publishing entry
 /// under the same namespace.
-const SERVICE: &str = "awidat.publishing";
+const SERVICE: &str = "montage.publishing";
 
 /// Which slot inside a provider's credential set this entry maps to.
 ///
@@ -76,7 +76,7 @@ pub enum TokenKind {
 
 impl TokenKind {
     /// Suffix appended after the provider key in the keychain account
-    /// name. Lowercase-snake to match other awidat keyring entries
+    /// name. Lowercase-snake to match other montage keyring entries
     /// (`crates/secrets`).
     pub fn as_str(self) -> &'static str {
         match self {
@@ -141,7 +141,7 @@ impl Default for Keychain {
 }
 
 impl Keychain {
-    /// Construct using the canonical `"awidat.publishing"` service name.
+    /// Construct using the canonical `"montage.publishing"` service name.
     pub fn new() -> Self {
         Self { service: SERVICE }
     }
@@ -502,6 +502,6 @@ mod tests {
         // Same reasoning as `crates/secrets`'s service-name test: a
         // rename here strands every existing user's stored credentials.
         let kc = Keychain::new();
-        assert_eq!(kc.service(), "awidat.publishing");
+        assert_eq!(kc.service(), "montage.publishing");
     }
 }

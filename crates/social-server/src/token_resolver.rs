@@ -1,4 +1,4 @@
-use awidat_social::{
+use montage_social::{
     pg_store::PgSocialStore,
     store::SocialStore,
     token::Aead256Key,
@@ -65,7 +65,7 @@ impl AccessTokenResolver for ServerAccessTokenResolver {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use awidat_social::{
+    use montage_social::{
         model::{
             AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef,
             Provider, ProviderCapabilities,

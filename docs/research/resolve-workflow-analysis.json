@@ -1,15 +1,15 @@
 {
-  "schema": "awidat.resolve_workflow_research.v1",
+  "schema": "montage.resolve_workflow_research.v1",
   "created_at": "2026-05-16",
   "scope": "Separate Resolve workflow research pass based on nine DaVinci Resolve tutorial videos. This is not an extension of docs/editorial-grammar-upgrade-plan.md and does not implement product changes.",
   "north_star": {
     "goal": "Build an agent editor that can produce edits with the judgment, craft, and technical range of a professional video editor for users who are not professional editors.",
     "not_the_goal": "Do not clone DaVinci Resolve, Premiere, or Final Cut as UI products. They are references for professional editing capability, task coverage, and decision quality.",
-    "product_thesis": "A user should be able to ask for an outcome in ordinary language and have Awidat inspect the footage, make professional editorial decisions, perform the required technical operations, explain/review the result, and render a deliverable.",
+    "product_thesis": "A user should be able to ask for an outcome in ordinary language and have Montage inspect the footage, make professional editorial decisions, perform the required technical operations, explain/review the result, and render a deliverable.",
     "sequencing_principle": "Do not try to build the full autonomous decision layer before the professional editing substrate exists. First map and build the pipeline components professional editors rely on; then the decision layer can orchestrate them with enough tools and evidence.",
     "reference_editors_are_useful_because": [
       "They reveal the complete set of tasks professional editors routinely perform.",
-      "They expose workflow categories Awidat must support internally: media organization, assembly, compositing, color, audio, motion graphics, and delivery.",
+      "They expose workflow categories Montage must support internally: media organization, assembly, compositing, color, audio, motion graphics, and delivery.",
       "They show the decision points a professional makes: what to keep, what to remove, when to cut, how to hide problems, how to preserve continuity, how to polish sound/color, and when an effect is justified."
     ],
     "agent_requirements": [
@@ -20,11 +20,11 @@
       "Persist intent and evidence so the user and future agents can understand why an edit was made.",
       "Present reviewable proposals and final outputs without requiring the user to know professional editing terminology."
     ],
-    "success_measure": "Awidat is succeeding when a non-editor can request a polished video outcome and get a result that a professional editor would recognize as technically clean, intentional, paced, watchable, and deliverable."
+    "success_measure": "Montage is succeeding when a non-editor can request a polished video outcome and get a result that a professional editor would recognize as technically clean, intentional, paced, watchable, and deliverable."
   },
   "method": {
     "video_capture": "Collected YouTube metadata and available English caption tracks with yt-dlp 2026.03.17. Captions were used for notes and theme extraction; full verbatim transcripts are not stored in this artifact.",
-    "codebase_review": "Read Awidat README, desktop README, protocol metadata, EDL operations, effect registry, render planner, indexer defaults, Python indexer docs/tests, desktop timeline, media, properties, transcript, notes, and action bar surfaces.",
+    "codebase_review": "Read Montage README, desktop README, protocol metadata, EDL operations, effect registry, render planner, indexer defaults, Python indexer docs/tests, desktop timeline, media, properties, transcript, notes, and action bar surfaces.",
     "evidence_quality": "All listed videos exposed English captions. Some were auto captions and should be treated as high-level evidence rather than exact wording."
   },
   "sources": [
@@ -179,7 +179,7 @@
       "notes": [
         "Matching color grades is presented as a workflow problem: color management, reference stills, consistent starting state, shot-to-shot matching, and avoiding late-stage surprises.",
         "The tutorial emphasizes resetting grades/nodes, comparing references, using stills/presets, and checking whether clips match before render pressure.",
-        "For Awidat this points to reviewable color-match recommendations, visual comparison packs, and grade consistency state, not only per-clip sliders."
+        "For Montage this points to reviewable color-match recommendations, visual comparison packs, and grade consistency state, not only per-clip sliders."
       ]
     },
     {
@@ -218,7 +218,7 @@
       ],
       "notes": [
         "Even a short text tutorial expects inspector controls, timeline timing, keyframed properties, tracking/spacing changes, dynamic zoom, and write-on style animation.",
-        "Awidat's title system should eventually separate simple presets from deeper property animation."
+        "Montage's title system should eventually separate simple presets from deeper property animation."
       ]
     }
   ],
@@ -227,52 +227,52 @@
       "id": "rw_media_organization",
       "label": "Media organization before editing",
       "resolve_pattern": "Editors import assets into a media pool, organize bins, review metadata, create timelines, and prepare media before detailed timeline work.",
-      "agent_native_interpretation": "Awidat needs source organization metadata that agents can query and mutate: bins, labels, roles, tags, source provenance, proxy state, sync groups, and readiness status."
+      "agent_native_interpretation": "Montage needs source organization metadata that agents can query and mutate: bins, labels, roles, tags, source provenance, proxy state, sync groups, and readiness status."
     },
     {
       "id": "rw_editing_surface",
       "label": "Timeline assembly and trim surface",
       "resolve_pattern": "Editors use cut/edit pages for trimming, splitting, moving, ripple behavior, transitions, inspector changes, and fast assembly.",
-      "agent_native_interpretation": "Awidat should preserve its EDL-first model but expose richer trim modes, boundary tools, keyboard-level operations, markers, and clear proposal previews."
+      "agent_native_interpretation": "Montage should preserve its EDL-first model but expose richer trim modes, boundary tools, keyboard-level operations, markers, and clear proposal previews."
     },
     {
       "id": "rw_inspector_keyframes",
       "label": "Inspector plus keyframes",
       "resolve_pattern": "Clip, title, transform, text, audio, and effect properties are adjusted in an inspector and animated over time with keyframes/easing.",
-      "agent_native_interpretation": "Awidat needs a general parameter animation model rather than hard-coded title animation enums only."
+      "agent_native_interpretation": "Montage needs a general parameter animation model rather than hard-coded title animation enums only."
     },
     {
       "id": "rw_fusion_nodes",
       "label": "Node-based compositing",
       "resolve_pattern": "Fusion work is a node graph with media in/out, merges, transforms, masks, mattes, trackers, text, particles, and 3D.",
-      "agent_native_interpretation": "Awidat does not need to copy Fusion immediately, but it needs a graph representation for multi-step visual effects that cannot be represented as one flat FFmpeg effect."
+      "agent_native_interpretation": "Montage does not need to copy Fusion immediately, but it needs a graph representation for multi-step visual effects that cannot be represented as one flat FFmpeg effect."
     },
     {
       "id": "rw_tracking_masks",
       "label": "Tracking, masks, and mattes",
       "resolve_pattern": "Tracking and masking underpin tracked text, object replacement, invisible VFX, patching, roto, and integration.",
-      "agent_native_interpretation": "Awidat should add sidecars for point/planar/surface tracks, mask regions, matte confidence, and operations that bind overlays/effects to those tracks."
+      "agent_native_interpretation": "Montage should add sidecars for point/planar/surface tracks, mask regions, matte confidence, and operations that bind overlays/effects to those tracks."
     },
     {
       "id": "rw_color_matching",
       "label": "Color matching and grade state",
       "resolve_pattern": "Color workflows use color management, nodes, scopes, reference stills, shot matching, LUTs, and consistency checks.",
-      "agent_native_interpretation": "Awidat should turn color-analysis into reviewable match plans with reference stills, scopes, scene groups, grade stacks, and before/after packs."
+      "agent_native_interpretation": "Montage should turn color-analysis into reviewable match plans with reference stills, scopes, scene groups, grade stacks, and before/after packs."
     },
     {
       "id": "rw_audio_finishing",
       "label": "Audio finishing",
       "resolve_pattern": "Fairlight provides mixer, EQ, compression, noise repair, levels, loudness, and track-focused controls.",
-      "agent_native_interpretation": "Awidat already has strong primitives but needs a mixer-grade UI, automation lanes, meters, bus roles, and audible review packages."
+      "agent_native_interpretation": "Montage already has strong primitives but needs a mixer-grade UI, automation lanes, meters, bus roles, and audible review packages."
     },
     {
       "id": "rw_delivery",
       "label": "Delivery as a workflow",
       "resolve_pattern": "Deliver is a final workspace with presets, render settings, output validation, and render queue expectations.",
-      "agent_native_interpretation": "Awidat's export path should grow into delivery profiles, batch queue, platform presets, validation, and package manifests."
+      "agent_native_interpretation": "Montage's export path should grow into delivery profiles, batch queue, platform presets, validation, and package manifests."
     }
   ],
-  "current_awidat_strengths": [
+  "current_montage_strengths": [
     {
       "area": "Agent-native editorial core",
       "evidence": [
@@ -285,17 +285,17 @@
     {
       "area": "Editorial intent preservation",
       "evidence": [
-        "crates/proto/src/awidat_meta.rs stores timeline cut boundaries with SemanticCutSpec.",
-        "crates/proto/src/awidat_meta.rs stores SplitEditSpec on clip metadata.",
+        "crates/proto/src/montage_meta.rs stores timeline cut boundaries with SemanticCutSpec.",
+        "crates/proto/src/montage_meta.rs stores SplitEditSpec on clip metadata.",
         "apps/desktop/src/timeline/TimelinePane.tsx overlays cut badges and J/L split offset markers.",
         "apps/desktop/src/properties/PropertiesPane.tsx shows editorial and split-edit controls."
       ],
-      "assessment": "Awidat already captures the intent behind cuts and split edits, which many conventional editors do not model explicitly."
+      "assessment": "Montage already captures the intent behind cuts and split edits, which many conventional editors do not model explicitly."
     },
     {
       "area": "Effect and render graph primitives",
       "evidence": [
-        "crates/effects/src/lib.rs defines graph-native Awidat effect ids for volume, speed, color correction, LUT, title, video overlay, audio fade, and audio FX.",
+        "crates/effects/src/lib.rs defines graph-native Montage effect ids for volume, speed, color correction, LUT, title, video overlay, audio fade, and audio FX.",
         "crates/render/src/timeline.rs plans transitions, overlays, titles, audio tracks, ducking, color correction, LUTs, and split-edit audio."
       ],
       "assessment": "The system already has a semantic effect registry and FFmpeg-backed lowering path."
@@ -307,7 +307,7 @@
         "python/packages/shot-mcp/src/shot_mcp/__init__.py emits edit-aware shot fields including motion, dominant direction, composition, eye trace, action score, whip pan score, occlusion score, and match candidates.",
         "python/SMOKE.md documents safe and model-backed indexer checks."
       ],
-      "assessment": "Awidat is well positioned to make edit decisions from indexed evidence rather than only from timeline coordinates."
+      "assessment": "Montage is well positioned to make edit decisions from indexed evidence rather than only from timeline coordinates."
     },
     {
       "area": "Desktop review surface",
@@ -324,7 +324,7 @@
       "id": "gap_001_media_pool_bins",
       "severity": "high",
       "resolve_reference": "Media Page, Media Pool, bins, metadata, import preparation",
-      "current_awidat": "Imports local files and URLs, creates proxies, lists assets, stores source assets, and can index media.",
+      "current_montage": "Imports local files and URLs, creates proxies, lists assets, stores source assets, and can index media.",
       "missing": [
         "First-class bins or smart collections",
         "Editable asset metadata tags and roles",
@@ -337,7 +337,7 @@
       "id": "gap_002_page_workflow_modes",
       "severity": "medium",
       "resolve_reference": "Resolve pages: Media, Cut/Edit, Fusion, Color, Fairlight, Deliver",
-      "current_awidat": "Desktop uses panes rather than workflow modes. This fits agent collaboration but makes task context less explicit.",
+      "current_montage": "Desktop uses panes rather than workflow modes. This fits agent collaboration but makes task context less explicit.",
       "missing": [
         "Mode-specific task framing",
         "Workflow progress markers",
@@ -349,7 +349,7 @@
       "id": "gap_003_general_keyframes",
       "severity": "high",
       "resolve_reference": "Inspector keyframe controls, title tracking/spacing animation, dynamic zoom, spline panel",
-      "current_awidat": "Titles have a coarse animation enum. Effects are mostly static per clip. Speed, color, volume, audio fade, and title style are single values.",
+      "current_montage": "Titles have a coarse animation enum. Effects are mostly static per clip. Speed, color, volume, audio fade, and title style are single values.",
       "missing": [
         "General keyframe curve schema",
         "Per-parameter animation across effects",
@@ -363,7 +363,7 @@
       "id": "gap_004_node_compositing_model",
       "severity": "high",
       "resolve_reference": "Fusion node graph with MediaIn, Merge, masks, transforms, trackers, MediaOut",
-      "current_awidat": "Effects are graph-native in naming but stored as clip effects or timeline overlays, not as explicit compositing DAGs.",
+      "current_montage": "Effects are graph-native in naming but stored as clip effects or timeline overlays, not as explicit compositing DAGs.",
       "missing": [
         "Node graph document model",
         "Multi-input/multi-output compositing",
@@ -372,13 +372,13 @@
         "Desktop node graph or compact node inspector",
         "Agent-readable graph diffs"
       ],
-      "implementation_direction": "Start with a small Awidat composition graph for overlays and tracked inserts, not a full Fusion clone. Nodes should be serializable, diffable, and lowerable to FFmpeg where possible."
+      "implementation_direction": "Start with a small Montage composition graph for overlays and tracked inserts, not a full Fusion clone. Nodes should be serializable, diffable, and lowerable to FFmpeg where possible."
     },
     {
       "id": "gap_005_tracking_masks_mattes",
       "severity": "high",
       "resolve_reference": "Basic tracker, planar tracker, surface tracker, 3D tracking, masks, mattes, magic mask",
-      "current_awidat": "Shot indexer has motion, composition, face, gaze, action, whip pan, occlusion, and match scores. It does not appear to store object/planar/surface track paths or reusable mask shapes.",
+      "current_montage": "Shot indexer has motion, composition, face, gaze, action, whip pan, occlusion, and match scores. It does not appear to store object/planar/surface track paths or reusable mask shapes.",
       "missing": [
         "Tracker sidecars with points/planes/surfaces and confidence",
         "Mask shape sidecars with keyframed paths",
@@ -392,7 +392,7 @@
       "id": "gap_006_color_match_workflow",
       "severity": "medium_high",
       "resolve_reference": "Color management, grade matching, gallery stills, reset grades/nodes, LUTs, render-time surprises",
-      "current_awidat": "Has color-analysis indexer, SetColorCorrection, ApplyLut, PropertiesPane color sliders, and color-corrector skill scripts.",
+      "current_montage": "Has color-analysis indexer, SetColorCorrection, ApplyLut, PropertiesPane color sliders, and color-corrector skill scripts.",
       "missing": [
         "Reference still/gallery model",
         "Shot group color consistency state",
@@ -406,7 +406,7 @@
       "id": "gap_007_fairlight_mixer_depth",
       "severity": "medium",
       "resolve_reference": "Fairlight page, mixer, EQ, compression, audio repair, loudness",
-      "current_awidat": "Has track audio controls, ducking, clip/track audio FX, loudness target, waveforms, and render support.",
+      "current_montage": "Has track audio controls, ducking, clip/track audio FX, loudness target, waveforms, and render support.",
       "missing": [
         "Mixer-style UI with meters",
         "Bus routing and roles",
@@ -420,7 +420,7 @@
       "id": "gap_008_delivery_profiles_queue",
       "severity": "medium",
       "resolve_reference": "Deliver page, export presets, render settings, render workflow",
-      "current_awidat": "Has export timeline, start_render/poll_render, package metadata, output format, and platform metadata operations.",
+      "current_montage": "Has export timeline, start_render/poll_render, package metadata, output format, and platform metadata operations.",
       "missing": [
         "Named delivery profiles",
         "Render queue",
@@ -434,7 +434,7 @@
       "id": "gap_009_fast_editing_ergonomics",
       "severity": "medium",
       "resolve_reference": "Cut/Edit pages, trim/blade/ripple, fast assembly",
-      "current_awidat": "EDL operations are broad; desktop supports timeline selection, trim/move interactions, proposals, and agent chat.",
+      "current_montage": "EDL operations are broad; desktop supports timeline selection, trim/move interactions, proposals, and agent chat.",
       "missing": [
         "Explicit ripple/roll/slip/slide tool modes",
         "Keyboard-first editing commands",
@@ -448,7 +448,7 @@
       "id": "gap_010_reusable_motion_graphics",
       "severity": "medium_high",
       "resolve_reference": "Text Plus, title templates, Fusion comp duplicates, particles, 3D, write-on effects",
-      "current_awidat": "Supports titles/captions and broadcast overlays; title animation options are limited.",
+      "current_montage": "Supports titles/captions and broadcast overlays; title animation options are limited.",
       "missing": [
         "Reusable editable title/motion templates",
         "Character-level or word-level text animation",
@@ -463,12 +463,12 @@
     {
       "phase": "research_discussion",
       "status": "current",
-      "goal": "Discuss which Resolve/Premiere-class capabilities define the professional editing pipeline Awidat must support before a complete autonomous editor brain can orchestrate it.",
+      "goal": "Discuss which Resolve/Premiere-class capabilities define the professional editing pipeline Montage must support before a complete autonomous editor brain can orchestrate it.",
       "outputs": [
         "Prioritized gap list",
         "Definition of professional editor pipeline stages and required tool substrate",
         "Definition of professional editor decisions the agent will later make autonomously",
-        "Definition of Resolve/Premiere-inspired but Awidat-native workflow modes or task lenses",
+        "Definition of Resolve/Premiere-inspired but Montage-native workflow modes or task lenses",
         "Implementation plan boundaries"
       ]
     },
@@ -519,10 +519,10 @@
     }
   ],
   "discussion_questions": [
-    "For each Resolve/Premiere capability, should Awidat expose a manual control, an agent tool, or both?",
+    "For each Resolve/Premiere capability, should Montage expose a manual control, an agent tool, or both?",
     "Which professional editing pipeline components must exist before the autonomous decision layer can be reliable?",
     "What professional editing decisions should the agent eventually make without requiring the user to know editing terminology?",
-    "Should Awidat expose Resolve-like workflow modes, or keep the current pane layout and use agent task lenses instead?",
+    "Should Montage expose Resolve-like workflow modes, or keep the current pane layout and use agent task lenses instead?",
     "Do we want a full node graph eventually, or a smaller composition graph focused on tracked overlays, titles, masks, and reusable effects?",
     "Should the next implementation plan prioritize media organization and delivery profiles, keyframes and motion graphics, or autonomous edit-decision planning first?",
     "How much manual direct manipulation should the desktop gain while keeping the agent as the primary editor?"

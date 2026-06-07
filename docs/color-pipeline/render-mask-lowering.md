@@ -1,19 +1,19 @@
 # Render mask lowering
 
-`awidat.color_pipeline.mask_source` is no longer only reserved schema.
+`montage.color_pipeline.mask_source` is no longer only reserved schema.
 The timeline render path lowers the v1 masked look-LUT case into FFmpeg by
 adding the mask as an extra input and compositing the masked grade over the
 original clip.
 
 ## Implemented scope
 
-- Single `look_lut` plus `mask_source` on `awidat.color_pipeline`.
+- Single `look_lut` plus `mask_source` on `montage.color_pipeline`.
 - Static-image masks, including grayscale or alpha-bearing images.
 - Mask input is inserted after video/overlay inputs and before explicit
   audio-track inputs.
 - Audio input labels are shifted past mask inputs, so masked video clips do
   not break explicit audio-track rendering.
-- The effect registry advertises `awidat.color_pipeline` as an FFmpeg-native
+- The effect registry advertises `montage.color_pipeline` as an FFmpeg-native
   backend because the render path now supports the color-management/LUT chain
   and this masked look-LUT subset.
 

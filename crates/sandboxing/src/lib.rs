@@ -1,4 +1,4 @@
-//! Awidat per-OS sandbox.
+//! Montage per-OS sandbox.
 //!
 //! Per `PLAN.md` §10 / §15. The shape:
 //!
@@ -13,7 +13,7 @@
 //!
 //! Single public type — [`Sandbox`] — with one method, [`run`].
 //! Callers compose policies via [`Policy`]. The `try-sandboxed-
-//! then-escalate` orchestrator pattern lives in `awidat-core`,
+//! then-escalate` orchestrator pattern lives in `montage-core`,
 //! NOT here; this crate is a thin platform wrapper.
 
 #![forbid(unsafe_code)]
@@ -37,10 +37,10 @@ const MACOS_SEATBELT: &str = "/usr/bin/sandbox-exec";
 /// What's allowed in the sandbox.
 ///
 /// We deny by default and explicitly grant the minimum needed for
-/// the call. Per PLAN.md §10.1, the canonical policy for awidat is:
+/// the call. Per PLAN.md §10.1, the canonical policy for montage is:
 ///   - Read-only access to source assets (`raw/`)
 ///   - Read-write access to project subdirs (`renders/`, `index/`,
-///     `.awidat/`, the OTIO timeline file)
+///     `.montage/`, the OTIO timeline file)
 ///   - Network: deny by default; explicit opt-in for API calls
 ///   - All other paths: deny
 #[derive(Debug, Clone)]
@@ -106,7 +106,7 @@ pub enum SandboxErr {
     /// Linux v1: not yet implemented.
     #[error(
         "Linux sandbox not yet wired. Falling back to unsandboxed execution \
-         is the orchestrator's responsibility — see awidat-core's \
+         is the orchestrator's responsibility — see montage-core's \
          run-sandboxed-or-escalate flow."
     )]
     LinuxNotImplemented,
@@ -161,7 +161,7 @@ impl Sandbox {
         {
             let _ = (argv, policy);
             Err(SandboxErr::LaunchFailed(
-                "this OS is not supported by awidat-sandboxing".into(),
+                "this OS is not supported by montage-sandboxing".into(),
             ))
         }
     }
@@ -192,7 +192,7 @@ impl Sandbox {
 ///
 /// Format reference: Apple's `(version 1)` SBPL dialect. Codex's
 /// profile generator is the reference; ours is narrower because
-/// awidat's surface is smaller (no compiler invocation, no git
+/// montage's surface is smaller (no compiler invocation, no git
 /// rebases). The base policy denies everything; we explicitly
 /// allow:
 ///   - Process spawn (so the wrapped command can fork helpers
@@ -272,7 +272,7 @@ fn detect_macos_denial(stderr: &[u8], exit_code: Option<i32>) -> Option<String> 
 }
 
 /// Returns the sandbox backend that would be selected on the current
-/// platform. Useful for diagnostics + the `awidat doctor` command.
+/// platform. Useful for diagnostics + the `montage doctor` command.
 pub fn current_backend() -> &'static str {
     if cfg!(target_os = "macos") {
         "seatbelt"
@@ -331,11 +331,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_profile_includes_project_subpath() {
-        let policy = Policy::for_project("/tmp/awidat-test");
+        let policy = Policy::for_project("/tmp/montage-test");
         let profile = render_seatbelt_profile(&policy);
         assert!(profile.contains("(version 1)"));
         assert!(profile.contains("(deny default)"));
-        assert!(profile.contains("/tmp/awidat-test"));
+        assert!(profile.contains("/tmp/montage-test"));
     }
 
     #[cfg(target_os = "macos")]
@@ -357,7 +357,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_denies_writes_outside_project_root() {
-        // Try to write a file at /etc/awidat-sandbox-test (outside
+        // Try to write a file at /etc/montage-sandbox-test (outside
         // the policy's writable subtree). Should fail. We use
         // `/bin/sh -c "echo ... > /etc/..."` so the redirection
         // happens inside the sandboxed process, not the parent
@@ -369,7 +369,7 @@ mod tests {
             &[
                 "/bin/sh",
                 "-c",
-                "echo blocked > /etc/awidat-sandbox-test 2>&1",
+                "echo blocked > /etc/montage-sandbox-test 2>&1",
             ],
             &policy,
         );
@@ -385,7 +385,7 @@ mod tests {
                     out.status
                 );
                 assert!(
-                    !std::path::Path::new("/etc/awidat-sandbox-test").exists(),
+                    !std::path::Path::new("/etc/montage-sandbox-test").exists(),
                     "sandbox didn't actually block the write"
                 );
             }

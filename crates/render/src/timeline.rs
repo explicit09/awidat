@@ -1,7 +1,7 @@
 //! Timeline-render planning: walk a project's OTIO and produce the
 //! [`RenderJobSpec`] that ffmpeg will execute.
 //!
-//! Extracted from `awidat-core::tools::start_render` so the desktop's
+//! Extracted from `montage-core::tools::start_render` so the desktop's
 //! Export button can call into the same logic without going through
 //! the agent tool. Both call sites depend on this module; both
 //! produce identical specs.
@@ -11,7 +11,7 @@
 //! points produces audible clicks (DTS-seam scratch); we accept
 //! the encoder cost to avoid that.
 //!
-//! Audio tracks aren't enumerated separately — most awidat
+//! Audio tracks aren't enumerated separately — most montage
 //! projects keep video and audio paired in the same source file,
 //! so the concat filter pulls each input's audio stream alongside
 //! its video stream.
@@ -25,18 +25,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use awidat_proto::awidat_meta::{
-    AwidatTimelineMetadata, BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle,
+use chrono::Utc;
+use montage_proto::montage_meta::{
+    BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle, MontageTimelineMetadata,
 };
-use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::{
+use montage_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
+use montage_proto::professional::{
     MaskOperation, MotionScene, MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform,
     MotionSceneTransformFit, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
 };
-use awidat_proto::project::{files, read_otio_timeline};
-use awidat_proto::subtitle::SubtitleTrack;
-use awidat_proto::transitions::{self, TransitionComposition};
-use chrono::Utc;
+use montage_proto::project::{files, read_otio_timeline};
+use montage_proto::subtitle::SubtitleTrack;
+use montage_proto::transitions::{self, TransitionComposition};
 use serde::Deserialize;
 use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
@@ -53,7 +53,7 @@ const TIMELINE_RENDER_HEIGHT: u32 = 1080;
 
 /// Output canvas (width × height in px) every segment is conformed to
 /// before `concat`. Derived from the timeline's `output_format` aspect
-/// ratio — written into `Timeline.metadata.awidat.extra["output_format"]`
+/// ratio — written into `Timeline.metadata.montage.extra["output_format"]`
 /// by the `set_output_format` EDL op — so a 9:16 short-form project
 /// renders vertical instead of being letterboxed into the 16:9 default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +104,7 @@ impl RenderCanvas {
 
 /// Read the conform canvas from a timeline's `output_format` metadata,
 /// defaulting to the 16:9 1920×1080 master when absent or malformed.
-fn timeline_render_canvas(metadata: Option<&AwidatTimelineMetadata>) -> RenderCanvas {
+fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderCanvas {
     metadata
         .and_then(|m| m.extra.get("output_format"))
         .and_then(|format| format.get("aspect_ratio"))
@@ -154,7 +154,7 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p{conform_label}
 #[derive(Debug, Error)]
 pub enum RenderTimelineError {
     /// `<project_root>/project.otio.json` doesn't exist.
-    #[error("no project.otio.json found at {0} — this isn't an awidat project root")]
+    #[error("no project.otio.json found at {0} — this isn't an montage project root")]
     NoOtio(PathBuf),
     /// OTIO file present but parse / validation failed.
     #[error("timeline parse failed: {message}")]
@@ -182,7 +182,7 @@ pub enum RenderTimelineError {
         "transition {kind:?} around clip '{clip_name}' needs {needed_s:.3}s {side} handle, but only {available_s:.3}s is available"
     )]
     TransitionHandleUnavailable {
-        /// Transition kind or Awidat id from OTIO.
+        /// Transition kind or Montage id from OTIO.
         kind: String,
         /// Clip whose source range lacks the requested handle.
         clip_name: String,
@@ -217,7 +217,7 @@ pub enum RenderTimelineError {
     /// A transition kind/id cannot be exported by the phase-one renderer.
     #[error("unsupported timeline transition {kind:?}: {message}")]
     UnsupportedTransition {
-        /// Transition kind or Awidat id from OTIO.
+        /// Transition kind or Montage id from OTIO.
         kind: String,
         /// Detailed registry/lookup message.
         message: String,
@@ -228,21 +228,21 @@ pub enum RenderTimelineError {
         /// Detailed placement failure.
         message: String,
     },
-    /// Awidat transition metadata exists but is malformed or outside
+    /// Montage transition metadata exists but is malformed or outside
     /// the supported primitive API.
     #[error("invalid transition metadata for {kind:?}: {message}")]
     InvalidTransitionMetadata {
-        /// Transition kind or Awidat id from OTIO.
+        /// Transition kind or Montage id from OTIO.
         kind: String,
         /// Detailed metadata failure.
         message: String,
     },
-    /// Awidat clip effect metadata is malformed or outside the supported API.
+    /// Montage clip effect metadata is malformed or outside the supported API.
     #[error("invalid clip effect {effect:?} on clip '{clip_name}': {message}")]
     InvalidClipEffectMetadata {
         /// Clip name from OTIO.
         clip_name: String,
-        /// Effect id such as `awidat.time_remap`.
+        /// Effect id such as `montage.time_remap`.
         effect: String,
         /// Detailed metadata failure.
         message: String,
@@ -286,7 +286,7 @@ pub struct BroadcastOverlayPlan {
     pub project_root: PathBuf,
 }
 
-/// Timeline-level final loudness target from `metadata.awidat`.
+/// Timeline-level final loudness target from `metadata.montage`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LoudnessTargetPlan {
     /// Integrated loudness target in LUFS.
@@ -330,7 +330,7 @@ pub struct TimelineSegment {
     /// Optional FFmpeg input index for a renderable mask source.
     pub mask_input_index: Option<usize>,
     /// Linear gain multiplier for this segment's audio. `None` means
-    /// no `awidat.volume` effect is on the underlying clip — the
+    /// no `montage.volume` effect is on the underlying clip — the
     /// FilterPlanner skips emitting a `volume=` filter and the audio
     /// passes through unchanged. `Some(1.0)` is unity (functionally
     /// identical to `None` but the planner still emits the filter
@@ -338,17 +338,17 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     /// Optional keyframed clip-local volume automation.
     pub volume_automation: Option<AudioAutomationPlan>,
-    /// Optional constant-speed retime controls read from `awidat.speed`.
+    /// Optional constant-speed retime controls read from `montage.speed`.
     pub speed: Option<SpeedPlan>,
     /// Optional source-local → timeline-local retime curve.
     pub time_remap: Option<TimeRemapPlan>,
     /// Optional inserted freeze-frame hold.
     pub freeze: Option<FreezePlan>,
     /// Optional clip-level color correction controls, read from the
-    /// `awidat.color_correction` effect.
+    /// `montage.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional clip-level blur controls, read from the
-    /// `awidat.blur` effect.
+    /// `montage.blur` effect.
     pub blur: Option<BlurPlan>,
     /// Optional clip-level chroma key controls.
     pub chroma_key: Option<ChromaKeyPlan>,
@@ -357,31 +357,31 @@ pub struct TimelineSegment {
     /// Optional clip-level static region blur controls.
     pub region_blur: Option<RegionBlurPlan>,
     /// Optional clip-level blur radius animation, read from a runtime
-    /// `awidat.blur.radius_px` parameter animation.
+    /// `montage.blur.radius_px` parameter animation.
     pub blur_radius_animation: Option<RenderParameterAnimation>,
-    /// Optional HDR transfer metadata, read from `awidat.source_color`.
+    /// Optional HDR transfer metadata, read from `montage.source_color`.
     pub hdr_transfer: Option<HdrTransfer>,
     /// Optional clip-level reframe / punch-in controls, read from the
-    /// `awidat.reframe` effect.
+    /// `montage.reframe` effect.
     pub reframe: Option<ReframePlan>,
     /// Optional subject-aware reframe path, read from the tracking package.
     pub reframe_path: Option<ReframePathPlan>,
     /// Optional clip-level lens warp controls, read from the
-    /// `awidat.warp` effect.
+    /// `montage.warp` effect.
     pub warp: Option<WarpPlan>,
     /// Optional animated lens warp controls, read from
-    /// `awidat.warp.*` parameter animations.
+    /// `montage.warp.*` parameter animations.
     pub warp_animation: Option<WarpAnimationPlan>,
     /// Optional procedural handheld shake controls, read from the
-    /// `awidat.shake` effect.
+    /// `montage.shake` effect.
     pub shake: Option<ShakePlan>,
     /// Optional animated shake intensity, read from
-    /// `awidat.shake.intensity_px`.
+    /// `montage.shake.intensity_px`.
     pub shake_intensity_animation: Option<RenderParameterAnimation>,
     /// Optional animated shake frequency, read from
-    /// `awidat.shake.frequency_hz`.
+    /// `montage.shake.frequency_hz`.
     pub shake_frequency_animation: Option<RenderParameterAnimation>,
-    /// Optional absolute LUT path, read from the `awidat.lut` effect.
+    /// Optional absolute LUT path, read from the `montage.lut` effect.
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
     pub lut_interpolation: Option<String>,
@@ -390,7 +390,7 @@ pub struct TimelineSegment {
     /// emits a `split → lut3d → blend=all_opacity=<s>` block so the
     /// LUT mixes with the un-graded source.
     pub lut_strength: Option<f64>,
-    /// Optional atomic color pipeline read from `awidat.color_pipeline`.
+    /// Optional atomic color pipeline read from `montage.color_pipeline`.
     /// When present, supersedes the legacy `lut_path` slots and
     /// drives a multi-stage LUT chain (input transform → shaper →
     /// look → output transform) plus output color-space tagging.
@@ -413,7 +413,7 @@ pub struct TimelineSegment {
     pub audio_removed_ranges: Vec<(f64, f64)>,
 }
 
-/// Clip-level curve-based time remap extracted from `awidat.time_remap`.
+/// Clip-level curve-based time remap extracted from `montage.time_remap`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeRemapPlan {
     /// Strictly increasing source-local to timeline-local mapping points.
@@ -460,14 +460,14 @@ fn interpolate_time_remap_segment(
     start.timeline_time_s + (source_time_s - start.source_time_s) * timeline_span / source_span
 }
 
-/// Render-time plan for an `awidat.color_pipeline` effect.
+/// Render-time plan for an `montage.color_pipeline` effect.
 ///
 /// Slots that are `None` are skipped. The filter chain runs each
 /// non-empty slot in order:
 /// `input_transform_lut → shaper_lut → look_lut → output_transform_lut`.
 /// Color-space identifiers (`clip_input_space`, `working_space`,
 /// `lut_input_space`, `output_space`) are stable strings from
-/// [`awidat_effects::KNOWN_COLOR_SPACES`]. `output_space` flows out
+/// [`montage_effects::KNOWN_COLOR_SPACES`]. `output_space` flows out
 /// to the encoder as `-color_primaries / -color_trc / -colorspace /
 /// -color_range`; the other space fields are carried for the agent's
 /// reasoning today and reserved for automatic conversion in a
@@ -602,7 +602,7 @@ pub enum VideoOverlayMode {
     },
 }
 
-/// Render-time annotation extracted from virtual `awidat.annotation` clips.
+/// Render-time annotation extracted from virtual `montage.annotation` clips.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnnotationPlan {
     /// Primitive to draw or apply.
@@ -665,7 +665,7 @@ pub struct AudioClipPlan {
     pub audio_fx: Option<AudioFxPlan>,
 }
 
-/// Constant-speed retime controls read from `awidat.speed`.
+/// Constant-speed retime controls read from `montage.speed`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpeedPlan {
     /// Playback rate multiplier.
@@ -702,7 +702,7 @@ pub enum FrameBlending {
     Flow,
 }
 
-/// Clip-level freeze-frame hold extracted from `awidat.freeze`.
+/// Clip-level freeze-frame hold extracted from `montage.freeze`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FreezePlan {
     /// Source time, in seconds, where the frame is held.
@@ -755,7 +755,7 @@ pub struct AudioAutomationPlan {
     /// FFmpeg expression for the parameter value.
     pub expression: String,
     /// Original keyframes in project units.
-    pub keyframes: Vec<awidat_proto::professional::Keyframe>,
+    pub keyframes: Vec<montage_proto::professional::Keyframe>,
 }
 
 /// Audio ducking parameters for music/effects under dialogue.
@@ -987,9 +987,9 @@ fn default_warp_plan() -> WarpPlan {
 /// Pull a numeric metadata field off the first effect on `clip` whose
 /// `effect_name` matches. Returns `None` when no such effect exists
 /// or the metadata field is missing / non-numeric. Used to surface
-/// awidat.volume / awidat.speed values into the render pipeline.
+/// montage.volume / montage.speed values into the render pipeline.
 fn read_effect_number(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     effect_name: &str,
     field: &str,
 ) -> Option<f64> {
@@ -1001,7 +1001,7 @@ fn read_effect_number(
 }
 
 fn read_effect_bool(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     effect_name: &str,
     field: &str,
 ) -> Option<bool> {
@@ -1013,7 +1013,7 @@ fn read_effect_bool(
 }
 
 fn read_effect_string(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     effect_name: &str,
     field: &str,
 ) -> Option<String> {
@@ -1025,32 +1025,32 @@ fn read_effect_string(
         .map(str::to_string)
 }
 
-fn read_speed(clip: &awidat_proto::otio::Clip) -> Option<SpeedPlan> {
-    let factor = read_effect_number(clip, "awidat.speed", "factor")?;
+fn read_speed(clip: &montage_proto::otio::Clip) -> Option<SpeedPlan> {
+    let factor = read_effect_number(clip, "montage.speed", "factor")?;
     if !factor.is_finite() || factor <= 0.0 {
         return None;
     }
-    let frame_blending = match read_effect_string(clip, "awidat.speed", "frame_blending").as_deref()
-    {
-        Some("blend") => FrameBlending::Blend,
-        Some("flow") => FrameBlending::Flow,
-        _ => FrameBlending::Nearest,
-    };
+    let frame_blending =
+        match read_effect_string(clip, "montage.speed", "frame_blending").as_deref() {
+            Some("blend") => FrameBlending::Blend,
+            Some("flow") => FrameBlending::Flow,
+            _ => FrameBlending::Nearest,
+        };
     Some(SpeedPlan {
         factor,
-        reverse: read_effect_bool(clip, "awidat.speed", "reverse").unwrap_or(false),
-        maintain_pitch: read_effect_bool(clip, "awidat.speed", "maintain_pitch").unwrap_or(true),
+        reverse: read_effect_bool(clip, "montage.speed", "reverse").unwrap_or(false),
+        maintain_pitch: read_effect_bool(clip, "montage.speed", "maintain_pitch").unwrap_or(true),
         frame_blending,
     })
 }
 
 fn read_time_remap(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
 ) -> Result<Option<TimeRemapPlan>, RenderTimelineError> {
     let Some(effect) = clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.time_remap")
+        .find(|effect| effect.effect_name == "montage.time_remap")
     else {
         return Ok(None);
     };
@@ -1125,12 +1125,12 @@ fn read_time_remap(
     Ok(Some(TimeRemapPlan { points }))
 }
 
-fn read_freeze(clip: &awidat_proto::otio::Clip) -> Option<FreezePlan> {
-    let freeze_at_source_s = read_effect_number(clip, "awidat.freeze", "freeze_at_source_s")?;
-    let duration_s = read_effect_number(clip, "awidat.freeze", "duration_s")?;
-    let freeze_position =
-        read_effect_string(clip, "awidat.freeze", "freeze_position").unwrap_or_else(|| "at".into());
-    let audio_behavior = read_effect_string(clip, "awidat.freeze", "audio_behavior")
+fn read_freeze(clip: &montage_proto::otio::Clip) -> Option<FreezePlan> {
+    let freeze_at_source_s = read_effect_number(clip, "montage.freeze", "freeze_at_source_s")?;
+    let duration_s = read_effect_number(clip, "montage.freeze", "duration_s")?;
+    let freeze_position = read_effect_string(clip, "montage.freeze", "freeze_position")
+        .unwrap_or_else(|| "at".into());
+    let audio_behavior = read_effect_string(clip, "montage.freeze", "audio_behavior")
         .unwrap_or_else(|| "silence".into());
     if !freeze_at_source_s.is_finite()
         || freeze_at_source_s < 0.0
@@ -1147,11 +1147,11 @@ fn read_freeze(clip: &awidat_proto::otio::Clip) -> Option<FreezePlan> {
     })
 }
 
-fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
+fn read_color_correction(clip: &montage_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.color_correction")?;
+        .find(|e| e.effect_name == "montage.color_correction")?;
     let m = &effect.metadata;
     let plan = ColorCorrectionPlan {
         exposure_ev: m.get("exposure_ev").and_then(serde_json::Value::as_f64),
@@ -1165,11 +1165,11 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
     Some(plan)
 }
 
-fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
+fn read_blur(clip: &montage_proto::otio::Clip) -> Option<BlurPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.blur")?;
+        .find(|e| e.effect_name == "montage.blur")?;
     let radius_px = effect
         .metadata
         .get("radius_px")
@@ -1183,10 +1183,10 @@ fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
     })
 }
 
-fn read_chroma_key(clip: &awidat_proto::otio::Clip) -> Option<ChromaKeyPlan> {
-    let key_color = read_effect_string(clip, "awidat.chroma_key", "key_color")?;
-    let similarity = read_effect_number(clip, "awidat.chroma_key", "similarity").unwrap_or(0.1);
-    let blend = read_effect_number(clip, "awidat.chroma_key", "blend").unwrap_or(0.0);
+fn read_chroma_key(clip: &montage_proto::otio::Clip) -> Option<ChromaKeyPlan> {
+    let key_color = read_effect_string(clip, "montage.chroma_key", "key_color")?;
+    let similarity = read_effect_number(clip, "montage.chroma_key", "similarity").unwrap_or(0.1);
+    let blend = read_effect_number(clip, "montage.chroma_key", "blend").unwrap_or(0.0);
     if !similarity.is_finite() || !blend.is_finite() {
         return None;
     }
@@ -1197,11 +1197,11 @@ fn read_chroma_key(clip: &awidat_proto::otio::Clip) -> Option<ChromaKeyPlan> {
     })
 }
 
-fn read_luma_key(clip: &awidat_proto::otio::Clip) -> Option<LumaKeyPlan> {
+fn read_luma_key(clip: &montage_proto::otio::Clip) -> Option<LumaKeyPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.luma_key")?;
+        .find(|effect| effect.effect_name == "montage.luma_key")?;
     let threshold = effect
         .metadata
         .get("threshold")
@@ -1221,11 +1221,11 @@ fn read_luma_key(clip: &awidat_proto::otio::Clip) -> Option<LumaKeyPlan> {
     })
 }
 
-fn read_region_blur(clip: &awidat_proto::otio::Clip) -> Option<RegionBlurPlan> {
+fn read_region_blur(clip: &montage_proto::otio::Clip) -> Option<RegionBlurPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.region_blur")?;
+        .find(|effect| effect.effect_name == "montage.region_blur")?;
     let m = &effect.metadata;
     let x = m.get("x").and_then(serde_json::Value::as_f64)?;
     let y = m.get("y").and_then(serde_json::Value::as_f64)?;
@@ -1273,14 +1273,14 @@ fn normalize_ffmpeg_color(raw: &str) -> String {
     }
 }
 
-fn read_overlay_blend_mode(clip: &awidat_proto::otio::Clip) -> Option<String> {
-    let blend_mode = read_effect_string(clip, "awidat.video_overlay", "blend_mode")?;
+fn read_overlay_blend_mode(clip: &montage_proto::otio::Clip) -> Option<String> {
+    let blend_mode = read_effect_string(clip, "montage.video_overlay", "blend_mode")?;
     matches!(blend_mode.as_str(), "multiply" | "screen").then_some(blend_mode)
 }
 
-fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
-    let raw = read_effect_string(clip, "awidat.source_color", "transfer")
-        .or_else(|| read_effect_string(clip, "awidat.source_color", "hdr_transfer"))?;
+fn read_hdr_transfer(clip: &montage_proto::otio::Clip) -> Option<HdrTransfer> {
+    let raw = read_effect_string(clip, "montage.source_color", "transfer")
+        .or_else(|| read_effect_string(clip, "montage.source_color", "hdr_transfer"))?;
     match raw.trim().to_ascii_lowercase().as_str() {
         "smpte2084" | "smpte2084-pq" | "pq" | "bt2020-10" => Some(HdrTransfer::Smpte2084),
         "arib-std-b67" | "arib_std_b67" | "hlg" => Some(HdrTransfer::AribStdB67),
@@ -1288,11 +1288,11 @@ fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
     }
 }
 
-fn read_reframe(clip: &awidat_proto::otio::Clip) -> Option<ReframePlan> {
+fn read_reframe(clip: &montage_proto::otio::Clip) -> Option<ReframePlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.reframe")?;
+        .find(|e| e.effect_name == "montage.reframe")?;
     let m = &effect.metadata;
     let zoom = m.get("zoom").and_then(serde_json::Value::as_f64)?;
     if !zoom.is_finite() || zoom <= 1.0 {
@@ -1350,11 +1350,11 @@ fn reframe_path_plan(path: &ReframePath) -> Option<ReframePathPlan> {
     })
 }
 
-fn read_shake(clip: &awidat_proto::otio::Clip) -> Option<ShakePlan> {
+fn read_shake(clip: &montage_proto::otio::Clip) -> Option<ShakePlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.shake")?;
+        .find(|e| e.effect_name == "montage.shake")?;
     let m = &effect.metadata;
     let intensity_px = m
         .get("intensity_px")
@@ -1377,11 +1377,11 @@ fn read_shake(clip: &awidat_proto::otio::Clip) -> Option<ShakePlan> {
     })
 }
 
-fn read_warp(clip: &awidat_proto::otio::Clip) -> Option<WarpPlan> {
+fn read_warp(clip: &montage_proto::otio::Clip) -> Option<WarpPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.warp")?;
+        .find(|e| e.effect_name == "montage.warp")?;
     let m = &effect.metadata;
     let k1 = m
         .get("k1")
@@ -1413,19 +1413,19 @@ fn read_warp(clip: &awidat_proto::otio::Clip) -> Option<WarpPlan> {
     })
 }
 
-/// Read an `awidat.color_pipeline` effect off `clip` and resolve its
+/// Read an `montage.color_pipeline` effect off `clip` and resolve its
 /// LUT paths against `project_root`. Returns `None` when no
 /// pipeline effect is stamped. Surfaces `MissingLut` for any
 /// declared-but-not-on-disk LUT path so render fails fast like
-/// `awidat.lut` does.
+/// `montage.lut` does.
 fn read_color_pipeline(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     project_root: &Path,
 ) -> Result<Option<ColorPipelinePlan>, RenderTimelineError> {
     let Some(effect) = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.color_pipeline")
+        .find(|e| e.effect_name == "montage.color_pipeline")
     else {
         return Ok(None);
     };
@@ -1492,8 +1492,8 @@ fn read_color_pipeline(
     }))
 }
 
-fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
-    let raw = read_effect_string(clip, "awidat.lut", "interpolation")?;
+fn read_lut_interpolation(clip: &montage_proto::otio::Clip) -> Option<String> {
+    let raw = read_effect_string(clip, "montage.lut", "interpolation")?;
     let value = raw.trim().to_ascii_lowercase();
     matches!(
         value.as_str(),
@@ -1502,11 +1502,11 @@ fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
     .then_some(value)
 }
 
-fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>) {
+fn read_audio_fade(clip: &montage_proto::otio::Clip) -> (Option<f64>, Option<f64>) {
     let Some(effect) = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.audio_fade")
+        .find(|e| e.effect_name == "montage.audio_fade")
     else {
         return (None, None);
     };
@@ -1522,16 +1522,16 @@ fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>
     )
 }
 
-fn read_clip_audio_fx(clip: &awidat_proto::otio::Clip) -> Option<AudioFxPlan> {
+fn read_clip_audio_fx(clip: &montage_proto::otio::Clip) -> Option<AudioFxPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.audio_fx")?;
+        .find(|e| e.effect_name == "montage.audio_fx")?;
     serde_json::from_value(serde_json::Value::Object(effect.metadata.clone())).ok()
 }
 
 fn read_timeline_loudness_target(
-    metadata: &awidat_proto::awidat_meta::AwidatTimelineMetadata,
+    metadata: &montage_proto::montage_meta::MontageTimelineMetadata,
 ) -> Option<LoudnessTargetPlan> {
     let value = metadata.extra.get("loudness_target")?;
     let integrated_lufs = value.get("integrated_lufs")?.as_f64()?;
@@ -1711,7 +1711,7 @@ pub fn analyze_timeline_render_preflight(
 
 /// Walk `<project_root>/project.otio.json` and collect segments +
 /// transitions + titles. The Titles track (flagged via
-/// `track.metadata["awidat_track_role"] = "titles"` or matched by
+/// `track.metadata["montage_track_role"] = "titles"` or matched by
 /// name `"Titles"` for backwards-compat) is excluded from segment
 /// production — its clips are virtual, not media-bearing.
 pub fn collect_timeline_full_plan(
@@ -1730,21 +1730,21 @@ pub fn collect_timeline_full_plan(
     let mut graph_binding_limitations = Vec::new();
     let frame_rate = timeline_frame_rate(&timeline);
     let parameter_animations = collect_effective_parameter_animations(
-        timeline.metadata.awidat.as_ref(),
+        timeline.metadata.montage.as_ref(),
         frame_rate,
         &mut graph_binding_limitations,
     );
     let corner_pin_filters = collect_corner_pin_filters(
-        timeline.metadata.awidat.as_ref(),
+        timeline.metadata.montage.as_ref(),
         &mut graph_binding_limitations,
     );
     let overlay_matte_sources = collect_overlay_matte_sources(
         project_root,
-        timeline.metadata.awidat.as_ref(),
+        timeline.metadata.montage.as_ref(),
         &mut graph_binding_limitations,
     );
     let overlay_masks = collect_overlay_masks(
-        timeline.metadata.awidat.as_ref(),
+        timeline.metadata.montage.as_ref(),
         &mut graph_binding_limitations,
     );
 
@@ -1755,7 +1755,7 @@ pub fn collect_timeline_full_plan(
     let mut titles = Vec::new();
     let editable_subtitle_tracks = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|metadata| {
             metadata
@@ -1813,7 +1813,7 @@ pub fn collect_timeline_full_plan(
                             &parameter_animations,
                             timeline
                                 .metadata
-                                .awidat
+                                .montage
                                 .as_ref()
                                 .and_then(|m| m.tracking_package.as_ref()),
                             &mut consumed_animation_ids,
@@ -1882,7 +1882,7 @@ pub fn collect_timeline_full_plan(
                         &parameter_animations,
                         timeline
                             .metadata
-                            .awidat
+                            .montage
                             .as_ref()
                             .and_then(|m| m.tracking_package.as_ref()),
                         &mut consumed_animation_ids,
@@ -1908,8 +1908,8 @@ pub fn collect_timeline_full_plan(
                         )?;
                         let gpu_shader = composition
                             .as_ref()
-                            .and_then(awidat_proto::transitions::resolve_composition_gpu_shader)
-                            .and_then(awidat_render_gpu::TransitionShader::from_proto_id);
+                            .and_then(montage_proto::transitions::resolve_composition_gpu_shader)
+                            .and_then(montage_render_gpu::TransitionShader::from_proto_id);
                         transitions.push(TransitionPlan {
                             from_segment_index: new_index - 1,
                             to_segment_index: new_index,
@@ -1972,7 +1972,7 @@ pub fn collect_timeline_full_plan(
                         &parameter_animations,
                         timeline
                             .metadata
-                            .awidat
+                            .montage
                             .as_ref()
                             .and_then(|m| m.tracking_package.as_ref()),
                         &mut consumed_animation_ids,
@@ -1989,7 +1989,7 @@ pub fn collect_timeline_full_plan(
             });
         }
     }
-    if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+    if let Some(metadata) = timeline.metadata.montage.as_ref() {
         titles.extend(collect_motion_scene_title_plans(
             metadata,
             &mut render_limitations,
@@ -2007,13 +2007,13 @@ pub fn collect_timeline_full_plan(
     apply_dynamic_title_keywords(
         &mut titles,
         &segs,
-        timeline.metadata.awidat.as_ref(),
+        timeline.metadata.montage.as_ref(),
         project_root,
         frame_rate,
     );
     let broadcast_overlay = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.broadcast_overlay.clone())
         .map(|config| BroadcastOverlayPlan {
@@ -2022,10 +2022,10 @@ pub fn collect_timeline_full_plan(
         });
     let loudness_target = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(read_timeline_loudness_target);
-    let canvas = timeline_render_canvas(timeline.metadata.awidat.as_ref());
+    let canvas = timeline_render_canvas(timeline.metadata.montage.as_ref());
     if audio_tracks.is_empty() {
         audio_tracks = synthesize_audio_tracks(&segs)?;
     }
@@ -2052,7 +2052,7 @@ pub fn collect_timeline_full_plan(
 }
 
 fn collect_motion_scene_title_plans(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> Vec<TitlePlan> {
     let mut titles = Vec::new();
@@ -2105,7 +2105,7 @@ fn collect_motion_scene_title_plans(
 }
 
 fn collect_motion_scene_shape_plans(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> Vec<AnnotationPlan> {
     let mut annotations = Vec::new();
@@ -2133,7 +2133,7 @@ fn collect_motion_scene_shape_plans(
 
 fn collect_motion_scene_image_plans(
     project_root: &Path,
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> Vec<MotionImagePlan> {
     let mut images = Vec::new();
@@ -2306,10 +2306,10 @@ fn motion_scene_layer_limitation(
 }
 
 fn collect_effective_parameter_animations(
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     frame_rate: f64,
     limitations: &mut Vec<RenderPlanLimitation>,
-) -> Vec<awidat_proto::professional::ParameterAnimation> {
+) -> Vec<montage_proto::professional::ParameterAnimation> {
     let Some(metadata) = metadata else {
         return Vec::new();
     };
@@ -2336,7 +2336,7 @@ fn collect_effective_parameter_animations(
 }
 
 fn collect_corner_pin_filters(
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> BTreeMap<String, String> {
     let Some(metadata) = metadata else {
@@ -2375,7 +2375,7 @@ fn collect_corner_pin_filters(
 
 fn collect_overlay_matte_sources(
     project_root: &Path,
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> BTreeMap<String, PathBuf> {
     let Some(metadata) = metadata else {
@@ -2385,7 +2385,7 @@ fn collect_overlay_matte_sources(
         graph
             .nodes
             .iter()
-            .any(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Matte)
+            .any(|node| node.node_type == montage_proto::professional::CompositionNodeType::Matte)
     });
     let Some(package) = metadata.tracking_package.as_ref() else {
         if has_matte_nodes {
@@ -2402,11 +2402,9 @@ fn collect_overlay_matte_sources(
     };
     let mut sources = BTreeMap::new();
     for graph in &metadata.composition_graphs {
-        for node in graph
-            .nodes
-            .iter()
-            .filter(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Matte)
-        {
+        for node in graph.nodes.iter().filter(|node| {
+            node.node_type == montage_proto::professional::CompositionNodeType::Matte
+        }) {
             let Some(matte_id) = node
                 .params
                 .get("matte_id")
@@ -2461,8 +2459,8 @@ fn collect_overlay_matte_sources(
 }
 
 fn matte_node_limitation(
-    graph: &awidat_proto::professional::CompositionGraph,
-    node: &awidat_proto::professional::CompositionNode,
+    graph: &montage_proto::professional::CompositionGraph,
+    node: &montage_proto::professional::CompositionNode,
     message: &str,
 ) -> RenderPlanLimitation {
     RenderPlanLimitation {
@@ -2478,7 +2476,7 @@ fn matte_node_limitation(
 }
 
 fn collect_overlay_masks(
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> BTreeMap<String, OverlayMaskPlan> {
     let Some(metadata) = metadata else {
@@ -2488,7 +2486,7 @@ fn collect_overlay_masks(
         graph
             .nodes
             .iter()
-            .any(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Mask)
+            .any(|node| node.node_type == montage_proto::professional::CompositionNodeType::Mask)
     });
     let Some(package) = metadata.tracking_package.as_ref() else {
         if has_mask_nodes {
@@ -2509,7 +2507,7 @@ fn collect_overlay_masks(
         for node in graph
             .nodes
             .iter()
-            .filter(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Mask)
+            .filter(|node| node.node_type == montage_proto::professional::CompositionNodeType::Mask)
         {
             let Some(mask_id) = node
                 .params
@@ -2606,8 +2604,8 @@ fn normalized_points_bounds(points: &[[f64; 2]]) -> Option<(f64, f64, f64, f64)>
 }
 
 fn mask_node_limitation(
-    graph: &awidat_proto::professional::CompositionGraph,
-    node: &awidat_proto::professional::CompositionNode,
+    graph: &montage_proto::professional::CompositionGraph,
+    node: &montage_proto::professional::CompositionNode,
     message: &str,
 ) -> RenderPlanLimitation {
     RenderPlanLimitation {
@@ -2622,7 +2620,7 @@ fn mask_node_limitation(
     }
 }
 
-fn timeline_frame_rate(timeline: &awidat_proto::otio::Timeline) -> f64 {
+fn timeline_frame_rate(timeline: &montage_proto::otio::Timeline) -> f64 {
     timeline
         .tracks
         .children
@@ -2649,7 +2647,7 @@ fn track_child_frame_rate(child: &TrackChild) -> Option<f64> {
     }
 }
 
-fn clip_source_range_rate(clip: &awidat_proto::otio::Clip) -> Option<f64> {
+fn clip_source_range_rate(clip: &montage_proto::otio::Clip) -> Option<f64> {
     clip.source_range
         .as_ref()
         .and_then(|range| positive_rate(range.duration.rate))
@@ -2660,9 +2658,9 @@ fn positive_rate(rate: f64) -> Option<f64> {
 }
 
 fn read_transition_composition(
-    transition: &awidat_proto::otio::Transition,
+    transition: &montage_proto::otio::Transition,
 ) -> Result<Option<TransitionComposition>, RenderTimelineError> {
-    let Some(value) = transition.metadata.get("awidat_transition") else {
+    let Some(value) = transition.metadata.get("montage_transition") else {
         return Ok(None);
     };
     let Some(composition_value) = value.get("composition") else {
@@ -2686,22 +2684,22 @@ fn read_transition_composition(
 }
 
 fn validate_renderable_composite_transition(
-    transition: &awidat_proto::otio::Transition,
+    transition: &montage_proto::otio::Transition,
     composition: Option<&TransitionComposition>,
 ) -> Result<(), RenderTimelineError> {
-    if transition.transition_type != "awidat.composite" {
+    if transition.transition_type != "montage.composite" {
         return Ok(());
     }
     let Some(composition) = composition else {
         return Err(RenderTimelineError::InvalidTransitionMetadata {
             kind: transition.transition_type.clone(),
-            message: "awidat.composite requires metadata.awidat_transition.composition".into(),
+            message: "montage.composite requires metadata.montage_transition.composition".into(),
         });
     };
     if transitions::resolve_composition_ffmpeg_xfade(composition).is_none() {
         return Err(RenderTimelineError::InvalidTransitionMetadata {
             kind: transition.transition_type.clone(),
-            message: "awidat.composite composition has no phase-one FFmpeg lowering".into(),
+            message: "montage.composite composition has no phase-one FFmpeg lowering".into(),
         });
     }
     Ok(())
@@ -2709,8 +2707,8 @@ fn validate_renderable_composite_transition(
 
 fn collect_nested_video_stack_segments(
     project_root: &Path,
-    stack: &awidat_proto::otio::Stack,
-    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    stack: &montage_proto::otio::Stack,
+    parameter_animations: &[montage_proto::professional::ParameterAnimation],
     tracking_package: Option<&TrackingPackage>,
     consumed_animation_ids: &mut BTreeSet<String>,
     segs: &mut Vec<TimelineSegment>,
@@ -2766,8 +2764,8 @@ fn collect_nested_video_stack_segments(
 
 fn collect_nested_video_track_segments(
     project_root: &Path,
-    track: &awidat_proto::otio::Track,
-    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    track: &montage_proto::otio::Track,
+    parameter_animations: &[montage_proto::professional::ParameterAnimation],
     tracking_package: Option<&TrackingPackage>,
     consumed_animation_ids: &mut BTreeSet<String>,
     segs: &mut Vec<TimelineSegment>,
@@ -2807,8 +2805,8 @@ fn collect_nested_video_track_segments(
 
 fn collect_timeline_segment(
     project_root: &Path,
-    clip: &awidat_proto::otio::Clip,
-    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    clip: &montage_proto::otio::Clip,
+    parameter_animations: &[montage_proto::professional::ParameterAnimation],
     tracking_package: Option<&TrackingPackage>,
     consumed_animation_ids: &mut BTreeSet<String>,
 ) -> Result<Option<TimelineSegment>, RenderTimelineError> {
@@ -2827,7 +2825,7 @@ fn collect_timeline_segment(
             missing: asset_path,
         });
     }
-    let lut_path = read_effect_string(clip, "awidat.lut", "lut_path")
+    let lut_path = read_effect_string(clip, "montage.lut", "lut_path")
         .map(|lut_path| project_root.join(lut_path));
     if let Some(lut_path) = lut_path.as_ref()
         && !lut_path.exists()
@@ -2838,7 +2836,7 @@ fn collect_timeline_segment(
         });
     }
     let lut_interpolation = read_lut_interpolation(clip);
-    let lut_strength = read_effect_number(clip, "awidat.lut", "strength")
+    let lut_strength = read_effect_number(clip, "montage.lut", "strength")
         .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
     let color_pipeline = read_color_pipeline(clip, project_root)?;
     let time_remap = read_time_remap(clip)?;
@@ -2846,13 +2844,13 @@ fn collect_timeline_segment(
     let shake_intensity_animation = select_clip_effect_animation(
         parameter_animations,
         &clip_id,
-        "awidat.shake.intensity_px",
+        "montage.shake.intensity_px",
         consumed_animation_ids,
     );
     let shake_frequency_animation = select_clip_effect_animation(
         parameter_animations,
         &clip_id,
-        "awidat.shake.frequency_hz",
+        "montage.shake.frequency_hz",
         consumed_animation_ids,
     );
     let shake = read_shake(clip).or_else(|| {
@@ -2880,7 +2878,7 @@ fn collect_timeline_segment(
             .as_ref()
             .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
         mask_input_index: None,
-        volume: read_effect_number(clip, "awidat.volume", "value"),
+        volume: read_effect_number(clip, "montage.volume", "value"),
         volume_automation: audio_volume_automation.automation,
         speed: read_speed(clip),
         time_remap,
@@ -2893,7 +2891,7 @@ fn collect_timeline_segment(
         blur_radius_animation: select_clip_effect_animation(
             parameter_animations,
             &clip_id,
-            "awidat.blur.radius_px",
+            "montage.blur.radius_px",
             consumed_animation_ids,
         ),
         hdr_transfer: read_hdr_transfer(clip),
@@ -2912,26 +2910,26 @@ fn collect_timeline_segment(
         overlay_blend_mode: read_overlay_blend_mode(clip),
         audio_lead_s: clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.split_edit.as_ref())
             .and_then(|s| s.audio_lead_s),
         audio_trail_s: clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.split_edit.as_ref())
             .and_then(|s| s.audio_trail_s),
         audio_muted: clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.audio_override.as_ref())
             .map(|o| o.muted)
             .unwrap_or(false),
         audio_removed_ranges: clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.audio_override.as_ref())
             .map(|o| {
@@ -3014,11 +3012,11 @@ fn add_post_handle(
     Ok(())
 }
 
-fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode {
+fn read_video_overlay_mode(clip: &montage_proto::otio::Clip) -> VideoOverlayMode {
     let Some(effect) = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.video_overlay")
+        .find(|e| e.effect_name == "montage.video_overlay")
     else {
         return VideoOverlayMode::FullFrame;
     };
@@ -3047,10 +3045,10 @@ fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode 
     }
 }
 
-fn read_video_overlay_rotation_deg(clip: &awidat_proto::otio::Clip) -> f64 {
+fn read_video_overlay_rotation_deg(clip: &montage_proto::otio::Clip) -> f64 {
     clip.effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.video_overlay")
+        .find(|effect| effect.effect_name == "montage.video_overlay")
         .and_then(|effect| effect.metadata.get("rotation_deg"))
         .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
@@ -3059,14 +3057,14 @@ fn read_video_overlay_rotation_deg(clip: &awidat_proto::otio::Clip) -> f64 {
 }
 
 fn read_video_overlay_motion_blur_with_limitations(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     clip_id: &str,
     limitations: &mut Vec<RenderPlanLimitation>,
 ) -> Option<OverlayMotionBlurPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.video_overlay")?;
+        .find(|effect| effect.effect_name == "montage.video_overlay")?;
     if !effect
         .metadata
         .get("motion_blur")
@@ -3105,8 +3103,8 @@ struct AudioTrackAnimationSelection {
 
 fn collect_audio_track_plan(
     project_root: &Path,
-    track: &awidat_proto::otio::Track,
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    track: &montage_proto::otio::Track,
+    animations: &[montage_proto::professional::ParameterAnimation],
 ) -> Result<AudioTrackAnimationSelection, RenderTimelineError> {
     let settings = parse_audio_track_settings(track);
     let mut items = Vec::new();
@@ -3139,7 +3137,7 @@ fn collect_audio_track_plan(
                     asset_path,
                     start_s: range.start_time.to_seconds(),
                     duration_s: range.duration.to_seconds(),
-                    volume: read_effect_number(clip, "awidat.volume", "value"),
+                    volume: read_effect_number(clip, "montage.volume", "value"),
                     volume_automation: audio_volume_automation.automation,
                     speed: read_speed(clip),
                     fade_in_s,
@@ -3178,12 +3176,12 @@ struct AudioAutomationSelection {
 }
 
 fn audio_volume_automation_for_track(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     track_name: &str,
 ) -> AudioAutomationSelection {
     let mut selection = AudioAutomationSelection::default();
     for animation in animations {
-        let awidat_proto::professional::AnimationTarget::TrackParameter { track, parameter } =
+        let montage_proto::professional::AnimationTarget::TrackParameter { track, parameter } =
             &animation.target
         else {
             continue;
@@ -3213,12 +3211,12 @@ fn audio_volume_automation_for_track(
 }
 
 fn audio_volume_automation_for_clip(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
 ) -> AudioAutomationSelection {
     let mut selection = AudioAutomationSelection::default();
     for animation in animations {
-        let awidat_proto::professional::AnimationTarget::ClipParameter {
+        let montage_proto::professional::AnimationTarget::ClipParameter {
             clip_id: target_clip_id,
             parameter,
         } = &animation.target
@@ -3251,9 +3249,9 @@ fn audio_volume_automation_for_clip(
 
 fn audio_volume_automation_expression(
     parameter: &str,
-    keyframes: &[awidat_proto::professional::Keyframe],
-    pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
-    post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    keyframes: &[montage_proto::professional::Keyframe],
+    pre_extrapolation: montage_proto::professional::ExtrapolationMode,
+    post_extrapolation: montage_proto::professional::ExtrapolationMode,
 ) -> String {
     let value_expr = keyframes_to_ffmpeg_expr_with_extrapolation(
         keyframes,
@@ -3504,8 +3502,8 @@ fn validate_split_edit_handles(
     Ok(())
 }
 
-fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPlan {
-    let value = track.metadata.get("awidat_audio");
+fn parse_audio_track_settings(track: &montage_proto::otio::Track) -> AudioTrackPlan {
+    let value = track.metadata.get("montage_audio");
     let role = value
         .and_then(|v| v.get("role"))
         .and_then(serde_json::Value::as_str)
@@ -3571,12 +3569,12 @@ fn default_audio_role(track_name: &str) -> String {
 
 /// True iff the track is the project's Titles track. Mirrors the
 /// apply-side check in `crates/core/src/edl/apply.rs` —
-/// `track.metadata["awidat_track_role"] = "titles"` flag with a
+/// `track.metadata["montage_track_role"] = "titles"` flag with a
 /// fallback to the canonical name.
-fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
+fn is_titles_track(track: &montage_proto::otio::Track) -> bool {
     if track
         .metadata
-        .get("awidat_track_role")
+        .get("montage_track_role")
         .and_then(|v| v.as_str())
         == Some("titles")
     {
@@ -3585,10 +3583,10 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
     track.name == "Titles"
 }
 
-fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
+fn is_annotations_track(track: &montage_proto::otio::Track) -> bool {
     if track
         .metadata
-        .get("awidat_track_role")
+        .get("montage_track_role")
         .and_then(|v| v.as_str())
         == Some("annotations")
     {
@@ -3598,17 +3596,17 @@ fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
 }
 
 /// Parse one synthesized title-clip into a [`TitlePlan`]. Returns
-/// `None` if the clip carries no awidat.title effect or required
+/// `None` if the clip carries no montage.title effect or required
 /// metadata is missing — the render walk just skips invalid titles
 /// rather than aborting.
 fn parse_title_plan(
-    clip: &awidat_proto::otio::Clip,
-    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    clip: &montage_proto::otio::Clip,
+    parameter_animations: &[montage_proto::professional::ParameterAnimation],
 ) -> Option<(TitlePlan, RenderAnimationSelection)> {
     let effect = clip
         .effects
         .iter()
-        .find(|e| e.effect_name == "awidat.title")?;
+        .find(|e| e.effect_name == "montage.title")?;
     let m = &effect.metadata;
     let text = m.get("text").and_then(|v| v.as_str())?.to_string();
     let start_s = m.get("start_s").and_then(serde_json::Value::as_f64)?;
@@ -3724,11 +3722,11 @@ fn parse_title_plan(
     Some((plan, animation_selection))
 }
 
-fn parse_annotation_plan(clip: &awidat_proto::otio::Clip) -> Option<AnnotationPlan> {
+fn parse_annotation_plan(clip: &montage_proto::otio::Clip) -> Option<AnnotationPlan> {
     let effect = clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.annotation")?;
+        .find(|effect| effect.effect_name == "montage.annotation")?;
     let metadata = &effect.metadata;
     let kind = match metadata.get("kind").and_then(|value| value.as_str())? {
         "rectangle" => AnnotationKind::Rectangle,
@@ -3788,7 +3786,7 @@ fn valid_annotation_region(x: f64, y: f64, width: f64, height: f64) -> bool {
 fn apply_dynamic_title_keywords(
     titles: &mut [TitlePlan],
     segments: &[TimelineSegment],
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     project_root: &Path,
     frame_rate: f64,
 ) {
@@ -3811,7 +3809,7 @@ fn resolve_dynamic_title_text(
     text: &str,
     timeline_s: f64,
     segments: &[TimelineSegment],
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     project_root: &Path,
     frame_rate: f64,
 ) -> String {
@@ -3876,7 +3874,7 @@ fn active_segment_at(segments: &[TimelineSegment], timeline_s: f64) -> Option<&T
 }
 
 fn active_chapter_title(
-    metadata: Option<&AwidatTimelineMetadata>,
+    metadata: Option<&MontageTimelineMetadata>,
     timeline_s: f64,
 ) -> Option<String> {
     metadata
@@ -3891,7 +3889,10 @@ fn active_chapter_title(
         .map(|chapter| chapter.text.clone())
 }
 
-fn metadata_dynamic_string(metadata: Option<&AwidatTimelineMetadata>, key: &str) -> Option<String> {
+fn metadata_dynamic_string(
+    metadata: Option<&MontageTimelineMetadata>,
+    key: &str,
+) -> Option<String> {
     let metadata = metadata?;
     metadata
         .extra
@@ -3907,9 +3908,9 @@ fn metadata_dynamic_string(metadata: Option<&AwidatTimelineMetadata>, key: &str)
         .map(str::to_string)
 }
 
-fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
+fn render_clip_id(clip: &montage_proto::otio::Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(|value| value.as_str())
@@ -3923,13 +3924,13 @@ pub struct RenderParameterAnimation {
     /// Phase 3A parameter path such as `title.opacity`.
     pub parameter: String,
     /// Clip-local keyframes.
-    pub keyframes: Vec<awidat_proto::professional::Keyframe>,
+    pub keyframes: Vec<montage_proto::professional::Keyframe>,
     /// Behavior before the first keyframe.
-    pub pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    pub pre_extrapolation: montage_proto::professional::ExtrapolationMode,
     /// Behavior after the last keyframe.
-    pub post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    pub post_extrapolation: montage_proto::professional::ExtrapolationMode,
     /// Optional 2D path for position animations.
-    pub motion_path: Option<awidat_proto::professional::MotionPath>,
+    pub motion_path: Option<montage_proto::professional::MotionPath>,
 }
 
 #[derive(Debug, Default)]
@@ -3941,7 +3942,7 @@ struct RenderAnimationSelection {
 
 #[cfg(test)]
 fn render_animations_for_clip(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
     surface: &str,
 ) -> Vec<RenderParameterAnimation> {
@@ -3949,13 +3950,13 @@ fn render_animations_for_clip(
 }
 
 fn render_animations_for_clip_with_limitations(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
     surface: &str,
 ) -> RenderAnimationSelection {
     let mut selection = RenderAnimationSelection::default();
     animations.iter().for_each(|animation| {
-        let awidat_proto::professional::AnimationTarget::ClipParameter {
+        let montage_proto::professional::AnimationTarget::ClipParameter {
             clip_id: target_clip_id,
             parameter,
         } = &animation.target
@@ -4017,7 +4018,7 @@ fn render_animations_for_clip_with_limitations(
 }
 
 fn select_clip_effect_animation(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
     parameter: &str,
     consumed_animation_ids: &mut BTreeSet<String>,
@@ -4025,7 +4026,7 @@ fn select_clip_effect_animation(
     let animation = animations.iter().find(|animation| {
         matches!(
             &animation.target,
-            awidat_proto::professional::AnimationTarget::ClipParameter {
+            montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: target_clip_id,
                 parameter: target_parameter,
             } if target_clip_id == clip_id
@@ -4043,7 +4044,7 @@ fn select_clip_effect_animation(
 }
 
 fn select_warp_animation(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
     consumed_animation_ids: &mut BTreeSet<String>,
 ) -> Option<WarpAnimationPlan> {
@@ -4051,25 +4052,25 @@ fn select_warp_animation(
         k1: select_clip_effect_animation(
             animations,
             clip_id,
-            "awidat.warp.k1",
+            "montage.warp.k1",
             consumed_animation_ids,
         ),
         k2: select_clip_effect_animation(
             animations,
             clip_id,
-            "awidat.warp.k2",
+            "montage.warp.k2",
             consumed_animation_ids,
         ),
         center_x: select_clip_effect_animation(
             animations,
             clip_id,
-            "awidat.warp.center_x",
+            "montage.warp.center_x",
             consumed_animation_ids,
         ),
         center_y: select_clip_effect_animation(
             animations,
             clip_id,
-            "awidat.warp.center_y",
+            "montage.warp.center_y",
             consumed_animation_ids,
         ),
     };
@@ -4077,7 +4078,7 @@ fn select_warp_animation(
 }
 
 fn overlay_blur_radius_limitations(
-    animation: &awidat_proto::professional::ParameterAnimation,
+    animation: &montage_proto::professional::ParameterAnimation,
 ) -> Vec<RenderPlanLimitation> {
     animation
         .keyframes
@@ -4089,7 +4090,7 @@ fn overlay_blur_radius_limitations(
             kind: "overlay_blur_radius_clamped".to_string(),
             animation_id: Some(animation.id.clone()),
             clip_id: match &animation.target {
-                awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, .. } => {
+                montage_proto::professional::AnimationTarget::ClipParameter { clip_id, .. } => {
                     Some(clip_id.clone())
                 }
                 _ => None,
@@ -4105,7 +4106,7 @@ fn overlay_blur_radius_limitations(
 }
 
 fn tracker_bind_coverage_limitations(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     clip_id: &str,
     track_start_s: f64,
     duration_s: f64,
@@ -4114,7 +4115,7 @@ fn tracker_bind_coverage_limitations(
         .iter()
         .filter(|animation| animation.id.starts_with("tracker-bind-"))
         .filter_map(|animation| {
-            let awidat_proto::professional::AnimationTarget::ClipParameter {
+            let montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: target_clip_id,
                 parameter,
             } = &animation.target
@@ -4150,7 +4151,7 @@ fn tracker_bind_coverage_limitations(
 }
 
 fn unconsumed_animation_limitations(
-    animations: &[awidat_proto::professional::ParameterAnimation],
+    animations: &[montage_proto::professional::ParameterAnimation],
     consumed_animation_ids: &BTreeSet<String>,
 ) -> Vec<RenderPlanLimitation> {
     animations
@@ -4224,7 +4225,7 @@ fn mask_source_limitations(segs: &[TimelineSegment]) -> Vec<RenderPlanLimitation
                 clip_id: Some(seg.clip_name.clone()),
                 parameter: Some("color_pipeline.mask_source".to_string()),
                 message: format!(
-                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: this masked color-pipeline combination is not renderable yet \
+                    "render ignored montage.color_pipeline.mask_source {} on clip {:?}: this masked color-pipeline combination is not renderable yet \
                      (see docs/color-pipeline/render-mask-lowering.md for the supported v1 scope)",
                     mask.display(),
                     seg.clip_name,
@@ -4304,10 +4305,10 @@ fn assign_mask_input_indices(
 }
 
 fn render_limitation_for_unconsumed_animation(
-    animation: &awidat_proto::professional::ParameterAnimation,
+    animation: &montage_proto::professional::ParameterAnimation,
 ) -> RenderPlanLimitation {
     match &animation.target {
-        awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
+        montage_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
             if !is_phase_3a_parameter(parameter) {
                 RenderPlanLimitation {
                     kind: "unsupported_parameter".to_string(),
@@ -4443,7 +4444,7 @@ pub enum CaptionRenderReveal {
 }
 
 /// Parsed caption styling carried through from the EDL `style_json` block.
-/// Field names mirror `CaptionStyleSpec` in `awidat-core` so the same JSON
+/// Field names mirror `CaptionStyleSpec` in `montage-core` so the same JSON
 /// deserializes on both sides without a conversion layer.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CaptionRenderStyle {
@@ -4482,7 +4483,7 @@ pub enum TextReveal {
     Line,
 }
 
-/// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
+/// Mirrors `montage_core::edl::op::TitlePosition` to avoid a render
 /// → core dep. Render only needs the variants for emitting drawtext
 /// y= expressions; the parsing happens in core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4495,7 +4496,7 @@ pub enum TitlePosition {
     Bottom,
 }
 
-/// Mirrors `awidat_core::edl::op::TitleWeight`.
+/// Mirrors `montage_core::edl::op::TitleWeight`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleWeight {
@@ -4505,7 +4506,7 @@ pub enum TitleWeight {
     Bold,
 }
 
-/// Mirrors `awidat_core::edl::op::TitleAnimation`.
+/// Mirrors `montage_core::edl::op::TitleAnimation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleAnimation {
     /// No animation.
@@ -4522,7 +4523,7 @@ pub enum TitleAnimation {
     SlideOut,
 }
 
-/// Mirrors `awidat_core::edl::op::TitlePhaseKind`. Render-side enum
+/// Mirrors `montage_core::edl::op::TitlePhaseKind`. Render-side enum
 /// keeps the render crate independent of the core crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -4535,7 +4536,7 @@ pub enum TitlePhaseKind {
     Pop,
 }
 
-/// Mirrors `awidat_core::edl::op::TitlePhase`.
+/// Mirrors `montage_core::edl::op::TitlePhase`.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 pub struct TitlePhase {
     /// Kind of animation this phase plays.
@@ -4550,7 +4551,7 @@ pub struct TitlePhase {
     pub stagger_s: Option<f64>,
 }
 
-/// Mirrors `awidat_core::edl::op::TitlePhases`. Three-phase title
+/// Mirrors `montage_core::edl::op::TitlePhases`. Three-phase title
 /// animation: entrance, highlight, exit. Any phase may be absent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
 pub struct TitlePhases {
@@ -4620,7 +4621,7 @@ pub struct TransitionPlan {
     pub from_segment_index: usize,
     /// Index of the incoming segment. Must be `from_segment_index + 1`.
     pub to_segment_index: usize,
-    /// Transition kind (`"SMPTE_Dissolve"`, `"awidat.fade_in"`, etc).
+    /// Transition kind (`"SMPTE_Dissolve"`, `"montage.fade_in"`, etc).
     /// Mapped to ffmpeg's xfade transition names by the planner.
     pub kind: String,
     /// Timeline seconds before the cut occupied by the transition.
@@ -4630,14 +4631,14 @@ pub struct TransitionPlan {
     /// Total transition duration on the timeline, in seconds.
     pub duration_s: f64,
     /// Optional data-only composition recipe carried from
-    /// `metadata.awidat_transition.composition`. Phase-one FFmpeg still
+    /// `metadata.montage_transition.composition`. Phase-one FFmpeg still
     /// exports by `kind`; future backends lower this recipe directly.
     pub composition: Option<TransitionComposition>,
     /// Optional GPU shader identifier. When `Some`, the render
     /// orchestrator routes this transition through the raw-stream
     /// composer (wgpu fragment shader instead of FFmpeg `xfade`).
     /// `None` keeps the legacy filter-graph path unchanged.
-    pub gpu_shader: Option<awidat_render_gpu::TransitionShader>,
+    pub gpu_shader: Option<montage_render_gpu::TransitionShader>,
 }
 
 /// Plans the `-filter_complex` argument + map labels for a render.
@@ -4992,7 +4993,7 @@ impl<'a> FilterPlanner<'a> {
         let mut filter = String::new();
 
         // Pre-stage each segment's video / audio inputs. When a
-        // segment carries an awidat.volume effect, its audio stream
+        // segment carries an montage.volume effect, its audio stream
         // goes through `volume=<v>` first; downstream nodes use the
         // resulting [av<i>] label in place of [i:a:0]. Speed runs
         // through a parallel setpts pass on video + atempo on audio.
@@ -5032,7 +5033,7 @@ impl<'a> FilterPlanner<'a> {
                 // If the transition's composition carries a TimeRemap
                 // primitive, retime the outgoing tail and incoming
                 // head through `setpts` before feeding them to xfade.
-                // This is what makes `awidat.ramp_in_beat` actually
+                // This is what makes `montage.ramp_in_beat` actually
                 // feel like a speed ramp instead of just a flash —
                 // the xfade fallback covers the visual blend, the
                 // setpts covers the speed curve.
@@ -5760,14 +5761,14 @@ fn overlay_mask_keyframe_value_expr(
         .keyframes
         .iter()
         .map(|keyframe| {
-            awidat_proto::professional::Keyframe::linear(keyframe.time_s, value(keyframe))
+            montage_proto::professional::Keyframe::linear(keyframe.time_s, value(keyframe))
         })
         .collect::<Vec<_>>();
     let expr = keyframes_to_ffmpeg_expr_with_extrapolation(
         &keyframes,
         time_var,
-        awidat_proto::professional::ExtrapolationMode::Hold,
-        awidat_proto::professional::ExtrapolationMode::Hold,
+        montage_proto::professional::ExtrapolationMode::Hold,
+        montage_proto::professional::ExtrapolationMode::Hold,
     );
     if keyframes.len() == 1 {
         fmt_filter_num(value(&mask.keyframes[0]))
@@ -6539,7 +6540,7 @@ fn stage_segment_inputs(
 
     // Volume next: applies to whatever the audio_label currently
     // points at (raw input or speed-stretched stream). Clip-local
-    // automation takes precedence over scalar `awidat.volume`.
+    // automation takes precedence over scalar `montage.volume`.
     if let Some(automation) = seg.volume_automation.as_ref() {
         let av = format!("[av{i}]");
         filter.push_str(&format!(
@@ -6799,7 +6800,7 @@ fn db_to_linear(db: f64) -> f64 {
 /// Returned `vf` is a comma-separated filter chain (no labels) that
 /// can be prefixed onto a `scale=...` chain. When a clip's effects
 /// require multi-segment labeled filtergraphs (e.g.
-/// `awidat.lut.strength < 1.0`, multi-stage `color_pipeline`) those
+/// `montage.lut.strength < 1.0`, multi-stage `color_pipeline`) those
 /// stages are recorded in `skipped` rather than emitted — the
 /// preview falls back to a partial grade and the caller can warn
 /// the user. Full-strength single-LUT cases are the common path
@@ -6813,8 +6814,8 @@ pub struct ClipGradeChain {
 }
 
 /// Labeled `-filter_complex` graph that applies the full grade for
-/// a single clip — color correction + the legacy `awidat.lut` or
-/// the full `awidat.color_pipeline` chain — without dropping any
+/// a single clip — color correction + the legacy `montage.lut` or
+/// the full `montage.color_pipeline` chain — without dropping any
 /// stage. Strength<1 LUTs and multi-stage pipelines lower cleanly.
 ///
 /// The returned `graph` (when `Some`) uses `[in]` for the source
@@ -6838,7 +6839,7 @@ pub struct ClipGradePreview {
 /// `[grade_out]`. Returns `graph: None` when the clip has no
 /// graded effects.
 pub fn build_clip_preview_filtergraph(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     project_root: &Path,
 ) -> ClipGradePreview {
     const SUFFIX: &str = "preview";
@@ -6869,7 +6870,7 @@ pub fn build_clip_preview_filtergraph(
     let pipeline_present = clip
         .effects
         .iter()
-        .any(|e| e.effect_name == "awidat.color_pipeline");
+        .any(|e| e.effect_name == "montage.color_pipeline");
 
     if pipeline_present {
         match read_color_pipeline(clip, project_root) {
@@ -6885,10 +6886,10 @@ pub fn build_clip_preview_filtergraph(
             Err(err) => skipped.push(format!("color_pipeline failed to resolve: {err}")),
         }
     } else if let Some(lut_path) =
-        read_effect_string(clip, "awidat.lut", "lut_path").map(|p| project_root.join(p))
+        read_effect_string(clip, "montage.lut", "lut_path").map(|p| project_root.join(p))
     {
         let interpolation = read_lut_interpolation(clip);
-        let strength = read_effect_number(clip, "awidat.lut", "strength")
+        let strength = read_effect_number(clip, "montage.lut", "strength")
             .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
         let next = format!("[lut_{SUFFIX}_out]");
         segments.push(lut3d_filter_block(
@@ -6925,12 +6926,12 @@ pub fn build_clip_preview_filtergraph(
 }
 
 /// Build a flat preview-grade filter chain for `clip`, joining
-/// (when present): color correction, the legacy `awidat.lut` at
+/// (when present): color correction, the legacy `montage.lut` at
 /// full strength, and the `color_pipeline` look LUT at full
 /// strength. Multi-stage pipelines and partial-strength LUTs are
 /// recorded in `skipped`.
 pub fn build_clip_grade_chain(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     project_root: &Path,
 ) -> ClipGradeChain {
     let mut filters: Vec<String> = Vec::new();
@@ -6945,7 +6946,7 @@ pub fn build_clip_grade_chain(
     let pipeline_present = clip
         .effects
         .iter()
-        .any(|e| e.effect_name == "awidat.color_pipeline");
+        .any(|e| e.effect_name == "montage.color_pipeline");
 
     if pipeline_present {
         match read_color_pipeline(clip, project_root) {
@@ -6974,16 +6975,16 @@ pub fn build_clip_grade_chain(
             Err(err) => skipped.push(format!("color_pipeline failed to resolve: {err}")),
         }
     } else if let Some(lut_path) =
-        read_effect_string(clip, "awidat.lut", "lut_path").map(|p| project_root.join(p))
+        read_effect_string(clip, "montage.lut", "lut_path").map(|p| project_root.join(p))
     {
         let interpolation = read_lut_interpolation(clip);
-        let strength = read_effect_number(clip, "awidat.lut", "strength")
+        let strength = read_effect_number(clip, "montage.lut", "strength")
             .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
         if let Some(s) = strength
             && s < 1.0 - 1e-9
         {
             skipped.push(format!(
-                "awidat.lut strength {s} < 1.0 needs split/blend; preview applies LUT at full strength"
+                "montage.lut strength {s} < 1.0 needs split/blend; preview applies LUT at full strength"
             ));
         }
         filters.push(lut3d_filter(&lut_path, interpolation.as_deref()));
@@ -7168,7 +7169,7 @@ fn reframe_path_axis_expr(
         .keyframes
         .iter()
         .map(|keyframe| {
-            awidat_proto::professional::Keyframe::linear(
+            montage_proto::professional::Keyframe::linear(
                 keyframe.time_s,
                 value(keyframe).clamp(0.0, 1.0),
             )
@@ -7177,8 +7178,8 @@ fn reframe_path_axis_expr(
     keyframes_to_ffmpeg_expr_with_extrapolation(
         &keyframes,
         "t",
-        awidat_proto::professional::ExtrapolationMode::Hold,
-        awidat_proto::professional::ExtrapolationMode::Hold,
+        montage_proto::professional::ExtrapolationMode::Hold,
+        montage_proto::professional::ExtrapolationMode::Hold,
     )
 }
 
@@ -7421,10 +7422,10 @@ fn filter_escape_single_quoted(s: &str) -> String {
 }
 
 /// Map a delivery color-space id (as carried on
-/// `awidat.color_pipeline.output_space`) to the four FFmpeg encoder
+/// `montage.color_pipeline.output_space`) to the four FFmpeg encoder
 /// tags needed to round-trip the intent in the output container:
 /// `-color_primaries -color_trc -colorspace -color_range`. Returns
-/// `None` for spaces awidat doesn't currently tag (Log encodings —
+/// `None` for spaces montage doesn't currently tag (Log encodings —
 /// nobody delivers those — and `scene_linear`, which has no
 /// canonical container-tag triple).
 fn output_space_color_tags(output_space: &str) -> Option<[&'static str; 4]> {
@@ -7499,7 +7500,7 @@ fn lut1d_filter(lut_path: &Path) -> String {
 /// case the agent uses to feed a P3-authored LUT; the actual
 /// gamma 2.6 encoding lives in the LUT itself.
 /// Stable (transfer, primaries, matrix) triple for each color space
-/// awidat can normalize via FFmpeg's `zscale` filter. Returns `None`
+/// montage can normalize via FFmpeg's `zscale` filter. Returns `None`
 /// for camera Log encodings — those need a shaper LUT for
 /// linearization, not a transfer-curve swap.
 ///
@@ -7571,7 +7572,7 @@ fn auto_pre_lut_zscale(plan: &ColorPipelinePlan) -> Option<String> {
     Some(format!("{in_params}:{out_params}"))
 }
 
-/// Build the filter-graph block for an `awidat.color_pipeline` plan,
+/// Build the filter-graph block for an `montage.color_pipeline` plan,
 /// chaining each populated slot in order:
 /// input_transform_lut → shaper_lut → look_lut (with look_strength)
 /// → output_transform_lut. Returns the entire block including
@@ -8313,7 +8314,7 @@ fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<Strin
 
 fn broadcast_ticker_entries(
     c: &BroadcastOverlayConfig,
-) -> &[awidat_proto::awidat_meta::BroadcastTimedEntry] {
+) -> &[montage_proto::montage_meta::BroadcastTimedEntry] {
     if c.topics.is_empty() {
         &c.chapters
     } else {
@@ -9573,7 +9574,7 @@ fn pick_sponsor_fontfile_attr() -> String {
 }
 
 /// Effective on-timeline duration of a segment, accounting for any
-/// `awidat.time_remap` curve or `awidat.speed` factor. A 4s clip at
+/// `montage.time_remap` curve or `montage.speed` factor. A 4s clip at
 /// 2× plays in 2s; at 0.5× it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
     let freeze_duration = seg.freeze.map(|freeze| freeze.duration_s).unwrap_or(0.0);
@@ -9772,7 +9773,7 @@ fn atempo_chain(factor: f64) -> String {
         .join(",")
 }
 
-/// Map an OTIO transition kind or Awidat transition id to an ffmpeg
+/// Map an OTIO transition kind or Montage transition id to an ffmpeg
 /// `xfade=transition=` name. Project-level render planning validates
 /// this earlier; direct test/helper callers get an intentionally
 /// invalid token for unsupported values instead of a wrong fallback.
@@ -9780,7 +9781,7 @@ fn map_transition_kind(kind: &str) -> String {
     transitions::resolve_ffmpeg_xfade(kind)
         .ok()
         .flatten()
-        .unwrap_or("__unsupported_awidat_transition__")
+        .unwrap_or("__unsupported_montage_transition__")
         .to_string()
 }
 
@@ -10719,7 +10720,7 @@ fn build_timeline_render_spec_inner(
     // Opt-in per-clip dialogue leveling: measure each dialogue clip's
     // integrated loudness and fill its per-clip `loudnorm_i` target so
     // clips are evened BEFORE any master pass. Off by default (gated on
-    // the AWIDAT_LEVEL_DIALOGUE env var) — default render behavior is
+    // the MONTAGE_LEVEL_DIALOGUE env var) — default render behavior is
     // unchanged. See `crate::dialogue_leveling`.
     if crate::dialogue_leveling::dialogue_leveling_enabled() {
         let leveled = crate::dialogue_leveling::level_dialogue_clips(
@@ -11191,7 +11192,7 @@ fn resolve_timeline_section(
             message: e.to_string(),
         }
     })?;
-    let Some(metadata) = timeline.metadata.awidat.as_ref() else {
+    let Some(metadata) = timeline.metadata.montage.as_ref() else {
         return Err(RenderTimelineError::GuideSectionNotFound {
             guide_track_id: guide_track_id.into(),
             marker_id: marker_id.into(),
@@ -11364,11 +11365,11 @@ fn prepare_browser_broadcast_overlay_video(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange as OtioRange, Timeline, Track, TrackChild, TrackKind,
     };
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         BezierHandles, CompositionGraph, CompositionNode, CompositionNodeType, Easing,
         ExtrapolationMode, Keyframe, KeyframeInterpolation, MaskKeyframe, MaskOperation,
         MaskSidecar, MatteSidecar, MotionScene, MotionSceneLayer, MotionSceneLayerKind,
@@ -11457,7 +11458,7 @@ mod tests {
     fn write_fixture_project_with_reframe_path(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project(dir);
         let mut tl = read_otio_timeline(&otio_path, &mut Vec::new()).expect("fixture should parse");
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata.tracking_package = Some(TrackingPackage {
             reframe_paths: vec![ReframePath {
                 id: "reframe-c1-9-16".into(),
@@ -11494,18 +11495,20 @@ mod tests {
     fn write_fixture_project_with_guide_section(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project(dir);
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata
             .guide_tracks
-            .push(awidat_proto::awidat_meta::GuideTrack {
+            .push(montage_proto::montage_meta::GuideTrack {
                 id: "deliverables".into(),
                 label: "Deliverables".into(),
-                markers: vec![awidat_proto::awidat_meta::TimelineMarker {
+                markers: vec![montage_proto::montage_meta::TimelineMarker {
                     id: "cold-open".into(),
                     label: "Cold open".into(),
                     time_s: 0.5,
                     duration_s: Some(1.25),
-                    category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::ExportRange),
+                    category: Some(
+                        montage_proto::montage_meta::TimelineMarkerCategory::ExportRange,
+                    ),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -11523,7 +11526,7 @@ mod tests {
         let TrackChild::Clip(clip) = &mut track.children[0] else {
             panic!("expected fixture clip");
         };
-        let mut effect = Effect::new("awidat.time_remap");
+        let mut effect = Effect::new("montage.time_remap");
         effect.metadata.insert(
             "curve".into(),
             serde_json::json!([
@@ -11552,7 +11555,7 @@ mod tests {
             RationalTime::new(0.0, 24.0),
             RationalTime::new(3.0 * 24.0, 24.0),
         ));
-        let mut effect = Effect::new("awidat.time_remap");
+        let mut effect = Effect::new("montage.time_remap");
         effect.metadata.insert(
             "curve".into(),
             serde_json::json!([
@@ -11611,7 +11614,7 @@ mod tests {
         stack.children.push(StackChild::Track(v2));
         tl.tracks = stack;
         tl.metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .parameter_animations
@@ -11625,7 +11628,7 @@ mod tests {
     fn write_fixture_project_with_oversized_motion_blur_shutter(dir: &Path) -> PathBuf {
         let animation = ParameterAnimation {
             id: "move-overlay".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-a".into(),
                 parameter: "overlay.x".into(),
             },
@@ -11644,7 +11647,7 @@ mod tests {
         let TrackChild::Clip(clip) = &mut track.children[0] else {
             panic!("fixture overlay child should be clip");
         };
-        let mut effect = Effect::new("awidat.video_overlay");
+        let mut effect = Effect::new("montage.video_overlay");
         effect
             .metadata
             .insert("motion_blur".into(), serde_json::json!(true));
@@ -11690,7 +11693,7 @@ mod tests {
         stack.children.push(StackChild::Track(v2));
         tl.tracks = stack;
 
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata.tracking_package = Some(TrackingPackage {
             tracks: vec![TrackSidecar {
                 id: "speaker-face".into(),
@@ -11743,7 +11746,7 @@ mod tests {
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let samples = &mut tl
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .tracking_package
@@ -11790,7 +11793,7 @@ mod tests {
         stack.children.push(StackChild::Track(v2));
         tl.tracks = stack;
 
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata.tracking_package = Some(TrackingPackage {
             tracks: vec![TrackSidecar {
                 id: "screen-surface".into(),
@@ -11872,7 +11875,7 @@ mod tests {
         stack.children.push(StackChild::Track(v2));
         tl.tracks = stack;
 
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata.tracking_package = Some(TrackingPackage {
             mattes: vec![MatteSidecar {
                 id: "matte-subject".into(),
@@ -11936,7 +11939,7 @@ mod tests {
         stack.children.push(StackChild::Track(v2));
         tl.tracks = stack;
 
-        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata.tracking_package = Some(TrackingPackage {
             masks: vec![MaskSidecar {
                 id: "mask-callout".into(),
@@ -11977,7 +11980,7 @@ mod tests {
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let mask = tl
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .tracking_package
@@ -12003,7 +12006,7 @@ mod tests {
         let otio_path = write_fixture_project(dir);
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .parameter_animations
@@ -12035,7 +12038,7 @@ mod tests {
         stack.children.push(StackChild::Track(track));
         tl.tracks = stack;
         tl.metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .parameter_animations
@@ -12053,7 +12056,7 @@ mod tests {
         let otio_path = write_fixture_project(dir);
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .motion_scenes
@@ -12082,7 +12085,7 @@ mod tests {
     fn empty_otio_returns_empty_timeline() {
         let dir = tempfile::tempdir().unwrap();
         // Init an OTIO file with no tracks.
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         let err = build_timeline_render_spec(dir.path()).unwrap_err();
         assert!(matches!(err, RenderTimelineError::EmptyTimeline));
     }
@@ -12098,7 +12101,7 @@ mod tests {
         let TrackChild::Clip(clip) = &mut track.children[0] else {
             panic!("expected fixture clip");
         };
-        let mut effect = Effect::new("awidat.volume");
+        let mut effect = Effect::new("montage.volume");
         effect
             .metadata
             .insert("value".into(), serde_json::json!(0.8));
@@ -12269,7 +12272,7 @@ mod tests {
         );
         // Anchor the scene 5s into the program.
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
-        tl.metadata.awidat.as_mut().unwrap().motion_scenes[0].start_s = 5.0;
+        tl.metadata.montage.as_mut().unwrap().motion_scenes[0].start_s = 5.0;
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
 
         let spec = build_timeline_render_spec(dir.path()).unwrap();
@@ -12703,7 +12706,7 @@ mod tests {
         let TrackChild::Clip(clip) = &mut track.children[0] else {
             panic!("expected fixture clip");
         };
-        let mut effect = Effect::new("awidat.time_remap");
+        let mut effect = Effect::new("montage.time_remap");
         effect.metadata.insert(
             "curve".into(),
             serde_json::json!([
@@ -13011,7 +13014,7 @@ mod tests {
         ));
 
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
-        tl.metadata.awidat.as_mut().unwrap().guide_tracks[0].markers[0].duration_s = None;
+        tl.metadata.montage.as_mut().unwrap().guide_tracks[0].markers[0].duration_s = None;
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
 
         let point_marker =
@@ -13033,7 +13036,7 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-bezier-opacity".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".to_string(),
                     parameter: "overlay.opacity".to_string(),
                 },
@@ -13077,7 +13080,7 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-bezier-opacity".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".to_string(),
                     parameter: "overlay.opacity".to_string(),
                 },
@@ -13118,9 +13121,9 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-base-brightness".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "c1".to_string(),
-                    parameter: "awidat.color_correction.brightness".to_string(),
+                    parameter: "montage.color_correction.brightness".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.2), Keyframe::linear(1.0, 0.4)],
                 pre_extrapolation: ExtrapolationMode::Hold,
@@ -13148,9 +13151,9 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-base-blur".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "c1".to_string(),
-                    parameter: "awidat.blur.radius_px".to_string(),
+                    parameter: "montage.blur.radius_px".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
                 pre_extrapolation: ExtrapolationMode::Hold,
@@ -13179,9 +13182,9 @@ mod tests {
     fn effect_parameter_alias_selects_blur_radius_animation() {
         let animations = vec![ParameterAnimation {
             id: "blur-alias".to_string(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-a".to_string(),
-                parameter: "effects.awidat.blur.params.radius_px".to_string(),
+                parameter: "effects.montage.blur.params.radius_px".to_string(),
             },
             keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
             pre_extrapolation: ExtrapolationMode::Hold,
@@ -13195,12 +13198,12 @@ mod tests {
         let selected = select_clip_effect_animation(
             &animations,
             "clip-a",
-            "awidat.blur.radius_px",
+            "montage.blur.radius_px",
             &mut consumed,
         )
         .expect("alias should select canonical blur radius animation");
 
-        assert_eq!(selected.parameter, "awidat.blur.radius_px");
+        assert_eq!(selected.parameter, "montage.blur.radius_px");
         assert!(consumed.contains("blur-alias"));
     }
 
@@ -13211,9 +13214,9 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-base-shake".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "c1".to_string(),
-                    parameter: "awidat.shake.intensity_px".to_string(),
+                    parameter: "montage.shake.intensity_px".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 14.0)],
                 pre_extrapolation: ExtrapolationMode::Hold,
@@ -13249,9 +13252,9 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "anim-base-warp".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "c1".to_string(),
-                    parameter: "awidat.warp.k1".to_string(),
+                    parameter: "montage.warp.k1".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, -0.15), Keyframe::linear(1.0, 0.05)],
                 pre_extrapolation: ExtrapolationMode::Hold,
@@ -13291,7 +13294,7 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "music-duck".to_string(),
-                target: awidat_proto::professional::AnimationTarget::TrackParameter {
+                target: montage_proto::professional::AnimationTarget::TrackParameter {
                     track: "Music".to_string(),
                     parameter: "volume_db".to_string(),
                 },
@@ -13325,7 +13328,7 @@ mod tests {
             dir.path(),
             ParameterAnimation {
                 id: "clip-volume".to_string(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "c1".to_string(),
                     parameter: "volume_db".to_string(),
                 },
@@ -13902,7 +13905,7 @@ mod tests {
 
     #[test]
     fn timeline_render_canvas_reads_output_format_metadata() {
-        let mut meta = AwidatTimelineMetadata::default();
+        let mut meta = MontageTimelineMetadata::default();
         meta.extra.insert(
             "output_format".into(),
             serde_json::json!({ "aspect_ratio": "9:16" }),
@@ -13917,7 +13920,7 @@ mod tests {
         // Absent metadata -> landscape default.
         assert_eq!(timeline_render_canvas(None), RenderCanvas::default());
         assert_eq!(
-            timeline_render_canvas(Some(&AwidatTimelineMetadata::default())),
+            timeline_render_canvas(Some(&MontageTimelineMetadata::default())),
             RenderCanvas::default()
         );
     }
@@ -13973,7 +13976,7 @@ mod tests {
         let trans = vec![TransitionPlan {
             from_segment_index: 0,
             to_segment_index: 1,
-            kind: "awidat.slide_left".into(),
+            kind: "montage.slide_left".into(),
             in_offset_s: 0.5,
             out_offset_s: 0.5,
             duration_s: 1.0,
@@ -14874,9 +14877,9 @@ mod tests {
 
     #[test]
     fn build_clip_preview_filtergraph_emits_strength_blend_for_legacy_lut() {
-        use awidat_proto::otio::{Clip, Effect};
+        use montage_proto::otio::{Clip, Effect};
         let mut clip = Clip::empty("partial".to_string());
-        let mut lut = Effect::new("awidat.lut");
+        let mut lut = Effect::new("montage.lut");
         lut.metadata
             .insert("lut_path".into(), serde_json::json!("luts/x.cube"));
         lut.metadata
@@ -14900,17 +14903,17 @@ mod tests {
 
     #[test]
     fn build_clip_preview_filtergraph_chains_color_correction_into_pipeline() {
-        use awidat_proto::otio::{Clip, Effect};
+        use montage_proto::otio::{Clip, Effect};
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("luts")).unwrap();
         std::fs::write(dir.path().join("luts/look.cube"), b"# stub").unwrap();
 
         let mut clip = Clip::empty("graded".to_string());
-        let mut cc = Effect::new("awidat.color_correction");
+        let mut cc = Effect::new("montage.color_correction");
         cc.metadata
             .insert("exposure_ev".into(), serde_json::json!(0.5));
         clip.effects.push(cc);
-        let mut cp = Effect::new("awidat.color_pipeline");
+        let mut cp = Effect::new("montage.color_pipeline");
         cp.metadata
             .insert("clip_input_space".into(), serde_json::json!("rec709_g24"));
         cp.metadata
@@ -14931,9 +14934,9 @@ mod tests {
 
     #[test]
     fn build_clip_preview_filtergraph_mirrors_hdr_tonemap() {
-        use awidat_proto::otio::{Clip, Effect};
+        use montage_proto::otio::{Clip, Effect};
         let mut clip = Clip::empty("hdr".to_string());
-        let mut sc = Effect::new("awidat.source_color");
+        let mut sc = Effect::new("montage.source_color");
         sc.metadata
             .insert("transfer".into(), serde_json::json!("smpte2084"));
         clip.effects.push(sc);
@@ -14951,7 +14954,7 @@ mod tests {
 
     #[test]
     fn build_clip_preview_filtergraph_returns_none_for_bare_clip() {
-        use awidat_proto::otio::Clip;
+        use montage_proto::otio::Clip;
         let clip = Clip::empty("bare".to_string());
         let preview = build_clip_preview_filtergraph(&clip, Path::new("/p"));
         assert!(preview.graph.is_none());
@@ -14960,9 +14963,9 @@ mod tests {
 
     #[test]
     fn build_clip_grade_chain_emits_color_and_lut_for_simple_clip() {
-        use awidat_proto::otio::{Clip, Effect};
+        use montage_proto::otio::{Clip, Effect};
         let mut clip = Clip::empty("test-clip".to_string());
-        let mut color = Effect::new("awidat.color_correction");
+        let mut color = Effect::new("montage.color_correction");
         color
             .metadata
             .insert("exposure_ev".into(), serde_json::json!(0.5));
@@ -14970,7 +14973,7 @@ mod tests {
             .metadata
             .insert("saturation".into(), serde_json::json!(1.2));
         clip.effects.push(color);
-        let mut lut = Effect::new("awidat.lut");
+        let mut lut = Effect::new("montage.lut");
         lut.metadata
             .insert("lut_path".into(), serde_json::json!("luts/show-look.cube"));
         lut.metadata
@@ -14995,9 +14998,9 @@ mod tests {
 
     #[test]
     fn build_clip_grade_chain_warns_about_partial_strength() {
-        use awidat_proto::otio::{Clip, Effect};
+        use montage_proto::otio::{Clip, Effect};
         let mut clip = Clip::empty("partial".to_string());
-        let mut lut = Effect::new("awidat.lut");
+        let mut lut = Effect::new("montage.lut");
         lut.metadata
             .insert("lut_path".into(), serde_json::json!("luts/x.cube"));
         lut.metadata
@@ -15014,7 +15017,7 @@ mod tests {
 
     #[test]
     fn build_clip_grade_chain_returns_none_for_bare_clip() {
-        use awidat_proto::otio::Clip;
+        use montage_proto::otio::Clip;
         let clip = Clip::empty("bare".to_string());
         let chain = build_clip_grade_chain(&clip, Path::new("/p"));
         assert!(chain.vf.is_none());
@@ -15483,12 +15486,12 @@ mod tests {
             caption_style: None,
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
-        let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
-        overlay.chapters = vec![awidat_proto::awidat_meta::BroadcastTimedEntry {
+        let mut overlay = montage_proto::montage_meta::BroadcastOverlayConfig::default();
+        overlay.chapters = vec![montage_proto::montage_meta::BroadcastTimedEntry {
             time_seconds: 3.0,
             text: "Deep Dive".into(),
         }];
-        let mut metadata = awidat_proto::awidat_meta::AwidatTimelineMetadata {
+        let mut metadata = montage_proto::montage_meta::MontageTimelineMetadata {
             broadcast_overlay: Some(overlay),
             ..Default::default()
         };
@@ -16177,13 +16180,13 @@ caption_style: None,
         config.host_b.photo_path = Some("branding/elvis.jpg".into());
         config
             .topics
-            .push(awidat_proto::awidat_meta::BroadcastTimedEntry {
+            .push(montage_proto::montage_meta::BroadcastTimedEntry {
                 time_seconds: 45.0,
                 text: "Custom drones".into(),
             });
         config
             .chapters
-            .push(awidat_proto::awidat_meta::BroadcastTimedEntry {
+            .push(montage_proto::montage_meta::BroadcastTimedEntry {
                 time_seconds: 60.0,
                 text: "Hardware barriers".into(),
             });
@@ -16308,8 +16311,8 @@ caption_style: None,
                 RenderParameterAnimation {
                     parameter: "overlay.x".to_string(),
                     keyframes: vec![
-                        awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                        awidat_proto::professional::Keyframe::linear(1.0, -0.1),
+                        montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                        montage_proto::professional::Keyframe::linear(1.0, -0.1),
                     ],
                     pre_extrapolation: ExtrapolationMode::Hold,
                     post_extrapolation: ExtrapolationMode::Hold,
@@ -16318,8 +16321,8 @@ caption_style: None,
                 RenderParameterAnimation {
                     parameter: "overlay.scale".to_string(),
                     keyframes: vec![
-                        awidat_proto::professional::Keyframe::linear(0.0, 1.0),
-                        awidat_proto::professional::Keyframe::linear(1.0, 1.2),
+                        montage_proto::professional::Keyframe::linear(0.0, 1.0),
+                        montage_proto::professional::Keyframe::linear(1.0, 1.2),
                     ],
                     pre_extrapolation: ExtrapolationMode::Hold,
                     post_extrapolation: ExtrapolationMode::Hold,
@@ -16374,8 +16377,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.blur".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 12.0),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16415,15 +16418,15 @@ caption_style: None,
 
     #[test]
     fn oversized_overlay_blur_animation_surfaces_clamp_limitation() {
-        let animations = vec![awidat_proto::professional::ParameterAnimation {
+        let animations = vec![montage_proto::professional::ParameterAnimation {
             id: "big-blur".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "overlay-a".into(),
                 parameter: "overlay.blur".into(),
             },
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 32.0),
+                montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                montage_proto::professional::Keyframe::linear(1.0, 32.0),
             ],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
@@ -16467,8 +16470,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.x".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, -0.2),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, -0.2),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16522,8 +16525,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.rotation_deg".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 45.0),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 45.0),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16577,8 +16580,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.scale".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 1.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 1.5),
+                    montage_proto::professional::Keyframe::linear(0.0, 1.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 1.5),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16628,8 +16631,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.rotation_deg".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 15.0),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 15.0),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16717,8 +16720,8 @@ caption_style: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.opacity".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 1.0),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 1.0),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -16783,8 +16786,8 @@ caption_style: None,
                 RenderParameterAnimation {
                     parameter: "overlay.opacity".into(),
                     keyframes: vec![
-                        awidat_proto::professional::Keyframe::linear(0.0, 0.2),
-                        awidat_proto::professional::Keyframe::linear(1.0, 0.8),
+                        montage_proto::professional::Keyframe::linear(0.0, 0.2),
+                        montage_proto::professional::Keyframe::linear(1.0, 0.8),
                     ],
                     pre_extrapolation: ExtrapolationMode::Hold,
                     post_extrapolation: ExtrapolationMode::Hold,
@@ -16793,8 +16796,8 @@ caption_style: None,
                 RenderParameterAnimation {
                     parameter: "overlay.scale".into(),
                     keyframes: vec![
-                        awidat_proto::professional::Keyframe::linear(0.0, 0.25),
-                        awidat_proto::professional::Keyframe::linear(1.0, 0.45),
+                        montage_proto::professional::Keyframe::linear(0.0, 0.25),
+                        montage_proto::professional::Keyframe::linear(1.0, 0.45),
                     ],
                     pre_extrapolation: ExtrapolationMode::Hold,
                     post_extrapolation: ExtrapolationMode::Hold,
@@ -17063,13 +17066,13 @@ caption_style: None,
 
     #[test]
     fn render_animations_for_clip_selects_supported_title_animation() {
-        let animations = vec![awidat_proto::professional::ParameterAnimation {
+        let animations = vec![montage_proto::professional::ParameterAnimation {
             id: "anim-title-opacity".to_string(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "title-1".to_string(),
                 parameter: "title.opacity".to_string(),
             },
-            keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            keyframes: vec![montage_proto::professional::Keyframe::linear(0.0, 0.0)],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
             motion_path: None,
@@ -17085,13 +17088,13 @@ caption_style: None,
 
     #[test]
     fn render_animations_for_clip_rejects_overlay_animation_for_title() {
-        let animations = vec![awidat_proto::professional::ParameterAnimation {
+        let animations = vec![montage_proto::professional::ParameterAnimation {
             id: "anim-overlay-x".to_string(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "title-1".to_string(),
                 parameter: "overlay.x".to_string(),
             },
-            keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            keyframes: vec![montage_proto::professional::Keyframe::linear(0.0, 0.0)],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
             motion_path: None,
@@ -17312,8 +17315,8 @@ caption_style: None,
         title.animations = vec![RenderParameterAnimation {
             parameter: "title.opacity".to_string(),
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 1.0),
+                montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                montage_proto::professional::Keyframe::linear(1.0, 1.0),
             ],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
@@ -17349,8 +17352,8 @@ caption_style: None,
             RenderParameterAnimation {
                 parameter: "title.x".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, -0.1),
-                    awidat_proto::professional::Keyframe::linear(1.0, 0.1),
+                    montage_proto::professional::Keyframe::linear(0.0, -0.1),
+                    montage_proto::professional::Keyframe::linear(1.0, 0.1),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -17359,8 +17362,8 @@ caption_style: None,
             RenderParameterAnimation {
                 parameter: "title.y".to_string(),
                 keyframes: vec![
-                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                    awidat_proto::professional::Keyframe::linear(1.0, 0.2),
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 0.2),
                 ],
                 pre_extrapolation: ExtrapolationMode::Hold,
                 post_extrapolation: ExtrapolationMode::Hold,
@@ -17396,8 +17399,8 @@ caption_style: None,
         title.animations = vec![RenderParameterAnimation {
             parameter: "title.font_size".to_string(),
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 48.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 72.0),
+                montage_proto::professional::Keyframe::linear(0.0, 48.0),
+                montage_proto::professional::Keyframe::linear(1.0, 72.0),
             ],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
@@ -17434,16 +17437,16 @@ caption_style: None,
             keyframes: Vec::new(),
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
-            motion_path: Some(awidat_proto::professional::MotionPath {
+            motion_path: Some(montage_proto::professional::MotionPath {
                 points: vec![
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 0.0,
                         x: -0.2,
                         y: 0.0,
                         outgoing_control: None,
                         incoming_control: None,
                     },
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 0.2,
                         y: 0.4,
@@ -17500,16 +17503,16 @@ caption_style: None,
             ],
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
-            motion_path: Some(awidat_proto::professional::MotionPath {
+            motion_path: Some(montage_proto::professional::MotionPath {
                 points: vec![
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 0.0,
                         x: -0.2,
                         y: 0.0,
                         outgoing_control: None,
                         incoming_control: None,
                     },
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 0.2,
                         y: 0.4,
@@ -18103,7 +18106,7 @@ caption_style: None,
 
     #[test]
     fn parse_title_plan_reads_caption_style_from_metadata() {
-        // Build a minimal awidat.title clip whose metadata includes a
+        // Build a minimal montage.title clip whose metadata includes a
         // caption_style blob (as apply_insert_caption now stores it).
         let style_value = serde_json::json!({
             "font_size": 52,
@@ -18114,7 +18117,7 @@ caption_style: None,
             "reveal": "word_by_word",
             "background": { "kind": "box", "color": "#000000", "opacity": 128 }
         });
-        let mut effect = Effect::new("awidat.title");
+        let mut effect = Effect::new("montage.title");
         effect
             .metadata
             .insert("text".into(), serde_json::json!("Hello"));

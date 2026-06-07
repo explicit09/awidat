@@ -20,14 +20,14 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use awidat_effects::StackPolicy;
-use awidat_proto::awidat_meta::{
-    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BrandKit,
-    BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType,
+use montage_effects::StackPolicy;
+use montage_proto::montage_meta::{
+    AudioRange, AudioRelation, BrandKit, BroadcastOverlayConfig, BroadcastOverlayStyle,
+    BroadcastTimedEntry, ClipAudioOverride, CutType, MontageClipMetadata, MontageTimelineMetadata,
     SemanticCutSpec, SplitEditSpec, cut_boundary_key,
 };
-use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
-use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
+use montage_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
+use montage_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
@@ -336,10 +336,10 @@ fn clip_id(clip: &Clip) -> String {
 
 fn clip_media_target(clip: &Clip) -> Option<String> {
     match &clip.media_reference {
-        awidat_proto::otio::MediaReference::External(reference) => {
+        montage_proto::otio::MediaReference::External(reference) => {
             Some(reference.target_url.clone())
         }
-        awidat_proto::otio::MediaReference::Missing(_) => None,
+        montage_proto::otio::MediaReference::Missing(_) => None,
     }
 }
 
@@ -857,7 +857,7 @@ fn apply_one(
             apply_set_broadcast_overlay(working, index, config)
         }
         EdlOp::SetAssetCatalog { catalog } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.asset_catalog = Some(catalog.clone());
             Ok(format!(
                 "stored asset catalog with {} assets",
@@ -868,7 +868,7 @@ fn apply_one(
             selects,
             stringouts,
         } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.selects = selects.clone();
             meta.stringouts = stringouts.clone();
             Ok(format!(
@@ -881,7 +881,7 @@ fn apply_one(
             apply_professional_timeline_edit(working, index, edit, ctx, locator)
         }
         EdlOp::AddProposalPackage { package } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.proposal_packages, package.clone(), |item| {
                 &item.id
             });
@@ -891,19 +891,19 @@ fn apply_one(
             apply_set_parameter_animation(working, index, animation)
         }
         EdlOp::SetMotionTemplate { template } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.motion_templates, template.clone(), |item| {
                 &item.id
             });
             Ok(format!("stored motion template {}", template.id))
         }
         EdlOp::SetMotionScene { scene } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.motion_scenes, scene.clone(), |item| &item.id);
             Ok(format!("stored motion scene {}", scene.id))
         }
         EdlOp::AttachComposition { graph, attach_to } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.composition_graphs, graph.clone(), |item| &item.id);
             if let Some(range) = attach_to {
                 meta.extra.insert(
@@ -917,7 +917,7 @@ fn apply_one(
             Ok(format!("stored composition graph {}", graph.id))
         }
         EdlOp::SetTrackingPackage { package } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.tracking_package = Some(package.clone());
             Ok(format!(
                 "stored tracking package with {} tracks, {} masks, {} mattes",
@@ -954,7 +954,7 @@ fn apply_one(
             },
         ),
         EdlOp::SetColorFinishing { state } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.color_finishing = Some(state.clone());
             Ok(format!(
                 "stored color finishing state with {} shot groups",
@@ -962,7 +962,7 @@ fn apply_one(
             ))
         }
         EdlOp::SetAudioFinishing { state } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.audio_finishing = Some(state.clone());
             Ok(format!(
                 "stored audio finishing state with {} buses",
@@ -970,19 +970,19 @@ fn apply_one(
             ))
         }
         EdlOp::SelectDeliveryProfile { profile } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.delivery_profiles, profile.clone(), |item| {
                 &item.id
             });
             Ok(format!("selected delivery profile {}", profile.id))
         }
         EdlOp::AddPreflightReport { report } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.preflight_reports, report.clone(), |item| &item.id);
             Ok(format!("stored preflight report {}", report.id))
         }
         EdlOp::SetWorkflowLens { lens } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             if !meta.workflow_lenses.contains(lens) {
                 meta.workflow_lenses.push(*lens);
             }
@@ -994,7 +994,7 @@ fn apply_one(
             readiness,
             planner_passes,
         } => {
-            let meta = timeline_awidat_metadata(working);
+            let meta = timeline_montage_metadata(working);
             meta.pipeline_readiness = Some(readiness.clone());
             meta.planner_passes = planner_passes.clone();
             Ok(format!(
@@ -1109,7 +1109,7 @@ fn apply_author_subject_reframe_from_track(
     request: SubjectReframeRequest,
 ) -> Result<String, ApplyError> {
     let clip_id = request.clip_id.clone();
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     let package = meta
         .tracking_package
         .as_mut()
@@ -1134,9 +1134,9 @@ fn apply_author_subject_reframe_from_track(
 fn apply_set_parameter_animation(
     working: &mut Timeline,
     index: usize,
-    animation: &awidat_proto::professional::ParameterAnimation,
+    animation: &montage_proto::professional::ParameterAnimation,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         FindingSeverity, RUNTIME_CLIP_PARAMETERS, RUNTIME_TRACK_PARAMETERS,
         is_runtime_parameter_animation_target,
     };
@@ -1164,7 +1164,7 @@ fn apply_set_parameter_animation(
         });
     }
 
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     replace_by_id(&mut meta.parameter_animations, animation.clone(), |item| {
         &item.id
     });
@@ -1215,15 +1215,15 @@ fn apply_instantiate_motion_template(
     };
 
     let filled =
-        awidat_render::professional::fill_motion_template(&template, values).map_err(|error| {
+        montage_render::professional::fill_motion_template(&template, values).map_err(|error| {
             ApplyError::Invalid {
                 index,
                 message: format!("instantiate_motion_template: {error}"),
             }
         })?;
-    let render = awidat_render::professional::lower_motion_template(
+    let render = montage_render::professional::lower_motion_template(
         &filled,
-        awidat_render::professional::MotionTemplateTiming {
+        montage_render::professional::MotionTemplateTiming {
             start_s,
             end_s,
             animation: render_template_animation(animation),
@@ -1267,10 +1267,10 @@ fn apply_instantiate_motion_template(
 fn resolve_motion_template(
     working: &Timeline,
     template_id: &str,
-) -> Option<awidat_proto::professional::MotionGraphicsTemplate> {
+) -> Option<montage_proto::professional::MotionGraphicsTemplate> {
     working
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| {
             metadata
@@ -1280,7 +1280,7 @@ fn resolve_motion_template(
                 .cloned()
         })
         .or_else(|| {
-            awidat_render::professional::built_in_motion_templates()
+            montage_render::professional::built_in_motion_templates()
                 .into_iter()
                 .find(|template| template.id == template_id)
         })
@@ -1302,43 +1302,47 @@ fn motion_template_clip_id(template_id: &str, op_index: usize, title_index: usiz
 
 fn render_template_animation(
     animation: MotionTemplateAnimation,
-) -> awidat_render::professional::TemplateAnimation {
+) -> montage_render::professional::TemplateAnimation {
     match animation {
-        MotionTemplateAnimation::None => awidat_render::professional::TemplateAnimation::None,
-        MotionTemplateAnimation::Opacity => awidat_render::professional::TemplateAnimation::Opacity,
+        MotionTemplateAnimation::None => montage_render::professional::TemplateAnimation::None,
+        MotionTemplateAnimation::Opacity => {
+            montage_render::professional::TemplateAnimation::Opacity
+        }
         MotionTemplateAnimation::Transform => {
-            awidat_render::professional::TemplateAnimation::Transform
+            montage_render::professional::TemplateAnimation::Transform
         }
         MotionTemplateAnimation::TextReveal => {
-            awidat_render::professional::TemplateAnimation::TextReveal
+            montage_render::professional::TemplateAnimation::TextReveal
         }
-        MotionTemplateAnimation::WriteOn => awidat_render::professional::TemplateAnimation::WriteOn,
+        MotionTemplateAnimation::WriteOn => {
+            montage_render::professional::TemplateAnimation::WriteOn
+        }
     }
 }
 
-fn core_title_position(position: awidat_render::TitlePosition) -> super::op::TitlePosition {
+fn core_title_position(position: montage_render::TitlePosition) -> super::op::TitlePosition {
     match position {
-        awidat_render::TitlePosition::Top => super::op::TitlePosition::Top,
-        awidat_render::TitlePosition::Center => super::op::TitlePosition::Center,
-        awidat_render::TitlePosition::Bottom => super::op::TitlePosition::Bottom,
+        montage_render::TitlePosition::Top => super::op::TitlePosition::Top,
+        montage_render::TitlePosition::Center => super::op::TitlePosition::Center,
+        montage_render::TitlePosition::Bottom => super::op::TitlePosition::Bottom,
     }
 }
 
-fn core_title_weight(weight: awidat_render::TitleWeight) -> super::op::TitleWeight {
+fn core_title_weight(weight: montage_render::TitleWeight) -> super::op::TitleWeight {
     match weight {
-        awidat_render::TitleWeight::Normal => super::op::TitleWeight::Normal,
-        awidat_render::TitleWeight::Bold => super::op::TitleWeight::Bold,
+        montage_render::TitleWeight::Normal => super::op::TitleWeight::Normal,
+        montage_render::TitleWeight::Bold => super::op::TitleWeight::Bold,
     }
 }
 
-fn core_title_animation(animation: awidat_render::TitleAnimation) -> super::op::TitleAnimation {
+fn core_title_animation(animation: montage_render::TitleAnimation) -> super::op::TitleAnimation {
     match animation {
-        awidat_render::TitleAnimation::None => super::op::TitleAnimation::None,
-        awidat_render::TitleAnimation::FadeIn => super::op::TitleAnimation::FadeIn,
-        awidat_render::TitleAnimation::FadeOut => super::op::TitleAnimation::FadeOut,
-        awidat_render::TitleAnimation::FadeInOut => super::op::TitleAnimation::FadeInOut,
-        awidat_render::TitleAnimation::SlideIn => super::op::TitleAnimation::SlideIn,
-        awidat_render::TitleAnimation::SlideOut => super::op::TitleAnimation::SlideOut,
+        montage_render::TitleAnimation::None => super::op::TitleAnimation::None,
+        montage_render::TitleAnimation::FadeIn => super::op::TitleAnimation::FadeIn,
+        montage_render::TitleAnimation::FadeOut => super::op::TitleAnimation::FadeOut,
+        montage_render::TitleAnimation::FadeInOut => super::op::TitleAnimation::FadeInOut,
+        montage_render::TitleAnimation::SlideIn => super::op::TitleAnimation::SlideIn,
+        montage_render::TitleAnimation::SlideOut => super::op::TitleAnimation::SlideOut,
     }
 }
 
@@ -1627,16 +1631,16 @@ fn apply_roll_edit(
         to_end_s,
     )?;
 
-    from_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(from_start_s * from_rate, from_rate),
-        awidat_proto::otio::RationalTime::new(
+    from_clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(from_start_s * from_rate, from_rate),
+        montage_proto::otio::RationalTime::new(
             (target_from_end_s - from_start_s) * from_rate,
             from_rate,
         ),
     ));
-    to_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(target_to_start_s * to_rate, to_rate),
-        awidat_proto::otio::RationalTime::new((to_end_s - target_to_start_s) * to_rate, to_rate),
+    to_clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(target_to_start_s * to_rate, to_rate),
+        montage_proto::otio::RationalTime::new((to_end_s - target_to_start_s) * to_rate, to_rate),
     ));
     Ok(format!(
         "rolled edit between {:?} and {:?} by {delta_s:.3}s",
@@ -1773,16 +1777,16 @@ fn apply_slide_clip(
         next_end_s,
     )?;
 
-    previous_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(previous_start_s * previous_rate, previous_rate),
-        awidat_proto::otio::RationalTime::new(
+    previous_clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(previous_start_s * previous_rate, previous_rate),
+        montage_proto::otio::RationalTime::new(
             (target_previous_end_s - previous_start_s) * previous_rate,
             previous_rate,
         ),
     ));
-    next_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(target_next_start_s * next_rate, next_rate),
-        awidat_proto::otio::RationalTime::new(
+    next_clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(target_next_start_s * next_rate, next_rate),
+        montage_proto::otio::RationalTime::new(
             (next_end_s - target_next_start_s) * next_rate,
             next_rate,
         ),
@@ -1797,7 +1801,7 @@ fn apply_slide_clip(
 fn apply_lift_range(
     working: &mut Timeline,
     index: usize,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
     tracks: &[String],
 ) -> Result<String, ApplyError> {
     validate_professional_timeline_range(index, "lift_range", range)?;
@@ -1847,7 +1851,7 @@ fn apply_lift_range(
 fn apply_extract_range(
     working: &mut Timeline,
     index: usize,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
     tracks: &[String],
 ) -> Result<String, ApplyError> {
     validate_professional_timeline_range(index, "extract_range", range)?;
@@ -1894,7 +1898,7 @@ fn apply_replace_clip(
     index: usize,
     anchor: &Anchor,
     asset: &str,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     let _ = anchor;
@@ -1925,12 +1929,12 @@ fn apply_replace_clip(
         .filter(|rate| *rate > 0.0)
         .unwrap_or(24.0);
     let original_name = clip.name.clone();
-    clip.media_reference = awidat_proto::otio::MediaReference::External(
-        awidat_proto::otio::ExternalReference::new(asset.to_string()),
+    clip.media_reference = montage_proto::otio::MediaReference::External(
+        montage_proto::otio::ExternalReference::new(asset.to_string()),
     );
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(range.start_s * rate, rate),
-        awidat_proto::otio::RationalTime::new((range.end_s - range.start_s) * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(range.start_s * rate, rate),
+        montage_proto::otio::RationalTime::new((range.end_s - range.start_s) * rate, rate),
     ));
     Ok(format!(
         "replaced clip {original_name:?} with asset {asset:?} source=[{:.3}s..{:.3}s]",
@@ -1943,7 +1947,7 @@ fn apply_append_clip(
     index: usize,
     track: &str,
     asset: &str,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
 ) -> Result<String, ApplyError> {
     validate_professional_timeline_range(index, "append", range)?;
     if track.trim().is_empty() {
@@ -1978,7 +1982,7 @@ fn apply_overwrite_clip(
     working: &mut Timeline,
     index: usize,
     track_name: &str,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
     asset: &str,
 ) -> Result<String, ApplyError> {
     validate_professional_timeline_range(index, "overwrite", range)?;
@@ -2010,7 +2014,7 @@ fn apply_overwrite_clip(
             working
                 .tracks
                 .children
-                .push(StackChild::Track(awidat_proto::otio::Track::empty(
+                .push(StackChild::Track(montage_proto::otio::Track::empty(
                     track_name.to_string(),
                     kind,
                 )));
@@ -2045,7 +2049,7 @@ fn apply_overwrite_clip(
 }
 
 fn build_professional_source_clip(
-    track: &awidat_proto::otio::Track,
+    track: &montage_proto::otio::Track,
     asset: &str,
     source_start_s: f64,
     source_end_s: f64,
@@ -2056,12 +2060,12 @@ fn build_professional_source_clip(
         .map(|prefix| format!("{prefix}-{}", track.children.len()))
         .unwrap_or_else(|| default_clip_name_for_asset(track, asset));
     let mut clip = Clip::empty(name);
-    clip.media_reference = awidat_proto::otio::MediaReference::External(
-        awidat_proto::otio::ExternalReference::new(asset.to_string()),
+    clip.media_reference = montage_proto::otio::MediaReference::External(
+        montage_proto::otio::ExternalReference::new(asset.to_string()),
     );
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(source_start_s * rate, rate),
-        awidat_proto::otio::RationalTime::new((source_end_s - source_start_s) * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(source_start_s * rate, rate),
+        montage_proto::otio::RationalTime::new((source_end_s - source_start_s) * rate, rate),
     ));
     stamp_fresh_clip_uuid(&mut clip);
     clip
@@ -2070,7 +2074,7 @@ fn build_professional_source_clip(
 fn validate_professional_timeline_range(
     index: usize,
     label: &str,
-    range: &awidat_proto::professional::SourceRange,
+    range: &montage_proto::professional::SourceRange,
 ) -> Result<(), ApplyError> {
     if !range.start_s.is_finite() || !range.end_s.is_finite() {
         return Err(ApplyError::Invalid {
@@ -2104,7 +2108,7 @@ fn validate_professional_timeline_range(
 
 fn lift_range_on_track(
     index: usize,
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     range_start_s: f64,
     range_end_s: f64,
     rate: f64,
@@ -2148,7 +2152,7 @@ fn lift_range_on_track(
 
         let overlap_duration_s = overlap_end_s - overlap_start_s;
         lifted_s += overlap_duration_s;
-        replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+        replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
             overlap_duration_s,
             rate,
         )));
@@ -2175,7 +2179,7 @@ fn lift_range_on_track(
 
 fn extract_range_on_track(
     index: usize,
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     range_start_s: f64,
     range_end_s: f64,
 ) -> Result<f64, ApplyError> {
@@ -2245,7 +2249,7 @@ fn extract_range_on_track(
 
 fn overwrite_range_on_track(
     index: usize,
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     range_start_s: f64,
     range_end_s: f64,
     overwrite: Clip,
@@ -2333,7 +2337,7 @@ fn overwrite_range_on_track(
     }
     if let Some(overwrite) = pending_overwrite {
         if cursor_s < range_start_s - 1e-6 {
-            replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 range_start_s - cursor_s,
                 rate,
             )));
@@ -2371,9 +2375,9 @@ fn timeline_child_segment(
             let mut segment = clip.clone();
             let rate = range.start_time.rate;
             let source_start_s = range.start_time.to_seconds() + (segment_start_s - child_start_s);
-            segment.source_range = Some(awidat_proto::otio::TimeRange::new(
-                awidat_proto::otio::RationalTime::new(source_start_s * rate, rate),
-                awidat_proto::otio::RationalTime::new(duration_s * rate, rate),
+            segment.source_range = Some(montage_proto::otio::TimeRange::new(
+                montage_proto::otio::RationalTime::new(source_start_s * rate, rate),
+                montage_proto::otio::RationalTime::new(duration_s * rate, rate),
             ));
             if fresh_clip_uuid {
                 segment.name = format!("{}-lift-tail", segment.name);
@@ -2381,10 +2385,9 @@ fn timeline_child_segment(
             }
             Ok(Some(TrackChild::Clip(segment)))
         }
-        TrackChild::Gap(gap) => Ok(Some(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
-            duration_s,
-            gap.source_range.duration.rate,
-        )))),
+        TrackChild::Gap(gap) => Ok(Some(TrackChild::Gap(
+            montage_proto::otio::Gap::of_duration(duration_s, gap.source_range.duration.rate),
+        ))),
         TrackChild::Transition(_) => Ok(None),
         TrackChild::Stack(_) => Err(ApplyError::Invalid {
             index,
@@ -2406,7 +2409,7 @@ fn validate_available_source_range(
             message: format!("{label}: target source start {start_s:.3}s is before 0"),
         });
     }
-    if let awidat_proto::otio::MediaReference::External(reference) = &clip.media_reference
+    if let montage_proto::otio::MediaReference::External(reference) = &clip.media_reference
         && let Some(available_range) = &reference.available_range
     {
         let available_start_s = available_range.start_time.to_seconds();
@@ -2429,7 +2432,7 @@ fn record_professional_timeline_edit(
     index: usize,
     edit: &ProfessionalTimelineEdit,
 ) -> Result<(), ApplyError> {
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     meta.extra.insert(
         "last_professional_timeline_edit".into(),
         serde_json::to_value(edit).map_err(|e| ApplyError::Invalid {
@@ -2489,7 +2492,7 @@ fn apply_slip_clip(
             message: format!("slip_clip: target source start {target_start_s:.3}s is before 0"),
         });
     }
-    if let awidat_proto::otio::MediaReference::External(reference) = &clip.media_reference
+    if let montage_proto::otio::MediaReference::External(reference) = &clip.media_reference
         && let Some(available_range) = &reference.available_range
     {
         let available_start_s = available_range.start_time.to_seconds();
@@ -2504,9 +2507,9 @@ fn apply_slip_clip(
             });
         }
     }
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(target_start_s * rate, rate),
-        awidat_proto::otio::RationalTime::new(duration_s * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(target_start_s * rate, rate),
+        montage_proto::otio::RationalTime::new(duration_s * rate, rate),
     ));
     let name = clip.name.clone();
     Ok(format!(
@@ -2564,22 +2567,22 @@ fn apply_professional_marker(
                 .unwrap_or(24.0);
             let relative_s = at_s - start_s;
             let marker_id = format!("marker-{track_index}-{child_index}-{}", clip.markers.len());
-            let mut marker = awidat_proto::otio::Marker::new(
+            let mut marker = montage_proto::otio::Marker::new(
                 label.to_string(),
-                awidat_proto::otio::TimeRange::new(
-                    awidat_proto::otio::RationalTime::new(relative_s * rate, rate),
-                    awidat_proto::otio::RationalTime::new(0.0, rate),
+                montage_proto::otio::TimeRange::new(
+                    montage_proto::otio::RationalTime::new(relative_s * rate, rate),
+                    montage_proto::otio::RationalTime::new(0.0, rate),
                 ),
             );
-            let mut metadata = awidat_proto::awidat_meta::AwidatMarkerMetadata {
+            let mut metadata = montage_proto::montage_meta::MontageMarkerMetadata {
                 category: category.clone(),
                 note: Some(label.to_string()),
-                ..awidat_proto::awidat_meta::AwidatMarkerMetadata::default()
+                ..montage_proto::montage_meta::MontageMarkerMetadata::default()
             };
             metadata
                 .extra
                 .insert("id".into(), serde_json::Value::String(marker_id));
-            marker.metadata.awidat = Some(metadata);
+            marker.metadata.montage = Some(metadata);
             clip.markers.push(marker);
             return Ok(format!(
                 "added marker {label:?} at {at_s:.3}s on clip {:?}",
@@ -2676,8 +2679,8 @@ fn apply_update_marker(
     }
     let marker_metadata = marker
         .metadata
-        .awidat
-        .get_or_insert_with(awidat_proto::awidat_meta::AwidatMarkerMetadata::default);
+        .montage
+        .get_or_insert_with(montage_proto::montage_meta::MontageMarkerMetadata::default);
     if let Some(category) = category {
         marker_metadata.category = Some(category.trim().to_string());
     }
@@ -2690,12 +2693,12 @@ fn apply_update_marker(
         let rate = marker.marked_range.start_time.rate;
         let relative_s = new_at_s - candidate.clip_start_s;
         marker.marked_range.start_time =
-            awidat_proto::otio::RationalTime::new(relative_s * rate, rate);
+            montage_proto::otio::RationalTime::new(relative_s * rate, rate);
     }
     if let Some(new_duration_s) = duration_s {
         let rate = marker.marked_range.duration.rate;
         marker.marked_range.duration =
-            awidat_proto::otio::RationalTime::new(new_duration_s * rate, rate);
+            montage_proto::otio::RationalTime::new(new_duration_s * rate, rate);
     }
     Ok(format!(
         "updated marker {:?} at {:.3}s on clip {:?}",
@@ -2847,7 +2850,7 @@ fn collect_marker_candidates(
 }
 
 fn marker_matches_selector(
-    marker: &awidat_proto::otio::Marker,
+    marker: &montage_proto::otio::Marker,
     timeline_s: f64,
     selector: &MarkerSelector,
 ) -> bool {
@@ -2869,10 +2872,10 @@ fn marker_matches_selector(
     true
 }
 
-fn marker_metadata_id(marker: &awidat_proto::otio::Marker) -> Option<&str> {
+fn marker_metadata_id(marker: &montage_proto::otio::Marker) -> Option<&str> {
     marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("id"))
         .and_then(serde_json::Value::as_str)
@@ -2968,9 +2971,9 @@ fn apply_trim(
             message: format!("trim: computed negative duration {new_dur}"),
         });
     }
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(target_start * rate, rate),
-        awidat_proto::otio::RationalTime::new(new_dur * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(target_start * rate, rate),
+        montage_proto::otio::RationalTime::new(new_dur * rate, rate),
     ));
     let name = clip.name.clone();
     let mut linked_trim_count = 0usize;
@@ -3045,9 +3048,9 @@ fn trim_linked_siblings(
             });
         }
         let new_dur = target_end - target_start;
-        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-            awidat_proto::otio::RationalTime::new(target_start * rate, rate),
-            awidat_proto::otio::RationalTime::new(new_dur * rate, rate),
+        clip.source_range = Some(montage_proto::otio::TimeRange::new(
+            montage_proto::otio::RationalTime::new(target_start * rate, rate),
+            montage_proto::otio::RationalTime::new(new_dur * rate, rate),
         ));
         count += 1;
     }
@@ -3078,7 +3081,7 @@ fn apply_untrim(
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{ExternalReference, MediaReference};
+    use montage_proto::otio::{ExternalReference, MediaReference};
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
@@ -3170,9 +3173,9 @@ fn apply_untrim(
         });
     }
 
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(final_start * rate, rate),
-        awidat_proto::otio::RationalTime::new(new_dur * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(final_start * rate, rate),
+        montage_proto::otio::RationalTime::new(new_dur * rate, rate),
     ));
     let name = clip.name.clone();
     Ok(format!(
@@ -3214,7 +3217,7 @@ fn apply_insert_clip(
     link_group_id: Option<&str>,
     snap: Option<&SnapOptions>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track,
     };
 
@@ -3316,7 +3319,7 @@ fn apply_insert_clip(
         if position == track.children.len() && cursor_s + 0.001 < target_time_s {
             track
                 .children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     target_time_s - cursor_s,
                     rate,
                 )));
@@ -3334,7 +3337,7 @@ fn apply_insert_clip(
         if cursor_s + 0.001 < target_time_s {
             track
                 .children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     target_time_s - cursor_s,
                     rate,
                 )));
@@ -3391,7 +3394,7 @@ fn infer_insert_track_kind(track_name: &str, hint: Option<InsertTrackKind>) -> T
     }
 }
 
-/// Stamp a fresh, process-unique clip uuid into `clip.metadata.awidat
+/// Stamp a fresh, process-unique clip uuid into `clip.metadata.montage
 /// .extra["clip_uuid"]`. Used by InsertClip (new clip created) and
 /// Split (right piece needs its own uuid — clip.clone() inherited
 /// the parent's, which breaks Anchor::ClipUuid resolution because
@@ -3410,51 +3413,51 @@ fn stamp_fresh_clip_uuid(clip: &mut Clip) {
 }
 
 fn stamp_clip_uuid(clip: &mut Clip, uuid: &str) {
-    let awidat = clip
+    let montage = clip
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatClipMetadata::default);
-    awidat
+        .montage
+        .get_or_insert_with(MontageClipMetadata::default);
+    montage
         .extra
         .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));
 }
 
 fn stamp_link_group_id(clip: &mut Clip, link_group_id: &str) {
-    let awidat = clip
+    let montage = clip
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatClipMetadata::default);
-    awidat.extra.insert(
+        .montage
+        .get_or_insert_with(MontageClipMetadata::default);
+    montage.extra.insert(
         "link_group_id".into(),
         serde_json::Value::String(link_group_id.to_string()),
     );
 }
 
 fn keep_only_split_edit_lead(clip: &mut Clip) {
-    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+    let Some(montage) = clip.metadata.montage.as_mut() else {
         return;
     };
-    let Some(split_edit) = awidat.split_edit.as_mut() else {
+    let Some(split_edit) = montage.split_edit.as_mut() else {
         return;
     };
     split_edit.audio_trail_s = None;
     split_edit.audio_trail_to_clip_id = None;
     if split_edit.audio_lead_s.is_none() {
-        awidat.split_edit = None;
+        montage.split_edit = None;
     }
 }
 
 fn keep_only_split_edit_trail(clip: &mut Clip) {
-    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+    let Some(montage) = clip.metadata.montage.as_mut() else {
         return;
     };
-    let Some(split_edit) = awidat.split_edit.as_mut() else {
+    let Some(split_edit) = montage.split_edit.as_mut() else {
         return;
     };
     split_edit.audio_lead_s = None;
     split_edit.audio_lead_from_clip_id = None;
     if split_edit.audio_trail_s.is_none() {
-        awidat.split_edit = None;
+        montage.split_edit = None;
     }
 }
 
@@ -3485,7 +3488,7 @@ fn linked_clip_track_time(
 
 fn clip_link_group_id(clip: &Clip) -> Option<String> {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.extra.get("link_group_id"))
         .and_then(|v| v.as_str())
@@ -3555,13 +3558,13 @@ fn clip_with_link_group_covering_range(
 
 fn clip_uuid(clip: &Clip) -> Option<&str> {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.extra.get("clip_uuid"))
         .and_then(|v| v.as_str())
 }
 
-fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
+fn next_clip_name_in_track(track: &montage_proto::otio::Track) -> String {
     let used = track
         .children
         .iter()
@@ -3585,7 +3588,7 @@ fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
 /// has clips referencing the same asset. Falls back to the legacy
 /// `clip-{i}` naming when no usable stem can be derived (e.g. a URL
 /// scheme with no path, or an empty asset string).
-fn default_clip_name_for_asset(track: &awidat_proto::otio::Track, asset: &str) -> String {
+fn default_clip_name_for_asset(track: &montage_proto::otio::Track, asset: &str) -> String {
     let stem = std::path::Path::new(asset)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -3750,9 +3753,9 @@ fn split_clip_at_locator(
     let original_clip_id = clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string();
     let mut right = clip.clone();
     right.name = format!("{original_name}-b");
-    right.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(at_s * rate, rate),
-        awidat_proto::otio::RationalTime::new((end_s - at_s) * rate, rate),
+    right.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(at_s * rate, rate),
+        montage_proto::otio::RationalTime::new((end_s - at_s) * rate, rate),
     ));
     keep_only_split_edit_trail(&mut right);
     // The clip.clone() above also cloned the parent's clip_uuid —
@@ -3770,9 +3773,9 @@ fn split_clip_at_locator(
             message: "split: left piece type-check vanished mid-op".into(),
         });
     };
-    left.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(start_s * rate, rate),
-        awidat_proto::otio::RationalTime::new((at_s - start_s) * rate, rate),
+    left.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(start_s * rate, rate),
+        montage_proto::otio::RationalTime::new((at_s - start_s) * rate, rate),
     ));
     keep_only_split_edit_lead(left);
 
@@ -3851,7 +3854,7 @@ fn apply_delete(
         .unwrap_or(24.0);
     let removed = std::mem::replace(
         &mut track.children[locator.child_index],
-        TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+        TrackChild::Gap(montage_proto::otio::Gap::of_duration(
             removed_duration_s,
             gap_rate,
         )),
@@ -3877,7 +3880,7 @@ fn apply_delete(
     }
 }
 
-fn remove_transitions_around_child(track: &mut awidat_proto::otio::Track, index: usize) -> usize {
+fn remove_transitions_around_child(track: &mut montage_proto::otio::Track, index: usize) -> usize {
     let mut removed = 0;
     if matches!(
         track.children.get(index + 1),
@@ -3899,7 +3902,7 @@ fn remove_transitions_around_child(track: &mut awidat_proto::otio::Track, index:
 }
 
 fn remove_cut_boundaries_for_clip(timeline: &mut Timeline, clip_id: &str) {
-    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+    let Some(meta) = timeline.metadata.montage.as_mut() else {
         return;
     };
     meta.cut_boundaries
@@ -3918,7 +3921,7 @@ fn transfer_outgoing_cut_boundary_to_split_right(
     original_clip_id: &str,
     right_clip_id: &str,
 ) {
-    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+    let Some(meta) = timeline.metadata.montage.as_mut() else {
         return;
     };
     let transfers = meta
@@ -3943,7 +3946,7 @@ fn transfer_outgoing_cut_boundary_to_split_right(
 
 fn prune_stale_cut_boundaries(timeline: &mut Timeline) {
     let valid_boundaries = current_cut_boundary_keys(timeline);
-    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+    let Some(meta) = timeline.metadata.montage.as_mut() else {
         return;
     };
     meta.cut_boundaries
@@ -4001,10 +4004,10 @@ fn prune_stale_split_edits(timeline: &mut Timeline) {
 }
 
 fn prune_split_edit_for_clip(clip: &mut Clip, previous_id: Option<&str>, next_id: Option<&str>) {
-    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+    let Some(montage) = clip.metadata.montage.as_mut() else {
         return;
     };
-    let Some(split_edit) = awidat.split_edit.as_mut() else {
+    let Some(split_edit) = montage.split_edit.as_mut() else {
         return;
     };
 
@@ -4033,7 +4036,7 @@ fn prune_split_edit_for_clip(clip: &mut Clip, previous_id: Option<&str>, next_id
     }
 
     if split_edit.audio_lead_s.is_none() && split_edit.audio_trail_s.is_none() {
-        awidat.split_edit = None;
+        montage.split_edit = None;
     }
 }
 
@@ -4057,10 +4060,10 @@ fn apply_insert_transition(
     alignment: Option<TransitionAlignment>,
     in_offset_s: Option<f64>,
     out_offset_s: Option<f64>,
-    spec: Option<&awidat_proto::transitions::SemanticTransitionSpec>,
+    spec: Option<&montage_proto::transitions::SemanticTransitionSpec>,
     ctx: &AnchorContext,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{RationalTime, Transition};
+    use montage_proto::otio::{RationalTime, Transition};
 
     if !duration_s.is_finite() || duration_s <= 0.0 {
         return Err(ApplyError::Invalid {
@@ -4068,13 +4071,13 @@ fn apply_insert_transition(
             message: format!("transition duration {duration_s} must be > 0"),
         });
     }
-    awidat_proto::transitions::validate_transition_duration(kind, duration_s).map_err(|e| {
+    montage_proto::transitions::validate_transition_duration(kind, duration_s).map_err(|e| {
         ApplyError::Invalid {
             index,
             message: e.to_string(),
         }
     })?;
-    let xfade = awidat_proto::transitions::resolve_ffmpeg_xfade(kind)
+    let xfade = montage_proto::transitions::resolve_ffmpeg_xfade(kind)
         .map_err(|e| ApplyError::Invalid {
             index,
             message: format!("transition {kind:?} is not supported by the phase-one renderer: {e}"),
@@ -4087,15 +4090,15 @@ fn apply_insert_transition(
         return Err(ApplyError::Invalid {
             index,
             message: format!(
-                "transition {kind:?} is a raw FFmpeg transition name. New EDLs must use a registered awidat.* transition id or SMPTE_Dissolve."
+                "transition {kind:?} is a raw FFmpeg transition name. New EDLs must use a registered montage.* transition id or SMPTE_Dissolve."
             ),
         });
     }
-    if kind == "awidat.composite" && spec.is_none() {
+    if kind == "montage.composite" && spec.is_none() {
         return Err(ApplyError::Invalid {
             index,
             message:
-                "transition \"awidat.composite\" requires semantic metadata with composition_json"
+                "transition \"montage.composite\" requires semantic metadata with composition_json"
                     .into(),
         });
     }
@@ -4110,7 +4113,7 @@ fn apply_insert_transition(
             });
         }
         let spec_xfade =
-            awidat_proto::transitions::resolve_ffmpeg_xfade(&spec.id).map_err(|e| {
+            montage_proto::transitions::resolve_ffmpeg_xfade(&spec.id).map_err(|e| {
                 ApplyError::Invalid {
                     index,
                     message: format!("transition spec for {:?} is invalid: {e}", spec.id),
@@ -4125,7 +4128,7 @@ fn apply_insert_transition(
                 ),
             });
         }
-        awidat_proto::transitions::validate_semantic_transition_spec(spec).map_err(|e| {
+        montage_proto::transitions::validate_semantic_transition_spec(spec).map_err(|e| {
             ApplyError::Invalid {
                 index,
                 message: format!("transition spec for {:?} is invalid: {e}", spec.id),
@@ -4134,7 +4137,7 @@ fn apply_insert_transition(
     }
     let persisted_spec = spec.cloned().map(|mut spec| {
         if spec.composition.is_none() {
-            spec.composition = awidat_proto::transitions::builtin_transition_composition(&spec.id);
+            spec.composition = montage_proto::transitions::builtin_transition_composition(&spec.id);
         }
         spec
     });
@@ -4217,7 +4220,7 @@ fn apply_insert_transition(
     };
     if let Some(spec) = persisted_spec.as_ref() {
         transition.metadata.insert(
-            "awidat_transition".into(),
+            "montage_transition".into(),
             serde_json::to_value(spec).map_err(|e| ApplyError::Invalid {
                 index,
                 message: format!("transition spec could not be serialized: {e}"),
@@ -4253,7 +4256,7 @@ fn apply_insert_transition(
 }
 
 fn is_authorable_transition_kind(kind: &str) -> bool {
-    kind == "SMPTE_Dissolve" || kind.starts_with("awidat.")
+    kind == "SMPTE_Dissolve" || kind.starts_with("montage.")
 }
 
 fn apply_delete_transition(
@@ -4381,7 +4384,7 @@ fn apply_set_cut_intent(
         .unwrap_or(to_clip.name.as_str())
         .to_string();
     let key = cut_boundary_key(&from_id, &to_id);
-    timeline_awidat_metadata(working)
+    timeline_montage_metadata(working)
         .cut_boundaries
         .insert(key.clone(), spec.clone());
     Ok(format!(
@@ -4391,7 +4394,7 @@ fn apply_set_cut_intent(
 }
 
 fn clips_are_separated_only_by_gaps(
-    track: &awidat_proto::otio::Track,
+    track: &montage_proto::otio::Track,
     from_index: usize,
     to_index: usize,
 ) -> bool {
@@ -4480,7 +4483,7 @@ fn validate_transition_handle(
     side: &'static str,
     needed_s: f64,
 ) -> Result<(), ApplyError> {
-    use awidat_proto::otio::{ExternalReference, MediaReference};
+    use montage_proto::otio::{ExternalReference, MediaReference};
     if needed_s <= 0.0 {
         return Ok(());
     }
@@ -4711,8 +4714,8 @@ fn validate_multicam_decisions(
 fn build_multicam_program_track(
     program_track: &str,
     decisions: &[MulticamDecision],
-) -> awidat_proto::otio::Track {
-    use awidat_proto::otio::{ExternalReference, MediaReference, RationalTime, TimeRange, Track};
+) -> montage_proto::otio::Track {
+    use montage_proto::otio::{ExternalReference, MediaReference, RationalTime, TimeRange, Track};
 
     let rate = 24.0;
     let mut track = Track::empty(program_track.to_string(), TrackKind::Video);
@@ -4721,7 +4724,7 @@ fn build_multicam_program_track(
         if decision.start_s > cursor_s + 0.001 {
             track
                 .children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     decision.start_s - cursor_s,
                     rate,
                 )));
@@ -4739,26 +4742,26 @@ fn build_multicam_program_track(
             RationalTime::new(timeline_duration_s * rate, rate),
         ));
         {
-            let awidat = clip
+            let montage = clip
                 .metadata
-                .awidat
-                .get_or_insert_with(AwidatClipMetadata::default);
-            awidat.reasoning = decision.reason.clone();
-            awidat.extra.insert(
+                .montage
+                .get_or_insert_with(MontageClipMetadata::default);
+            montage.reasoning = decision.reason.clone();
+            montage.extra.insert(
                 "multicam_source_asset".into(),
                 serde_json::json!(&decision.source_asset),
             );
-            awidat.extra.insert(
+            montage.extra.insert(
                 "multicam_decision_index".into(),
                 serde_json::json!(decision_index),
             );
             if let Some(speaker) = decision.speaker.as_deref() {
-                awidat
+                montage
                     .extra
                     .insert("speaker".into(), serde_json::json!(speaker));
             }
             if let Some(sync_group_id) = decision.sync_group_id.as_deref() {
-                awidat
+                montage
                     .extra
                     .insert("sync_group_id".into(), serde_json::json!(sync_group_id));
             }
@@ -4813,9 +4816,9 @@ fn apply_wrap_as_nested(
         .unwrap_or("Nested Stack");
     let nested_children: Vec<TrackChild> = track.children.drain(start_index..end_index).collect();
     let mut nested_track =
-        awidat_proto::otio::Track::empty(format!("{nested_name} Track"), track.kind);
+        montage_proto::otio::Track::empty(format!("{nested_name} Track"), track.kind);
     nested_track.children = nested_children;
-    let mut stack = awidat_proto::otio::Stack::empty(nested_name.to_string());
+    let mut stack = montage_proto::otio::Stack::empty(nested_name.to_string());
     stack.children.push(StackChild::Track(nested_track));
     track.children.insert(start_index, TrackChild::Stack(stack));
     Ok(format!(
@@ -5011,7 +5014,7 @@ fn apply_ripple_move(
         match &source_track.children[locator.child_index] {
             TrackChild::Clip(c) => (
                 c.metadata
-                    .awidat
+                    .montage
                     .as_ref()
                     .and_then(|m| m.extra.get("link_group_id"))
                     .and_then(|v| v.as_str())
@@ -5086,7 +5089,7 @@ fn first_clip_with_link_group(stack_child: &StackChild, group_id: &str) -> Optio
     track.children.iter().position(|child| match child {
         TrackChild::Clip(c) => c
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("link_group_id"))
             .and_then(|v| v.as_str())
@@ -5141,13 +5144,13 @@ fn shift_clip_at_index(
             let prev_dur = child_duration(&track.children[child_index - 1]);
             if let TrackChild::Gap(gap) = &mut track.children[child_index - 1] {
                 let new_duration = prev_dur + delta_s;
-                *gap = awidat_proto::otio::Gap::of_duration(new_duration, rate);
+                *gap = montage_proto::otio::Gap::of_duration(new_duration, rate);
                 return Ok(());
             }
         }
         track.children.insert(
             insert_pos,
-            TrackChild::Gap(awidat_proto::otio::Gap::of_duration(delta_s, rate)),
+            TrackChild::Gap(montage_proto::otio::Gap::of_duration(delta_s, rate)),
         );
         return Ok(());
     }
@@ -5168,7 +5171,7 @@ fn shift_clip_at_index(
                 } else {
                     // Shrink in place.
                     let new_duration = dur - remaining;
-                    *gap = awidat_proto::otio::Gap::of_duration(new_duration, rate);
+                    *gap = montage_proto::otio::Gap::of_duration(new_duration, rate);
                     remaining = 0.0;
                 }
             }
@@ -5217,7 +5220,7 @@ fn apply_ripple_delete(
     {
         TrackChild::Clip(c) => (
             c.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.extra.get("link_group_id"))
                 .and_then(|v| v.as_str())
@@ -5314,7 +5317,7 @@ fn apply_ripple_trim(
     let old_end = old_start + range.duration.to_seconds();
     let link_group_id = clip
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.extra.get("link_group_id"))
         .and_then(|v| v.as_str())
@@ -5340,9 +5343,9 @@ fn apply_ripple_trim(
             ),
         });
     }
-    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-        awidat_proto::otio::RationalTime::new(new_start * rate, rate),
-        awidat_proto::otio::RationalTime::new(new_duration * rate, rate),
+    clip.source_range = Some(montage_proto::otio::TimeRange::new(
+        montage_proto::otio::RationalTime::new(new_start * rate, rate),
+        montage_proto::otio::RationalTime::new(new_duration * rate, rate),
     ));
 
     // Track-time effect of the trim:
@@ -5416,9 +5419,9 @@ fn apply_ripple_trim(
                 };
                 let sib_new_dur = sib_new_end - sib_new_start;
                 if sib_new_dur > 0.0 {
-                    sibling_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-                        awidat_proto::otio::RationalTime::new(sib_new_start * sib_rate, sib_rate),
-                        awidat_proto::otio::RationalTime::new(sib_new_dur * sib_rate, sib_rate),
+                    sibling_clip.source_range = Some(montage_proto::otio::TimeRange::new(
+                        montage_proto::otio::RationalTime::new(sib_new_start * sib_rate, sib_rate),
+                        montage_proto::otio::RationalTime::new(sib_new_dur * sib_rate, sib_rate),
                     ));
                 }
             }
@@ -5468,13 +5471,13 @@ fn ripple_shift_after(
                 let new_dur = child_duration(&track.children[after_index]) + delta_s;
                 let _ = gap;
                 track.children[after_index] =
-                    TrackChild::Gap(awidat_proto::otio::Gap::of_duration(new_dur, rate));
+                    TrackChild::Gap(montage_proto::otio::Gap::of_duration(new_dur, rate));
                 return Ok(());
             }
         }
         track.children.insert(
             after_index,
-            TrackChild::Gap(awidat_proto::otio::Gap::of_duration(delta_s, rate)),
+            TrackChild::Gap(montage_proto::otio::Gap::of_duration(delta_s, rate)),
         );
         return Ok(());
     }
@@ -5492,7 +5495,7 @@ fn ripple_shift_after(
                     // element at `cursor`.
                 } else {
                     let new_dur = dur - remaining;
-                    *gap = awidat_proto::otio::Gap::of_duration(new_dur, rate);
+                    *gap = montage_proto::otio::Gap::of_duration(new_dur, rate);
                     remaining = 0.0;
                 }
             }
@@ -5542,7 +5545,7 @@ fn apply_delete_gap(
         Some(StackChild::Track(t)) => match t.children.get(locator.child_index) {
             Some(TrackChild::Clip(c)) => c
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.extra.get("link_group_id"))
                 .and_then(|v| v.as_str())
@@ -5821,7 +5824,7 @@ fn apply_insert_track(
         }
     }
 
-    let new_track = StackChild::Track(awidat_proto::otio::Track::empty(
+    let new_track = StackChild::Track(montage_proto::otio::Track::empty(
         trimmed.to_string(),
         resolved_kind,
     ));
@@ -5975,7 +5978,7 @@ fn last_clip_link_group_id(stack_child: &StackChild) -> Option<String> {
         if let TrackChild::Clip(clip) = child {
             return clip
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.extra.get("link_group_id"))
                 .and_then(|v| v.as_str())
@@ -5987,7 +5990,7 @@ fn last_clip_link_group_id(stack_child: &StackChild) -> Option<String> {
 
 fn apply_move_clip_to_time(
     index: usize,
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     child_index: usize,
     target_start_s: f64,
 ) -> Result<String, ApplyError> {
@@ -6022,7 +6025,7 @@ fn apply_move_clip_to_time(
     let rate = track.children[child_index].as_clip_rate().unwrap_or(24.0);
     let removed = std::mem::replace(
         &mut track.children[child_index],
-        TrackChild::Gap(awidat_proto::otio::Gap::of_duration(duration_s, rate)),
+        TrackChild::Gap(montage_proto::otio::Gap::of_duration(duration_s, rate)),
     );
     let name = match &removed {
         TrackChild::Clip(c) => c.name.clone(),
@@ -6055,7 +6058,7 @@ impl TrackChildClipRate for TrackChild {
 }
 
 fn insert_child_at_time(
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     child: TrackChild,
     target_start_s: f64,
     child_duration_s: f64,
@@ -6076,13 +6079,13 @@ fn insert_child_at_time(
                 let after_s = (end_s - target_start_s - child_duration_s).max(0.0);
                 let mut replacement = Vec::new();
                 if before_s > EPS {
-                    replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                         before_s, rate,
                     )));
                 }
                 replacement.push(child);
                 if after_s > EPS {
-                    replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                         after_s, rate,
                     )));
                 }
@@ -6102,7 +6105,7 @@ fn insert_child_at_time(
     if target_start_s > cursor_s + EPS {
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 target_start_s - cursor_s,
                 rate,
             )));
@@ -6120,7 +6123,7 @@ fn merge_adjacent_gaps(children: &mut Vec<TrackChild>, rate: f64) {
             }
             if let Some(TrackChild::Gap(prev)) = merged.last_mut() {
                 let total_s = prev.source_range.duration.to_seconds() + dur_s;
-                *prev = awidat_proto::otio::Gap::of_duration(total_s, rate);
+                *prev = montage_proto::otio::Gap::of_duration(total_s, rate);
             } else {
                 merged.push(TrackChild::Gap(gap));
             }
@@ -6158,7 +6161,7 @@ fn apply_insert_broll(
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
     };
     let _ = (anchor, ctx);
@@ -6343,7 +6346,7 @@ fn apply_insert_pip(
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackChild,
         TrackKind,
     };
@@ -6442,7 +6445,7 @@ fn apply_insert_pip(
     if target_cursor < anchor_track_time {
         target
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 anchor_track_time - target_cursor,
                 rate,
             )));
@@ -6459,30 +6462,30 @@ fn apply_insert_pip(
 /// Effect name used for per-clip volume changes. Render reads this
 /// in [`crates/render/src/timeline.rs`]'s FilterPlanner and emits
 /// `volume=<value>` on the segment's audio stream.
-const VOLUME_EFFECT_NAME: &str = awidat_effects::VOLUME;
+const VOLUME_EFFECT_NAME: &str = montage_effects::VOLUME;
 
 /// Effect name used for media overlays and picture-in-picture clips.
-const VIDEO_OVERLAY_EFFECT_NAME: &str = awidat_effects::VIDEO_OVERLAY;
+const VIDEO_OVERLAY_EFFECT_NAME: &str = montage_effects::VIDEO_OVERLAY;
 
 /// Effect name used for per-clip audio fades.
-const AUDIO_FADE_EFFECT_NAME: &str = awidat_effects::AUDIO_FADE;
+const AUDIO_FADE_EFFECT_NAME: &str = montage_effects::AUDIO_FADE;
 
 /// Effect name used for per-clip speed changes. Render reads this
 /// and emits `setpts=<1/factor>*PTS` on video + `atempo=<factor>`
 /// on audio (chained when factor is outside `[0.5, 2.0]`).
-const SPEED_EFFECT_NAME: &str = awidat_effects::SPEED;
+const SPEED_EFFECT_NAME: &str = montage_effects::SPEED;
 
 /// Effect name used for clip-level color correction. Render reads the
 /// optional numeric fields and emits FFmpeg color filters before speed.
-const COLOR_CORRECTION_EFFECT_NAME: &str = awidat_effects::COLOR_CORRECTION;
+const COLOR_CORRECTION_EFFECT_NAME: &str = montage_effects::COLOR_CORRECTION;
 
 /// Effect name used for clip-level LUT application. Render maps the
 /// project-relative `lut_path` to FFmpeg's `lut3d` filter.
-const LUT_EFFECT_NAME: &str = awidat_effects::LUT;
+const LUT_EFFECT_NAME: &str = montage_effects::LUT;
 /// Effect name used for the atomic color pipeline. Schema is live;
 /// render lowering is the next stage (see
-/// `awidat-color-pipeline-plan` memory).
-const COLOR_PIPELINE_EFFECT_NAME: &str = awidat_effects::COLOR_PIPELINE;
+/// `montage-color-pipeline-plan` memory).
+const COLOR_PIPELINE_EFFECT_NAME: &str = montage_effects::COLOR_PIPELINE;
 const SUPPORTED_LUT_EXTENSIONS: &[&str] = &["3dl", "cube", "dat", "m3d", "csp"];
 const SUPPORTED_LUT_INTERPOLATIONS: &[&str] =
     &["nearest", "trilinear", "tetrahedral", "pyramid", "prism"];
@@ -6490,37 +6493,37 @@ const SUPPORTED_LUT_INTERPOLATIONS: &[&str] =
 /// Effect name stamped on title-clip synthesized clips. The metadata
 /// holds text/position/font_size/color/font_weight/animation; render
 /// walks the Titles track and emits drawtext filters per title.
-const TITLE_EFFECT_NAME: &str = awidat_effects::TITLE;
+const TITLE_EFFECT_NAME: &str = montage_effects::TITLE;
 
 /// Track name used for the auto-created Titles track. Render walks
-/// any video track whose `metadata["awidat_track_role"]` is "titles"
+/// any video track whose `metadata["montage_track_role"]` is "titles"
 /// (not just by name) so the user can rename it.
 const TITLES_TRACK_NAME: &str = "Titles";
 
 /// Track-metadata key flagging this track as the project's title
 /// overlay track. `apply_insert_title` stamps it on track creation;
 /// the render pipeline pattern-matches on it.
-const TITLES_TRACK_ROLE_KEY: &str = "awidat_track_role";
+const TITLES_TRACK_ROLE_KEY: &str = "montage_track_role";
 
 /// Track-metadata value for the titles track.
 const TITLES_TRACK_ROLE_VALUE: &str = "titles";
 
-const ANNOTATION_EFFECT_NAME: &str = "awidat.annotation";
+const ANNOTATION_EFFECT_NAME: &str = "montage.annotation";
 const ANNOTATIONS_TRACK_NAME: &str = "Annotations";
 const ANNOTATIONS_TRACK_ROLE_VALUE: &str = "annotations";
 
 /// Track metadata key holding first-class audio controls.
-const AUDIO_TRACK_METADATA_KEY: &str = "awidat_audio";
+const AUDIO_TRACK_METADATA_KEY: &str = "montage_audio";
 
 /// Clip effect storing waveform/timecode sync metadata.
-const SYNC_GROUP_EFFECT_NAME: &str = "awidat.sync_group";
+const SYNC_GROUP_EFFECT_NAME: &str = "montage.sync_group";
 
 /// Clip effect storing FFmpeg-native audio repair settings.
-const AUDIO_FX_EFFECT_NAME: &str = "awidat.audio_fx";
+const AUDIO_FX_EFFECT_NAME: &str = "montage.audio_fx";
 
-/// Stamp an awidat.volume Effect on the anchored clip with `value`
+/// Stamp an montage.volume Effect on the anchored clip with `value`
 /// (linear gain multiplier). Idempotent: any existing
-/// awidat.volume effect on the clip is removed first, so two
+/// montage.volume effect on the clip is removed first, so two
 /// SetVolume ops in one envelope leave only the second's value.
 fn apply_set_volume(
     working: &mut Timeline,
@@ -6551,7 +6554,7 @@ fn apply_set_volume(
         });
     };
     clip.effects.retain(|e| e.effect_name != VOLUME_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(VOLUME_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(VOLUME_EFFECT_NAME);
     effect
         .metadata
         .insert("value".to_string(), serde_json::json!(value));
@@ -6585,18 +6588,18 @@ fn apply_mute_clip(
         });
     };
     let clip_name = clip.name.clone();
-    let awidat = clip
+    let montage = clip
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatClipMetadata::default);
-    let overlay = awidat
+        .montage
+        .get_or_insert_with(MontageClipMetadata::default);
+    let overlay = montage
         .audio_override
         .get_or_insert_with(ClipAudioOverride::default);
     overlay.muted = muted;
     // Drop an override that no longer carries any state, keeping clip
     // metadata clean and the render on the coupled path when possible.
     if !overlay.muted && overlay.removed_ranges.is_empty() {
-        awidat.audio_override = None;
+        montage.audio_override = None;
     }
     Ok(format!(
         "{} audio on clip {clip_name:?} (picture kept)",
@@ -6630,16 +6633,16 @@ fn apply_remove_audio(
         });
     };
     let clip_name = clip.name.clone();
-    let awidat = clip
+    let montage = clip
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatClipMetadata::default);
+        .montage
+        .get_or_insert_with(MontageClipMetadata::default);
 
     if clear {
-        if let Some(overlay) = awidat.audio_override.as_mut() {
+        if let Some(overlay) = montage.audio_override.as_mut() {
             overlay.removed_ranges.clear();
             if !overlay.muted {
-                awidat.audio_override = None;
+                montage.audio_override = None;
             }
         }
         return Ok(format!("cleared audio removals on clip {clip_name:?}"));
@@ -6660,7 +6663,7 @@ fn apply_remove_audio(
         });
     }
 
-    let overlay = awidat
+    let overlay = montage
         .audio_override
         .get_or_insert_with(ClipAudioOverride::default);
     overlay.removed_ranges.push(AudioRange { start_s, end_s });
@@ -6704,7 +6707,7 @@ fn apply_set_audio_fade(
     };
     clip.effects
         .retain(|e| e.effect_name != AUDIO_FADE_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(AUDIO_FADE_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(AUDIO_FADE_EFFECT_NAME);
     effect
         .metadata
         .insert("fade_in_s".to_string(), serde_json::json!(fade_in));
@@ -6826,11 +6829,11 @@ fn stamp_split_edit_on_clip(
     };
     let clip_name = clip.name.clone();
     let clip_id = clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string();
-    let awidat = clip
+    let montage = clip
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatClipMetadata::default);
-    let mut spec = awidat.split_edit.clone().unwrap_or_default();
+        .montage
+        .get_or_insert_with(MontageClipMetadata::default);
+    let mut spec = montage.split_edit.clone().unwrap_or_default();
     match kind {
         SplitEditKind::AudioLead => {
             spec.audio_lead_s = Some(offset_s);
@@ -6855,7 +6858,7 @@ fn stamp_split_edit_on_clip(
     if let Some(confidence) = split_edit.and_then(|s| s.confidence) {
         spec.confidence = Some(confidence);
     }
-    awidat.split_edit = Some(spec);
+    montage.split_edit = Some(spec);
     Ok((clip_name, clip_id))
 }
 
@@ -6875,7 +6878,7 @@ fn stamp_split_edit_cut_boundary(
         SplitEditKind::AudioLead => (CutType::JCut, AudioRelation::AudioLeads, "audio_lead"),
         SplitEditKind::AudioTrail => (CutType::LCut, AudioRelation::AudioTrails, "audio_trail"),
     };
-    timeline_awidat_metadata(working).cut_boundaries.insert(
+    timeline_montage_metadata(working).cut_boundaries.insert(
         key,
         SemanticCutSpec {
             cut_type,
@@ -6918,14 +6921,14 @@ fn neighboring_boundary_ids(
     }
 }
 
-fn previous_clip_id(track: &awidat_proto::otio::Track, before_index: usize) -> Option<String> {
+fn previous_clip_id(track: &montage_proto::otio::Track, before_index: usize) -> Option<String> {
     track.children[..before_index]
         .iter()
         .rev()
         .find_map(track_child_clip_id)
 }
 
-fn next_clip_id(track: &awidat_proto::otio::Track, after_index: usize) -> Option<String> {
+fn next_clip_id(track: &montage_proto::otio::Track, after_index: usize) -> Option<String> {
     track
         .children
         .iter()
@@ -6934,7 +6937,7 @@ fn next_clip_id(track: &awidat_proto::otio::Track, after_index: usize) -> Option
 }
 
 fn next_clip_id_after_gaps(
-    track: &awidat_proto::otio::Track,
+    track: &montage_proto::otio::Track,
     after_index: usize,
 ) -> Option<String> {
     track
@@ -7129,7 +7132,7 @@ fn apply_set_sync_group(
         };
         clip.effects
             .retain(|e| e.effect_name != SYNC_GROUP_EFFECT_NAME);
-        let mut effect = awidat_proto::otio::Effect::new(SYNC_GROUP_EFFECT_NAME);
+        let mut effect = montage_proto::otio::Effect::new(SYNC_GROUP_EFFECT_NAME);
         effect
             .metadata
             .insert("sync_group_id".into(), serde_json::json!(sync_group_id));
@@ -7142,7 +7145,7 @@ fn apply_set_sync_group(
                 .insert("speed_factor".into(), serde_json::json!(speed_factor));
             if (speed_factor - 1.0).abs() > 1e-9 {
                 clip.effects.retain(|e| e.effect_name != SPEED_EFFECT_NAME);
-                let mut speed = awidat_proto::otio::Effect::new(SPEED_EFFECT_NAME);
+                let mut speed = montage_proto::otio::Effect::new(SPEED_EFFECT_NAME);
                 speed
                     .metadata
                     .insert("factor".into(), serde_json::json!(speed_factor));
@@ -7198,7 +7201,7 @@ fn apply_set_clip_audio_fx(
     };
     clip.effects
         .retain(|e| e.effect_name != AUDIO_FX_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(AUDIO_FX_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(AUDIO_FX_EFFECT_NAME);
     effect.metadata = audio_fx_metadata(index, fx)?;
     let clip_name = clip.name.clone();
     clip.effects.push(effect);
@@ -7316,7 +7319,7 @@ fn apply_set_effect(
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let (definition, mut metadata) =
-        awidat_effects::normalize_params(effect_id, params).map_err(|e| ApplyError::Invalid {
+        montage_effects::normalize_params(effect_id, params).map_err(|e| ApplyError::Invalid {
             index,
             message: format!("set_effect: {e}"),
         })?;
@@ -7326,7 +7329,7 @@ fn apply_set_effect(
     if definition.id == COLOR_PIPELINE_EFFECT_NAME {
         normalize_color_pipeline_metadata(index, &mut metadata, ctx)?;
     }
-    if !matches!(definition.scope, awidat_effects::EffectScope::Clip) {
+    if !matches!(definition.scope, montage_effects::EffectScope::Clip) {
         return Err(ApplyError::Invalid {
             index,
             message: format!("set_effect: effect {effect_id:?} is not a clip-scoped effect"),
@@ -7358,7 +7361,7 @@ fn apply_set_effect(
     if matches!(definition.stack_policy, StackPolicy::ReplaceSameId) {
         clip.effects.retain(|e| e.effect_name != definition.id);
     }
-    let mut effect = awidat_proto::otio::Effect::new(definition.id);
+    let mut effect = montage_proto::otio::Effect::new(definition.id);
     effect.name = definition.display_name.to_string();
     effect.metadata = metadata;
     let clip_name = clip.name.clone();
@@ -7369,9 +7372,9 @@ fn apply_set_effect(
     ))
 }
 
-/// Stamp an awidat.speed Effect on the anchored clip with `factor`
+/// Stamp an montage.speed Effect on the anchored clip with `factor`
 /// (playback rate multiplier). Idempotent: any existing
-/// awidat.speed effect on the clip is removed first.
+/// montage.speed effect on the clip is removed first.
 fn apply_set_speed(
     working: &mut Timeline,
     index: usize,
@@ -7401,7 +7404,7 @@ fn apply_set_speed(
         });
     };
     clip.effects.retain(|e| e.effect_name != SPEED_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(SPEED_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(SPEED_EFFECT_NAME);
     effect
         .metadata
         .insert("factor".to_string(), serde_json::json!(factor));
@@ -7429,7 +7432,7 @@ fn apply_set_time_remap(
         working,
         index,
         anchor,
-        awidat_effects::TIME_REMAP,
+        montage_effects::TIME_REMAP,
         &params,
         None,
         ctx,
@@ -7471,7 +7474,7 @@ fn apply_set_freeze(
         working,
         index,
         anchor,
-        awidat_effects::FREEZE,
+        montage_effects::FREEZE,
         &params,
         None,
         ctx,
@@ -7539,7 +7542,7 @@ fn apply_set_color_correction(
 
     clip.effects
         .retain(|e| e.effect_name != COLOR_CORRECTION_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(COLOR_CORRECTION_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(COLOR_CORRECTION_EFFECT_NAME);
     for (name, value, _, _) in [
         ("exposure_ev", exposure_ev, -4.0, 4.0),
         ("contrast", contrast, 0.0, 3.0),
@@ -7591,7 +7594,7 @@ fn apply_lut(
         });
     };
     clip.effects.retain(|e| e.effect_name != LUT_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(LUT_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(LUT_EFFECT_NAME);
     effect
         .metadata
         .insert("lut_path".to_string(), serde_json::json!(lut_path));
@@ -7652,13 +7655,13 @@ fn normalize_lut_metadata(
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| ApplyError::Invalid {
             index,
-            message: "set_effect: awidat.lut requires string lut_path".into(),
+            message: "set_effect: montage.lut requires string lut_path".into(),
         })?;
     let normalized_path = normalize_lut_path(index, lut_path)?;
     // Mirror apply_lut: when the project root is known, parse the
     // file so a malformed `.cube` or `.3dl` fails at apply time
     // rather than mid-render. Without this, agents could route a
-    // bad LUT through `Set Effect { effect: awidat.lut }` and skip
+    // bad LUT through `Set Effect { effect: montage.lut }` and skip
     // the validation that `Apply LUT` runs.
     if let Some(root) = ctx.project_root() {
         validate_lut_contents(index, root, &normalized_path, ExpectedLutKind::ThreeD)?;
@@ -7687,7 +7690,7 @@ fn normalize_lut_metadata(
             let Some(number) = serde_json::Number::from_f64(value) else {
                 return Err(ApplyError::Invalid {
                     index,
-                    message: format!("set_effect: awidat.lut strength {value} is non-finite"),
+                    message: format!("set_effect: montage.lut strength {value} is non-finite"),
                 });
             };
             metadata.insert("strength".to_string(), serde_json::Value::Number(number));
@@ -7735,18 +7738,18 @@ fn normalize_lut_path(index: usize, lut_path: &str) -> Result<String, ApplyError
     Ok(trimmed.to_string())
 }
 
-/// Validate the metadata for an `awidat.color_pipeline` effect.
+/// Validate the metadata for an `montage.color_pipeline` effect.
 ///
 /// Beyond the per-param schema checks the effects registry already
 /// runs, this layer enforces:
-/// - color-space slot values are in [`awidat_effects::KNOWN_COLOR_SPACES`]
+/// - color-space slot values are in [`montage_effects::KNOWN_COLOR_SPACES`]
 /// - LUT path slots pass [`normalize_lut_path`] (project-relative,
 ///   supported extension)
 /// - `look_interpolation` is a known interpolation mode
 /// - cross-slot consistency (e.g., `look_strength` without `look_lut`
 ///   is meaningless and rejected)
 /// - if the project root is known and the `look_lut` is a `.cube`
-///   file that exists on disk, parse it via [`awidat_lut::parse_cube_3d`]
+///   file that exists on disk, parse it via [`montage_lut::parse_cube_3d`]
 fn normalize_color_pipeline_metadata(
     index: usize,
     metadata: &mut serde_json::Map<String, serde_json::Value>,
@@ -7761,13 +7764,13 @@ fn normalize_color_pipeline_metadata(
         let Some(value) = metadata.get(slot).and_then(serde_json::Value::as_str) else {
             continue;
         };
-        if !awidat_effects::is_known_color_space(value) {
+        if !montage_effects::is_known_color_space(value) {
             return Err(ApplyError::Invalid {
                 index,
                 message: format!(
-                    "set_effect: awidat.color_pipeline {slot} {value:?} is not a known color space; \
+                    "set_effect: montage.color_pipeline {slot} {value:?} is not a known color space; \
                      expected one of {:?}",
-                    awidat_effects::KNOWN_COLOR_SPACES
+                    montage_effects::KNOWN_COLOR_SPACES
                 ),
             });
         }
@@ -7796,9 +7799,9 @@ fn normalize_color_pipeline_metadata(
                 index,
                 message: match err {
                     ApplyError::Invalid { message, .. } => {
-                        format!("set_effect: awidat.color_pipeline {slot}: {message}")
+                        format!("set_effect: montage.color_pipeline {slot}: {message}")
                     }
-                    other => format!("set_effect: awidat.color_pipeline {slot}: {other}"),
+                    other => format!("set_effect: montage.color_pipeline {slot}: {other}"),
                 },
             }
         })?;
@@ -7806,7 +7809,7 @@ fn normalize_color_pipeline_metadata(
             validate_lut_contents(index, root, &normalized, *kind).map_err(|err| match err {
                 ApplyError::Invalid { message, .. } => ApplyError::Invalid {
                     index,
-                    message: format!("set_effect: awidat.color_pipeline {slot}: {message}"),
+                    message: format!("set_effect: montage.color_pipeline {slot}: {message}"),
                 },
                 other => other,
             })?;
@@ -7851,7 +7854,7 @@ fn normalize_color_pipeline_metadata(
             return Err(ApplyError::Invalid {
                 index,
                 message: format!(
-                    "set_effect: awidat.color_pipeline {dependent} requires look_lut to also be set"
+                    "set_effect: montage.color_pipeline {dependent} requires look_lut to also be set"
                 ),
             });
         }
@@ -7864,7 +7867,7 @@ fn normalize_color_pipeline_metadata(
     {
         return Err(ApplyError::Invalid {
             index,
-            message: "set_effect: awidat.color_pipeline look_strength != 1.0 requires look_lut"
+            message: "set_effect: montage.color_pipeline look_strength != 1.0 requires look_lut"
                 .into(),
         });
     }
@@ -7875,10 +7878,10 @@ fn normalize_color_pipeline_metadata(
     Ok(())
 }
 
-/// Validate an `awidat.color_pipeline.mask_source` path. Mirrors
+/// Validate an `montage.color_pipeline.mask_source` path. Mirrors
 /// `normalize_lut_path` (project-relative, no `..`, no backslashes)
 /// but swaps the LUT extension whitelist for
-/// [`awidat_effects::SUPPORTED_MASK_EXTENSIONS`].
+/// [`montage_effects::SUPPORTED_MASK_EXTENSIONS`].
 fn normalize_mask_path(index: usize, mask_source: &str) -> Result<String, ApplyError> {
     let trimmed = mask_source.trim();
     let path = std::path::Path::new(trimmed);
@@ -7892,7 +7895,7 @@ fn normalize_mask_path(index: usize, mask_source: &str) -> Result<String, ApplyE
         return Err(ApplyError::Invalid {
             index,
             message:
-                "set_effect: awidat.color_pipeline mask_source must be a non-empty project-relative path without '.', '..', absolute prefixes, or backslashes"
+                "set_effect: montage.color_pipeline mask_source must be a non-empty project-relative path without '.', '..', absolute prefixes, or backslashes"
                     .into(),
         });
     }
@@ -7902,13 +7905,13 @@ fn normalize_mask_path(index: usize, mask_source: &str) -> Result<String, ApplyE
         .map(str::to_ascii_lowercase);
     if !extension
         .as_deref()
-        .is_some_and(|ext| awidat_effects::SUPPORTED_MASK_EXTENSIONS.contains(&ext))
+        .is_some_and(|ext| montage_effects::SUPPORTED_MASK_EXTENSIONS.contains(&ext))
     {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
-                "set_effect: awidat.color_pipeline mask_source must end in one of: {}",
-                awidat_effects::SUPPORTED_MASK_EXTENSIONS.join(", ")
+                "set_effect: montage.color_pipeline mask_source must end in one of: {}",
+                montage_effects::SUPPORTED_MASK_EXTENSIONS.join(", ")
             ),
         });
     }
@@ -7928,8 +7931,8 @@ fn normalize_lut_strength(index: usize, strength: Option<f64>) -> Result<Option<
     Ok(Some(value))
 }
 
-/// Which LUT kind a slot expects. The legacy `awidat.lut` effect
-/// and most `awidat.color_pipeline` LUT slots are 3D; only the
+/// Which LUT kind a slot expects. The legacy `montage.lut` effect
+/// and most `montage.color_pipeline` LUT slots are 3D; only the
 /// `shaper_lut` slot wants a 1D table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExpectedLutKind {
@@ -7939,7 +7942,7 @@ enum ExpectedLutKind {
     OneD,
 }
 
-/// Extensions awidat knows to always carry 3D data — listing one
+/// Extensions montage knows to always carry 3D data — listing one
 /// of these in a 1D slot is rejected at apply time before render.
 const THREE_D_ONLY_LUT_EXTENSIONS: &[&str] = &["3dl", "dat", "m3d"];
 
@@ -7951,7 +7954,7 @@ const THREE_D_ONLY_LUT_EXTENSIONS: &[&str] = &["3dl", "dat", "m3d"];
 /// `expected` selects which kind of LUT the slot wants; mismatches
 /// (e.g. a 3D `.cube` in a 1D slot) are rejected with a clear
 /// message that tells the agent which slot and which kind. For
-/// extensions awidat doesn't yet parse (`.csp`, `.dat`, `.m3d`,
+/// extensions montage doesn't yet parse (`.csp`, `.dat`, `.m3d`,
 /// `.look`), the kind check is extension-only — `THREE_D_ONLY_LUT_EXTENSIONS`
 /// gets rejected in 1D slots, everything else falls through.
 fn validate_lut_contents(
@@ -8000,9 +8003,9 @@ fn validate_lut_contents(
         }
     };
     let parse_result = match (ext, expected) {
-        ("cube", ExpectedLutKind::ThreeD) => awidat_lut::parse_cube_3d(text).map(|_| ()),
-        ("cube", ExpectedLutKind::OneD) => awidat_lut::parse_cube_1d(text).map(|_| ()),
-        ("3dl", ExpectedLutKind::ThreeD) => awidat_lut::parse_3dl(text).map(|_| ()),
+        ("cube", ExpectedLutKind::ThreeD) => montage_lut::parse_cube_3d(text).map(|_| ()),
+        ("cube", ExpectedLutKind::OneD) => montage_lut::parse_cube_1d(text).map(|_| ()),
+        ("3dl", ExpectedLutKind::ThreeD) => montage_lut::parse_3dl(text).map(|_| ()),
         // `.3dl` in a 1D slot was rejected above on extension; this
         // arm is unreachable but keeps the match exhaustive.
         ("3dl", ExpectedLutKind::OneD) => {
@@ -8068,7 +8071,7 @@ fn validate_project_relative_asset(
 }
 
 fn stamp_video_overlay_effect(
-    clip: &mut awidat_proto::otio::Clip,
+    clip: &mut montage_proto::otio::Clip,
     mode: &str,
     corner: Option<super::op::PiPCorner>,
     scale: Option<f64>,
@@ -8076,7 +8079,7 @@ fn stamp_video_overlay_effect(
 ) {
     clip.effects
         .retain(|e| e.effect_name != VIDEO_OVERLAY_EFFECT_NAME);
-    let mut effect = awidat_proto::otio::Effect::new(VIDEO_OVERLAY_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(VIDEO_OVERLAY_EFFECT_NAME);
     effect
         .metadata
         .insert("mode".to_string(), serde_json::json!(mode));
@@ -8112,7 +8115,7 @@ fn pip_corner_str(corner: super::op::PiPCorner) -> &'static str {
 /// titles track auto-creates on first call (Video kind, flagged via
 /// track metadata). The overlay is structurally a Clip with a
 /// MissingReference media_reference (no real media — drawtext
-/// renders the title from the awidat.title Effect's metadata) and
+/// renders the title from the montage.title Effect's metadata) and
 /// a source_range whose duration matches `end_s - start_s`.
 ///
 /// Stamps a fresh clip_uuid on the synthesized clip so subsequent
@@ -8293,7 +8296,7 @@ fn apply_insert_annotation(
     stroke_width: u32,
     label: Option<&str>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{Clip, RationalTime, TimeRange};
+    use montage_proto::otio::{Clip, RationalTime, TimeRange};
 
     if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
         return Err(ApplyError::Invalid {
@@ -8347,7 +8350,7 @@ fn apply_insert_annotation(
     ));
     stamp_fresh_clip_uuid(&mut clip);
 
-    let mut effect = awidat_proto::otio::Effect::new(ANNOTATION_EFFECT_NAME);
+    let mut effect = montage_proto::otio::Effect::new(ANNOTATION_EFFECT_NAME);
     effect
         .metadata
         .insert("kind".into(), serde_json::json!(annotation_kind_str(kind)));
@@ -8445,7 +8448,7 @@ fn apply_insert_text_overlay(
     animation: super::op::TitleAnimation,
     phases: Option<super::op::TitlePhases>,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::{Clip, RationalTime, TimeRange};
+    use montage_proto::otio::{Clip, RationalTime, TimeRange};
 
     if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
         return Err(ApplyError::Invalid {
@@ -8491,8 +8494,8 @@ fn apply_insert_text_overlay(
         stamp_fresh_clip_uuid(&mut clip);
     }
 
-    // Build the awidat.title effect with all the styling.
-    let mut effect = awidat_proto::otio::Effect::new(TITLE_EFFECT_NAME);
+    // Build the montage.title effect with all the styling.
+    let mut effect = montage_proto::otio::Effect::new(TITLE_EFFECT_NAME);
     effect
         .metadata
         .insert("role".to_string(), serde_json::json!(role));
@@ -8553,13 +8556,13 @@ fn apply_insert_text_overlay(
     ))
 }
 
-fn timeline_awidat_metadata(working: &mut Timeline) -> &mut AwidatTimelineMetadata {
+fn timeline_montage_metadata(working: &mut Timeline) -> &mut MontageTimelineMetadata {
     let meta = working
         .metadata
-        .awidat
-        .get_or_insert_with(AwidatTimelineMetadata::default);
+        .montage
+        .get_or_insert_with(MontageTimelineMetadata::default);
     if meta.version.is_empty() {
-        meta.version = awidat_proto::AWIDAT_PROJECT_VERSION.to_string();
+        meta.version = montage_proto::MONTAGE_PROJECT_VERSION.to_string();
     }
     meta
 }
@@ -8592,7 +8595,7 @@ fn apply_set_output_format(
             ),
         });
     }
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     meta.extra.insert(
         "output_format".into(),
         serde_json::json!({
@@ -8629,7 +8632,7 @@ fn apply_set_loudness_target(
             message: format!("set_loudness_target: true_peak_db {peak} must be finite and <= 0"),
         });
     }
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     meta.extra.insert(
         "loudness_target".into(),
         serde_json::json!({
@@ -8656,7 +8659,7 @@ fn apply_set_package_metadata(
             message: "set_package_metadata: at least one field is required".into(),
         });
     }
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     meta.extra.insert(
         "package_metadata".into(),
         serde_json::json!({
@@ -8678,7 +8681,7 @@ fn apply_set_broadcast_overlay(
     config: &BroadcastOverlayConfig,
 ) -> Result<String, ApplyError> {
     validate_broadcast_overlay_config(index, config)?;
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     let mut config = config.clone();
     if let Some(kit) = &meta.brand_kit {
         config.apply_brand_kit(kit);
@@ -8699,7 +8702,7 @@ fn apply_set_brand_kit(
     kit: &BrandKit,
 ) -> Result<String, ApplyError> {
     validate_brand_kit(index, kit)?;
-    let meta = timeline_awidat_metadata(working);
+    let meta = timeline_montage_metadata(working);
     meta.brand_kit = Some(kit.clone());
     // Backfill an already-stored overlay so an existing overlay also picks
     // up newly-set shared brand identity, not just overlays set afterwards.
@@ -8857,7 +8860,7 @@ fn validate_overlay_style(index: usize, style: &BroadcastOverlayStyle) -> Result
     Ok(())
 }
 
-/// Update the awidat.title effect on an anchored title clip.
+/// Update the montage.title effect on an anchored title clip.
 /// All styling fields are optional — None leaves the existing value
 /// alone. start_s / end_s adjust both the effect metadata AND the
 /// underlying clip's source_range so the timeline window stays in
@@ -8902,7 +8905,7 @@ fn apply_set_title(
         .ok_or_else(|| ApplyError::Invalid {
             index,
             message: format!(
-                "set_title: anchored clip {:?} carries no awidat.title effect — \
+                "set_title: anchored clip {:?} carries no montage.title effect — \
                  SetTitle only updates existing titles, use InsertTitle to create one",
                 clip.name,
             ),
@@ -8996,9 +8999,9 @@ fn apply_set_title(
                 ),
             });
         }
-        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-            awidat_proto::otio::RationalTime::new(new_start * rate, rate),
-            awidat_proto::otio::RationalTime::new((new_end - new_start) * rate, rate),
+        clip.source_range = Some(montage_proto::otio::TimeRange::new(
+            montage_proto::otio::RationalTime::new(new_start * rate, rate),
+            montage_proto::otio::RationalTime::new((new_end - new_start) * rate, rate),
         ));
         effect
             .metadata
@@ -9013,7 +9016,7 @@ fn apply_set_title(
 
 /// Find the existing Titles track or push a new one onto the
 /// timeline. Returns the track's index in `tracks.children`. The
-/// new track is flagged via `metadata["awidat_track_role"] = "titles"`
+/// new track is flagged via `metadata["montage_track_role"] = "titles"`
 /// so the render pipeline can route its clips into drawtext filters.
 fn find_or_create_titles_track(working: &mut Timeline) -> usize {
     if let Some(idx) = working
@@ -9024,9 +9027,9 @@ fn find_or_create_titles_track(working: &mut Timeline) -> usize {
     {
         return idx;
     }
-    let mut track = awidat_proto::otio::Track::empty(
+    let mut track = montage_proto::otio::Track::empty(
         TITLES_TRACK_NAME.to_string(),
-        awidat_proto::otio::TrackKind::Video,
+        montage_proto::otio::TrackKind::Video,
     );
     track.metadata.insert(
         TITLES_TRACK_ROLE_KEY.to_string(),
@@ -9045,9 +9048,9 @@ fn find_or_create_annotations_track(working: &mut Timeline) -> usize {
     {
         return idx;
     }
-    let mut track = awidat_proto::otio::Track::empty(
+    let mut track = montage_proto::otio::Track::empty(
         ANNOTATIONS_TRACK_NAME.to_string(),
-        awidat_proto::otio::TrackKind::Video,
+        montage_proto::otio::TrackKind::Video,
     );
     track.metadata.insert(
         TITLES_TRACK_ROLE_KEY.to_string(),
@@ -9061,7 +9064,7 @@ fn find_or_create_annotations_track(working: &mut Timeline) -> usize {
 /// metadata flag first; falls back to the canonical name so a
 /// hand-edited OTIO from before the metadata flag landed is still
 /// recognized.
-fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
+fn is_titles_track(track: &montage_proto::otio::Track) -> bool {
     if track
         .metadata
         .get(TITLES_TRACK_ROLE_KEY)
@@ -9073,7 +9076,7 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
     track.name == TITLES_TRACK_NAME
 }
 
-fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
+fn is_annotations_track(track: &montage_proto::otio::Track) -> bool {
     if track
         .metadata
         .get(TITLES_TRACK_ROLE_KEY)
@@ -9089,7 +9092,7 @@ fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
 /// Titles track. Walks children left-to-right and returns the first
 /// position whose existing source_range start is >= start_s. Keeps
 /// the track sorted by start_s for readable render output.
-fn title_insertion_index(track: &awidat_proto::otio::Track, start_s: f64) -> usize {
+fn title_insertion_index(track: &montage_proto::otio::Track, start_s: f64) -> usize {
     for (i, child) in track.children.iter().enumerate() {
         let TrackChild::Clip(c) = child else { continue };
         let existing_start = c
@@ -9133,7 +9136,7 @@ fn title_animation_str(a: super::op::TitleAnimation) -> &'static str {
 fn find_track_mut<'a>(
     timeline: &'a mut Timeline,
     track_name: &str,
-) -> Option<&'a mut awidat_proto::otio::Track> {
+) -> Option<&'a mut montage_proto::otio::Track> {
     timeline.tracks.children.iter_mut().find_map(|sc| match sc {
         StackChild::Track(track) if track.name == track_name => Some(track),
         _ => None,
@@ -9160,12 +9163,12 @@ fn track_time_at(timeline: &Timeline, track_index: usize, child_index: usize) ->
 
 /// Total duration of a track's children. Used to know where to
 /// append on the overlay track without recomputing per-element.
-fn track_cursor(track: &awidat_proto::otio::Track) -> f64 {
+fn track_cursor(track: &montage_proto::otio::Track) -> f64 {
     track.children.iter().map(child_duration).sum()
 }
 
 fn insert_overlay_clip_at(
-    track: &mut awidat_proto::otio::Track,
+    track: &mut montage_proto::otio::Track,
     clip: TrackChild,
     start_s: f64,
     duration_s: f64,
@@ -9176,7 +9179,7 @@ fn insert_overlay_clip_at(
         if start_s > cursor + 1e-6 {
             track
                 .children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     start_s - cursor,
                     rate,
                 )));
@@ -9198,13 +9201,13 @@ fn insert_overlay_clip_at(
             let after = (child_end - start_s - duration_s).max(0.0);
             let mut replacement = Vec::new();
             if before > 1e-6 {
-                replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     before, rate,
                 )));
             }
             replacement.push(clip);
             if after > 1e-6 {
-                replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                replacement.push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     after, rate,
                 )));
             }
@@ -9233,7 +9236,7 @@ fn child_duration(child: &TrackChild) -> f64 {
         // not extra timeline length). For the cursor math here we
         // treat them as zero — they don't push later clips later.
         TrackChild::Transition(_) => 0.0,
-        // Nested stacks aren't produced anywhere in the awidat
+        // Nested stacks aren't produced anywhere in the montage
         // pipeline today; treat as zero rather than panicking.
         TrackChild::Stack(_) => 0.0,
     }
@@ -9259,7 +9262,7 @@ fn next_video_track_name(timeline: &Timeline) -> String {
 }
 
 /// Lightweight validate hook on Timeline. We reach into the proto crate's
-/// validate machinery via [`awidat_proto::project::Project`] indirectly —
+/// validate machinery via [`montage_proto::project::Project`] indirectly —
 /// but here we just round-trip through serde to catch shape-level errors.
 trait ValidateForApply {
     fn validate_for_test(&self) -> Result<(), String>;
@@ -9307,14 +9310,14 @@ impl ValidateForApply for Timeline {
 mod tests {
     use super::*;
     use crate::edl::op::{MarkerSelector, ProfessionalTimelineEdit};
-    use awidat_proto::awidat_meta::{
-        Anchor as AwAnchor, AudioRelation, AwidatClipMetadata, CutType, cut_boundary_key,
+    use montage_proto::montage_meta::{
+        Anchor as AwAnchor, AudioRelation, CutType, MontageClipMetadata, cut_boundary_key,
     };
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
     };
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         CoordinateSpace, ReframeSmoothing, SourceRange, TrackKind as ProfessionalTrackKind,
         TrackSample, TrackSidecar, TrackingPackage,
     };
@@ -9334,12 +9337,12 @@ mod tests {
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
             c.metadata = ClipMetadata {
-                awidat: Some(AwidatClipMetadata {
+                montage: Some(MontageClipMetadata {
                     anchor: Some(AwAnchor {
                         transcript_snippet: Some((*snip).to_string()),
                         ..AwAnchor::default()
                     }),
-                    ..AwidatClipMetadata::default()
+                    ..MontageClipMetadata::default()
                 }),
                 ..ClipMetadata::default()
             };
@@ -9368,9 +9371,9 @@ mod tests {
                 RationalTime::new(20.0 * 24.0, 24.0),
             ));
             clip.metadata = ClipMetadata {
-                awidat: Some(AwidatClipMetadata {
+                montage: Some(MontageClipMetadata {
                     extra,
-                    ..AwidatClipMetadata::default()
+                    ..MontageClipMetadata::default()
                 }),
                 ..ClipMetadata::default()
             };
@@ -9562,13 +9565,19 @@ mod tests {
         assert_eq!(marker.name, "Review beat");
         assert!((marker.marked_range.start_time.to_seconds() - 1.0).abs() < 1e-9);
         assert_eq!(
-            marker.metadata.awidat.as_ref().unwrap().category.as_deref(),
+            marker
+                .metadata
+                .montage
+                .as_ref()
+                .unwrap()
+                .category
+                .as_deref(),
             Some("note")
         );
         assert_eq!(
             marker
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .unwrap()
                 .extra
@@ -9621,7 +9630,13 @@ mod tests {
         assert!((marker.marked_range.start_time.to_seconds() - 1.5).abs() < 1e-9);
         assert!((marker.marked_range.duration.to_seconds() - 1.25).abs() < 1e-9);
         assert_eq!(
-            marker.metadata.awidat.as_ref().unwrap().category.as_deref(),
+            marker
+                .metadata
+                .montage
+                .as_ref()
+                .unwrap()
+                .category
+                .as_deref(),
             Some("select")
         );
     }
@@ -10127,7 +10142,7 @@ mod tests {
 
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
 
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         assert!(
             meta.cut_boundaries.is_empty(),
             "cut metadata referring to deleted clips must not remain: {:?}",
@@ -10173,7 +10188,7 @@ mod tests {
         assert!(
             clip_two
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|metadata| metadata.split_edit.as_ref())
                 .and_then(|split| split.audio_lead_s)
@@ -10367,7 +10382,7 @@ mod tests {
 
     fn extract_clip_uuid(clip: &Clip) -> Option<String> {
         clip.metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("clip_uuid"))
             .and_then(|v| v.as_str())
@@ -10391,8 +10406,8 @@ mod tests {
             panic!()
         };
         c.metadata
-            .awidat
-            .get_or_insert_with(AwidatClipMetadata::default)
+            .montage
+            .get_or_insert_with(MontageClipMetadata::default)
             .extra
             .insert(
                 "clip_uuid".into(),
@@ -10469,7 +10484,7 @@ mod tests {
             panic!("expected split right piece");
         };
         let right_uuid = extract_clip_uuid(right_piece).expect("right piece uuid");
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         let key = cut_boundary_key(&right_uuid, "clip-2");
         let spec = meta
             .cut_boundaries
@@ -10537,13 +10552,13 @@ mod tests {
         };
         let left_split = left_piece
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|metadata| metadata.split_edit.as_ref())
             .expect("left piece split edit");
         let right_split = right_piece
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|metadata| metadata.split_edit.as_ref())
             .expect("right piece split edit");
@@ -10562,11 +10577,11 @@ mod tests {
     fn apply_insert_clip_stamps_fresh_clip_uuid() {
         let mut tl = Timeline::empty("test");
         let mut track =
-            awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
+            montage_proto::otio::Track::empty("V1", montage_proto::otio::TrackKind::Video);
         // No existing clip — the insert must generate its own anchor.
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 0.0, 24.0,
             )));
         tl.tracks.children.push(StackChild::Track(track));
@@ -10731,7 +10746,7 @@ mod tests {
         // Build a single-clip timeline whose external reference declares
         // available_range = [0, 4s]. Trim it to [0, 2s], then Untrim
         // asking for [0, 999s]. Result should cap at 4s.
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
             TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
         };
@@ -10786,23 +10801,23 @@ mod tests {
         // Build a clip with source_range = [10s, 20s] (10s duration
         // starting at 10s into the source media). Untrim with end=30
         // and start=None should produce [10s, 30s] — NOT [0s, 30s].
-        let mut tl = awidat_proto::otio::Timeline::empty("preserve");
+        let mut tl = montage_proto::otio::Timeline::empty("preserve");
         let mut track =
-            awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
-        let mut clip = awidat_proto::otio::Clip::empty("clip-0".to_string());
-        clip.media_reference = awidat_proto::otio::MediaReference::External(
-            awidat_proto::otio::ExternalReference::new("raw/x.mp4"),
+            montage_proto::otio::Track::empty("V1", montage_proto::otio::TrackKind::Video);
+        let mut clip = montage_proto::otio::Clip::empty("clip-0".to_string());
+        clip.media_reference = montage_proto::otio::MediaReference::External(
+            montage_proto::otio::ExternalReference::new("raw/x.mp4"),
         );
-        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
-            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+        clip.source_range = Some(montage_proto::otio::TimeRange::new(
+            montage_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+            montage_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
         ));
         track
             .children
-            .push(awidat_proto::otio::TrackChild::Clip(clip));
+            .push(montage_proto::otio::TrackChild::Clip(clip));
         tl.tracks
             .children
-            .push(awidat_proto::otio::StackChild::Track(track));
+            .push(montage_proto::otio::StackChild::Track(track));
 
         let env = EdlEnvelope {
             ops: vec![EdlOp::UntrimClip {
@@ -10836,7 +10851,7 @@ mod tests {
     #[test]
     fn apply_insert_clip_creates_track_when_missing() {
         // Empty timeline. Insert one clip — track gets created.
-        use awidat_proto::otio::Timeline as Tl;
+        use montage_proto::otio::Timeline as Tl;
         let tl = Tl::empty("test");
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertClip {
@@ -11013,12 +11028,12 @@ mod tests {
 
     #[test]
     fn apply_linked_audio_insert_pads_to_video_start() {
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, TimeRange,
         };
 
-        let mut tl = awidat_proto::otio::Timeline::empty("test");
-        let mut v1 = awidat_proto::otio::Track::empty("Video 1", TrackKind::Video);
+        let mut tl = montage_proto::otio::Timeline::empty("test");
+        let mut v1 = montage_proto::otio::Track::empty("Video 1", TrackKind::Video);
         let mut first = Clip::empty("first");
         first.media_reference = MediaReference::External(ExternalReference::new("raw/first.mp4"));
         first.source_range = Some(TimeRange::new(
@@ -11068,7 +11083,7 @@ mod tests {
 
     #[test]
     fn apply_insert_clip_rejects_zero_duration() {
-        use awidat_proto::otio::Timeline as Tl;
+        use montage_proto::otio::Timeline as Tl;
         let tl = Tl::empty("test");
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertClip {
@@ -11095,7 +11110,7 @@ mod tests {
 
     #[test]
     fn apply_insert_clip_can_create_audio_track() {
-        use awidat_proto::otio::Timeline as Tl;
+        use montage_proto::otio::Timeline as Tl;
         let tl = Tl::empty("test");
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertClip {
@@ -11121,7 +11136,7 @@ mod tests {
         };
         let link = c
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("link_group_id"))
             .and_then(|v| v.as_str());
@@ -11155,15 +11170,15 @@ mod tests {
             "expected video-track rejection, got {err}"
         );
 
-        let mut audio_tl = awidat_proto::otio::Timeline::empty("audio");
-        let mut track = awidat_proto::otio::Track::empty("A1", TrackKind::Audio);
-        let mut clip = awidat_proto::otio::Clip::empty("clip-0");
-        clip.media_reference = awidat_proto::otio::MediaReference::External(
-            awidat_proto::otio::ExternalReference::new("raw/a.wav"),
+        let mut audio_tl = montage_proto::otio::Timeline::empty("audio");
+        let mut track = montage_proto::otio::Track::empty("A1", TrackKind::Audio);
+        let mut clip = montage_proto::otio::Clip::empty("clip-0");
+        clip.media_reference = montage_proto::otio::MediaReference::External(
+            montage_proto::otio::ExternalReference::new("raw/a.wav"),
         );
-        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-            awidat_proto::otio::RationalTime::zero(24.0),
-            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+        clip.source_range = Some(montage_proto::otio::TimeRange::new(
+            montage_proto::otio::RationalTime::zero(24.0),
+            montage_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
         ));
         stamp_fresh_clip_uuid(&mut clip);
         track.children.push(TrackChild::Clip(clip));
@@ -11195,7 +11210,7 @@ mod tests {
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
-        assert_eq!(t.metadata["awidat_audio"]["volume"].as_f64().unwrap(), 0.8);
+        assert_eq!(t.metadata["montage_audio"]["volume"].as_f64().unwrap(), 0.8);
         let TrackChild::Clip(c) = &t.children[0] else {
             panic!()
         };
@@ -11580,7 +11595,7 @@ mod tests {
             "unexpected outcome: {:?}",
             outcome.applied
         );
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         let key = cut_boundary_key("clip-0", "clip-1");
         let spec = meta
             .cut_boundaries
@@ -11628,7 +11643,7 @@ mod tests {
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 2);
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         let key = cut_boundary_key("clip-0", "clip-2");
         assert_eq!(
             meta.cut_boundaries.get(&key).map(|spec| spec.cut_type),
@@ -11680,7 +11695,7 @@ mod tests {
         };
         let split = clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.split_edit.as_ref())
             .expect("split edit metadata");
@@ -11689,7 +11704,7 @@ mod tests {
         assert_eq!(split.reason.as_deref(), Some("hold answer under reaction"));
         assert_eq!(split.confidence, Some(0.82));
 
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         let j_key = cut_boundary_key("clip-0", "clip-1");
         assert_eq!(
             meta.cut_boundaries
@@ -11841,13 +11856,13 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                 },
-                kind: "awidat.slide_left".into(),
+                kind: "montage.slide_left".into(),
                 duration_s: 0.28,
                 alignment: None,
                 in_offset_s: None,
                 out_offset_s: None,
-                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
-                    id: "awidat.slide_left".into(),
+                spec: Some(montage_proto::transitions::SemanticTransitionSpec {
+                    id: "montage.slide_left".into(),
                     family: Some("slide".into()),
                     intent: Some("hide_motion_jump".into()),
                     energy: Some(0.7),
@@ -11864,15 +11879,15 @@ mod tests {
         let TrackChild::Transition(tr) = &t.children[1] else {
             panic!("expected transition")
         };
-        assert_eq!(tr.transition_type, "awidat.slide_left");
+        assert_eq!(tr.transition_type, "montage.slide_left");
         let meta = tr
             .metadata
-            .get("awidat_transition")
+            .get("montage_transition")
             .and_then(serde_json::Value::as_object)
             .unwrap();
         assert_eq!(
             meta.get("id").and_then(|v| v.as_str()),
-            Some("awidat.slide_left")
+            Some("montage.slide_left")
         );
         assert_eq!(
             meta.get("intent").and_then(|v| v.as_str()),
@@ -11899,23 +11914,23 @@ mod tests {
     fn apply_insert_transition_accepts_agent_composite_recipe() {
         let mut tl = timeline_with_three_clips();
         add_one_second_handles(&mut tl);
-        let composition = awidat_proto::transitions::TransitionComposition {
+        let composition = montage_proto::transitions::TransitionComposition {
             version: 1,
             primitives: vec![
-                awidat_proto::transitions::TransitionPrimitive {
+                montage_proto::transitions::TransitionPrimitive {
                     start: 0.0,
                     end: 1.0,
-                    easing: awidat_proto::transitions::TransitionEasing::EaseOutExpo,
-                    op: awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                    easing: montage_proto::transitions::TransitionEasing::EaseOutExpo,
+                    op: montage_proto::transitions::TransitionPrimitiveOp::Push {
                         direction: "left".into(),
                         distance: 0.9,
                     },
                 },
-                awidat_proto::transitions::TransitionPrimitive {
+                montage_proto::transitions::TransitionPrimitive {
                     start: 0.35,
                     end: 0.55,
-                    easing: awidat_proto::transitions::TransitionEasing::EaseInOut,
-                    op: awidat_proto::transitions::TransitionPrimitiveOp::Flash {
+                    easing: montage_proto::transitions::TransitionEasing::EaseInOut,
+                    op: montage_proto::transitions::TransitionPrimitiveOp::Flash {
                         color: "#ffffff".into(),
                         peak: 0.25,
                     },
@@ -11932,13 +11947,13 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                 },
-                kind: "awidat.composite".into(),
+                kind: "montage.composite".into(),
                 duration_s: 0.55,
                 alignment: None,
                 in_offset_s: None,
                 out_offset_s: None,
-                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
-                    id: "awidat.composite".into(),
+                spec: Some(montage_proto::transitions::SemanticTransitionSpec {
+                    id: "montage.composite".into(),
                     family: Some("custom".into()),
                     intent: Some("beat_hit_motion_cover".into()),
                     energy: Some(0.85),
@@ -11955,10 +11970,10 @@ mod tests {
         let TrackChild::Transition(tr) = &t.children[1] else {
             panic!("expected transition")
         };
-        assert_eq!(tr.transition_type, "awidat.composite");
+        assert_eq!(tr.transition_type, "montage.composite");
         let meta = tr
             .metadata
-            .get("awidat_transition")
+            .get("montage_transition")
             .and_then(serde_json::Value::as_object)
             .unwrap();
         assert_eq!(
@@ -11982,7 +11997,7 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                 },
-                kind: "awidat.composite".into(),
+                kind: "montage.composite".into(),
                 duration_s: 0.55,
                 alignment: None,
                 in_offset_s: None,
@@ -12105,13 +12120,13 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                 },
-                kind: "awidat.cross_dissolve".into(),
+                kind: "montage.cross_dissolve".into(),
                 duration_s: 0.3,
                 alignment: None,
                 in_offset_s: None,
                 out_offset_s: None,
-                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
-                    id: "awidat.slide_left".into(),
+                spec: Some(montage_proto::transitions::SemanticTransitionSpec {
+                    id: "montage.slide_left".into(),
                     family: Some("slide".into()),
                     intent: None,
                     energy: None,
@@ -12200,12 +12215,12 @@ mod tests {
             RationalTime::new(5.0 * 24.0, 24.0),
         ));
         c.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(AwAnchor {
                     transcript_snippet: Some("delta snippet".to_string()),
                     ..AwAnchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };
@@ -12279,7 +12294,7 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                 },
-                kind: "awidat.flash_white".into(),
+                kind: "montage.flash_white".into(),
                 duration_s: 1.0,
                 alignment: Some(TransitionAlignment::EndAtCut),
                 in_offset_s: None,
@@ -12353,7 +12368,7 @@ mod tests {
 
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
 
-        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let meta = new_tl.metadata.montage.as_ref().expect("montage metadata");
         assert!(
             meta.cut_boundaries.is_empty(),
             "cut metadata for changed boundaries must not remain: {:?}",
@@ -12498,7 +12513,7 @@ mod tests {
     fn apply_ripple_move_shrinks_preceding_gap_on_negative_delta() {
         // Start: gap(5) | clip-0(5) | clip-1(5). Ripple-move clip-0 by
         // -3s. Expect: gap(2) | clip-0 | clip-1.
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
             Timeline as Tl, Track, TrackChild, TrackKind,
         };
@@ -12506,7 +12521,7 @@ mod tests {
         let mut track = Track::empty("V1", TrackKind::Video);
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 5.0, 24.0,
             )));
         for (i, name) in ["clip-0", "clip-1"].iter().enumerate() {
@@ -12602,7 +12617,7 @@ mod tests {
     fn apply_delete_gap_removes_preceding_gap_before_anchor_clip() {
         // Three 5s clips + a leading 3s gap on V1. Delete the gap
         // sitting before clip-0. Expect: clip-0 | clip-1 | clip-2.
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
             Timeline as Tl, Track, TrackChild, TrackKind,
         };
@@ -12610,7 +12625,7 @@ mod tests {
         let mut track = Track::empty("V1", TrackKind::Video);
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 3.0, 24.0,
             )));
         for (i, name) in ["clip-0", "clip-1", "clip-2"].iter().enumerate() {
@@ -12647,7 +12662,7 @@ mod tests {
         // clip-0 has nothing after it on the track. Asking to delete
         // the trailing gap should leave the timeline unchanged with
         // a descriptive message.
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
             Timeline as Tl, Track, TrackChild, TrackKind,
         };
@@ -12681,7 +12696,7 @@ mod tests {
     fn apply_trim_track_tail_strips_trailing_gaps() {
         // Two 5s clips + a 10s trailing gap. Trimming the tail should
         // leave clip-0 | clip-1 and report 10s removed.
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
             Timeline as Tl, Track, TrackChild, TrackKind,
         };
@@ -12699,7 +12714,7 @@ mod tests {
         }
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                 10.0, 24.0,
             )));
         tl.tracks.children.push(StackChild::Track(track));
@@ -12720,20 +12735,20 @@ mod tests {
         // V1 + A1 each carry one clip whose link_group_id matches.
         // Both tracks have a leading gap. DeleteGap(side=before) on
         // V1's clip should remove the leading gap on A1 too.
-        use awidat_proto::awidat_meta::AwidatClipMetadata;
-        use awidat_proto::otio::{
+        use montage_proto::montage_meta::MontageClipMetadata;
+        use montage_proto::otio::{
             Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
             TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
         };
         let mut tl = Tl::empty("test");
-        let mut awidat_meta = AwidatClipMetadata::default();
-        awidat_meta
+        let mut montage_meta = MontageClipMetadata::default();
+        montage_meta
             .extra
             .insert("link_group_id".into(), serde_json::json!("g0"));
         let build = |name: &str, kind: TrackKind, clip_name: &str| {
             let mut t = Track::empty(name, kind);
             t.children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     3.0, 24.0,
                 )));
             let mut c = Clip::empty(clip_name.to_string());
@@ -12743,7 +12758,7 @@ mod tests {
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
             c.metadata = ClipMetadata {
-                awidat: Some(awidat_meta.clone()),
+                montage: Some(montage_meta.clone()),
                 ..ClipMetadata::default()
             };
             t.children.push(TrackChild::Clip(c));
@@ -12782,14 +12797,14 @@ mod tests {
     fn apply_trim_track_tail_cascades_to_link_group_siblings() {
         // V1 + A1 each end with a clip sharing link_group_id, then a
         // trailing gap. Trim Track Tail on V1 should also trim A1.
-        use awidat_proto::awidat_meta::AwidatClipMetadata;
-        use awidat_proto::otio::{
+        use montage_proto::montage_meta::MontageClipMetadata;
+        use montage_proto::otio::{
             Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
             TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
         };
         let mut tl = Tl::empty("test");
-        let mut awidat_meta = AwidatClipMetadata::default();
-        awidat_meta
+        let mut montage_meta = MontageClipMetadata::default();
+        montage_meta
             .extra
             .insert("link_group_id".into(), serde_json::json!("g0"));
         let build = |name: &str, kind: TrackKind, clip_name: &str| {
@@ -12801,12 +12816,12 @@ mod tests {
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
             c.metadata = ClipMetadata {
-                awidat: Some(awidat_meta.clone()),
+                montage: Some(montage_meta.clone()),
                 ..ClipMetadata::default()
             };
             t.children.push(TrackChild::Clip(c));
             t.children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                .push(TrackChild::Gap(montage_proto::otio::Gap::of_duration(
                     7.0, 24.0,
                 )));
             t
@@ -12948,7 +12963,7 @@ mod tests {
     #[test]
     fn apply_delete_track_removes_empty_track() {
         // Two tracks: V1 with clips + V2 empty. Delete V2; V1 stays.
-        use awidat_proto::otio::{StackChild, Timeline as Tl, Track, TrackKind};
+        use montage_proto::otio::{StackChild, Timeline as Tl, Track, TrackKind};
         let mut tl = timeline_with_three_clips();
         tl.tracks
             .children
@@ -13047,7 +13062,7 @@ mod tests {
         let TrackChild::Clip(clip) = &mut track.children[1] else {
             panic!("expected clip")
         };
-        clip.markers.push(awidat_proto::otio::Marker::new(
+        clip.markers.push(montage_proto::otio::Marker::new(
             "snap here",
             TimeRange::new(
                 RationalTime::new(1.0 * 24.0, 24.0),
@@ -13086,7 +13101,7 @@ mod tests {
         let TrackChild::Clip(bravo) = &mut track.children[1] else {
             panic!("expected clip")
         };
-        bravo.markers.push(awidat_proto::otio::Marker::new(
+        bravo.markers.push(montage_proto::otio::Marker::new(
             "snap here",
             TimeRange::new(
                 RationalTime::new(2.0 * 24.0, 24.0),
@@ -13237,7 +13252,7 @@ mod tests {
             &first.media_reference,
             MediaReference::External(reference) if reference.target_url == "raw/cam-a.mov"
         ));
-        let metadata = first.metadata.awidat.as_ref().expect("awidat metadata");
+        let metadata = first.metadata.montage.as_ref().expect("montage metadata");
         assert_eq!(metadata.reasoning.as_deref(), Some("speaker A"));
         assert_eq!(
             metadata
@@ -13402,7 +13417,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.volume");
+        assert_eq!(clip.effects[0].effect_name, "montage.volume");
         let v = clip.effects[0]
             .metadata
             .get("value")
@@ -13434,7 +13449,7 @@ mod tests {
         };
         assert!(
             clip.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.audio_override.as_ref())
                 .map(|o| o.muted)
@@ -13462,7 +13477,7 @@ mod tests {
         };
         assert!(
             clip.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.audio_override.as_ref())
                 .is_none(),
@@ -13484,7 +13499,7 @@ mod tests {
                 panic!()
             };
             clip.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.audio_override.as_ref())
                 .map(|o| o.removed_ranges.clone())
@@ -13533,7 +13548,7 @@ mod tests {
         };
         assert!(
             clip.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.audio_override.as_ref())
                 .is_none(),
@@ -13618,7 +13633,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_correction".into(),
+                effect: "montage.color_correction".into(),
                 params: serde_json::Map::from_iter([
                     ("contrast".into(), serde_json::json!(1.15)),
                     ("saturation".into(), serde_json::json!(0.9)),
@@ -13634,7 +13649,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.color_correction");
+        assert_eq!(clip.effects[0].effect_name, "montage.color_correction");
         assert_eq!(clip.effects[0].name, "Color Correction");
         assert_eq!(
             clip.effects[0]
@@ -13660,7 +13675,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.shake".into(),
+                effect: "montage.shake".into(),
                 params: serde_json::Map::new(),
                 rationale: Some("add handheld emphasis".into()),
             }],
@@ -13675,7 +13690,7 @@ mod tests {
         let effect = clip
             .effects
             .iter()
-            .find(|effect| effect.effect_name == "awidat.shake")
+            .find(|effect| effect.effect_name == "montage.shake")
             .expect("shake effect should be stamped");
         assert_eq!(effect.name, "Shake");
         assert_eq!(
@@ -13700,7 +13715,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.blur".into(),
+                effect: "montage.blur".into(),
                 params: serde_json::Map::new(),
                 rationale: Some("soften distracting background".into()),
             }],
@@ -13715,7 +13730,7 @@ mod tests {
         let effect = clip
             .effects
             .iter()
-            .find(|effect| effect.effect_name == "awidat.blur")
+            .find(|effect| effect.effect_name == "montage.blur")
             .expect("blur effect should be stamped");
         assert_eq!(effect.name, "Blur");
         assert_eq!(
@@ -13736,7 +13751,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.warp".into(),
+                effect: "montage.warp".into(),
                 params: serde_json::Map::new(),
                 rationale: Some("add stylized lens bend".into()),
             }],
@@ -13751,7 +13766,7 @@ mod tests {
         let effect = clip
             .effects
             .iter()
-            .find(|effect| effect.effect_name == "awidat.warp")
+            .find(|effect| effect.effect_name == "montage.warp")
             .expect("warp effect should be stamped");
         assert_eq!(effect.name, "Warp");
         assert_eq!(
@@ -13785,7 +13800,7 @@ mod tests {
                     anchor: Anchor::TranscriptSnippet {
                         text: "bravo snippet".into(),
                     },
-                    effect: "awidat.color_correction".into(),
+                    effect: "montage.color_correction".into(),
                     params: serde_json::Map::from_iter([(
                         "contrast".into(),
                         serde_json::json!(1.15),
@@ -13796,7 +13811,7 @@ mod tests {
                     anchor: Anchor::TranscriptSnippet {
                         text: "bravo snippet".into(),
                     },
-                    effect: "awidat.color_correction".into(),
+                    effect: "montage.color_correction".into(),
                     params: serde_json::Map::from_iter([(
                         "saturation".into(),
                         serde_json::json!(0.8),
@@ -13815,7 +13830,7 @@ mod tests {
         let color_effects: Vec<_> = clip
             .effects
             .iter()
-            .filter(|effect| effect.effect_name == "awidat.color_correction")
+            .filter(|effect| effect.effect_name == "montage.color_correction")
             .collect();
         assert_eq!(color_effects.len(), 1);
         assert!(!color_effects[0].metadata.contains_key("contrast"));
@@ -13837,7 +13852,7 @@ mod tests {
                     anchor: Anchor::TranscriptSnippet {
                         text: "bravo snippet".into(),
                     },
-                    effect: "awidat.volume".into(),
+                    effect: "montage.volume".into(),
                     params: serde_json::Map::from_iter([("value".into(), serde_json::json!(0.75))]),
                     rationale: None,
                 },
@@ -13845,7 +13860,7 @@ mod tests {
                     anchor: Anchor::TranscriptSnippet {
                         text: "bravo snippet".into(),
                     },
-                    effect: "awidat.color_correction".into(),
+                    effect: "montage.color_correction".into(),
                     params: serde_json::Map::from_iter([(
                         "contrast".into(),
                         serde_json::json!(1.1),
@@ -13864,30 +13879,30 @@ mod tests {
         assert!(
             clip.effects
                 .iter()
-                .any(|e| e.effect_name == "awidat.volume")
+                .any(|e| e.effect_name == "montage.volume")
         );
         assert!(
             clip.effects
                 .iter()
-                .any(|e| e.effect_name == "awidat.color_correction")
+                .any(|e| e.effect_name == "montage.color_correction")
         );
     }
 
     #[test]
     fn apply_set_parameter_animation_accepts_runtime_blur_effect_parameter() {
         let tl = timeline_with_three_clips();
-        let animation = awidat_proto::professional::ParameterAnimation {
+        let animation = montage_proto::professional::ParameterAnimation {
             id: "anim-blur-radius".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-1".into(),
-                parameter: "awidat.blur.radius_px".into(),
+                parameter: "montage.blur.radius_px".into(),
             },
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+                montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                montage_proto::professional::Keyframe::linear(1.0, 12.0),
             ],
-            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
-            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            pre_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
             motion_path: None,
             metadata_only: false,
             rationale: None,
@@ -13904,7 +13919,7 @@ mod tests {
         assert_eq!(
             new_tl
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .unwrap()
                 .parameter_animations,
@@ -13915,18 +13930,18 @@ mod tests {
     #[test]
     fn apply_set_parameter_animation_accepts_runtime_blur_effect_alias() {
         let tl = timeline_with_three_clips();
-        let animation = awidat_proto::professional::ParameterAnimation {
+        let animation = montage_proto::professional::ParameterAnimation {
             id: "anim-blur-radius-alias".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-1".into(),
-                parameter: "effects.awidat.blur.params.radius_px".into(),
+                parameter: "effects.montage.blur.params.radius_px".into(),
             },
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+                montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                montage_proto::professional::Keyframe::linear(1.0, 12.0),
             ],
-            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
-            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            pre_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
             motion_path: None,
             metadata_only: false,
             rationale: None,
@@ -13947,7 +13962,7 @@ mod tests {
         assert_eq!(
             new_tl
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .unwrap()
                 .parameter_animations,
@@ -13958,18 +13973,18 @@ mod tests {
     #[test]
     fn apply_set_parameter_animation_accepts_runtime_shake_effect_parameter() {
         let tl = timeline_with_three_clips();
-        let animation = awidat_proto::professional::ParameterAnimation {
+        let animation = montage_proto::professional::ParameterAnimation {
             id: "anim-shake-intensity".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-1".into(),
-                parameter: "awidat.shake.intensity_px".into(),
+                parameter: "montage.shake.intensity_px".into(),
             },
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
-                awidat_proto::professional::Keyframe::linear(1.0, 14.0),
+                montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                montage_proto::professional::Keyframe::linear(1.0, 14.0),
             ],
-            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
-            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            pre_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
             motion_path: None,
             metadata_only: false,
             rationale: None,
@@ -13990,7 +14005,7 @@ mod tests {
         assert_eq!(
             new_tl
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .unwrap()
                 .parameter_animations,
@@ -14001,18 +14016,18 @@ mod tests {
     #[test]
     fn apply_set_parameter_animation_accepts_runtime_warp_effect_parameter() {
         let tl = timeline_with_three_clips();
-        let animation = awidat_proto::professional::ParameterAnimation {
+        let animation = montage_proto::professional::ParameterAnimation {
             id: "anim-warp-k1".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-1".into(),
-                parameter: "awidat.warp.k1".into(),
+                parameter: "montage.warp.k1".into(),
             },
             keyframes: vec![
-                awidat_proto::professional::Keyframe::linear(0.0, -0.15),
-                awidat_proto::professional::Keyframe::linear(1.0, 0.05),
+                montage_proto::professional::Keyframe::linear(0.0, -0.15),
+                montage_proto::professional::Keyframe::linear(1.0, 0.05),
             ],
-            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
-            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            pre_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: montage_proto::professional::ExtrapolationMode::Hold,
             motion_path: None,
             metadata_only: false,
             rationale: None,
@@ -14029,7 +14044,7 @@ mod tests {
         assert_eq!(
             new_tl
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .unwrap()
                 .parameter_animations,
@@ -14040,7 +14055,7 @@ mod tests {
     #[test]
     fn apply_author_subject_reframe_from_track_stores_renderable_path() {
         let mut tl = timeline_with_three_clips();
-        tl.metadata.awidat.as_mut().unwrap().tracking_package = Some(TrackingPackage {
+        tl.metadata.montage.as_mut().unwrap().tracking_package = Some(TrackingPackage {
             tracks: vec![TrackSidecar {
                 id: "speaker-track".into(),
                 asset_id: "clip-1".into(),
@@ -14086,7 +14101,7 @@ mod tests {
         );
         let package = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .tracking_package
@@ -14110,7 +14125,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.nope".into(),
+                effect: "montage.nope".into(),
                 params: serde_json::Map::new(),
                 rationale: None,
             }],
@@ -14137,7 +14152,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_correction".into(),
+                effect: "montage.color_correction".into(),
                 params: serde_json::Map::from_iter([("contrast".into(), serde_json::json!(4.0))]),
                 rationale: None,
             }],
@@ -14175,7 +14190,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.speed");
+        assert_eq!(clip.effects[0].effect_name, "montage.speed");
         let f = clip.effects[0]
             .metadata
             .get("factor")
@@ -14206,7 +14221,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.time_remap");
+        assert_eq!(clip.effects[0].effect_name, "montage.time_remap");
         let curve = clip.effects[0]
             .metadata
             .get("curve")
@@ -14239,7 +14254,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.freeze");
+        assert_eq!(clip.effects[0].effect_name, "montage.freeze");
         assert_eq!(
             clip.effects[0]
                 .metadata
@@ -14299,7 +14314,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.color_correction");
+        assert_eq!(clip.effects[0].effect_name, "montage.color_correction");
         assert_eq!(
             clip.effects[0]
                 .metadata
@@ -14358,7 +14373,7 @@ mod tests {
         let color_effects: Vec<_> = clip
             .effects
             .iter()
-            .filter(|effect| effect.effect_name == "awidat.color_correction")
+            .filter(|effect| effect.effect_name == "montage.color_correction")
             .collect();
         assert_eq!(color_effects.len(), 1);
         assert!(!color_effects[0].metadata.contains_key("exposure_ev"));
@@ -14416,7 +14431,7 @@ mod tests {
             panic!()
         };
         assert_eq!(clip.effects.len(), 1);
-        assert_eq!(clip.effects[0].effect_name, "awidat.lut");
+        assert_eq!(clip.effects[0].effect_name, "montage.lut");
         assert_eq!(
             clip.effects[0]
                 .metadata
@@ -14544,7 +14559,7 @@ mod tests {
 
     #[test]
     fn set_effect_lut_validates_cube_contents() {
-        // P3: stamping `awidat.lut` through `Set Effect` must run
+        // P3: stamping `montage.lut` through `Set Effect` must run
         // the same content-parse as `Apply LUT`. Previously the
         // SetEffect path skipped `validate_lut_contents`, so a
         // malformed LUT could sit on a clip until render time.
@@ -14566,7 +14581,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.lut".into(),
+                effect: "montage.lut".into(),
                 params,
                 rationale: None,
             }],
@@ -14602,7 +14617,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14635,7 +14650,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14690,7 +14705,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14714,7 +14729,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14738,7 +14753,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14753,7 +14768,7 @@ mod tests {
         let effect = clip
             .effects
             .iter()
-            .find(|e| e.effect_name == "awidat.color_pipeline")
+            .find(|e| e.effect_name == "montage.color_pipeline")
             .expect("pipeline stamped");
         assert_eq!(
             effect.metadata.get("mask_source").and_then(|v| v.as_str()),
@@ -14773,7 +14788,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14814,7 +14829,7 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                effect: "awidat.color_pipeline".into(),
+                effect: "montage.color_pipeline".into(),
                 params,
                 rationale: None,
             }],
@@ -14829,7 +14844,7 @@ mod tests {
         let effect = clip
             .effects
             .iter()
-            .find(|e| e.effect_name == "awidat.color_pipeline")
+            .find(|e| e.effect_name == "montage.color_pipeline")
             .expect("color_pipeline effect should be stamped");
         assert_eq!(
             effect
@@ -14979,7 +14994,7 @@ mod tests {
         assert_eq!(
             titles
                 .metadata
-                .get("awidat_track_role")
+                .get("montage_track_role")
                 .and_then(|v| v.as_str()),
             Some("titles"),
         );
@@ -14989,7 +15004,7 @@ mod tests {
         };
         assert_eq!(title_clip.effects.len(), 1);
         let effect = &title_clip.effects[0];
-        assert_eq!(effect.effect_name, "awidat.title");
+        assert_eq!(effect.effect_name, "montage.title");
         assert_eq!(
             effect.metadata.get("text").and_then(|v| v.as_str()),
             Some("Welcome"),
@@ -15073,7 +15088,7 @@ mod tests {
         };
         assert!(caption_clip.name.starts_with("caption-"));
         let effect = &caption_clip.effects[0];
-        assert_eq!(effect.effect_name, "awidat.title");
+        assert_eq!(effect.effect_name, "montage.title");
         assert_eq!(
             effect.metadata.get("role").and_then(|v| v.as_str()),
             Some("caption"),
@@ -15206,9 +15221,9 @@ mod tests {
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         let extra = &new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
-            .expect("awidat metadata")
+            .expect("montage metadata")
             .extra;
         assert_eq!(
             extra
@@ -15373,7 +15388,7 @@ mod tests {
         };
         let title_uuid = title_clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("clip_uuid"))
             .and_then(|v| v.as_str())
@@ -15456,7 +15471,7 @@ mod tests {
         };
         let title_uuid = title_clip
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("clip_uuid"))
             .and_then(|v| v.as_str())
@@ -15499,7 +15514,7 @@ mod tests {
 
     #[test]
     fn apply_set_title_rejects_clip_without_title_effect() {
-        // Anchor a clip-on-V1 (no awidat.title effect) → error.
+        // Anchor a clip-on-V1 (no montage.title effect) → error.
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
             ops: vec![EdlOp::SetTitle {
@@ -15521,7 +15536,7 @@ mod tests {
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
         assert!(
-            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("awidat.title"))
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("montage.title"))
         );
     }
 
@@ -15551,7 +15566,7 @@ mod tests {
         assert_eq!(applied.applied.len(), 1);
         let stored = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .expect("overlay config should be stored");
@@ -15598,7 +15613,7 @@ mod tests {
         .unwrap();
         let stored = after_second
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .unwrap();
@@ -15626,7 +15641,7 @@ mod tests {
 
     #[test]
     fn apply_set_brand_kit_stores_timeline_metadata() {
-        use awidat_proto::awidat_meta::SocialHandle;
+        use montage_proto::montage_meta::SocialHandle;
         let tl = timeline_with_three_clips();
         let kit = BrandKit {
             logo_path: Some("branding/logo.png".into()),
@@ -15635,8 +15650,8 @@ mod tests {
             music_path: Some("branding/theme.wav".into()),
             social_handles: vec![SocialHandle {
                 platform: "youtube".into(),
-                handle: "@awidat".into(),
-                url: Some("https://youtube.com/@awidat".into()),
+                handle: "@montage".into(),
+                url: Some("https://youtube.com/@montage".into()),
             }],
             ..BrandKit::default()
         };
@@ -15647,13 +15662,13 @@ mod tests {
         assert_eq!(applied.applied.len(), 1);
         let stored = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.brand_kit.as_ref())
             .expect("brand kit should be stored");
         assert_eq!(stored.logo_path.as_deref(), Some("branding/logo.png"));
         assert_eq!(stored.palette, vec!["#FFD700", "#00CED1"]);
-        assert_eq!(stored.social_handles[0].handle, "@awidat");
+        assert_eq!(stored.social_handles[0].handle, "@montage");
     }
 
     #[test]
@@ -15721,7 +15736,7 @@ mod tests {
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         let stored = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .expect("overlay should be stored");
@@ -15750,7 +15765,7 @@ mod tests {
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         let stored = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .unwrap();
@@ -15778,9 +15793,9 @@ mod tests {
             time_seconds: 14.0,
             text: "Shifted chapter".into(),
         }];
-        tl.metadata.awidat = Some(AwidatTimelineMetadata {
+        tl.metadata.montage = Some(MontageTimelineMetadata {
             broadcast_overlay: Some(config),
-            ..AwidatTimelineMetadata::default()
+            ..MontageTimelineMetadata::default()
         });
 
         let (new_tl, _) = apply(
@@ -15798,7 +15813,7 @@ mod tests {
 
         let overlay = new_tl
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .unwrap();
@@ -15840,7 +15855,7 @@ mod tests {
             .iter()
             .map(|e| e.effect_name.as_str())
             .collect();
-        assert!(names.contains(&"awidat.volume"));
-        assert!(names.contains(&"awidat.speed"));
+        assert!(names.contains(&"montage.volume"));
+        assert!(names.contains(&"montage.speed"));
     }
 }

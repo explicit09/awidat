@@ -1,8 +1,8 @@
 //! Bundled indexer registry.
 //!
-//! Awidat ships with 11 canonical indexers pre-registered. New
+//! Montage ships with 11 canonical indexers pre-registered. New
 //! projects work with zero `[[mcp.servers]]` config — the user's
-//! `.awidat/config.toml` (and `~/.config/awidat/config.toml`) become
+//! `.montage/config.toml` (and `~/.config/montage/config.toml`) become
 //! purely *additive overlays*: add custom indexers, swap a model,
 //! or `enabled = false` to disable a default.
 //!
@@ -12,9 +12,9 @@
 //!
 //! - **Python workspace root** — where the bundled `<name>-mcp`
 //!   packages live. Resolved in priority order:
-//!     1. `AWIDAT_PYTHON_ROOT` env var (explicit override; dev use)
-//!     2. Walk up from the awidat binary looking for `python/`
-//!     3. Documented install location: `<prefix>/share/awidat/python`
+//!     1. `MONTAGE_PYTHON_ROOT` env var (explicit override; dev use)
+//!     2. Walk up from the montage binary looking for `python/`
+//!     3. Documented install location: `<prefix>/share/montage/python`
 //!     4. Fall back to a literal-empty path; defaults are still
 //!        registered, but launching them will fail with a clear error
 //!        (`uv` won't find the package). The user can fix by setting
@@ -24,9 +24,9 @@
 //!   `~/.local/bin/uv` (uv's documented install path on macOS/Linux),
 //!   else fall back to the literal `"uv"` (assumes PATH at launch).
 //!
-//! ## Why this lives in awidat-config and not awidat-cli
+//! ## Why this lives in montage-config and not montage-cli
 //!
-//! Multiple consumers need the registry: the CLI's `awidat index`,
+//! Multiple consumers need the registry: the CLI's `montage index`,
 //! the TUI command's session creation, and any future MCP-host
 //! integration test fixture. Putting it under config keeps the data-
 //! not-code rule intact (the engine is still data-driven; we just
@@ -41,7 +41,7 @@ use crate::{HooksConfig, IndexerGroup, IndexerResourceClass, McpConfig, McpServe
 /// module doc. Returns `None` only when every fallback misses; in
 /// that case the defaults still register but launching them errors.
 pub fn python_root() -> Option<PathBuf> {
-    if let Ok(env) = std::env::var("AWIDAT_PYTHON_ROOT") {
+    if let Ok(env) = std::env::var("MONTAGE_PYTHON_ROOT") {
         let p = PathBuf::from(env);
         if p.exists() {
             return Some(p);
@@ -53,7 +53,7 @@ pub fn python_root() -> Option<PathBuf> {
         return Some(p);
     }
     // Walk up from the binary location, then from the current dir.
-    // Either should land on the awidat repo root in a dev install.
+    // Either should land on the montage repo root in a dev install.
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
         && let Some(found) = walk_up_for_python(parent)
@@ -66,10 +66,10 @@ pub fn python_root() -> Option<PathBuf> {
         return Some(found);
     }
     // Documented install locations. Try Homebrew prefix first since
-    // that's where `brew install awidat` would land it.
+    // that's where `brew install montage` would land it.
     for candidate in [
-        "/opt/homebrew/share/awidat/python",
-        "/usr/local/share/awidat/python",
+        "/opt/homebrew/share/montage/python",
+        "/usr/local/share/montage/python",
     ] {
         let p = PathBuf::from(candidate);
         if p.exists() {
@@ -77,7 +77,7 @@ pub fn python_root() -> Option<PathBuf> {
         }
     }
     if let Some(home) = dirs::home_dir() {
-        let p = home.join(".local/share/awidat/python");
+        let p = home.join(".local/share/montage/python");
         if p.exists() {
             return Some(p);
         }
@@ -86,14 +86,14 @@ pub fn python_root() -> Option<PathBuf> {
 }
 
 /// Walk up from `start` looking for a directory containing a
-/// `python/packages/awidat-mcp/pyproject.toml` — the unambiguous
-/// marker of the awidat python workspace.
+/// `python/packages/montage-mcp/pyproject.toml` — the unambiguous
+/// marker of the montage python workspace.
 fn walk_up_for_python(start: &Path) -> Option<PathBuf> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
         let candidate = dir.join("python");
         if candidate
-            .join("packages/awidat-mcp/pyproject.toml")
+            .join("packages/montage-mcp/pyproject.toml")
             .exists()
         {
             return Some(candidate);
@@ -107,13 +107,13 @@ fn walk_up_for_python(start: &Path) -> Option<PathBuf> {
 /// env override → dev walk-up → documented install paths. Returns
 /// `None` only when every fallback misses; the skill loader treats
 /// that as "no bundled skills" which is fine (user-installed skills
-/// still load via `~/.config/awidat/skills/`).
+/// still load via `~/.config/montage/skills/`).
 ///
 /// The dev-tree marker is `<repo>/skills/.bundled-marker` (an empty
 /// file we ship to disambiguate the bundled tree from any random
 /// directory called `skills/`).
 pub fn skills_root() -> Option<PathBuf> {
-    if let Ok(env) = std::env::var("AWIDAT_SKILLS_ROOT") {
+    if let Ok(env) = std::env::var("MONTAGE_SKILLS_ROOT") {
         return Some(PathBuf::from(env));
     }
     if let Ok(exe) = std::env::current_exe()
@@ -128,8 +128,8 @@ pub fn skills_root() -> Option<PathBuf> {
         return Some(found);
     }
     for candidate in [
-        "/opt/homebrew/share/awidat/skills",
-        "/usr/local/share/awidat/skills",
+        "/opt/homebrew/share/montage/skills",
+        "/usr/local/share/montage/skills",
     ] {
         let p = PathBuf::from(candidate);
         if p.exists() {
@@ -138,12 +138,12 @@ pub fn skills_root() -> Option<PathBuf> {
     }
     if let Some(home) = dirs::home_dir() {
         // Tarball installs land bundled skills under
-        // `~/.local/share/awidat/current/share/awidat/skills` (per
+        // `~/.local/share/montage/current/share/montage/skills` (per
         // the layout written by dist/install.sh: bundled assets
-        // live next to the binary under `share/awidat/`).
+        // live next to the binary under `share/montage/`).
         for rel in [
-            ".local/share/awidat/current/share/awidat/skills",
-            ".local/share/awidat/skills",
+            ".local/share/montage/current/share/montage/skills",
+            ".local/share/montage/skills",
         ] {
             let p = home.join(rel);
             if p.exists() {
@@ -167,20 +167,20 @@ fn walk_up_for_skills(start: &Path) -> Option<PathBuf> {
 }
 
 /// Primary user-scoped skills dir. On macOS this is usually
-/// `~/Library/Application Support/awidat/skills`; on Linux this is
-/// usually `~/.config/awidat/skills`.
+/// `~/Library/Application Support/montage/skills`; on Linux this is
+/// usually `~/.config/montage/skills`.
 pub fn user_skills_root() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("awidat").join("skills"))
+    dirs::config_dir().map(|d| d.join("montage").join("skills"))
 }
 
 /// User-scoped skill directories, ordered from lower to higher
-/// priority. We include the XDG-style `~/.config/awidat/skills`
+/// priority. We include the XDG-style `~/.config/montage/skills`
 /// fallback even on macOS so skills copied there by older docs or
 /// hand-written installers still load.
 pub fn user_skills_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".config/awidat/skills"));
+        roots.push(home.join(".config/montage/skills"));
     }
     if let Some(primary) = user_skills_root()
         && !roots.iter().any(|p| p == &primary)
@@ -191,16 +191,16 @@ pub fn user_skills_roots() -> Vec<PathBuf> {
 }
 
 /// Persistent state root: where session logs (`sessions/<date>/...jsonl`)
-/// live. Override with `AWIDAT_STATE_ROOT` (used in tests). Defaults to
-/// `~/.local/share/awidat`, sibling of the install layout so a user
+/// live. Override with `MONTAGE_STATE_ROOT` (used in tests). Defaults to
+/// `~/.local/share/montage`, sibling of the install layout so a user
 /// wiping the install doesn't lose conversation history.
 pub fn state_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("AWIDAT_STATE_ROOT")
+    if let Ok(p) = std::env::var("MONTAGE_STATE_ROOT")
         && !p.is_empty()
     {
         return Some(PathBuf::from(p));
     }
-    dirs::home_dir().map(|h| h.join(".local/share/awidat"))
+    dirs::home_dir().map(|h| h.join(".local/share/montage"))
 }
 
 /// Resolve the `uv` executable path. Returns the absolute path when
@@ -240,7 +240,7 @@ struct IndexerRecipe {
     group: IndexerGroup,
 }
 
-/// The canonical list. Adding a new indexer to the awidat install
+/// The canonical list. Adding a new indexer to the montage install
 /// is a one-line edit here, no engine changes — the data-not-code
 /// rule per `INDEX_SCHEMA.md`. Order is the dispatch order
 /// (whisper before topic before editorial-moments because of the
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(clip.args, vec!["run", "--package", "clip-mcp", "clip-mcp"]);
     }
 
-    // Note: `python_root()` reads `AWIDAT_PYTHON_ROOT` directly. We
+    // Note: `python_root()` reads `MONTAGE_PYTHON_ROOT` directly. We
     // don't have a unit test that mutates that env var because the
     // workspace forbids `unsafe { std::env::set_var(...) }` and
     // `set_var` is unsafe in 2024-edition Rust. The integration test

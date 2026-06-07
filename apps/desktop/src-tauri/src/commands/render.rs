@@ -17,8 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_desktop_protocol::{Id, JobKind};
-use awidat_render::{
+use montage_desktop_protocol::{Id, JobKind};
+use montage_render::{
     JobStatus, ReframeTarget, RenderJobSpec, RenderPlanLimitation, build_timeline_render_spec,
     reframe_to_target,
 };
@@ -27,7 +27,7 @@ use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Reply from `start_timeline_render`: enough info for the frontend
 /// to start polling and to wire up "Show in Finder" later.
@@ -50,7 +50,9 @@ pub struct RenderJobInfo {
 /// Plan + start a timeline render. Returns immediately with the
 /// JobId; the actual ffmpeg invocation runs in the background.
 #[tauri::command]
-pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<RenderJobInfo, String> {
+pub async fn start_timeline_render(
+    state: State<'_, MontageState>,
+) -> Result<RenderJobInfo, String> {
     let project_root = state
         .project_root
         .lock()
@@ -62,7 +64,7 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
     // Wrap in spawn_blocking to keep the runtime free.
     let project_root_for_spec = project_root.clone();
     let spec = tokio::task::spawn_blocking(move || {
-        awidat_core::lessons::apply_learned_project_format_defaults(&project_root_for_spec)
+        montage_core::lessons::apply_learned_project_format_defaults(&project_root_for_spec)
             .map_err(|e| format!("learned defaults: {e}"))?;
         build_timeline_render_spec(&project_root_for_spec).map_err(|e| format!("plan: {e}"))
     })
@@ -106,7 +108,7 @@ fn prepare_desktop_timeline_render_spec(
     let project_path = project_root.join("project.otio.json");
     let project_hash = if project_path.is_file() {
         Some(
-            awidat_render::fingerprint_file(&project_path, true)
+            montage_render::fingerprint_file(&project_path, true)
                 .map_err(|e| format!("fingerprint {}: {e}", project_path.display()))?
                 .sha256,
         )
@@ -114,50 +116,50 @@ fn prepare_desktop_timeline_render_spec(
         None
     };
     let inputs =
-        awidat_render::fingerprint_manifest_inputs_sampled(project_root, &spec.input_paths)
+        montage_render::fingerprint_manifest_inputs_sampled(project_root, &spec.input_paths)
             .map_err(|e| format!("fingerprint render inputs: {e}"))?;
-    let ffmpeg = awidat_render::ffmpeg_path()
+    let ffmpeg = montage_render::ffmpeg_path()
         .map_err(|e| format!("failed to locate ffmpeg for manifest: {e}"))?;
     let mut replay_argv = vec![ffmpeg.to_string_lossy().into_owned()];
     replay_argv.extend(spec.args.iter().cloned());
     let mut metadata = spec.metadata.clone();
     metadata.insert("render_driver".into(), "desktop_timeline_render".into());
-    metadata.extend(awidat_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
-    let project = awidat_proto::project::Project::read(project_root)
+    metadata.extend(montage_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
+    let project = montage_proto::project::Project::read(project_root)
         .map_err(|e| format!("read project for caption metadata: {e}"))?;
-    let caption_summary = awidat_core::captions::summarize_captions(&project);
-    metadata.extend(awidat_core::captions::caption_summary_metadata(
+    let caption_summary = montage_core::captions::summarize_captions(&project);
+    metadata.extend(montage_core::captions::caption_summary_metadata(
         &caption_summary,
     ));
     let replay_cwd = spec.cwd.as_deref().unwrap_or(project_root);
-    let sidecars = awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
+    let sidecars = montage_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
         .map_err(|e| format!("fingerprint render sidecars: {e}"))?;
-    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+    let manifest = montage_render::planned_at_now(montage_render::RenderExecutionManifestInput {
         created_at: String::new(),
-        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        montage_version: env!("CARGO_PKG_VERSION").into(),
         project_root: project_root.to_string_lossy().into_owned(),
         project_hash: project_hash.clone(),
         timeline_hash: project_hash,
         backend: spec.backend.clone(),
-        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+        replay: montage_render::RenderReplayPlan::FfmpegArgv {
             argv: replay_argv,
             cwd: Some(replay_cwd.to_string_lossy().into_owned()),
         },
         inputs,
-        outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
+        outputs: vec![montage_render::output_artifact(&spec.output_path, true)],
         sidecars,
         limitations: spec
             .limitations
             .iter()
             .map(|limitation| {
-                awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+                montage_render::limitation(limitation.kind.clone(), limitation.message.clone())
             })
             .collect(),
         verification: None,
         metadata: metadata.clone(),
     });
-    let manifest_path = awidat_render::manifest_path_for_output(&spec.output_path);
-    awidat_render::write_render_manifest(&manifest_path, &manifest)
+    let manifest_path = montage_render::manifest_path_for_output(&spec.output_path);
+    montage_render::write_render_manifest(&manifest_path, &manifest)
         .map_err(|e| format!("write render manifest {}: {e}", manifest_path.display()))?;
     spec.manifest_path = Some(manifest_path);
     spec.metadata = metadata;
@@ -168,10 +170,10 @@ fn prepare_desktop_timeline_render_spec(
 /// every 500ms while the job is non-terminal.
 #[tauri::command]
 pub async fn poll_timeline_render(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<JobStatus, String> {
-    let id = awidat_render::JobId(job_id);
+    let id = montage_render::JobId(job_id);
     state
         .render_jobs
         .status(&id)
@@ -183,10 +185,10 @@ pub async fn poll_timeline_render(
 /// return Ok.
 #[tauri::command]
 pub async fn cancel_timeline_render(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<(), String> {
-    let id = awidat_render::JobId(job_id);
+    let id = montage_render::JobId(job_id);
     state
         .render_jobs
         .cancel(&id)
@@ -217,7 +219,7 @@ pub struct ReframeJobInfo {
 #[tauri::command]
 pub async fn start_reframe_render(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     master_path: String,
     target_id: String,
     width: u32,
@@ -286,22 +288,23 @@ pub async fn start_reframe_render(
     let app_for_progress = app.clone();
     let id_for_progress = job_id.clone();
     tokio::spawn(async move {
-        let progress_cb: awidat_render::TranscodeProgressCallback = std::sync::Arc::new(move |p| {
-            if let awidat_render::TranscodeProgress::Tick { percent, line } = p {
-                crate::events::emit_item(
-                    &app_for_progress,
-                    awidat_desktop_protocol::Item::Job {
-                        id: id_for_progress.clone(),
-                        phase: awidat_desktop_protocol::ItemLifecycle::Delta,
-                        job_kind: JobKind::Render,
-                        percent,
-                        status: line,
-                        result: None,
-                        output_path: None,
-                    },
-                );
-            }
-        });
+        let progress_cb: montage_render::TranscodeProgressCallback =
+            std::sync::Arc::new(move |p| {
+                if let montage_render::TranscodeProgress::Tick { percent, line } = p {
+                    crate::events::emit_item(
+                        &app_for_progress,
+                        montage_desktop_protocol::Item::Job {
+                            id: id_for_progress.clone(),
+                            phase: montage_desktop_protocol::ItemLifecycle::Delta,
+                            job_kind: JobKind::Render,
+                            percent,
+                            status: line,
+                            result: None,
+                            output_path: None,
+                        },
+                    );
+                }
+            });
         let result = reframe_to_target(
             &input_for_task,
             &output_for_task,
@@ -317,7 +320,7 @@ pub async fn start_reframe_render(
                     Some(output_for_task.to_string_lossy().into_owned()),
                 );
             }
-            Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. })
+            Err(montage_render::FfmpegError::NonZero { stderr_tail, .. })
                 if stderr_tail == "cancelled" =>
             {
                 emitter.cancelled();
@@ -339,7 +342,7 @@ pub async fn start_reframe_render(
 /// Cancel an in-flight reframe job by its id.
 #[tauri::command]
 pub async fn cancel_reframe_render(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<(), String> {
     let mut jobs = state.jobs.lock().await;
@@ -349,7 +352,7 @@ pub async fn cancel_reframe_render(
     Ok(())
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -363,14 +366,14 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
-    use awidat_proto::project::Project;
-    use awidat_render::RenderBackendKind;
+    use montage_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
+    use montage_proto::project::Project;
+    use montage_render::RenderBackendKind;
     use std::collections::BTreeMap;
 
     fn caption_clip(name: &str) -> Clip {
         let mut clip = Clip::empty(name);
-        let mut effect = Effect::new("awidat.title");
+        let mut effect = Effect::new("montage.title");
         effect
             .metadata
             .insert("role".into(), serde_json::json!("caption"));
@@ -435,11 +438,11 @@ mod tests {
             .manifest_path
             .as_ref()
             .ok_or("prepared spec did not include a manifest path")?;
-        let manifest = awidat_render::read_render_manifest(manifest_path)?;
+        let manifest = montage_render::read_render_manifest(manifest_path)?;
 
         assert_eq!(
             manifest_path,
-            &awidat_render::manifest_path_for_output(&prepared.output_path)
+            &montage_render::manifest_path_for_output(&prepared.output_path)
         );
         assert_eq!(manifest.backend, RenderBackendKind::TimelineFfmpegReencode);
         assert_eq!(

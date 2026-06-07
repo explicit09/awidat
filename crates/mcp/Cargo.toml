@@ -1,12 +1,12 @@
 [package]
-name = "awidat-mcp"
+name = "montage-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_mcp"
+name = "montage_mcp"
 path = "src/lib.rs"
 
 [dependencies]
@@ -21,7 +21,7 @@ rmcp = { workspace = true, features = ["client", "transport-child-process", "mac
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "macros", "rt", "rt-multi-thread"] }
 tokio-util = { workspace = true }
-awidat-test-support = { workspace = true }
+montage-test-support = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [[test]]
@@ -33,7 +33,7 @@ harness = true
 # MCP over stdio so the client is exercised against the actual protocol, not
 # a mock.
 [[bin]]
-name = "awidat-mcp-test-server"
+name = "montage-mcp-test-server"
 path = "test-server/src/main.rs"
 test = false
 doc = false

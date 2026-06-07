@@ -1,6 +1,6 @@
 //! `find_dead_air` tool — surface silence ranges as editorial findings.
 //!
-//! Reads silence sidecars at `<project>/.awidat/silences/<stem>-<hash>
+//! Reads silence sidecars at `<project>/.montage/silences/<stem>-<hash>
 //! .json` (written by Step 1.2's post-import chain), maps each source-
 //! time silence range onto the project's timeline by walking the
 //! current OTIO clips, and returns the ranges that survived
@@ -21,8 +21,8 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -271,7 +271,7 @@ pub struct DeadAirFinding {
 }
 
 /// Mirror of `commands::silence::SilenceSidecar` — duplicated here so
-/// `awidat-core` doesn't depend on the desktop crate.
+/// `montage-core` doesn't depend on the desktop crate.
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SilenceSidecar {
     ranges: Vec<SilenceRangeRecord>,
@@ -307,7 +307,7 @@ fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root.join(".awidat").join("silences").join(format!(
+    project_root.join(".montage").join("silences").join(format!(
         "{stem}-{:08x}.json",
         stable_path_hash(asset_abs_path)
     ))
@@ -426,7 +426,7 @@ clean.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };

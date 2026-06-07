@@ -33,7 +33,7 @@ scaffolds, archives, and work-in-progress.
 name: my-skill                 # required, kebab-case, must match dir name
 description: One line describing what this skill does.  # required
 version: "0.1.0"               # recommended; bumped on behavior changes
-awidat_min_version: "0.1.0"    # optional compat gate; skipped if too old
+montage_min_version: "0.1.0"    # optional compat gate; skipped if too old
 tools_allowlist:               # optional — restricts agent's tools
   - apply_edl
   - view_timeline
@@ -49,7 +49,7 @@ when_to_use: |                 # optional — when should the agent reach
 - **`version`** — semver string. Defaults to `"0.1.0"` if omitted.
   Bump it whenever the agent's behavior would notably change for users
   pinned to an older version.
-- **`awidat_min_version`** — minimum Awidat core required. Older hosts
+- **`montage_min_version`** — minimum Montage core required. Older hosts
   skip the skill with a warning rather than loading a broken playbook.
 - **`tools_allowlist`** — when present, the agent only sees these tools
   during a skill turn. Empty or missing = no restriction.
@@ -112,10 +112,10 @@ tools your playbook actually needs.
 
 Skills are discovered from three layers, lowest priority first:
 
-1. **Bundled** — `<install>/share/awidat/skills/` or, in dev,
-   `<repo>/skills/`. Ships with Awidat.
-2. **User** — `~/Library/Application Support/awidat/skills/` (macOS),
-   `~/.config/awidat/skills/` (Linux), `%APPDATA%\awidat\skills\`
+1. **Bundled** — `<install>/share/montage/skills/` or, in dev,
+   `<repo>/skills/`. Ships with Montage.
+2. **User** — `~/Library/Application Support/montage/skills/` (macOS),
+   `~/.config/montage/skills/` (Linux), `%APPDATA%\montage\skills\`
    (Windows). Personal overrides + additions.
 3. **Project** — `<project>/skills/`. Per-project workflows; trumps
    user + bundled on name conflict.
@@ -128,7 +128,7 @@ resolved provenance via a chip on each row.
 
 Projects can lock to a specific skill version (and optionally a
 specific provenance layer) by setting a pin in
-`<project>/.awidat/skills.json`. The Skills tab exposes this through
+`<project>/.montage/skills.json`. The Skills tab exposes this through
 the "Pin v1.0.0" affordance on any skill at version ≥ 1.0.0. Pinned
 skills resolve deterministically across teammates and CI.
 
@@ -199,7 +199,7 @@ unit of distribution.
 
 ## Scaffolding a new skill
 
-The Skills tab in Awidat has a **+ New skill** button that copies the
+The Skills tab in Montage has a **+ New skill** button that copies the
 `skills/_template/SKILL.md` skeleton into the chosen location (user or
 project) with the name + description substituted. Use it for the
 boilerplate; edit the body to taste.

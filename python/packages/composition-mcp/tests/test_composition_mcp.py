@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from awidat_mcp import IndexAssetRequest
+from montage_mcp import IndexAssetRequest
 
 from composition_mcp import (
     _project_root_from,

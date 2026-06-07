@@ -1,7 +1,7 @@
 /* Dialog overlay + surface. Sits above Popover (z-60) and Tooltip
  * (z-50). Centered with translate, capped at a sensible width. */
 
-.awidat-dialog-overlay {
+.montage-dialog-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
@@ -10,15 +10,15 @@
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.awidat-dialog-overlay[data-state="open"] {
-  animation-name: awidat-dialog-overlay-in;
+.montage-dialog-overlay[data-state="open"] {
+  animation-name: montage-dialog-overlay-in;
 }
 
-.awidat-dialog-overlay[data-state="closed"] {
-  animation-name: awidat-dialog-overlay-out;
+.montage-dialog-overlay[data-state="closed"] {
+  animation-name: montage-dialog-overlay-out;
 }
 
-.awidat-dialog {
+.montage-dialog {
   position: fixed;
   top: 50%;
   left: 50%;
@@ -40,15 +40,15 @@
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.awidat-dialog[data-state="open"] {
-  animation-name: awidat-dialog-in;
+.montage-dialog[data-state="open"] {
+  animation-name: montage-dialog-in;
 }
 
-.awidat-dialog[data-state="closed"] {
-  animation-name: awidat-dialog-out;
+.montage-dialog[data-state="closed"] {
+  animation-name: montage-dialog-out;
 }
 
-@keyframes awidat-dialog-overlay-in {
+@keyframes montage-dialog-overlay-in {
   from {
     opacity: 0;
   }
@@ -57,7 +57,7 @@
   }
 }
 
-@keyframes awidat-dialog-overlay-out {
+@keyframes montage-dialog-overlay-out {
   from {
     opacity: 1;
   }
@@ -66,7 +66,7 @@
   }
 }
 
-@keyframes awidat-dialog-in {
+@keyframes montage-dialog-in {
   from {
     opacity: 0;
     transform: translate(-50%, -48%) scale(0.96);
@@ -77,7 +77,7 @@
   }
 }
 
-@keyframes awidat-dialog-out {
+@keyframes montage-dialog-out {
   from {
     opacity: 1;
   }

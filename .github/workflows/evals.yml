@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
       run_real_corpus:
-        description: Run awidat-eval --live against AWIDAT_REAL_CORPUS on the runner
+        description: Run montage-eval --live against MONTAGE_REAL_CORPUS on the runner
         type: boolean
         default: false
   schedule:
@@ -43,10 +43,10 @@ jobs:
             libssl-dev
       - uses: Swatinem/rust-cache@v2
       - name: Fast, product, and golden evals
-        run: cargo run -p awidat-eval -- --ci --product --golden --json
+        run: cargo run -p montage-eval -- --ci --product --golden --json
       - name: Stress evals
         if: github.event_name == 'schedule' || inputs.run_stress
-        run: cargo run -p awidat-eval -- --stress --json
+        run: cargo run -p montage-eval -- --stress --json
       - name: Python safe smoke
         run: python3 python/scripts/smoke_indexers.py --safe
 
@@ -80,32 +80,32 @@ jobs:
   real-corpus:
     name: Real corpus evals
     if: github.event_name == 'workflow_dispatch' && inputs.run_real_corpus
-    runs-on: [self-hosted, awidat-real-corpus]
+    runs-on: [self-hosted, montage-real-corpus]
     env:
-      AWIDAT_REAL_CORPUS: ${{ vars.AWIDAT_REAL_CORPUS }}
-      AWIDAT_REAL_VISUAL_MIN_METADATA_SHOTS: ${{ vars.AWIDAT_REAL_VISUAL_MIN_METADATA_SHOTS }}
-      AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO: ${{ vars.AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO }}
-      AWIDAT_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS: ${{ vars.AWIDAT_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS }}
-      AWIDAT_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS: ${{ vars.AWIDAT_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS }}
-      AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS: ${{ vars.AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS }}
-      AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS: ${{ vars.AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS }}
-      AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES: ${{ vars.AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES }}
-      AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES: ${{ vars.AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES }}
-      AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES: ${{ vars.AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES }}
-      AWIDAT_COMPOSITION_MODEL_PROJECT: ${{ vars.AWIDAT_REAL_CORPUS }}
-      AWIDAT_COMPOSITION_MODEL_MIN_REGIONS: ${{ vars.AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS }}
-      AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS: ${{ vars.AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS }}
+      MONTAGE_REAL_CORPUS: ${{ vars.MONTAGE_REAL_CORPUS }}
+      MONTAGE_REAL_VISUAL_MIN_METADATA_SHOTS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_METADATA_SHOTS }}
+      MONTAGE_REAL_VISUAL_MIN_METADATA_RATIO: ${{ vars.MONTAGE_REAL_VISUAL_MIN_METADATA_RATIO }}
+      MONTAGE_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS }}
+      MONTAGE_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS }}
+      MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS }}
+      MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS }}
+      MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES: ${{ vars.MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES }}
+      MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES: ${{ vars.MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES }}
+      MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES: ${{ vars.MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES }}
+      MONTAGE_COMPOSITION_MODEL_PROJECT: ${{ vars.MONTAGE_REAL_CORPUS }}
+      MONTAGE_COMPOSITION_MODEL_MIN_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS }}
+      MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Refuse missing real corpus path
         run: |
-          test -n "$AWIDAT_REAL_CORPUS"
-          test -d "$AWIDAT_REAL_CORPUS"
-          test -f "$AWIDAT_REAL_CORPUS/project.otio.json"
+          test -n "$MONTAGE_REAL_CORPUS"
+          test -d "$MONTAGE_REAL_CORPUS"
+          test -f "$MONTAGE_REAL_CORPUS/project.otio.json"
       - name: Validate composition-model sidecars
-        if: env.AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '' && env.AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '0'
+        if: env.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '' && env.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '0'
         run: python3 python/scripts/smoke_safe.py
       - name: Run real corpus evals
-        run: cargo run -p awidat-eval -- --live --json --fail-on-skip
+        run: cargo run -p montage-eval -- --live --json --fail-on-skip

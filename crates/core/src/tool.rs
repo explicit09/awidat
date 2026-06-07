@@ -140,7 +140,7 @@ pub struct ToolContext {
     /// Shared render-job manager. Start jobs via `start_render`, poll
     /// them via `poll_render`. Survives across tool calls within a
     /// session.
-    pub job_manager: awidat_render::JobManager,
+    pub job_manager: montage_render::JobManager,
     /// Channel the agent loop uses to ask the front-end for approval
     /// before dispatching a mutating tool. Tools normally do not touch
     /// this — the loop owns the gate. Surfaced on `ToolContext` only so
@@ -562,10 +562,10 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

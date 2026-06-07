@@ -5,7 +5,7 @@
 // shows the active one. Follows the modal pattern used elsewhere
 // (SettingsModal, NewProjectForm): `.modal-backdrop` ▸ `.modal` ▸ header/body.
 //
-// All real work lives in the `auth_*` Tauri commands → `awidat-auth` crate →
+// All real work lives in the `auth_*` Tauri commands → `montage-auth` crate →
 // codex-login. This component only renders state and calls those actions.
 
 import { openUrl } from "@tauri-apps/plugin-opener";

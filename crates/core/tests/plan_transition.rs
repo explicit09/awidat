@@ -1,5 +1,5 @@
-use awidat_core::awidat_mcp::context::McpToolCtx;
-use awidat_core::awidat_mcp::tools::plan_transition::{PlanTransitionArgs, run};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::plan_transition::{PlanTransitionArgs, run};
 use std::error::Error;
 
 fn context(
@@ -63,7 +63,7 @@ fn assert_edl_parses(body: &serde_json::Value) -> Result<(), Box<dyn Error>> {
         .pointer("/edl_fragment")
         .and_then(serde_json::Value::as_str)
         .ok_or("missing EDL fragment")?;
-    awidat_core::edl::parse(edl)?;
+    montage_core::edl::parse(edl)?;
     Ok(())
 }
 
@@ -83,7 +83,7 @@ fn occlusion_job_selects_directional_pass_by() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         body.pointer("/recommended/id")
             .and_then(|value| value.as_str()),
-        Some("awidat.pass_by_left")
+        Some("montage.pass_by_left")
     );
     assert_edl_parses(&body)
 }
@@ -112,7 +112,7 @@ fn punch_in_job_selects_zoom_in() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         body.pointer("/recommended/id")
             .and_then(|value| value.as_str()),
-        Some("awidat.zoom_in")
+        Some("montage.zoom_in")
     );
     assert_edl_parses(&body)
 }
@@ -134,13 +134,13 @@ fn stylized_reveal_and_closure_select_iris_variants() -> Result<(), Box<dyn Erro
         reveal
             .pointer("/recommended/id")
             .and_then(|value| value.as_str()),
-        Some("awidat.iris_open")
+        Some("montage.iris_open")
     );
     assert_eq!(
         closure
             .pointer("/recommended/id")
             .and_then(|value| value.as_str()),
-        Some("awidat.iris_close")
+        Some("montage.iris_close")
     );
     assert_edl_parses(&reveal)?;
     assert_edl_parses(&closure)
@@ -157,7 +157,7 @@ fn directional_graphic_movement_selects_wipe() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         body.pointer("/recommended/id")
             .and_then(|value| value.as_str()),
-        Some("awidat.wipe_up")
+        Some("montage.wipe_up")
     );
     assert_edl_parses(&body)
 }

@@ -1,6 +1,6 @@
 //! Operational professional-pipeline engines and render lowerers.
 //!
-//! These functions sit above the durable schemas in `awidat-proto` and below
+//! These functions sit above the durable schemas in `montage-proto` and below
 //! tool/UI orchestration. They intentionally produce deterministic plans and
 //! diagnostics from existing evidence; expensive CV/ML sidecars can feed these
 //! APIs later without changing callers.
@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::professional::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
     CompositionNode, CompositionNodeType, CoordinateSpace, DeliveryPreflightInput, DeliveryProfile,
@@ -1497,7 +1497,7 @@ pub struct RenderLimitation {
 /// Built-in capability metadata for animating a clip effect parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectParameterCapability {
-    /// Effect id, e.g. `awidat.color_correction`.
+    /// Effect id, e.g. `montage.color_correction`.
     pub effect: &'static str,
     /// Parameter id under the effect.
     pub parameter: &'static str,
@@ -1522,7 +1522,7 @@ enum EffectParameterValidation {
 pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
     vec![
         EffectParameterCapability {
-            effect: "awidat.color_correction",
+            effect: "montage.color_correction",
             parameter: "brightness",
             unit: "offset",
             previewable: true,
@@ -1530,7 +1530,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::AnyFinite,
         },
         EffectParameterCapability {
-            effect: "awidat.color_correction",
+            effect: "montage.color_correction",
             parameter: "contrast",
             unit: "multiplier",
             previewable: true,
@@ -1538,7 +1538,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Positive,
         },
         EffectParameterCapability {
-            effect: "awidat.color_correction",
+            effect: "montage.color_correction",
             parameter: "saturation",
             unit: "multiplier",
             previewable: true,
@@ -1546,7 +1546,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Positive,
         },
         EffectParameterCapability {
-            effect: "awidat.video_overlay",
+            effect: "montage.video_overlay",
             parameter: "opacity",
             unit: "normalized",
             previewable: true,
@@ -1554,7 +1554,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Normalized,
         },
         EffectParameterCapability {
-            effect: "awidat.video_overlay",
+            effect: "montage.video_overlay",
             parameter: "scale",
             unit: "multiplier",
             previewable: true,
@@ -1562,7 +1562,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Positive,
         },
         EffectParameterCapability {
-            effect: "awidat.video_overlay",
+            effect: "montage.video_overlay",
             parameter: "blur",
             unit: "px",
             previewable: true,
@@ -1570,7 +1570,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::NonNegative,
         },
         EffectParameterCapability {
-            effect: "awidat.blur",
+            effect: "montage.blur",
             parameter: "radius_px",
             unit: "px",
             previewable: true,
@@ -1578,7 +1578,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::NonNegative,
         },
         EffectParameterCapability {
-            effect: "awidat.shake",
+            effect: "montage.shake",
             parameter: "intensity_px",
             unit: "px",
             previewable: true,
@@ -1586,7 +1586,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::NonNegative,
         },
         EffectParameterCapability {
-            effect: "awidat.shake",
+            effect: "montage.shake",
             parameter: "frequency_hz",
             unit: "hz",
             previewable: true,
@@ -1594,7 +1594,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Positive,
         },
         EffectParameterCapability {
-            effect: "awidat.warp",
+            effect: "montage.warp",
             parameter: "k1",
             unit: "coefficient",
             previewable: true,
@@ -1602,7 +1602,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::AnyFinite,
         },
         EffectParameterCapability {
-            effect: "awidat.warp",
+            effect: "montage.warp",
             parameter: "k2",
             unit: "coefficient",
             previewable: true,
@@ -1610,7 +1610,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::AnyFinite,
         },
         EffectParameterCapability {
-            effect: "awidat.warp",
+            effect: "montage.warp",
             parameter: "center_x",
             unit: "normalized",
             previewable: true,
@@ -1618,7 +1618,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Normalized,
         },
         EffectParameterCapability {
-            effect: "awidat.warp",
+            effect: "montage.warp",
             parameter: "center_y",
             unit: "normalized",
             previewable: true,
@@ -1626,7 +1626,7 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             validation: EffectParameterValidation::Normalized,
         },
         EffectParameterCapability {
-            effect: "awidat.volume",
+            effect: "montage.volume",
             parameter: "value",
             unit: "multiplier",
             previewable: false,
@@ -1926,7 +1926,7 @@ pub struct FilledMotionTemplate {
     /// Slot definitions copied from the source template.
     pub slot_defs: Vec<TemplateSlot>,
     /// Safe-area rules copied from the template.
-    pub safe_areas: Vec<awidat_proto::professional::SafeAreaRule>,
+    pub safe_areas: Vec<montage_proto::professional::SafeAreaRule>,
 }
 
 /// Timing and animation selection for a filled template.
@@ -2094,7 +2094,7 @@ pub enum MotionPackageDecision {
 
 /// Apply a review decision for a motion package to durable timeline metadata.
 pub fn apply_motion_package(
-    metadata: &mut AwidatTimelineMetadata,
+    metadata: &mut MontageTimelineMetadata,
     mut package: MotionPackage,
     decision: MotionPackageDecision,
 ) -> Result<(), ProfessionalEngineError> {
@@ -2121,7 +2121,7 @@ pub fn apply_motion_package(
     }
     metadata
         .learning_signals
-        .push(awidat_proto::professional::LearningSignal {
+        .push(montage_proto::professional::LearningSignal {
             proposal_id: package.id.clone(),
             area: CapabilityArea::MotionGraphicsTemplates,
             status: package.status,
@@ -2150,7 +2150,7 @@ pub fn motion_package_summary(package: &MotionPackage) -> String {
 }
 
 fn first_motion_package_conflict(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     package: &MotionPackage,
 ) -> Option<String> {
     package.generated_animations.iter().find_map(|generated| {
@@ -3328,18 +3328,26 @@ fn attach_preflight_fix_refs(report: &mut PreflightReport) {
     for finding in &mut report.findings {
         finding.fix_ref = Some(
             match finding.check {
-                awidat_proto::professional::PreflightCheckKind::AspectRatio => {
+                montage_proto::professional::PreflightCheckKind::AspectRatio => {
                     "fix-delivery-aspect-ratio"
                 }
-                awidat_proto::professional::PreflightCheckKind::Duration => "fix-delivery-duration",
-                awidat_proto::professional::PreflightCheckKind::Bitrate => "fix-delivery-bitrate",
-                awidat_proto::professional::PreflightCheckKind::Captions => "fix-delivery-captions",
-                awidat_proto::professional::PreflightCheckKind::Loudness => "fix-delivery-loudness",
-                awidat_proto::professional::PreflightCheckKind::SafeAreas => {
+                montage_proto::professional::PreflightCheckKind::Duration => {
+                    "fix-delivery-duration"
+                }
+                montage_proto::professional::PreflightCheckKind::Bitrate => "fix-delivery-bitrate",
+                montage_proto::professional::PreflightCheckKind::Captions => {
+                    "fix-delivery-captions"
+                }
+                montage_proto::professional::PreflightCheckKind::Loudness => {
+                    "fix-delivery-loudness"
+                }
+                montage_proto::professional::PreflightCheckKind::SafeAreas => {
                     "fix-delivery-safe-areas"
                 }
-                awidat_proto::professional::PreflightCheckKind::Metadata => "fix-delivery-metadata",
-                awidat_proto::professional::PreflightCheckKind::Thumbnail => {
+                montage_proto::professional::PreflightCheckKind::Metadata => {
+                    "fix-delivery-metadata"
+                }
+                montage_proto::professional::PreflightCheckKind::Thumbnail => {
                     "fix-delivery-thumbnail"
                 }
             }

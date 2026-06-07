@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    # Awidat crates.
+    # Montage crates.
     "crates/proto",
     "crates/core",
     "crates/tools",
@@ -146,9 +146,9 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-authors = ["Awidat Authors"]
+authors = ["Montage Authors"]
 license = "Apache-2.0"
-repository = "https://github.com/explicit09/awidat"
+repository = "https://github.com/explicit09/montage"
 
 # Centralized lints: every crate inherits via `[lints] workspace = true` in
 # its Cargo.toml. New crates added later get the same treatment by default.
@@ -160,7 +160,7 @@ repository = "https://github.com/explicit09/awidat"
 # their keep on a real bug.
 #
 # `[workspace.lints.rust]` is intentionally empty because the codex fork
-# (~110 crates) inherits these and they need to compile too. Awidat crates
+# (~110 crates) inherits these and they need to compile too. Montage crates
 # that want stricter `rust` lints (`unsafe_code = "forbid"`,
 # `missing_docs = "warn"`) opt in locally with a `[lints.rust]` block in
 # their own Cargo.toml.
@@ -205,24 +205,24 @@ unwrap_used = "deny"
 
 [workspace.dependencies]
 # Crates we own.
-awidat-proto = { path = "crates/proto" }
-awidat-core = { path = "crates/core" }
-awidat-tools = { path = "crates/tools" }
-awidat-mcp = { path = "crates/mcp" }
-awidat-sandboxing = { path = "crates/sandboxing" }
-awidat-render = { path = "crates/render" }
-awidat-render-gpu = { path = "crates/render-gpu" }
-awidat-effects = { path = "crates/effects" }
-awidat-lut = { path = "crates/lut" }
-awidat-config = { path = "crates/config" }
-awidat-secrets = { path = "crates/secrets" }
-awidat-auth = { path = "crates/auth" }
-awidat-social = { path = "crates/social" }
-awidat-social-server = { path = "crates/social-server" }
-awidat-index = { path = "crates/index" }
-awidat-desktop-protocol = { path = "crates/desktop-protocol" }
-awidat-codex-bridge = { path = "crates/codex-bridge" }
-awidat-test-support = { path = "crates/test-support" }
+montage-proto = { path = "crates/proto" }
+montage-core = { path = "crates/core" }
+montage-tools = { path = "crates/tools" }
+montage-mcp = { path = "crates/mcp" }
+montage-sandboxing = { path = "crates/sandboxing" }
+montage-render = { path = "crates/render" }
+montage-render-gpu = { path = "crates/render-gpu" }
+montage-effects = { path = "crates/effects" }
+montage-lut = { path = "crates/lut" }
+montage-config = { path = "crates/config" }
+montage-secrets = { path = "crates/secrets" }
+montage-auth = { path = "crates/auth" }
+montage-social = { path = "crates/social" }
+montage-social-server = { path = "crates/social-server" }
+montage-index = { path = "crates/index" }
+montage-desktop-protocol = { path = "crates/desktop-protocol" }
+montage-codex-bridge = { path = "crates/codex-bridge" }
+montage-test-support = { path = "crates/test-support" }
 
 # Forked codex harness crates (we own these — see vendor/codex-rs/SOURCE).
 app_test_support = { path = "vendor/codex-rs/app-server/tests/common" }
@@ -345,7 +345,7 @@ mcp_test_support = { path = "vendor/codex-rs/mcp-server/tests/common" }
 # See PLAN.md for the vedit integration rationale.
 vedit-core = { git = "https://github.com/explicit09/vedit.git", rev = "23a2bbc9cd2ac11e68988bf27d6c0094ac29975e" }
 
-# External — merged from Awidat + codex. Conflicts resolved per the
+# External — merged from Montage + codex. Conflicts resolved per the
 # table in the codex-adoption plan (lets-plan-golden-crystal.md).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -553,7 +553,7 @@ zstd = "0.13"
 wiremock = "0.6"
 zeroize = "1.8.2"
 # Sync Postgres client + blocking connection pool for PgSocialStore (D1).
-# The domain crate (awidat-social) stays synchronous; the async server shell
+# The domain crate (montage-social) stays synchronous; the async server shell
 # calls it via spawn_blocking.  Do not add the sqlx postgres backend here.
 postgres = { version = "0.19", features = ["with-serde_json-1"] }
 r2d2 = "0.8"
@@ -599,7 +599,7 @@ debug = "full"
 lto = false
 strip = false
 
-# CI test binaries (esp. awidat-render-gpu with the full wgpu graph) link
+# CI test binaries (esp. montage-render-gpu with the full wgpu graph) link
 # into objects so large with the default `debuginfo=2` that ubuntu-latest
 # GitHub runners regularly hit `ld: Bus error` / disk-full during the link
 # phase. Cutting test debuginfo to line tables only keeps useful panic
@@ -616,7 +616,7 @@ opt-level = 0
 # Patches inherited from the codex fork. These point at openai-oss-forks
 # of crossterm/ratatui/tokio-tungstenite/tungstenite that add a few
 # features (notably the `proxy` feature on tokio-tungstenite) the
-# upstream crates don't carry. Awidat's old TUI consumed plain crates.io
+# upstream crates don't carry. Montage's old TUI consumed plain crates.io
 # crossterm/ratatui; switching it to the fork during the transition is
 # acceptable because crates/tui/ is slated for deletion once codex's TUI
 # takes over.

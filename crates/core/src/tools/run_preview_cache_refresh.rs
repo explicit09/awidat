@@ -2,7 +2,7 @@
 //!
 //! Mutating sibling of `preview_cache_status`: this tool actually runs the
 //! persisted lifecycle through `PreviewRefreshExecutor`, persisting per-task
-//! state transitions to `.awidat/preview-cache/refresh-plan.json` as it goes.
+//! state transitions to `.montage/preview-cache/refresh-plan.json` as it goes.
 //! Resume semantics are inherited from `run_preview_cache_refresh`: re-running
 //! the tool against the same project picks up Pending/InProgress tasks and
 //! skips already-`Completed`/`Skipped` ones.
@@ -88,7 +88,7 @@ impl ToolHandler for RunPreviewCacheRefreshTool {
         metadata.side_effects = vec![
             "runs ffmpeg per refresh task to generate proxies, thumbnails, or waveform sidecars"
                 .into(),
-            "atomically updates `.awidat/preview-cache/refresh-plan.json` with per-task state"
+            "atomically updates `.montage/preview-cache/refresh-plan.json` with per-task state"
                 .into(),
         ];
         metadata.known_limitations = vec![

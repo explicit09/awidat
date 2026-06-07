@@ -7,8 +7,8 @@
 //! canonical host-intro cues, and explicitly rejects setup/rehearsal cues.
 
 use async_trait::async_trait;
-use awidat_index::{read_sidecar, walk_indexer};
-use awidat_proto::index::AssetId;
+use montage_index::{read_sidecar, walk_indexer};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -601,10 +601,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
