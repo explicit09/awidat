@@ -31,12 +31,15 @@ use tracing::{info, warn};
 
 mod manifest_io;
 pub mod media_files;
+pub mod perf_report;
 mod sha;
 pub mod sidecar_io;
 
 pub use manifest_io::{read_manifest, write_manifest};
 pub use sha::{asset_fingerprint, asset_sha256};
 pub use sidecar_io::{SidecarError, read_sidecar, sidecar_path, walk_indexer};
+
+const INDEXER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Errors from the indexer dispatcher. Per-asset / per-indexer errors land
 /// in [`IndexReport::failures`] instead.
@@ -291,10 +294,37 @@ pub async fn run(
     max_concurrent: usize,
     progress: Option<ProgressCallback>,
 ) -> Result<IndexReport, IndexError> {
+    run_with_index_dir(
+        project_root,
+        &project_root.join(files::INDEX_DIR),
+        servers,
+        assets,
+        client_info,
+        max_concurrent,
+        progress,
+    )
+    .await
+}
+
+/// Run indexers using a caller-provided index directory.
+///
+/// Normal project indexing should use [`run`]. This variant exists for
+/// performance review/reporting flows that need to avoid the normal
+/// idempotency path against `<project>/index` and measure fresh pair runs in
+/// an isolated report directory.
+pub async fn run_with_index_dir(
+    project_root: &Path,
+    index_dir: &Path,
+    servers: &[McpServer],
+    assets: &[AssetInput],
+    client_info: ClientInfo,
+    max_concurrent: usize,
+    progress: Option<ProgressCallback>,
+) -> Result<IndexReport, IndexError> {
     if !project_root.is_dir() {
         return Err(IndexError::BadRoot(project_root.display().to_string()));
     }
-    let index_dir = project_root.join(files::INDEX_DIR);
+    let index_dir = index_dir.to_path_buf();
     tokio::fs::create_dir_all(&index_dir)
         .await
         .map_err(|e| IndexError::SidecarIo {
@@ -444,7 +474,9 @@ pub async fn run(
             if *st != ItemState::Pending {
                 continue;
             }
-            let server = server_by_name.get(&key.0).expect("server registered");
+            let Some(server) = server_by_name.get(&key.0) else {
+                continue;
+            };
             let mut all_deps_done = true;
             let mut failed_deps: Vec<String> = Vec::new();
             for dep_name in &server.depends_on {
@@ -514,10 +546,10 @@ pub async fn run(
             if launched >= slots {
                 break;
             }
-            let class = server_by_name
-                .get(&key.0)
-                .expect("server present")
-                .resource_class;
+            let Some(server_ref) = server_by_name.get(&key.0) else {
+                continue;
+            };
+            let class = server_ref.resource_class;
             if !resources.can_launch(class) {
                 continue;
             }
@@ -527,11 +559,10 @@ pub async fn run(
             // was operating on a `&&McpServer` (returned by `.get()`),
             // producing another reference rather than a deep clone.
             // `(*..).clone()` is the explicit form.
-            let server = (*server_by_name.get(&key.0).expect("server present")).clone();
-            let (asset_path, asset_sha) = asset_index
-                .get(&key.1)
-                .cloned()
-                .expect("asset present in index");
+            let server = (*server_ref).clone();
+            let Some((asset_path, asset_sha)) = asset_index.get(&key.1).cloned() else {
+                continue;
+            };
             // Flip to Running so the next ready-scan doesn't re-pick
             // this same item; the spawned task overwrites with the
             // final state on completion. Without this we'd double-
@@ -773,7 +804,10 @@ async fn run_pair(
     };
     let mut rss_monitor = RssMonitor::start(client.child_pid());
 
-    if let Err(e) = client.initialize(client_info).await {
+    if let Err(e) = client
+        .initialize_with_timeout(client_info, INDEXER_INITIALIZE_TIMEOUT)
+        .await
+    {
         launch_init = launch_started.elapsed();
         peak_rss_bytes = stop_rss_monitor(&mut rss_monitor).await;
         return PairOutcome::Failed {
@@ -792,11 +826,7 @@ async fn run_pair(
     }
     launch_init = launch_started.elapsed();
 
-    let args = serde_json::json!({
-        "asset_path": item.asset_path.to_string_lossy(),
-        "asset_id": item.asset_id.as_str(),
-        "asset_sha256": item.asset_sha,
-    });
+    let args = index_asset_args(project_root, item);
     // Generous timeout for indexer runs; whisper on a long episode is the
     // worst case.
     let tool_started = Instant::now();
@@ -970,6 +1000,15 @@ fn telemetry_for_terminal(
         },
         peak_rss_bytes,
     }
+}
+
+fn index_asset_args(project_root: &Path, item: &WorkItem) -> serde_json::Value {
+    serde_json::json!({
+        "project_root": project_root.to_string_lossy(),
+        "asset_path": item.asset_path.to_string_lossy(),
+        "asset_id": item.asset_id.as_str(),
+        "asset_sha256": item.asset_sha,
+    })
 }
 
 fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
@@ -1184,6 +1223,29 @@ mod tests {
         assert_eq!(r.counts(), (1, 1, 1, 0));
         assert!(r.has_failures());
         assert_eq!(r.failures().count(), 1);
+    }
+
+    #[test]
+    fn indexer_initialize_timeout_allows_heavy_python_startup() {
+        assert_eq!(INDEXER_INITIALIZE_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn index_asset_args_include_project_root_for_external_sidecar_lookup() {
+        let item = WorkItem {
+            server: server("dummy", IndexerResourceClass::Light, vec![], "/bin/false"),
+            asset_id: AssetId::new("external/0001-video.mp4"),
+            asset_path: PathBuf::from("/Volumes/Media/video.mp4"),
+            asset_sha: "abc123".into(),
+            queued_at: Instant::now(),
+        };
+
+        let args = index_asset_args(Path::new("/tmp/project"), &item);
+
+        assert_eq!(args["project_root"], "/tmp/project");
+        assert_eq!(args["asset_path"], "/Volumes/Media/video.mp4");
+        assert_eq!(args["asset_id"], "external/0001-video.mp4");
+        assert_eq!(args["asset_sha256"], "abc123");
     }
 
     #[test]

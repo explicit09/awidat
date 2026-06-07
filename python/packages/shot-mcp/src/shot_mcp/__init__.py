@@ -95,14 +95,16 @@ server = IndexerServer(
 )
 
 
-def _project_root_from(asset_path: str) -> Path:
+def _project_root_from(req: IndexAssetRequest) -> Path:
     """Walk up from the asset to the dir containing `index/`."""
-    p = Path(asset_path).absolute()
+    if req.project_root:
+        return Path(req.project_root).absolute()
+    p = Path(req.asset_path).absolute()
     while p != p.parent:
         if (p / "index").is_dir():
             return p
         p = p.parent
-    return Path(asset_path).absolute().parent
+    return Path(req.asset_path).absolute().parent
 
 
 def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
@@ -715,7 +717,7 @@ def _deduplicate_match_candidates(candidates: list[dict[str, Any]]) -> list[dict
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
-    project_root = _project_root_from(req.asset_path)
+    project_root = _project_root_from(req)
 
     scenes_doc = _read_sidecar(project_root, "scenedetect", req.asset_id)
     if not scenes_doc:

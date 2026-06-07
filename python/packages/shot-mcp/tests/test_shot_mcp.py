@@ -1,8 +1,11 @@
 import unittest
 
 import base64
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
+from awidat_mcp import IndexAssetRequest
 
 from shot_mcp import (
     _clip_match_candidates_for_shot,
@@ -10,6 +13,7 @@ from shot_mcp import (
     _composition_summary,
     _face_center_in_window,
     _gaze_summary_in_window,
+    _project_root_from,
 )
 
 
@@ -18,6 +22,17 @@ def _pack_embeddings(arr: np.ndarray) -> str:
 
 
 class ShotMcpTests(unittest.TestCase):
+    def test_project_root_prefers_request_field_for_external_assets(self) -> None:
+        with TemporaryDirectory() as project_dir, TemporaryDirectory() as media_dir:
+            req = IndexAssetRequest(
+                project_root=project_dir,
+                asset_path=str(Path(media_dir) / "external.mp4"),
+                asset_id="external/0001-external.mp4",
+                asset_sha256="sha",
+            )
+
+            self.assertEqual(_project_root_from(req), Path(project_dir).absolute())
+
     def test_face_center_uses_area_weighted_largest_face_per_frame(self) -> None:
         per_frame = [
             {
