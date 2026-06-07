@@ -10,6 +10,7 @@ pub const TWITTER_X_API_BASE: &str = "https://api.x.com";
 pub const TWITTER_X_VIDEO_MEDIA_TYPE: &str = "video/mp4";
 pub const TWITTER_X_VIDEO_MEDIA_CATEGORY: &str = "tweet_video";
 pub const TWITTER_X_VIDEO_MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub const TWITTER_X_TEXT_MAX_CHARS: usize = 280;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TwitterXUploadRequest {
@@ -120,6 +121,11 @@ impl<C: TwitterXUploadClient> UploadAdapter for TwitterXUploadAdapter<C> {
         if text.is_empty() {
             return Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "twitter_x_text_required".into(),
+            });
+        }
+        if text.chars().count() > TWITTER_X_TEXT_MAX_CHARS {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "twitter_x_text_too_long".into(),
             });
         }
         let response = self
@@ -910,6 +916,27 @@ mod tests {
                 media_id: "media_123".into(),
                 text: "Launch clip".into()
             }
+        );
+    }
+
+    #[test]
+    fn adapter_rejects_text_over_twitter_x_limit() {
+        let adapter = TwitterXUploadAdapter::new(StubTwitterXUploadClient {
+            response: TwitterXUploadResponse {
+                media_id: "media_123".into(),
+                post_id: Some("tweet_123".into()),
+                post_url: Some("https://x.com/i/web/status/tweet_123".into()),
+                processing: false,
+            },
+        });
+        let mut req = request();
+        req.title = "x".repeat(281);
+
+        assert_eq!(
+            adapter.upload(&req),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "twitter_x_text_too_long".into()
+            })
         );
     }
 
