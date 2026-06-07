@@ -315,7 +315,7 @@ function AddTrackButton() {
   }
 
   return (
-    <div className="timeline-add-track" style={{ position: "relative" }}>
+    <div className="timeline-add-track">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
