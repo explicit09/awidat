@@ -14,8 +14,8 @@ use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
+mod agent_delegate_cmd;
 mod apply_edl_cmd;
-mod chat_codex_cmd;
 mod index_cmd;
 mod lessons_cmd;
 mod new_cmd;
@@ -326,15 +326,12 @@ fn main() -> ExitCode {
             yolo,
             config_overrides,
         } => {
-            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+            return agent_delegate_cmd::run_chat(agent_delegate_cmd::AgentChatArgs {
+                project_root: path,
                 prompt,
-                dangerously_bypass: yolo,
                 model,
+                yolo,
                 config_overrides,
-                project_root: Some(path),
-                ephemeral: false,
-                skip_git_repo_check: true,
-                display_name: "awidat chat",
             });
         }
         Command::Tui {
@@ -344,34 +341,18 @@ fn main() -> ExitCode {
             yolo,
             config_overrides,
         } => {
-            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+            return agent_delegate_cmd::run_tui(agent_delegate_cmd::AgentChatArgs {
+                project_root: path,
                 prompt,
-                dangerously_bypass: yolo,
                 model,
+                yolo,
                 config_overrides,
-                project_root: Some(path),
-                ephemeral: false,
-                skip_git_repo_check: true,
-                display_name: "awidat tui",
             });
         }
         Command::Resume { selector, model } => {
-            // `awidat resume` delegates to the codex engine the same
-            // way `chat` does. Codex persists rollouts under
-            // $CODEX_HOME and resolves them by its own selector
-            // grammar; surfacing those through Awidat's legacy
-            // rollout-recorder paths is step 7b work. The `selector`
-            // arg is forwarded as the initial prompt so the user can
-            // paste a session id and the agent can re-orient.
-            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
-                prompt: selector,
-                dangerously_bypass: false,
+            return agent_delegate_cmd::run_resume(agent_delegate_cmd::AgentResumeArgs {
+                selector,
                 model,
-                config_overrides: Vec::new(),
-                project_root: std::env::current_dir().ok(),
-                ephemeral: false,
-                skip_git_repo_check: true,
-                display_name: "awidat resume",
             });
         }
         Command::Skills {
@@ -392,14 +373,10 @@ fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
-                prompt: Some(prompt),
-                dangerously_bypass: false,
+            return agent_delegate_cmd::run_prepared(agent_delegate_cmd::AgentPreparedRunArgs {
+                prompt,
                 model,
-                config_overrides: Vec::new(),
-                project_root: Some(project),
-                ephemeral: false,
-                skip_git_repo_check: true,
+                project_root: project,
                 display_name: "awidat skills run",
             });
         }
