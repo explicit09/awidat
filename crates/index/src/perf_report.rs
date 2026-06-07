@@ -216,14 +216,18 @@ pub fn sidecar_metrics(path: &Path) -> Option<SidecarMetrics> {
 pub fn to_markdown(report: &PerfReport) -> String {
     let mut out = String::new();
     out.push_str("# Indexing Performance Report\n\n");
-    out.push_str(&format!("- Label: `{}`\n", report.label));
-    out.push_str(&format!("- Project: `{}`\n", report.command.project_root));
-    out.push_str(&format!("- Source: `{}`\n", report.media.path));
+    let label = &report.label;
+    let project_root = &report.command.project_root;
+    let media_path = &report.media.path;
+    let concurrency = report.command.concurrency;
+    out.push_str(&format!("- Label: `{label}`\n"));
+    out.push_str(&format!("- Project: `{project_root}`\n"));
+    out.push_str(&format!("- Source: `{media_path}`\n"));
     if let Some(duration) = report.media.duration_s {
-        out.push_str(&format!("- Duration: {:.3}s\n", duration));
+        out.push_str(&format!("- Duration: {duration:.3}s\n"));
     }
     if let (Some(width), Some(height)) = (report.media.width, report.media.height) {
-        out.push_str(&format!("- Resolution: {}x{}\n", width, height));
+        out.push_str(&format!("- Resolution: {width}x{height}\n"));
     }
     if let Some(codec) = &report.media.video_codec {
         out.push_str(&format!("- Video codec: `{codec}`\n"));
@@ -232,9 +236,9 @@ pub fn to_markdown(report: &PerfReport) -> String {
         out.push_str(&format!("- FPS: `{fps}`\n"));
     }
     if let Some(size) = report.media.size_bytes {
-        out.push_str(&format!("- File size: {} bytes\n", size));
+        out.push_str(&format!("- File size: {size} bytes\n"));
     }
-    out.push_str(&format!("- Concurrency: {}\n", report.command.concurrency));
+    out.push_str(&format!("- Concurrency: {concurrency}\n"));
     out.push_str(&format!(
         "- Indexers: {}\n\n",
         report.command.included_indexers.join(", ")
