@@ -59,7 +59,7 @@ Verify:
 ```sql
 -- Run in Supabase SQL editor.
 SELECT table_name FROM information_schema.tables
-WHERE table_schema = 'public'
+WHERE table_schema = 'montage_social'
 ORDER BY table_name;
 -- Expected: account_publish_defaults, campaign_variant_targets,
 --           connected_accounts, oauth_connections, oauth_token_secrets,
