@@ -4,9 +4,9 @@ import { usePendingProposals } from "../timeline/pendingProposals";
 import { ProposalCard } from "./brief/ProposalCard";
 import { useTimelineStore } from "../timeline/store";
 import type { Stage } from "../state/stages";
-import { ChatStream } from "../agent/ChatStream";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
+import { ConversationPanel } from "./StageConversation";
 import mark from "../brand/awidat-mark.svg";
 
 /**
@@ -75,6 +75,9 @@ const TOOL_W = 372; // panel width
 const TOOL_GUTTER = 12; // gap from the right edge
 const TOOL_DOCK_W = 44; // right dock width
 const TOOL_RESERVE = TOOL_W + TOOL_GUTTER + TOOL_DOCK_W + 12; // stage reflow when a tool is open
+const CHAT_W = 360;
+const CHAT_GUTTER = 12;
+const CHAT_RESERVE = CHAT_W + CHAT_GUTTER + 12;
 
 export type StageShellProps = {
   hasProject: boolean;
@@ -182,6 +185,12 @@ export function StageShell(props: StageShellProps) {
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
   const tracks = trackCount || storeTrackCount;
   const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
+  const chatRight = CHAT_GUTTER;
+  const toolRight = convoOpen ? CHAT_W + CHAT_GUTTER * 2 : TOOL_GUTTER;
+  const toolDockRight = convoOpen
+    ? CHAT_W + CHAT_GUTTER + (tool ? TOOL_W + TOOL_GUTTER + 8 : 12)
+    : tool ? TOOL_W + TOOL_GUTTER + 8 : 12;
+  const rightReserve = (convoOpen ? CHAT_RESERVE : 0) + (tool ? TOOL_RESERVE : 0) || undefined;
 
   // Empty stage: a project is loaded but there's NO footage on the timeline
   // yet (no tracks) AND nothing proposed. "No proposals" alone is not empty —
@@ -266,7 +275,7 @@ export function StageShell(props: StageShellProps) {
       {tools && onStage_ ? (
         <div
           className="group/tools absolute top-1/2 z-40 -translate-y-1/2 transition-[right] duration-300"
-          style={{ right: tool ? TOOL_W + TOOL_GUTTER + 8 : 12 }}
+          style={{ right: toolDockRight }}
         >
           <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
             {TOOLS.map((t) => {
@@ -297,7 +306,7 @@ export function StageShell(props: StageShellProps) {
             position: "absolute",
             top: 64,
             bottom: 88,
-            right: TOOL_GUTTER,
+            right: toolRight,
             left: "auto",
             width: TOOL_W,
             maxWidth: "calc(100vw - 24px)",
@@ -311,15 +320,33 @@ export function StageShell(props: StageShellProps) {
         </div>
       ) : null}
 
+      {convoOpen ? (
+        <div
+          className="stage-chat-pane absolute z-30 flex flex-col overflow-hidden"
+          style={{
+            top: 64,
+            bottom: 88,
+            right: chatRight,
+            width: CHAT_W,
+            maxWidth: "calc(100vw - 24px)",
+          }}
+        >
+          <ConversationPanel
+            agentRead={agentRead}
+            onCollapse={() => setConvoOpen(false)}
+          />
+        </div>
+      ) : null}
+
       {/* STAGE LAYER — preview hero + proposal deck (dims when a destination
           opens). Bottom padding tracks the (track-sized) timeline height so
-          the hero flexes; right padding makes room for an open tool panel. */}
+          the hero flexes; right padding makes room for open right panes. */}
       <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: convoOpen ? 120 : `calc(96px + 56px + ${timelineHeight})`,
-          paddingRight: tool ? TOOL_RESERVE : undefined,
+          paddingBottom: `calc(96px + 56px + ${timelineHeight})`,
+          paddingRight: rightReserve,
         }}>
         <div className="relative flex min-w-0 flex-1 flex-col gap-2">
           <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
@@ -379,15 +406,13 @@ export function StageShell(props: StageShellProps) {
 
       {/* timeline glass strip — height grows with track count so every track
           is visible at once; past the soft cap it scrolls (never clips a
-          track). Hidden while the conversation panel is open so the two don't
-          fight for the bottom region. */}
-      {!convoOpen ? (
-        <div className="absolute inset-x-20 bottom-24 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? TOOL_RESERVE : undefined }}>
-          <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
-            {timeline}
-          </div>
+          track). Chat lives on the right, so the bottom timeline remains
+          available while the conversation is open. */}
+      <div className="absolute inset-x-20 bottom-24 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: rightReserve }}>
+        <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
+          {timeline}
         </div>
-      ) : null}
+      </div>
 
       {/* destination sheets slide over the dimmed stage */}
       {visibleDestination ? (
@@ -413,18 +438,6 @@ export function StageShell(props: StageShellProps) {
       {/* command bar + conversation home — edits, navigates, and shows
           the agent's replies in a glass thread that grows from the bar */}
       <div className="absolute inset-x-0 bottom-0 z-40 flex flex-col items-center px-8 pb-6">
-        {convoOpen ? (
-          <div className="glass glass-strong stage-convo mb-2 flex w-full max-w-[760px] flex-col overflow-hidden" style={{ borderRadius: 18, maxHeight: "min(46vh, 460px)" }}>
-            <div className="flex items-center gap-2 border-b border-[var(--glass-border)] px-4 py-2">
-              <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">Conversation</span>
-              {agentRead ? <span className="text-[10px] text-[var(--color-text-muted)]">· {agentRead}</span> : null}
-              <button onClick={() => setConvoOpen(false)} className="glass-ghost ml-auto rounded-md px-2 py-0.5 text-[11px]">▾ collapse</button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <ChatStream />
-            </div>
-          </div>
-        ) : null}
         <div className="glass glass-strong glass-reactive flex w-full max-w-[760px] items-center gap-3 rounded-2xl px-4 py-3" style={{ borderRadius: 18 }}>
           <button
             onClick={() => setConvoOpen((o) => !o)}

@@ -449,10 +449,69 @@ html, body, #root { background: #0a0a12; }
   background: #111;
 }
 
-/* Stage conversation panel: let ChatStream breathe inside the glass.
-   Strip its solid cockpit background so the frost shows through. */
-.stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
-.stage-convo .sticky-user-prompt { background: rgba(255,255,255,0.04); border-radius: 10px; }
+/* Stage conversation panel: compact assistant UI inside Montage glass. */
+.stage-convo .chat-items {
+  background: transparent !important;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.stage-convo .item {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: none;
+}
+.stage-convo .item-text {
+  background: transparent;
+  border-color: transparent;
+  padding: 8px 2px;
+}
+.stage-convo .item-user {
+  align-self: flex-end;
+  max-width: min(78%, 540px);
+  background: rgba(239, 68, 68, 0.20);
+  border-color: rgba(251, 113, 133, 0.24);
+}
+.stage-convo .item-user .item-meta {
+  display: none;
+}
+.stage-convo .item-user .item-body {
+  color: var(--color-text-primary);
+}
+.stage-convo .item-meta {
+  color: var(--color-text-muted);
+}
+.stage-convo .markdown table {
+  width: 100%;
+}
+.stage-convo .sticky-user-prompt {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.10);
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.stage-chat-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.045);
+  color: var(--color-text-muted);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+.stage-chat-icon:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.18);
+  color: var(--color-text-primary);
+}
+.stage-chat-icon[data-active="true"] {
+  border-color: rgba(251,113,133,0.42);
+  background: rgba(239,68,68,0.18);
+  color: #FCA5A5;
+}
 
 /* Stage tool side-panel: make reused cockpit surfaces (transcript, media,
    inspector, index, vedit) FILL the panel instead of collapsing to their

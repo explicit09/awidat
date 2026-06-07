@@ -19,9 +19,11 @@ import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { isAwidatSentinel } from "../state/introState";
 import { RationaleHint } from "../ui/components/RationaleHint";
+import { visibleChatItems } from "./chatDisplay";
 
 export function ChatStream() {
-  const items = useAgentStore((s) => s.items);
+  const rawItems = useAgentStore((s) => s.items);
+  const items = useMemo(() => visibleChatItems(rawItems), [rawItems]);
   const running = useAgentStore((s) => s.running);
   const turnError = useAgentStore((s) => s.turnError);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
