@@ -1,12 +1,20 @@
 import { strict as assert } from "node:assert";
 
 import {
+  buildSchedulerCadenceSlots,
+  buildSchedulerMetadataProfile,
+  schedulerMetadataFieldConfig,
+  buildSchedulerMetadata,
   loadSchedulerAccounts,
+  mergeSchedulerMetadataEdit,
   mergeSchedulerPublishResult,
   mergeSchedulerPublishResults,
   publishSchedulerPostToAccounts,
   publishSchedulerPostViaServer,
+  schedulerMetadataControlProvider,
   schedulerPublishableEntries,
+  updateSchedulerTargetMetadata,
+  validateSchedulerMetadataForAccounts,
 } from "../src/app/scheduler/schedulerPublish.ts";
 import type { RenderQueueEntry } from "../src/app/renderQueue.ts";
 
@@ -57,6 +65,207 @@ assert.deepEqual(failedSchedulerAccounts, {
   accounts: [],
   error: "server offline",
 });
+
+const editedMetadata = buildSchedulerMetadata({
+  title: "Edited title",
+  description: "Edited description",
+  tagsInput: "awidat, edited, awidat",
+  thumbnailPath: "  /tmp/edited.jpg  ",
+  privacy: "public",
+  scheduledFor: 4_000,
+});
+assert.deepEqual(editedMetadata, {
+  title: "Edited title",
+  description: "Edited description",
+  tags: ["awidat", "edited"],
+  visibility: "public",
+  scheduledAt: 4_000,
+  thumbnailPath: "/tmp/edited.jpg",
+});
+assert.deepEqual(
+  mergeSchedulerMetadataEdit(
+    {
+      ...finishedEntry,
+      uploadMetadata: {
+        youtube: {
+          title: "Old YouTube",
+          description: "",
+          tags: [],
+          visibility: "private",
+        },
+        tiktok: {
+          title: "Keep TikTok",
+          description: "Keep this",
+          tags: ["keep"],
+          visibility: "private",
+        },
+      },
+    },
+    "youtube",
+    editedMetadata,
+  ),
+  {
+    youtube: editedMetadata,
+    tiktok: {
+      title: "Keep TikTok",
+      description: "Keep this",
+      tags: ["keep"],
+      visibility: "private",
+    },
+  },
+);
+assert.deepEqual(
+  buildSchedulerCadenceSlots(
+    [
+      { id: "acct_youtube", provider: "youtube" },
+      { id: "acct_tiktok", provider: "tiktok" },
+      { id: "acct_instagram", provider: "instagram" },
+    ],
+    4_000,
+    15,
+  ).map((slot) => `${slot.provider}:${slot.scheduledFor}`),
+  ["youtube:4000", "tiktok:4900", "instagram:5800"],
+);
+assert.deepEqual(
+  validateSchedulerMetadataForAccounts(
+    [
+      { id: "acct_instagram", provider: "instagram" },
+      { id: "acct_youtube", provider: "youtube" },
+    ],
+    {
+      title: "",
+      description: "Short caption",
+      tagsInput: "",
+      thumbnailPath: "",
+      privacy: "private",
+      scheduledFor: 4_000,
+    },
+  ).map((error) => `${error.provider}:${error.code}`),
+  ["youtube:title.required"],
+);
+assert.deepEqual(schedulerMetadataFieldConfig("instagram"), {
+  showTitle: false,
+  titleLabel: "Title",
+  showDescription: true,
+  descriptionLabel: "Caption",
+  descriptionPlaceholder: "Caption shown under the post",
+  showTags: true,
+  showThumbnail: true,
+  visibilityOptions: null,
+});
+assert.deepEqual(schedulerMetadataFieldConfig("twitter_x"), {
+  showTitle: true,
+  titleLabel: "Post text",
+  showDescription: false,
+  descriptionLabel: "Description",
+  descriptionPlaceholder: "Long-form description",
+  showTags: false,
+  showThumbnail: false,
+  visibilityOptions: null,
+});
+assert.deepEqual(
+  schedulerMetadataFieldConfig("tiktok").visibilityOptions?.map(
+    (option) => `${option.value}:${option.label}`,
+  ),
+  ["private:Private", "unlisted:Friends only", "public:Public"],
+);
+assert.equal(schedulerMetadataFieldConfig("youtube").descriptionLabel, "Description");
+assert.equal(
+  schedulerMetadataControlProvider([
+    { id: "acct_instagram", provider: "instagram" },
+    { id: "acct_youtube", provider: "youtube" },
+  ]),
+  "youtube",
+);
+assert.equal(
+  schedulerMetadataControlProvider([
+    { id: "acct_instagram", provider: "instagram" },
+    { id: "acct_x", provider: "twitter_x" },
+  ]),
+  "twitter_x",
+);
+assert.equal(
+  schedulerMetadataControlProvider([
+    { id: "acct_instagram", provider: "instagram" },
+  ]),
+  "instagram",
+);
+assert.deepEqual(
+  buildSchedulerMetadataProfile({
+    provider: "instagram",
+    renderLabel: "Launch clip",
+    scheduledFor: 4_000,
+  }),
+  {
+    title: "",
+    description: "Launch clip",
+    tagsInput: "",
+    thumbnailPath: "",
+    privacy: "private",
+    scheduledFor: 4_000,
+  },
+);
+assert.deepEqual(
+  buildSchedulerMetadataProfile({
+    provider: "tiktok",
+    renderLabel: "Launch clip",
+    scheduledFor: 4_000,
+  }),
+  {
+    title: "Launch clip",
+    description: "",
+    tagsInput: "",
+    thumbnailPath: "",
+    privacy: "private",
+    scheduledFor: 4_000,
+  },
+);
+
+const updateTargetCalls: { command: string; args?: Record<string, unknown> }[] = [];
+await updateSchedulerTargetMetadata({
+  provider: "youtube",
+  targetId: "target_1",
+  title: "Edited title",
+  description: "Edited description",
+  tagsInput: "edited, launch",
+  thumbnailPath: "/tmp/edited.jpg",
+  privacy: "public",
+  scheduledFor: 5_000,
+  nowSeconds: () => 4_500,
+  invoke: async (command, args) => {
+    updateTargetCalls.push({ command, args });
+    if (command === "social_update_target") {
+      return { id: "target_1", validationState: "pending" };
+    }
+    if (command === "social_validate_target") {
+      return { id: "target_1", validationState: "valid" };
+    }
+    throw new Error(`unexpected update command ${command}`);
+  },
+});
+assert.deepEqual(updateTargetCalls, [
+  {
+    command: "social_update_target",
+    args: {
+      args: {
+        targetId: "target_1",
+        platformFields: {
+          privacy: "public",
+          title: "Edited title",
+          description: "Edited description",
+          tags: ["edited", "launch"],
+          thumbnailRef: "file:///tmp/edited.jpg",
+        },
+        scheduledFor: 5_000,
+        now: 4_500,
+      },
+    },
+  },
+  {
+    command: "social_validate_target",
+    args: { targetId: "target_1", now: 4_500 },
+  },
+]);
 
 const calls: { command: string; args?: Record<string, unknown> }[] = [];
 
@@ -126,7 +335,11 @@ const result = await publishSchedulerPostViaServer({
 
 assert.equal(result.provider, "youtube");
 assert.equal(result.jobId, "job_1");
-assert.deepEqual(result.uploadState, { state: "scheduled", job_id: "job_1" });
+assert.deepEqual(result.uploadState, {
+  state: "scheduled",
+  job_id: "job_1",
+  target_id: "target_1",
+});
 assert.deepEqual(result.metadata, {
   title: "Launch title",
   description: "Launch description",
@@ -134,6 +347,102 @@ assert.deepEqual(result.metadata, {
   visibility: "unlisted",
   scheduledAt: 3_000,
   thumbnailPath: "/tmp/thumb.jpg",
+});
+
+const tiktokBindCalls: { command: string; args?: Record<string, unknown> }[] = [];
+await publishSchedulerPostViaServer({
+  entry: finishedEntry,
+  account: {
+    id: "acct_tiktok",
+    provider: "tiktok",
+    capabilities: { uploadVideo: true },
+  },
+  title: "TikTok launch",
+  description: "TikTok caption",
+  tagsInput: "",
+  thumbnailPath: "",
+  privacy: "private",
+  scheduledFor: 3_000,
+  tiktokInteractions: {
+    disableDuet: true,
+    disableComment: true,
+    disableStitch: true,
+  },
+  invoke: async (command, args) => {
+    tiktokBindCalls.push({ command, args });
+    if (command === "social_validate_target") return { validationState: "valid" };
+    if (command === "social_schedule_target") return { id: "job_tiktok", status: "scheduled" };
+    if (command === "social_upload_artifact") return undefined;
+    return { id: "target_tiktok" };
+  },
+  idFactory: (prefix) => `${prefix}_tiktok`,
+  nowSeconds: () => 2_500,
+});
+assert.deepEqual(
+  (tiktokBindCalls[0].args?.args as Record<string, unknown>).platformFields,
+  {
+    privacy: "private",
+    title: "TikTok launch",
+    description: "TikTok caption",
+    tags: [],
+    disableDuet: true,
+    disableComment: true,
+    disableStitch: true,
+  },
+);
+
+const eventResult = await publishSchedulerPostViaServer({
+  entry: finishedEntry,
+  account: {
+    id: "acct_youtube",
+    provider: "youtube",
+    capabilities: { uploadVideo: true },
+  },
+  title: "Launch title",
+  description: "Launch description",
+  tagsInput: "",
+  thumbnailPath: "",
+  privacy: "private",
+  scheduledFor: 3_000,
+  invoke: async (command, args) => {
+    if (command === "social_validate_target") return { validationState: "valid" };
+    if (command === "social_schedule_target") {
+      const scheduleArgs = args?.args as Record<string, unknown>;
+      return { id: scheduleArgs.jobId, status: "scheduled" };
+    }
+    if (command === "social_upload_artifact") {
+      return {
+        id: "job_events",
+        status: "scheduled",
+        events: [
+          {
+            id: "event_1",
+            eventType: "artifact_uploaded",
+            message: "Upload artifact attached",
+            metadata: {},
+            createdAt: 2_510,
+          },
+        ],
+      };
+    }
+    return { id: "target_1" };
+  },
+  idFactory: (prefix) => `${prefix}_events`,
+  nowSeconds: () => 2_500,
+});
+assert.deepEqual(eventResult.uploadState, {
+  state: "scheduled",
+  job_id: "job_events",
+  target_id: "target_events",
+  events: [
+    {
+      id: "event_1",
+      eventType: "artifact_uploaded",
+      message: "Upload artifact attached",
+      metadata: {},
+      createdAt: 2_510,
+    },
+  ],
 });
 assert.deepEqual(
   mergeSchedulerPublishResult(
@@ -169,7 +478,7 @@ assert.deepEqual(
         remote_url: "https://tiktok.example/post/1",
         remote_id: "tt_1",
       },
-      youtube: { state: "scheduled", job_id: "job_1" },
+      youtube: { state: "scheduled", job_id: "job_1", target_id: "target_1" },
     },
     publishedUrls: {
       tiktok: "https://tiktok.example/post/1",
@@ -281,6 +590,7 @@ const multiResults = await publishSchedulerPostToAccounts({
   thumbnailPath: "",
   privacy: "private",
   scheduledFor: 4_000,
+  cadenceMinutes: 15,
   invoke: multiInvoke,
   idFactory: (prefix) => `${prefix}_${++multiIdSeq}`,
   nowSeconds: () => 3_500,
@@ -296,6 +606,44 @@ assert.deepEqual(
   }),
   ["job_2", "job_4"],
 );
+assert.deepEqual(
+  multiCalls.filter((call) => call.command === "social_bind_target").map((call) => {
+    const args = call.args?.args as Record<string, unknown>;
+    return args.scheduledFor;
+  }),
+  [4_000, 4_900],
+);
+assert.deepEqual(
+  multiResults.map((result) => result.metadata.scheduledAt),
+  [4_000, 4_900],
+);
+
+const blockedCalls: string[] = [];
+await assert.rejects(
+  () =>
+    publishSchedulerPostToAccounts({
+      entry: finishedEntry,
+      accounts: [
+        {
+          id: "acct_youtube",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ],
+      title: "",
+      description: "",
+      tagsInput: "",
+      thumbnailPath: "",
+      privacy: "private",
+      scheduledFor: 4_000,
+      invoke: async (command) => {
+        blockedCalls.push(command);
+        return {} as never;
+      },
+    }),
+  /Not valid: YouTube title required/,
+);
+assert.deepEqual(blockedCalls, []);
 
 async function invalidInvoke<T>(
   command: string,

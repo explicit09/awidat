@@ -31,6 +31,12 @@ import { create } from "zustand";
  *  handled at the form layer; this is the wire shape. */
 export type UploadVisibility = "private" | "unlisted" | "public";
 
+export type TikTokInteractionSettings = {
+  disableDuet: boolean;
+  disableComment: boolean;
+  disableStitch: boolean;
+};
+
 /** Per-target upload metadata. Mirrors `UploadParams` on the backend
  *  minus `file_path` (which the dispatcher fills in from the render's
  *  output_path). */
@@ -53,6 +59,7 @@ export type UploadMetadata = {
    *  `dialog::open` plugin; the form's preview uses `convertFileSrc`
    *  so the WKWebView can render it. */
   thumbnailPath?: string;
+  tiktokInteractions?: TikTokInteractionSettings;
 };
 
 export type PublishTimingMode = "now" | "scheduled";
@@ -103,7 +110,7 @@ export const PLATFORM_LIMITS = {
   },
   twitter_x: {
     titleMax: 280,
-    descriptionMax: 280,
+    descriptionMax: undefined as number | undefined,
     tagsTotalCharsMax: undefined as number | undefined,
     captionMax: undefined as number | undefined,
   },
@@ -307,12 +314,12 @@ export const useUploadMetadata = create<UploadMetadataState>((set, get) => ({
 
 /** Visibility options the form exposes for each provider. Maps to the
  *  backend's three-value `Visibility` enum but the labels (and which
- *  values are surfaced) differ per platform — Instagram has no
- *  visibility toggle at all. */
+ *  values are surfaced) differ per platform — Instagram and Twitter/X
+ *  have no visibility toggle in Awidat's current publish path. */
 export function visibilityOptionsFor(
   provider: string,
 ): Array<{ value: UploadVisibility; label: string }> | null {
-  if (provider === "instagram") return null;
+  if (provider === "instagram" || provider === "twitter_x") return null;
   if (provider === "tiktok") {
     return [
       { value: "private", label: "Private" },

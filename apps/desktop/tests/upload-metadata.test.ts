@@ -135,6 +135,23 @@ function resetStore(): void {
   assert.ok(tooLongDesc.find((e) => e.code === "description.too_long"));
 }
 
+// ---- X limits the post text field only; description is not published ----
+{
+  const tooLongText = validateMetadata("twitter_x", {
+    ...defaultMetadata(""),
+    title: "x".repeat(281),
+  });
+  assert.ok(tooLongText.find((e) => e.code === "title.too_long"));
+  const unusedDescription = validateMetadata("twitter_x", {
+    ...defaultMetadata("ok"),
+    description: "x".repeat(281),
+  });
+  assert.equal(
+    unusedDescription.find((e) => e.code === "description.too_long"),
+    undefined,
+  );
+}
+
 // ---- schedule.in_past fires for old timestamps ----
 {
   // 1 hour ago in epoch seconds.
@@ -183,6 +200,11 @@ function resetStore(): void {
     null,
     "Instagram has no visibility toggle",
   );
+  assert.equal(
+    visibilityOptionsFor("twitter_x"),
+    null,
+    "Twitter/X posts are public and should not expose an ignored visibility toggle",
+  );
   const tikTok = visibilityOptionsFor("tiktok");
   assert.ok(tikTok);
   assert.ok(
@@ -203,7 +225,7 @@ function resetStore(): void {
   assert.equal(PLATFORM_LIMITS.tiktok.descriptionMax, 4000);
   assert.equal(PLATFORM_LIMITS.instagram.captionMax, 2200);
   assert.equal(PLATFORM_LIMITS.twitter_x.titleMax, 280);
-  assert.equal(PLATFORM_LIMITS.twitter_x.descriptionMax, 280);
+  assert.equal(PLATFORM_LIMITS.twitter_x.descriptionMax, undefined);
 }
 
 // ---- useUploadMetadata.set + get round-trips by (jobId, provider) ----

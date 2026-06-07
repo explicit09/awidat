@@ -35,7 +35,7 @@ assert.equal(eligibilitySummary({ eligible: false, reasons: [] }), "Not eligible
 assert.equal(reasonCopy("scheduled_time_invalid"), "scheduled time is in the past");
 assert.equal(
   reasonCopy("twitter_x_oauth_client_pending"),
-  "Twitter/X connection setup pending",
+  "twitter x oauth client pending",
 );
 assert.equal(reasonCopy("title.required"), "title required");
 assert.equal(reasonCopy("some_unknown_code"), "some unknown code");
@@ -94,6 +94,34 @@ assert.deepEqual(
     privacy: "private",
     description: "Caption only",
     tags: [],
+  },
+);
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "instagram",
+    privacy: "private",
+    title: "Shared scheduler title",
+    description: "",
+    tagsInput: "",
+    thumbnailPath: "",
+  }),
+  {
+    privacy: "private",
+    description: "Shared scheduler title",
+    tags: [],
+  },
+);
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "twitter_x",
+    privacy: "private",
+    title: "Post text",
+    description: "Ignored long description",
+    tagsInput: "ignored",
+    thumbnailPath: "/tmp/ignored-thumb.jpg",
+  }),
+  {
+    title: "Post text",
   },
 );
 

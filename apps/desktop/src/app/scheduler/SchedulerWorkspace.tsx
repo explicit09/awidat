@@ -4,6 +4,7 @@ import {
   Clock3,
   ExternalLink,
   FileVideo,
+  KeyRound,
   ListTodo,
   Lock,
   RefreshCw,
@@ -18,8 +19,12 @@ import {
   type RenderQueueEntry,
 } from "../renderQueue";
 import { refreshServerUploadState } from "../useRenderQueueWorker";
-import type { UploadVisibility } from "../../state/uploadMetadata";
-import type { AccountSummary } from "../social/socialModel";
+import type {
+  TikTokInteractionSettings,
+  UploadVisibility,
+} from "../../state/uploadMetadata";
+import type { AccountSummary, Provider } from "../social/socialModel";
+import { startConnect } from "../social/socialActions";
 import {
   deriveSchedulerPostActions,
   deriveSchedulerPosts,
@@ -29,10 +34,18 @@ import {
   type SchedulerStatus,
 } from "./schedulerModel";
 import {
+  buildSchedulerMetadata,
+  buildSchedulerCadenceSlots,
+  buildSchedulerMetadataProfile,
   loadSchedulerAccounts,
+  mergeSchedulerMetadataEdit,
   mergeSchedulerPublishResult,
   publishSchedulerPostToAccounts,
+  schedulerMetadataControlProvider,
+  schedulerMetadataFieldConfig,
   schedulerPublishableEntries,
+  updateSchedulerTargetMetadata,
+  validateSchedulerMetadataForAccounts,
   type SchedulerPublishAccount,
 } from "./schedulerPublish";
 
@@ -45,6 +58,20 @@ type CalendarDay = {
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const SOCIAL_PROVIDERS: readonly Provider[] = [
+  "youtube",
+  "tiktok",
+  "instagram",
+  "twitter_x",
+];
+
+function defaultTikTokInteractions(): TikTokInteractionSettings {
+  return {
+    disableDuet: false,
+    disableComment: false,
+    disableStitch: false,
+  };
+}
 
 const STATUS_STYLES: Record<SchedulerStatus, string> = {
   draft:
@@ -372,7 +399,17 @@ function ReviewDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [rescheduleAt, setRescheduleAt] = useState("");
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editTagsInput, setEditTagsInput] = useState("");
+  const [editThumbnailPath, setEditThumbnailPath] = useState("");
+  const [editPrivacy, setEditPrivacy] = useState<UploadVisibility>("private");
+  const [editTikTokInteractions, setEditTikTokInteractions] = useState(
+    defaultTikTokInteractions,
+  );
   const actions = post ? deriveSchedulerPostActions(post) : null;
+  const postTagsKey = post?.tags.join("\u0000") ?? "";
+  const editFieldConfig = schedulerMetadataFieldConfig(post?.provider);
 
   useEffect(() => {
     if (!post) {
@@ -381,8 +418,23 @@ function ReviewDrawer({
       return;
     }
     setRescheduleAt(toDateTimeLocal(post.scheduledAt));
+    setEditTitle(post.title);
+    setEditDescription(post.description);
+    setEditTagsInput(post.tags.join(", "));
+    setEditThumbnailPath(post.thumbnailPath ?? "");
+    setEditPrivacy(post.visibility);
+    setEditTikTokInteractions(post.tiktokInteractions ?? defaultTikTokInteractions());
     setActionError(null);
-  }, [post?.id, post?.scheduledAt]);
+  }, [
+    post?.description,
+    post?.id,
+    post?.scheduledAt,
+    postTagsKey,
+    post?.thumbnailPath,
+    post?.tiktokInteractions,
+    post?.title,
+    post?.visibility,
+  ]);
 
   const refresh = useCallback(async () => {
     if (!post || !entry) return;
@@ -427,6 +479,88 @@ function ReviewDrawer({
     });
   }, [post?.jobId, rescheduleAt, runJobCommand]);
 
+  const reconnect = useCallback(async () => {
+    if (!post || !isSocialProvider(post.provider)) return;
+    setBusyAction("social_reconnect_provider");
+    try {
+      await startConnect(invoke, openUrl, post.provider, "/schedule");
+      await onRefreshAccounts();
+      if (entry) await refreshServerUploadState(entry, post.provider);
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [entry, onRefreshAccounts, post]);
+
+  const regenerateMetadata = useCallback(() => {
+    if (!post || !entry) return;
+    const profile = buildSchedulerMetadataProfile({
+      provider: post.provider,
+      renderLabel: entry.label,
+      scheduledFor: post.scheduledAt,
+    });
+    setEditTitle(profile.title);
+    setEditDescription(profile.description);
+    setEditTagsInput(profile.tagsInput);
+    setEditThumbnailPath(profile.thumbnailPath);
+    setEditPrivacy(profile.privacy);
+    setEditTikTokInteractions(defaultTikTokInteractions());
+    setActionError(null);
+  }, [entry, post]);
+
+  const saveMetadata = useCallback(async () => {
+    if (!post || !entry) return;
+    setBusyAction("save_metadata");
+    try {
+      const store = useRenderQueueStore.getState();
+      const latest = store.entries.find((item) => item.id === entry.id) ?? entry;
+      const metadata = buildSchedulerMetadata({
+        title: editTitle || latest.label,
+        description: editDescription,
+        tagsInput: editTagsInput,
+        thumbnailPath: editThumbnailPath,
+        privacy: editPrivacy,
+        scheduledFor: post.scheduledAt,
+        tiktokInteractions:
+          post.provider === "tiktok" ? editTikTokInteractions : undefined,
+      });
+      if (post.targetId && isSocialProvider(post.provider)) {
+        await updateSchedulerTargetMetadata({
+          provider: post.provider,
+          targetId: post.targetId,
+          title: metadata.title,
+          description: metadata.description,
+          tagsInput: editTagsInput,
+          thumbnailPath: editThumbnailPath,
+          privacy: metadata.visibility,
+          scheduledFor: post.scheduledAt,
+          tiktokInteractions: metadata.tiktokInteractions,
+          invoke,
+        });
+      }
+      store.setUploadMetadata(
+        latest.id,
+        mergeSchedulerMetadataEdit(latest, post.provider, metadata),
+      );
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [
+    editDescription,
+    editPrivacy,
+    editTagsInput,
+    editThumbnailPath,
+    editTikTokInteractions,
+    editTitle,
+    entry,
+    post,
+  ]);
+
   return (
     <aside className="min-h-0 border-l border-[var(--glass-border)] bg-[rgba(8,10,14,0.54)]">
       <div className="flex h-full min-h-0 flex-col">
@@ -441,6 +575,7 @@ function ReviewDrawer({
           accounts={accounts}
           accountError={accountError}
           accountsBusy={accountsBusy}
+          timeZone={timeZone}
           onRefreshAccounts={onRefreshAccounts}
           onSelectPost={onSelectPost}
         />
@@ -495,6 +630,108 @@ function ReviewDrawer({
               </Metadata>
             </dl>
 
+            <section className="mt-4 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.03)] p-3">
+              <div className="text-[12px] font-semibold text-[var(--color-text-secondary)]">
+                Metadata
+              </div>
+              <div className="mt-3 grid gap-2">
+                {editFieldConfig.showTitle ? (
+                  <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                    {editFieldConfig.titleLabel}
+                    <input
+                      value={editTitle}
+                      onChange={(event) => setEditTitle(event.currentTarget.value)}
+                      className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                    />
+                  </label>
+                ) : null}
+                {editFieldConfig.showDescription ? (
+                  <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                    {editFieldConfig.descriptionLabel}
+                    <textarea
+                      value={editDescription}
+                      onChange={(event) =>
+                        setEditDescription(event.currentTarget.value)
+                      }
+                      placeholder={editFieldConfig.descriptionPlaceholder}
+                      className="min-h-[66px] min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                    />
+                  </label>
+                ) : null}
+                <div className="grid grid-cols-2 gap-2">
+                  {editFieldConfig.showTags ? (
+                    <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                      Tags
+                      <input
+                        value={editTagsInput}
+                        onChange={(event) =>
+                          setEditTagsInput(event.currentTarget.value)
+                        }
+                        className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                      />
+                    </label>
+                  ) : null}
+                  {editFieldConfig.visibilityOptions ? (
+                    <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                      Privacy
+                      <select
+                        value={editPrivacy}
+                        onChange={(event) =>
+                          setEditPrivacy(event.currentTarget.value as UploadVisibility)
+                        }
+                        className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                      >
+                        {editFieldConfig.visibilityOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                      Visibility
+                      <span className="rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] px-2 py-1.5 text-[12px] text-[var(--color-text-secondary)]">
+                        Always public on {providerLabel(post.provider)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {editFieldConfig.showThumbnail ? (
+                  <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                    Thumbnail path
+                    <input
+                      value={editThumbnailPath}
+                      onChange={(event) =>
+                        setEditThumbnailPath(event.currentTarget.value)
+                      }
+                      className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                    />
+                  </label>
+                ) : null}
+                {post.provider === "tiktok" ? (
+                  <TikTokInteractionControls
+                    value={editTikTokInteractions}
+                    onChange={setEditTikTokInteractions}
+                  />
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <SchedulerActionButton
+                    icon={<RefreshCw className="h-3.5 w-3.5" />}
+                    label="Regenerate"
+                    busy={false}
+                    onClick={regenerateMetadata}
+                  />
+                  <SchedulerActionButton
+                    icon={<ListTodo className="h-3.5 w-3.5" />}
+                    label="Save metadata"
+                    busy={busyAction === "save_metadata"}
+                    onClick={() => void saveMetadata()}
+                  />
+                </div>
+              </div>
+            </section>
+
             {actions ? (
               <section className="mt-4 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.03)] p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -542,6 +779,14 @@ function ReviewDrawer({
                       }
                     />
                   ) : null}
+                  {actions.canReconnect && isSocialProvider(post.provider) ? (
+                    <SchedulerActionButton
+                      icon={<KeyRound className="h-3.5 w-3.5" />}
+                      label="Reconnect"
+                      busy={busyAction === "social_reconnect_provider"}
+                      onClick={() => void reconnect()}
+                    />
+                  ) : null}
                   {actions.canOpenProviderUrl && post.providerUrl ? (
                     <SchedulerActionButton
                       icon={<ExternalLink className="h-3.5 w-3.5" />}
@@ -575,6 +820,14 @@ function ReviewDrawer({
                 ) : null}
               </section>
             ) : null}
+
+            <section className="mt-4 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.03)] p-3">
+              <div className="flex items-center gap-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+                <ListTodo className="h-3.5 w-3.5" />
+                Audit history
+              </div>
+              <AuditEventList post={post} timeZone={timeZone} />
+            </section>
 
             <section className="mt-4 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.03)] p-3">
               <div className="text-[12px] font-semibold text-[var(--color-text-secondary)]">
@@ -611,6 +864,7 @@ function SchedulerComposer({
   accounts,
   accountError,
   accountsBusy,
+  timeZone,
   onRefreshAccounts,
   onSelectPost,
 }: {
@@ -618,6 +872,7 @@ function SchedulerComposer({
   accounts: AccountSummary[];
   accountError: string | null;
   accountsBusy: boolean;
+  timeZone: string;
   onRefreshAccounts: () => Promise<void>;
   onSelectPost: (postId: string) => void;
 }) {
@@ -633,7 +888,11 @@ function SchedulerComposer({
   const [tagsInput, setTagsInput] = useState("");
   const [thumbnailPath, setThumbnailPath] = useState("");
   const [privacy, setPrivacy] = useState<UploadVisibility>("private");
+  const [tiktokInteractions, setTikTokInteractions] = useState(
+    defaultTikTokInteractions,
+  );
   const [scheduledAt, setScheduledAt] = useState(toDateTimeLocal(nowSeconds() + 3600));
+  const [cadenceMinutes, setCadenceMinutes] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -651,10 +910,45 @@ function SchedulerComposer({
   }, [uploadAccounts]);
 
   const selectedEntry = publishable.find((item) => item.id === entryId);
-  const selectedAccounts = uploadAccounts.filter((account) =>
-    accountIds.includes(account.id),
+  const selectedAccounts = useMemo(
+    () => uploadAccounts.filter((account) => accountIds.includes(account.id)),
+    [accountIds, uploadAccounts],
   );
-  const selectedProvider = selectedAccounts[0]?.provider;
+  const selectedProvider = schedulerMetadataControlProvider(selectedAccounts);
+  const hasTikTokSelection = selectedAccounts.some(
+    (account) => account.provider === "tiktok",
+  );
+  const fieldConfig = schedulerMetadataFieldConfig(selectedProvider);
+  const scheduledForPreview = fromDateTimeLocal(scheduledAt);
+  const cadenceSlots = scheduledForPreview
+    ? buildSchedulerCadenceSlots(
+        selectedAccounts,
+        scheduledForPreview,
+        cadenceMinutes,
+      )
+    : [];
+  const metadataValidationErrors = useMemo(
+    () =>
+      scheduledForPreview
+        ? validateSchedulerMetadataForAccounts(selectedAccounts, {
+            title,
+            description,
+            tagsInput,
+            thumbnailPath,
+            privacy,
+            scheduledFor: scheduledForPreview,
+          })
+        : [],
+    [
+      description,
+      privacy,
+      scheduledForPreview,
+      selectedAccounts,
+      tagsInput,
+      thumbnailPath,
+      title,
+    ],
+  );
 
   useEffect(() => {
     if (!selectedEntry || !selectedProvider) return;
@@ -664,14 +958,37 @@ function SchedulerComposer({
     setTagsInput(metadata?.tags.join(", ") ?? "");
     setThumbnailPath(metadata?.thumbnailPath ?? "");
     setPrivacy(metadata?.visibility ?? "private");
+    setTikTokInteractions(metadata?.tiktokInteractions ?? defaultTikTokInteractions());
     setScheduledAt(toDateTimeLocal(metadata?.scheduledAt ?? nowSeconds() + 3600));
   }, [selectedEntry?.id, selectedProvider]);
+
+  const regenerateProfile = useCallback(() => {
+    if (!selectedEntry) return;
+    const scheduledFor = fromDateTimeLocal(scheduledAt) ?? nowSeconds() + 3600;
+    const profile = buildSchedulerMetadataProfile({
+      provider: selectedProvider,
+      renderLabel: selectedEntry.label,
+      scheduledFor,
+    });
+    setTitle(profile.title);
+    setDescription(profile.description);
+    setTagsInput(profile.tagsInput);
+    setThumbnailPath(profile.thumbnailPath);
+    setPrivacy(profile.privacy);
+    setTikTokInteractions(defaultTikTokInteractions());
+    setScheduledAt(toDateTimeLocal(profile.scheduledFor));
+    setError(null);
+  }, [scheduledAt, selectedEntry, selectedProvider]);
 
   const submit = useCallback(async () => {
     if (!selectedEntry || selectedAccounts.length === 0) return;
     const scheduledFor = fromDateTimeLocal(scheduledAt);
     if (!scheduledFor) {
       setError("Choose a valid schedule time");
+      return;
+    }
+    if (metadataValidationErrors.length > 0) {
+      setError(metadataValidationErrors[0].message);
       return;
     }
     setBusy(true);
@@ -686,6 +1003,8 @@ function SchedulerComposer({
         thumbnailPath,
         privacy,
         scheduledFor,
+        cadenceMinutes,
+        tiktokInteractions,
         invoke,
       });
       const store = useRenderQueueStore.getState();
@@ -721,12 +1040,15 @@ function SchedulerComposer({
     selectedEntry,
     selectedAccounts,
     scheduledAt,
+    cadenceMinutes,
     title,
     description,
     tagsInput,
     thumbnailPath,
     privacy,
+    tiktokInteractions,
     onSelectPost,
+    metadataValidationErrors,
   ]);
 
   return (
@@ -735,15 +1057,26 @@ function SchedulerComposer({
         <div className="text-[12px] font-semibold text-[var(--color-text-secondary)]">
           Schedule from render
         </div>
-        <button
-          type="button"
-          disabled={accountsBusy}
-          onClick={() => void onRefreshAccounts()}
-          className="inline-flex min-h-[28px] items-center gap-1.5 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] px-2 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)] hover:border-[var(--glass-border-strong)] hover:text-[var(--color-text-primary)] disabled:cursor-wait disabled:opacity-60"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          {accountsBusy ? "Refreshing" : "Accounts"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            disabled={!selectedEntry}
+            onClick={regenerateProfile}
+            className="inline-flex min-h-[28px] items-center gap-1.5 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] px-2 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)] hover:border-[var(--glass-border-strong)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Regenerate
+          </button>
+          <button
+            type="button"
+            disabled={accountsBusy}
+            onClick={() => void onRefreshAccounts()}
+            className="inline-flex min-h-[28px] items-center gap-1.5 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.035)] px-2 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)] hover:border-[var(--glass-border-strong)] hover:text-[var(--color-text-primary)] disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {accountsBusy ? "Refreshing" : "Accounts"}
+          </button>
+        </div>
       </div>
       <div className="mt-3 grid gap-2">
         {accountError ? (
@@ -805,55 +1138,91 @@ function SchedulerComposer({
                 })}
               </div>
             </div>
-            <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
-              Title
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.currentTarget.value)}
-                className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
-              />
-            </label>
-            <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
-              Description
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.currentTarget.value)}
-                className="min-h-[66px] min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-2">
+            {fieldConfig.showTitle ? (
               <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
-                Tags
+                {fieldConfig.titleLabel}
                 <input
-                  value={tagsInput}
-                  onChange={(event) => setTagsInput(event.currentTarget.value)}
+                  value={title}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
                   className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
                 />
               </label>
+            ) : null}
+            {fieldConfig.showDescription ? (
               <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
-                Privacy
-                <select
-                  value={privacy}
-                  onChange={(event) =>
-                    setPrivacy(event.currentTarget.value as UploadVisibility)
-                  }
-                  className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
-                >
-                  <option value="private">Private</option>
-                  <option value="unlisted">Unlisted</option>
-                  <option value="public">Public</option>
-                </select>
+                {fieldConfig.descriptionLabel}
+                <textarea
+                  value={description}
+                  onChange={(event) => setDescription(event.currentTarget.value)}
+                  placeholder={fieldConfig.descriptionPlaceholder}
+                  className="min-h-[66px] min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                />
               </label>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              {fieldConfig.showTags ? (
+                <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                  Tags
+                  <input
+                    value={tagsInput}
+                    onChange={(event) => setTagsInput(event.currentTarget.value)}
+                    className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                  />
+                </label>
+              ) : null}
+              {fieldConfig.visibilityOptions ? (
+                <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                  Privacy
+                  <select
+                    value={privacy}
+                    onChange={(event) =>
+                      setPrivacy(event.currentTarget.value as UploadVisibility)
+                    }
+                    className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                  >
+                    {fieldConfig.visibilityOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                  Visibility
+                  <span className="rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] px-2 py-1.5 text-[12px] text-[var(--color-text-secondary)]">
+                    Always public on {providerLabel(selectedProvider ?? "")}
+                  </span>
+                </div>
+              )}
             </div>
-            <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
-              Thumbnail path
-              <input
-                value={thumbnailPath}
-                onChange={(event) => setThumbnailPath(event.currentTarget.value)}
-                className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+            {fieldConfig.showThumbnail ? (
+              <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                Thumbnail path
+                <input
+                  value={thumbnailPath}
+                  onChange={(event) => setThumbnailPath(event.currentTarget.value)}
+                  className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                />
+              </label>
+            ) : null}
+            {hasTikTokSelection ? (
+              <TikTokInteractionControls
+                value={tiktokInteractions}
+                onChange={setTikTokInteractions}
               />
-            </label>
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            ) : null}
+            {metadataValidationErrors.length > 0 ? (
+              <ul className="m-0 grid list-none gap-1 rounded-md border border-[var(--color-job-failed-border)] bg-[var(--color-job-failed-fill)] p-2 text-[12px] text-[var(--color-job-failed-text)]">
+                {metadataValidationErrors.map((validationError) => (
+                  <li key={`${validationError.provider}:${validationError.code}`}>
+                    {providerLabel(validationError.provider)}:{" "}
+                    {validationError.message}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
               <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
                 When
                 <input
@@ -863,15 +1232,57 @@ function SchedulerComposer({
                   className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
                 />
               </label>
+              <label className="grid gap-1 text-[11px] text-[var(--color-text-muted)]">
+                Cadence
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={cadenceMinutes}
+                  onChange={(event) =>
+                    setCadenceMinutes(
+                      Math.max(0, Number(event.currentTarget.value) || 0),
+                    )
+                  }
+                  className="w-20 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--color-text-primary)]"
+                  aria-label="Cadence minutes between scheduled posts"
+                />
+              </label>
               <button
                 type="button"
-                disabled={busy || selectedAccounts.length === 0}
+                disabled={
+                  busy ||
+                  selectedAccounts.length === 0 ||
+                  metadataValidationErrors.length > 0
+                }
                 onClick={() => void submit()}
                 className="self-end rounded-md border border-[rgba(255,122,24,0.42)] bg-[rgba(255,122,24,0.14)] px-3 py-1.5 text-[12px] font-semibold text-[#FFB073] hover:bg-[rgba(255,122,24,0.2)] disabled:cursor-wait disabled:opacity-60"
               >
                 {busy ? "Scheduling" : `Schedule ${selectedAccounts.length}`}
               </button>
             </div>
+            {cadenceSlots.length > 0 ? (
+              <div className="rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] p-2">
+                <div className="text-[11px] font-semibold uppercase text-[var(--color-text-muted)]">
+                  Slot preview
+                </div>
+                <ol className="mt-2 m-0 grid list-none gap-1 p-0">
+                  {cadenceSlots.map((slot) => (
+                    <li
+                      key={slot.account.id}
+                      className="flex min-w-0 items-center justify-between gap-2 text-[12px]"
+                    >
+                      <span className="min-w-0 truncate text-[var(--color-text-secondary)]">
+                        {slot.account.displayName} ({providerLabel(slot.provider)})
+                      </span>
+                      <span className="shrink-0 text-[var(--color-text-muted)]">
+                        {formatSchedulerTime(slot.scheduledFor, timeZone)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
           </>
         )}
         {error ? (
@@ -881,6 +1292,45 @@ function SchedulerComposer({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function AuditEventList({
+  post,
+  timeZone,
+}: {
+  post: SchedulerPost;
+  timeZone: string;
+}) {
+  if (post.auditEvents.length === 0) {
+    return (
+      <p className="mt-2 m-0 text-[12px] leading-relaxed text-[var(--color-text-muted)]">
+        No audit events recorded yet.
+      </p>
+    );
+  }
+
+  return (
+    <ol className="mt-3 m-0 grid list-none gap-2 p-0">
+      {post.auditEvents.map((event) => (
+        <li
+          key={event.id}
+          className="min-w-0 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] px-2.5 py-2"
+        >
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+              {event.eventType}
+            </span>
+            <time className="shrink-0 text-[11px] text-[var(--color-text-muted)]">
+              {formatSchedulerTime(event.createdAt, timeZone)}
+            </time>
+          </div>
+          <p className="mt-1 m-0 break-words text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+            {event.message || "No message"}
+          </p>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -905,6 +1355,48 @@ function SchedulerActionButton({
       {icon}
       {busy ? "Working" : label}
     </button>
+  );
+}
+
+function TikTokInteractionControls({
+  value,
+  onChange,
+}: {
+  value: TikTokInteractionSettings;
+  onChange: (value: TikTokInteractionSettings) => void;
+}) {
+  const options: Array<{
+    key: keyof TikTokInteractionSettings;
+    label: string;
+  }> = [
+    { key: "disableDuet", label: "Disable duet" },
+    { key: "disableComment", label: "Disable comments" },
+    { key: "disableStitch", label: "Disable stitch" },
+  ];
+  return (
+    <fieldset className="grid gap-2 rounded-md border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] p-2">
+      <legend className="px-1 text-[11px] text-[var(--color-text-muted)]">
+        TikTok interactions
+      </legend>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {options.map((option) => (
+          <label
+            key={option.key}
+            className="flex min-w-0 items-center gap-2 text-[12px] text-[var(--color-text-secondary)]"
+          >
+            <input
+              type="checkbox"
+              checked={value[option.key]}
+              onChange={(event) =>
+                onChange({ ...value, [option.key]: event.currentTarget.checked })
+              }
+              className="h-3.5 w-3.5 accent-[#FF7A18]"
+            />
+            <span className="min-w-0 truncate">{option.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -1032,6 +1524,10 @@ function providerLabel(provider: string): string {
     .filter(Boolean)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isSocialProvider(provider: string): provider is Provider {
+  return SOCIAL_PROVIDERS.includes(provider as Provider);
 }
 
 function formatGmtOffset(): string {
