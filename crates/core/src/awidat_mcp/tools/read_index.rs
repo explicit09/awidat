@@ -26,7 +26,7 @@ pub struct ReadIndexArgs {
     pub asset_id: String,
     /// Which signal to read. transcript / scenes / audio_levels / beats / topics /
     /// editorial_moments / color / clip / face / gaze / shot / composition /
-    /// frame_quality / summary.
+    /// frame_quality / generated_description / summary.
     pub channel: String,
     /// 0-based first entry for windowed channels.
     #[serde(default)]
@@ -51,12 +51,14 @@ pub fn run(args: ReadIndexArgs, ctx: McpToolCtx) -> Result<String, String> {
         "shot" => "shot",
         "composition" => "composition",
         "frame_quality" => "frame-quality",
+        "generated_description" => "generated-description",
         "summary" => return summary(&ctx.project_root, &args.asset_id),
         other => {
             return Err(format!(
                 "read_index: channel '{other}' not recognized. Use one of: \
                  transcript, scenes, audio_levels, beats, topics, editorial_moments, \
-                 color, clip, face, gaze, shot, composition, frame_quality, summary."
+                 color, clip, face, gaze, shot, composition, frame_quality, \
+                 generated_description, summary."
             ));
         }
     };
@@ -309,6 +311,23 @@ fn project_channel(
                 "offset": offset, "limit": limit,
             })
         }
+        "generated_description" => serde_json::json!({
+            "asset_id": sidecar.get("asset_id"),
+            "job_id": data.get("job_id"),
+            "provider": data.get("provider"),
+            "model": data.get("model"),
+            "prompt": data.get("prompt"),
+            "prompt_hash": data.get("prompt_hash"),
+            "artifact_kind": data.get("artifact_kind"),
+            "workflow_purpose": data.get("workflow_purpose"),
+            "visual_summary": data.get("visual_summary"),
+            "intended_use": data.get("intended_use"),
+            "created_at": data.get("created_at"),
+            "completed_at": data.get("completed_at"),
+            "requires_disclosure": data.get("requires_disclosure"),
+            "uses_likeness": data.get("uses_likeness"),
+            "provenance": data.get("provenance"),
+        }),
         _ => sidecar.clone(),
     }
 }
@@ -349,6 +368,7 @@ fn summary(project_root: &Path, asset_id: &str) -> Result<String, String> {
         ("shot", "shot"),
         ("composition", "composition"),
         ("frame_quality", "frame-quality"),
+        ("generated_description", "generated-description"),
     ] {
         match read_sidecar(project_root, indexer, &asset) {
             Ok(v) => {
@@ -368,6 +388,9 @@ fn summary(project_root: &Path, asset_id: &str) -> Result<String, String> {
                     "total_regions",
                     "speaker_to_face",
                     "has_embeddings",
+                    "visual_summary",
+                    "requires_disclosure",
+                    "uses_likeness",
                 ] {
                     if let Some(v) = projected.get(key) {
                         entry.insert(key.into(), v.clone());
@@ -409,6 +432,68 @@ Read one channel of the footage index for an asset. Channels: \
 'audio_levels' (LUFS + silences), 'beats' (tempo + beat times), 'topics' (topic segmentation), \
 'editorial_moments' (typed edit beats), 'color' (per-frame color/exposure analysis), \
 'clip' (CLIP embedding metadata), 'face', 'gaze', 'shot', 'composition', \
-'frame_quality', 'summary' (one-line overview of all channels). Windowed channels accept \
+'frame_quality', 'generated_description' (prompt/provenance context for generated media), \
+'summary' (one-line overview of all channels). Windowed channels accept \
 offset+limit (default 0+50). Result is capped at 8KB; page via offset \
 when truncated.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_sidecar(root: &Path, indexer: &str, asset: &str, body: serde_json::Value) {
+        let path = root
+            .join("index")
+            .join(indexer)
+            .join(format!("{asset}.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn generated_description_channel_projects_generation_context() {
+        let dir = tempfile::tempdir().unwrap();
+        write_sidecar(
+            dir.path(),
+            "generated-description",
+            "raw/generated/mock/gen-1.mp4",
+            serde_json::json!({
+                "indexer": "generated-description",
+                "asset_id": "raw/generated/mock/gen-1.mp4",
+                "data": {
+                    "job_id": "gen-1",
+                    "provider": "mock",
+                    "model": "offline-placeholder",
+                    "prompt": "quiet street at dusk",
+                    "prompt_hash": "abc123",
+                    "artifact_kind": "video",
+                    "workflow_purpose": "broll",
+                    "visual_summary": "quiet street at dusk",
+                    "intended_use": "broll",
+                    "requires_disclosure": true,
+                    "uses_likeness": false,
+                    "provenance": "generated_media_registry"
+                }
+            }),
+        );
+
+        let body = run(
+            ReadIndexArgs {
+                asset_id: "raw/generated/mock/gen-1.mp4".into(),
+                channel: "generated_description".into(),
+                offset: None,
+                limit: None,
+            },
+            McpToolCtx {
+                project_root: dir.path().to_path_buf(),
+            },
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(body["job_id"], "gen-1");
+        assert_eq!(body["visual_summary"], "quiet street at dusk");
+        assert_eq!(body["requires_disclosure"], true);
+        assert_eq!(body["provenance"], "generated_media_registry");
+    }
+}
