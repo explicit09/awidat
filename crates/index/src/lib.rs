@@ -31,6 +31,7 @@ use tracing::{info, warn};
 
 mod manifest_io;
 pub mod media_files;
+pub mod perf_report;
 mod sha;
 pub mod sidecar_io;
 
