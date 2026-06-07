@@ -17,6 +17,7 @@ import {
   renderQueueProgressCopy,
   renderQueueStatusLabel,
   renderQueueVisibleEntries,
+  serverUploadRefreshCommand,
   sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
@@ -578,6 +579,26 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
       canReschedule: false,
       canOpenProviderUrl: false,
     },
+  );
+}
+
+// ---- server-backed refresh advances processing jobs through provider polling ----
+{
+  assert.equal(
+    serverUploadRefreshCommand({ state: "scheduled", job_id: "job_sched" }),
+    "social_publish_job",
+  );
+  assert.equal(
+    serverUploadRefreshCommand({ state: "processing", job_id: "job_processing" }),
+    "social_poll_publish_job",
+  );
+  assert.equal(
+    serverUploadRefreshCommand({
+      state: "failed",
+      reason: "missing scope",
+      job_id: "job_action",
+    }),
+    "social_publish_job",
   );
 }
 

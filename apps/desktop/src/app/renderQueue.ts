@@ -132,6 +132,14 @@ export function deriveUploadTargetRetryMode(
   return hasRenderOutput ? "republish" : null;
 }
 
+export function serverUploadRefreshCommand(
+  state: RenderUploadState,
+): "social_publish_job" | "social_poll_publish_job" {
+  return state.state === "processing"
+    ? "social_poll_publish_job"
+    : "social_publish_job";
+}
+
 function hasActiveUpload(states?: Record<string, RenderUploadState>): boolean {
   return Object.values(states ?? {}).some((state) =>
     ["pending", "uploading", "scheduled", "processing"].includes(state.state),

@@ -21,6 +21,7 @@ import {
   hasRunnablePendingWithoutRunning,
   reframeMasterPathForEntry,
   renderQueueSelectors,
+  serverUploadRefreshCommand,
   sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
@@ -158,7 +159,7 @@ export async function refreshServerUploadState(
       ?.uploadStates ?? {};
   let nextState: RenderUploadState;
   try {
-    const job = await invoke<SocialPublishJob>("social_publish_job", {
+    const job = await invoke<SocialPublishJob>(serverUploadRefreshCommand(current), {
       jobId: current.job_id,
     });
     nextState = uploadStateFromSocialJob(job);
