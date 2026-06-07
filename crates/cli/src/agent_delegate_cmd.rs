@@ -88,13 +88,13 @@ fn resolve_agent_command_with(
     sibling_candidate: Option<PathBuf>,
     args: Vec<OsString>,
 ) -> Result<AgentCommand, std::env::VarError> {
-    if let Some(candidate) = sibling_candidate {
-        if candidate.exists() {
-            return Ok(AgentCommand {
-                program: candidate.into_os_string(),
-                args,
-            });
-        }
+    if let Some(candidate) = sibling_candidate
+        && candidate.exists()
+    {
+        return Ok(AgentCommand {
+            program: candidate.into_os_string(),
+            args,
+        });
     }
 
     let manifest_path = workspace_manifest_path();
@@ -239,7 +239,7 @@ mod tests {
     fn missing_sibling_agent_falls_back_to_workspace_cargo_run() {
         let args = vec![OsString::from("tui"), OsString::from("project")];
         let command =
-            resolve_agent_command_with(Some(PathBuf::from("/missing/awidat-agent")), args.clone())
+            resolve_agent_command_with(Some(PathBuf::from("/missing/awidat-agent")), args)
                 .expect("workspace cargo fallback should be available");
 
         assert_eq!(command.program, OsString::from("cargo"));
