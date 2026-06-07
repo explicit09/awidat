@@ -1,5 +1,8 @@
 import type { RenderQueueEntry } from "../app/renderQueue.ts";
-import { reasonCopy } from "../app/social/socialModel.ts";
+import {
+  buildPlatformFieldsForPublish,
+  reasonCopy,
+} from "../app/social/socialModel.ts";
 import type {
   UploadMetadata,
   UploadVisibility,
@@ -186,28 +189,20 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-function localArtifactRef(path: string): string {
-  return `file://${path}`;
-}
-
 function platformFieldsFromMetadata(
   provider: CampaignPlatform,
   metadata: UploadMetadata,
   fallbackTitle: string,
 ): Record<string, unknown> {
-  const fields: Record<string, unknown> = {
+  return buildPlatformFieldsForPublish({
+    provider,
     privacy: metadata.visibility ?? "private",
     title: metadata.title || fallbackTitle,
     description: metadata.description ?? "",
-    tags: metadata.tags,
-  };
-  if (metadata.thumbnailPath) {
-    fields.thumbnailRef = localArtifactRef(metadata.thumbnailPath);
-  }
-  if (provider === "instagram") {
-    delete fields.title;
-  }
-  return fields;
+    tagsInput: metadata.tags.join(","),
+    thumbnailPath: metadata.thumbnailPath ?? "",
+    tiktokInteractions: metadata.tiktokInteractions,
+  });
 }
 
 /**

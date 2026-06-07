@@ -1,6 +1,10 @@
 import type { RenderUploadEvent, RenderUploadState } from "./renderQueue";
 import type { UploadMetadata } from "../state/uploadMetadata";
-import { reasonCopy } from "./social/socialModel.ts";
+import {
+  buildPlatformFieldsForPublish,
+  reasonCopy,
+  type Provider,
+} from "./social/socialModel.ts";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -137,28 +141,20 @@ function validationFailureReason(target: ValidatedTarget): string {
   return first ? reasonCopy(first) : (validationState(target) ?? "unknown");
 }
 
-function localArtifactRef(outputPath: string): string {
-  return `file://${outputPath}`;
-}
-
 function platformFieldsFromMetadata(
   provider: string,
   metadata: UploadMetadata | undefined,
   fallbackTitle: string,
 ): Record<string, unknown> {
-  const fields: Record<string, unknown> = {
+  return buildPlatformFieldsForPublish({
+    provider: provider as Provider,
     privacy: metadata?.visibility ?? "private",
     title: metadata?.title || fallbackTitle,
     description: metadata?.description ?? "",
-    tags: metadata?.tags ?? [],
-  };
-  if (metadata?.thumbnailPath) {
-    fields.thumbnailRef = localArtifactRef(metadata.thumbnailPath);
-  }
-  if (provider === "instagram") {
-    delete fields.title;
-  }
-  return fields;
+    tagsInput: (metadata?.tags ?? []).join(","),
+    thumbnailPath: metadata?.thumbnailPath ?? "",
+    tiktokInteractions: metadata?.tiktokInteractions,
+  });
 }
 
 function sleep(ms: number): Promise<void> {

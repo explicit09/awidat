@@ -148,7 +148,9 @@ calls.length = 0;
         },
       ] as T;
     }
-    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_bind_target") {
+      return { id: "target_1" } as T;
+    }
     if (command === "social_validate_target") {
       return { id: "target_1", validation_state: "valid" } as T;
     }
@@ -301,7 +303,17 @@ calls.length = 0;
         },
       ] as T;
     }
-    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_bind_target") {
+      const bindArgs = args?.args as { platformFields?: Record<string, unknown> };
+      assert.deepEqual(bindArgs.platformFields, {
+        privacy: "private",
+        title: "TikTok private clip",
+        disableDuet: false,
+        disableComment: false,
+        disableStitch: false,
+      });
+      return { id: "target_1" } as T;
+    }
     if (command === "social_validate_target") {
       return { id: "target_1", validation_state: "valid" } as T;
     }
@@ -339,10 +351,11 @@ calls.length = 0;
     metadataByProvider: {
       tiktok: {
         title: "TikTok private clip",
-        description: "",
-        tags: [],
+        description: "Ignored unused description",
+        tags: ["ignored"],
         visibility: "private",
         scheduledAt: undefined,
+        thumbnailPath: "/tmp/ignored-thumb.jpg",
       },
     },
     invoke: privateTikTokInvoke,
@@ -362,6 +375,70 @@ calls.length = 0;
     remote_id: "v_pub_file~private",
   });
   assert.deepEqual(result.publishedUrls, {});
+}
+
+calls.length = 0;
+
+{
+  async function twitterXInvoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    calls.push(command);
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct_x",
+          provider: "twitter_x",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") {
+      const bindArgs = args?.args as { platformFields?: Record<string, unknown> };
+      assert.deepEqual(bindArgs.platformFields, {
+        title: "X post text",
+      });
+      return { id: "target_x" } as T;
+    }
+    if (command === "social_validate_target") {
+      return { id: "target_x", validation_state: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job_x", status: "scheduled", scheduledFor: 2_000 } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return { id: "job_x", status: "scheduled", scheduledFor: 2_000 } as T;
+    }
+    throw new Error(`unexpected command: ${command}`);
+  }
+
+  const result = await publishRenderTargetsViaServer({
+    renderQueueId: "queue_1",
+    renderJobId: "render_1",
+    outputPath: "/tmp/render.mp4",
+    title: "Fallback X text",
+    targets: ["twitter_x"],
+    metadataByProvider: {
+      twitter_x: {
+        title: "X post text",
+        description: "Ignored X description",
+        tags: ["ignored"],
+        visibility: "private",
+        scheduledAt: 2_000,
+        thumbnailPath: "/tmp/ignored-x-thumb.jpg",
+      },
+    },
+    invoke: twitterXInvoke,
+    idFactory: (prefix) => `${prefix}_x`,
+    nowSeconds: () => 1_000,
+  });
+
+  assert.deepEqual(result.states.twitter_x, {
+    state: "scheduled",
+    job_id: "job_x",
+    scheduled_for: 2_000,
+  });
 }
 
 calls.length = 0;
