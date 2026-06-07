@@ -5,7 +5,7 @@ type Variant = "cta" | "ghost";
 /**
  * GlassButton — brand light, not flat paint.
  *
- *   cta   → filled orange that radiates a soft glow + inner specular line.
+ *   cta   → filled red that radiates a soft glow + inner specular line.
  *   ghost → frosted translucent that lights up on hover.
  *
  * `kbd` renders a trailing monospace keyboard hint chip.

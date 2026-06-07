@@ -109,8 +109,8 @@ export function Screen2MediaSlot() {
         <Frame label="Before" src={beforeFrame} muted />
         <Frame label="After proposal" src={afterFrame} />
       </div>
-      <div className="absolute left-1/2 top-5 bottom-5 w-px -translate-x-1/2 bg-[var(--color-border-focus)] shadow-[0_0_18px_rgba(56,189,248,0.7)]" />
-      <div className="absolute left-1/2 top-1/2 grid h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--color-border-focus)] bg-[rgba(8,13,20,0.92)] text-[var(--color-brand-secondary)] shadow-[0_0_24px_rgba(56,189,248,0.3)]">
+      <div className="absolute left-1/2 top-5 bottom-5 w-px -translate-x-1/2 bg-[var(--color-border-focus)] shadow-[0_0_18px_rgba(239,68,68,0.7)]" />
+      <div className="absolute left-1/2 top-1/2 grid h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--color-border-focus)] bg-[rgba(8,13,20,0.92)] text-[var(--color-brand-secondary)] shadow-[0_0_24px_rgba(239,68,68,0.3)]">
         <Scissors className="h-4 w-4 stroke-[1.7]" />
       </div>
       <div className="absolute left-8 top-8 flex items-center gap-2 rounded-[var(--radius-sm)] border border-[rgba(245,158,11,0.45)] bg-[rgba(58,38,5,0.76)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-job-idle-text)]">

@@ -22,7 +22,7 @@ const card = cva(
         // a hard border or glow.
         elevated: "bg-[var(--glass-content-hover)]",
         flat: "bg-transparent border-transparent",
-        accent: "bg-[rgba(56,189,248,0.07)]",
+        accent: "bg-[rgba(239,68,68,0.07)]",
         warning: "bg-[rgba(245,158,11,0.07)]",
         danger: "bg-[rgba(220,100,95,0.07)]",
       },

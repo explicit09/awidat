@@ -346,7 +346,7 @@ function GhostAnchorOverlay({
                 padding: "1px 6px",
                 borderRadius: 3,
                 background: "rgba(34,211,238,0.12)",
-                color: "#67E8F9",
+                color: "#FCA5A5",
                 border: "1px solid rgba(34,211,238,0.32)",
               }}
             >

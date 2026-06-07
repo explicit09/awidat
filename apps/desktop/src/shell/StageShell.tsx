@@ -26,16 +26,16 @@ import mark from "../brand/awidat-mark.svg";
  * the data wiring. The proposal deck reads the store directly.
  */
 
-const ORANGE = "#FF7A18";
+const BRAND_RED = "#EF4444";
 
 const MEDIUM_COLOR: Record<string, string> = {
-  cut: "#67E8F9",
+  cut: "#EF4444",
   color: "#FCD34D",
-  broll: "#D8B4FE",
+  broll: "#FB7185",
   audio: "#CBD5E1",
-  transition: "#D8B4FE",
-  title: "#5EEAD4",
-  caption: "#5EEAD4",
+  transition: "#FB7185",
+  title: "#FCA5A5",
+  caption: "#FCA5A5",
   mixed: "#E2E8F0",
   other: "#94A3B8",
 };
@@ -217,8 +217,8 @@ export function StageShell(props: StageShellProps) {
     <div className="relative z-10 h-full w-full overflow-hidden font-sans text-[var(--color-text-primary)]">
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3" data-tauri-drag-region>
-        <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(255,122,24,0.25), 0 4px 16px rgba(255,122,24,0.30)" }} />
-        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">AWIDAT</span>
+        <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(239,68,68,0.30), 0 4px 16px rgba(239,68,68,0.34)" }} />
+        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         {projectLabel ? (
           <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">
             {projectLabel}{projectType ? <> · <span className="text-[var(--color-text-secondary)]">{projectType}</span></> : null}
@@ -226,7 +226,7 @@ export function StageShell(props: StageShellProps) {
         ) : null}
         <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? ORANGE : "#20C997", boxShadow: `0 0 8px ${running ? ORANGE : "#20C997"}` }} />
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: running ? BRAND_RED : "#20C997", boxShadow: `0 0 8px ${running ? BRAND_RED : "#20C997"}` }} />
             {running ? "working" : "ready"}
           </span>
           {timecode ? <span className="font-mono text-[11px] text-[var(--color-text-muted)]">{timecode}</span> : null}
@@ -249,9 +249,9 @@ export function StageShell(props: StageShellProps) {
                 data-active={on ? "true" : "false"}
                 className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
                 style={{
-                  background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
-                  color: on ? "#1A0E04" : "var(--color-text-muted)",
-                  boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
+                  background: on ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
+                  color: on ? "#FFFFFF" : "var(--color-text-muted)",
+                  boxShadow: on ? "0 0 18px rgba(239,68,68,0.45)" : "none",
                 }}>
                 <span className="grid w-5 place-items-center text-[13px]">{d.glyph}</span>
                 <span className="max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/dock:max-w-[80px] group-hover/dock:opacity-100">{d.label}</span>
@@ -275,9 +275,9 @@ export function StageShell(props: StageShellProps) {
                 <button key={t.id} onClick={() => toggleTool(t.id)}
                   className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
                   style={{
-                    background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
-                    color: on ? "#1A0E04" : "var(--color-text-muted)",
-                    boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
+                    background: on ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
+                    color: on ? "#FFFFFF" : "var(--color-text-muted)",
+                    boxShadow: on ? "0 0 18px rgba(239,68,68,0.45)" : "none",
                   }}>
                   <span className="order-2 max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/tools:max-w-[90px] group-hover/tools:opacity-100">{t.label}</span>
                   <span className="order-1 grid w-5 place-items-center text-[13px]">{t.glyph}</span>
@@ -349,7 +349,7 @@ export function StageShell(props: StageShellProps) {
           </div>
           {agentRead ? (
             <div className="flex items-center gap-2 pl-1 text-[11px] text-[var(--color-text-muted)]">
-              <span className="text-[#FF9A45]">◇</span> {agentRead}
+              <span className="text-[var(--color-brand-hover)]">◇</span> {agentRead}
             </div>
           ) : null}
         </div>
@@ -430,7 +430,7 @@ export function StageShell(props: StageShellProps) {
             onClick={() => setConvoOpen((o) => !o)}
             title={convoOpen ? "Hide conversation" : "Show conversation"}
             className="grid h-7 w-7 shrink-0 place-items-center rounded-lg transition"
-            style={{ background: convoOpen ? "rgba(255,122,24,0.30)" : "rgba(255,122,24,0.16)", color: "#FF9A45" }}
+            style={{ background: convoOpen ? "rgba(239,68,68,0.30)" : "rgba(239,68,68,0.16)", color: "#FCA5A5" }}
           >◇</button>
           <input
             value={draft}

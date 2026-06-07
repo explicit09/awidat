@@ -8,7 +8,7 @@ import { useSettings } from "../../state/settings";
  * IdentityRow — row 1 of the redesigned top chrome.
  *
  * Layout:
- *   [traffic-light gutter] [mark] AWIDAT · <project name> <project path>      [Pro|Creator] [Share] [Settings]
+ *   [traffic-light gutter] [mark] MONTAGE · <project name> <project path>      [Pro|Creator] [Share] [Settings]
  *
  * The project store exposes only `current: string | null` (an absolute path),
  * so the project name is derived from the path's basename. When no project is
@@ -33,7 +33,7 @@ export function IdentityRow() {
       <div className="flex items-center gap-2 min-w-0" data-tauri-drag-region={false}>
         <img src={mark} alt="" width={18} height={18} />
         <span className="font-mono font-semibold tracking-[0.08em] text-[11px] text-[var(--color-text-primary)]">
-          AWIDAT
+          MONTAGE
         </span>
         {project && (
           <>

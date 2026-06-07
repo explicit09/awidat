@@ -29,21 +29,21 @@ const TOKEN = {
   laneAudio: "#0E1110",
   laneTitle: "#0E1219",
   /** --color-border-subtle */
-  borderSubtle: "#1F1F22",
+  borderSubtle: "#1F1F1F",
   /** --color-border */
-  border: "#2D2D30",
+  border: "#2A2A2A",
   /** --color-text-primary */
-  textPrimary: "#E6E6E6",
+  textPrimary: "#FFFFFF",
   /** --color-text-secondary */
-  textSecondary: "#B4B4B8",
+  textSecondary: "#D1D5DB",
   /** --color-text-muted */
-  textMuted: "#7A7A82",
-  /** --color-brand-secondary (cyan accents: selection, playhead, highlight) */
-  brandSecondary: "#38BDF8",
-  /** --color-brand-secondary-hover (lighter cyan) */
-  brandSecondaryHover: "#7DD3FC",
+  textMuted: "#8F949E",
+  /** --color-brand-secondary (red accents: selection, playhead, highlight) */
+  brandSecondary: "#EF4444",
+  /** --color-brand-secondary-hover (lighter red) */
+  brandSecondaryHover: "#FCA5A5",
   /** --color-brand-purple (transitions, motion family) */
-  brandPurple: "#A855F7",
+  brandPurple: "#FB7185",
   /** --color-viz-audio — slate-grey baseline for inactive audio */
   vizAudio: "#64748B",
   /** --color-job-ready-dot — green reserved for the active audio clip */

@@ -15,7 +15,7 @@ export function EmptyState() {
         <span>Export</span>
       </div>
       <p className="empty-hint">
-        Use the command bar to import local files or a URL. Awidat will create
+        Use the command bar to import local files or a URL. Montage will create
         proxies, run indexers, and stream the job state into the copilot rail.
       </p>
     </div>

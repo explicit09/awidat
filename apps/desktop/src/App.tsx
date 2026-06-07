@@ -1967,7 +1967,7 @@ function App() {
             if (effectiveDuration > 0) seekPreview(Math.max(0, Math.min(1, pct)) * effectiveDuration);
           }}
         >
-          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#FF7A18", boxShadow: "0 0 10px #FF7A18" }} />
+          <div className="h-full rounded-full" style={{ width: `${stageProgress}%`, background: "#EF4444", boxShadow: "0 0 10px #EF4444" }} />
         </div>
         <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">
           {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
@@ -2388,7 +2388,7 @@ function App() {
             </label>
             {!current && (
               <p className="field-hint">
-                Create a project after entering the URL; Awidat will import it into the new project.
+                Create a project after entering the URL; Montage will import it into the new project.
               </p>
             )}
           </div>

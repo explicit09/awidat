@@ -163,7 +163,7 @@ export function AppShell({
               local · idle · disk 412 GB free
             </span>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-              Awidat v2 · ui-v2
+              Montage v2 · ui-v2
             </span>
           </>
         )}

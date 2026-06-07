@@ -24,7 +24,7 @@ export function ShellModeToggle({ tone = "glass" }: { tone?: "glass" | "flat" })
             onClick={() => setMode(m)}
             className="rounded-full px-2.5 py-0.5 font-medium capitalize transition"
             style={{
-              background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
+              background: on ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
               color: on ? "#1A0E04" : "var(--color-text-muted)",
             }}
           >

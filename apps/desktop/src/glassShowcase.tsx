@@ -25,14 +25,14 @@ function Mark({ size = 64 }: { size?: number }) {
         background: "linear-gradient(160deg, #1b1b1f, #0e0e11)",
         border: "1px solid rgba(255,255,255,0.10)",
         boxShadow:
-          "0 0 0 1px rgba(255,122,24,0.25), 0 8px 30px rgba(255,122,24,0.30), inset 0 1px 0 rgba(255,255,255,0.12)",
+          "0 0 0 1px rgba(239,68,68,0.25), 0 8px 30px rgba(239,68,68,0.30), inset 0 1px 0 rgba(255,255,255,0.12)",
       }}
     >
       <svg width={size * 0.5} height={size * 0.5} viewBox="0 0 24 24" aria-hidden>
         <defs>
           <linearGradient id="tri" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#FFB040" />
-            <stop offset="1" stopColor="#FF7A18" />
+            <stop offset="0" stopColor="#FB7185" />
+            <stop offset="1" stopColor="#EF4444" />
           </linearGradient>
         </defs>
         <path d="M12 3 L21 20 L3 20 Z" fill="url(#tri)" />
@@ -45,7 +45,7 @@ function Mark({ size = 64 }: { size?: number }) {
 function LandingScene() {
   return (
     <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-6 text-center">
-      <div style={{ filter: "drop-shadow(0 0 40px rgba(255,122,24,0.35))" }}>
+      <div style={{ filter: "drop-shadow(0 0 40px rgba(239,68,68,0.35))" }}>
         <Mark size={76} />
       </div>
       <div className="mt-4 font-mono text-[13px] tracking-[0.34em] text-[var(--color-text-secondary)]">
@@ -53,7 +53,7 @@ function LandingScene() {
       </div>
       <h1 className="mt-6 max-w-[22ch] text-[30px] font-bold leading-tight text-[var(--color-text-primary)]">
         The editor that{" "}
-        <span style={{ color: "#FF9A45" }}>reads your footage</span> and proposes
+        <span style={{ color: "#FCA5A5" }}>reads your footage</span> and proposes
         the cut.
       </h1>
       <p className="mt-3 max-w-[44ch] text-[13px] leading-relaxed text-[var(--color-text-muted)]">
@@ -94,7 +94,7 @@ function LandingScene() {
           { t: "Learns", d: "Reject with a reason; the agent stops repeating it." },
         ].map((c, i) => (
           <div key={c.t} className="px-5 py-4 text-left" style={{ background: "rgba(14,14,17,0.5)" }}>
-            <div className="font-mono text-[10px] text-[#FF9A45]">0{i + 1}</div>
+            <div className="font-mono text-[10px] text-[#FCA5A5]">0{i + 1}</div>
             <div className="mt-1 text-[13px] font-semibold text-[var(--color-text-primary)]">
               {c.t}
             </div>
@@ -111,7 +111,7 @@ function LandingScene() {
 /* ============================ SCENE 2: EDITOR ============================ */
 
 const MEDIUM_COLOR: Record<string, string> = {
-  cut: "#67E8F9",
+  cut: "#FCA5A5",
   broll: "#D8B4FE",
   color: "#FCD34D",
 };
@@ -196,7 +196,7 @@ function FrostedChrome() {
       <div className="flex items-center gap-2">
         <Mark size={26} />
         <span className="font-mono text-[12px] tracking-[0.22em] text-[var(--color-text-secondary)]">
-          AWIDAT
+          MONTAGE
         </span>
       </div>
       <div
@@ -220,7 +220,7 @@ function FrostedChrome() {
             {i === 0 && (
               <span
                 className="absolute inset-x-2 -bottom-px h-0.5 rounded-full"
-                style={{ background: "#FF7A18", boxShadow: "0 0 8px #FF7A18" }}
+                style={{ background: "#EF4444", boxShadow: "0 0 8px #EF4444" }}
               />
             )}
           </button>
@@ -228,7 +228,7 @@ function FrostedChrome() {
       </nav>
       <div className="ml-auto flex items-center gap-3">
         <div className="glass-ghost flex items-center gap-1.5 rounded-full px-1 py-1 text-[11px]">
-          <span className="rounded-full bg-[rgba(255,122,24,0.18)] px-2.5 py-0.5 font-semibold text-[#FF9A45]">
+          <span className="rounded-full bg-[rgba(239,68,68,0.18)] px-2.5 py-0.5 font-semibold text-[#FCA5A5]">
             Pro
           </span>
           <span className="px-2 text-[var(--color-text-muted)]">Creator</span>
@@ -258,7 +258,7 @@ function EditorScene() {
             </span>
           </div>
           <GlassContent className="p-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
-            I read your <span className="text-[#FF9A45]">AGENTS.md</span> — podcast,
+            I read your <span className="text-[#FCA5A5]">AGENTS.md</span> — podcast,
             ≤ 12 min, trim filler. Indexed 9 signals on Demo (Raw).mp4: 4 scenes,
             2 speakers, 11 silences. Say the word and I'll prepare a starting cut.
           </GlassContent>
@@ -295,7 +295,7 @@ function EditorScene() {
                 className="rounded-lg px-3 py-1.5 text-[12px] font-medium transition"
                 style={{
                   color: i === 0 ? "#1A0E04" : "var(--color-text-muted)",
-                  background: i === 0 ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
+                  background: i === 0 ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
                 }}
               >
                 {t}
@@ -363,8 +363,8 @@ function EditorScene() {
           </GlassContent>
           <div className="mt-3 space-y-3">
             {[
-              ["Exposure", 62, "#FF9A45"],
-              ["Contrast", 48, "#67E8F9"],
+              ["Exposure", 62, "#FCA5A5"],
+              ["Contrast", 48, "#FCA5A5"],
               ["Saturation", 55, "#D8B4FE"],
             ].map(([label, val, c]) => (
               <div key={label as string}>
@@ -476,7 +476,7 @@ function Showcase() {
             style={{
               color: scene === s.id ? "#1A0E04" : "var(--color-text-secondary)",
               background:
-                scene === s.id ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
+                scene === s.id ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
             }}
           >
             {s.label}

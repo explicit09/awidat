@@ -19,9 +19,9 @@ import { AmbientBackground, useCursorGlass } from "./ui/glass";
      • Agent "read"     — always-legible Copilot relationship
    ==================================================================== */
 
-const ORANGE = "#FF7A18";
+const ORANGE = "#EF4444";
 const MEDIUM = {
-  cut: { c: "#67E8F9", label: "cut" },
+  cut: { c: "#FCA5A5", label: "cut" },
   broll: { c: "#D8B4FE", label: "b-roll" },
   color: { c: "#FCD34D", label: "color" },
   audio: { c: "#CBD5E1", label: "audio" },
@@ -44,10 +44,10 @@ function Mark({ size = 26 }: { size?: number }) {
     <div className="grid shrink-0 place-items-center rounded-xl" style={{
       width: size, height: size, background: "linear-gradient(160deg,#1b1b1f,#0e0e11)",
       border: "1px solid rgba(255,255,255,0.12)",
-      boxShadow: "0 0 0 1px rgba(255,122,24,0.25), 0 4px 16px rgba(255,122,24,0.30)",
+      boxShadow: "0 0 0 1px rgba(239,68,68,0.25), 0 4px 16px rgba(239,68,68,0.30)",
     }}>
       <svg width={size * 0.5} height={size * 0.5} viewBox="0 0 24 24" aria-hidden>
-        <defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#FFB040" /><stop offset="1" stopColor="#FF7A18" /></linearGradient></defs>
+        <defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#FB7185" /><stop offset="1" stopColor="#EF4444" /></linearGradient></defs>
         <path d="M12 3 L21 20 L3 20 Z" fill="url(#t)" />
       </svg>
     </div>
@@ -71,9 +71,9 @@ function LeftDock({ view, setView }: { view: View; setView: (v: View) => void })
             <button key={d.id} onClick={() => setView(d.id)}
               className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
               style={{
-                background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
+                background: on ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
                 color: on ? "#1A0E04" : "var(--color-text-muted)",
-                boxShadow: on ? "0 0 18px rgba(255,122,24,0.45)" : "none",
+                boxShadow: on ? "0 0 18px rgba(239,68,68,0.45)" : "none",
               }}>
               <span className="grid w-5 place-items-center text-[13px]">{d.glyph}</span>
               <span className="max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/dock:max-w-[80px] group-hover/dock:opacity-100">{d.label}</span>
@@ -137,7 +137,7 @@ function DeliverSheet({ onClose }: { onClose: () => void }) {
         <div className="space-y-2">
           {targets.map(([n, f], i) => (
             <div key={n} className="glass-content flex items-center gap-3 px-4 py-3">
-              <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ background: "rgba(255,122,24,0.14)", color: "#FF9A45" }}>{n[0]}</span>
+              <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ background: "rgba(239,68,68,0.14)", color: "#FCA5A5" }}>{n[0]}</span>
               <div><div className="text-[13px] font-semibold text-[var(--color-text-primary)]">{n}</div><div className="font-mono text-[10px] text-[var(--color-text-muted)]">{f}</div></div>
               <span className="ml-auto h-4 w-7 rounded-full p-0.5" style={{ background: i < 1 ? ORANGE : "rgba(255,255,255,0.12)" }}><span className="block h-3 w-3 rounded-full bg-white transition-all" style={{ transform: i < 1 ? "translateX(12px)" : "none" }} /></span>
             </div>
@@ -162,7 +162,7 @@ function SkillsSheet({ onClose }: { onClose: () => void }) {
       <div className="grid grid-cols-2 gap-2.5">
         {skills.map((s, i) => (
           <div key={s} className="glass-content flex items-center gap-3 px-4 py-3">
-            <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ background: "rgba(56,189,248,0.14)", color: "#67E8F9" }}>✦</span>
+            <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ background: "rgba(239,68,68,0.14)", color: "#FCA5A5" }}>✦</span>
             <div><div className="text-[13px] font-semibold text-[var(--color-text-primary)]">{s}</div><div className="font-mono text-[10px] text-[var(--color-text-muted)]">{i % 3 === 0 ? "bundled" : i % 3 === 1 ? "user" : "project"} · v1.{i}.0</div></div>
             <span className="ml-auto h-4 w-7 rounded-full p-0.5" style={{ background: ORANGE }}><span className="block h-3 w-3 translate-x-3 rounded-full bg-white" /></span>
           </div>
@@ -209,11 +209,11 @@ function Stage() {
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3">
         <Mark />
-        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">AWIDAT</span>
+        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">new_cast · <span className="text-[var(--color-text-secondary)]">podcast</span></span>
         <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"><span className="h-1.5 w-1.5 rounded-full bg-[#20C997] shadow-[0_0_8px_#20C997]" /> ready</span>
-          <div className="glass-ghost flex items-center gap-1 rounded-full p-0.5 text-[11px]"><span className="rounded-full bg-[rgba(255,122,24,0.18)] px-2.5 py-0.5 font-semibold text-[#FF9A45]">Pro</span><span className="px-2 text-[var(--color-text-muted)]">Creator</span></div>
+          <div className="glass-ghost flex items-center gap-1 rounded-full p-0.5 text-[11px]"><span className="rounded-full bg-[rgba(239,68,68,0.18)] px-2.5 py-0.5 font-semibold text-[#FCA5A5]">Pro</span><span className="px-2 text-[var(--color-text-muted)]">Creator</span></div>
           <span className="font-mono text-[11px] text-[var(--color-text-muted)]">00:06:35:21</span>
         </div>
       </div>
@@ -234,7 +234,7 @@ function Stage() {
           </div>
           {/* agent read line */}
           <div className="mt-3 flex items-center gap-2 pl-1 text-[11px] text-[var(--color-text-muted)]">
-            <span className="text-[#FF9A45]">◇</span> read AGENTS.md · 9 signals · <span className="text-[var(--color-text-secondary)]">{pending.length} proposals ready</span>
+            <span className="text-[#FCA5A5]">◇</span> read AGENTS.md · 9 signals · <span className="text-[var(--color-text-secondary)]">{pending.length} proposals ready</span>
           </div>
         </div>
 
@@ -279,7 +279,7 @@ function Stage() {
       {/* command bar — edits AND navigates */}
       <div className="absolute inset-x-0 bottom-0 z-40 flex justify-center px-8 pb-6">
         <div className="glass glass-strong glass-reactive flex w-full max-w-[760px] items-center gap-3 rounded-2xl px-4 py-3" style={{ borderRadius: 18 }}>
-          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg" style={{ background: "rgba(255,122,24,0.16)", color: "#FF9A45" }}>◇</span>
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg" style={{ background: "rgba(239,68,68,0.16)", color: "#FCA5A5" }}>◇</span>
           <input value={draft} onChange={(e) => setDraft(e.target.value)}
             placeholder="ask, trim, propose…  or type a destination: deliver · skills · history"
             className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none" />

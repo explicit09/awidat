@@ -2,11 +2,11 @@
 //
 // A horizontal range input rendered with on-brand styling:
 //   - 4px track (charcoal `--color-surface-input`)
-//   - Cyan fill (`--color-brand-secondary`) from the zero-point to the thumb.
+//   - Red fill (`--color-brand-secondary`) from the zero-point to the thumb.
 //     The zero-point defaults to `min`, but can be set to `defaultValue`
 //     (e.g. 0 EV, 1× speed, 1× volume) so bipolar controls fill outward
 //     from the canonical resting position.
-//   - 14px circular thumb. Filled cyan when the value differs from
+//   - 14px circular thumb. Filled red when the value differs from
 //     `defaultValue`; quieter muted grey when the control is at rest so
 //     the user can see at a glance which knobs have been touched.
 //

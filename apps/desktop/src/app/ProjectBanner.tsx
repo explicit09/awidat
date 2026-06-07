@@ -106,7 +106,7 @@ export function ProjectBanner({ onChange }: Props) {
       <div className="project-path-group">
         <strong className="project-name">{current ? basename(current) : "No project"}</strong>
         <code className="project-path">
-          {current ?? "Open or create an Awidat project"}
+          {current ?? "Open or create a Montage project"}
         </code>
       </div>
       {projectType && current && (

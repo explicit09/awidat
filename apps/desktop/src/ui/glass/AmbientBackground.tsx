@@ -1,8 +1,8 @@
 /**
  * AmbientBackground — the z0 atmosphere plane.
  *
- * Four slow-drifting color orbs (warm orange + amber brand light, a teal
- * counter-light for tension, a deep violet accent) under a film-grain
+ * Four slow-drifting color fields (red brand light, rose reflection,
+ * neutral counter-light, and a deep red accent) under a film-grain
  * overlay and a centering vignette. Pure CSS animation; GPU-promoted.
  * Sits behind everything with pointer-events disabled.
  *

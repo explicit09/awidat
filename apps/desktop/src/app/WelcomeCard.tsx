@@ -20,7 +20,7 @@ const CORE_IDEAS: ReadonlyArray<{ icon: ReactNode; title: string; body: string }
   {
     icon: <BookOpen size={16} />,
     title: "An agent reads your media.",
-    body: "Drop a file, and Awidat indexes it — transcript, scenes, speakers, silences. Your editorial brief lives in AGENTS.md.",
+    body: "Drop a file, and Montage indexes it — transcript, scenes, speakers, silences. Your editorial brief lives in AGENTS.md.",
   },
   {
     icon: <Sparkles size={16} />,
@@ -71,12 +71,12 @@ export function WelcomeCard() {
         }}
         role="dialog"
         aria-modal="true"
-        aria-label="Welcome to Awidat"
+        aria-label="Welcome to Montage"
       >
         <header className="modal-header">
           <Inline gap="2" align="center">
             <img src={mark} alt="" width={20} height={20} />
-            <h2>Welcome to Awidat</h2>
+            <h2>Welcome to Montage</h2>
           </Inline>
           <button type="button" className="modal-close" onClick={dismiss} aria-label="Dismiss welcome">
             ×

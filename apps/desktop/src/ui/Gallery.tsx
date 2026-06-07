@@ -61,7 +61,7 @@ export function Gallery() {
       <header className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)]">
         <div className="mx-auto max-w-[1400px] flex items-center justify-between px-6 h-[var(--layout-chrome-h)]">
           <Inline gap="3" align="center">
-            <img src={wordmark} alt="Awidat" className="h-7" />
+            <img src={wordmark} alt="Montage" className="h-7" />
             <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
               UI Gallery · Phase 1
             </span>
@@ -76,7 +76,7 @@ export function Gallery() {
             <Card padding="lg">
               <Stack gap="3">
                 <span className="text-[length:var(--text-display)] leading-[var(--text-display--line-height)] tracking-[var(--text-display--letter-spacing)] font-bold">
-                  Display 32 — Awidat
+                  Display 32 — Montage
                 </span>
                 <span className="text-[length:var(--text-h1)] leading-[var(--text-h1--line-height)] tracking-[var(--text-h1--letter-spacing)] font-bold">
                   H1 24 — Proposal Review

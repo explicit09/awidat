@@ -1,9 +1,9 @@
 /*
- * Awidat — "Obsidian Glass" 2026 design layer.
+ * Montage — "Obsidian Glass" design layer.
  *
  * A dark-first liquid-glass system layered on top of tokens.css. The
  * editorial AI is presented as light moving through frosted glass: the
- * orange brand becomes living ambient light (drifting orbs behind the
+ * red brand becomes living ambient light (drifting fields behind the
  * UI) rather than flat button paint.
  *
  * Depth model (three planes):
@@ -26,11 +26,11 @@
      Cool blue-grey, genuinely translucent so the colored atmosphere
      reads THROUGH the frost. These are deliberately light + see-through
      — a near-opaque charcoal panel just looks like the old flat UI. */
-  --glass-tint-1: rgba(30, 34, 48, 0.42);   /* primary panels / chrome */
-  --glass-tint-2: rgba(34, 38, 54, 0.55);   /* raised glass (modals)   */
-  --glass-tint-3: rgba(26, 30, 44, 0.30);   /* faint glass (overlays)  */
-  --glass-content: rgba(26, 30, 42, 0.66);  /* z2 content — tinted, still readable */
-  --glass-content-hover: rgba(38, 44, 60, 0.74);
+  --glass-tint-1: rgba(20, 20, 20, 0.54);   /* primary panels / chrome */
+  --glass-tint-2: rgba(26, 26, 26, 0.68);   /* raised glass (modals)   */
+  --glass-tint-3: rgba(18, 18, 18, 0.38);   /* faint glass (overlays)  */
+  --glass-content: rgba(26, 26, 26, 0.76);  /* z2 content — tinted, still readable */
+  --glass-content-hover: rgba(36, 36, 36, 0.84);
 
   /* ---- glass edges & light (brighter so the lip clearly catches light) ---- */
   --glass-border: rgba(255, 255, 255, 0.14);
@@ -48,15 +48,15 @@
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.30);
   --glass-shadow-lift: 0 16px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.34);
 
-  /* ---- brand light (orange as ambient, not paint) — vivid so it
+  /* ---- brand light (red as ambient, not paint) — vivid so it
      actually bleeds through the frosted panels ---- */
-  --orb-warm: rgba(255, 122, 24, 0.95);   /* awidat orange */
-  --orb-amber: rgba(255, 184, 72, 0.75);
-  --orb-cool: rgba(20, 184, 166, 0.70);   /* teal counter-light for tension */
-  --orb-violet: rgba(139, 92, 246, 0.62); /* deep violet accent */
-  --glow-brand: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 0 24px rgba(255, 122, 24, 0.30);
-  --glow-cyan: 0 0 0 1px rgba(56, 189, 248, 0.40), 0 0 20px rgba(56, 189, 248, 0.22);
-  --glow-violet: 0 0 0 1px rgba(168, 85, 247, 0.40), 0 0 20px rgba(168, 85, 247, 0.22);
+  --orb-warm: rgba(239, 68, 68, 0.92);
+  --orb-amber: rgba(251, 113, 133, 0.64);
+  --orb-cool: rgba(107, 114, 128, 0.42);
+  --orb-violet: rgba(185, 28, 28, 0.56);
+  --glow-brand: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 0 24px rgba(239, 68, 68, 0.30);
+  --glow-cyan: 0 0 0 1px rgba(239, 68, 68, 0.40), 0 0 20px rgba(239, 68, 68, 0.22);
+  --glow-violet: 0 0 0 1px rgba(251, 113, 133, 0.40), 0 0 20px rgba(251, 113, 133, 0.22);
 
   /* cursor-reactive sheen position (updated by useCursorGlass) */
   --glass-mx: 50%;
@@ -156,19 +156,19 @@
 .glow-cyan { box-shadow: var(--glow-cyan); }
 .glow-violet { box-shadow: var(--glow-violet); }
 
-/* brand CTA: filled orange that radiates rather than sits flat */
+/* brand CTA: filled red that radiates rather than sits flat */
 .glass-cta {
-  background: linear-gradient(180deg, #FF8B33, #FF7A18 60%, #E5641A);
-  color: #1A0E04;
-  border: 1px solid rgba(255, 180, 120, 0.55);
-  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.30), 0 6px 20px rgba(255, 122, 24, 0.34),
+  background: linear-gradient(180deg, #FB7185, #EF4444 60%, #DC2626);
+  color: #FFFFFF;
+  border: 1px solid rgba(252, 165, 165, 0.58);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.30), 0 6px 20px rgba(239, 68, 68, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.35);
   font-weight: 650;
   transition: box-shadow 0.2s ease, transform 0.12s ease, filter 0.2s ease;
 }
 .glass-cta:hover {
   filter: brightness(1.06);
-  box-shadow: 0 0 0 1px rgba(255, 122, 24, 0.45), 0 8px 28px rgba(255, 122, 24, 0.48),
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 8px 28px rgba(239, 68, 68, 0.48),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 .glass-cta:active { transform: translateY(1px) scale(0.99); }
@@ -196,11 +196,11 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  /* deep blue-charcoal base, not pure black, so the frost reads as glass */
+  /* deep neutral base, with red light concentrated around the work surface */
   background:
-    radial-gradient(ellipse at 22% 18%, #1a1530 0%, transparent 55%),
-    radial-gradient(ellipse at 82% 88%, #0c2230 0%, transparent 55%),
-    #0a0a12;
+    radial-gradient(ellipse at 22% 18%, #320E12 0%, transparent 55%),
+    radial-gradient(ellipse at 82% 88%, #1F1113 0%, transparent 55%),
+    #050505;
   pointer-events: none;
 }
 .atmosphere__orb {
@@ -392,6 +392,63 @@ html, body, #root { background: #0a0a12; }
 .stage-timeline .timeline-header { display: none !important; }
 .stage-timeline > * { height: 100%; }
 
+/* Project manager — startup surface when no project is open. */
+.pm-shell {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(239, 68, 68, 0.10), transparent 22%),
+    radial-gradient(circle at 86% 8%, rgba(255, 255, 255, 0.045), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 24%),
+    #0d0d0d;
+}
+
+.pm-glass {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.075), transparent 42%),
+    rgba(26, 26, 26, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+}
+
+.pm-sidebar {
+  border-radius: 14px;
+}
+
+.pm-project-card {
+  position: relative;
+  display: block;
+  min-width: 0;
+  border-radius: 14px;
+  padding: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 42%),
+    rgba(26, 26, 26, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
+}
+
+.pm-project-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(239, 68, 68, 0.46);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.40), 0 0 32px rgba(239, 68, 68, 0.14);
+}
+
+.pm-project-frame {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: #111;
+}
+
 /* Stage conversation panel: let ChatStream breathe inside the glass.
    Strip its solid cockpit background so the frost shows through. */
 .stage-convo .chat-items { background: transparent !important; padding: 12px 14px; }
@@ -463,7 +520,7 @@ html, body, #root { background: #0a0a12; }
 .gk-pill--mint   { color: #5EEAD4; background: rgba(45, 212, 191, 0.16); }
 .gk-pill--amber  { color: #FCD34D; background: rgba(245, 158, 11, 0.16); }
 .gk-pill--red    { color: #FCA5A5; background: rgba(220, 100, 95, 0.16); }
-.gk-pill--orange { color: #FF9A45; background: rgba(255, 122, 24, 0.16); }
+.gk-pill--orange { color: #FCA5A5; background: rgba(239, 68, 68, 0.16); }
 .gk-pill--muted  { color: var(--color-text-muted); background: rgba(255, 255, 255, 0.06); }
 
 /* Consistent thin scrollbar inside glass surfaces. */

@@ -62,7 +62,7 @@ export function EmptyConversation() {
         className="m-3 p-3 rounded-lg border border-[var(--color-border-subtle)]"
         style={{
           background:
-            "linear-gradient(180deg, rgba(255,122,24,0.05), transparent), var(--color-surface-panel)",
+            "linear-gradient(180deg, rgba(239,68,68,0.05), transparent), var(--color-surface-panel)",
         }}
       >
         <div className="text-[12px] font-semibold text-[var(--color-text-primary)] mb-1">

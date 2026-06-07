@@ -61,7 +61,7 @@ function EditorPublishBridge({
       <button
         type="button"
         onClick={onOpenDelivery}
-        className="mt-2 w-full rounded-[var(--radius-sm)] border border-[rgba(255,122,24,0.42)] bg-[rgba(255,122,24,0.14)] px-2 py-1.5 text-[var(--text-caption)] font-semibold text-[#FFB073] hover:bg-[rgba(255,122,24,0.2)]"
+        className="mt-2 w-full rounded-[var(--radius-sm)] border border-[rgba(239,68,68,0.42)] bg-[rgba(239,68,68,0.14)] px-2 py-1.5 text-[var(--text-caption)] font-semibold text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.2)]"
       >
         Open Delivery
       </button>

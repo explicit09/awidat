@@ -231,7 +231,7 @@ export function CampaignApprovalPanel({
                   className={cn(
                     "rounded-[var(--radius-sm)] border px-2 py-1 text-[var(--text-caption)]",
                     campaignType === type
-                      ? "border-[var(--color-brand-secondary)] bg-[rgba(56,189,248,0.12)] text-[var(--color-text-primary)]"
+                      ? "border-[var(--color-brand-secondary)] bg-[rgba(239,68,68,0.12)] text-[var(--color-text-primary)]"
                       : "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-text-secondary)]",
                   )}
                 >

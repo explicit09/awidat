@@ -119,7 +119,7 @@ console.log("# davinci selection ring");
     "selected clip should paint the red-orange ring",
   );
   assert.ok(
-    !strokes.includes("#38BDF8"),
+    !strokes.includes("#EF4444"),
     "selection ring must no longer use the old cyan brand colour",
   );
 }

@@ -11,10 +11,13 @@ const css = readFileSync(new URL("../src/ui/tokens.css", import.meta.url), "utf8
 
 const requiredTokens = [
   // brand
-  "--color-brand: #FF7A18",
-  "--color-brand-hover: #FF8B33",
-  "--color-brand-active: #E5641A",
-  "--color-accent-mint: #20C997",
+  "--color-brand: #EF4444",
+  "--color-brand-hover: #FB7185",
+  "--color-brand-active: #DC2626",
+  "--color-brand-secondary: #EF4444",
+  "--color-surface-page: #0D0D0D",
+  "--color-surface-card: #1A1A1A",
+  "--color-text-primary: #FFFFFF",
   // job family
   "--color-job-idle-dot",
   "--color-job-running-dot",
@@ -40,6 +43,8 @@ const removedTokens = [
   "--color-pill-pending-fill",
   "--color-pill-reviewing-fill",
   "--color-pill-missing-fill",
+  "--color-brand: #FF7A18",
+  "--color-brand-secondary: #38BDF8",
 ];
 
 for (const t of requiredTokens) {

@@ -9,9 +9,9 @@
 @import "@fontsource/jetbrains-mono/600.css";
 
 /*
- * Awidat design tokens. Values pulled directly from the canonical design spec at
- * ~/Downloads/Awidat UI Design Concept.md. When the spec moves, the source of
- * truth for tokens lives there; this file is its implementation.
+ * Montage design tokens. The brand system is intentionally narrow: red,
+ * black, charcoal, slate, and white. Semantic status colors stay separate
+ * so color never has to carry multiple meanings.
  */
 
 @theme {
@@ -21,61 +21,59 @@
      backdrop; app + panel sit slightly above; card is the highest
      elevation a static surface reaches. Hover/active tiers are pure
      greys: no cool tint. */
-  --color-surface-page: #0B0B0C;
-  --color-surface-app: #0F0F11;
-  --color-surface-panel: #0F0F11;
-  --color-surface-panel-hover: #1A1A1C;
-  --color-surface-panel-active: #1F1F22;
-  --color-surface-card: #18181A;
-  --color-surface-card-hover: #1E1E20;
-  --color-surface-card-active: #232325;
-  --color-surface-modal: #18181A;
-  --color-surface-modal-hover: #1E1E20;
-  --color-surface-modal-active: #232325;
-  --color-surface-hover: #1E1E20;
-  --color-surface-input: #161618;
-  --color-surface-input-hover: #1B1B1D;
-  --color-surface-input-active: #232325;
-  --color-surface-selected: #262629;
-  --color-surface-selected-hover: #2D2D30;
-  --color-surface-selected-active: #36363A;
+  --color-surface-page: #0D0D0D;
+  --color-surface-app: #111111;
+  --color-surface-panel: #141414;
+  --color-surface-panel-hover: #1A1A1A;
+  --color-surface-panel-active: #202020;
+  --color-surface-card: #1A1A1A;
+  --color-surface-card-hover: #222222;
+  --color-surface-card-active: #2A2A2A;
+  --color-surface-modal: #1A1A1A;
+  --color-surface-modal-hover: #222222;
+  --color-surface-modal-active: #2A2A2A;
+  --color-surface-hover: #242424;
+  --color-surface-input: #161616;
+  --color-surface-input-hover: #1F1F1F;
+  --color-surface-input-active: #2A2A2A;
+  --color-surface-selected: #2A1717;
+  --color-surface-selected-hover: #351B1B;
+  --color-surface-selected-active: #421F1F;
 
   /* borders — hairline charcoal, no blue tint. Focus + active fall
      back to a slightly brighter neutral grey instead of cyan so the
      UI never advertises focus with a colored ring. */
-  --color-border: #2D2D30;
-  --color-border-subtle: #1F1F22;
-  --color-border-strong: #4F4F55;
-  --color-border-focus: #4F4F55;
-  --color-border-active: #5A5A60;
+  --color-border: #2A2A2A;
+  --color-border-subtle: #1F1F1F;
+  --color-border-strong: #3A3A3A;
+  --color-border-focus: #EF4444;
+  --color-border-active: #FB7185;
 
   /* text — DaVinci-style: primary near-white, secondary mid-grey,
      muted at 6A737D (matches Cursor's comment color), disabled
      dropped further so the disabled states read as "off". */
-  --color-text-primary: #E6E6E6;
-  --color-text-secondary: #B4B4B8;
-  --color-text-muted: #7A7A82;
-  --color-text-disabled: #4F4F55;
-  --color-text-inverse: #0B0B0C;
-  --color-text-on-accent: #ECFEFF;
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #D1D5DB;
+  --color-text-muted: #8F949E;
+  --color-text-disabled: #6B7280;
+  --color-text-inverse: #0D0D0D;
+  --color-text-on-accent: #FFFFFF;
   --color-text-on-danger: #FEF2F2;
 
-  /* brand — Studio orange is the single primary action accent. Mint
-     is demoted to liveness indicators only (agent online, daemon
-     connected) and lives at --color-accent-mint. See spec §5.1. */
-  --color-brand: #FF7A18;
-  --color-brand-hover: #FF8B33;
-  --color-brand-active: #E5641A;
+  /* brand — precision red is the single primary action accent. */
+  --color-brand: #EF4444;
+  --color-brand-hover: #FB7185;
+  --color-brand-active: #DC2626;
 
   --color-accent-mint: #20C997;
   --color-accent-mint-hover: #2EE6AE;
   --color-accent-mint-active: #17A77E;
-  --color-brand-secondary: #38BDF8;
-  --color-brand-secondary-hover: #7DD3FC;
-  --color-brand-secondary-active: #0284C7;
-  --color-brand-purple: #A855F7;
-  --color-brand-purple-hover: #C084FC;
-  --color-brand-purple-active: #7E22CE;
+  --color-brand-secondary: #EF4444;
+  --color-brand-secondary-hover: #FB7185;
+  --color-brand-secondary-active: #DC2626;
+  --color-brand-purple: #FB7185;
+  --color-brand-purple-hover: #FCA5A5;
+  --color-brand-purple-active: #B91C1C;
 
   /* semantic base */
   --color-success: #22C55E;
@@ -99,10 +97,10 @@
   --color-job-idle-dot: #3F3F46;
 
   /* job × running (orange = the action accent) */
-  --color-job-running-fill: rgba(255, 122, 24, 0.10);
-  --color-job-running-border: rgba(255, 122, 24, 0.40);
-  --color-job-running-text: #FCA67A;
-  --color-job-running-dot: #FF7A18;
+  --color-job-running-fill: rgba(239, 68, 68, 0.12);
+  --color-job-running-border: rgba(239, 68, 68, 0.42);
+  --color-job-running-text: #FCA5A5;
+  --color-job-running-dot: #EF4444;
 
   /* job × ready (true green, distinct from mint) */
   --color-job-ready-fill: rgba(34, 197, 94, 0.10);
@@ -116,11 +114,11 @@
   --color-job-failed-text: #FCA5A5;
   --color-job-failed-dot: #EF4444;
 
-  /* proposal × proposed (cyan = awaiting human) */
-  --color-proposal-proposed-fill: rgba(56, 189, 248, 0.12);
-  --color-proposal-proposed-border: rgba(56, 189, 248, 0.45);
-  --color-proposal-proposed-text: #7DD3FC;
-  --color-proposal-proposed-dot: #38BDF8;
+  /* proposal × proposed (brand red = awaiting human precision pass) */
+  --color-proposal-proposed-fill: rgba(239, 68, 68, 0.12);
+  --color-proposal-proposed-border: rgba(239, 68, 68, 0.45);
+  --color-proposal-proposed-text: #FCA5A5;
+  --color-proposal-proposed-dot: #EF4444;
 
   /* proposal × accepted (shares green with job-ready: a positive completion) */
   --color-proposal-accepted-fill: rgba(34, 197, 94, 0.10);
@@ -135,10 +133,10 @@
   --color-proposal-rejected-dot: #EF4444;
 
   /* proposal × revised (purple — human modified) */
-  --color-proposal-revised-fill: rgba(168, 85, 247, 0.12);
-  --color-proposal-revised-border: rgba(168, 85, 247, 0.45);
-  --color-proposal-revised-text: #D8B4FE;
-  --color-proposal-revised-dot: #A855F7;
+  --color-proposal-revised-fill: rgba(251, 113, 133, 0.12);
+  --color-proposal-revised-border: rgba(251, 113, 133, 0.45);
+  --color-proposal-revised-text: #FDA4AF;
+  --color-proposal-revised-dot: #FB7185;
 
   /* data viz */
   --color-viz-speaker-a: #3B82F6;
@@ -148,7 +146,7 @@
   --color-viz-rejected: #DC2626;
   --color-viz-warning: #EAB308;
   --color-viz-audio: #64748B;
-  --color-viz-playhead: #38BDF8;
+  --color-viz-playhead: #EF4444;
 
   /* typography */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -256,7 +254,7 @@
   *, *::before, *::after { box-sizing: border-box; }
 
   ::selection {
-    background: rgba(56, 189, 248, 0.28);
+    background: rgba(239, 68, 68, 0.30);
   }
 
   /* a focus ring that respects keyboard-only users */
@@ -474,8 +472,8 @@
 @layer utilities {
   .glow-active {
     box-shadow:
-      0 0 0 1px rgba(20, 184, 166, 0.35),
-      0 0 24px rgba(20, 184, 166, 0.12);
+      0 0 0 1px rgba(239, 68, 68, 0.35),
+      0 0 24px rgba(239, 68, 68, 0.12);
   }
   .glow-warning {
     box-shadow:

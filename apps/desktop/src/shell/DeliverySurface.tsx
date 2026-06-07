@@ -574,7 +574,7 @@ function TargetChip({
           className={cn(
             "grid h-8 w-8 shrink-0 place-items-center rounded-lg",
             target.active
-              ? "bg-[rgba(255,122,24,0.16)]"
+              ? "bg-[rgba(239,68,68,0.16)]"
               : "bg-[rgba(255,255,255,0.05)]",
           )}
         >
@@ -600,7 +600,7 @@ function TargetChip({
           className={cn(
             "mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full transition-colors",
             target.active
-              ? "bg-[var(--color-brand)] shadow-[0_0_8px_rgba(255,122,24,0.7)]"
+              ? "bg-[var(--color-brand)] shadow-[0_0_8px_rgba(239,68,68,0.7)]"
               : "bg-[rgba(255,255,255,0.18)]",
           )}
         />
@@ -635,7 +635,7 @@ function PublishToggleRow({
   const label = target.label ?? meta.label;
   return (
     <div className="glass-content flex items-center gap-3 rounded-xl px-3.5 py-2.5">
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[rgba(255,122,24,0.16)]">
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[rgba(239,68,68,0.16)]">
         {meta.brand ? (
           <BrandIcon icon={meta.brand} tinted className="h-4 w-4" />
         ) : (
@@ -825,7 +825,7 @@ function RenderStatusBanner({
         ? Math.max(0, Math.min(100, running.progress))
         : null;
     return (
-      <div className="rounded-[var(--radius-md)] border border-[rgba(56,189,248,0.45)] bg-[rgba(56,189,248,0.12)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.24)]">
+      <div className="rounded-[var(--radius-md)] border border-[rgba(239,68,68,0.45)] bg-[rgba(239,68,68,0.12)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.24)]">
         <Stack gap="3">
           <Inline justify="between" align="center">
             <Inline gap="2" align="center" className="min-w-0">
@@ -906,7 +906,7 @@ function ExportConfirmDialog({
               </div>
             ) : null}
             <p className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              After export finishes, Awidat will keep the output in review until you mark it good.
+              After export finishes, Montage will keep the output in review until you mark it good.
             </p>
           </Stack>
         </div>

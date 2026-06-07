@@ -324,7 +324,7 @@ function SkillsSheet({
       <header className="flex shrink-0 items-baseline justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <Sparkles
-            className="h-5 w-5 text-[#67E8F9]"
+            className="h-5 w-5 text-[#FCA5A5]"
             strokeWidth={1.75}
             aria-hidden
           />
@@ -441,7 +441,7 @@ function SkillSheetCard({
             "mt-0.5 h-3 w-3 shrink-0 rounded-full border transition-all",
             disabled
               ? "border-[var(--glass-border)] bg-transparent hover:border-[var(--glass-border-strong)]"
-              : "border-[var(--color-brand)] bg-[var(--color-brand)] shadow-[0_0_10px_rgba(255,122,24,0.55)]",
+              : "border-[var(--color-brand)] bg-[var(--color-brand)] shadow-[0_0_10px_rgba(239,68,68,0.55)]",
           )}
         />
       </div>
@@ -456,12 +456,12 @@ function SkillSheetCard({
             type="button"
             onClick={onToggleExpand}
             aria-expanded={expanded}
-            className="self-start text-[11px] font-medium text-[#67E8F9] transition-opacity hover:opacity-80"
+            className="self-start text-[11px] font-medium text-[#FCA5A5] transition-opacity hover:opacity-80"
           >
             {expanded ? "Hide details" : "When to use →"}
           </button>
           {expanded && (
-            <p className="rounded-[10px] border-l-2 border-[#67E8F9] bg-[var(--color-surface-input)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+            <p className="rounded-[10px] border-l-2 border-[#FCA5A5] bg-[var(--color-surface-input)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
               {skill.when_to_use}
             </p>
           )}
@@ -494,7 +494,7 @@ function SheetProvenanceChip({
     user: {
       label: "user",
       className:
-        "border-[#67E8F9]/40 bg-[#67E8F9]/12 text-[#67E8F9]",
+        "border-[#FCA5A5]/40 bg-[#FCA5A5]/12 text-[#FCA5A5]",
       title: "Installed from your per-user skills folder",
     },
     project: {

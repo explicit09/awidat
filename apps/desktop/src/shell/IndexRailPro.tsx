@@ -169,11 +169,11 @@ function Header({
           className="h-full rounded-full transition-[width] duration-300"
           style={{
             width: `${pct}%`,
-            background: showReady ? "#5EEAD4" : "#FF7A18",
+            background: showReady ? "#5EEAD4" : "#EF4444",
             boxShadow: showReady
               ? "0 0 8px rgba(94,234,212,0.55)"
               : pct >= 100
-                ? "0 0 8px rgba(255,122,24,0.55)"
+                ? "0 0 8px rgba(239,68,68,0.55)"
                 : "none",
           }}
         />
