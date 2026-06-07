@@ -106,16 +106,16 @@ function projectHarnessUrl() {
 async function installPageInstrumentation(context) {
   await context.addInitScript(`
     try {
-      localStorage.setItem("awidat:welcome:shown", new Date().toISOString());
+      localStorage.setItem("montage:welcome:shown", new Date().toISOString());
     } catch {}
-    window.__awidatPerf = {
+    window.__montagePerf = {
       longTasks: [],
       marks: {},
     };
     try {
       const observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
-          window.__awidatPerf.longTasks.push({
+          window.__montagePerf.longTasks.push({
             name: entry.name,
             startTime: entry.startTime,
             duration: entry.duration,
@@ -126,21 +126,21 @@ async function installPageInstrumentation(context) {
     } catch {}
     const observePreviewVideo = () => {
       const markPreviewVideo = () => {
-        if (window.__awidatPerf.marks.firstVideoAttached) return;
+        if (window.__montagePerf.marks.firstVideoAttached) return;
         const video = document.querySelector("video");
         if (!video) return;
-        window.__awidatPerf.marks.firstVideoAttached = performance.now();
+        window.__montagePerf.marks.firstVideoAttached = performance.now();
         video.addEventListener("loadedmetadata", () => {
-          window.__awidatPerf.marks.firstPreviewMetadata = performance.now();
+          window.__montagePerf.marks.firstPreviewMetadata = performance.now();
         }, { once: true });
         video.addEventListener("loadeddata", () => {
-          window.__awidatPerf.marks.firstPreviewFrame = performance.now();
+          window.__montagePerf.marks.firstPreviewFrame = performance.now();
         }, { once: true });
         if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-          window.__awidatPerf.marks.firstPreviewMetadata = performance.now();
+          window.__montagePerf.marks.firstPreviewMetadata = performance.now();
         }
         if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          window.__awidatPerf.marks.firstPreviewFrame = performance.now();
+          window.__montagePerf.marks.firstPreviewFrame = performance.now();
         }
       };
       markPreviewVideo();
@@ -186,7 +186,7 @@ async function measureLoadedProject(page) {
   const shellInteractiveMs = Date.now() - navStart;
 
   await page.waitForFunction(() => {
-    const calls = window.__awidatIpcCalls ?? [];
+    const calls = window.__montageIpcCalls ?? [];
     return ["current_project_root", "read_timeline", "list_source_media", "list_proxies"].every(
       (command) => calls.some((call) => call.command === command),
     );
@@ -200,8 +200,8 @@ async function measureLoadedProject(page) {
   );
   const firstPreviewFrameMs = Date.now() - navStart;
 
-  const perf = await page.evaluate(() => window.__awidatPerf);
-  const ipcCalls = await page.evaluate(() => window.__awidatIpcCalls ?? []);
+  const perf = await page.evaluate(() => window.__montagePerf);
+  const ipcCalls = await page.evaluate(() => window.__montageIpcCalls ?? []);
   const mediaUrlCall = ipcCalls.find((call) => call.command === "media_url_for_path");
   const previewFrameMark = perf?.marks?.firstPreviewFrame ?? null;
   const previewEngineInitMs =
@@ -259,7 +259,7 @@ async function measureSwitches(page) {
 }
 
 async function collectLongTasks(page) {
-  return page.evaluate(() => window.__awidatPerf?.longTasks ?? []);
+  return page.evaluate(() => window.__montagePerf?.longTasks ?? []);
 }
 
 function writeReports(report) {

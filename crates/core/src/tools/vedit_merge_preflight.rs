@@ -95,7 +95,7 @@ impl ToolHandler for VeditMergePreflightTool {
 
 const DESCRIPTION: &str = "\
 Check whether a source ref can be safely merged into a target ref under \
-Awidat's proposed bounded merge rule: both sides must have changed \
+Montage's proposed bounded merge rule: both sides must have changed \
 non-overlapping clip/media identifiers since their common ancestor. \
 This tool is read-only; it does not checkout, merge, resolve conflicts, \
 or modify refs.\
@@ -114,10 +114,10 @@ mod tests {
             project_root,
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

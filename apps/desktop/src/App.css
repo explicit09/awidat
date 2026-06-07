@@ -1,4 +1,4 @@
-/* Awidat desktop UI system.
+/* Montage desktop UI system.
    A dense editorial workspace: central monitor and timeline, task rails,
    explicit agent/proposal state, and restrained long-session contrast. */
 
@@ -2474,7 +2474,7 @@ button {
 }
 
 /* Outer .proposal-edl-popover positioning was retired in Step 12.2
- * — Radix's <Popover> portals + .awidat-popover provide positioning,
+ * — Radix's <Popover> portals + .montage-popover provide positioning,
  * sizing, and shadow. The inner content rules below still apply
  * (the className stays on the PopoverContent so descendant selectors
  * keep targeting header/close/pre). */
@@ -2562,7 +2562,7 @@ button {
 
 /* Live label that follows the dragged edge during a user-trim drag.
  * `left` is set inline (= drag.currentX); everything else lives here.
- * Visual language matches .awidat-tooltip so the live drag affordance
+ * Visual language matches .montage-tooltip so the live drag affordance
  * reads consistently with the hover tooltips elsewhere in the app —
  * but the amber accent stays because this label needs to pop during
  * a fast drag, not blend in like a passive hover hint. */
@@ -6991,13 +6991,13 @@ button {
 }
 
 /* ─── Chat rail (Cursor-inspired calm pass) ─────────────────────────
-   Scoped to .awidat-chat-rail so the rest of the app keeps its
+   Scoped to .montage-chat-rail so the rest of the app keeps its
    teal-accent palette. Inside the rail we shift to a flatter
    charcoal/slate surface (Cursor's Anysphere Dark), enlarge the body
    rhythm, and replace the green Send pill with a quiet bordered
    button. Composer becomes one rounded card with the mode chip,
    attach + mic icons, hint text, and Send all inside the same frame. */
-.awidat-chat-rail {
+.montage-chat-rail {
   /* Palette now matches the global tokens (charcoal everywhere),
      so the rail only needs its own background pin. */
   background: var(--color-surface-page);
@@ -7007,12 +7007,12 @@ button {
    chat-title button reads like a tab title; History/New/Focus
    buttons become tiny ghost icons (less visual weight than text
    buttons). */
-.awidat-chat-rail [aria-expanded][title="Chat history"] {
+.montage-chat-rail [aria-expanded][title="Chat history"] {
   border-color: transparent !important;
   background: transparent !important;
   font-weight: 500;
 }
-.awidat-chat-rail [aria-expanded][title="Chat history"]:hover {
+.montage-chat-rail [aria-expanded][title="Chat history"]:hover {
   background: var(--color-surface-card) !important;
 }
 
@@ -7020,15 +7020,15 @@ button {
    replies so the eye has room to breathe. Tool-call rows (the
    `• view timeline  Read timeline` lines) drop their card chrome
    and read as plain text with a leading dot. */
-.awidat-chat-rail .chat-stream,
-.awidat-chat-rail [data-chat-stream] {
+.montage-chat-rail .chat-stream,
+.montage-chat-rail [data-chat-stream] {
   font-size: 14px;
   line-height: 1.6;
 }
 
 /* User bubble — Cursor uses a soft pill with selection-tinted
    background, not a vivid brand color. */
-.awidat-chat-rail [data-chat-user] {
+.montage-chat-rail [data-chat-user] {
   background: var(--color-surface-selected);
   color: var(--color-text-primary);
   border-radius: 12px;
@@ -7036,7 +7036,7 @@ button {
 }
 
 /* Tool tags inline — calm monospace, no card. */
-.awidat-chat-rail [data-tool-tag] {
+.montage-chat-rail [data-tool-tag] {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 12px;
   color: var(--color-text-muted);
@@ -7048,7 +7048,7 @@ button {
 /* Composer — one rounded card that contains the textarea, the
    ⌘↩ hint, and the Send/Stop button. Focus state thickens the
    border without changing color (keeps the rail calm). */
-.awidat-chat-rail .awidat-composer-card {
+.montage-chat-rail .montage-composer-card {
   background: var(--color-surface-card);
   border: 1px solid transparent;
   border-radius: 12px;
@@ -7060,20 +7060,20 @@ button {
    default :focus-visible style, some from Tailwind's preflight; both
    show up as a faint blue/teal line on the card's edge when the
    textarea has focus. */
-.awidat-chat-rail .awidat-composer-card,
-.awidat-chat-rail .awidat-composer-card *,
-.awidat-chat-rail .awidat-composer-card *:focus,
-.awidat-chat-rail .awidat-composer-card *:focus-visible,
-.awidat-chat-rail .awidat-composer-card:focus,
-.awidat-chat-rail .awidat-composer-card:focus-within,
-.awidat-chat-rail .awidat-composer-card:focus-visible {
+.montage-chat-rail .montage-composer-card,
+.montage-chat-rail .montage-composer-card *,
+.montage-chat-rail .montage-composer-card *:focus,
+.montage-chat-rail .montage-composer-card *:focus-visible,
+.montage-chat-rail .montage-composer-card:focus,
+.montage-chat-rail .montage-composer-card:focus-within,
+.montage-chat-rail .montage-composer-card:focus-visible {
   outline: none !important;
   box-shadow: none !important;
 }
-.awidat-chat-rail .awidat-composer-card textarea {
+.montage-chat-rail .montage-composer-card textarea {
   border: none !important;
 }
-.awidat-chat-rail .awidat-composer-card textarea {
+.montage-chat-rail .montage-composer-card textarea {
   font-size: 14px;
   line-height: 1.45;
   padding: 8px 12px 2px;
@@ -7082,19 +7082,19 @@ button {
 /* Send button override — strip the brand-green primary look and use
    a quiet bordered button that lights up on hover. Stop button keeps
    the warning tint because it's a destructive interrupt. */
-.awidat-chat-rail .awidat-composer-card button[title*="Command-Enter"],
-.awidat-chat-rail .awidat-composer-card .awidat-send-button {
+.montage-chat-rail .montage-composer-card button[title*="Command-Enter"],
+.montage-chat-rail .montage-composer-card .montage-send-button {
   background: var(--color-surface-input) !important;
   border: 1px solid var(--color-border) !important;
   color: var(--color-text-secondary) !important;
   border-radius: 8px !important;
   font-weight: 500;
 }
-.awidat-chat-rail .awidat-composer-card .awidat-send-button:hover:not(:disabled) {
+.montage-chat-rail .montage-composer-card .montage-send-button:hover:not(:disabled) {
   background: var(--color-surface-hover) !important;
   color: var(--color-text-primary) !important;
 }
-.awidat-chat-rail .awidat-composer-card .awidat-send-button:disabled {
+.montage-chat-rail .montage-composer-card .montage-send-button:disabled {
   opacity: 0.5;
 }
 
@@ -7103,7 +7103,7 @@ button {
    but our editor needs "playhead + selected clip" context surfaced
    somewhere — keep it minimal so it doesn't compete with the
    composer. */
-.awidat-chat-rail .awidat-context-strip {
+.montage-chat-rail .montage-context-strip {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -7113,12 +7113,12 @@ button {
   color: var(--color-text-muted);
   min-height: 20px;
 }
-.awidat-chat-rail .awidat-context-strip .awidat-context-item {
+.montage-chat-rail .montage-context-strip .montage-context-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.awidat-chat-rail .awidat-context-strip .awidat-context-clear {
+.montage-chat-rail .montage-context-strip .montage-context-clear {
   margin-left: auto;
   background: transparent;
   border: none;
@@ -7128,7 +7128,7 @@ button {
   border-radius: 4px;
   font-size: 11px;
 }
-.awidat-chat-rail .awidat-context-strip .awidat-context-clear:hover {
+.montage-chat-rail .montage-context-strip .montage-context-clear:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
@@ -7140,7 +7140,7 @@ button {
    like a form field. Mode dot color encodes intent: blue=manual
    (you drive), amber=copilot (it nudges), green=autopilot (it
    drives). */
-.awidat-chat-rail .awidat-mode-chip {
+.montage-chat-rail .montage-mode-chip {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -7153,26 +7153,26 @@ button {
   cursor: pointer;
   transition: background-color 100ms ease, color 100ms ease;
 }
-.awidat-chat-rail .awidat-mode-chip:hover {
+.montage-chat-rail .montage-mode-chip:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot {
+.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot {
   height: 6px;
   width: 6px;
   border-radius: 999px;
   background: var(--color-text-muted);
 }
-.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="manual"] {
+.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="manual"] {
   background: #5fa8ff;
 }
-.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="copilot"] {
+.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="copilot"] {
   background: #fbbf24;
 }
-.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="autopilot"] {
+.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="autopilot"] {
   background: #5bd3d9;
 }
-.awidat-chat-rail .awidat-mode-chip select {
+.montage-chat-rail .montage-mode-chip select {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -7188,7 +7188,7 @@ button {
 /* ─── Focused / full-chat mode sidebar ─────────────────────────────
    240px column with always-visible chat list. Matches Cursor's
    left-sidebar treatment when the chat takes over the whole window. */
-.awidat-focused-sidebar {
+.montage-focused-sidebar {
   display: flex;
   flex-direction: column;
   width: 240px;
@@ -7199,10 +7199,10 @@ button {
   padding: 12px 8px;
   gap: 8px;
 }
-.awidat-focused-sidebar-header {
+.montage-focused-sidebar-header {
   shrink: 0;
 }
-.awidat-focused-sidebar-new {
+.montage-focused-sidebar-new {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -7217,15 +7217,15 @@ button {
   cursor: pointer;
   transition: background-color 100ms ease, color 100ms ease;
 }
-.awidat-focused-sidebar-new:hover:not(:disabled) {
+.montage-focused-sidebar-new:hover:not(:disabled) {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.awidat-focused-sidebar-new:disabled {
+.montage-focused-sidebar-new:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.awidat-focused-sidebar-list {
+.montage-focused-sidebar-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -7234,7 +7234,7 @@ button {
   gap: 1px;
   scrollbar-gutter: stable;
 }
-.awidat-focused-sidebar-item {
+.montage-focused-sidebar-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7249,35 +7249,35 @@ button {
   cursor: pointer;
   transition: background-color 100ms ease, color 100ms ease;
 }
-.awidat-focused-sidebar-item:hover:not(:disabled) {
+.montage-focused-sidebar-item:hover:not(:disabled) {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.awidat-focused-sidebar-item.is-active {
+.montage-focused-sidebar-item.is-active {
   background: var(--color-surface-selected);
   color: var(--color-text-primary);
 }
-.awidat-focused-sidebar-item:disabled {
+.montage-focused-sidebar-item:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.awidat-focused-sidebar-meta {
+.montage-focused-sidebar-meta {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 10px;
   color: var(--color-text-muted);
   shrink: 0;
 }
-.awidat-focused-sidebar-empty {
+.montage-focused-sidebar-empty {
   padding: 12px 10px;
   font-size: 12px;
   color: var(--color-text-muted);
 }
-.awidat-focused-sidebar-footer {
+.montage-focused-sidebar-footer {
   shrink: 0;
   border-top: 1px solid var(--color-border-subtle);
   padding-top: 8px;
 }
-.awidat-focused-sidebar-footer-button {
+.montage-focused-sidebar-footer-button {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -7291,7 +7291,7 @@ button {
   cursor: pointer;
   transition: background-color 100ms ease, color 100ms ease;
 }
-.awidat-focused-sidebar-footer-button:hover {
+.montage-focused-sidebar-footer-button:hover {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
@@ -7299,13 +7299,13 @@ button {
 /* Chat row + context menu shared between the in-cockpit history
    dropdown and the focused-mode sidebar. The wrapper is the position
    anchor for the absolutely-placed menu and the …-more button. */
-.awidat-chat-row-wrapper {
+.montage-chat-row-wrapper {
   position: relative;
 }
-.awidat-chat-row-wrapper .awidat-chat-row {
+.montage-chat-row-wrapper .montage-chat-row {
   padding-right: 26px;
 }
-.awidat-chat-row-more {
+.montage-chat-row-more {
   position: absolute;
   right: 4px;
   top: 50%;
@@ -7325,15 +7325,15 @@ button {
   opacity: 0;
   transition: opacity 80ms ease, background-color 80ms ease;
 }
-.awidat-chat-row-wrapper:hover .awidat-chat-row-more,
-.awidat-chat-row-wrapper:focus-within .awidat-chat-row-more {
+.montage-chat-row-wrapper:hover .montage-chat-row-more,
+.montage-chat-row-wrapper:focus-within .montage-chat-row-more {
   opacity: 1;
 }
-.awidat-chat-row-more:hover {
+.montage-chat-row-more:hover {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.awidat-chat-row-menu {
+.montage-chat-row-menu {
   position: absolute;
   right: 4px;
   top: calc(100% - 2px);
@@ -7347,7 +7347,7 @@ button {
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
-.awidat-chat-row-menu button {
+.montage-chat-row-menu button {
   text-align: left;
   padding: 6px 10px;
   border: none;
@@ -7357,18 +7357,18 @@ button {
   color: var(--color-text-secondary);
   cursor: pointer;
 }
-.awidat-chat-row-menu button:hover {
+.montage-chat-row-menu button:hover {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.awidat-chat-row-menu button.awidat-chat-row-menu-danger {
+.montage-chat-row-menu button.montage-chat-row-menu-danger {
   color: #ef7168;
 }
-.awidat-chat-row-menu button.awidat-chat-row-menu-danger:hover {
+.montage-chat-row-menu button.montage-chat-row-menu-danger:hover {
   background: rgba(239, 113, 104, 0.12);
   color: #ff8a82;
 }
-.awidat-chat-row-rename {
+.montage-chat-row-rename {
   flex: 1;
   background: var(--color-surface-input);
   border: 1px solid var(--color-border);
@@ -7378,7 +7378,7 @@ button {
   font-size: 13px;
   outline: none;
 }
-.awidat-chat-row-rename:focus {
+.montage-chat-row-rename:focus {
   border-color: var(--color-border-focus);
 }
 
@@ -7386,7 +7386,7 @@ button {
    user is typing a query. Keyboard-driven (Up/Down + Enter); mouse
    hover updates the highlighted row. Calm dropdown matching the
    chat-row context menu's chrome. */
-.awidat-chat-rail .awidat-mention-picker {
+.montage-chat-rail .montage-mention-picker {
   position: absolute;
   left: 8px;
   right: 8px;
@@ -7403,7 +7403,7 @@ button {
   flex-direction: column;
   gap: 1px;
 }
-.awidat-chat-rail .awidat-mention-item {
+.montage-chat-rail .montage-mention-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7418,11 +7418,11 @@ button {
   cursor: pointer;
   transition: background-color 80ms ease, color 80ms ease;
 }
-.awidat-chat-rail .awidat-mention-item.is-active {
+.montage-chat-rail .montage-mention-item.is-active {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.awidat-chat-rail .awidat-mention-item-label {
+.montage-chat-rail .montage-mention-item-label {
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7430,7 +7430,7 @@ button {
   flex: 1;
   min-width: 0;
 }
-.awidat-chat-rail .awidat-mention-item-detail {
+.montage-chat-rail .montage-mention-item-detail {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 10.5px;
   color: var(--color-text-muted);

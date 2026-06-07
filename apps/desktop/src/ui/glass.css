@@ -1,5 +1,5 @@
 /*
- * Awidat — "Obsidian Glass" 2026 design layer.
+ * Montage — "Obsidian Glass" 2026 design layer.
  *
  * A dark-first liquid-glass system layered on top of tokens.css. The
  * editorial AI is presented as light moving through frosted glass: the
@@ -50,7 +50,7 @@
 
   /* ---- brand light (orange as ambient, not paint) — vivid so it
      actually bleeds through the frosted panels ---- */
-  --orb-warm: rgba(255, 122, 24, 0.95);   /* awidat orange */
+  --orb-warm: rgba(255, 122, 24, 0.95);   /* montage orange */
   --orb-amber: rgba(255, 184, 72, 0.75);
   --orb-cool: rgba(20, 184, 166, 0.70);   /* teal counter-light for tension */
   --orb-violet: rgba(139, 92, 246, 0.62); /* deep violet accent */

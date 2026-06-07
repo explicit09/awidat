@@ -1,12 +1,12 @@
 /**
  * useWelcome — first-run welcome card open-state (Wave 3 W1).
  *
- * Awidat's agent-driven editorial loop is unusual: a new user has no
+ * Montage's agent-driven editorial loop is unusual: a new user has no
  * mental model for "the agent already read your media and is proposing
  * edits". A one-screen welcome on first launch ever explains the three
  * core ideas — read once, dismiss, done.
  *
- * Storage: a single localStorage key (`awidat:welcome:shown`). If
+ * Storage: a single localStorage key (`montage:welcome:shown`). If
  * absent, the modal fires on mount; on dismiss, a timestamp is written
  * so subsequent launches stay clean. Settings exposes a "Show welcome
  * again" affordance that wipes the key via `reset()`.
@@ -17,7 +17,7 @@
 
 import { create } from "zustand";
 
-export const STORAGE_KEY = "awidat:welcome:shown";
+export const STORAGE_KEY = "montage:welcome:shown";
 
 interface StorageAdapter {
   getItem(k: string): string | null;
@@ -70,11 +70,11 @@ export function createWelcomeStore(opts: CreateOpts = {}) {
   const storage: StorageAdapter | null = persist
     ? opts.storage ?? (typeof localStorage !== "undefined" ? localStorage : null)
     : null;
-  // Dev-only: VITE_AWIDAT_SKIP_WELCOME=1 suppresses the first-run card
+  // Dev-only: VITE_MONTAGE_SKIP_WELCOME=1 suppresses the first-run card
   // (used for native screenshot tours). No effect in production builds.
   const devSkip =
     typeof import.meta !== "undefined" &&
-    import.meta.env?.VITE_AWIDAT_SKIP_WELCOME === "1";
+    import.meta.env?.VITE_MONTAGE_SKIP_WELCOME === "1";
   const initialShown = devSkip || loadShown(storage);
 
   return create<WelcomeStore>((set, get) => ({

@@ -18,7 +18,7 @@ from statistics import mean
 from typing import Any
 
 try:
-    from awidat_mcp import IndexAssetRequest, IndexerServer
+    from montage_mcp import IndexAssetRequest, IndexerServer
 except ModuleNotFoundError:
     IndexAssetRequest = Any
     IndexerServer = None
@@ -309,5 +309,5 @@ handle = server.index_asset(_handle) if server else _handle
 
 def main() -> None:
     if server is None:
-        raise RuntimeError("composition-mcp requires awidat-mcp runtime dependencies")
+        raise RuntimeError("composition-mcp requires montage-mcp runtime dependencies")
     server.run()

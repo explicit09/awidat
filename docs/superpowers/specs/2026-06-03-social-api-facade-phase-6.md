@@ -2,7 +2,7 @@
 
 ## Summary
 
-Phase 6 turns the verified `awidat-social` domain crate into a server-ready API
+Phase 6 turns the verified `montage-social` domain crate into a server-ready API
 facade. The repository still does not have a dedicated web-server crate, so this
 phase does not add concrete HTTP routes. Instead, it creates route-shaped Rust
 methods, request/response DTOs, and authorization gates that a future Axum,
@@ -11,7 +11,7 @@ Next, Tauri, or other server wrapper can mount directly.
 The purpose is to make the pipeline usable as a server-backed product surface
 without blurring the layers:
 
-- Awidat app auth decides which user or workspace is making the request.
+- Montage app auth decides which user or workspace is making the request.
 - Social OAuth decides which creator account can receive the post.
 - Provider adapters decide platform capability, upload, and status behavior.
 - The API facade exposes only account display data, eligibility, publish state,
@@ -184,7 +184,7 @@ responses only.
 
 ## Authorization Rules
 
-`ApiActor` should represent the authenticated Awidat user and the workspace
+`ApiActor` should represent the authenticated Montage user and the workspace
 roles known by the caller. This is separate from social provider credentials.
 
 User-owned resources:
@@ -231,9 +231,9 @@ mapping for that wrapper:
 Phase 6 is complete only when these pass:
 
 ```bash
-cargo test -p awidat-social api::tests
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social api::tests
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

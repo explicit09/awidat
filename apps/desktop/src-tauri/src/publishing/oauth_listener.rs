@@ -325,7 +325,7 @@ fn percent_decode(value: &str) -> String {
 
 const SUCCESS_BODY: &str = concat!(
     "<!doctype html><html><head><meta charset=\"utf-8\">",
-    "<title>Awidat — Authorization complete</title>",
+    "<title>Montage — Authorization complete</title>",
     "<style>",
     "body{font:14px -apple-system,system-ui,sans-serif;",
     "background:#0a0a0a;color:#e5e5e5;display:flex;",
@@ -338,13 +338,13 @@ const SUCCESS_BODY: &str = concat!(
     "<div class=\"check\">&#10003;</div>",
     "<div>Authorization complete</div>",
     "<div style=\"margin-top:6px;color:#a3a3a3;font-size:13px\">",
-    "You can close this tab and return to Awidat.",
+    "You can close this tab and return to Montage.",
     "</div></div></body></html>",
 );
 
 const ERROR_BODY_STATE: &str = concat!(
     "<!doctype html><html><head><meta charset=\"utf-8\">",
-    "<title>Awidat — Authorization rejected</title>",
+    "<title>Montage — Authorization rejected</title>",
     "<style>",
     "body{font:14px -apple-system,system-ui,sans-serif;",
     "background:#0a0a0a;color:#e5e5e5;display:flex;",

@@ -1,4 +1,4 @@
-//! Cross-crate test helpers for awidat. See `README.md` for placement
+//! Cross-crate test helpers for montage. See `README.md` for placement
 //! conventions (per-crate vs. cross-crate).
 //!
 //! This crate is `publish = false`; it's a workspace dev-dep used only from

@@ -70,7 +70,7 @@ The tool returns:
 - `edl_fragment` ready for apply_edl
 - `downloads_remaining_this_session` (cap is 10)
 
-The acknowledgment is recorded at `<project>/.awidat/yt_caveats.json`
+The acknowledgment is recorded at `<project>/.montage/yt_caveats.json`
 so it persists across sessions.
 
 ### 3. Place via apply_edl
@@ -113,7 +113,7 @@ on the timeline. Same flow as `stock-broll`'s final step.
       idempotent re-fetch — both are fine).
 - [ ] You handed the `edl_fragment` to `apply_edl` and `view_timeline`
       shows the cutaway at the expected anchor.
-- [ ] The acknowledgment is in `<project>/.awidat/yt_caveats.json`
+- [ ] The acknowledgment is in `<project>/.montage/yt_caveats.json`
       (the tool persists this; you don't need to verify).
 
 ## Compared to stock-broll

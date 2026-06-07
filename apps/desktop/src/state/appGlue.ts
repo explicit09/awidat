@@ -332,7 +332,7 @@ export function useAppGlue() {
       refreshTimeline().catch(() => {});
       refreshMedia().catch(() => {});
       // Hydrate the Skills tab's enable/disable state from
-      // `<project>/.awidat/skills.json` so the toggles reflect any
+      // `<project>/.montage/skills.json` so the toggles reflect any
       // changes that arrived via file sync (Dropbox/git/etc.). The
       // file is the source of truth; the localStorage cache is just a
       // UX optimization for cold loads. Errors are swallowed — the
@@ -364,7 +364,7 @@ export function useAppGlue() {
           .catch((e) => console.warn("read_skill_config failed", e));
         // Mirror the skills hydration for the indexers overlay (Wave 4
         // T3). The IndexersStrip popover reads disabled state from this
-        // store; the dispatcher reads the same .awidat/indexers.json on
+        // store; the dispatcher reads the same .montage/indexers.json on
         // run so the two views never disagree.
         invoke<string[]>("read_disabled_indexers", { projectPath: projectRoot })
           .then((disabled) => hydrateIndexerOverlayFromDisk(projectRoot, disabled))
@@ -424,7 +424,7 @@ export function useAppGlue() {
   // project per persisted-state-clear. The agent has read AGENTS.md and
   // any cached indexer signals by the time the bridge is up, so this
   // gives it a chance to introduce itself before the user types. Hidden
-  // from the transcript via the `[awidat:intro]` sentinel in the prompt
+  // from the transcript via the `[montage:intro]` sentinel in the prompt
   // body — see `introState.ts` and the `ChatStream` / App.tsx filters.
   //
   // Hard constraints:

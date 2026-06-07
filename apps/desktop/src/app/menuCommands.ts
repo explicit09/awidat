@@ -1,4 +1,4 @@
-export const MENU_COMMAND_EVENT = "awidat-menu-command";
+export const MENU_COMMAND_EVENT = "montage-menu-command";
 
 export const MENU_COMMANDS = {
   NEW_PROJECT: "project:new",

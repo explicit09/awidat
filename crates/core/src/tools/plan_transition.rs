@@ -5,7 +5,7 @@
 //! returned EDL fragment still has to go through `apply_edl`.
 
 use async_trait::async_trait;
-use awidat_proto::transitions::{BuiltinTransition, MotionAlignment, lookup_builtin_transition};
+use montage_proto::transitions::{BuiltinTransition, MotionAlignment, lookup_builtin_transition};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -198,7 +198,7 @@ fn recommend(
         return hard_cut(
             context,
             "transition_unavailable",
-            "The requested transition job does not map to a supported Awidat transition id.",
+            "The requested transition job does not map to a supported Montage transition id.",
         );
     };
 
@@ -288,17 +288,17 @@ fn job_from_context(context: &ContextSummary) -> Option<&'static str> {
 
 fn transition_for_job(job: &str, direction: Option<MotionAlignment>) -> &'static str {
     match job {
-        "beat_hit" => "awidat.ramp_in_beat",
-        "soft_time_passage" => "awidat.cross_dissolve",
-        "chapter_reset" => "awidat.fade_black",
-        "visual_match" => "awidat.match_dissolve",
-        "style_accent" => "awidat.motion_blur",
+        "beat_hit" => "montage.ramp_in_beat",
+        "soft_time_passage" => "montage.cross_dissolve",
+        "chapter_reset" => "montage.fade_black",
+        "visual_match" => "montage.match_dissolve",
+        "style_accent" => "montage.motion_blur",
         "hide_motion_jump" => match direction {
-            Some(MotionAlignment::Left) => "awidat.whip_pan_left",
-            Some(MotionAlignment::Right) => "awidat.whip_pan_right",
-            _ => "awidat.motion_blur",
+            Some(MotionAlignment::Left) => "montage.whip_pan_left",
+            Some(MotionAlignment::Right) => "montage.whip_pan_right",
+            _ => "montage.motion_blur",
         },
-        _ => "awidat.motion_blur",
+        _ => "montage.motion_blur",
     }
 }
 
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn beat_hit_prefers_speed_ramp_transition() {
-        assert_eq!(transition_for_job("beat_hit", None), "awidat.ramp_in_beat");
+        assert_eq!(transition_for_job("beat_hit", None), "montage.ramp_in_beat");
     }
 
     #[tokio::test]
@@ -555,7 +555,7 @@ mod tests {
         );
         assert_eq!(
             body.pointer("/recommended/id").and_then(|v| v.as_str()),
-            Some("awidat.whip_pan_left")
+            Some("montage.whip_pan_left")
         );
         let edl = body
             .pointer("/edl_fragment")
@@ -654,7 +654,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
         assert_eq!(
             body.pointer("/recommended/id").and_then(|v| v.as_str()),
-            Some("awidat.whip_pan_right")
+            Some("montage.whip_pan_right")
         );
         assert_eq!(
             body.pointer("/recommended/direction")
@@ -700,10 +700,10 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

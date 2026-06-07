@@ -1,17 +1,17 @@
 [package]
-name = "awidat-codex-bridge"
+name = "montage-codex-bridge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "In-process codex app-server bridge for Awidat surfaces"
+description = "In-process codex app-server bridge for Montage surfaces"
 
 [lib]
-name = "awidat_codex_bridge"
+name = "montage_codex_bridge"
 
 [dependencies]
 # Desktop wire protocol — the `Item` types we emit.
-awidat-desktop-protocol = { workspace = true }
+montage-desktop-protocol = { workspace = true }
 
 # Codex app-server in-process client + protocol types.
 codex-app-server-client = { workspace = true }

@@ -40,7 +40,7 @@ export type PlaySegment = {
   /** Project-relative path of the *source* asset (e.g. `raw/foo.MOV`).
    *  Distinct from `proxyPath` — agent tools look this up under the
    *  project root, so view-state hints must use this id, not the
-   *  proxy stem (which lives under `.awidat/proxies/`). */
+   *  proxy stem (which lives under `.montage/proxies/`). */
   assetId: string | null;
   /** Stem of the source asset (filename without extension). The
    *  agent's view-context line uses this so e.g. `view_frame` can
@@ -75,8 +75,8 @@ export type PreviewTransition = {
   /** OTIO effect_name, e.g. `SMPTE_Dissolve` or a raw FFmpeg xfade name. */
   kind: string;
   /**
-   * Stable awidat transition id, e.g. `awidat.match_dissolve`. `null`
-   * when the transition has no `metadata.awidat_transition`. Used by
+   * Stable montage transition id, e.g. `montage.match_dissolve`. `null`
+   * when the transition has no `metadata.montage_transition`. Used by
    * the preview to decide whether to route through the GPU renderer
    * (when the transition's composition wants a shader CSS can't fake)
    * or fall back to the CSS-based overlay.

@@ -1,16 +1,18 @@
 //! Integration coverage for typed editorial intent lowering.
 
-use awidat_core::edl::intent::{
+use montage_core::edl::intent::{
     EditorialIntent, EditorialIntentResolver, MarkerIntent, MoveClipIntent, ProfessionalIntent,
     SplitClipIntent, TrimClipIntent,
 };
-use awidat_core::edl::{Anchor, AnchorContext, EdlOp, ProfessionalTimelineEdit, TransitionBetween};
-use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-use awidat_proto::otio::{
+use montage_core::edl::{
+    Anchor, AnchorContext, EdlOp, ProfessionalTimelineEdit, TransitionBetween,
+};
+use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+use montage_proto::otio::{
     Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::professional::SourceRange;
+use montage_proto::professional::SourceRange;
 
 fn timeline_with_three_clips() -> Timeline {
     let mut timeline = Timeline::empty("intent-test");
@@ -28,12 +30,12 @@ fn timeline_with_three_clips() -> Timeline {
             RationalTime::new(5.0 * 24.0, 24.0),
         ));
         clip.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(AwAnchor {
                     transcript_snippet: Some((*snippet).to_string()),
                     ..AwAnchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };

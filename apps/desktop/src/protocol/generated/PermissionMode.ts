@@ -4,6 +4,6 @@
  * User's permission level for the agent's autonomous editing. Maps
  * to Claude Code's permission modes (manual / accept-edits /
  * bypass). The dropdown lives in the action bar; selection persists
- * per project at `<project>/.awidat/permission_mode`.
+ * per project at `<project>/.montage/permission_mode`.
  */
 export type PermissionMode = "manual" | "copilot" | "autopilot";

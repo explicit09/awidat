@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from awidat_mcp import IndexAssetRequest
+from montage_mcp import IndexAssetRequest
 
 from shot_mcp import (
     _clip_match_candidates_for_shot,

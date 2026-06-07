@@ -1,4 +1,4 @@
-//! Typed errors for the awidat MCP client.
+//! Typed errors for the montage MCP client.
 //!
 //! Variants are coarse but actionable. The CLI layer attaches `anyhow::Context`
 //! at call sites (which indexer? which tool? which asset?). Tools that bubble

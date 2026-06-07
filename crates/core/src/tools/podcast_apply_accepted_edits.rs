@@ -8,8 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -342,7 +342,7 @@ fn collect_clip_targets(timeline: &Timeline) -> Vec<ClipTarget> {
             let source_end_s = source_start_s + range.duration.to_seconds();
             let anchor = clip
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|meta| meta.extra.get("clip_uuid"))
                 .and_then(|value| value.as_str())
@@ -373,11 +373,11 @@ fn find_clip_target<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange, Timeline, Track, TrackChild, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     fn ctx_at(root: &std::path::Path) -> ToolContext {
@@ -386,10 +386,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -428,7 +428,7 @@ mod tests {
         }
         let stem = raw.file_stem().unwrap().to_string_lossy();
         let path = root
-            .join(".awidat")
+            .join(".montage")
             .join("silences")
             .join(format!("{stem}-{hash:08x}.json"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

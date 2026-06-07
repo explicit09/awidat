@@ -20,7 +20,7 @@ fn vertical_ffmpeg_transition_families_have_manifest_and_pixel_evidence() {
     for case in [
         TransitionProofCase {
             name: "slide-left",
-            id: "awidat.slide_left",
+            id: "montage.slide_left",
             family: "slide",
             intent: "screen_direction",
             direction: Some("left"),
@@ -28,7 +28,7 @@ fn vertical_ffmpeg_transition_families_have_manifest_and_pixel_evidence() {
         },
         TransitionProofCase {
             name: "cross-dissolve",
-            id: "awidat.cross_dissolve",
+            id: "montage.cross_dissolve",
             family: "dissolve",
             intent: "soft_time_passage",
             direction: None,
@@ -36,7 +36,7 @@ fn vertical_ffmpeg_transition_families_have_manifest_and_pixel_evidence() {
         },
         TransitionProofCase {
             name: "flash-white",
-            id: "awidat.flash_white",
+            id: "montage.flash_white",
             family: "flash",
             intent: "beat_hit",
             direction: None,
@@ -44,7 +44,7 @@ fn vertical_ffmpeg_transition_families_have_manifest_and_pixel_evidence() {
         },
         TransitionProofCase {
             name: "wipe-left",
-            id: "awidat.wipe_left",
+            id: "montage.wipe_left",
             family: "wipe",
             intent: "graphic_movement",
             direction: Some("left"),
@@ -52,7 +52,7 @@ fn vertical_ffmpeg_transition_families_have_manifest_and_pixel_evidence() {
         },
         TransitionProofCase {
             name: "zoom-in",
-            id: "awidat.zoom_in",
+            id: "montage.zoom_in",
             family: "zoom",
             intent: "punch_in",
             direction: Some("in"),
@@ -243,8 +243,8 @@ fn clip_uuid_by_name(project_root: &Path, name: &str) -> String {
 fn find_clip_uuid_by_name(value: &serde_json::Value, name: &str) -> Option<String> {
     if value.get("name").and_then(serde_json::Value::as_str) == Some(name) {
         return value
-            .pointer("/metadata/awidat/clip_uuid")
-            .or_else(|| value.pointer("/metadata/awidat/extra/clip_uuid"))
+            .pointer("/metadata/montage/clip_uuid")
+            .or_else(|| value.pointer("/metadata/montage/extra/clip_uuid"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
     }

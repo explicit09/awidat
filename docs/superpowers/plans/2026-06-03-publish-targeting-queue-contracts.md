@@ -4,7 +4,7 @@
 
 **Goal:** Build Phase 3B of the server-backed social publishing pipeline: bind campaign variants to connected accounts, validate publishability, create durable publish jobs, record audit events, and model queue state transitions without live provider uploads.
 
-**Architecture:** Extend `awidat-social` with publish-targeting service contracts on top of the Phase 3A store boundary. The service remains framework-neutral so a future HTTP server can mount it directly. Provider upload adapters, live HTTP calls, desktop UI, and background worker execution are explicitly out of scope; this phase creates the durable target/job/event contracts those systems will use.
+**Architecture:** Extend `montage-social` with publish-targeting service contracts on top of the Phase 3A store boundary. The service remains framework-neutral so a future HTTP server can mount it directly. Provider upload adapters, live HTTP calls, desktop UI, and background worker execution are explicitly out of scope; this phase creates the durable target/job/event contracts those systems will use.
 
 **Tech Stack:** Rust 2024 workspace crate, `serde`, `serde_json`, `thiserror`, `rusqlite`, deterministic unit tests, no live network calls in CI.
 
@@ -113,7 +113,7 @@ fn publish_job_event_records_audit_metadata_without_token_material() {
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests
+cargo test -p montage-social job::tests
 ```
 
 Expected: FAIL with unresolved `CampaignVariantTarget::new`, `PublishJobEvent`, `PublishJobEventType`, `PublishJobActorType`, and job transition methods.
@@ -275,7 +275,7 @@ impl PublishJobEvent {
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests
+cargo test -p montage-social job::tests
 ```
 
 Expected: PASS.
@@ -394,7 +394,7 @@ fn in_memory_store_claims_due_scheduled_jobs_once() {
 Run:
 
 ```bash
-cargo test -p awidat-social store::tests
+cargo test -p montage-social store::tests
 ```
 
 Expected: FAIL with unresolved target/job/event store methods.
@@ -461,7 +461,7 @@ Implement the new trait methods. `claim_due_publish_jobs(now, limit)` must:
 Run:
 
 ```bash
-cargo test -p awidat-social store::tests
+cargo test -p montage-social store::tests
 ```
 
 Expected: PASS.
@@ -571,7 +571,7 @@ fn sqlite_claims_due_scheduled_jobs_once() {
 Run:
 
 ```bash
-cargo test -p awidat-social sqlite_store::tests
+cargo test -p montage-social sqlite_store::tests
 ```
 
 Expected: FAIL with missing `SqliteSocialStore` implementations for new `SocialStore` methods.
@@ -641,7 +641,7 @@ Map missing rows to `SocialStoreError::NotFound`; map idempotency unique constra
 Run:
 
 ```bash
-cargo test -p awidat-social sqlite_store::tests
+cargo test -p montage-social sqlite_store::tests
 ```
 
 Expected: PASS.
@@ -777,8 +777,8 @@ fn connected_account(id: &str, account_owner: OwnerRef, eligible: bool) -> Conne
         owner: account_owner,
         provider: Provider::YouTube,
         provider_account_id: "channel_1".into(),
-        display_name: "Awidat Channel".into(),
-        handle: Some("@awidat".into()),
+        display_name: "Montage Channel".into(),
+        handle: Some("@montage".into()),
         avatar_url: None,
         account_kind: AccountKind::Channel,
         status: ConnectedAccountStatus::Connected,
@@ -825,7 +825,7 @@ fn bind_target(store: &mut InMemorySocialStore) {
 Run:
 
 ```bash
-cargo test -p awidat-social publish_service::tests
+cargo test -p montage-social publish_service::tests
 ```
 
 Expected: FAIL with unresolved `PublishService` and input/report types.
@@ -1055,7 +1055,7 @@ pub mod publish_service;
 Run:
 
 ```bash
-cargo test -p awidat-social publish_service::tests
+cargo test -p montage-social publish_service::tests
 ```
 
 Expected: PASS.
@@ -1077,7 +1077,7 @@ git commit -m "feat(social): add publish targeting service"
 Run:
 
 ```bash
-cargo test -p awidat-social
+cargo test -p montage-social
 ```
 
 Expected: PASS.
@@ -1087,7 +1087,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo clippy -p montage-social --all-targets -- -D warnings
 ```
 
 Expected: PASS.

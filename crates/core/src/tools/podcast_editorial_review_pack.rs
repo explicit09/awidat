@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -139,7 +139,7 @@ impl ToolHandler for PodcastEditorialReviewPackTool {
 
 fn build_review_pack(
     project_root: &Path,
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     max_results: usize,
     window_padding_s: f64,
     include_dead_air: bool,
@@ -384,7 +384,7 @@ as cut/keep/review before calling proposal or mutation tools.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
@@ -396,10 +396,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -420,7 +420,7 @@ mod tests {
         asset_id: &str,
         source_start_s: f64,
         duration_s: f64,
-    ) -> awidat_proto::otio::Timeline {
+    ) -> montage_proto::otio::Timeline {
         let mut clip = Clip::empty("c1");
         clip.media_reference = MediaReference::External(ExternalReference::new(asset_id));
         clip.source_range = Some(TimeRange::new(
@@ -429,7 +429,7 @@ mod tests {
         ));
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip));
-        let mut timeline = awidat_proto::otio::Timeline::empty("test");
+        let mut timeline = montage_proto::otio::Timeline::empty("test");
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
         timeline.tracks = stack;
@@ -474,7 +474,7 @@ mod tests {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("asset");
-        project_root.join(".awidat").join("silences").join(format!(
+        project_root.join(".montage").join("silences").join(format!(
             "{stem}-{:08x}.json",
             stable_path_hash_for_test(asset_abs_path)
         ))
@@ -493,7 +493,7 @@ mod tests {
     async fn surfaces_yusuff_style_coaching_as_ai_review_packet() {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
-        let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
+        let mut project = montage_proto::project::Project::init(dir.path()).unwrap();
         project.timeline = timeline_with_clip(asset, 1520.0, 70.0);
         project.write(dir.path()).unwrap();
         write_whisper_sidecar(
@@ -550,7 +550,7 @@ mod tests {
     async fn dead_air_is_evidence_not_final_cut() {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
-        let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
+        let mut project = montage_proto::project::Project::init(dir.path()).unwrap();
         project.timeline = timeline_with_clip(asset, 0.0, 20.0);
         project.write(dir.path()).unwrap();
         write_whisper_sidecar(

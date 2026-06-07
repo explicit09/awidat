@@ -10,16 +10,16 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awidat_desktop_protocol::{
+use montage_desktop_protocol::{
     MediaCacheArtifactStatus, MediaCacheReadiness, MediaDecodeBackend, MediaFailureReason,
     MediaProcessingProgress, MediaReadinessEntry, MediaReadinessSnapshot, MediaReadinessState,
     PlayableArtifact, PlayableArtifactKind,
 };
-use awidat_proto::index::AssetId;
+use montage_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::state::{AwidatState, MediaServerInner};
+use crate::state::{MediaServerInner, MontageState};
 
 /// One playable proxy. The frontend feeds `proxy_path` into
 /// `convertFileSrc()` to get a `<video>`-compatible URL.
@@ -55,7 +55,7 @@ pub struct SourceMediaEntry {
 #[tauri::command]
 pub async fn insert_media_on_timeline(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     asset_id: String,
     at_s: Option<f64>,
 ) -> Result<bool, String> {
@@ -77,7 +77,7 @@ pub async fn insert_media_on_timeline(
         return Err("asset is not a source media file in this project's raw/ directory".into());
     }
 
-    let probe = awidat_render::probe_media(&requested)
+    let probe = montage_render::probe_media(&requested)
         .await
         .map_err(|e| format!("probe source media: {e}"))?;
     let inserted = match at_s {
@@ -104,7 +104,7 @@ pub async fn insert_media_on_timeline(
         let asset_for_task = requested.clone();
         let app_for_task = app.clone();
         tokio::spawn(async move {
-            let state = app_for_task.state::<AwidatState>();
+            let state = app_for_task.state::<MontageState>();
             match crate::commands::transcode::transcode_single_asset_in_project(
                 &app_for_task,
                 &state,
@@ -135,16 +135,16 @@ pub async fn insert_media_on_timeline(
 /// project assets before transcoding/indexing has produced sidecars.
 #[tauri::command]
 pub async fn list_source_media(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<SourceMediaEntry>, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(Vec::new()),
     };
     let files = tokio::task::spawn_blocking(move || {
-        awidat_index::media_files::collect_project_media_files(
+        montage_index::media_files::collect_project_media_files(
             &project_root,
-            awidat_index::media_files::MediaScanOptions {
+            montage_index::media_files::MediaScanOptions {
                 include_raw: true,
                 include_renders: false,
                 max_files: None,
@@ -172,16 +172,16 @@ pub async fn list_source_media(
 }
 
 /// Return every proxy currently sitting in
-/// `<project>/.awidat/proxies/`. Empty list when no project is
+/// `<project>/.montage/proxies/`. Empty list when no project is
 /// loaded or the dir doesn't exist yet (first import will create
 /// it). Sorted by stem so order is stable across calls.
 #[tauri::command]
-pub async fn list_proxies(state: State<'_, AwidatState>) -> Result<Vec<ProxyEntry>, String> {
+pub async fn list_proxies(state: State<'_, MontageState>) -> Result<Vec<ProxyEntry>, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(Vec::new()),
     };
-    let dir = project_root.join(".awidat").join("proxies");
+    let dir = project_root.join(".montage").join("proxies");
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -225,7 +225,7 @@ pub async fn list_proxies(state: State<'_, AwidatState>) -> Result<Vec<ProxyEntr
 /// sidecar state from disk and never starts transcodes or indexers.
 #[tauri::command]
 pub async fn read_media_readiness(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<MediaReadinessSnapshot, String> {
     let project_root = state
         .project_root
@@ -287,7 +287,7 @@ fn media_readiness_entry(
         .to_string();
     let source_meta = std::fs::metadata(asset_path).ok();
     let source_exists = source_meta.as_ref().is_some_and(|meta| meta.is_file());
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let proxy_path = proxy_path_for(&proxies_dir, asset_path);
     let proxy_pending = proxy_pending_path(&proxy_path);
     let proxy_status = cache_file_status(asset_path, &proxy_path, Some(&proxy_pending));
@@ -387,7 +387,7 @@ fn newest_whispercpp_work_dir() -> Option<PathBuf> {
                 return None;
             }
             let name = path.file_name()?.to_str()?;
-            if !name.starts_with("awidat-whispercpp-") {
+            if !name.starts_with("montage-whispercpp-") {
                 return None;
             }
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -471,7 +471,7 @@ fn chunk_index(file_name: &str, suffix: &str) -> Option<u32> {
 }
 
 fn probe_duration_s_sync(asset_path: &Path) -> Option<f64> {
-    let bin = awidat_render::ffprobe_path().ok()?;
+    let bin = montage_render::ffprobe_path().ok()?;
     let output = Command::new(bin)
         .arg("-v")
         .arg("error")
@@ -587,7 +587,7 @@ fn index_sidecar_status(
     asset_id: &str,
 ) -> MediaCacheArtifactStatus {
     let asset = AssetId::new(asset_id.to_string());
-    let Ok(path) = awidat_index::sidecar_io::sidecar_path(project_root, indexer, &asset) else {
+    let Ok(path) = montage_index::sidecar_io::sidecar_path(project_root, indexer, &asset) else {
         return MediaCacheArtifactStatus::Missing;
     };
     sidecar_file_status(&project_root.join(asset_id), &path)
@@ -659,7 +659,7 @@ fn system_time_ms(time: SystemTime) -> Option<u64> {
 /// without listing every proxy.
 #[tauri::command]
 pub async fn proxy_path_for_stem(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     stem: String,
 ) -> Result<Option<String>, String> {
     let project_root = match state.project_root.lock().await.clone() {
@@ -667,7 +667,7 @@ pub async fn proxy_path_for_stem(
         None => return Ok(None),
     };
     let candidate: PathBuf = project_root
-        .join(".awidat")
+        .join(".montage")
         .join("proxies")
         .join(format!("{stem}.mp4"));
     Ok(if candidate.is_file() {
@@ -682,7 +682,7 @@ pub async fn proxy_path_for_stem(
 /// it does not load multi-GB media into WebKit memory.
 #[tauri::command]
 pub async fn media_url_for_path(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     path: String,
 ) -> Result<String, String> {
     let project_root = state
@@ -707,7 +707,7 @@ pub async fn media_url_for_path(
 }
 
 fn is_project_media_path(project_root: &Path, requested: &Path) -> bool {
-    if let Ok(proxies_dir) = std::fs::canonicalize(project_root.join(".awidat").join("proxies")) {
+    if let Ok(proxies_dir) = std::fs::canonicalize(project_root.join(".montage").join("proxies")) {
         if requested.starts_with(&proxies_dir) && is_proxy_file(requested) {
             return true;
         }
@@ -733,7 +733,7 @@ fn is_preview_media_file(path: &Path) -> bool {
 }
 
 fn ensure_media_server(
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
 ) -> Result<(u16, Arc<StdMutex<HashMap<String, PathBuf>>>), String> {
     let mut slot = state
         .media_server
@@ -766,7 +766,7 @@ fn ensure_media_server(
     Ok((port, files))
 }
 
-pub(crate) fn clear_media_server_files(state: &crate::state::AwidatState) -> Result<(), String> {
+pub(crate) fn clear_media_server_files(state: &crate::state::MontageState) -> Result<(), String> {
     let slot = state
         .media_server
         .inner
@@ -959,7 +959,7 @@ pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
         .unwrap_or("asset");
     proxies_dir.join(format!(
         "{stem}-{}-{:08x}.mp4",
-        awidat_render::PROXY_SCHEMA_TAG,
+        montage_render::PROXY_SCHEMA_TAG,
         stable_path_hash(asset_abs_path)
     ))
 }
@@ -993,7 +993,7 @@ pub fn proxy_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<St
     if !abs.is_file() {
         return None;
     }
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let proxy = proxy_path_for(&proxies_dir, &abs);
     proxy
         .is_file()
@@ -1013,7 +1013,7 @@ pub fn thumbnails_dir_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("thumbnails")
         .join(format!("{stem}-{:08x}", stable_path_hash(asset_abs_path)))
 }
@@ -1028,10 +1028,13 @@ pub fn waveform_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root.join(".awidat").join("waveforms").join(format!(
-        "{stem}-{:08x}.json",
-        stable_path_hash(asset_abs_path)
-    ))
+    project_root
+        .join(".montage")
+        .join("waveforms")
+        .join(format!(
+            "{stem}-{:08x}.json",
+            stable_path_hash(asset_abs_path)
+        ))
 }
 
 /// Compute the absolute silence-sidecar path for an asset path.
@@ -1045,7 +1048,7 @@ pub fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root.join(".awidat").join("silences").join(format!(
+    project_root.join(".montage").join("silences").join(format!(
         "{stem}-{:08x}.json",
         stable_path_hash(asset_abs_path)
     ))
@@ -1060,7 +1063,7 @@ pub fn motion_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root.join(".awidat").join("motion").join(format!(
+    project_root.join(".montage").join("motion").join(format!(
         "{stem}-{:08x}.json",
         stable_path_hash(asset_abs_path)
     ))
@@ -1192,7 +1195,7 @@ fn walk_external_refs(value: &mut serde_json::Value, old: &str, new: &str, chang
 #[tauri::command]
 pub async fn relink_missing_asset(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     old_asset_id: String,
     new_asset_id: String,
 ) -> Result<usize, String> {
@@ -1228,7 +1231,7 @@ mod tests {
 
     #[test]
     fn proxy_path_disambiguates_same_stem_assets() {
-        let proxies = PathBuf::from("/tmp/proj/.awidat/proxies");
+        let proxies = PathBuf::from("/tmp/proj/.montage/proxies");
         let a = proxy_path_for(&proxies, &PathBuf::from("/tmp/proj/raw/a/foo.mov"));
         let b = proxy_path_for(&proxies, &PathBuf::from("/tmp/proj/raw/b/foo.mov"));
         assert_ne!(a, b);
@@ -1236,7 +1239,7 @@ mod tests {
 
     #[test]
     fn proxy_path_replaces_extension_with_mp4() {
-        let proxies = PathBuf::from("/tmp/proj/.awidat/proxies");
+        let proxies = PathBuf::from("/tmp/proj/.montage/proxies");
         let asset = PathBuf::from("/tmp/proj/raw/foo.mov");
         let p = proxy_path_for(&proxies, &asset);
         assert_eq!(p.extension().and_then(|e| e.to_str()), Some("mp4"));
@@ -1246,7 +1249,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(
-            stem.starts_with(&format!("foo-{}-", awidat_render::PROXY_SCHEMA_TAG)),
+            stem.starts_with(&format!("foo-{}-", montage_render::PROXY_SCHEMA_TAG)),
             "expected proxy stem to start with foo-<schema>- ; got {stem}"
         );
     }
@@ -1261,7 +1264,7 @@ mod tests {
 
         assert!(proxy_path_for_asset_id(dir.path(), "raw/foo.mov").is_none());
 
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let proxy = proxy_path_for(&proxies_dir, &asset);
         std::fs::write(&proxy, b"y").unwrap();
@@ -1309,7 +1312,7 @@ mod tests {
         std::fs::write(&asset, b"source").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let proxy = proxy_path_for(&proxies_dir, &asset);
         std::fs::write(&proxy, b"proxy").unwrap();
@@ -1379,7 +1382,7 @@ mod tests {
         let asset = raw_dir.join("clip.mov");
         std::fs::write(&asset, b"source").unwrap();
 
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let proxy = proxy_path_for(&proxies_dir, &asset);
         std::fs::write(proxy_pending_path(&proxy), b"partial").unwrap();
@@ -1416,7 +1419,7 @@ mod tests {
 
     #[test]
     fn media_token_is_stable_for_same_path() {
-        let path = PathBuf::from("/tmp/proj/.awidat/proxies/foo.mp4");
+        let path = PathBuf::from("/tmp/proj/.montage/proxies/foo.mp4");
 
         assert_eq!(media_token(&path), media_token(&path));
     }
@@ -1436,7 +1439,7 @@ mod tests {
     #[test]
     fn project_media_path_allows_proxy_media() {
         let dir = tempfile::tempdir().unwrap();
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let proxy = proxies_dir.join("foo.mp4");
         std::fs::write(&proxy, b"x").unwrap();

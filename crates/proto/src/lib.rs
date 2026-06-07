@@ -1,10 +1,10 @@
-//! Awidat project format types.
+//! Montage project format types.
 //!
-//! This crate is the **load-bearing schema layer** for Awidat. Two contracts
+//! This crate is the **load-bearing schema layer** for Montage. Two contracts
 //! it owns must not break:
 //!
 //! 1. **OTIO superset.** A typed subset of OpenTimelineIO 1.x, plus the
-//!    `metadata.awidat` namespace. See [`otio`] and [`awidat_meta`].
+//!    `metadata.montage` namespace. See [`otio`] and [`montage_meta`].
 //!    Background: [`OTIO_NOTES.md`](../OTIO_NOTES.md) in the crate root.
 //!
 //! 2. **Index sidecar contract.** The shared coordinate model every footage
@@ -21,18 +21,18 @@
 //! # Reading and writing projects
 //!
 //! ```no_run
-//! use awidat_proto::project::Project;
+//! use montage_proto::project::Project;
 //! use std::path::Path;
 //!
-//! let project = Project::read(Path::new("/tmp/awidat-demo")).unwrap();
-//! project.write(Path::new("/tmp/awidat-demo")).unwrap();
+//! let project = Project::read(Path::new("/tmp/montage-demo")).unwrap();
+//! project.write(Path::new("/tmp/montage-demo")).unwrap();
 //! ```
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-pub mod awidat_meta;
 pub mod error;
 pub mod index;
+pub mod montage_meta;
 pub mod otio;
 pub mod professional;
 pub mod project;
@@ -42,11 +42,11 @@ pub mod validate;
 
 pub use error::{JsonPath, ProtoError};
 
-/// Schema version of the awidat project format.
+/// Schema version of the montage project format.
 ///
-/// Bumped on breaking changes to `metadata.awidat` shape. Reads accept any
-/// version we know about; writes always emit [`AWIDAT_PROJECT_VERSION`].
-pub const AWIDAT_PROJECT_VERSION: &str = "0.1";
+/// Bumped on breaking changes to `metadata.montage` shape. Reads accept any
+/// version we know about; writes always emit [`MONTAGE_PROJECT_VERSION`].
+pub const MONTAGE_PROJECT_VERSION: &str = "0.1";
 
 /// Schema version of the `index/manifest.json` file. Independent of the
 /// project version because indexers and project format evolve separately.

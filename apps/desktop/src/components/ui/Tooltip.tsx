@@ -44,13 +44,13 @@ export function Tooltip({
         <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
         <RadixTooltip.Portal>
           <RadixTooltip.Content
-            className="awidat-tooltip"
+            className="montage-tooltip"
             side={side}
             sideOffset={sideOffset}
             collisionPadding={8}
           >
             {content}
-            <RadixTooltip.Arrow className="awidat-tooltip-arrow" />
+            <RadixTooltip.Arrow className="montage-tooltip-arrow" />
           </RadixTooltip.Content>
         </RadixTooltip.Portal>
       </RadixTooltip.Root>

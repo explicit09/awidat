@@ -4,16 +4,16 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, TimeRange, TrackChild, TrackKind};
-use awidat_proto::professional::{
+use montage_proto::otio::{MediaReference, StackChild, TimeRange, TrackChild, TrackKind};
+use montage_proto::professional::{
     AudioExportSettings, DeliveryPreflightInput, DeliveryProfile, ExportMode, ExportOutputSettings,
     ExportPreset, HardwareAccelerationPolicy, PreflightReport, VideoExportSettings,
 };
-use awidat_proto::project::Project;
-use awidat_proto::subtitle::{
+use montage_proto::project::Project;
+use montage_proto::subtitle::{
     SubtitleCue, format_srt as format_subtitle_srt, format_vtt as format_subtitle_vtt,
 };
-use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
+use montage_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -158,14 +158,14 @@ impl ToolHandler for ExportPackageTool {
             .map_err(io_err("write thumbnail candidates"))?;
 
         let mut spec =
-            awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(render_err)?;
+            montage_render::build_timeline_render_spec(&ctx.project_root).map_err(render_err)?;
         if let Some(last) = spec.args.last_mut() {
             *last = mp4_path.to_string_lossy().to_string();
         }
         spec.output_path = mp4_path.clone();
         let export_preset =
             package_export_preset_for_format(&args.format, &project, hardware_policy);
-        spec = awidat_render::professional::apply_export_preset_to_spec(spec, &export_preset)
+        spec = montage_render::professional::apply_export_preset_to_spec(spec, &export_preset)
             .map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
                     "export_package: export preset failed: {e}"
@@ -183,7 +183,7 @@ impl ToolHandler for ExportPackageTool {
             .job_manager
             .start(RenderJobSpec {
                 args: spec.args,
-                backend: awidat_render::RenderBackendKind::PackageExport,
+                backend: montage_render::RenderBackendKind::PackageExport,
                 total_duration_s: spec.total_duration_s,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: mp4_path.clone(),
@@ -390,8 +390,8 @@ struct RecipeClipEffect {
 }
 
 fn build_enhancement_recipe_card(project: &Project, format: &str) -> EnhancementRecipeCard {
-    let awidat = project.timeline.metadata.awidat.as_ref();
-    let color_grade_stacks = awidat
+    let montage = project.timeline.metadata.montage.as_ref();
+    let color_grade_stacks = montage
         .and_then(|metadata| metadata.color_finishing.as_ref())
         .map(|finishing| {
             finishing
@@ -408,7 +408,7 @@ fn build_enhancement_recipe_card(project: &Project, format: &str) -> Enhancement
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let audio_chains = awidat
+    let audio_chains = montage
         .and_then(|metadata| metadata.audio_finishing.as_ref())
         .map(|finishing| {
             finishing
@@ -421,7 +421,7 @@ fn build_enhancement_recipe_card(project: &Project, format: &str) -> Enhancement
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let audio_meters = awidat
+    let audio_meters = montage
         .and_then(|metadata| metadata.audio_finishing.as_ref())
         .map(|finishing| {
             finishing
@@ -463,7 +463,7 @@ fn build_enhancement_recipe_card(project: &Project, format: &str) -> Enhancement
             .map(|clip| format!("Clip {} effects {}", clip.clip_id, clip.effects.join(", "))),
     );
     EnhancementRecipeCard {
-        schema_version: "awidat.enhancement_recipe.v1".into(),
+        schema_version: "montage.enhancement_recipe.v1".into(),
         format: format.into(),
         project_name: project.timeline.name.clone(),
         color_grade_count: color_grade_stacks.len(),
@@ -552,7 +552,7 @@ async fn write_turnover_package(
     let source_assets = collect_turnover_source_assets(project, &clips);
     let frame_rate = turnover_frame_rate(project);
     let manifest = TurnoverManifest {
-        schema_version: "awidat.turnover.v1".into(),
+        schema_version: "montage.turnover.v1".into(),
         package_kind: "department_turnover".into(),
         created_at: created_at.clone(),
         project_name: project.timeline.name.clone(),
@@ -649,7 +649,7 @@ fn collect_turnover_clips(project: &Project) -> Vec<TurnoverClip> {
             if let TrackChild::Clip(clip) = child {
                 let source_fields = clip_source_fields(clip);
                 let clip_id = clip_uuid_or_name(clip);
-                let awidat = clip.metadata.awidat.as_ref();
+                let montage = clip.metadata.montage.as_ref();
                 clips.push(TurnoverClip {
                     clip_id,
                     clip_name: clip.name.clone(),
@@ -680,14 +680,14 @@ fn collect_turnover_clips(project: &Project) -> Vec<TurnoverClip> {
                             duration_s: marker.marked_range.duration.to_seconds(),
                         })
                         .collect(),
-                    link_group_id: awidat
+                    link_group_id: montage
                         .and_then(|metadata| metadata.extra.get("link_group_id"))
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string),
-                    audio_lead_s: awidat
+                    audio_lead_s: montage
                         .and_then(|metadata| metadata.split_edit.as_ref())
                         .and_then(|split| split.audio_lead_s),
-                    audio_trail_s: awidat
+                    audio_trail_s: montage
                         .and_then(|metadata| metadata.split_edit.as_ref())
                         .and_then(|split| split.audio_trail_s),
                 });
@@ -726,7 +726,7 @@ fn collect_turnover_transitions(project: &Project) -> Vec<TurnoverTransition> {
 
 fn collect_turnover_source_assets(project: &Project, clips: &[TurnoverClip]) -> Vec<String> {
     let mut assets = BTreeSet::new();
-    if let Some(metadata) = project.timeline.metadata.awidat.as_ref() {
+    if let Some(metadata) = project.timeline.metadata.montage.as_ref() {
         assets.extend(metadata.source_assets.iter().cloned());
     }
     assets.extend(clips.iter().filter_map(|clip| clip.asset.clone()));
@@ -789,7 +789,7 @@ fn turnover_media_file(project_root: &Path, asset: &str) -> TurnoverMediaFile {
     } else {
         (None, "missing".into())
     };
-    match awidat_index::asset_sha256(&path) {
+    match montage_index::asset_sha256(&path) {
         Ok(sha256) => TurnoverMediaFile {
             asset: asset.into(),
             path: path_string,
@@ -819,7 +819,7 @@ fn turnover_proxy_path(project_root: &Path, asset_path: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("proxies")
         .join(format!("{stem}-{:08x}.mp4", stable_path_hash(asset_path)))
 }
@@ -849,7 +849,7 @@ fn department_turnover(
     manifest: &TurnoverManifest,
 ) -> DepartmentTurnover {
     DepartmentTurnover {
-        schema_version: "awidat.turnover.v1".into(),
+        schema_version: "montage.turnover.v1".into(),
         department: department.into(),
         created_at: created_at.into(),
         project_name: project.timeline.name.clone(),
@@ -878,7 +878,7 @@ fn department_accepts_clip(department: &str, clip: &TurnoverClip) -> bool {
                 || clip
                     .effects
                     .iter()
-                    .any(|effect| effect.contains("audio") || effect == "awidat.volume")
+                    .any(|effect| effect.contains("audio") || effect == "montage.volume")
         }
         "color" => clip.track_kind == "video" && clip.track != "Titles" && clip.asset.is_some(),
         "vfx" => {
@@ -928,7 +928,7 @@ struct TurnoverClipSourceFields {
     handle_out_s: Option<f64>,
 }
 
-fn clip_source_fields(clip: &awidat_proto::otio::Clip) -> TurnoverClipSourceFields {
+fn clip_source_fields(clip: &montage_proto::otio::Clip) -> TurnoverClipSourceFields {
     let (asset, source_available_start_s, source_available_end_s) = match &clip.media_reference {
         MediaReference::External(ext) => {
             let available_start = ext
@@ -972,9 +972,9 @@ fn clip_source_fields(clip: &awidat_proto::otio::Clip) -> TurnoverClipSourceFiel
     }
 }
 
-fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
+fn clip_uuid_or_name(clip: &montage_proto::otio::Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(serde_json::Value::as_str)
@@ -1329,7 +1329,7 @@ fn delivery_profile_for_format(format: &str, project: &Project) -> DeliveryProfi
         _ => project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|metadata| metadata.delivery_profiles.first())
             .cloned()
@@ -1371,7 +1371,7 @@ fn delivery_loudness_measurement(project: &Project) -> Option<f64> {
     project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()?
         .extra
         .get("loudness_measurement")?
@@ -1384,7 +1384,7 @@ fn has_required_package_metadata(project: &Project) -> bool {
     let Some(package_metadata) = project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("package_metadata"))
     else {
@@ -1421,7 +1421,7 @@ fn has_caption_overlays(project: &Project) -> bool {
                 return false;
             };
             clip.effects.iter().any(|effect| {
-                effect.effect_name == "awidat.title"
+                effect.effect_name == "montage.title"
                     && effect
                         .metadata
                         .get("role")
@@ -1436,7 +1436,7 @@ fn output_format_metadata(project: &Project) -> Option<serde_json::Value> {
     project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()?
         .extra
         .get("output_format")
@@ -1467,7 +1467,7 @@ pub fn collect_timeline_cues(
         let StackChild::Track(track) = child else {
             continue;
         };
-        if !matches!(track.kind, awidat_proto::otio::TrackKind::Video) || track.name == "Titles" {
+        if !matches!(track.kind, montage_proto::otio::TrackKind::Video) || track.name == "Titles" {
             continue;
         }
         let mut cursor_s = 0.0;
@@ -1484,7 +1484,7 @@ pub fn collect_timeline_cues(
                 };
                 let source_start = range.start_time.to_seconds();
                 let source_end = source_start + range.duration.to_seconds();
-                let speed = read_effect_number(clip, "awidat.speed", "factor").unwrap_or(1.0);
+                let speed = read_effect_number(clip, "montage.speed", "factor").unwrap_or(1.0);
                 let segments = read_transcript_segments(project_root, &ext.target_url);
                 for seg in segments {
                     let overlap_start = seg.start_s.max(source_start);
@@ -1507,7 +1507,7 @@ pub fn collect_timeline_cues(
 }
 
 fn collect_editable_subtitle_cues(project: &Project) -> Result<Vec<Cue>, FunctionCallError> {
-    let Some(metadata) = project.timeline.metadata.awidat.as_ref() else {
+    let Some(metadata) = project.timeline.metadata.montage.as_ref() else {
         return Ok(Vec::new());
     };
     let mut cues = Vec::new();
@@ -1540,8 +1540,8 @@ struct TranscriptSegment {
 }
 
 fn read_transcript_segments(project_root: &Path, asset_id: &str) -> Vec<TranscriptSegment> {
-    let asset = awidat_proto::index::AssetId::new(asset_id.to_string());
-    let Ok(sidecar) = awidat_index::read_sidecar(project_root, "whisper", &asset) else {
+    let asset = montage_proto::index::AssetId::new(asset_id.to_string());
+    let Ok(sidecar) = montage_index::read_sidecar(project_root, "whisper", &asset) else {
         return Vec::new();
     };
     let Some(segments) = sidecar.pointer("/data/segments").and_then(|v| v.as_array()) else {
@@ -1563,7 +1563,7 @@ fn read_transcript_segments(project_root: &Path, asset_id: &str) -> Vec<Transcri
 }
 
 fn read_effect_number(
-    clip: &awidat_proto::otio::Clip,
+    clip: &montage_proto::otio::Clip,
     effect_name: &str,
     field: &str,
 ) -> Option<f64> {
@@ -1582,7 +1582,7 @@ fn child_duration_s(child: &TrackChild) -> f64 {
                 .as_ref()
                 .map(|r| r.duration.to_seconds())
                 .unwrap_or(0.0)
-                / read_effect_number(c, "awidat.speed", "factor").unwrap_or(1.0)
+                / read_effect_number(c, "montage.speed", "factor").unwrap_or(1.0)
         }
         TrackChild::Gap(g) => g.source_range.duration.to_seconds(),
         TrackChild::Transition(t) => t.in_offset.to_seconds() + t.out_offset.to_seconds(),
@@ -1643,7 +1643,7 @@ fn io_err(label: &'static str) -> impl Fn(std::io::Error) -> FunctionCallError {
     move |e| FunctionCallError::RespondToModel(format!("export_package: {label} failed: {e}"))
 }
 
-fn render_err(e: awidat_render::RenderTimelineError) -> FunctionCallError {
+fn render_err(e: montage_render::RenderTimelineError) -> FunctionCallError {
     FunctionCallError::RespondToModel(format!("export_package: timeline render plan failed: {e}"))
 }
 
@@ -1659,17 +1659,17 @@ off, auto, or require.";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::{AwidatClipMetadata, SplitEditSpec};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{MontageClipMetadata, SplitEditSpec};
+    use montage_proto::otio::{
         Clip, Effect, ExternalReference, Gap, MediaReference, RationalTime, StackChild, TimeRange,
         Timeline, Track,
     };
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         AudioBus, AudioChainPreset, AudioFinishingState, AudioMeterReading, AudioRole,
         ColorFinishingState, FindingSeverity, GradeStack, GradeStage, PreflightCheckKind,
     };
-    use awidat_proto::project::EditPlan;
-    use awidat_proto::subtitle::{SubtitleCue, SubtitleTrack};
+    use montage_proto::project::EditPlan;
+    use montage_proto::subtitle::{SubtitleCue, SubtitleTrack};
 
     fn time_range(start_s: f64, duration_s: f64) -> TimeRange {
         TimeRange::new(
@@ -1692,17 +1692,17 @@ mod tests {
         let mut clip = Clip::empty(name);
         clip.source_range = Some(time_range(start_s, duration_s));
         clip.media_reference = MediaReference::External(ExternalReference::new(asset));
-        let mut awidat = AwidatClipMetadata::default();
-        awidat
+        let mut montage = MontageClipMetadata::default();
+        montage
             .extra
             .insert("clip_uuid".into(), serde_json::json!(uuid));
-        clip.metadata.awidat = Some(awidat);
+        clip.metadata.montage = Some(montage);
         clip
     }
 
     fn write_whisper_sidecar(root: &std::path::Path, asset: &str, segments: serde_json::Value) {
-        let asset_id = awidat_proto::index::AssetId::new(asset.to_string());
-        let path = awidat_index::sidecar_path(root, "whisper", &asset_id).unwrap();
+        let asset_id = montage_proto::index::AssetId::new(asset.to_string());
+        let path = montage_index::sidecar_path(root, "whisper", &asset_id).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             path,
@@ -1730,7 +1730,7 @@ mod tests {
                 RationalTime::new(12.0 * 24.0, 24.0),
             ));
         }
-        video.effects.push(Effect::new("awidat.lut"));
+        video.effects.push(Effect::new("montage.lut"));
         v1.children.push(TrackChild::Clip(video));
         timeline.tracks.children.push(StackChild::Track(v1));
 
@@ -1747,7 +1747,7 @@ mod tests {
         assert_eq!(clips[0].source_available_end_s, Some(20.0));
         assert_eq!(clips[0].handle_in_s, Some(2.0));
         assert_eq!(clips[0].handle_out_s, Some(5.0));
-        assert_eq!(clips[0].effects, vec!["awidat.lut"]);
+        assert_eq!(clips[0].effects, vec!["montage.lut"]);
     }
 
     #[test]
@@ -1755,7 +1755,7 @@ mod tests {
         let mut timeline = Timeline::empty("subtitle-track-test");
         timeline
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .subtitle_tracks
@@ -1901,11 +1901,11 @@ mod tests {
         )));
         let mut a1 = Track::empty("A1", TrackKind::Audio);
         let mut audio = clip("dialogue", "raw/dialogue.wav", 0.0, 4.0, "c-audio");
-        let awidat = audio
+        let montage = audio
             .metadata
-            .awidat
-            .get_or_insert_with(AwidatClipMetadata::default);
-        awidat.split_edit = Some(SplitEditSpec {
+            .montage
+            .get_or_insert_with(MontageClipMetadata::default);
+        montage.split_edit = Some(SplitEditSpec {
             audio_trail_s: Some(0.5),
             ..SplitEditSpec::default()
         });
@@ -1916,7 +1916,7 @@ mod tests {
 
         let project = project_with_timeline(timeline);
         let manifest = TurnoverManifest {
-            schema_version: "awidat.turnover.v1".into(),
+            schema_version: "montage.turnover.v1".into(),
             package_kind: "department_turnover".into(),
             created_at: "now".into(),
             project_name: project.timeline.name.clone(),
@@ -1956,7 +1956,7 @@ mod tests {
             handle_out_s: Some(9.0),
             duration_s: 1.0,
             active: true,
-            effects: vec!["awidat.lut".into()],
+            effects: vec!["montage.lut".into()],
             markers: vec![TurnoverMarker {
                 name: "note, \"sync\"".into(),
                 start_s: 0.25,
@@ -1970,7 +1970,7 @@ mod tests {
         assert!(csv.contains("\"clip, \"\"quoted\"\"\""));
         assert!(csv.contains("0.000,1.000,10.000,11.000,8.000,20.000,2.000,9.000,1.000"));
         assert!(csv.contains("duration_s,active,effects,link_group_id"));
-        assert!(csv.contains("1.000,true,awidat.lut,link-1"));
+        assert!(csv.contains("1.000,true,montage.lut,link-1"));
         assert!(csv.contains("link_group_id,audio_lead_s,audio_trail_s,markers"));
         assert!(csv.contains("link-1,0.125,0.500"));
         assert!(csv.contains("\"note, \"\"sync\"\"@0.250+0.500\""));
@@ -2046,11 +2046,11 @@ mod tests {
     #[test]
     fn package_preflight_flags_bitrate_above_delivery_profile_target() {
         let mut timeline = Timeline::empty("delivery-bitrate-test");
-        let awidat = timeline.metadata.awidat.as_mut().unwrap();
+        let montage = timeline.metadata.montage.as_mut().unwrap();
         let mut profile = DeliveryProfile::youtube_1080p();
         profile.preflight_checks = vec![PreflightCheckKind::Bitrate];
-        awidat.delivery_profiles = vec![profile];
-        awidat.extra.insert(
+        montage.delivery_profiles = vec![profile];
+        montage.extra.insert(
             "output_format".into(),
             serde_json::json!({
                 "aspect_ratio": "16:9",
@@ -2071,11 +2071,11 @@ mod tests {
     #[test]
     fn package_preflight_flags_safe_area_violations_from_output_metadata() {
         let mut timeline = Timeline::empty("delivery-safe-area-test");
-        let awidat = timeline.metadata.awidat.as_mut().unwrap();
+        let montage = timeline.metadata.montage.as_mut().unwrap();
         let mut profile = DeliveryProfile::youtube_1080p();
         profile.preflight_checks = vec![PreflightCheckKind::SafeAreas];
-        awidat.delivery_profiles = vec![profile];
-        awidat.extra.insert(
+        montage.delivery_profiles = vec![profile];
+        montage.extra.insert(
             "output_format".into(),
             serde_json::json!({
                 "aspect_ratio": "16:9",
@@ -2096,11 +2096,11 @@ mod tests {
     #[test]
     fn package_preflight_accepts_thumbnail_from_output_metadata() {
         let mut timeline = Timeline::empty("delivery-thumbnail-test");
-        let awidat = timeline.metadata.awidat.as_mut().unwrap();
+        let montage = timeline.metadata.montage.as_mut().unwrap();
         let mut profile = DeliveryProfile::youtube_1080p();
         profile.preflight_checks = vec![PreflightCheckKind::Thumbnail];
-        awidat.delivery_profiles = vec![profile];
-        awidat.extra.insert(
+        montage.delivery_profiles = vec![profile];
+        montage.extra.insert(
             "output_format".into(),
             serde_json::json!({
                 "aspect_ratio": "16:9",
@@ -2124,11 +2124,11 @@ mod tests {
         let mut timeline = Timeline::empty("recipe-test");
         let mut v1 = Track::empty("V1", TrackKind::Video);
         let mut video = clip("hero", "raw/cam-a.mov", 0.0, 4.0, "c-hero");
-        video.effects.push(Effect::new("awidat.reframe"));
+        video.effects.push(Effect::new("montage.reframe"));
         v1.children.push(TrackChild::Clip(video));
         timeline.tracks.children.push(StackChild::Track(v1));
-        let awidat = timeline.metadata.awidat.as_mut().unwrap();
-        awidat.color_finishing = Some(ColorFinishingState {
+        let montage = timeline.metadata.montage.as_mut().unwrap();
+        montage.color_finishing = Some(ColorFinishingState {
             grade_stacks: vec![GradeStack {
                 id: "grade-hero".into(),
                 stages: vec![GradeStage {
@@ -2141,7 +2141,7 @@ mod tests {
             }],
             ..ColorFinishingState::default()
         });
-        awidat.audio_finishing = Some(AudioFinishingState {
+        montage.audio_finishing = Some(AudioFinishingState {
             buses: vec![AudioBus {
                 id: "dialogue".into(),
                 role: AudioRole::Dialogue,
@@ -2159,7 +2159,7 @@ mod tests {
             }],
             ..AudioFinishingState::default()
         });
-        awidat.extra.insert(
+        montage.extra.insert(
             "output_format".into(),
             serde_json::json!({"aspect_ratio": "9:16", "safe_area_violations": 0}),
         );
@@ -2180,7 +2180,7 @@ mod tests {
         );
         assert!(markdown.contains("# Enhancement recipe"));
         assert!(markdown.contains("grade-hero"));
-        assert!(markdown.contains("awidat.reframe"));
+        assert!(markdown.contains("montage.reframe"));
         assert!(markdown.contains("-14.1 LUFS"));
     }
 
@@ -2237,7 +2237,7 @@ mod tests {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("asset");
-        project_root.join(".awidat").join("proxies").join(format!(
+        project_root.join(".montage").join("proxies").join(format!(
             "{stem}-{:08x}.mp4",
             test_stable_path_hash(asset_path)
         ))

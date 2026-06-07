@@ -21,10 +21,10 @@
 //   speaker        | index/whisper/<asset>.json            | useTranscriptStore| EvidenceSpeaker[]
 //   captions       | derivable from whisper                | useTranscriptStore| EvidenceCaption[]
 //   scenes         | index/scenedetect/<asset>.json        | read_scenes       | EvidenceScene[]
-//   silence        | .awidat/silences/<stem>-<hash>.json   | read_silences     | EvidenceSilence[]
+//   silence        | .montage/silences/<stem>-<hash>.json   | read_silences     | EvidenceSilence[]
 //   audio          | index/audio-energy/<asset>.json       | read_audio_samples| EvidenceAudioSample[]
 //   face           | index/face/<asset>.json               | read_faces        | EvidenceFace[]
-//   motion         | .awidat/motion/<stem>-<hash>.json     | read_motion_regions| EvidenceMotionRegion[]
+//   motion         | .montage/motion/<stem>-<hash>.json     | read_motion_regions| EvidenceMotionRegion[]
 //   color          | index/color-analysis/<asset>.json     | read_color_stats  | EvidenceColorStat[]
 //
 // Design rules (kept stable from B3):
@@ -148,7 +148,7 @@ export interface EvidenceAudioSample {
 /** One episode span from origin's first-class episodes feature.
  *
  *  Source: `get_project_episodes` Tauri command (reads OTIO
- *  metadata.awidat.episodes). App.tsx owns the fetch and mirrors the
+ *  metadata.montage.episodes). App.tsx owns the fetch and mirrors the
  *  result into `useEpisodesStore`; this accessor reads from that store
  *  so it doesn't need to invoke. */
 export interface EvidenceEpisode {

@@ -16,8 +16,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, StackChild, TrackChild};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -155,7 +155,7 @@ impl ToolHandler for AssessContinuityTool {
 /// source_clip_end_s)`. Source-time = clip's source_range.start +
 /// (timeline_at - clip's track_start).
 pub(crate) fn resolve_asset_at(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     at_s: f64,
 ) -> Option<(String, f64, f64)> {
     for stack_child in &timeline.tracks.children {
@@ -200,7 +200,7 @@ pub(crate) fn resolve_asset_at(
 /// missing files — the rule that needs that input will abstain.
 pub(crate) fn build_inputs(
     project_root: &Path,
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     asset_id: &str,
     at_s: f64,
 ) -> ContinuityInputs {
@@ -218,7 +218,7 @@ pub(crate) fn build_inputs(
 /// Walk the timeline and collect any clip-boundary times within
 /// ±5 seconds of `at_s`. Each clip's start (other than 0) is a
 /// cut point on the track. Used by the rhythm rule.
-pub(crate) fn collect_nearby_cuts(timeline: &awidat_proto::otio::Timeline, at_s: f64) -> Vec<f64> {
+pub(crate) fn collect_nearby_cuts(timeline: &montage_proto::otio::Timeline, at_s: f64) -> Vec<f64> {
     let mut out = Vec::new();
     for stack_child in &timeline.tracks.children {
         let StackChild::Track(track) = stack_child else {
@@ -270,7 +270,7 @@ of kind continuity_warning.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
@@ -279,7 +279,7 @@ mod tests {
         asset_id: &str,
         source_start_s: f64,
         duration_s: f64,
-    ) -> awidat_proto::otio::Timeline {
+    ) -> montage_proto::otio::Timeline {
         let mut clip = Clip::empty("c1");
         clip.media_reference = MediaReference::External(ExternalReference::new(asset_id));
         clip.source_range = Some(TimeRange::new(
@@ -288,7 +288,7 @@ mod tests {
         ));
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip));
-        let mut tl = awidat_proto::otio::Timeline::empty("p");
+        let mut tl = montage_proto::otio::Timeline::empty("p");
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
         tl.tracks = stack;
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn collect_nearby_cuts_finds_clip_starts_within_5s() {
         // Three clips: starts at 0, 5, 8.
-        let mut tl = awidat_proto::otio::Timeline::empty("p");
+        let mut tl = montage_proto::otio::Timeline::empty("p");
         let mut track = Track::empty("V1", TrackKind::Video);
         for (i, dur) in [(0, 5.0), (1, 3.0), (2, 4.0)].iter() {
             let mut c = Clip::empty(format!("c{i}"));

@@ -400,12 +400,12 @@ mod tests {
         let transitions = vec![RawStreamTransition {
             from_segment_index: 0,
             duration_s: 0.4,
-            shader: awidat_render_gpu::TransitionShader::CrossDissolve,
+            shader: montage_render_gpu::TransitionShader::CrossDissolve,
             param_curves: [
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
+                montage_proto::transitions::ParamCurve::Const(0.0),
             ],
         }];
         compose_audio(&segments, &transitions, &out)

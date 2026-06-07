@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::commands::media::{proxy_path_for, thumbnails_dir_for, waveform_path_for};
 use crate::commands::transcode::{collect_media, proxy_is_fresh};
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Artifact status for preview cache components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -215,7 +215,7 @@ fn default_true() -> bool {
 /// Return a project-level preview cache summary for the loaded project.
 #[tauri::command]
 pub async fn preview_cache_summary(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<PreviewCacheSummary, String> {
     let project_root = state
         .project_root
@@ -230,7 +230,7 @@ pub async fn preview_cache_summary(
 #[tauri::command]
 pub async fn preview_cache_refresh(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     options: Option<PreviewCacheRefreshOptions>,
 ) -> Result<PreviewCacheRefreshReport, String> {
     let project_root = state
@@ -343,7 +343,7 @@ fn task_family_enabled(family: &str, options: &PreviewCacheRefreshOptions) -> bo
 
 async fn execute_preview_cache_refresh_plan(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     project_root: &Path,
     plan: PreviewCacheRefreshPlan,
 ) -> Result<PreviewCacheRefreshReport, String> {
@@ -370,7 +370,7 @@ async fn execute_preview_cache_refresh_plan(
 
 async fn execute_preview_cache_task(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     task: PreviewCacheRefreshTask,
 ) -> PreviewCacheRefreshTaskResult {
@@ -430,7 +430,7 @@ fn build_preview_cache_summary(project_root: &Path) -> Result<PreviewCacheSummar
     };
     assets.sort();
 
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let mut proxy_counts = PreviewArtifactCounts::default();
     let mut thumbnail_counts = PreviewArtifactCounts::default();
     let mut waveform_counts = PreviewArtifactCounts::default();
@@ -753,7 +753,7 @@ mod tests {
         std::fs::write(&missing_asset, b"missing")?;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir)?;
         std::fs::write(proxy_path_for(&proxies_dir, &ready_asset), b"proxy")?;
 
@@ -833,7 +833,7 @@ mod tests {
         let asset = raw_dir.join("stale.mov");
         std::fs::write(&asset, b"old-source")?;
 
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir)?;
         let proxy = proxy_path_for(&proxies_dir, &asset);
         std::fs::write(&proxy, b"old-proxy")?;
@@ -888,7 +888,7 @@ mod tests {
         std::fs::write(&ready_asset, b"ready")?;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir)?;
         std::fs::write(proxy_path_for(&proxies_dir, &ready_asset), b"proxy")?;
         let thumbnails_dir = thumbnails_dir_for(dir.path(), &ready_asset);

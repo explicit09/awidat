@@ -1,7 +1,7 @@
 {
   "label": "pass2-face-color-first",
   "command": {
-    "project_root": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000",
+    "project_root": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000",
     "output_dir": "artifacts/perf/indexing-optimization",
     "concurrency": 2,
     "included_indexers": [
@@ -55,7 +55,7 @@
         "write_ms": 1,
         "total_ms": 30694,
         "peak_rss_bytes": 32964608,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/beats/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/beats/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 60027,
           "frame_count": null,
@@ -82,7 +82,7 @@
         "write_ms": 17,
         "total_ms": 37466,
         "peak_rss_bytes": 33030144,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/audio-energy/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/audio-energy/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 945560,
           "frame_count": null,
@@ -109,7 +109,7 @@
         "write_ms": 184,
         "total_ms": 108984,
         "peak_rss_bytes": 33079296,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/clip/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/clip/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 740874,
           "frame_count": 537,
@@ -142,7 +142,7 @@
         "write_ms": 4,
         "total_ms": 117214,
         "peak_rss_bytes": 33030144,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/face/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/face/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 147407,
           "frame_count": 268,
@@ -179,7 +179,7 @@
         "write_ms": 12,
         "total_ms": 166312,
         "peak_rss_bytes": 33013760,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/color-analysis/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/color-analysis/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 545528,
           "frame_count": 268,
@@ -212,7 +212,7 @@
         "write_ms": 5,
         "total_ms": 172686,
         "peak_rss_bytes": 32997376,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/frame-quality/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/frame-quality/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 231152,
           "frame_count": 1073,
@@ -244,7 +244,7 @@
         "write_ms": 1,
         "total_ms": 200675,
         "peak_rss_bytes": 33013760,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/scenedetect/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/scenedetect/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 952,
           "frame_count": 1073,
@@ -276,7 +276,7 @@
         "write_ms": 2,
         "total_ms": 202744,
         "peak_rss_bytes": 33062912,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/gaze/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/gaze/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 131166,
           "frame_count": 268,
@@ -303,7 +303,7 @@
         "write_ms": 1,
         "total_ms": 204034,
         "peak_rss_bytes": 32980992,
-        "sidecar_path": "/Volumes/Explicit's Hard Drive/awidat-index-perf-work/projects/awidat-index-perf-pass2-face-color-first-15648-1780804603584106000/index/shot/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
+        "sidecar_path": "/Volumes/Explicit's Hard Drive/montage-index-perf-work/projects/montage-index-perf-pass2-face-color-first-15648-1780804603584106000/index/shot/external/Episode3_AI_Regulation_IPOs_Elons_Chip_Play.mp4.json",
         "sidecar": {
           "output_size_bytes": 4803,
           "frame_count": null,

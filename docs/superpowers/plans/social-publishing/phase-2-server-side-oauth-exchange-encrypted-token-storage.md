@@ -51,7 +51,7 @@ Files: `crates/social/src/token.rs`, `crates/social/Cargo.toml`, `Cargo.toml` (w
 5. Keep `TestKeyProvider` for unit tests but make its `key_material` derive/pad to 32 bytes deterministically so existing tests compile.
 
 Verification:
-- `cargo test -p awidat-social token::` — port the 5 existing token tests; add: round-trip with AEAD; tamper a ciphertext byte and assert `DecryptionFailed`; assert two encryptions of the same plaintext differ (nonce randomization); assert serialized `TokenSecret` JSON still contains no plaintext (the existing `token_secret_serialization_does_not_include_plaintext_tokens` test must stay green).
+- `cargo test -p montage-social token::` — port the 5 existing token tests; add: round-trip with AEAD; tamper a ciphertext byte and assert `DecryptionFailed`; assert two encryptions of the same plaintext differ (nonce randomization); assert serialized `TokenSecret` JSON still contains no plaintext (the existing `token_secret_serialization_does_not_include_plaintext_tokens` test must stay green).
 
 ## Step 2 — Build the real Google/YouTube OAuth token exchange + refresh client
 
@@ -72,7 +72,7 @@ Files: new `crates/social/src/oauth_exchange.rs` (declared in `crates/social/src
 Reuse: `reqwest` is already a workspace dep with `json`+`rustls-tls` (root `Cargo.toml` line 368). Add `reqwest`, `tokio` (for async), to `crates/social/Cargo.toml`.
 
 Verification:
-- `cargo test -p awidat-social oauth_exchange::` against a mock HTTP server (use a lightweight stub: a `wiremock`-style server or a hand-rolled `tokio` listener; if adding `wiremock` is undesirable, gate live tests behind `#[ignore]` and unit-test the request-building + JSON parsing pure functions). Tests: successful exchange yields a bundle with correct absolute expiries; refresh with `invalid_grant` body → `RefreshRejected`; missing `refresh_token` on first exchange → error (Google should always return one given `prompt=consent`).
+- `cargo test -p montage-social oauth_exchange::` against a mock HTTP server (use a lightweight stub: a `wiremock`-style server or a hand-rolled `tokio` listener; if adding `wiremock` is undesirable, gate live tests behind `#[ignore]` and unit-test the request-building + JSON parsing pure functions). Tests: successful exchange yields a bundle with correct absolute expiries; refresh with `invalid_grant` body → `RefreshRejected`; missing `refresh_token` on first exchange → error (Google should always return one given `prompt=consent`).
 
 ## Step 3 — Add the token-refresh service + `NeedsReauth` transition
 
@@ -87,7 +87,7 @@ Files: new `crates/social/src/token_refresh.rs` (declared in `lib.rs`), `crates/
 3. Add `TokenRefreshService::refresh_due_secrets(store, exchange, key, ..., horizon, now)` — a sweep that selects accounts whose `access_token_expires_at` falls within `horizon` and proactively refreshes them. This is the unit of work the Phase 4 `pg_cron` token-refresh sweep will call. (Phase 2 ships the capability; Phase 4 schedules it.)
 
 Verification:
-- `cargo test -p awidat-social token_refresh::` with a fake `OAuthTokenExchange` impl + `InMemorySocialStore`: (a) non-expired token returns without calling exchange; (b) expired token triggers refresh, re-encrypts, persists new expiry; (c) refresh returning `None` refresh_token keeps the old one decryptable; (d) `RefreshRejected` flips account to `NeedsReauth` and returns the typed error and does not re-call exchange on the next tick.
+- `cargo test -p montage-social token_refresh::` with a fake `OAuthTokenExchange` impl + `InMemorySocialStore`: (a) non-expired token returns without calling exchange; (b) expired token triggers refresh, re-encrypts, persists new expiry; (c) refresh returning `None` refresh_token keeps the old one decryptable; (d) `RefreshRejected` flips account to `NeedsReauth` and returns the typed error and does not re-call exchange on the next tick.
 
 ## Step 4 — Wire the real key + exchange into the facade callers
 
@@ -98,8 +98,8 @@ Files: `crates/social/src/api.rs` (light), `apps/desktop/src-tauri/src/commands/
 3. Add the server-side OAuth callback handler in the Phase-1 service module: validate connection (`OAuthConnection::validate_callback` — reuse), call `GoogleOAuthExchange::exchange_code` (Step 2), then `SocialApi::oauth_complete` with the AEAD key (Step 1). This is where `client_secret` is read from env.
 
 Verification:
-- `cargo test -p awidat-social api::account_api_starts_and_completes_oauth` and `api_round_trips_account_routes_with_sqlite_store` stay green (these already assert no `access-secret`/`refresh-secret` leaks).
-- `cargo test -p awidat-desktop` (or the tauri crate's `commands::social::tests`) — `oauth_complete_then_disconnect_round_trips_without_tokens` must stay green; add a test asserting the dev key is 32 bytes and AEAD round-trips.
+- `cargo test -p montage-social api::account_api_starts_and_completes_oauth` and `api_round_trips_account_routes_with_sqlite_store` stay green (these already assert no `access-secret`/`refresh-secret` leaks).
+- `cargo test -p montage-desktop` (or the tauri crate's `commands::social::tests`) — `oauth_complete_then_disconnect_round_trips_without_tokens` must stay green; add a test asserting the dev key is 32 bytes and AEAD round-trips.
 - Build the whole workspace: `cargo build` and `cargo clippy --workspace` (lints are workspace-enforced).
 
 ## Step 5 — Mark the encryption-version migration / rotation path
@@ -109,7 +109,7 @@ Files: `crates/social/src/token.rs` (read path), `crates/social/src/sqlite_store
 1. The decrypt path must reject `token_version == 1` (old XOR) with a typed `TokenError::UnsupportedTokenVersion` rather than silently mis-decrypting. Since the only existing token rows are dev stubs, no data migration is required; document that any pre-existing local `social.sqlite` token rows must be reconnected. `kms_key_id` carries the key version so a future key rotation can re-encrypt without schema change.
 
 Verification:
-- `cargo test -p awidat-social` full suite green; add a test that a `token_version: 1` payload decrypts to `UnsupportedTokenVersion`.
+- `cargo test -p montage-social` full suite green; add a test that a `token_version: 1` payload decrypts to `UnsupportedTokenVersion`.
 
 ## Step 6 — Documentation + secret inventory
 

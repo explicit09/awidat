@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use awidat_index::{read_sidecar, walk_indexer};
-use awidat_proto::index::AssetId;
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_index::{read_sidecar, walk_indexer};
+use montage_proto::index::AssetId;
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -93,7 +93,7 @@ impl ToolHandler for PlanMulticamTool {
         let quality_by_asset = load_index_map(&ctx.project_root, "frame-quality");
         let topics = load_topics(&ctx.project_root, &audio_master);
 
-        // Per-camera timeline offsets from applied `awidat.sync_group` effects.
+        // Per-camera timeline offsets from applied `montage.sync_group` effects.
         // Cameras recorded on separate devices are placed at different timeline
         // offsets; without this correction every per-camera sidecar lookup
         // would read the wrong source time. Falls back to an empty map (shared
@@ -318,7 +318,7 @@ fn load_topics(project_root: &std::path::Path, asset_id: &str) -> Vec<f64> {
         .collect()
 }
 
-/// Per-camera timeline sync info read from applied `awidat.sync_group` effects.
+/// Per-camera timeline sync info read from applied `montage.sync_group` effects.
 #[derive(Debug, Clone, Default)]
 struct SyncInfo {
     /// Timeline offset (seconds) relative to the reference. Positive means the
@@ -329,9 +329,9 @@ struct SyncInfo {
     sync_group_id: Option<String>,
 }
 
-const SYNC_GROUP_EFFECT_NAME: &str = "awidat.sync_group";
+const SYNC_GROUP_EFFECT_NAME: &str = "montage.sync_group";
 
-/// Collect per-asset sync offsets from applied `awidat.sync_group` effects.
+/// Collect per-asset sync offsets from applied `montage.sync_group` effects.
 /// Maps source asset id (clip `target_url`) → [`SyncInfo`]. The first effect
 /// seen per asset wins (one sync group per camera in v1).
 fn sync_offsets(timeline: &Timeline) -> HashMap<String, SyncInfo> {
@@ -512,7 +512,7 @@ multicam stacks.";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, Effect, ExternalReference, MediaReference, StackChild, Timeline, Track, TrackChild,
         TrackKind,
     };

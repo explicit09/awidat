@@ -4,13 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::awidat_meta::{EpisodeSpan, EpisodeSpanStatus};
-use awidat_proto::project::Project;
+use montage_proto::montage_meta::{EpisodeSpan, EpisodeSpanStatus};
+use montage_proto::project::Project;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tokio::fs;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Reconfigure Tauri's asset-protocol scope so the webview can fetch
 /// preview media and project-local broadcast assets via
@@ -20,7 +20,7 @@ use crate::state::AwidatState;
 /// `set_project_root` and `init_project`.
 pub(crate) fn allow_project_asset_dirs(app: &AppHandle, project_root: &Path) {
     let scope = app.asset_protocol_scope();
-    for sub in [".awidat/proxies", ".awidat/thumbnails", "branding"] {
+    for sub in [".montage/proxies", ".montage/thumbnails", "branding"] {
         let dir = project_root.join(sub);
         // The dirs may not exist yet (first import will create them).
         // Allow them preemptively — the scope check is a glob, not a
@@ -44,7 +44,7 @@ const MAX_RECENTS: usize = 10;
 #[tauri::command]
 pub async fn set_project_root(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     path: String,
 ) -> Result<(), String> {
     ensure_project_switch_allowed(&state).await?;
@@ -59,7 +59,7 @@ pub async fn set_project_root(
     let manifest = buf.join("project.otio.json");
     if !manifest.is_file() {
         return Err(format!(
-            "not an awidat project (no project.otio.json under {path})"
+            "not an montage project (no project.otio.json under {path})"
         ));
     }
 
@@ -99,7 +99,9 @@ pub async fn set_project_root(
 
 /// Read the currently-configured project root, if any.
 #[tauri::command]
-pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Option<String>, String> {
+pub async fn current_project_root(
+    state: State<'_, MontageState>,
+) -> Result<Option<String>, String> {
     Ok(state
         .project_root
         .lock()
@@ -113,7 +115,7 @@ pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Optio
 /// proposals, turns, or import/index/render jobs against a project
 /// the UI no longer shows.
 #[tauri::command]
-pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> {
+pub async fn close_project(state: State<'_, MontageState>) -> Result<(), String> {
     ensure_project_switch_allowed(&state).await?;
     *state.project_root.lock().await = None;
     tear_down_codex_session(&state).await;
@@ -122,13 +124,13 @@ pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> 
     Ok(())
 }
 
-/// Initialize a new awidat project at `<parent_dir>/<name>` and load
-/// it as the current project. Mirrors `awidat new --no-md=false
+/// Initialize a new montage project at `<parent_dir>/<name>` and load
+/// it as the current project. Mirrors `montage new --no-md=false
 /// --no-index` (init + starter AGENTS.md, no asset import). Asset
 /// import is a separate step the frontend can chain after.
 ///
 /// `project_type` is optional — when present, it's serialized into
-/// the timeline's `metadata.awidat.extra["awidat_project_type"]`
+/// the timeline's `metadata.montage.extra["montage_project_type"]`
 /// slot so the agent can pick up the per-format defaults on session
 /// start. When absent (e.g. older clients), the project type
 /// defaults to `Other { description: "" }` which gets the neutral
@@ -136,10 +138,10 @@ pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> 
 #[tauri::command]
 pub async fn init_project(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     parent_dir: String,
     name: String,
-    project_type: Option<awidat_desktop_protocol::ProjectType>,
+    project_type: Option<montage_desktop_protocol::ProjectType>,
 ) -> Result<String, String> {
     ensure_project_switch_allowed(&state).await?;
     let parent = PathBuf::from(&parent_dir);
@@ -171,7 +173,7 @@ pub async fn init_project(
     let project_dir_for_init = project_dir.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         Project::init(&project_dir_for_init).map_err(|e| e.to_string())?;
-        awidat_core::lessons::apply_learned_project_format_defaults(&project_dir_for_init)
+        montage_core::lessons::apply_learned_project_format_defaults(&project_dir_for_init)
             .map_err(|e| e.to_string())?;
         Ok(())
     })
@@ -188,7 +190,7 @@ pub async fn init_project(
         .await
         .map_err(|e| format!("write AGENTS.md: {e}"))?;
 
-    // Stamp project_type into the OTIO timeline's metadata.awidat.extra
+    // Stamp project_type into the OTIO timeline's metadata.montage.extra
     // slot if the caller specified one. Done as a separate step (post-
     // Project::init) so the typed Project schema doesn't need to grow
     // a new field for what's essentially a forward-compat passthrough.
@@ -213,23 +215,23 @@ pub async fn init_project(
 
 /// Read the project type from the currently-loaded project, if any.
 /// Returns `Other { description: "" }` when no project is loaded or
-/// when the OTIO file's metadata.awidat.extra has no
-/// `awidat_project_type` key (old projects, or projects created
+/// when the OTIO file's metadata.montage.extra has no
+/// `montage_project_type` key (old projects, or projects created
 /// before the picker landed).
 #[tauri::command]
 pub async fn get_project_type(
-    state: State<'_, AwidatState>,
-) -> Result<awidat_desktop_protocol::ProjectType, String> {
+    state: State<'_, MontageState>,
+) -> Result<montage_desktop_protocol::ProjectType, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => {
-            return Ok(awidat_desktop_protocol::ProjectType::Other {
+            return Ok(montage_desktop_protocol::ProjectType::Other {
                 description: String::new(),
             });
         }
     };
     Ok(read_project_type_from_otio(&project_root).await.unwrap_or(
-        awidat_desktop_protocol::ProjectType::Other {
+        montage_desktop_protocol::ProjectType::Other {
             description: String::new(),
         },
     ))
@@ -261,7 +263,7 @@ pub struct ProjectEpisodeSummary {
 /// Return first-class episode spans stamped on the currently-loaded timeline.
 #[tauri::command]
 pub async fn get_project_episodes(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<ProjectEpisodesSummary, String> {
     let project_root = state
         .project_root
@@ -279,7 +281,7 @@ fn summarize_project_episodes(project_root: &Path) -> Result<ProjectEpisodesSumm
     let mut episodes: Vec<ProjectEpisodeSummary> = project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|meta| {
             meta.episodes
@@ -342,8 +344,8 @@ fn episode_status_label(status: &EpisodeSpanStatus) -> &'static str {
 /// to OTIO immediately so the next agent session-start picks it up.
 #[tauri::command]
 pub async fn set_project_type(
-    state: State<'_, AwidatState>,
-    project_type: awidat_desktop_protocol::ProjectType,
+    state: State<'_, MontageState>,
+    project_type: montage_desktop_protocol::ProjectType,
 ) -> Result<(), String> {
     let project_root = state
         .project_root
@@ -354,32 +356,32 @@ pub async fn set_project_type(
     write_project_type_to_otio(&project_root, &project_type).await
 }
 
-/// Slot key inside `Timeline.metadata.awidat.extra` where the project
+/// Slot key inside `Timeline.metadata.montage.extra` where the project
 /// type lives. Kept as a constant so the agent-side reader can
 /// reference the same key without copy-paste drift.
-const PROJECT_TYPE_KEY: &str = "awidat_project_type";
+const PROJECT_TYPE_KEY: &str = "montage_project_type";
 
 async fn write_project_type_to_otio(
     project_root: &Path,
-    project_type: &awidat_desktop_protocol::ProjectType,
+    project_type: &montage_desktop_protocol::ProjectType,
 ) -> Result<(), String> {
-    let otio_path = project_root.join(awidat_proto::project::files::OTIO);
+    let otio_path = project_root.join(montage_proto::project::files::OTIO);
     let bytes = fs::read(&otio_path)
         .await
         .map_err(|e| format!("read otio: {e}"))?;
     let mut value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse otio json: {e}"))?;
-    // metadata.awidat.extra is what we want — but `extra` is a
+    // metadata.montage.extra is what we want — but `extra` is a
     // `#[serde(flatten)]` HashMap, which means at the JSON layer the
-    // entries land directly inside `metadata.awidat`. Walk to that
+    // entries land directly inside `metadata.montage`. Walk to that
     // object and insert our key alongside the version field.
-    let awidat_meta = value
-        .pointer_mut("/metadata/awidat")
+    let montage_meta = value
+        .pointer_mut("/metadata/montage")
         .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| "otio file missing metadata.awidat".to_string())?;
+        .ok_or_else(|| "otio file missing metadata.montage".to_string())?;
     let pt_value =
         serde_json::to_value(project_type).map_err(|e| format!("serialize project_type: {e}"))?;
-    awidat_meta.insert(PROJECT_TYPE_KEY.to_string(), pt_value);
+    montage_meta.insert(PROJECT_TYPE_KEY.to_string(), pt_value);
     let serialized =
         serde_json::to_vec_pretty(&value).map_err(|e| format!("re-serialize otio: {e}"))?;
     fs::write(&otio_path, serialized)
@@ -390,17 +392,17 @@ async fn write_project_type_to_otio(
 
 async fn read_project_type_from_otio(
     project_root: &Path,
-) -> Option<awidat_desktop_protocol::ProjectType> {
-    let otio_path = project_root.join(awidat_proto::project::files::OTIO);
+) -> Option<montage_desktop_protocol::ProjectType> {
+    let otio_path = project_root.join(montage_proto::project::files::OTIO);
     let bytes = fs::read(&otio_path).await.ok()?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let raw = value
-        .pointer(&format!("/metadata/awidat/{PROJECT_TYPE_KEY}"))?
+        .pointer(&format!("/metadata/montage/{PROJECT_TYPE_KEY}"))?
         .clone();
     serde_json::from_value(raw).ok()
 }
 
-async fn ensure_project_switch_allowed(state: &State<'_, AwidatState>) -> Result<(), String> {
+async fn ensure_project_switch_allowed(state: &State<'_, MontageState>) -> Result<(), String> {
     if state.turn.lock().await.is_some() {
         return Err("cannot change projects while a turn is running; stop it first".into());
     }
@@ -418,7 +420,7 @@ async fn ensure_project_switch_allowed(state: &State<'_, AwidatState>) -> Result
 /// Must be called AFTER `ensure_project_switch_allowed` (which refuses
 /// a switch if a turn is in flight) so we don't kill a running turn's
 /// pump task mid-event.
-pub(super) async fn tear_down_codex_session(state: &State<'_, AwidatState>) {
+pub(super) async fn tear_down_codex_session(state: &State<'_, MontageState>) {
     if let Some(session) = state.codex.lock().await.take() {
         if let Err(e) = session.bridge.shutdown().await {
             tracing::warn!(error = %e, "codex bridge shutdown on project switch returned error");
@@ -430,7 +432,7 @@ pub(super) async fn tear_down_codex_session(state: &State<'_, AwidatState>) {
 /// Replaces any previously-running watcher (e.g. from a stale project
 /// switch path).
 pub(super) async fn spawn_generated_media_watcher(
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     app: &AppHandle,
     project_root: &std::path::Path,
 ) {
@@ -447,7 +449,7 @@ pub(super) async fn spawn_generated_media_watcher(
 }
 
 /// Cancel and drop the active generated-media watcher (if any).
-pub(super) async fn tear_down_generated_media_watcher(state: &State<'_, AwidatState>) {
+pub(super) async fn tear_down_generated_media_watcher(state: &State<'_, MontageState>) {
     if let Some(watcher) = state.generated_media_watcher.lock().await.take() {
         watcher.cancel.cancel();
     }
@@ -589,7 +591,7 @@ fn dir_size_recursive(dir: &Path) -> u64 {
 ///   stale-path filter cleans up whatever's left.
 #[tauri::command]
 pub async fn delete_project(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     path: String,
     expected_basename: String,
 ) -> Result<(), String> {
@@ -622,7 +624,7 @@ pub async fn delete_project(
 /// Pure validation half of [`delete_project`], split out for testability.
 /// Confirms the path is a real directory, that the on-disk basename
 /// matches what the UI thought it was deleting (catches rename races),
-/// and that the folder carries the Awidat sentinel so we cannot be
+/// and that the folder carries the Montage sentinel so we cannot be
 /// tricked into `rm -rf`ing an unrelated directory.
 fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf, String> {
     let buf = PathBuf::from(path);
@@ -637,7 +639,7 @@ fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf
     }
     if !buf.join("project.otio.json").is_file() {
         return Err(format!(
-            "refusing to delete non-Awidat directory: {path} (no project.otio.json sentinel)"
+            "refusing to delete non-Montage directory: {path} (no project.otio.json sentinel)"
         ));
     }
     Ok(buf)
@@ -646,7 +648,7 @@ fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf
 /// Cancel an in-flight long job (yt-dlp download, indexer run) by
 /// its protocol-Item id. No-op if the id isn't currently running.
 #[tauri::command]
-pub async fn cancel_job(state: State<'_, AwidatState>, job_id: String) -> Result<(), String> {
+pub async fn cancel_job(state: State<'_, MontageState>, job_id: String) -> Result<(), String> {
     if let Some(handle) = state.jobs.lock().await.get(&job_id) {
         handle.cancel.cancel();
     }
@@ -655,20 +657,20 @@ pub async fn cancel_job(state: State<'_, AwidatState>, job_id: String) -> Result
 
 /// Return job ids currently tracked by the live backend process.
 #[tauri::command]
-pub async fn running_job_ids(state: State<'_, AwidatState>) -> Result<Vec<String>, String> {
+pub async fn running_job_ids(state: State<'_, MontageState>) -> Result<Vec<String>, String> {
     Ok(state.jobs.lock().await.keys().cloned().collect())
 }
 
 /// Path to the recents file.
 ///
-/// macOS: `~/Library/Application Support/awidat-desktop/recents.json`
-/// Linux: `~/.config/awidat-desktop/recents.json`
-/// Windows: `%APPDATA%\awidat-desktop\recents.json`
+/// macOS: `~/Library/Application Support/montage-desktop/recents.json`
+/// Linux: `~/.config/montage-desktop/recents.json`
+/// Windows: `%APPDATA%\montage-desktop\recents.json`
 ///
 /// Returns `None` if the OS doesn't expose a config dir (we silently
 /// drop recents in that case rather than failing).
 fn recents_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("awidat-desktop").join("recents.json"))
+    dirs::config_dir().map(|d| d.join("montage-desktop").join("recents.json"))
 }
 
 /// Starter AGENTS.md identical to the CLI's. Kept inline rather than
@@ -678,7 +680,7 @@ fn recents_path() -> Option<PathBuf> {
 const AGENTS_MD_TEMPLATE: &str = "\
 # Project conventions
 
-This file is read by awidat at session start and added to the agent's \
+This file is read by montage at session start and added to the agent's \
 system prompt. Use it to record editorial conventions, ground rules, \
 and per-episode constraints. Edit freely; remove sections you don't \
 need. Subdirectories may also have their own `AGENTS.md` for narrower \
@@ -719,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_delete_target_accepts_real_awidat_project() {
+    fn validate_delete_target_accepts_real_montage_project() {
         let tmp = tempfile::tempdir().unwrap();
         let project = make_fake_project(tmp.path(), "demo");
         let buf = validate_delete_target(project.to_str().unwrap(), "demo").unwrap();
@@ -728,7 +730,7 @@ mod tests {
 
     #[test]
     fn validate_delete_target_refuses_missing_path() {
-        let err = validate_delete_target("/no/such/awidat/project", "project").unwrap_err();
+        let err = validate_delete_target("/no/such/montage/project", "project").unwrap_err();
         assert!(err.contains("not a directory"), "got: {err}");
     }
 
@@ -744,12 +746,12 @@ mod tests {
     #[test]
     fn validate_delete_target_refuses_directory_without_otio_sentinel() {
         let tmp = tempfile::tempdir().unwrap();
-        let bogus = tmp.path().join("definitely-not-awidat");
+        let bogus = tmp.path().join("definitely-not-montage");
         std::fs::create_dir_all(&bogus).unwrap();
         std::fs::write(bogus.join("README.md"), b"not a project").unwrap();
         let err =
-            validate_delete_target(bogus.to_str().unwrap(), "definitely-not-awidat").unwrap_err();
-        assert!(err.contains("non-Awidat directory"), "got: {err}");
+            validate_delete_target(bogus.to_str().unwrap(), "definitely-not-montage").unwrap_err();
+        assert!(err.contains("non-Montage directory"), "got: {err}");
     }
 
     #[tokio::test]
@@ -825,7 +827,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         Project::init(tmp.path()).unwrap();
         let mut project = Project::read(tmp.path()).unwrap();
-        project.timeline.metadata.awidat.as_mut().unwrap().episodes = vec![
+        project.timeline.metadata.montage.as_mut().unwrap().episodes = vec![
             EpisodeSpan {
                 id: "needs-review".into(),
                 name: Some("Needs Review".into()),

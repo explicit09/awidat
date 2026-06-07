@@ -1,5 +1,5 @@
 //! Per-second motion-magnitude sampling. Per-asset JSON sidecar at
-//! `<project>/.awidat/motion/<stem>-<hash>.json` consumed by Phase
+//! `<project>/.montage/motion/<stem>-<hash>.json` consumed by Phase
 //! 2's continuity engine to detect mid-motion cuts.
 //!
 //! Idempotency: mtime-based, same shape as proxy / waveform /
@@ -13,15 +13,15 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_desktop_protocol::{Id, JobKind};
-use awidat_render::MotionSignal;
+use montage_desktop_protocol::{Id, JobKind};
+use montage_render::MotionSignal;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::motion_path_for;
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Default samples-per-second. v1 ships 1 — adequate for podcast +
 /// long-form spoken content. Action footage may want 2-4 in a
@@ -46,20 +46,20 @@ pub struct MotionSidecar {
 /// sidecar path on success.
 pub async fn generate_motion_for_asset_in_project(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
     generate_motion_for_asset_in_project_inner(app, state.inner(), project_root, asset_path).await
 }
 
-/// `&AwidatState` variant of [`generate_motion_for_asset_in_project`],
+/// `&MontageState` variant of [`generate_motion_for_asset_in_project`],
 /// so callers without a Tauri `State` handle (e.g. background tasks
 /// spawned with `tokio::join!` that need to outlive the `State`'s
 /// borrow lifetime) can invoke the same machinery.
 pub async fn generate_motion_for_asset_in_project_inner(
     app: &AppHandle,
-    state: &AwidatState,
+    state: &MontageState,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
@@ -73,7 +73,7 @@ pub async fn generate_motion_for_asset_in_project_inner(
 
 async fn run_one(
     app: &AppHandle,
-    state: &AwidatState,
+    state: &MontageState,
     asset: &Path,
     sidecar: &Path,
 ) -> Result<(), String> {
@@ -94,7 +94,7 @@ async fn run_one(
         format!("sampling motion in {asset_label}"),
     );
 
-    let result = awidat_render::generate_motion_signal(asset, cancel.clone()).await;
+    let result = montage_render::generate_motion_signal(asset, cancel.clone()).await;
     unregister_job(state, &job_id).await;
 
     match result {
@@ -130,7 +130,7 @@ async fn run_one(
             )));
             Ok(())
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
+        Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             let _ = stderr_tail;
             emitter.cancelled();
             Err("cancelled".into())
@@ -177,7 +177,7 @@ pub async fn read_motion(path: String) -> Result<MotionSidecar, String> {
     Ok(parsed)
 }
 
-async fn register_job(state: &AwidatState, id: &Id) -> CancellationToken {
+async fn register_job(state: &MontageState, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -188,7 +188,7 @@ async fn register_job(state: &AwidatState, id: &Id) -> CancellationToken {
     token
 }
 
-async fn unregister_job(state: &AwidatState, id: &Id) {
+async fn unregister_job(state: &MontageState, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

@@ -31,7 +31,7 @@ use crate::publishing::{
         run_upload, save_prefs_to,
     },
 };
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Tauri event channel: fires once per OAuth flow when the 8419
 /// listener (W6.A1) captures the redirect. Frontend subscribes after
@@ -241,7 +241,7 @@ pub async fn upload_via_provider(
 /// fan-out (no auto-upload after render).
 #[tauri::command]
 pub async fn set_render_upload_targets(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     providers: Vec<String>,
 ) -> Result<(), String> {
@@ -254,7 +254,7 @@ pub async fn set_render_upload_targets(
 /// the frontend treats that as "no auto-upload requested".
 #[tauri::command]
 pub async fn poll_upload_states(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<Option<UploadJobEntry>, String> {
     Ok(state.upload_queue.snapshot(&job_id).await)
@@ -264,7 +264,7 @@ pub async fn poll_upload_states(
 /// boot to reconcile in-flight uploads after a reload.
 #[tauri::command]
 pub async fn list_upload_states(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<UploadJobEntry>, String> {
     Ok(state.upload_queue.snapshots().await)
 }
@@ -282,7 +282,7 @@ pub async fn list_upload_states(
 /// (title from `title` arg, no description / tags, `private`).
 #[tauri::command]
 pub async fn start_uploads_for_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     file_path: String,
     title: String,
@@ -368,7 +368,7 @@ async fn build_upload_params(
 /// original upload — retry doesn't re-prompt the form.
 #[tauri::command]
 pub async fn retry_upload(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     provider: String,
     file_path: String,
@@ -404,7 +404,7 @@ pub async fn retry_upload(
 /// the metadata isn't lost.
 #[tauri::command]
 pub async fn set_upload_metadata(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     provider: String,
     metadata: UploadMetadata,
@@ -461,7 +461,7 @@ pub async fn set_default_upload_targets(providers: Vec<String>) -> Result<(), St
 /// frontend treats that the same as "clean cut" and renders nothing.
 #[tauri::command]
 pub async fn compute_ai_disclosure(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     auto_disclose: Option<bool>,
 ) -> Result<AiDisclosure, String> {
@@ -550,7 +550,7 @@ pub async fn get_publishing_credentials_path() -> Result<String, String> {
 /// cleared after a reload).
 #[tauri::command]
 pub async fn get_ai_disclosure_for_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<Option<AiDisclosure>, String> {
     Ok(state.upload_queue.ai_disclosure_for(&job_id).await)

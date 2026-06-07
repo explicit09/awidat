@@ -1,7 +1,7 @@
 //! `read_understanding` tool - fused understanding and clip candidates.
 
 use async_trait::async_trait;
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -29,8 +29,8 @@ struct ReadUnderstandingResponse {
     moment_count: usize,
     clip_candidate_count: usize,
     summary_for_agent: String,
-    understanding: awidat_proto::professional::UnderstandingPackage,
-    clip_candidates: awidat_proto::professional::ClipCandidatePackage,
+    understanding: montage_proto::professional::UnderstandingPackage,
+    clip_candidates: montage_proto::professional::ClipCandidatePackage,
 }
 
 #[async_trait]
@@ -159,10 +159,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

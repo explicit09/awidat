@@ -17,7 +17,7 @@ import { EmptyConversation } from "./EmptyConversation";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../timeline/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
-import { isAwidatSentinel } from "../state/introState";
+import { isMontageSentinel } from "../state/introState";
 import { RationaleHint } from "../ui/components/RationaleHint";
 
 export function ChatStream() {
@@ -98,7 +98,7 @@ function latestUserPrompt(items: Item[]): string | null {
     if (
       item.kind === "user_input" &&
       item.text.trim() &&
-      !isAwidatSentinel(item.text)
+      !isMontageSentinel(item.text)
     ) {
       const hasReplyAfter = items.slice(i + 1).some((next) => next.kind !== "user_input");
       if (!hasReplyAfter) return null;
@@ -111,12 +111,12 @@ function latestUserPrompt(items: Item[]): string | null {
 function ItemView({ item }: { item: Item }) {
   switch (item.kind) {
     case "user_input":
-      // Synthetic editorial turns carry an `[awidat:*]` sentinel —
+      // Synthetic editorial turns carry an `[montage:*]` sentinel —
       // they are an instruction to the model, not a user message. Hide
       // them from the transcript so the agent's reply reads as a
       // direct, unprompted response to project state. Covers the intro
       // (F3) and "Prepare a starting cut" (B4) flows.
-      if (isAwidatSentinel(item.text)) return null;
+      if (isMontageSentinel(item.text)) return null;
       return (
         <article className="item item-user">
           <div className="item-meta">you</div>

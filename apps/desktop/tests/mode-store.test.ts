@@ -36,7 +36,7 @@ import { createModeStore, type Mode } from "../src/state/mode.ts";
 
 // invalid persisted value falls back to default
 {
-  const fake: Record<string, string> = { "awidat:mode": "garbage" };
+  const fake: Record<string, string> = { "montage:mode": "garbage" };
   const storage = {
     getItem: (k: string) => fake[k] ?? null,
     setItem: () => {},

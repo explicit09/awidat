@@ -1,4 +1,4 @@
-//! CLI integration tests that exercise the installed `awidat` binary.
+//! CLI integration tests that exercise the installed `montage` binary.
 
 #![allow(clippy::unwrap_used)]
 
@@ -55,7 +55,7 @@ fn new_import_places_source_on_timeline() {
     let timeline: serde_json::Value =
         serde_json::from_slice(&fs::read(project_root.join("project.otio.json")).unwrap()).unwrap();
     assert_eq!(
-        timeline["metadata"]["awidat"]["source_assets"][0],
+        timeline["metadata"]["montage"]["source_assets"][0],
         "raw/source.mp4"
     );
     assert_eq!(timeline["tracks"]["children"][0]["name"], "V1");

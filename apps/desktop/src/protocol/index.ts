@@ -81,10 +81,10 @@ export type { BrollAnchor } from "./generated/BrollAnchor";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.
-export const ITEM_EVENT = "awidat://item";
-export const TURN_END_EVENT = "awidat://turn-end";
-export const TIMELINE_CHANGED_EVENT = "awidat://timeline-changed";
-export const MENU_COMMAND_EVENT = "awidat://menu-command";
+export const ITEM_EVENT = "montage://item";
+export const TURN_END_EVENT = "montage://turn-end";
+export const TIMELINE_CHANGED_EVENT = "montage://timeline-changed";
+export const MENU_COMMAND_EVENT = "montage://menu-command";
 
 // Envelope shape emitted by the backend over `ITEM_EVENT`.
 import type { Item } from "./generated/Item";

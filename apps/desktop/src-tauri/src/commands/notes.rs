@@ -1,7 +1,7 @@
 //! Tauri commands for the per-project editorial notes file.
 //! Phase 1.7 wires the NotesPanel UI to the persistent storage in
-//! `<project>/.awidat/notes.json` (shape defined in
-//! `awidat_core::notes::NotesFile`).
+//! `<project>/.montage/notes.json` (shape defined in
+//! `montage_core::notes::NotesFile`).
 //!
 //! Dismiss is special — the command also stamps the matching coarse
 //! pattern into `dismissed_patterns.json` so the agent's editorial-
@@ -9,22 +9,22 @@
 //! scan. That coupling lives here at the desktop layer rather than
 //! in core; core just owns the load/save shape.
 
-use awidat_core::dismissal::{
+use montage_core::dismissal::{
     DismissalBucket, DismissalFile, dismissal_file_path, load_dismissals, save_dismissals,
 };
-use awidat_core::notes::{NotesFile, PersistedNote, load_notes, save_notes};
-use awidat_proto::otio::{StackChild, Timeline, TrackChild, TrackKind};
-use awidat_proto::project::Project;
+use montage_core::notes::{NotesFile, PersistedNote, load_notes, save_notes};
+use montage_proto::otio::{StackChild, Timeline, TrackChild, TrackKind};
+use montage_proto::project::Project;
 use serde::Deserialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Read the current notes file. Returns empty when no project is
 /// loaded — same shape so the frontend doesn't have to special-case
 /// the unloaded state.
 #[tauri::command]
-pub async fn list_notes(state: State<'_, AwidatState>) -> Result<NotesFile, String> {
+pub async fn list_notes(state: State<'_, MontageState>) -> Result<NotesFile, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(NotesFile::empty()),
@@ -41,7 +41,7 @@ pub async fn list_notes(state: State<'_, AwidatState>) -> Result<NotesFile, Stri
 /// duplicates. Returns the updated file.
 #[tauri::command]
 pub async fn upsert_note(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     note: PersistedNote,
 ) -> Result<NotesFile, String> {
     let project_root = state
@@ -70,7 +70,7 @@ pub async fn upsert_note(
 /// `list_dismissals` call.
 #[tauri::command]
 pub async fn set_note_status(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: SetNoteStatusArgs,
 ) -> Result<(NotesFile, DismissalFile), String> {
     let project_root = state
@@ -117,7 +117,7 @@ pub struct SetNoteStatusArgs {
 /// has no UI for this beyond the Tauri command — wired for future
 /// use.
 #[tauri::command]
-pub async fn delete_note(state: State<'_, AwidatState>, id: String) -> Result<NotesFile, String> {
+pub async fn delete_note(state: State<'_, MontageState>, id: String) -> Result<NotesFile, String> {
     let project_root = state
         .project_root
         .lock()
@@ -134,7 +134,7 @@ pub async fn delete_note(state: State<'_, AwidatState>, id: String) -> Result<No
 /// by the desktop's "show in finder" affordance (not wired to UI
 /// in Phase 1, but cheap to expose now).
 #[tauri::command]
-pub async fn dismissals_path(state: State<'_, AwidatState>) -> Result<Option<String>, String> {
+pub async fn dismissals_path(state: State<'_, MontageState>) -> Result<Option<String>, String> {
     Ok(state
         .project_root
         .lock()
@@ -192,7 +192,7 @@ fn clip_uuid_at_timeline_time(timeline: &Timeline, at_s: f64) -> Option<String> 
         }
         if track
             .metadata
-            .get("awidat_track_role")
+            .get("montage_track_role")
             .and_then(|v| v.as_str())
             == Some("titles")
         {
@@ -223,9 +223,9 @@ fn clip_uuid_at_timeline_time(timeline: &Timeline, at_s: f64) -> Option<String> 
     None
 }
 
-fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
+fn clip_uuid_or_name(clip: &montage_proto::otio::Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.extra.get("clip_uuid"))
         .and_then(|v| v.as_str())
@@ -236,7 +236,7 @@ fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track,
     };
 
@@ -266,7 +266,7 @@ mod tests {
             RationalTime::new(duration_s * 24.0, 24.0),
         ));
         clip.metadata
-            .awidat
+            .montage
             .get_or_insert_with(Default::default)
             .extra
             .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));

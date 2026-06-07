@@ -1,22 +1,22 @@
 [package]
-name = "awidat-index"
+name = "montage-index"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_index"
+name = "montage_index"
 path = "src/lib.rs"
 
 [[bin]]
-name = "awidat-index-perf"
-path = "src/bin/awidat-index-perf.rs"
+name = "montage-index-perf"
+path = "src/bin/montage-index-perf.rs"
 
 [dependencies]
-awidat-proto = { workspace = true }
-awidat-mcp = { workspace = true }
-awidat-config = { workspace = true }
+montage-proto = { workspace = true }
+montage-mcp = { workspace = true }
+montage-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -28,7 +28,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-awidat-test-support = { workspace = true }
+montage-test-support = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

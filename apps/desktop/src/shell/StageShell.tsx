@@ -7,7 +7,7 @@ import type { Stage } from "../state/stages";
 import { ChatStream } from "../agent/ChatStream";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
-import mark from "../brand/awidat-mark.svg";
+import mark from "../brand/montage-mark.svg";
 
 /**
  * StageShell — the 2026 "Stage" application shell (replaces the
@@ -164,8 +164,8 @@ export function StageShell(props: StageShellProps) {
   }, [running]);
 
   // Summonable tool side-panel — one open at a time.
-  // Dev-only: VITE_AWIDAT_TOOL pre-opens a tool (native screenshot verify).
-  const devTool = (import.meta.env?.VITE_AWIDAT_TOOL as ToolKey | undefined) ?? null;
+  // Dev-only: VITE_MONTAGE_TOOL pre-opens a tool (native screenshot verify).
+  const devTool = (import.meta.env?.VITE_MONTAGE_TOOL as ToolKey | undefined) ?? null;
   const [tool, setTool] = useState<ToolKey | null>(devTool);
   const toggleTool = (id: ToolKey) => setTool((t) => (t === id ? null : id));
 
@@ -218,7 +218,7 @@ export function StageShell(props: StageShellProps) {
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3" data-tauri-drag-region>
         <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(255,122,24,0.25), 0 4px 16px rgba(255,122,24,0.30)" }} />
-        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">AWIDAT</span>
+        <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         {projectLabel ? (
           <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">
             {projectLabel}{projectType ? <> · <span className="text-[var(--color-text-secondary)]">{projectType}</span></> : null}

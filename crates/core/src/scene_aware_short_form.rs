@@ -363,7 +363,7 @@ fn plan_reframes(
             kind: RecommendationKind::Reframe,
             start_s: shot.start_s,
             end_s: shot.end_s,
-            operation: "Set Effect / awidat.reframe".into(),
+            operation: "Set Effect / montage.reframe".into(),
             transcript_reason: "selected short-form clip should preserve the speaker or action"
                 .into(),
             visual_reason: "source framing needs vertical subject-aware composition".into(),
@@ -593,7 +593,7 @@ fn build_edl_fragment(
         lines.extend([
             "*** Set Effect".to_string(),
             format!("@@ anchor: clip_uuid={}", input.clip_id),
-            "+ effect: awidat.reframe".to_string(),
+            "+ effect: montage.reframe".to_string(),
             format!(
                 "+ params_json: {{\"zoom\":{},\"x\":{},\"y\":{}}}",
                 fmt_number(zoom),
@@ -1785,7 +1785,7 @@ mod tests {
 
     #[test]
     fn generated_edl_applies_to_timeline_and_leaves_scene_aware_diff() {
-        use awidat_proto::otio::{
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
             Track, TrackChild, TrackKind,
         };

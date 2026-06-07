@@ -177,7 +177,7 @@ fn map_pexels_err(err: pexels::PexelsError) -> FunctionCallError {
     match err {
         pexels::PexelsError::MissingApiKey => FunctionCallError::RespondToModel(
             "search_broll: PEXELS_API_KEY not set. Tell the user: \
-             store the key with `awidat config set pexels` or export PEXELS_API_KEY \
+             store the key with `montage config set pexels` or export PEXELS_API_KEY \
              then retry."
                 .into(),
         ),

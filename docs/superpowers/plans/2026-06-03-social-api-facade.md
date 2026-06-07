@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build Phase 6 of the server-backed social publishing pipeline: framework-neutral API methods that map the planned server routes onto the verified `awidat-social` domain services.
+**Goal:** Build Phase 6 of the server-backed social publishing pipeline: framework-neutral API methods that map the planned server routes onto the verified `montage-social` domain services.
 
-**Architecture:** Keep Phase 6 inside `awidat-social` until the repository has a dedicated web-server crate. Add a route-shaped API facade with request/response DTOs, actor/owner authorization, account and publishing operations, and worker entrypoints for upload/status execution. The facade must never expose provider token material and must remain usable from an Axum/Tauri/Next server wrapper later.
+**Architecture:** Keep Phase 6 inside `montage-social` until the repository has a dedicated web-server crate. Add a route-shaped API facade with request/response DTOs, actor/owner authorization, account and publishing operations, and worker entrypoints for upload/status execution. The facade must never expose provider token material and must remain usable from an Axum/Tauri/Next server wrapper later.
 
 **Tech Stack:** Rust 2024, `serde`, `serde_json`, existing `SocialStore`, existing account/publish/upload/status/team services, mocked provider adapters in tests.
 
@@ -14,7 +14,7 @@
 
 Included:
 - Route-shaped DTOs and service methods for the initial server API surface from `docs/superpowers/specs/2026-06-02-server-backed-social-oauth-design.md`.
-- Auth context that separates Awidat user/workspace authorization from social OAuth credentials.
+- Auth context that separates Montage user/workspace authorization from social OAuth credentials.
 - Provider/account/OAuth account methods.
 - Campaign variant target bind, validate, schedule, job lookup, cancel, and retry methods.
 - Worker-facing upload execution and status polling entrypoints over existing adapters.
@@ -65,7 +65,7 @@ Expected behavior:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::account_api
+cargo test -p montage-social api::tests::account_api
 ```
 
 Expected: FAIL because `api` is not exported.
@@ -100,7 +100,7 @@ Authorization:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::account_api
+cargo test -p montage-social api::tests::account_api
 ```
 
 Expected: PASS.
@@ -137,7 +137,7 @@ Expected behavior:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::publish_api
+cargo test -p montage-social api::tests::publish_api
 ```
 
 Expected: FAIL because publish facade methods do not exist.
@@ -169,7 +169,7 @@ Authorization:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::publish_api
+cargo test -p montage-social api::tests::publish_api
 ```
 
 Expected: PASS.
@@ -205,7 +205,7 @@ Expected behavior:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::worker_api
+cargo test -p montage-social api::tests::worker_api
 ```
 
 Expected: FAIL because worker facade methods do not exist.
@@ -230,7 +230,7 @@ Rules:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::worker_api
+cargo test -p montage-social api::tests::worker_api
 ```
 
 Expected: PASS.
@@ -265,7 +265,7 @@ Expected behavior:
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::sqlite_api
+cargo test -p montage-social api::tests::sqlite_api
 ```
 
 Expected: FAIL until the API tests are wired to SQLite fixtures.
@@ -284,7 +284,7 @@ If `publish_job()` needs owner-safe lookup and the current store methods are ins
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests::sqlite_api
+cargo test -p montage-social api::tests::sqlite_api
 ```
 
 Expected: PASS.
@@ -306,7 +306,7 @@ git commit -m "feat(social): add sqlite api parity"
 Run:
 
 ```bash
-cargo test -p awidat-social api::tests
+cargo test -p montage-social api::tests
 ```
 
 Expected: PASS.
@@ -316,8 +316,8 @@ Expected: PASS.
 Run:
 
 ```bash
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

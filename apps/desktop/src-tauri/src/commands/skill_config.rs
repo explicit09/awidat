@@ -3,7 +3,7 @@
 //! The Skills surface (`apps/desktop/src/shell/SkillsSurface.tsx`) lets
 //! the editor toggle individual skills on or off for the active project
 //! AND pin a specific version / provenance layer (Wave 5 B2). The state
-//! lives in `<project>/.awidat/skills.json` so it survives reloads,
+//! lives in `<project>/.montage/skills.json` so it survives reloads,
 //! syncs through file-based project sharing (Dropbox/git/etc.), and is
 //! visible from CLI invocations that don't load the React store.
 //! `codex_session::render_skills_catalog()` reads the same file when
@@ -48,10 +48,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-/// Subdirectory that holds `skills.json` and other awidat-managed state
+/// Subdirectory that holds `skills.json` and other montage-managed state
 /// files (proxies, notes, thumbnails, …). Mirrors the convention used
 /// across `commands/transcode.rs`, `commands/notes.rs`, etc.
-const AWIDAT_DIR: &str = ".awidat";
+const MONTAGE_DIR: &str = ".montage";
 /// Filename for the skill enable/disable config.
 const SKILLS_CONFIG_FILENAME: &str = "skills.json";
 /// Schema version we write today. Bump alongside any breaking
@@ -182,7 +182,7 @@ pub async fn read_skill_config(project_path: String) -> Result<SkillConfig, Stri
 /// `pinned` entries by reading the current file first, mutating only
 /// the `disabled` field, then writing back.
 ///
-/// Creates `<project>/.awidat/` if missing so the very first toggle on
+/// Creates `<project>/.montage/` if missing so the very first toggle on
 /// a fresh project still succeeds.
 #[tauri::command]
 pub async fn write_disabled_skills(
@@ -213,15 +213,15 @@ pub async fn write_skill_config(project_path: String, config: SkillConfig) -> Re
     write_config_to_disk(&root, &cfg).await
 }
 
-/// Shared write helper — creates the `.awidat/` dir, serializes, and
+/// Shared write helper — creates the `.montage/` dir, serializes, and
 /// flushes the file. Internal-only.
 async fn write_config_to_disk(root: &Path, cfg: &SkillConfig) -> Result<(), String> {
-    let awidat_dir = root.join(AWIDAT_DIR);
-    fs::create_dir_all(&awidat_dir)
+    let montage_dir = root.join(MONTAGE_DIR);
+    fs::create_dir_all(&montage_dir)
         .await
-        .map_err(|e| format!("create {AWIDAT_DIR}/: {e}"))?;
+        .map_err(|e| format!("create {MONTAGE_DIR}/: {e}"))?;
     let json = serde_json::to_vec_pretty(cfg).map_err(|e| format!("serialize skills.json: {e}"))?;
-    let path = awidat_dir.join(SKILLS_CONFIG_FILENAME);
+    let path = montage_dir.join(SKILLS_CONFIG_FILENAME);
     fs::write(&path, json)
         .await
         .map_err(|e| format!("write skills.json: {e}"))?;
@@ -252,9 +252,9 @@ fn sort_pins(mut pins: Vec<PinnedSkill>) -> Vec<PinnedSkill> {
     pins
 }
 
-/// `<project>/.awidat/skills.json`.
+/// `<project>/.montage/skills.json`.
 fn config_path(project_root: &Path) -> PathBuf {
-    project_root.join(AWIDAT_DIR).join(SKILLS_CONFIG_FILENAME)
+    project_root.join(MONTAGE_DIR).join(SKILLS_CONFIG_FILENAME)
 }
 
 /// Same guard the AGENTS.md command uses — reject empty / relative
@@ -302,16 +302,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_creates_awidat_dir_when_missing() {
+    async fn write_creates_montage_dir_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(!tmp.path().join(".awidat").exists());
+        assert!(!tmp.path().join(".montage").exists());
         write_disabled_skills(
             tmp.path().to_string_lossy().into_owned(),
             vec!["auto-cutter".to_string()],
         )
         .await
         .unwrap();
-        assert!(tmp.path().join(".awidat/skills.json").exists());
+        assert!(tmp.path().join(".montage/skills.json").exists());
     }
 
     #[tokio::test]
@@ -336,8 +336,8 @@ mod tests {
     #[tokio::test]
     async fn read_returns_empty_on_malformed_json() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
-        std::fs::write(tmp.path().join(".awidat/skills.json"), b"{not json").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
+        std::fs::write(tmp.path().join(".montage/skills.json"), b"{not json").unwrap();
         let out = read_disabled_skills(tmp.path().to_string_lossy().into_owned())
             .await
             .unwrap();
@@ -348,9 +348,9 @@ mod tests {
     #[tokio::test]
     async fn read_tolerates_missing_version_field() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
         std::fs::write(
-            tmp.path().join(".awidat/skills.json"),
+            tmp.path().join(".montage/skills.json"),
             br#"{"disabled":["a","b"]}"#,
         )
         .unwrap();
@@ -363,9 +363,9 @@ mod tests {
     #[test]
     fn load_disabled_skills_sync_matches_async_path() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
         std::fs::write(
-            tmp.path().join(".awidat/skills.json"),
+            tmp.path().join(".montage/skills.json"),
             br#"{"version":1,"disabled":["auto-cutter"]}"#,
         )
         .unwrap();
@@ -411,9 +411,9 @@ mod tests {
     #[test]
     fn load_skill_config_migrates_v1_to_v2() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
         std::fs::write(
-            tmp.path().join(".awidat/skills.json"),
+            tmp.path().join(".montage/skills.json"),
             br#"{"version":1,"disabled":["a"]}"#,
         )
         .unwrap();
@@ -538,7 +538,7 @@ mod tests {
         write_skill_config(tmp.path().to_string_lossy().into_owned(), cfg)
             .await
             .unwrap();
-        let raw = std::fs::read_to_string(tmp.path().join(".awidat/skills.json")).unwrap();
+        let raw = std::fs::read_to_string(tmp.path().join(".montage/skills.json")).unwrap();
         assert!(
             raw.contains("\"version\": 2"),
             "expected current version; got:\n{raw}"

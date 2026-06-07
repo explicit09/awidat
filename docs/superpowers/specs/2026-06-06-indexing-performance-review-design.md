@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a repeatable way to measure Awidat indexing speed in milliseconds, compare
+Build a repeatable way to measure Montage indexing speed in milliseconds, compare
 results against explicit targets, and produce a report the team can use for
 performance reviews on average and powerful machines.
 
@@ -41,7 +41,7 @@ assets, filters out `whisper` unless explicitly requested, and writes:
 The command should be explicit, for example:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project \
   --asset /path/to/project/raw/varied_720p_24fps_30s.mp4 \
   --output /path/to/project/reports/indexing-perf \
   --exclude-indexer whisper
@@ -62,12 +62,12 @@ gates once the team has enough baseline data.
 
 ## Architecture
 
-- Keep `awidat_index` responsible for telemetry aggregation and report model
+- Keep `montage_index` responsible for telemetry aggregation and report model
   helpers because it already owns `PairTelemetry` and `IndexReport`.
-- Keep `awidat-cli` responsible for command-line parsing, config loading, asset
+- Keep `montage-cli` responsible for command-line parsing, config loading, asset
   selection, filesystem output, and human-facing Markdown.
 - Add a small reusable formatter instead of pushing timing output into the
-  normal `awidat index` command. Normal indexing should stay concise.
+  normal `montage index` command. Normal indexing should stay concise.
 - Time built-in passes through a small report type if they are included in the
   command path. MCP pair timings remain sourced from `PairTelemetry`.
 

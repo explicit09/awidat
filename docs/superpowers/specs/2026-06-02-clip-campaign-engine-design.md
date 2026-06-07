@@ -2,7 +2,7 @@
 
 ## Summary
 
-Awidat should compete with Opus Clip by treating publishing as a campaign
+Montage should compete with Opus Clip by treating publishing as a campaign
 engine, not a standalone scheduler. The product creates publishable clips and
 long-form posts from a source asset, packages each post with platform-specific
 metadata and proof, then schedules and publishes through connected user
@@ -21,12 +21,12 @@ same publish package, approval, scheduling, OAuth, and platform adapter model.
 - Let users connect their own social accounts through OAuth.
 - Let users approve, edit, schedule, and publish generated posts.
 - Keep platform-specific rules isolated behind adapters.
-- Preserve Awidat's proof-oriented workflow: every publishable item should know
+- Preserve Montage's proof-oriented workflow: every publishable item should know
   which render, transcript anchors, metadata, and preflight checks support it.
 
 ## Non-Goals
 
-- Do not build a generic Buffer clone detached from Awidat's editing pipeline.
+- Do not build a generic Buffer clone detached from Montage's editing pipeline.
 - Do not attempt fully unattended autopilot before approval and audit history
   exist.
 - Do not make the desktop app responsible for reliable scheduled posting.
@@ -90,7 +90,7 @@ Expected outputs:
 
 ## Publish Package Manifest
 
-Awidat should write a durable manifest for every campaign. The manifest is the
+Montage should write a durable manifest for every campaign. The manifest is the
 handoff contract between editing, approval, and posting.
 
 Minimum fields:
@@ -223,7 +223,7 @@ they choose to.
 ## Data Flow
 
 1. User imports or selects a source asset.
-2. Awidat indexes and analyzes media.
+2. Montage indexes and analyzes media.
 3. User chooses `Podcast Campaign` or `Shorts Campaign`.
 4. Campaign planner proposes publishable items with evidence.
 5. Renderer creates required long-form, vertical, square, caption, and thumbnail
@@ -259,7 +259,7 @@ recommended fix, and whether retry is automatic or user-triggered.
 ### Phase 1: Campaign Manifest and Local Approval
 
 - Add campaign manifest format.
-- Generate podcast and shorts campaign plans from existing Awidat outputs.
+- Generate podcast and shorts campaign plans from existing Montage outputs.
 - Show a local approval/queue surface without live posting.
 - Validate render artifacts and metadata against platform profiles.
 
@@ -303,7 +303,7 @@ recommended fix, and whether retry is automatic or user-triggered.
 
 ## Open Decisions
 
-- Whether the campaign manifest should live inside the local Awidat project
+- Whether the campaign manifest should live inside the local Montage project
   only, or be synced to a server as soon as it is created.
 - Whether the first approval UI should be inside the desktop app, a web app, or
   both.

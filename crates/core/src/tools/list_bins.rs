@@ -11,8 +11,8 @@
 //! Read-only. Safe to call without project mutation.
 
 use async_trait::async_trait;
-use awidat_proto::professional::{AssetRecord, AssetRole};
-use awidat_proto::project::Project;
+use montage_proto::professional::{AssetRecord, AssetRole};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -97,7 +97,7 @@ impl ToolHandler for ListBinsTool {
         if let Some(catalog) = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|meta| meta.asset_catalog.as_ref())
         {
@@ -155,12 +155,12 @@ user/agent-defined bins (kind=user). Pass any returned id as the \
 mod tests {
     use std::path::Path;
 
-    use awidat_proto::professional::{AssetReadiness, AssetRecord, AssetRole};
-    use awidat_proto::project::Project;
+    use montage_proto::professional::{AssetReadiness, AssetRecord, AssetRole};
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
-    use crate::media_catalog_mutation::{create_bin, ensure_awidat_metadata, upsert_asset};
+    use crate::media_catalog_mutation::{create_bin, ensure_montage_metadata, upsert_asset};
     use crate::tool::SandboxMode;
 
     fn ctx_at(root: &Path) -> ToolContext {
@@ -169,10 +169,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -211,7 +211,7 @@ mod tests {
     async fn lists_user_bins_after_role_buckets() {
         let dir = tempfile::tempdir().unwrap();
         let mut project = Project::init(dir.path()).unwrap();
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         create_bin(meta, "scene-1".into(), "Scene 1".into(), None).unwrap();
         create_bin(meta, "broll".into(), "B-roll".into(), None).unwrap();
         project.write(dir.path()).unwrap();
@@ -237,8 +237,8 @@ mod tests {
         assert_eq!(role_id_for_record(&record), "role:audio");
         // Sanity-check upsert is just to keep this test independent of
         // any external setup.
-        let mut timeline = awidat_proto::otio::Timeline::empty("t");
-        let meta = ensure_awidat_metadata(&mut timeline);
+        let mut timeline = montage_proto::otio::Timeline::empty("t");
+        let meta = ensure_montage_metadata(&mut timeline);
         upsert_asset(meta, record);
     }
 }

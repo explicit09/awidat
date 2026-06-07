@@ -1,13 +1,13 @@
-//! `awidat plan-transcript-trim-edl` — generate a transcript-anchored trim EDL.
+//! `montage plan-transcript-trim-edl` — generate a transcript-anchored trim EDL.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use awidat_core::transcript_cleanup::{
+use montage_core::transcript_cleanup::{
     CleanupConfig, TranscriptSegment as CleanupTranscriptSegment, TranscriptWord,
     false_start_ranges, filler_dense_ranges,
 };
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde_json::Value;
 
 use crate::plan_clip::{SelectedClip, select_clip};
@@ -15,7 +15,7 @@ use crate::plan_ranges::{
     SourceRange, build_kept_ranges_edl, kept_ranges_after_removing, push_non_empty_range,
 };
 
-/// Arguments for `awidat plan-transcript-trim-edl`.
+/// Arguments for `montage plan-transcript-trim-edl`.
 pub struct PlanTranscriptTrimEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,
@@ -25,7 +25,7 @@ pub struct PlanTranscriptTrimEdlArgs {
     pub asset: Option<String>,
 }
 
-/// Arguments for `awidat plan-transcript-setup-edl`.
+/// Arguments for `montage plan-transcript-setup-edl`.
 pub struct PlanTranscriptSetupEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,
@@ -33,7 +33,7 @@ pub struct PlanTranscriptSetupEdlArgs {
     pub asset: Option<String>,
 }
 
-/// Arguments for `awidat plan-transcript-remove-edl`.
+/// Arguments for `montage plan-transcript-remove-edl`.
 pub struct PlanTranscriptRemoveEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,
@@ -43,7 +43,7 @@ pub struct PlanTranscriptRemoveEdlArgs {
     pub asset: Option<String>,
 }
 
-/// Arguments for `awidat plan-transcript-cleanup-edl`.
+/// Arguments for `montage plan-transcript-cleanup-edl`.
 pub struct PlanTranscriptCleanupEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,
@@ -55,7 +55,7 @@ pub struct PlanTranscriptCleanupEdlArgs {
     pub min_filler_tokens: usize,
 }
 
-/// Arguments for `awidat plan-false-start-edl`.
+/// Arguments for `montage plan-false-start-edl`.
 pub struct PlanFalseStartEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,

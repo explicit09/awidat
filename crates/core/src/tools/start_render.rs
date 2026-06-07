@@ -27,9 +27,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::professional::ExportPreset;
-use awidat_proto::project::Project;
-use awidat_render::{
+use montage_proto::professional::ExportPreset;
+use montage_proto::project::Project;
+use montage_render::{
     OutputPathPolicy, RenderJobSpec, RenderPlanLimitation, validate_render_output_path,
 };
 use serde::Deserialize;
@@ -178,7 +178,7 @@ impl ToolHandler for StartRenderTool {
         tokio::fs::create_dir_all(&renders_dir).await.ok();
         let timestamp = chrono::Utc::now().format("%H%M%S");
 
-        // Fork on scope. Timeline scope delegates to awidat-render's
+        // Fork on scope. Timeline scope delegates to montage-render's
         // shared planner so the agent and the desktop's Export button
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
@@ -214,15 +214,15 @@ impl ToolHandler for StartRenderTool {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let mut spec = match args.guide.as_ref() {
-                Some(guide) => awidat_render::build_timeline_section_render_spec(
+                Some(guide) => montage_render::build_timeline_section_render_spec(
                     &ctx.project_root,
                     &guide.track_id,
                     &guide.marker_id,
                 ),
-                None => awidat_render::build_timeline_render_spec(&ctx.project_root),
+                None => montage_render::build_timeline_render_spec(&ctx.project_root),
             }
             .map_err(|e| {
-                    use awidat_render::RenderTimelineError;
+                    use montage_render::RenderTimelineError;
                     let msg = match e {
                         RenderTimelineError::EmptyTimeline => {
                             "start_render: timeline has no clips to render. \
@@ -232,12 +232,12 @@ impl ToolHandler for StartRenderTool {
                         }
                         RenderTimelineError::NoOtio(p) => format!(
                             "start_render: no project.otio.json found at {} — \
-                         this isn't an awidat project root.",
+                         this isn't an montage project root.",
                             p.display()
                         ),
                         RenderTimelineError::OtioParse { message } => format!(
                             "start_render: timeline parse failed ({message}). \
-                         Run `awidat validate <project>` for the detailed diagnostic, \
+                         Run `montage validate <project>` for the detailed diagnostic, \
                          then revert the most recent apply_edl that broke the OTIO."
                         ),
                         RenderTimelineError::MissingAsset { clip_name, missing } => format!(
@@ -282,7 +282,7 @@ impl ToolHandler for StartRenderTool {
                         }
                         RenderTimelineError::InvalidTransitionMetadata { kind, message } => {
                             format!(
-                                "start_render: transition {kind:?} has invalid Awidat metadata: \
+                                "start_render: transition {kind:?} has invalid Montage metadata: \
                          {message}. Use data-only transition primitives with bounded params; do \
                          not put raw FFmpeg, GLSL, shell, or plugin code in transition metadata."
                             )
@@ -294,7 +294,7 @@ impl ToolHandler for StartRenderTool {
                         } => {
                             format!(
                                 "start_render: clip '{clip_name}' has invalid {effect} metadata: \
-                         {message}. Use the registered awidat effect parameter schema and avoid \
+                         {message}. Use the registered montage effect parameter schema and avoid \
                          raw renderer expressions in clip effect metadata."
                             )
                         }
@@ -318,7 +318,7 @@ impl ToolHandler for StartRenderTool {
                 })?;
             if let Some(slug) = args.preset.as_deref() {
                 let preset = resolve_export_preset(slug)?;
-                spec = awidat_render::professional::apply_export_preset_to_spec(spec, &preset)
+                spec = montage_render::professional::apply_export_preset_to_spec(spec, &preset)
                     .map_err(|e| {
                         FunctionCallError::RespondToModel(format!(
                             "start_render: failed to apply export preset '{}': {e}",
@@ -375,13 +375,13 @@ impl ToolHandler for StartRenderTool {
                 ))
             })?;
             let argv = build_ffmpeg_argv(&args, asset, &asset_path, &output_path)?;
-            let backend = awidat_render::RenderBackendKind::from_start_render_scope(&args.scope)
+            let backend = montage_render::RenderBackendKind::from_start_render_scope(&args.scope)
                 .ok_or_else(|| {
-                    FunctionCallError::RespondToModel(format!(
-                        "start_render: scope '{}' not recognized for render manifest",
-                        args.scope
-                    ))
-                })?;
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: scope '{}' not recognized for render manifest",
+                    args.scope
+                ))
+            })?;
             (
                 argv,
                 range_duration(&args.range),
@@ -400,7 +400,7 @@ impl ToolHandler for StartRenderTool {
             && args.guide.is_none()
             && args.preset.is_none()
             && matches!(
-                awidat_render::read_master_loudnorm_plan(&ctx.project_root),
+                montage_render::read_master_loudnorm_plan(&ctx.project_root),
                 Ok(Some(_))
             );
         if use_master_loudnorm_orchestrator {
@@ -435,7 +435,7 @@ impl ToolHandler for StartRenderTool {
             metadata: manifest_metadata,
         })?;
         if !use_master_loudnorm_orchestrator {
-            awidat_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest)
+            montage_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest)
                 .map_err(|e| {
                     FunctionCallError::RespondToModel(format!(
                         "start_render: failed to write render manifest {}: {e}",
@@ -458,7 +458,7 @@ impl ToolHandler for StartRenderTool {
         let job_id = if use_master_loudnorm_orchestrator {
             let _ = spec;
             ctx.job_manager
-                .start_master_loudnorm(awidat_render::MasterLoudnormManagedRenderSpec {
+                .start_master_loudnorm(montage_render::MasterLoudnormManagedRenderSpec {
                     project_root: ctx.project_root.clone(),
                     output_path: output_path.clone(),
                     manifest_path: manifest.manifest_path.clone(),
@@ -502,7 +502,7 @@ struct StartRenderResponseInput<'a> {
     asset_label: &'a str,
     output_path: &'a Path,
     manifest_path: &'a Path,
-    backend: awidat_render::RenderBackendKind,
+    backend: montage_render::RenderBackendKind,
     render_metadata: &'a BTreeMap<String, String>,
     limitations: &'a [RenderPlanLimitation],
     started_at: &'a str,
@@ -531,7 +531,7 @@ fn build_start_render_response(input: StartRenderResponseInput<'_>) -> serde_jso
     })
 }
 
-fn render_backend_json_value(backend: &awidat_render::RenderBackendKind) -> String {
+fn render_backend_json_value(backend: &montage_render::RenderBackendKind) -> String {
     serde_json::to_value(backend)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
@@ -567,7 +567,7 @@ fn enrich_render_metadata_with_caption_summary(
 
 fn enrich_render_metadata_with_backend_capability(
     metadata: &mut BTreeMap<String, String>,
-    backend: &awidat_render::RenderBackendKind,
+    backend: &montage_render::RenderBackendKind,
 ) {
     metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
         backend,
@@ -581,14 +581,14 @@ struct StartRenderManifestInput<'a> {
     input_paths: &'a [PathBuf],
     output_path: &'a Path,
     argv: &'a [String],
-    backend: awidat_render::RenderBackendKind,
+    backend: montage_render::RenderBackendKind,
     limitations: &'a [RenderPlanLimitation],
     metadata: serde_json::Value,
 }
 
 struct BuiltStartRenderManifest {
     manifest_path: PathBuf,
-    manifest: awidat_render::RenderExecutionManifest,
+    manifest: montage_render::RenderExecutionManifest,
 }
 
 fn build_start_render_manifest(
@@ -597,7 +597,7 @@ fn build_start_render_manifest(
     let mut inputs = Vec::new();
     if let Some(asset_path) = input.asset_path {
         inputs.push(
-            awidat_render::fingerprint_file(asset_path, true).map_err(|e| {
+            montage_render::fingerprint_file(asset_path, true).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
                     "start_render: failed to fingerprint input {}: {e}",
                     asset_path.display()
@@ -610,7 +610,7 @@ fn build_start_render_manifest(
             continue;
         }
         inputs.push(
-            awidat_render::fingerprint_file(input_path, true).map_err(|e| {
+            montage_render::fingerprint_file(input_path, true).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
                     "start_render: failed to fingerprint input {}: {e}",
                     input_path.display()
@@ -625,7 +625,7 @@ fn build_start_render_manifest(
     } else {
         None
     };
-    let ffmpeg_path = awidat_render::ffmpeg_path().map_err(|e| {
+    let ffmpeg_path = montage_render::ffmpeg_path().map_err(|e| {
         FunctionCallError::RespondToModel(format!("start_render: failed to locate ffmpeg: {e}"))
     })?;
     let mut replay_argv = vec![ffmpeg_path.to_string_lossy().into_owned()];
@@ -634,44 +634,44 @@ fn build_start_render_manifest(
         .limitations
         .iter()
         .map(|limitation| {
-            awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+            montage_render::limitation(limitation.kind.clone(), limitation.message.clone())
         })
         .collect();
     let mut metadata = json_object_to_string_map(input.metadata);
     enrich_render_metadata_with_backend_capability(&mut metadata, &input.backend);
     let sidecars =
-        awidat_render::fingerprint_ffmpeg_subtitle_sidecars(input.argv).map_err(|e| {
+        montage_render::fingerprint_ffmpeg_subtitle_sidecars(input.argv).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "start_render: failed to fingerprint render sidecars: {e}"
             ))
         })?;
     metadata.extend(
-        awidat_render::ass_sidecar_layout_metadata(input.argv).map_err(|e| {
+        montage_render::ass_sidecar_layout_metadata(input.argv).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "start_render: failed to inspect ASS sidecar layout: {e}"
             ))
         })?,
     );
-    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+    let manifest = montage_render::planned_at_now(montage_render::RenderExecutionManifestInput {
         created_at: String::new(),
-        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        montage_version: env!("CARGO_PKG_VERSION").into(),
         project_root: input.project_root.to_string_lossy().into_owned(),
         project_hash,
         timeline_hash,
         backend: input.backend,
-        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+        replay: montage_render::RenderReplayPlan::FfmpegArgv {
             argv: replay_argv,
             cwd: Some(input.project_root.to_string_lossy().into_owned()),
         },
         inputs,
-        outputs: vec![awidat_render::output_artifact(input.output_path, true)],
+        outputs: vec![montage_render::output_artifact(input.output_path, true)],
         sidecars,
         limitations,
         verification: None,
         metadata,
     });
     Ok(BuiltStartRenderManifest {
-        manifest_path: awidat_render::manifest_path_for_output(input.output_path),
+        manifest_path: montage_render::manifest_path_for_output(input.output_path),
         manifest,
     })
 }
@@ -680,7 +680,7 @@ fn optional_file_hash(path: &Path) -> Result<Option<String>, FunctionCallError> 
     if !path.is_file() {
         return Ok(None);
     }
-    awidat_render::fingerprint_file(path, true)
+    montage_render::fingerprint_file(path, true)
         .map(|fingerprint| Some(fingerprint.sha256))
         .map_err(|e| {
             FunctionCallError::RespondToModel(format!(
@@ -751,7 +751,7 @@ fn build_ffmpeg_argv(
 ///   scope. This is the back-compat path that existing tools rely on.
 /// - `Some("hevc")` / `Some("prores")` — build a stripped-down base argv
 ///   without baked-in codec args and then let
-///   [`awidat_render::professional::apply_export_preset_to_spec`] inject
+///   [`montage_render::professional::apply_export_preset_to_spec`] inject
 ///   the codec/container/bitrate args. This ensures broadcast and
 ///   archive workflows produce the right delivery codec.
 ///
@@ -868,7 +868,7 @@ fn build_legacy_argv(
 
 /// Preset-aware base argv: input + scope-specific filters but **no**
 /// codec/container flags. Codec args come from `apply_preset_to_argv`,
-/// which delegates to `awidat_render::professional::apply_export_preset_to_spec`.
+/// which delegates to `montage_render::professional::apply_export_preset_to_spec`.
 fn build_preset_base_argv(
     scope: &str,
     asset_path: &Path,
@@ -925,7 +925,7 @@ fn apply_preset_to_argv(
 ) -> Result<Vec<String>, FunctionCallError> {
     let spec = RenderJobSpec {
         args: base,
-        backend: awidat_render::RenderBackendKind::AssetFullReencode,
+        backend: montage_render::RenderBackendKind::AssetFullReencode,
         total_duration_s: None,
         cwd: None,
         output_path: output_path.to_path_buf(),
@@ -935,7 +935,7 @@ fn apply_preset_to_argv(
         metadata: Default::default(),
     };
     let lowered =
-        awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {
+        montage_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "start_render: failed to apply export preset '{}': {e}",
                 preset.id
@@ -971,11 +971,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -993,42 +993,42 @@ mod tests {
     }
 
     fn write_podcast_av_mismatch_project(root: &std::path::Path) {
-        let mut project = awidat_proto::project::Project::init(root).unwrap();
+        let mut project = montage_proto::project::Project::init(root).unwrap();
         let asset = root.join("raw/episode.mov");
         std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
         std::fs::write(&asset, b"fake").unwrap();
         project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .extra
             .insert(
-                "awidat_project_type".into(),
+                "montage_project_type".into(),
                 serde_json::json!({"kind": "podcast"}),
             );
 
-        let mut stack = awidat_proto::otio::Stack::empty("root");
+        let mut stack = montage_proto::otio::Stack::empty("root");
         for (name, kind, duration_s) in [
-            ("Video 1", awidat_proto::otio::TrackKind::Video, 30.0),
-            ("A1", awidat_proto::otio::TrackKind::Audio, 26.0),
+            ("Video 1", montage_proto::otio::TrackKind::Video, 30.0),
+            ("A1", montage_proto::otio::TrackKind::Audio, 26.0),
         ] {
-            let mut clip = awidat_proto::otio::Clip::empty(name);
-            clip.media_reference = awidat_proto::otio::MediaReference::External(
-                awidat_proto::otio::ExternalReference::new("raw/episode.mov"),
+            let mut clip = montage_proto::otio::Clip::empty(name);
+            clip.media_reference = montage_proto::otio::MediaReference::External(
+                montage_proto::otio::ExternalReference::new("raw/episode.mov"),
             );
-            clip.source_range = Some(awidat_proto::otio::TimeRange::new(
-                awidat_proto::otio::RationalTime::zero(24.0),
-                awidat_proto::otio::RationalTime::new(duration_s * 24.0, 24.0),
+            clip.source_range = Some(montage_proto::otio::TimeRange::new(
+                montage_proto::otio::RationalTime::zero(24.0),
+                montage_proto::otio::RationalTime::new(duration_s * 24.0, 24.0),
             ));
-            let mut track = awidat_proto::otio::Track::empty(name, kind);
+            let mut track = montage_proto::otio::Track::empty(name, kind);
             track
                 .children
-                .push(awidat_proto::otio::TrackChild::Clip(clip));
+                .push(montage_proto::otio::TrackChild::Clip(clip));
             stack
                 .children
-                .push(awidat_proto::otio::StackChild::Track(track));
+                .push(montage_proto::otio::StackChild::Track(track));
         }
         project.timeline.tracks = stack;
         project.write(root).unwrap();
@@ -1054,7 +1054,7 @@ mod tests {
             input_paths: std::slice::from_ref(&asset),
             output_path: &output,
             argv: &argv,
-            backend: awidat_render::RenderBackendKind::AssetPreview,
+            backend: montage_render::RenderBackendKind::AssetPreview,
             limitations: &[],
             metadata: serde_json::json!({"scope": "preview"}),
         })
@@ -1062,16 +1062,16 @@ mod tests {
 
         assert_eq!(
             built.manifest.backend,
-            awidat_render::RenderBackendKind::AssetPreview
+            montage_render::RenderBackendKind::AssetPreview
         );
         assert_eq!(
             built.manifest_path,
-            awidat_render::manifest_path_for_output(&output)
+            montage_render::manifest_path_for_output(&output)
         );
         assert_eq!(built.manifest.inputs.len(), 1);
         assert!(matches!(
             built.manifest.replay,
-            awidat_render::RenderReplayPlan::FfmpegArgv { .. }
+            montage_render::RenderReplayPlan::FfmpegArgv { .. }
         ));
     }
 
@@ -1094,7 +1094,7 @@ mod tests {
             input_paths: &[],
             output_path: &output,
             argv: &argv,
-            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
             limitations: &[],
             metadata: serde_json::json!({"scope": "timeline"}),
         })
@@ -1102,7 +1102,7 @@ mod tests {
 
         assert_eq!(
             built.manifest.backend,
-            awidat_render::RenderBackendKind::TimelineFfmpegReencode
+            montage_render::RenderBackendKind::TimelineFfmpegReencode
         );
         assert!(built.manifest.project_hash.is_some());
         assert!(built.manifest.timeline_hash.is_some());
@@ -1125,7 +1125,7 @@ mod tests {
             asset_label: "<timeline>",
             output_path: std::path::Path::new("/tmp/out.mp4"),
             manifest_path: std::path::Path::new("/tmp/out.render-manifest.json"),
-            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
             render_metadata: &BTreeMap::from([
                 (
                     "timeline_backend".to_string(),
@@ -1307,7 +1307,7 @@ mod tests {
     }
 
     // Pure-function tests for the timeline-render planner moved to
-    // `awidat-render::timeline` alongside the implementation. The
+    // `montage-render::timeline` alongside the implementation. The
     // tests below exercise the tool's error-mapping path end-to-end.
 
     #[tokio::test]
@@ -1329,7 +1329,7 @@ mod tests {
     async fn timeline_scope_with_empty_timeline_is_respond_to_model() {
         let dir = tempfile::tempdir().unwrap();
         // Init a real project (empty timeline).
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         let err = StartRenderTool
             .handle(
                 invoke(serde_json::json!({"scope": "timeline"})),

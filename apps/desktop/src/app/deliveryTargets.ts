@@ -117,7 +117,7 @@ type State = {
   clear: () => void;
 };
 
-const PERSIST_KEY = "awidat.deliver.targets.v1";
+const PERSIST_KEY = "montage.deliver.targets.v1";
 
 function loadPersisted(): Set<DeliveryTargetKey> {
   if (typeof localStorage === "undefined") return new Set();

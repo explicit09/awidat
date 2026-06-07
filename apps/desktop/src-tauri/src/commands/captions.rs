@@ -4,7 +4,7 @@
 //! The cues are remapped to *timeline-time*, not raw source-time, so
 //! cuts/trims/inserts the user has made in the Edit screen flow into
 //! the exported sidecar. Implementation reuses
-//! `awidat_core::tools::export_package::collect_timeline_cues` which
+//! `montage_core::tools::export_package::collect_timeline_cues` which
 //! is the same algorithm `export_package` relies on for its package
 //! exports.
 //!
@@ -14,13 +14,13 @@
 
 use std::path::PathBuf;
 
-use awidat_core::tools::export_package::collect_timeline_cues;
-use awidat_proto::project::Project;
-use awidat_proto::subtitle::{format_srt, format_vtt};
+use montage_core::tools::export_package::collect_timeline_cues;
+use montage_proto::project::Project;
+use montage_proto::subtitle::{format_srt, format_vtt};
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Reply from `export_caption_sidecars`: the two sidecar paths the
 /// frontend can reveal in Finder.
@@ -44,7 +44,7 @@ pub struct CaptionSidecarPaths {
 ///     video tracks AND no editable subtitle tracks)
 #[tauri::command]
 pub async fn export_caption_sidecars(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<CaptionSidecarPaths, String> {
     let project_root = state
         .project_root

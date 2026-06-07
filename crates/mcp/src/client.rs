@@ -5,7 +5,7 @@
 //! negotiation, the `2025-11-25` protocol version. We own: subprocess
 //! launch, our `ServerConfig` shape, the small surface our agent and CLI
 //! actually call, and per-request progress subscription routing via
-//! [`crate::handler::AwidatHandler`].
+//! [`crate::handler::MontageHandler`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::error::McpError;
-use crate::handler::{AwidatHandler, ProgressEvent};
+use crate::handler::{MontageHandler, ProgressEvent};
 
 /// Default request timeout. Indexers can run for minutes (whisper on a long
 /// episode is the worst case), so this is intentionally generous; shorter
@@ -67,7 +67,7 @@ pub struct ServerConfig {
 /// What we tell the server about ourselves in `initialize.params.clientInfo`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientInfo {
-    /// Application name, e.g. `"awidat"`.
+    /// Application name, e.g. `"montage"`.
     pub name: String,
     /// Application version.
     pub version: String,
@@ -208,7 +208,7 @@ impl ToolResult {
 /// 4. [`Client::shutdown`] — graceful tear-down.
 pub struct Client {
     server_name: String,
-    handler: AwidatHandler,
+    handler: MontageHandler,
     /// Pending pre-`initialize` state: the spawned child process transport,
     /// kept here until `initialize()` consumes it.
     pending_transport: Option<TokioChildProcess>,
@@ -217,7 +217,7 @@ pub struct Client {
     child_pid: Option<u32>,
     /// `Option` so we can `take()` it to consume in `shutdown`. Always
     /// `Some` between `initialize` and `shutdown`.
-    service: Option<Arc<RunningService<RoleClient, AwidatHandler>>>,
+    service: Option<Arc<RunningService<RoleClient, MontageHandler>>>,
     capabilities: ServerCapabilities,
     server_info: Option<ServerInfo>,
 }
@@ -249,7 +249,7 @@ impl Client {
         let child_pid = transport.id();
         Ok(Self {
             server_name: name,
-            handler: AwidatHandler::default(),
+            handler: MontageHandler::default(),
             pending_transport: Some(transport),
             child_pid,
             service: None,
@@ -285,7 +285,7 @@ impl Client {
 
         // Pre-load our handler with the ClientInfo we want to advertise.
         // The `ClientHandler::get_info` default returns ClientInfo::default();
-        // we override on AwidatHandler by stashing this and returning it.
+        // we override on MontageHandler by stashing this and returning it.
         // rmcp 0.15 dropped constructor methods on these param structs;
         // build with struct literal. `Implementation` only ships
         // `from_build_env()`, so we set name/version explicitly and
@@ -530,7 +530,7 @@ impl Client {
         Ok(())
     }
 
-    fn service(&self) -> Result<&Arc<RunningService<RoleClient, AwidatHandler>>, McpError> {
+    fn service(&self) -> Result<&Arc<RunningService<RoleClient, MontageHandler>>, McpError> {
         self.service
             .as_ref()
             .ok_or_else(|| McpError::ProtocolViolation {

@@ -2,12 +2,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +23,7 @@ fn write_project_with_freeze_effect(dir: &Path) {
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
 
-    let mut freeze = Effect::new("awidat.freeze");
+    let mut freeze = Effect::new("montage.freeze");
     freeze
         .metadata
         .insert("freeze_at_source_s".to_string(), serde_json::json!(1.2));

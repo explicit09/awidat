@@ -17,7 +17,7 @@
 
 ## Context discovered in the codebase (read before executing)
 
-The `awidat-social` crate (`crates/social/`) is today **fully synchronous** and has **no HTTP client** — `Cargo.toml` lists only `base64, serde, serde_json, rusqlite, sha2, thiserror`. The workspace root `Cargo.toml` already provides `reqwest = { version = "0.12", default-features = false, features = ["json","stream","rustls-tls","cookies"] }` and `tokio` as workspace deps, so we add them to the crate, we do not introduce new versions.
+The `montage-social` crate (`crates/social/`) is today **fully synchronous** and has **no HTTP client** — `Cargo.toml` lists only `base64, serde, serde_json, rusqlite, sha2, thiserror`. The workspace root `Cargo.toml` already provides `reqwest = { version = "0.12", default-features = false, features = ["json","stream","rustls-tls","cookies"] }` and `tokio` as workspace deps, so we add them to the crate, we do not introduce new versions.
 
 The adapter contract is deliberately token-blind and bytes-blind:
 - `UploadAdapter::upload(&self, &UploadRequest)` (`crates/social/src/upload_adapter.rs:50-53`) is sync and the request carries only `artifact_ref: String` and `access_token_ref: String`.
@@ -41,12 +41,12 @@ The real client needs three things the current contract withholds: the **decrypt
 
 ## Step 1 — Add HTTP/runtime deps to the social crate (gated)
 
-File: `crates/social/Cargo.toml`. Add `reqwest = { workspace = true }` and `tokio = { workspace = true }` (and `bytes`/`futures` if the streaming body needs them, both already in workspace). Put the concrete client behind a Cargo feature, e.g. `youtube-live`, so the existing sync, dependency-light unit-test surface (`cargo test -p awidat-social` default features) stays fast and the new networked code compiles only when asked:
+File: `crates/social/Cargo.toml`. Add `reqwest = { workspace = true }` and `tokio = { workspace = true }` (and `bytes`/`futures` if the streaming body needs them, both already in workspace). Put the concrete client behind a Cargo feature, e.g. `youtube-live`, so the existing sync, dependency-light unit-test surface (`cargo test -p montage-social` default features) stays fast and the new networked code compiles only when asked:
 ```
 [features]
 youtube-live = ["dep:reqwest", "dep:tokio"]
 ```
-Verify: `cargo build -p awidat-social` (no feature) unchanged; `cargo build -p awidat-social --features youtube-live` compiles.
+Verify: `cargo build -p montage-social` (no feature) unchanged; `cargo build -p montage-social --features youtube-live` compiles.
 
 ## Step 2 — Define the token + artifact resolution seams
 
@@ -84,7 +84,7 @@ Verify: resolver unit test with a `TokenSecret::encrypt(...)` round-trip (mirror
 
 ## Step 6 — Wire the real adapters into the server service instead of `MockUploadAdapter`
 
-The replacement target is the **server-side caller** (Phase 1's `awidat-social` HTTP service / worker), which calls the already-existing `SocialApi::execute_claimed_upload_job` (`crates/social/src/api.rs:644-671`) and `SocialApi::poll_upload_status` (`api.rs:678-693`). Construct:
+The replacement target is the **server-side caller** (Phase 1's `montage-social` HTTP service / worker), which calls the already-existing `SocialApi::execute_claimed_upload_job` (`crates/social/src/api.rs:644-671`) and `SocialApi::poll_upload_status` (`api.rs:678-693`). Construct:
 - `YouTubeUploadAdapter::new(LiveYouTubeUploadClient::new(resolver, artifact_source, YouTubeClientConfig { force_private, chunk_size, .. }))`
 - `YouTubeStatusAdapter::new(LiveYouTubeStatusClient::new(resolver))`
 and pass `&adapter` into those two `SocialApi` methods. No change to `api.rs`, `upload_service.rs`, or `upload_status.rs` — they already accept `&impl UploadAdapter` / `&impl UploadStatusAdapter`. This is the entire "wire it in" step on the server side.
@@ -99,14 +99,14 @@ File: a new integration test module behind `youtube-live`, e.g. `crates/social/t
 1. **Resumable interruption/resume**: initiate → first PUT returns `308` with partial `Range` → second PUT from the correct offset returns `200`. Assert one resulting `Published`/`Processing` job through `UploadService::execute_claimed_job` with the real adapter over a mock server + `InMemorySocialStore`.
 2. **Token-refresh failure**: resolver returns a refresh error → job ends in a retryable failure / `RequiresAction` and the account-needs-reauth path is observable (coordinate exact mapping with Phase 2).
 3. **Status failure**: status poll returns `failed`/rejection → job transitions to `Failed` via the existing `UploadStatusService` mapping.
-Verify: `cargo test -p awidat-social --features youtube-live`.
+Verify: `cargo test -p montage-social --features youtube-live`.
 
 ## Step 8 — Full verification + redaction guard
 
 Run:
-- `cargo test -p awidat-social` (default features) — all existing sync FSM/redaction tests stay green, proving the FSM was not disturbed.
-- `cargo test -p awidat-social --features youtube-live` — new client + integration tests.
-- `cargo clippy -p awidat-social --all-features` and `cargo fmt --check`.
+- `cargo test -p montage-social` (default features) — all existing sync FSM/redaction tests stay green, proving the FSM was not disturbed.
+- `cargo test -p montage-social --features youtube-live` — new client + integration tests.
+- `cargo clippy -p montage-social --all-features` and `cargo fmt --check`.
 - Re-run the existing redaction assertions (`upload_service.rs:494-538`, `upload_status.rs:441-475`, `token.rs:129-144`) and confirm they still pass — this is the proof that the real token/bytes seam (Step 2) did not leak secrets into `UploadRequest`/events.
 
 A manual sandbox smoke test (real Google project in test/private mode, real small mp4) is a human prerequisite gated on Phase 2 OAuth being live and the Google project existing — do it once the audit-gated private upload can be exercised end-to-end.

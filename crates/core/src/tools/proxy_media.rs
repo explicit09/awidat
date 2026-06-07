@@ -98,7 +98,7 @@ impl ToolHandler for GenerateProxyTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "generate_proxy".into(),
-            description: "Generate or refresh the .awidat proxy for one raw asset.".into(),
+            description: "Generate or refresh the .montage proxy for one raw asset.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "required": ["asset_id"],
@@ -162,7 +162,7 @@ impl ToolHandler for GenerateProxyTool {
 
         let proxy_path = proxy_path_for(&ctx.project_root, &asset_path);
         let pending_path = proxy_pending_path(&proxy_path);
-        awidat_render::transcode_proxy(&asset_path, &pending_path, None, CancellationToken::new())
+        montage_render::transcode_proxy(&asset_path, &pending_path, None, CancellationToken::new())
             .await
             .map_err(|e| FunctionCallError::RespondToModel(format!("generate_proxy: {e}")))?;
         if proxy_path.is_file() {
@@ -213,10 +213,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

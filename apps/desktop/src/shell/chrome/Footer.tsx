@@ -15,7 +15,7 @@ import { toActiveJobLike, aggregatePercent } from "../activeJobs";
  * Fields the old footer rendered that have intentionally been dropped here
  * (per Task 10 spec — they move to Settings):
  *   - "Agent online / Agent working" liveness dot
- *   - "Model: Awidat Pro 1.2"
+ *   - "Model: Montage Pro 1.2"
  *   - "Context window: local"
  *
  * The outer flex/border/bg layout is supplied by the AppShell's <footer>

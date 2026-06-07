@@ -24,8 +24,8 @@
 
 #![cfg(feature = "youtube-live")]
 
-use awidat_social::youtube_upload::live::{LiveYouTubeStatusClient, LiveYouTubeUploadClient};
-use awidat_social::youtube_upload::{
+use montage_social::youtube_upload::live::{LiveYouTubeStatusClient, LiveYouTubeUploadClient};
+use montage_social::youtube_upload::{
     AccessTokenResolver, AccessTokenResolverError, ArtifactBody, ArtifactSource,
     ArtifactSourceError, YouTubeClientConfig, YouTubeProcessingState, YouTubeStatusClient,
     YouTubeStatusClientError, YouTubeStatusRequest, YouTubeUploadClient, YouTubeUploadClientError,
@@ -71,7 +71,7 @@ fn upload_request() -> YouTubeUploadRequest {
         thumbnail_ref: None,
         title: "Launch clip".into(),
         description: Some("Description".into()),
-        tags: vec!["awidat".into()],
+        tags: vec!["montage".into()],
         privacy: "public".into(),
         scheduled_for: None,
         access_token_ref: "token_secret:acct-1".into(),
@@ -116,7 +116,7 @@ async fn run_upload(
 async fn run_status(
     client: LiveYouTubeStatusClient<FixedToken>,
     id: &str,
-) -> Result<awidat_social::youtube_upload::YouTubeStatusResponse, YouTubeStatusClientError> {
+) -> Result<montage_social::youtube_upload::YouTubeStatusResponse, YouTubeStatusClientError> {
     let id = id.to_string();
     tokio::task::spawn_blocking(move || client.poll_status(&status_request(&id)))
         .await

@@ -1,35 +1,35 @@
 //! Tauri-managed app state. One instance per running app, threaded
-//! into every command via `State<'_, AwidatState>`.
+//! into every command via `State<'_, MontageState>`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use awidat_core::edl::{AppliedOp, EdlEnvelope};
-use awidat_core::tool::ApprovalDecision;
-use awidat_desktop_protocol::Transcript;
-use awidat_proto::otio::Timeline;
-use awidat_render::JobManager;
-use awidat_render_gpu::{GpuTransitionRenderer, TransitionShader};
+use montage_core::edl::{AppliedOp, EdlEnvelope};
+use montage_core::tool::ApprovalDecision;
+use montage_desktop_protocol::Transcript;
+use montage_proto::otio::Timeline;
+use montage_render::JobManager;
+use montage_render_gpu::{GpuTransitionRenderer, TransitionShader};
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// All app-level state that has to outlive a single command call.
 ///
-/// **Step 8d:** the legacy `awidat_core::Session` is no longer driven
+/// **Step 8d:** the legacy `montage_core::Session` is no longer driven
 /// from the desktop. Each turn now spawns a `codex-exec` subprocess
 /// (see [`crate::codex_runner`]), so the prior `ActiveSession` slot,
 /// `pending_approvals`, and `pending_inputs` were dead containers and
 /// have been removed.
 #[derive(Default)]
-pub struct AwidatState {
+pub struct MontageState {
     /// Live codex bridge for the currently-open project. `None` when
     /// no project is open or after teardown (project switch, app
     /// shutdown). Lazily constructed on the first `start_turn` for a
     /// given `project_root`; rebuilt when the project changes
     /// (different cwd / MCP env override).
     pub codex: Mutex<Option<crate::codex_session::CodexSession>>,
-    /// Watcher tailing `<project>/.awidat/generated-media/registry.json`
+    /// Watcher tailing `<project>/.montage/generated-media/registry.json`
     /// and emitting `Item::Job { kind: GeneratedMedia, … }` lifecycle
     /// events so the chat UI shows external video-gen progress. One
     /// per opened project; torn down on close / app exit.
@@ -40,12 +40,12 @@ pub struct AwidatState {
     pub turn: Mutex<Option<TurnHandle>>,
     /// Project root the codex subprocess will be invoked against.
     /// Set by `set_project_root` (or its callers like `init_project`).
-    /// Defaulted from `AWIDAT_DESKTOP_PROJECT` env var on startup so
+    /// Defaulted from `MONTAGE_DESKTOP_PROJECT` env var on startup so
     /// dev runs work without configuring.
     pub project_root: Mutex<Option<PathBuf>>,
-    /// Thin authenticated HTTPS client of the `awidat-social-server` (Phase 5).
+    /// Thin authenticated HTTPS client of the `montage-social-server` (Phase 5).
     /// `None` until initialized in the Tauri `.setup()` hook from
-    /// `AWIDAT_SOCIAL_SERVER_URL` (+ `AWIDAT_SOCIAL_AUTH_TOKEN`); stays `None`
+    /// `MONTAGE_SOCIAL_SERVER_URL` (+ `MONTAGE_SOCIAL_AUTH_TOKEN`); stays `None`
     /// when the server URL is unconfigured, and the `social_*` commands then
     /// surface a clear "social client not initialized" error. The desktop holds
     /// no secrets — all token material lives server-side.
@@ -112,7 +112,7 @@ pub struct AwidatState {
     /// newer choice was written. See [`crate::commands::auth`].
     pub pending_oauth: Mutex<
         Option<(
-            awidat_auth::ShutdownHandle,
+            montage_auth::ShutdownHandle,
             tauri::async_runtime::JoinHandle<()>,
         )>,
     >,
@@ -204,7 +204,7 @@ pub struct ViewState {
     pub is_playing: bool,
 }
 
-/// Handle on a running turn. Owned by `AwidatState::turn`.
+/// Handle on a running turn. Owned by `MontageState::turn`.
 pub struct TurnHandle {
     /// Stable id for the active turn. Completion tasks use this to
     /// avoid clearing a newer turn if an older cleanup path runs late.
@@ -219,7 +219,7 @@ pub struct TurnHandle {
 }
 
 /// Handle on a running long-job (import, indexing). Owned by
-/// `AwidatState::jobs[job_id]`. Used by the import/index commands
+/// `MontageState::jobs[job_id]`. Used by the import/index commands
 /// in the next commit; predeclared here so the state-layout commit
 /// is self-contained.
 #[allow(dead_code)]

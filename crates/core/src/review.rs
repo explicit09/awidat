@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::vc;
 
-/// Relative directory under `.awidat/` that stores local review packages.
+/// Relative directory under `.montage/` that stores local review packages.
 pub const REVIEW_PACKAGES_DIR: &str = "review-packages";
 /// JSON filename pattern extension.
 const REVIEW_PACKAGE_EXT: &str = "json";
@@ -115,7 +115,7 @@ fn write_local_review_package(
     project_root: &Path,
     package: &LocalReviewPackage,
 ) -> Result<PathBuf, String> {
-    let package_dir = project_root.join(".awidat").join(REVIEW_PACKAGES_DIR);
+    let package_dir = project_root.join(".montage").join(REVIEW_PACKAGES_DIR);
     std::fs::create_dir_all(&package_dir)
         .map_err(|e| format!("create review package dir {}: {e}", package_dir.display()))?;
     let short_commit = package

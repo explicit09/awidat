@@ -6,8 +6,8 @@
 //! drowning in 50K-word transcripts in one tool result.
 
 use async_trait::async_trait;
-use awidat_index::{SidecarError, read_sidecar};
-use awidat_proto::index::AssetId;
+use montage_index::{SidecarError, read_sidecar};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -555,11 +555,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -807,7 +807,7 @@ mod tests {
         match err {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("no sidecar"));
-                assert!(msg.contains("awidat index --indexer whisper"));
+                assert!(msg.contains("montage index --indexer whisper"));
             }
             other => panic!("want RespondToModel, got {other:?}"),
         }

@@ -1,6 +1,6 @@
 // Zustand store for the editorial notes lifecycle (Phase 1.7).
 //
-// Source of truth is .awidat/notes.json on disk. The store loads it
+// Source of truth is .montage/notes.json on disk. The store loads it
 // on project change, ingests Item::EditorialNote emissions from the
 // agent, and writes back through the Tauri commands.
 //
@@ -71,7 +71,7 @@ type NotesFile = {
 };
 
 /** Coarse pattern key the dismissal-memory matcher uses. Mirrors
- *  awidat_core::dismissal::DismissalBucket. */
+ *  montage_core::dismissal::DismissalBucket. */
 export type DismissalBucket =
   | { kind: "silence_under_2s" }
   | { kind: "silence_2s_to_5s" }

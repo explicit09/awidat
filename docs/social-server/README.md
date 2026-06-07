@@ -1,4 +1,4 @@
-# awidat-social-server — Phase 1 runbook
+# montage-social-server — Phase 1 runbook
 
 This runbook covers the exact CLI commands to stand up the Phase 1 infrastructure.
 Follow steps in order; each USER step requires a browser or an account you own.
@@ -19,7 +19,7 @@ Follow steps in order; each USER step requires a browser or an account you own.
 ## 1. Create the Supabase project
 
 1. Go to https://app.supabase.com → New project.
-2. Choose an org, pick a name (`awidat`), select a region (e.g. `us-east-1`), and
+2. Choose an org, pick a name (`montage`), select a region (e.g. `us-east-1`), and
    set a strong DB password.  Save the password — you need it below.
 3. After the project initialises, note:
    - **Project ref** (in the URL: `https://app.supabase.com/project/<ref>`)
@@ -89,11 +89,11 @@ curl -X POST "https://<ref>.supabase.co/storage/v1/bucket" \
 fly auth login
 
 # Create the app (one-time; name must be globally unique).
-fly apps create awidat-social
+fly apps create montage-social
 
 # Set deployment secrets — never committed to the repo.
-fly secrets set --app awidat-social \
-  DATABASE_URL="postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres?options=-c%20search_path%3Dawidat_social,public" \
+fly secrets set --app montage-social \
+  DATABASE_URL="postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres?options=-c%20search_path%3Dmontage_social,public" \
   SERVICE_SHARED_SECRET="$(openssl rand -hex 32)" \
   SUPABASE_URL="https://<ref>.supabase.co" \
   SUPABASE_SERVICE_KEY="<service_role_key>" \
@@ -104,27 +104,27 @@ fly secrets set --app awidat-social \
 The `DATABASE_URL` above uses the **Supavisor session-pooler** (port 6543, not 5432).
 Find it in Supabase → Settings → Database → Connection string → Session pooler.
 
-### Multi-tenant: the `awidat_social` schema (IMPORTANT)
+### Multi-tenant: the `montage_social` schema (IMPORTANT)
 
-Awidat shares a single Supabase project (`technologia-builder-network`) with other
-products to keep costs down (one DB / auth / compute). Awidat's tables live in a
-dedicated **`awidat_social` Postgres schema**, isolated from the host app's
+Montage shares a single Supabase project (`technologia-builder-network`) with other
+products to keep costs down (one DB / auth / compute). Montage's tables live in a
+dedicated **`montage_social` Postgres schema**, isolated from the host app's
 `public` tables. Because `PgSocialStore` issues unqualified table names, the
 `DATABASE_URL` **must** pin the connection's search_path to that schema:
 
 ```
-?options=-c%20search_path%3Dawidat_social,public
+?options=-c%20search_path%3Dmontage_social,public
 ```
 
 (`%20` = space, `%3D` = `=`.) Do NOT `ALTER ROLE ... SET search_path` — the
 `postgres`/service role is shared with the host app, which needs `public`. The
-per-connection `options` param scopes the search_path to the Awidat server only.
+per-connection `options` param scopes the search_path to the Montage server only.
 
 For the **current shared project** (`technologia-builder-network`,
 ref `vgkocfbtkzmpklruqmsx`, region `us-east-1`):
 - `SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co`
-- Schema `awidat_social` + all 9 tables + `pg_cron`/`pg_net` are already applied.
-- RLS is enabled deny-all on every `awidat_social` table; the service-role
+- Schema `montage_social` + all 9 tables + `pg_cron`/`pg_net` are already applied.
+- RLS is enabled deny-all on every `montage_social` table; the service-role
   connection bypasses it (the server is the trusted authorization point).
 - `SUPABASE_JWT_SECRET`: Supabase → Settings → API → JWT Settings → JWT Secret
   (HS256). Enables Phase 7 per-user auth on `/social/*`; omit it to keep the
@@ -149,13 +149,13 @@ closest to your Supabase project region:
 
 ```bash
 fly deploy --config crates/social-server/fly.toml
-fly status --app awidat-social
+fly status --app montage-social
 ```
 
 Verify:
 ```bash
-curl https://awidat-social.fly.dev/health
-# Expected: {"status":"ok","service":"awidat-social-server"}
+curl https://montage-social.fly.dev/health
+# Expected: {"status":"ok","service":"montage-social-server"}
 ```
 
 ---
@@ -166,7 +166,7 @@ Run this in the Supabase SQL editor to prove `pg_net` can reach the service:
 
 ```sql
 SELECT net.http_post(
-    url     := 'https://awidat-social.fly.dev/internal/tick',
+    url     := 'https://montage-social.fly.dev/internal/tick',
     headers := jsonb_build_object(
                    'Content-Type',  'application/json',
                    'Authorization', 'Bearer <SERVICE_SHARED_SECRET>'
@@ -181,7 +181,7 @@ SELECT * FROM net._http_response ORDER BY created DESC LIMIT 5;
 
 Also check the service log:
 ```bash
-fly logs --app awidat-social
+fly logs --app montage-social
 # Expected line: "tick processed"
 ```
 
@@ -196,9 +196,9 @@ Confirm the scheduler jobs are registered:
 SELECT jobname, schedule, active
 FROM cron.job
 WHERE jobname IN (
-  'awidat-publish-tick',
-  'awidat-poll-processing',
-  'awidat-refresh-tokens'
+  'montage-publish-tick',
+  'montage-poll-processing',
+  'montage-refresh-tokens'
 )
 ORDER BY jobname;
 ```
@@ -277,12 +277,12 @@ Store the output as `SOCIAL_TOKEN_AEAD_KEY`.  Pick a short key ID, e.g. `"k1"`.
 ### 2. Set Phase 2 secrets
 
 ```bash
-fly secrets set --app awidat-social \
+fly secrets set --app montage-social \
   GOOGLE_CLIENT_ID="<client_id_from_google_console>" \
   GOOGLE_CLIENT_SECRET="<client_secret_from_google_console>" \
   SOCIAL_TOKEN_AEAD_KEY="<64_hex_chars_from_step_1>" \
   SOCIAL_TOKEN_KEY_ID="k1" \
-  OAUTH_REDIRECT_BASE="https://awidat-social.fly.dev"
+  OAUTH_REDIRECT_BASE="https://montage-social.fly.dev"
 ```
 
 `GOOGLE_CLIENT_SECRET` stays on the server.  The desktop app never sees it.
@@ -290,7 +290,7 @@ fly secrets set --app awidat-social \
 ### 3. Configure the Google Cloud OAuth consent screen
 
 1. Google Cloud Console → APIs & Services → Credentials → Create OAuth 2.0 Client ID.
-2. Authorized redirect URIs: `https://awidat-social.fly.dev/oauth/callback/youtube`
+2. Authorized redirect URIs: `https://montage-social.fly.dev/oauth/callback/youtube`
 3. Enable the YouTube Data API v3 in the project.
 4. In the OAuth consent screen, add the scopes:
    - `https://www.googleapis.com/auth/youtube.upload`

@@ -1,12 +1,12 @@
 //! Tauri commands for project-local generated media records.
 
-use awidat_core::generated_media::registry::{
+use montage_core::generated_media::registry::{
     GeneratedMediaRecord, Registry, validate_generated_output_path,
 };
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Generated-media record projected to the desktop media rail.
 #[derive(Debug, Clone, Serialize)]
@@ -46,7 +46,7 @@ pub struct GeneratedMediaEntry {
 /// List generated-media registry records for the active project.
 #[tauri::command]
 pub async fn list_generated_media(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<GeneratedMediaEntry>, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(root) => root,

@@ -1,11 +1,11 @@
 //! `podcast_cleanup_candidates` tool — aggregate existing cleanup evidence.
 //!
 //! This does not invent a new audio analyzer. It packages the evidence
-//! Awidat already has — dead air, filler words, and false starts —
+//! Montage already has — dead air, filler words, and false starts —
 //! into safe/review/risky candidate buckets for the podcast workflow.
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -247,7 +247,7 @@ audio-analysis indexer.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange, Timeline, Track, TrackChild, TrackKind,
     };
@@ -259,10 +259,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -297,7 +297,7 @@ mod tests {
         let hash = fnv1a32_hex(&raw);
         let stem = raw.file_stem().unwrap().to_string_lossy();
         let path = root
-            .join(".awidat")
+            .join(".montage")
             .join("silences")
             .join(format!("{stem}-{hash}.json"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -19,9 +19,9 @@
 
 use std::path::Path;
 
-use awidat_index::read_sidecar;
-use awidat_proto::index::AssetId;
-use awidat_proto::transitions::MotionAlignment;
+use montage_index::read_sidecar;
+use montage_proto::index::AssetId;
+use montage_proto::transitions::MotionAlignment;
 
 /// Visual signals at one side of a cut.
 #[derive(Debug, Clone, Default, PartialEq)]

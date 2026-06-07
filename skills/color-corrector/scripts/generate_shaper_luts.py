@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate `.csp` 1D shaper LUTs for the camera Log encodings the
-agent can name in `awidat.color_pipeline.shaper_lut`.
+agent can name in `montage.color_pipeline.shaper_lut`.
 
 Each shaper maps a Log-encoded source value (per channel, in
 `[0, 1]`) to a Rec.709 gamma-2.4 display-referred value. That's the
@@ -164,7 +164,7 @@ def render_csp_1d(title: str, log_to_linear: Callable[[float], float]) -> str:
         "1D",
         "",
         "BEGIN METADATA",
-        f"awidat_shaper {title}",
+        f"montage_shaper {title}",
         "END METADATA",
         "",
     ]

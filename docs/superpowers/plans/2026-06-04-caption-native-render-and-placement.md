@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make awidat render all captions through the libass/ASS subtitle engine (fixing the whole-cue render failure) and place captions clear of a busy bottom region / lower-third.
+**Goal:** Make montage render all captions through the libass/ASS subtitle engine (fixing the whole-cue render failure) and place captions clear of a busy bottom region / lower-third.
 
-**Architecture:** (1) `crates/render/src/ass.rs` — route every `role=caption` overlay to ASS regardless of word timings, emitting a whole-cue Dialogue when there are no word timings; add a `lower_third` margin profile. (2) `crates/core/src/awidat_mcp/tools/plan_captions.rs` — read the `composition` sidecar opportunistically and emit `safe_area="lower_third"` when the bottom region is busy, else `"standard"` (reusing the short-form composition parser). (3) Prove via awidat-native renders.
+**Architecture:** (1) `crates/render/src/ass.rs` — route every `role=caption` overlay to ASS regardless of word timings, emitting a whole-cue Dialogue when there are no word timings; add a `lower_third` margin profile. (2) `crates/core/src/montage_mcp/tools/plan_captions.rs` — read the `composition` sidecar opportunistically and emit `safe_area="lower_third"` when the bottom region is busy, else `"standard"` (reusing the short-form composition parser). (3) Prove via montage-native renders.
 
-**Tech Stack:** Rust (`awidat-render`, `awidat-core`), ffmpeg `subtitles=` (libass), serde_json. Specs: `docs/superpowers/specs/2026-06-04-caption-native-render-and-placement-design.md`.
+**Tech Stack:** Rust (`montage-render`, `montage-core`), ffmpeg `subtitles=` (libass), serde_json. Specs: `docs/superpowers/specs/2026-06-04-caption-native-render-and-placement-design.md`.
 
 **Conventions (per project + disk memory):**
 - Disk-scoped commands only: `CARGO_INCREMENTAL=0 cargo test -p <crate> <name>`. Never `--workspace` (vendored codex-* crates overflow disk).
 - Commit trailer: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
-- Render tests: `cargo test -p awidat-render <name>`. Core tests: `cargo test -p awidat-core <name>`.
+- Render tests: `cargo test -p montage-render <name>`. Core tests: `cargo test -p montage-core <name>`.
 
 ---
 
@@ -19,7 +19,7 @@
 
 - Modify: `crates/render/src/ass.rs` — `is_libass_eligible` (caption→ASS always), `build_dialogue_lines` (whole-cue branch), `CaptionLayoutProfile::for_title` (`lower_third` arm).
 - Modify: `crates/core/src/scene_aware_short_form.rs` — make `composition_zones` + `caption_placement_from_str` `pub(crate)` (reuse, no behavior change).
-- Modify: `crates/core/src/awidat_mcp/tools/plan_captions.rs` — composition-aware `safe_area`.
+- Modify: `crates/core/src/montage_mcp/tools/plan_captions.rs` — composition-aware `safe_area`.
 
 ---
 
@@ -77,7 +77,7 @@ fn whole_cue_caption_emits_one_dialogue_with_full_text() {
 
 - [ ] **Step 2: Run — verify FAIL**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render caption_without_word_timings_is_libass_eligible whole_cue_caption -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render caption_without_word_timings_is_libass_eligible whole_cue_caption -- --nocapture`
 Expected: FAIL — `is_libass_eligible` returns false for empty word_timings, and `build_dialogue_lines` returns no dialogue (0 lines).
 
 (If `cargo test` rejects two filters, run each separately: it accepts one substring filter.)
@@ -145,12 +145,12 @@ fn wrap_caption_text(escaped: &str, max_chars_per_line: usize) -> String {
 
 - [ ] **Step 5: Run — verify PASS**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render ass -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render ass -- --nocapture`
 Expected: PASS — the 2 new tests plus existing ass tests (word-timed karaoke path untouched).
 
 - [ ] **Step 6: Clippy + commit**
 
-Run: `CARGO_INCREMENTAL=0 cargo clippy -p awidat-render --all-targets -- -D warnings 2>&1 | tail -5` → clean.
+Run: `CARGO_INCREMENTAL=0 cargo clippy -p montage-render --all-targets -- -D warnings 2>&1 | tail -5` → clean.
 ```bash
 git add crates/render/src/ass.rs
 git commit -m "feat(render): render all captions via libass, including whole-cue (no word timings)
@@ -186,7 +186,7 @@ NOTE: `CaptionLayoutProfile` and `for_title` are `pub(crate)`/private; the test 
 
 - [ ] **Step 2: Run — verify FAIL**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render lower_third_safe_area -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render lower_third_safe_area -- --nocapture`
 Expected: FAIL — `"lower_third"` currently falls into the default arm (162), so `raised.margin_v_bottom == 162 != 300`.
 
 - [ ] **Step 3: Add the `lower_third` arm**
@@ -207,12 +207,12 @@ In `CaptionLayoutProfile::for_title`, add a match arm before the default `_`:
 
 - [ ] **Step 4: Run — verify PASS**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-render lower_third_safe_area -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-render lower_third_safe_area -- --nocapture`
 Expected: PASS.
 
 - [ ] **Step 5: Clippy + commit**
 
-Run: `CARGO_INCREMENTAL=0 cargo clippy -p awidat-render --all-targets -- -D warnings 2>&1 | tail -5` → clean.
+Run: `CARGO_INCREMENTAL=0 cargo clippy -p montage-render --all-targets -- -D warnings 2>&1 | tail -5` → clean.
 ```bash
 git add crates/render/src/ass.rs
 git commit -m "feat(render): add lower_third caption safe-area margin profile
@@ -236,9 +236,9 @@ In `crates/core/src/scene_aware_short_form.rs`:
 
 - [ ] **Step 2: Build + verify no behavior change**
 
-Run: `CARGO_INCREMENTAL=0 cargo build -p awidat-core`
+Run: `CARGO_INCREMENTAL=0 cargo build -p montage-core`
 Expected: compiles. Then:
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core scene_aware_short_form -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core scene_aware_short_form -- --nocapture`
 Expected: PASS unchanged.
 
 - [ ] **Step 3: Commit**
@@ -254,7 +254,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 4: Composition-aware placement in `plan_captions`
 
-**Files:** Modify `crates/core/src/awidat_mcp/tools/plan_captions.rs`
+**Files:** Modify `crates/core/src/montage_mcp/tools/plan_captions.rs`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -308,7 +308,7 @@ NOTE: confirm the composition fixture shape against `composition_zones` (`crates
 
 - [ ] **Step 2: Run — verify FAIL**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core busy_bottom_region_raises no_composition_defaults -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core busy_bottom_region_raises no_composition_defaults -- --nocapture`
 Expected: FAIL — `run` currently emits `safe_area = if ShortForm {"mobile"} else {"standard"}` and never reads composition, so the busy-bottom test sees `standard`, not `lower_third`.
 
 - [ ] **Step 3: Implement composition-aware safe_area**
@@ -356,14 +356,14 @@ NOTE: `composition_zones` returns `Vec<CaptionPlacement>` and `caption_placement
 
 - [ ] **Step 4: Run — verify PASS**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core plan_captions -- --nocapture`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core plan_captions -- --nocapture`
 Expected: PASS — both new tests plus the existing plan_captions tests (the existing long-form test has no composition sidecar → `standard`, still contains `*** Insert Caption`; verify it doesn't assert a conflicting safe_area — if it asserted `standard` implicitly it still holds).
 
 - [ ] **Step 5: Clippy + commit**
 
-Run: `CARGO_INCREMENTAL=0 cargo clippy -p awidat-core --all-targets -- -D warnings 2>&1 | tail -5` → clean.
+Run: `CARGO_INCREMENTAL=0 cargo clippy -p montage-core --all-targets -- -D warnings 2>&1 | tail -5` → clean.
 ```bash
-git add crates/core/src/awidat_mcp/tools/plan_captions.rs
+git add crates/core/src/montage_mcp/tools/plan_captions.rs
 git commit -m "feat(caption): plan_captions raises safe_area to lower_third on a busy bottom region
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -381,11 +381,11 @@ Run: `cargo fmt --all` then `cargo fmt --all -- --check` → no diff (warnings a
 
 - [ ] **Step 2: clippy (the two touched crates)**
 
-Run: `CARGO_INCREMENTAL=0 cargo clippy -p awidat-core -p awidat-render --all-targets -- -D warnings 2>&1 | tail -6` → clean.
+Run: `CARGO_INCREMENTAL=0 cargo clippy -p montage-core -p montage-render --all-targets -- -D warnings 2>&1 | tail -6` → clean.
 
 - [ ] **Step 3: tests (the two touched crates)**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core -p awidat-render 2>&1 | grep -E "test result:|FAILED" | tail` → all `ok`, 0 failed.
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core -p montage-render 2>&1 | grep -E "test result:|FAILED" | tail` → all `ok`, 0 failed.
 
 - [ ] **Step 4: commit any fmt fixups**
 
@@ -395,40 +395,40 @@ git add -A && git commit -m "chore(caption): fmt/clippy fixups for iteration 2" 
 
 ---
 
-## Task 6: Awidat-native proof renders (manual, user sign-off)
+## Task 6: Montage-native proof renders (manual, user sign-off)
 
 **Files:** none. Reuses the `capproof` project + transcript on `/Volumes/Explicit's Hard Drive/capproof` from iteration 1. No `ANTHROPIC_API_KEY` needed (CLI path).
 
 - [ ] **Step 1: Build the CLI**
 
-Run: `CARGO_INCREMENTAL=0 cargo build -p awidat-cli --bin awidat`. Confirm `target/debug/awidat` is fresh.
+Run: `CARGO_INCREMENTAL=0 cargo build -p montage-cli --bin montage`. Confirm `target/debug/montage` is fresh.
 
 - [ ] **Step 2: Index composition on the Episode slice**
 
 The placement detection needs the `composition` sidecar. Run:
-`./target/debug/awidat index "/Volumes/Explicit's Hard Drive/capproof" --indexer composition`
+`./target/debug/montage index "/Volumes/Explicit's Hard Drive/capproof" --indexer composition`
 (First run pre-warms the composition-mcp env; if it hits the 20s MCP init timeout like whisper did in iteration 1, pre-warm with `cd python && uv run --package composition-mcp python -c "pass"` then retry, OR run the composition indexer's transcription-equivalent directly — but composition has no model download, so a retry after env sync should succeed.) If composition indexing cannot be made to run, proceed with no composition sidecar — `plan_captions` will default to `standard`, and you can still validate the ASS render; note this in the report.
 
 - [ ] **Step 3: Produce the long-form caption EDL via the MCP tool**
 
-`plan_captions` is an MCP tool (no CLI subcommand). Invoke it via the in-process MCP server, or — simplest, matching iteration 1 — write a throwaway example that calls `awidat_core::awidat_mcp::tools::plan_captions::run(...)`, prints `edl_fragment` to stdout, run it, and **delete the example before finishing** (it must not be committed; it trips clippy as a quick script). Generate the EDL for `format=long_form mood=minimal_cinematic`, save to `/tmp/ep1_min_v2.edl`. Confirm it contains `+ safe_area: lower_third` (if composition ran and flagged bottom) or `standard`.
+`plan_captions` is an MCP tool (no CLI subcommand). Invoke it via the in-process MCP server, or — simplest, matching iteration 1 — write a throwaway example that calls `montage_core::montage_mcp::tools::plan_captions::run(...)`, prints `edl_fragment` to stdout, run it, and **delete the example before finishing** (it must not be committed; it trips clippy as a quick script). Generate the EDL for `format=long_form mood=minimal_cinematic`, save to `/tmp/ep1_min_v2.edl`. Confirm it contains `+ safe_area: lower_third` (if composition ran and flagged bottom) or `standard`.
 
-- [ ] **Step 4: Apply + render through awidat**
+- [ ] **Step 4: Apply + render through montage**
 
 ```
 cp "<proj>/project.otio.json" "<proj>/project.otio.json.bak"  # if not already clean
-./target/debug/awidat apply-edl "<proj>" /tmp/ep1_min_v2.edl
-./target/debug/awidat render "<proj>"
+./target/debug/montage apply-edl "<proj>" /tmp/ep1_min_v2.edl
+./target/debug/montage render "<proj>"
 ```
 Expected: render SUCCEEDS (captions now go through libass, not the broken drawtext chain). Output mp4 under `<proj>/renders/`. If render still errors, capture the ffmpeg stderr log and report — do not fall back to the libass-direct workaround silently.
 
 - [ ] **Step 5: Short6 short-form regression render**
 
-Create/import Short6 into a project (`awidat new short6proof --import "/Volumes/Explicit's Hard Drive/Short6_VCTake.mp4" --no-index --at ...`, then copy the real file into `raw/` per iteration 1's symlink caveat). Index `whisper` and `composition` (the short-form caption placement needs them). Run `plan_scene_aware_short_form` (via MCP/example) → apply its EDL → `awidat render`. Short-form captions are word-timed → libass karaoke. Confirm render succeeds.
+Create/import Short6 into a project (`montage new short6proof --import "/Volumes/Explicit's Hard Drive/Short6_VCTake.mp4" --no-index --at ...`, then copy the real file into `raw/` per iteration 1's symlink caveat). Index `whisper` and `composition` (the short-form caption placement needs them). Run `plan_scene_aware_short_form` (via MCP/example) → apply its EDL → `montage render`. Short-form captions are word-timed → libass karaoke. Confirm render succeeds.
 
 - [ ] **Step 6: Inspect + present**
 
-Extract representative frames (`ffmpeg -ss <t> -i <out> -frames:v 1 frame.png`) — especially a long cue (wrap) and a moment over the lower-third (placement). Present the user: the awidat-native Episode minimal render (captions raised clear of the banner) and the Short6 render, with frames. Summarize cue count, observed placement (raised vs standard), and whether composition detection fired.
+Extract representative frames (`ffmpeg -ss <t> -i <out> -frames:v 1 frame.png`) — especially a long cue (wrap) and a moment over the lower-third (placement). Present the user: the montage-native Episode minimal render (captions raised clear of the banner) and the Short6 render, with frames. Summarize cue count, observed placement (raised vs standard), and whether composition detection fired.
 
 - [ ] **Step 7: Capture the verdict**
 

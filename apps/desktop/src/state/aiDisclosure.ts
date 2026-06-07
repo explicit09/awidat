@@ -41,7 +41,7 @@ export function emptyAiDisclosure(): AiDisclosure {
 }
 
 /** localStorage key for the auto-disclose toggle. */
-const AUTO_DISCLOSE_KEY = "awidat.publishing.autoDiscloseAi.v1";
+const AUTO_DISCLOSE_KEY = "montage.publishing.autoDiscloseAi.v1";
 
 /** Read the persisted toggle. Default ON — see file header. */
 export function loadAutoDiscloseEnabled(): boolean {

@@ -1,9 +1,9 @@
 //! Version control wrapper around `vedit-core`.
 //!
 //! Phase A of the vedit integration (see VEDIT_INTEGRATION.md). The rest
-//! of awidat reaches version-control through this module — never
+//! of montage reaches version-control through this module — never
 //! through `vedit_core::*` directly. That isolation matters because
-//! vedit is under active development and we want the surface awidat
+//! vedit is under active development and we want the surface montage
 //! depends on to be stable, even if vedit's API churns underneath.
 //!
 //! ## Design rules baked in from day one
@@ -13,7 +13,7 @@
 //!
 //! 1. **Wrapper-only access.** No `pub use vedit_core::*`. We import
 //!    types into the wrapper namespace and expose what we need. The
-//!    rest of awidat sees `awidat_core::vc::Diff`, not
+//!    rest of montage sees `montage_core::vc::Diff`, not
 //!    `vedit_core::diff::Vec<Change>`.
 //!
 //! 2. **Phase-B commit message format from day one.** Even when the
@@ -34,7 +34,7 @@
 //! - [`Repo`] — opaque wrapper around `vedit_core::repo::Repo`.
 //! - [`open_or_init`] — idempotent constructor. Opens the existing
 //!   `.vedit/` if present, initializes a fresh repo otherwise.
-//! - [`commit`] — write a timeline + commit it with an awidat-shaped
+//! - [`commit`] — write a timeline + commit it with an montage-shaped
 //!   message. The agent reasoning string is mandatory; this is the
 //!   load-bearing audit trail.
 //! - [`diff_refs`] — structured diff between two refs (default
@@ -67,7 +67,7 @@ pub use animation_diff::AnimationChange;
 /// Re-exported here so callers don't have to reach into vedit-core for it.
 pub const DEFAULT_BRANCH: &str = "main";
 
-/// Branch name awidat stamps at session start so `diff_refs` defaults
+/// Branch name montage stamps at session start so `diff_refs` defaults
 /// work. The branch points at whatever HEAD was when the session
 /// opened; comparing `session-start..HEAD` shows the agent's session
 /// changes as one structured diff.
@@ -91,7 +91,7 @@ pub enum VcError {
 
 /// Convert any vedit-core error (which uses `anyhow::Error` upstream)
 /// into our wrapper error. Done as a free function rather than a
-/// `From` impl so awidat-core doesn't need to depend on `anyhow` —
+/// `From` impl so montage-core doesn't need to depend on `anyhow` —
 /// the wrapper's whole job is hiding vedit's choices, including its
 /// error library.
 fn vedit_err<E: std::fmt::Display>(e: E) -> VcError {
@@ -211,8 +211,8 @@ impl CommitAuthor {
         }
     }
 
-    /// Resolve a [`CommitAuthor`] from the runtime env (`AWIDAT_USER_NAME`
-    /// + `AWIDAT_USER_EMAIL`). Returns `None` when either is unset or
+    /// Resolve a [`CommitAuthor`] from the runtime env (`MONTAGE_USER_NAME`
+    /// + `MONTAGE_USER_EMAIL`). Returns `None` when either is unset or
     /// blank, so callers can explicitly fall back to the default-resolver
     /// chain by passing `None` into `*_as` entry points.
     ///
@@ -246,7 +246,7 @@ impl CommitAuthor {
     }
 }
 
-/// Commit the current `project.otio.json` with an awidat-shaped
+/// Commit the current `project.otio.json` with an montage-shaped
 /// message.
 ///
 /// Phase A: callers are tools (`vedit_commit`). Phase B: callers will
@@ -262,8 +262,8 @@ impl CommitAuthor {
 ///
 /// This shim preserves the pre-author-override signature for existing
 /// call sites. The author is resolved by [`resolve_commit_author`]
-/// (env vars `AWIDAT_USER_NAME` / `AWIDAT_USER_EMAIL`, falling back
-/// to the "awidat agent" default). To stamp an explicit identity,
+/// (env vars `MONTAGE_USER_NAME` / `MONTAGE_USER_EMAIL`, falling back
+/// to the "montage agent" default). To stamp an explicit identity,
 /// call [`commit_current_timeline_as`].
 pub fn commit_current_timeline(
     repo: &Repo,
@@ -315,7 +315,7 @@ pub struct CommitOutcome {
     pub message: String,
 }
 
-/// Command-history-style metadata embedded in Awidat-authored vedit commit messages.
+/// Command-history-style metadata embedded in Montage-authored vedit commit messages.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ActionMetadata {
     /// Source actor for the envelope when known.
@@ -378,7 +378,7 @@ fn format_commit_message_with_action_metadata(
 }
 
 /// Phase B auto-commit: snapshot the project after a successful
-/// apply_edl envelope, generating an awidat-shaped commit message
+/// apply_edl envelope, generating an montage-shaped commit message
 /// from the structured op descriptions + the agent's reasoning text.
 ///
 /// This is the entry point both write paths (agent-side and
@@ -512,10 +512,10 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// on purpose — when the agent is acting on the user's behalf and
 /// nobody has declared themselves, the commit is the agent's, not a
 /// fake personal stamp.
-fn default_awidat_author() -> Author {
+fn default_montage_author() -> Author {
     Author {
-        name: "awidat agent".to_string(),
-        email: "agent@awidat.local".to_string(),
+        name: "montage agent".to_string(),
+        email: "agent@montage.local".to_string(),
     }
 }
 
@@ -523,17 +523,17 @@ fn default_awidat_author() -> Author {
 /// attribution. Both must be set; a half-configured pair (just the
 /// name, or just the email) is treated as not configured so blame
 /// views never end up with a real name and a stale or guessed email.
-const ENV_USER_NAME: &str = "AWIDAT_USER_NAME";
-const ENV_USER_EMAIL: &str = "AWIDAT_USER_EMAIL";
+const ENV_USER_NAME: &str = "MONTAGE_USER_NAME";
+const ENV_USER_EMAIL: &str = "MONTAGE_USER_EMAIL";
 
 /// Resolve which `Author` to stamp on a commit, in priority order:
 ///
 /// 1. `author_override` — the call-site identity (multi-seat editing,
 ///    user-authored notes, anything that already knows the user).
-/// 2. `AWIDAT_USER_NAME` + `AWIDAT_USER_EMAIL` env vars — useful for
+/// 2. `MONTAGE_USER_NAME` + `MONTAGE_USER_EMAIL` env vars — useful for
 ///    CLI / TUI sessions where the user is identifiable from process
 ///    env (`git`-style configuration).
-/// 3. The "awidat agent" default — anonymous attribution, matches
+/// 3. The "montage agent" default — anonymous attribution, matches
 ///    pre-slice behavior for backward compat.
 ///
 /// Kept private so the priority chain stays a single decision point;
@@ -564,7 +564,7 @@ where
             };
         }
     }
-    default_awidat_author()
+    default_montage_author()
 }
 
 /// Diff between two refs. Default: `session-start..HEAD`. The agent
@@ -688,7 +688,7 @@ pub struct CommittedDiff {
     pub to_ref: String,
     /// Structured changes — see [`vedit_core::diff::Change`].
     pub changes: Vec<diff::Change>,
-    /// Awidat animation metadata changes omitted by vedit-core's structural model.
+    /// Montage animation metadata changes omitted by vedit-core's structural model.
     pub animation_changes: Vec<AnimationChange>,
 }
 
@@ -931,7 +931,7 @@ pub struct CommitDetails {
     pub timestamp: String,
     /// First line of the message.
     pub header: String,
-    /// Optional structured action metadata embedded by Awidat auto-commit.
+    /// Optional structured action metadata embedded by Montage auto-commit.
     pub action_metadata: Option<ActionMetadata>,
     /// Complete commit message.
     pub full_message: String,
@@ -1131,7 +1131,7 @@ pub fn merge_refs(
 
 /// Same as [`merge_refs`] but stamps an explicit identity on the merge
 /// commit. Passing `None` falls back to [`resolve_commit_author`]
-/// (env vars, then the "awidat agent" default).
+/// (env vars, then the "montage agent" default).
 pub fn merge_refs_as(
     repo: &Repo,
     source_ref: &str,
@@ -1514,7 +1514,7 @@ pub struct BlameEntry {
     pub timestamp: String,
     /// First line of the commit message.
     pub header: String,
-    /// Optional structured action metadata embedded by Awidat auto-commit.
+    /// Optional structured action metadata embedded by Montage auto-commit.
     pub action_metadata: Option<ActionMetadata>,
     /// Complete commit message.
     pub full_message: String,
@@ -1593,7 +1593,7 @@ pub struct LogEntry {
     pub timestamp: String,
     /// First line of the message — what the UI renders by default.
     pub header: String,
-    /// Optional structured action metadata embedded by Awidat auto-commit.
+    /// Optional structured action metadata embedded by Montage auto-commit.
     pub action_metadata: Option<ActionMetadata>,
     /// Full message body for "show this commit" deep dives.
     pub full_message: String,
@@ -1602,7 +1602,7 @@ pub struct LogEntry {
     /// Parent commit hashes (1 = normal, 0 = initial, 2+ = merge).
     pub parents: Vec<String>,
     /// Identity stamped on the commit. Backward-compat: pre-slice
-    /// commits read back as `awidat agent <agent@awidat.local>`.
+    /// commits read back as `montage agent <agent@montage.local>`.
     pub author: CommitAuthor,
 }
 
@@ -1666,7 +1666,7 @@ mod tests {
             "OTIO_SCHEMA": "Timeline.1",
             "name": "test",
             "metadata": {
-                "awidat": {
+                "montage": {
                     "version": "0.1",
                     "anchors": {
                         clip_name: {
@@ -1785,7 +1785,7 @@ mod tests {
             "OTIO_SCHEMA": "Timeline.1",
             "name": "test",
             "metadata": {
-                "awidat": {
+                "montage": {
                     "version": "0.1",
                     "parameter_animations": [{
                         "id": animation_id,
@@ -2509,7 +2509,7 @@ mod tests {
     }
 
     #[test]
-    fn awidat_metadata_survives_commit_round_trip() {
+    fn montage_metadata_survives_commit_round_trip() {
         // Sanity reprise of the standalone probe — make sure the
         // wrapper preserves the same fidelity as direct vedit-core
         // calls. If this ever fails, the wrapper introduced a
@@ -2524,9 +2524,9 @@ mod tests {
         // wrapper deliberately doesn't expose this — it's an internal
         // sanity check).
         let v = repo.inner.read_timeline(&out.timeline_hash).unwrap();
-        assert_eq!(v["metadata"]["awidat"]["version"].as_str(), Some("0.1"));
+        assert_eq!(v["metadata"]["montage"]["version"].as_str(), Some("0.1"));
         assert_eq!(
-            v["metadata"]["awidat"]["anchors"]["shot-a"]["transcript_snippet"].as_str(),
+            v["metadata"]["montage"]["anchors"]["shot-a"]["transcript_snippet"].as_str(),
             Some("hello world")
         );
     }
@@ -2570,21 +2570,21 @@ mod tests {
         // Both unset -> default.
         let none_env = |_: &str| None::<String>;
         let resolved = resolve_commit_author_with_env(None, none_env);
-        assert_eq!(resolved.name, "awidat agent");
-        assert_eq!(resolved.email, "agent@awidat.local");
+        assert_eq!(resolved.name, "montage agent");
+        assert_eq!(resolved.email, "agent@montage.local");
 
         // Only the name set -> still default; we refuse to invent an
         // email or pair a real name with a missing one.
         let half_env = env_from(&[(ENV_USER_NAME, "Bob")]);
         let resolved = resolve_commit_author_with_env(None, half_env);
-        assert_eq!(resolved.name, "awidat agent");
-        assert_eq!(resolved.email, "agent@awidat.local");
+        assert_eq!(resolved.name, "montage agent");
+        assert_eq!(resolved.email, "agent@montage.local");
 
         // Whitespace-only env values -> treat as unset.
         let ws_env = env_from(&[(ENV_USER_NAME, "   "), (ENV_USER_EMAIL, "  ")]);
         let resolved = resolve_commit_author_with_env(None, ws_env);
-        assert_eq!(resolved.name, "awidat agent");
-        assert_eq!(resolved.email, "agent@awidat.local");
+        assert_eq!(resolved.name, "montage agent");
+        assert_eq!(resolved.email, "agent@montage.local");
     }
 
     #[test]

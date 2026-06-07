@@ -6,7 +6,7 @@
 
 ## Problem
 
-The merged social-publishing stack (`awidat-social` crate + desktop UI) is an
+The merged social-publishing stack (`montage-social` crate + desktop UI) is an
 architecturally-complete but **mock harness**: connecting an account writes stub
 tokens, uploads go through `MockUploadAdapter`, and **nothing fires scheduled
 jobs at all** — there is no scheduler/worker anywhere in the tree. It cannot let
@@ -51,7 +51,7 @@ Other verified facts shaping the design:
 - **Platform:** server-side firing via **Supabase** (Postgres + `pg_cron` +
   Edge Function glue).
 - **Domain logic:** **Rust-as-a-service** — deploy the existing, tested
-  `awidat-social` crate as a small HTTP service the Supabase cron/functions
+  `montage-social` crate as a small HTTP service the Supabase cron/functions
   call. Reuse the verified job FSM and merged review-fix safety logic; do not
   reimplement it in TypeScript.
 - **First platform:** build **YouTube** end-to-end first (cleanest API, existing
@@ -74,7 +74,7 @@ Other verified facts shaping the design:
 │ • Poll job status          │ ◄────── │ Edge Function (thin HTTP/cron glue) │
 └────────────────────────────┘         │        │ calls                      │
                                         │        ▼                            │
-            client_secret + refresh ───┼─► awidat-social service (Rust)       │
+            client_secret + refresh ───┼─► montage-social service (Rust)       │
             tokens live ONLY here       │     job FSM + review-fix safety      │
                                         │     OAuth exchange/refresh           │
                                         │     YouTube/TikTok/IG adapters       │
@@ -93,7 +93,7 @@ Other verified facts shaping the design:
    desktop tokio loop.
 3. **`pg_cron` token-refresh sweep** — proactively refreshes tokens nearing
    expiry so a due post never finds a dead token.
-4. **`awidat-social` Rust service** — the existing crate deployed as a small
+4. **`montage-social` Rust service** — the existing crate deployed as a small
    HTTP service. Authoritative for the job lifecycle FSM and all merged safety
    logic (AI disclosure, account re-check, cancel-race, privacy, role gates).
    Cron worker + Edge Functions call it.
@@ -119,7 +119,7 @@ Other verified facts shaping the design:
 ### B) Schedule a post
 1. Desktop: approve campaign → upload rendered file to server storage → call
    "schedule job for `scheduled_for`."
-2. Server (`awidat-social`): validate target, run eligibility/role checks, write
+2. Server (`montage-social`): validate target, run eligibility/role checks, write
    `publish_job` (`status=scheduled`), return job id. Desktop shows "Scheduled."
 
 ### C) Fire the post (previously missing entirely)
@@ -166,7 +166,7 @@ audit clears. Public posting flips on per-platform as each audit passes.
 
 ## Testing strategy
 
-- **`awidat-social` Rust:** existing unit/e2e tests stay green (FSM unchanged,
+- **`montage-social` Rust:** existing unit/e2e tests stay green (FSM unchanged,
   only its callers move server-side).
 - **New server pieces** (OAuth exchange, real adapters, cron worker):
   integration tests against provider sandboxes + a local Postgres; explicit
@@ -179,7 +179,7 @@ audit clears. Public posting flips on per-platform as each audit passes.
 This is a multi-phase program; each phase is its own spec → plan → build cycle:
 
 1. **Supabase project + Postgres schema** for the publishing domain + the
-   `awidat-social` service deployment shape.
+   `montage-social` service deployment shape.
 2. **Server-side OAuth exchange + encrypted token storage** (YouTube first).
 3. **Real YouTube resumable-upload adapter**, wired server-side.
 4. **`pg_cron` scheduler + token-refresh sweep** firing jobs through the service.
@@ -192,7 +192,7 @@ This is a multi-phase program; each phase is its own spec → plan → build cyc
 - **Token encryption mechanism:** Supabase Vault / KMS envelope encryption vs.
   app-level libsodium/AES-GCM with a key from Supabase secrets. Decide in
   Phase 2.
-- **How `awidat-social` is invoked from Supabase:** HTTP service called by Edge
+- **How `montage-social` is invoked from Supabase:** HTTP service called by Edge
   Functions/`pg_cron` (`pg_net`), vs. a queue the service polls. Decide in
   Phase 1.
 - **Where the Rust service runs** (Fly.io / Railway / a container) and how it

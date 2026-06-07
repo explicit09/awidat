@@ -1,5 +1,5 @@
 /**
- * Awidat v2 App — composes the AppShell from src/shell with real wiring.
+ * Montage v2 App — composes the AppShell from src/shell with real wiring.
  *
  * The legacy 3-column layout has been retired (history: see git on
  * `ui-v2`). Side effects that the legacy App.tsx owned (Tauri channel
@@ -295,7 +295,7 @@ function App() {
   // Default-expanded: the saved layout in localStorage gives the
   // Inspector a real proportion (~21%) and the user expects that
   // width back on reload. Starting collapsed loaded a different
-  // layout variant (`awidat.shell.h.inspector-collapsed`) and gave
+  // layout variant (`montage.shell.h.inspector-collapsed`) and gave
   // the Inspector a 2% stub regardless of what was saved. The auto-
   // expand-on-proposal effect below still kicks in when a proposal
   // arrives, but boot doesn't force the collapse anymore.
@@ -433,7 +433,7 @@ function App() {
       const picked = await openDialog({
         directory: true,
         multiple: false,
-        title: "Open Awidat project",
+        title: "Open Montage project",
       });
       if (typeof picked !== "string") return;
       await invoke("set_project_root", { path: picked });
@@ -988,9 +988,9 @@ function App() {
   }, [demoMode, demoScreen.stage, setStage, stage]);
 
   useEffect(() => {
-    // Dev-only: when a stage is pinned via VITE_AWIDAT_STAGE (native
+    // Dev-only: when a stage is pinned via VITE_MONTAGE_STAGE (native
     // screenshot tours), don't auto-route the stage back to "edit".
-    if (import.meta.env?.VITE_AWIDAT_STAGE) return;
+    if (import.meta.env?.VITE_MONTAGE_STAGE) return;
     if (demoMode) {
       routedProjectRef.current = { project: null, mode: null };
       return;
@@ -1300,7 +1300,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode]);
 
-  // Episode metadata lives in OTIO metadata.awidat.episodes, not in
+  // Episode metadata lives in OTIO metadata.montage.episodes, not in
   // timelineSnapshot.cut_boundaries, so the cut-boundary-keyed effect
   // above misses changes from apply_episode_spans. The bridge already
   // emits timeline-changed after the mutating tool completes — re-pull
@@ -2388,7 +2388,7 @@ function App() {
             </label>
             {!current && (
               <p className="field-hint">
-                Create a project after entering the URL; Awidat will import it into the new project.
+                Create a project after entering the URL; Montage will import it into the new project.
               </p>
             )}
           </div>
@@ -2837,7 +2837,7 @@ function ProjectMediaPanel({
             draggable={item.assetId !== undefined}
             onDragStart={(event) => {
               if (!item.assetId) return;
-              event.dataTransfer.setData("application/x-awidat-media", item.assetId);
+              event.dataTransfer.setData("application/x-montage-media", item.assetId);
               event.dataTransfer.setData("text/plain", item.assetId);
               event.dataTransfer.effectAllowed = "copy";
             }}

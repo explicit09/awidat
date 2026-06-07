@@ -7,18 +7,18 @@
 //! URL pattern. We swap their file-read for ffmpeg single-frame
 //! extraction at time `t_s`.
 //!
-//! Cache layout: `<project>/.awidat/cache/frames/<asset-hash>/<t_ms>.<ext>`.
+//! Cache layout: `<project>/.montage/cache/frames/<asset-hash>/<t_ms>.<ext>`.
 //! Cache hits skip ffmpeg entirely.
 
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{StackChild, Timeline, TrackChild};
-use awidat_proto::project::files;
-use awidat_render::ffmpeg::{ImageFormat, extract_frame_complex, extract_frame_filtered};
-use awidat_render::{ClipGradePreview, build_clip_preview_filtergraph};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use montage_proto::otio::{StackChild, Timeline, TrackChild};
+use montage_proto::project::files;
+use montage_render::ffmpeg::{ImageFormat, extract_frame_complex, extract_frame_filtered};
+use montage_render::{ClipGradePreview, build_clip_preview_filtergraph};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -51,7 +51,7 @@ struct ViewFrameArgs {
     /// Optional clip name from the project's OTIO. When set, the
     /// frame is extracted through the same color filter chain the
     /// full timeline render would apply to that clip
-    /// (`awidat.color_correction` + LUT effects). Useful for graded
+    /// (`montage.color_correction` + LUT effects). Useful for graded
     /// before/after previews without running the full render.
     /// Multi-stage / partial-strength color pipelines fall back to
     /// a single-pass approximation and the response lists what was
@@ -104,7 +104,7 @@ impl ToolHandler for ViewFrameTool {
     }
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        // Writes a cached frame to disk under .awidat/cache/. Conceptually
+        // Writes a cached frame to disk under .montage/cache/. Conceptually
         // read-only against the project, but we touch disk; default-true
         // keeps it sequential with apply_edl.
         false
@@ -296,7 +296,7 @@ fn cache_path_for(
     grade_signature: &str,
 ) -> std::io::Result<PathBuf> {
     // Hash the asset *path* (cheap; doesn't read file). For invalidation
-    // on asset change, callers can prune .awidat/cache/frames/.
+    // on asset change, callers can prune .montage/cache/frames/.
     let mut h = Sha256::new();
     h.update(asset_path.to_string_lossy().as_bytes());
     let asset_hash = format!("{:x}", h.finalize());
@@ -320,7 +320,7 @@ fn cache_path_for(
         format!("g{}", hex.chars().take(12).collect::<String>())
     };
     Ok(project_root
-        .join(".awidat")
+        .join(".montage")
         .join("cache")
         .join("frames")
         .join(asset_dir)
@@ -372,7 +372,7 @@ as an inline image. Use this to *see* a moment — for example, to confirm \
 a cut lands on the right shot, or to read text on screen. \
 detail='preview' (default, ≤768px longest edge) keeps the image cheap; \
 detail='original' returns source resolution. format='png' (default) | \
-'jpeg'. Frames are cached under .awidat/cache/frames/ keyed by \
+'jpeg'. Frames are cached under .montage/cache/frames/ keyed by \
 (asset, time, format, dim).\
 ";
 
@@ -387,11 +387,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -479,7 +479,7 @@ mod tests {
         )
         .unwrap();
         let s = p.to_string_lossy();
-        assert!(s.contains("/.awidat/cache/frames/"));
+        assert!(s.contains("/.montage/cache/frames/"));
         assert!(s.ends_with("12345_d768_raw.png"));
     }
 

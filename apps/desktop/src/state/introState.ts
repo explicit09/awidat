@@ -24,13 +24,13 @@ import { create } from "zustand";
  *  an editorial instruction, not a user message. Keep this constant
  *  load-bearing: it is the contract between the dispatcher (appGlue),
  *  the chat renderer (ChatStream.tsx), and the turn grouping in App.tsx. */
-export const INTRO_PROMPT_PREFIX = "[awidat:intro]";
+export const INTRO_PROMPT_PREFIX = "[montage:intro]";
 
 /** Sentinel prefix the explicit "Prepare a starting cut" action carries
  *  (Wave 3 B4). Same filtering contract as the intro prefix — the
  *  message is an editorial instruction to the model, not a user
  *  question, so the chat transcript hides it. Keep this load-bearing. */
-export const PREPARE_PROMPT_PREFIX = "[awidat:prepare]";
+export const PREPARE_PROMPT_PREFIX = "[montage:prepare]";
 
 /** The body fired by the Brief surface's "Prepare a starting cut"
  *  button (B4). Asks the agent for an editorial first pass grounded in
@@ -49,15 +49,15 @@ See the Rationale contract in your skills catalog for the exact format.`;
 
 /** All sentinel prefixes that mean "this is editorial guidance, not a user message".
  *  Add new prefixes here and every renderer / turn-grouper picks them up. */
-export const AWIDAT_SENTINEL_PREFIXES: readonly string[] = [
+export const MONTAGE_SENTINEL_PREFIXES: readonly string[] = [
   INTRO_PROMPT_PREFIX,
   PREPARE_PROMPT_PREFIX,
 ];
 
-/** True if `text` carries any registered awidat sentinel. The canonical
+/** True if `text` carries any registered montage sentinel. The canonical
  *  cross-component "should this be hidden from transcript?" check. */
-export function isAwidatSentinel(text: string): boolean {
-  for (const prefix of AWIDAT_SENTINEL_PREFIXES) {
+export function isMontageSentinel(text: string): boolean {
+  for (const prefix of MONTAGE_SENTINEL_PREFIXES) {
     if (text.startsWith(prefix)) return true;
   }
   return false;
@@ -77,7 +77,7 @@ Do not call any tools. Do not propose any edits. Wait for the user to direct you
 When you do start proposing edits, include a one-sentence rationale per proposal
 — see the Rationale contract in your skills catalog for the format.`;
 
-export const STORAGE_KEY = "awidat:intro:introduced";
+export const STORAGE_KEY = "montage:intro:introduced";
 
 /** True if the message text is a synthetic intro turn. */
 export function isIntroSyntheticInput(text: string): boolean {

@@ -74,7 +74,7 @@ impl ToolHandler for LoadSkillTool {
             available.sort();
             let suggestions = if available.is_empty() {
                 "no skills are installed; drop a skill folder under \
-                 ~/.config/awidat/skills/<name>/SKILL.md or check the \
+                 ~/.config/montage/skills/<name>/SKILL.md or check the \
                  bundled skills location"
                     .to_string()
             } else {
@@ -147,10 +147,10 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

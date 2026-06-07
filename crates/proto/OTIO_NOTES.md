@@ -6,8 +6,8 @@ them later as `serde_json::Value` blobs would calcify into a wrong shape.
 
 ## What we model
 
-The Awidat project format is **OpenTimelineIO 1.x JSON, plus a single
-namespaced metadata key `awidat`**. The Rust types in
+The Montage project format is **OpenTimelineIO 1.x JSON, plus a single
+namespaced metadata key `montage`**. The Rust types in
 [`src/otio/`](src/otio/) are a typed subset of OTIO 1.x.
 
 | OTIO type | Rust type | Why we model it |
@@ -49,10 +49,10 @@ Every OTIO node carries an `OTIO_SCHEMA: "Name.Major"` discriminator.
 2. **Known name + unknown major** → forward-compat. We rewrite the schema
    string to our supported major, deserialize as that variant, and surface
    a [`SchemaWarning`](src/otio/schema.rs). Example: `"Clip.2"` is read
-   *as if* it were `"Clip.1"` and a warning is recorded. The `awidat
+   *as if* it were `"Clip.1"` and a warning is recorded. The `montage
    validate` CLI prints the warnings in a `Schema warnings:` section.
 
-   Rationale: hand-edited files coming from a future Awidat version, or
+   Rationale: hand-edited files coming from a future Montage version, or
    from a third-party OTIO adapter that uses a slightly newer revision,
    should not bounce. They should load with a warning the user can act on.
 
@@ -84,9 +84,9 @@ from_value` runs the typed deserialize; by that point every
 This is what lets the typed deserialize stay pure (no custom serde trait
 impls per type for forward-compat).
 
-## The `awidat` metadata namespace
+## The `montage` metadata namespace
 
-The only schema *extension* we make to OTIO is the `metadata.awidat`
+The only schema *extension* we make to OTIO is the `metadata.montage`
 block. We model it strongly (NOT `serde_json::Value`)
 so unknown fields surface as parse errors against our own schema.
 
@@ -94,9 +94,9 @@ Three locations:
 
 | Location | Type | Purpose |
 | --- | --- | --- |
-| `Timeline.metadata.awidat` | [`AwidatTimelineMetadata`](src/awidat_meta.rs) | Project-wide: source assets, anchor table, edit-plan reference. |
-| `Clip.metadata.awidat` | [`AwidatClipMetadata`](src/awidat_meta.rs) | Per-clip: agent's reasoning, edit-plan back-reference, optional inline anchor. |
-| `Marker.metadata.awidat` | [`AwidatMarkerMetadata`](src/awidat_meta.rs) | Per-marker: category (e.g. `"laugh"`, `"key-quote"`), free note. |
+| `Timeline.metadata.montage` | [`MontageTimelineMetadata`](src/montage_meta.rs) | Project-wide: source assets, anchor table, edit-plan reference. |
+| `Clip.metadata.montage` | [`MontageClipMetadata`](src/montage_meta.rs) | Per-clip: agent's reasoning, edit-plan back-reference, optional inline anchor. |
+| `Marker.metadata.montage` | [`MontageMarkerMetadata`](src/montage_meta.rs) | Per-marker: category (e.g. `"laugh"`, `"key-quote"`), free note. |
 
 Other metadata namespaces (other tools writing under `metadata.<name>`)
 are preserved verbatim via a `flatten`-ed `HashMap<String,
@@ -196,7 +196,7 @@ Move the row from "What we deliberately skip" to "What we model".
 - The schema-versioning rules.
 - Any existing type's `OTIO_SCHEMA` discriminator.
 - The forward-compat warning machinery.
-- The `awidat` metadata namespace.
+- The `montage` metadata namespace.
 
 The new type is purely additive. Files written by Week 4 still round-trip
 clean; files written by Week 5 with a `LinearTimeWarp` effect are
@@ -206,7 +206,7 @@ correct behavior for a new schema name.
 ## See also
 
 - [`src/otio/`](src/otio/) — Rust source for the typed model.
-- [`src/awidat_meta.rs`](src/awidat_meta.rs) — `metadata.awidat` types.
+- [`src/montage_meta.rs`](src/montage_meta.rs) — `metadata.montage` types.
 - [`INDEX_SCHEMA.md`](INDEX_SCHEMA.md) — sister doc for the index sidecar
   contract.
 

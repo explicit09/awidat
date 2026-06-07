@@ -11,7 +11,12 @@
 //! like the internal routes.
 
 use crate::{SharedState, bearer_auth, now_secs, parse_provider, provider_client_id, redirect_uri};
-use awidat_social::{
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+};
+use montage_social::{
     api::{
         AccountSummary, ApiActor, ApiOwner, BindTargetRequest, OAuthStartRequest,
         OAuthStartResponse, PublishJobResponse, RescheduleJobRequest, ScheduleTargetRequest,
@@ -23,11 +28,6 @@ use awidat_social::{
     oauth_url::OAuthProviderConfig,
     pg_store::PgSocialStore,
     store::SocialStore,
-};
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -108,7 +108,7 @@ fn desktop_token_ok(configured: &str, headers: &HeaderMap) -> bool {
 fn map_api_error(e: SocialApiError) -> HttpError {
     let status = match &e {
         SocialApiError::Unauthorized => StatusCode::FORBIDDEN,
-        SocialApiError::Store(awidat_social::store::SocialStoreError::NotFound) => {
+        SocialApiError::Store(montage_social::store::SocialStoreError::NotFound) => {
             StatusCode::NOT_FOUND
         }
         SocialApiError::Account(_)
@@ -254,7 +254,7 @@ pub(crate) async fn bind_target_handler(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(req): Json<BindTargetRequest>,
-) -> HttpResult<awidat_social::model::CampaignVariantTarget> {
+) -> HttpResult<montage_social::model::CampaignVariantTarget> {
     let (actor, _owner) = desktop_auth(&state, &headers)?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
@@ -273,7 +273,7 @@ pub(crate) async fn update_target_handler(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(req): Json<UpdateTargetRequest>,
-) -> HttpResult<awidat_social::model::CampaignVariantTarget> {
+) -> HttpResult<montage_social::model::CampaignVariantTarget> {
     let (actor, _owner) = desktop_auth(&state, &headers)?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
@@ -609,8 +609,8 @@ pub(crate) async fn upload_complete_handler(
 /// The provider registry used by validate/schedule. A fresh default registry is
 /// cheap and stateless; building it per request avoids threading the shared one
 /// into every blocking closure.
-fn state_registry() -> awidat_social::provider::ProviderRegistry {
-    awidat_social::provider::ProviderRegistry::default_multi_platform()
+fn state_registry() -> montage_social::provider::ProviderRegistry {
+    montage_social::provider::ProviderRegistry::default_multi_platform()
 }
 
 /// 32 bytes (256 bits) of CSPRNG entropy, hex-encoded. Used for the OAuth CSRF
@@ -647,7 +647,7 @@ fn artifact_storage_ref(bucket: &str, job_id: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use awidat_social::store::SocialStoreError;
+    use montage_social::store::SocialStoreError;
 
     fn headers_with_auth(value: &str) -> HeaderMap {
         let mut h = HeaderMap::new();

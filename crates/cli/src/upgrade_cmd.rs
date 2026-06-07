@@ -1,4 +1,4 @@
-//! `awidat upgrade` placeholder.
+//! `montage upgrade` placeholder.
 
 use anyhow::{Result, bail};
 

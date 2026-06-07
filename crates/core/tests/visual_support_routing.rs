@@ -1,6 +1,6 @@
 //! Visual-support routing policy tests.
 
-use awidat_core::tools::plan_visual_support::{
+use montage_core::tools::plan_visual_support::{
     VisualSupportIntent, VisualSupportLane, VisualSupportNeedKind, route_visual_support_request,
 };
 

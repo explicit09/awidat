@@ -1,6 +1,6 @@
 // WelcomeCard — one-screen first-launch welcome (Wave 3 W1).
 //
-// Awidat is structurally unusual: a local-first AI editorial NLE where
+// Montage is structurally unusual: a local-first AI editorial NLE where
 // the agent has READ your media and AGENTS.md, proposes editorial
 // work, and the human reviews/accepts/rejects. New users don't have a
 // mental model for this. The welcome explains the three core ideas in
@@ -12,7 +12,7 @@
 
 import { BookOpen, Sparkles, GitBranch } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
-import mark from "../brand/awidat-mark.svg";
+import mark from "../brand/montage-mark.svg";
 import { useWelcome } from "../state/welcome";
 import { Button, Inline, Stack } from "../ui";
 
@@ -20,7 +20,7 @@ const CORE_IDEAS: ReadonlyArray<{ icon: ReactNode; title: string; body: string }
   {
     icon: <BookOpen size={16} />,
     title: "An agent reads your media.",
-    body: "Drop a file, and Awidat indexes it — transcript, scenes, speakers, silences. Your editorial brief lives in AGENTS.md.",
+    body: "Drop a file, and Montage indexes it — transcript, scenes, speakers, silences. Your editorial brief lives in AGENTS.md.",
   },
   {
     icon: <Sparkles size={16} />,
@@ -71,12 +71,12 @@ export function WelcomeCard() {
         }}
         role="dialog"
         aria-modal="true"
-        aria-label="Welcome to Awidat"
+        aria-label="Welcome to Montage"
       >
         <header className="modal-header">
           <Inline gap="2" align="center">
             <img src={mark} alt="" width={20} height={20} />
-            <h2>Welcome to Awidat</h2>
+            <h2>Welcome to Montage</h2>
           </Inline>
           <button type="button" className="modal-close" onClick={dismiss} aria-label="Dismiss welcome">
             ×

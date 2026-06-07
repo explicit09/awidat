@@ -27,5 +27,5 @@ but the visible proof does not actually show one.
 ## Verification
 
 - `cargo fmt --all -- --check`
-- `CARGO_INCREMENTAL=0 cargo test -p awidat-cli --test transition_render_proof`
+- `CARGO_INCREMENTAL=0 cargo test -p montage-cli --test transition_render_proof`
 - Existing transition planner tests remain in scope after implementation.

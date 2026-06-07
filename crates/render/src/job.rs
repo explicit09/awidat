@@ -9,7 +9,7 @@
 //!   cadence, child kill on cancellation.
 //!
 //! What lives here: the spawn-and-track machinery + status struct. The
-//! `start_render` / `poll_render` MCP tool handlers live in `awidat-core`
+//! `start_render` / `poll_render` MCP tool handlers live in `montage-core`
 //! and consume this crate's surface. Frame-strip extraction reuses
 //! [`crate::ffmpeg::extract_frame`].
 
@@ -172,7 +172,7 @@ pub struct RenderJobSpec {
 /// User-facing managed render request for two-pass master loudnorm.
 #[derive(Debug, Clone)]
 pub struct MasterLoudnormManagedRenderSpec {
-    /// Awidat project root.
+    /// Montage project root.
     pub project_root: PathBuf,
     /// Final encoded output path.
     pub output_path: PathBuf,
@@ -343,7 +343,7 @@ impl JobManager {
             speed: None,
             eta_s: None,
             log_excerpt: "queued two-pass master loudnorm render".into(),
-            command_argv: vec!["awidat-master-loudnorm".into()],
+            command_argv: vec!["montage-master-loudnorm".into()],
             metadata: request.manifest.metadata.clone(),
             output_path: request.output_path.clone(),
             started_at,
@@ -418,7 +418,7 @@ impl Default for JobManager {
 }
 
 fn configured_max_running_jobs() -> usize {
-    std::env::var("AWIDAT_MAX_RENDER_JOBS")
+    std::env::var("MONTAGE_MAX_RENDER_JOBS")
         .ok()
         .and_then(|raw| raw.parse::<usize>().ok())
         .unwrap_or(DEFAULT_MAX_RUNNING_JOBS)
@@ -496,7 +496,7 @@ async fn run_job(
                     }
                     Ok(None) => break,
                     Err(e) => {
-                        log_buf.push(&format!("\n[awidat-render: stderr read error: {e}]\n"));
+                        log_buf.push(&format!("\n[montage-render: stderr read error: {e}]\n"));
                         break;
                     }
                 }
@@ -505,7 +505,7 @@ async fn run_job(
                 let _ = child.kill().await;
                 let _ = drain_remaining(&mut reader, &mut log_buf, Duration::from_secs(2)).await;
                 log_buf.push(&format!(
-                    "\n[awidat-render: timed out after {DEFAULT_JOB_TIMEOUT:?}]\n"
+                    "\n[montage-render: timed out after {DEFAULT_JOB_TIMEOUT:?}]\n"
                 ));
                 tx.send_modify(|s| {
                     s.state = JobState::Failed;
@@ -520,7 +520,7 @@ async fn run_job(
     let exit = match timeout(Duration::from_secs(5), child.wait()).await {
         Ok(Ok(status)) => status,
         Ok(Err(e)) => {
-            log_buf.push(&format!("\n[awidat-render: wait error: {e}]\n"));
+            log_buf.push(&format!("\n[montage-render: wait error: {e}]\n"));
             tx.send_modify(|s| {
                 s.state = JobState::Failed;
                 s.log_excerpt = log_buf.snapshot();
@@ -546,7 +546,7 @@ async fn run_job(
         manifest_path.as_ref().and_then(|path| {
             crate::finalize_render_manifest_file(path)
                 .err()
-                .map(|error| format!("\n[awidat-render: manifest finalize failed: {error}]\n"))
+                .map(|error| format!("\n[montage-render: manifest finalize failed: {error}]\n"))
         })
     } else {
         None
@@ -643,7 +643,7 @@ async fn run_master_loudnorm_job(
     manifest.manifest_id =
         crate::RenderExecutionManifest::planned(crate::RenderExecutionManifestInput {
             created_at: manifest.created_at.clone(),
-            awidat_version: manifest.awidat_version.clone(),
+            montage_version: manifest.montage_version.clone(),
             project_root: manifest.project_root.clone(),
             project_hash: manifest.project_hash.clone(),
             timeline_hash: manifest.timeline_hash.clone(),
@@ -933,7 +933,7 @@ mod tests {
         let manifest =
             crate::RenderExecutionManifest::planned(crate::RenderExecutionManifestInput {
                 created_at: "2026-05-22T10:00:00Z".into(),
-                awidat_version: "test".into(),
+                montage_version: "test".into(),
                 project_root: dir.path().to_string_lossy().into_owned(),
                 project_hash: None,
                 timeline_hash: None,

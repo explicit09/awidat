@@ -1,4 +1,4 @@
-//! Awidat MCP client.
+//! Montage MCP client.
 //!
 //! Thin wrapper over [`rmcp`] (the official Rust MCP SDK) that exposes the
 //! small surface our agent and CLI need: launch, initialize, list_tools,

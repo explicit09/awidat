@@ -2,7 +2,7 @@
 
 /**
  * Styling fields for a title overlay, lifted off the
- * `awidat.title` Effect's metadata. Mirror of the EDL grammar
+ * `montage.title` Effect's metadata. Mirror of the EDL grammar
  * values — strings rather than enums on the wire so the frontend
  * can pass them straight back through `*** Set Title` without
  * having to know the typed enum names.

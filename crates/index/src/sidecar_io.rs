@@ -9,8 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::index::AssetId;
-use awidat_proto::project::files;
+use montage_proto::index::AssetId;
+use montage_proto::project::files;
 
 /// Errors from sidecar lookup. Tool callers map these into
 /// `RespondToModel` strings; the per-variant Display strings are written
@@ -25,7 +25,7 @@ pub enum SidecarError {
         asset: String,
     },
     /// Sidecar file doesn't exist on disk yet.
-    #[error("no sidecar at {path}; run `awidat index --indexer {indexer}` first")]
+    #[error("no sidecar at {path}; run `montage index --indexer {indexer}` first")]
     NotFound {
         /// Indexer name we looked up.
         indexer: String,
@@ -87,7 +87,7 @@ pub fn read_sidecar(
 /// scan one indexer's whole output.
 ///
 /// Skips malformed sidecars silently (logged via `tracing`); they're
-/// surfaced separately by `awidat validate`.
+/// surfaced separately by `montage validate`.
 pub fn walk_indexer(
     project_root: &Path,
     indexer: &str,

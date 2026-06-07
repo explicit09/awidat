@@ -11,7 +11,7 @@ Required evidence:
 - Metadata validation: post text, no ignored privacy/description/tag fields, media upload capability, and schedule validation output.
 - Metadata edit: proof that a saved metadata change revalidates the bound target through `social_update_target` before firing.
 - Private or sandbox publish: test-account upload job id and provider response with non-public blast-radius controls.
-- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Awidat was closed.
+- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Montage was closed.
 - Status polling: `social_publish_job` history through terminal state.
 - Provider URL: final Twitter/X provider URL.
 - Audit history: account/job audit events.

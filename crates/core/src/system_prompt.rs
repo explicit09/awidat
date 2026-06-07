@@ -3,7 +3,7 @@
 //! The agent's system prompt is no longer a single static const —
 //! it composes from:
 //!
-//!   - **Base prompt**: every awidat session shares this. Discovery
+//!   - **Base prompt**: every montage session shares this. Discovery
 //!     rules, tool overview, time semantics. Stable across formats.
 //!
 //!   - **Per-format addendum**: podcast / shorts / tutorial each get
@@ -29,7 +29,7 @@
 use std::path::Path;
 
 /// Project type, mirroring the protocol's variants but kept here in
-/// core so this crate doesn't depend on `awidat-desktop-protocol`.
+/// core so this crate doesn't depend on `montage-desktop-protocol`.
 /// The CLI / desktop translate at the boundary.
 #[derive(Debug, Clone)]
 pub enum ProjectFormat {
@@ -84,7 +84,7 @@ pub fn assemble_system_prompt(
     out
 }
 
-/// Convenience: load `<project>/.awidat/permission_mode` and the
+/// Convenience: load `<project>/.montage/permission_mode` and the
 /// project's OTIO metadata, build the prompt. Returns the base
 /// prompt with neutral defaults when reads fail — never panics.
 pub fn assemble_for_project(project_root: &Path) -> String {
@@ -94,7 +94,7 @@ pub fn assemble_for_project(project_root: &Path) -> String {
 }
 
 /// Read the project type from
-/// `<project>/project.otio.json`'s `metadata.awidat.awidat_project_type`
+/// `<project>/project.otio.json`'s `metadata.montage.montage_project_type`
 /// slot (set by `init_project` in 1.3). Falls back to
 /// `Other { description: "" }` on any read / parse failure.
 fn read_project_format(project_root: &Path) -> ProjectFormat {
@@ -115,7 +115,7 @@ fn read_project_format(project_root: &Path) -> ProjectFormat {
             };
         }
     };
-    let raw = match value.pointer("/metadata/awidat/awidat_project_type") {
+    let raw = match value.pointer("/metadata/montage/montage_project_type") {
         Some(v) => v,
         None => {
             return ProjectFormat::Other {
@@ -140,12 +140,12 @@ fn read_project_format(project_root: &Path) -> ProjectFormat {
     }
 }
 
-/// Read `<project>/.awidat/permission_mode`. Falls back to Manual
+/// Read `<project>/.montage/permission_mode`. Falls back to Manual
 /// on any failure — same fallback as the desktop's
 /// `commands::permission::read_mode`. Duplicated here so core
 /// doesn't depend on the desktop crate.
 fn read_permission_mode(project_root: &Path) -> PromptPermissionMode {
-    let path = project_root.join(".awidat").join("permission_mode");
+    let path = project_root.join(".montage").join("permission_mode");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(_) => return PromptPermissionMode::Manual,
@@ -209,7 +209,7 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
 /// hand-rolled `SYSTEM_PROMPT` constants in `apps/desktop/.../session.rs`
 /// and the CLI tui/chat commands — same content, deduplicated here.
 const BASE_PROMPT: &str = "\
-You are awidat, a desktop agent for editing long-form spoken video. \
+You are montage, a desktop agent for editing long-form spoken video. \
 You operate inside a GUI: the user sees the chat, the timeline, and \
 the video preview live. Be concise. Commit edits via apply_edl \
 directly when you're confident.\
@@ -280,7 +280,7 @@ direction when the boundary's motion is aligned. It is still read-only; \
 apply only through `apply_edl` after review.\
 \n- plan_reframe(clip_id, aspect_ratio, subject_center): when making vertical \
 or social output from wide footage, call this after visual evidence identifies \
-the subject position. It returns a static `awidat.reframe` Set Effect EDL \
+the subject position. It returns a static `montage.reframe` Set Effect EDL \
 fragment; apply only through `apply_edl`, then render/review because reframing \
 is visually sensitive.\
 \n- Transition primitive parameters accept either a scalar or a \
@@ -378,7 +378,7 @@ operation that needs them. Imports auto-chain through indexing in \
 the GUI's import flow, so this is the rare-case tool — don't \
 proactively re-index already-indexed projects.\
 \n\n**Edit graph is source of truth.** The agent must understand and \
-mutate the OTIO timeline graph, not treat awidat as a chat wrapper \
+mutate the OTIO timeline graph, not treat montage as a chat wrapper \
 around FFmpeg. Use scripts, indexers, and shell commands for analysis \
 or verification only. Do not use bash/FFmpeg to cut, concatenate, \
 caption, overlay, or produce the final edited artifact. Express \
@@ -714,9 +714,9 @@ mod tests {
         let otio = serde_json::json!({
             "OTIO_SCHEMA": "Timeline.1",
             "metadata": {
-                "awidat": {
+                "montage": {
                     "version": "0.1",
-                    "awidat_project_type": { "kind": "podcast" }
+                    "montage_project_type": { "kind": "podcast" }
                 }
             }
         });
@@ -726,8 +726,8 @@ mod tests {
         )
         .unwrap();
         // Write permission_mode.
-        std::fs::create_dir_all(dir.path().join(".awidat")).unwrap();
-        std::fs::write(dir.path().join(".awidat/permission_mode"), b"copilot").unwrap();
+        std::fs::create_dir_all(dir.path().join(".montage")).unwrap();
+        std::fs::write(dir.path().join(".montage/permission_mode"), b"copilot").unwrap();
 
         let prompt = assemble_for_project(dir.path());
         assert!(prompt.contains("long-form podcast cleanup"));

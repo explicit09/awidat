@@ -1,23 +1,23 @@
 //! OpenAI auth-mode commands: report status, sign in with ChatGPT, set an API
 //! key, sign out.
 //!
-//! These are thin wrappers over [`awidat_auth`], which drives codex's own
-//! `login` crate in-process. All correctness lives in `awidat-auth` (and its
+//! These are thin wrappers over [`montage_auth`], which drives codex's own
+//! `login` crate in-process. All correctness lives in `montage-auth` (and its
 //! unit tests); this layer only resolves the environment, maps errors to the
 //! string form the frontend expects, and bridges the async ChatGPT flow to a
 //! Tauri event.
 //!
 //! This auth (who powers the agent) is deliberately separate from the
-//! publishing OAuth in [`crate::publishing`] (awidat acting on a user's behalf
+//! publishing OAuth in [`crate::publishing`] (montage acting on a user's behalf
 //! toward YouTube/TikTok/IG). They share no token store.
 
 use std::sync::atomic::Ordering;
 
-use awidat_auth::{AuthEnv, AuthModeKind, AuthStatus};
+use montage_auth::{AuthEnv, AuthModeKind, AuthStatus};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Event emitted when stored credentials change out-of-band (i.e. a ChatGPT
 /// login completed in the background). The frontend re-fetches `auth_status`.
@@ -82,33 +82,35 @@ pub struct BeginChatgptDto {
 #[tauri::command]
 pub async fn auth_status() -> Result<AuthStatusDto, String> {
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
-    Ok(awidat_auth::status(&env).into())
+    Ok(montage_auth::status(&env).into())
 }
 
 /// Validate and store an API key as the active credential, then return the new
 /// status.
 #[tauri::command]
 pub async fn auth_set_api_key(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     key: String,
 ) -> Result<AuthStatusDto, String> {
     // Shut down any pending ChatGPT login first so its browser callback can't
     // land after this and overwrite the API key the user just chose.
     cancel_pending_oauth(&state).await;
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
-    awidat_auth::set_api_key(&env, &key).map_err(|e| e.to_string())?;
+    montage_auth::set_api_key(&env, &key).map_err(|e| e.to_string())?;
     refresh_agent_auth(&state).await;
-    Ok(awidat_auth::status(&env).into())
+    Ok(montage_auth::status(&env).into())
 }
 
 /// Clear stored credentials, then return the new status.
 #[tauri::command]
-pub async fn auth_logout(state: State<'_, AwidatState>) -> Result<AuthStatusDto, String> {
+pub async fn auth_logout(state: State<'_, MontageState>) -> Result<AuthStatusDto, String> {
     cancel_pending_oauth(&state).await;
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
-    awidat_auth::logout(&env).await.map_err(|e| e.to_string())?;
+    montage_auth::logout(&env)
+        .await
+        .map_err(|e| e.to_string())?;
     refresh_agent_auth(&state).await;
-    Ok(awidat_auth::status(&env).into())
+    Ok(montage_auth::status(&env).into())
 }
 
 /// Cancel any in-flight ChatGPT OAuth login and *wait for its task to finish*
@@ -118,7 +120,7 @@ pub async fn auth_logout(state: State<'_, AwidatState>) -> Result<AuthStatusDto,
 /// task guarantees codex has finished (or abandoned) persisting `auth.json`, so
 /// the caller's subsequent write is the last one — closing the race where a
 /// completing browser callback overwrites a just-chosen API key.
-async fn cancel_pending_oauth(state: &State<'_, AwidatState>) {
+async fn cancel_pending_oauth(state: &State<'_, MontageState>) {
     state.current_oauth_id.store(0, Ordering::SeqCst);
     let pending = state.pending_oauth.lock().await.take();
     if let Some((cancel, task)) = pending {
@@ -134,7 +136,7 @@ async fn cancel_pending_oauth(state: &State<'_, AwidatState>) {
 /// the live session instead — `start_turn` lazily relaunches it, picking up the
 /// new `auth.json`. If a turn is in flight we can't tear down mid-event, so we
 /// set `auth_dirty`; `start_turn` honors it and rebuilds on the next turn.
-async fn refresh_agent_auth(state: &State<'_, AwidatState>) {
+async fn refresh_agent_auth(state: &State<'_, MontageState>) {
     if state.turn.lock().await.is_some() {
         state.auth_dirty.store(true, Ordering::SeqCst);
         tracing::info!(
@@ -152,10 +154,10 @@ async fn refresh_agent_auth(state: &State<'_, AwidatState>) {
 #[tauri::command]
 pub async fn auth_begin_chatgpt(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<BeginChatgptDto, String> {
     let env = AuthEnv::resolve().map_err(|e| e.to_string())?;
-    let handle = awidat_auth::begin_chatgpt_login(&env).map_err(|e| e.to_string())?;
+    let handle = montage_auth::begin_chatgpt_login(&env).map_err(|e| e.to_string())?;
     let dto = BeginChatgptDto {
         auth_url: handle.auth_url.clone(),
         port: handle.port,
@@ -173,7 +175,7 @@ pub async fn auth_begin_chatgpt(
     let app_for_task = app.clone();
     let task = tauri::async_runtime::spawn(async move {
         let result = handle.wait().await;
-        let state = app_for_task.state::<AwidatState>();
+        let state = app_for_task.state::<MontageState>();
 
         // Only act if we're still the current login: a later set-API-key / logout
         // / second sign-in bumps `current_oauth_id`, and we must not then tear the

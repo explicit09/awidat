@@ -1,6 +1,6 @@
-//! Semantic effect registry for Awidat graph-native OTIO effects.
+//! Semantic effect registry for Montage graph-native OTIO effects.
 //!
-//! This crate is intentionally backend-light. It centralizes Awidat's stable
+//! This crate is intentionally backend-light. It centralizes Montage's stable
 //! effect ids, parameter schemas, stack policies, phases, and current backend
 //! support. Renderers and EDL application code consume this registry instead
 //! of hard-coding semantic decisions in multiple places.
@@ -9,44 +9,44 @@ use serde_json::{Map, Number, Value};
 use thiserror::Error;
 
 /// Per-clip linear gain effect id.
-pub const VOLUME: &str = "awidat.volume";
+pub const VOLUME: &str = "montage.volume";
 /// Per-clip playback speed effect id.
-pub const SPEED: &str = "awidat.speed";
+pub const SPEED: &str = "montage.speed";
 /// Clip-level curve-based time remap effect id.
-pub const TIME_REMAP: &str = "awidat.time_remap";
+pub const TIME_REMAP: &str = "montage.time_remap";
 /// Clip-level freeze-frame insertion effect id.
-pub const FREEZE: &str = "awidat.freeze";
+pub const FREEZE: &str = "montage.freeze";
 /// Clip-level color correction effect id.
-pub const COLOR_CORRECTION: &str = "awidat.color_correction";
+pub const COLOR_CORRECTION: &str = "montage.color_correction";
 /// Clip-level blur effect id.
-pub const BLUR: &str = "awidat.blur";
+pub const BLUR: &str = "montage.blur";
 /// Clip-level chroma key effect id.
-pub const CHROMA_KEY: &str = "awidat.chroma_key";
+pub const CHROMA_KEY: &str = "montage.chroma_key";
 /// Clip-level luma key effect id.
-pub const LUMA_KEY: &str = "awidat.luma_key";
+pub const LUMA_KEY: &str = "montage.luma_key";
 /// Clip-level static region blur effect id.
-pub const REGION_BLUR: &str = "awidat.region_blur";
+pub const REGION_BLUR: &str = "montage.region_blur";
 /// Clip-level 3D LUT effect id.
-pub const LUT: &str = "awidat.lut";
+pub const LUT: &str = "montage.lut";
 /// Clip-level atomic color-pipeline effect id. Carries the full
 /// input-space / shaper / look / output-space chain in a single
 /// effect so the agent can emit one thing instead of composing
 /// multiple partial effects in the right order.
-pub const COLOR_PIPELINE: &str = "awidat.color_pipeline";
+pub const COLOR_PIPELINE: &str = "montage.color_pipeline";
 /// Drawtext-backed title/caption effect id.
-pub const TITLE: &str = "awidat.title";
+pub const TITLE: &str = "montage.title";
 /// Picture-in-picture / cutaway overlay effect id.
-pub const VIDEO_OVERLAY: &str = "awidat.video_overlay";
+pub const VIDEO_OVERLAY: &str = "montage.video_overlay";
 /// Clip-level punch-in / reframing effect id.
-pub const REFRAME: &str = "awidat.reframe";
+pub const REFRAME: &str = "montage.reframe";
 /// Clip-level lens warp effect id.
-pub const WARP: &str = "awidat.warp";
+pub const WARP: &str = "montage.warp";
 /// Clip-level procedural camera shake effect id.
-pub const SHAKE: &str = "awidat.shake";
+pub const SHAKE: &str = "montage.shake";
 /// Per-clip audio fade effect id.
-pub const AUDIO_FADE: &str = "awidat.audio_fade";
+pub const AUDIO_FADE: &str = "montage.audio_fade";
 /// FFmpeg-native clip/track audio processing effect id.
-pub const AUDIO_FX: &str = "awidat.audio_fx";
+pub const AUDIO_FX: &str = "montage.audio_fx";
 
 const VOLUME_PARAMS: &[ParamDef] = &[ParamDef::number("value", true, Some(0.0), None, None)];
 
@@ -225,17 +225,17 @@ const COLOR_PIPELINE_PARAMS: &[ParamDef] = &[
     ParamDef::string("mask_source", false, None),
 ];
 
-/// Extensions accepted for `awidat.color_pipeline.mask_source`. Image
+/// Extensions accepted for `montage.color_pipeline.mask_source`. Image
 /// formats carry the alpha matte; video formats let the mask
 /// animate. The validator accepts these and treats anything else
 /// as a malformed request.
 pub const SUPPORTED_MASK_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "mp4", "mov"];
 
-/// Stable identifiers for the color spaces awidat understands. These
+/// Stable identifiers for the color spaces montage understands. These
 /// are the *names* the agent uses when emitting an
-/// `awidat.color_pipeline` effect; the actual transforms attached to
+/// `montage.color_pipeline` effect; the actual transforms attached to
 /// each are wired up in the render layer (Stage 3 work, see
-/// `awidat-color-pipeline-plan` in the memory directory).
+/// `montage-color-pipeline-plan` in the memory directory).
 ///
 /// Display-referred spaces:
 /// - `rec709_g24`: BT.709 primaries, gamma 2.4 (typical SDR delivery).
@@ -412,7 +412,7 @@ const AUDIO_FX_PARAMS: &[ParamDef] = &[
     ParamDef::number("loudnorm_tp", false, None, None, None),
 ];
 
-/// In-tree registry entries for graph-native Awidat effects.
+/// In-tree registry entries for graph-native Montage effects.
 pub const EFFECTS: &[EffectDef] = &[
     EffectDef {
         id: VOLUME,
@@ -635,7 +635,7 @@ pub const EFFECTS: &[EffectDef] = &[
     },
 ];
 
-/// Static definition for one Awidat semantic effect.
+/// Static definition for one Montage semantic effect.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EffectDef {
     /// Stable graph-native effect id.
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[test]
     fn unknown_effect_fails() {
-        let err = must_reject("awidat.nope", &Map::new());
+        let err = must_reject("montage.nope", &Map::new());
         assert!(matches!(err, ValidationError::UnknownEffect { .. }));
     }
 
@@ -1285,11 +1285,11 @@ mod tests {
 
     #[test]
     fn shake_defaults_and_validates_motion_params() {
-        let effect = must_lookup("awidat.shake");
+        let effect = must_lookup("montage.shake");
         assert_eq!(effect.display_name, "Shake");
         assert_eq!(effect.phase, EffectPhase::Transform);
 
-        let (_, normalized) = must_normalize("awidat.shake", &Map::new());
+        let (_, normalized) = must_normalize("montage.shake", &Map::new());
         assert_eq!(
             normalized.get("intensity_px").and_then(Value::as_f64),
             Some(8.0)
@@ -1301,11 +1301,11 @@ mod tests {
 
         let mut params = Map::new();
         params.insert("intensity_px".into(), Value::from(-1.0));
-        let err = must_reject("awidat.shake", &params);
+        let err = must_reject("montage.shake", &params);
         assert!(matches!(
             err,
             ValidationError::OutOfRange {
-                effect_id: "awidat.shake",
+                effect_id: "montage.shake",
                 param: "intensity_px",
                 ..
             }
@@ -1314,11 +1314,11 @@ mod tests {
 
     #[test]
     fn blur_defaults_and_validates_radius() {
-        let effect = must_lookup("awidat.blur");
+        let effect = must_lookup("montage.blur");
         assert_eq!(effect.display_name, "Blur");
         assert_eq!(effect.phase, EffectPhase::Clip);
 
-        let (_, normalized) = must_normalize("awidat.blur", &Map::new());
+        let (_, normalized) = must_normalize("montage.blur", &Map::new());
         assert_eq!(
             normalized.get("radius_px").and_then(Value::as_f64),
             Some(8.0)
@@ -1326,11 +1326,11 @@ mod tests {
 
         let mut params = Map::new();
         params.insert("radius_px".into(), Value::from(-1.0));
-        let err = must_reject("awidat.blur", &params);
+        let err = must_reject("montage.blur", &params);
         assert!(matches!(
             err,
             ValidationError::OutOfRange {
-                effect_id: "awidat.blur",
+                effect_id: "montage.blur",
                 param: "radius_px",
                 ..
             }
@@ -1339,11 +1339,11 @@ mod tests {
 
     #[test]
     fn warp_defaults_and_validates_lens_params() {
-        let effect = must_lookup("awidat.warp");
+        let effect = must_lookup("montage.warp");
         assert_eq!(effect.display_name, "Warp");
         assert_eq!(effect.phase, EffectPhase::Transform);
 
-        let (_, normalized) = must_normalize("awidat.warp", &Map::new());
+        let (_, normalized) = must_normalize("montage.warp", &Map::new());
         assert_eq!(normalized.get("k1").and_then(Value::as_f64), Some(-0.08));
         assert_eq!(normalized.get("k2").and_then(Value::as_f64), Some(0.0));
         assert_eq!(
@@ -1357,11 +1357,11 @@ mod tests {
 
         let mut params = Map::new();
         params.insert("center_x".into(), Value::from(1.5));
-        let err = must_reject("awidat.warp", &params);
+        let err = must_reject("montage.warp", &params);
         assert!(matches!(
             err,
             ValidationError::OutOfRange {
-                effect_id: "awidat.warp",
+                effect_id: "montage.warp",
                 param: "center_x",
                 ..
             }

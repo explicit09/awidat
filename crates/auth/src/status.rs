@@ -109,7 +109,7 @@ impl AuthStatus {
 /// Note `OPENAI_API_KEY` is deliberately *not* an override here: the bridge runs
 /// codex with `enable_codex_api_key_env: true`, but `load_auth` only consults
 /// `CODEX_API_KEY` / `CODEX_ACCESS_TOKEN` for turns — `OPENAI_API_KEY` affects
-/// only realtime-voice sessions (which awidat doesn't use), so reporting it as
+/// only realtime-voice sessions (which montage doesn't use), so reporting it as
 /// the active wallet would misstate what turns are billed to.
 pub fn status(env: &AuthEnv) -> AuthStatus {
     if let Some(status) = env_override_status() {

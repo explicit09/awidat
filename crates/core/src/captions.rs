@@ -2,15 +2,15 @@
 
 use std::collections::BTreeMap;
 
-use awidat_proto::otio::{Clip, Stack, StackChild, Track, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{Clip, Stack, StackChild, Track, TrackChild};
+use montage_proto::project::Project;
 use serde::Serialize;
 
-/// Caption source Awidat should treat as authoritative for delivery.
+/// Caption source Montage should treat as authoritative for delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptionAuthority {
-    /// Editable timeline subtitle tracks from `metadata.awidat.subtitle_tracks`.
+    /// Editable timeline subtitle tracks from `metadata.montage.subtitle_tracks`.
     EditableSubtitleTracks,
     /// Burned-in caption overlay clips on the timeline.
     CaptionOverlays,
@@ -72,14 +72,14 @@ pub fn summarize_captions_with_sidecar_cue_count(
     let editable_track_count = project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|metadata| metadata.subtitle_tracks.len())
         .unwrap_or(0);
     let editable_cue_count = project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|metadata| {
             metadata

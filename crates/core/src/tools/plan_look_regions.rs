@@ -591,7 +591,7 @@ fn color_script(ctx: &ToolContext, script_name: &str) -> Result<PathBuf, Functio
             return Ok(script);
         }
     }
-    if let Some(root) = awidat_config::defaults::skills_root() {
+    if let Some(root) = montage_config::defaults::skills_root() {
         let script = root
             .join("color-corrector")
             .join("scripts")
@@ -601,7 +601,7 @@ fn color_script(ctx: &ToolContext, script_name: &str) -> Result<PathBuf, Functio
         }
     }
     Err(FunctionCallError::RespondToModel(format!(
-        "color-corrector script {script_name} was not found. Check bundled skills installation or AWIDAT_SKILLS_ROOT."
+        "color-corrector script {script_name} was not found. Check bundled skills installation or MONTAGE_SKILLS_ROOT."
     )))
 }
 
@@ -730,16 +730,16 @@ mod tests {
 
     fn ctx_at(root: &Path) -> ToolContext {
         let (tx, _) = broadcast::channel(8);
-        let bundled = awidat_config::defaults::skills_root();
+        let bundled = montage_config::defaults::skills_root();
         let (skills, _errors) = crate::skills::SkillRegistry::discover(bundled.as_deref(), None);
         ToolContext {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -773,7 +773,7 @@ mod tests {
                         "children": [{
                             "OTIO_SCHEMA": "Clip.2",
                             "name": "main",
-                            "metadata": {"awidat": {"clip_uuid": "clip-main"}},
+                            "metadata": {"montage": {"clip_uuid": "clip-main"}},
                             "media_reference": {
                                 "OTIO_SCHEMA": "ExternalReference.1",
                                 "target_url": "raw/source.mp4"
@@ -1219,23 +1219,23 @@ mod tests {
         assert!(dir.path().join("renders/look-plan.edl").is_file());
         assert!(dir.path().join("renders/look-plan.json").is_file());
 
-        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let project = montage_proto::project::Project::read(dir.path()).unwrap();
         let mut saw_lut = false;
         for stack_child in &project.timeline.tracks.children {
-            if let awidat_proto::otio::StackChild::Track(track) = stack_child {
+            if let montage_proto::otio::StackChild::Track(track) = stack_child {
                 for child in &track.children {
-                    if let awidat_proto::otio::TrackChild::Clip(clip) = child {
+                    if let montage_proto::otio::TrackChild::Clip(clip) = child {
                         saw_lut |= clip
                             .effects
                             .iter()
-                            .any(|e| e.effect_name == awidat_effects::LUT);
+                            .any(|e| e.effect_name == montage_effects::LUT);
                     }
                 }
             }
         }
         assert!(saw_lut, "start pass should apply generated LUT effect");
 
-        let job_id = awidat_render::JobId(
+        let job_id = montage_render::JobId(
             body["render_job_id"]
                 .as_str()
                 .expect("render job id")
@@ -1246,9 +1246,9 @@ mod tests {
             let status = ctx.job_manager.status(&job_id).await.unwrap();
             if matches!(
                 status.state,
-                awidat_render::JobState::Done
-                    | awidat_render::JobState::Failed
-                    | awidat_render::JobState::Cancelled
+                montage_render::JobState::Done
+                    | montage_render::JobState::Failed
+                    | montage_render::JobState::Cancelled
             ) {
                 terminal = Some(status);
                 break;
@@ -1256,7 +1256,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         let terminal = terminal.expect("render should reach a terminal state");
-        assert_eq!(terminal.state, awidat_render::JobState::Done);
+        assert_eq!(terminal.state, montage_render::JobState::Done);
 
         let review = ReviewLookRegionsTool
             .handle(

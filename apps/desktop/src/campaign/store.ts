@@ -5,7 +5,7 @@ import type {
   PlatformVariantStatus,
 } from "./manifest";
 
-const STORAGE_KEY = "awidat.campaigns.v1";
+const STORAGE_KEY = "montage.campaigns.v1";
 
 type CampaignState = {
   campaigns: CampaignManifest[];

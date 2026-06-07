@@ -6,7 +6,7 @@
 //! or consume these types. The legacy in-process tool surface that did
 //! (`update_plan`, `request_user_input`, `delegate`, `delegate_all`) was
 //! deleted in this step. The types stay re-exported from `lib.rs` so
-//! `awidat_core::SessionEvent` / `SessionError` are still valid type
+//! `montage_core::SessionEvent` / `SessionError` are still valid type
 //! paths for any caller that imports them by name (and so the
 //! `desktop-protocol` doc-comment cross-reference still resolves).
 //!

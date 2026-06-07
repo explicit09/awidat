@@ -51,7 +51,7 @@ export type PreviewIndexingInfo = {
 
 /**
  * PreviewSurface — the center "Preview / Review" surface from the design spec
- * (~/Downloads/Awidat UI Design Concept.md §8 Screen 2).
+ * (~/Downloads/Montage UI Design Concept.md §8 Screen 2).
  *
  * What this owns:
  *

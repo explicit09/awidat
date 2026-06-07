@@ -1,7 +1,7 @@
 //! Font-registry behaviour for the libass caption writer.
 //!
 //! Pinned by F3 follow-up:
-//!   1. `AWIDAT_CAPTION_FONT` (when set and non-empty) wins outright.
+//!   1. `MONTAGE_CAPTION_FONT` (when set and non-empty) wins outright.
 //!   2. Otherwise the helper returns a non-empty family name (host-probed
 //!      with a documented fallback list).
 //!   3. Whatever the helper resolves to MUST appear verbatim as the
@@ -16,10 +16,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_render::timeline::{
+use montage_render::timeline::{
     CaptionWordTiming, TextReveal, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
 };
-use awidat_render::{
+use montage_render::{
     build_ass_document_for_test, default_caption_font_name, resolve_caption_font_name,
 };
 
@@ -60,7 +60,7 @@ fn caption_fixture() -> TitlePlan {
 #[test]
 fn env_override_is_honored() {
     let resolved = resolve_caption_font_name(|key| {
-        if key == "AWIDAT_CAPTION_FONT" {
+        if key == "MONTAGE_CAPTION_FONT" {
             Some("Comic Sans MS".to_string())
         } else {
             None
@@ -73,7 +73,7 @@ fn env_override_is_honored() {
 fn empty_env_override_falls_through_to_probe() {
     // Explicit empty string must NOT win — fall through to probing.
     let resolved = resolve_caption_font_name(|key| {
-        if key == "AWIDAT_CAPTION_FONT" {
+        if key == "MONTAGE_CAPTION_FONT" {
             Some(String::new())
         } else {
             None
@@ -86,7 +86,7 @@ fn empty_env_override_falls_through_to_probe() {
 
     // And the production wrapper (reads real env) also always returns
     // a non-empty family. Tests run with a clean env; if a developer
-    // happens to have AWIDAT_CAPTION_FONT exported, the assertion still
+    // happens to have MONTAGE_CAPTION_FONT exported, the assertion still
     // holds (non-empty).
     let production_resolved = default_caption_font_name();
     assert!(
@@ -100,7 +100,7 @@ fn ass_document_uses_resolved_font_name() {
     // Force the resolver via env override so this test is hermetic
     // regardless of the host's installed fonts.
     let resolved = resolve_caption_font_name(|key| {
-        if key == "AWIDAT_CAPTION_FONT" {
+        if key == "MONTAGE_CAPTION_FONT" {
             Some("SentinelFontF3".to_string())
         } else {
             None

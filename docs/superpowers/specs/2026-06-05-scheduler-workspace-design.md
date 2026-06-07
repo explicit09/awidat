@@ -2,7 +2,7 @@
 
 ## Summary
 
-Awidat needs a product-facing scheduler workspace that makes the campaign
+Montage needs a product-facing scheduler workspace that makes the campaign
 engine usable as a daily posting tool. The workspace should feel closer to an
 OpusClip-style calendar and bulk scheduler than to a settings page: users pick
 clips or long-form videos, select connected accounts, review generated
@@ -41,7 +41,7 @@ fields. They do not need separate scheduling systems.
 
 ## Non-Goals
 
-- Do not build a detached generic social calendar that ignores Awidat's edit,
+- Do not build a detached generic social calendar that ignores Montage's edit,
   render, transcript, and proof pipeline.
 - Do not create separate scheduler implementations for podcasts, long-form
   YouTube, and shorts.
@@ -137,9 +137,9 @@ duration. It should not branch on separate scheduler code paths.
 
 1. User opens Scheduler and clicks Schedule.
 2. User selects one rendered video or timeline.
-3. Awidat proposes metadata for selected platforms.
+3. Montage proposes metadata for selected platforms.
 4. User selects accounts, visibility, and publish time.
-5. Awidat validates each platform variant.
+5. Montage validates each platform variant.
 6. User approves.
 7. Server creates scheduled publish jobs.
 8. Calendar shows the post in the selected slot and later updates to published
@@ -149,9 +149,9 @@ duration. It should not branch on separate scheduler code paths.
 
 1. User opens a generated clip set.
 2. User selects several clips.
-3. Awidat generates captions, hashtags, covers, and platform variants.
+3. Montage generates captions, hashtags, covers, and platform variants.
 4. User chooses start time, timezone, and cadence.
-5. Awidat previews computed slots across the calendar.
+5. Montage previews computed slots across the calendar.
 6. User approves the batch.
 7. Server creates one publish job per platform variant.
 8. Queue and calendar show every clip's status, retries, and final URLs.
@@ -159,9 +159,9 @@ duration. It should not branch on separate scheduler code paths.
 ### Long-Form Episode Campaign
 
 1. User selects a podcast or long-form render.
-2. Awidat generates a YouTube long-form package: title, description, chapters,
+2. Montage generates a YouTube long-form package: title, description, chapters,
    tags, thumbnail, and visibility.
-3. Awidat can also attach derived shorts from the same source.
+3. Montage can also attach derived shorts from the same source.
 4. User schedules the long-form release and optionally staggers related shorts.
 5. The same publish job model handles both the episode and the shorts.
 
@@ -222,7 +222,7 @@ The prompt and validation profile for platform-specific copy:
 
 ### Lowering to Server
 
-When the user approves, Awidat maps each selected platform variant to the
+When the user approves, Montage maps each selected platform variant to the
 server-backed social pipeline:
 
 ```text

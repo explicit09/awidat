@@ -26,7 +26,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "frame-quality"
 INDEXER_VERSION = "0.1.0"

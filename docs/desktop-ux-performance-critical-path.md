@@ -1,6 +1,6 @@
 # Desktop UX Performance Critical Path
 
-Awidat desktop should feel ready before all project data is hydrated. The
+Montage desktop should feel ready before all project data is hydrated. The
 performance contract is:
 
 - Paint the editor shell first.

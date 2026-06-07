@@ -228,7 +228,7 @@ export function ActionBar() {
                 />
               </label>
               <p className="field-hint">
-                Awidat downloads via yt-dlp at up to 1080p mp4. After
+                Montage downloads via yt-dlp at up to 1080p mp4. After
                 download, the proxy is generated and indexers run
                 automatically — three job cards stream in sequence.
               </p>

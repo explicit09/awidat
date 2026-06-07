@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awidat_core::{
+use montage_core::{
     FunctionCallError, ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry,
     capabilities::{CapabilityManifest, build_capability_manifest},
 };
@@ -16,8 +16,8 @@ impl ToolHandler for ReadOnlyTool {
         "inspect_media"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Inspect media without changing project files.".into(),
             input_schema: serde_json::json!({
@@ -52,8 +52,8 @@ impl ToolHandler for MutatingTool {
         "write_edit"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Write an edit decision to the project.".into(),
             input_schema: serde_json::json!({
@@ -84,8 +84,8 @@ impl ToolHandler for FindMomentLikeTool {
         "find_moment"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Search indexed editorial moments.".into(),
             input_schema: serde_json::json!({
@@ -120,8 +120,8 @@ impl ToolHandler for StartRenderLikeTool {
         "start_render"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Start a render job.".into(),
             input_schema: serde_json::json!({
@@ -152,8 +152,8 @@ impl ToolHandler for RenderPreflightLikeTool {
         "render_preflight"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Inspect render backend selection.".into(),
             input_schema: serde_json::json!({
@@ -187,8 +187,8 @@ impl ToolHandler for StreamRemuxLikeTool {
         "stream_remux"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Start a stream-copy remux job.".into(),
             input_schema: serde_json::json!({
@@ -205,7 +205,7 @@ impl ToolHandler for StreamRemuxLikeTool {
     async fn handle(
         &self,
         _invocation: ToolInvocation,
-        _ctx: awidat_core::ToolContext,
+        _ctx: montage_core::ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
         Ok(ToolOutput::text("ok"))
     }
@@ -219,8 +219,8 @@ impl ToolHandler for ProxyStatusLikeTool {
         "proxy_status"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Report proxy cache status.".into(),
             input_schema: serde_json::json!({
@@ -240,7 +240,7 @@ impl ToolHandler for ProxyStatusLikeTool {
     async fn handle(
         &self,
         _invocation: ToolInvocation,
-        _ctx: awidat_core::ToolContext,
+        _ctx: montage_core::ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
         Ok(ToolOutput::text("ok"))
     }
@@ -254,8 +254,8 @@ impl ToolHandler for PreviewCacheStatusLikeTool {
         "preview_cache_status"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Report preview cache status.".into(),
             input_schema: serde_json::json!({
@@ -276,7 +276,7 @@ impl ToolHandler for PreviewCacheStatusLikeTool {
     async fn handle(
         &self,
         _invocation: ToolInvocation,
-        _ctx: awidat_core::ToolContext,
+        _ctx: montage_core::ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
         Ok(ToolOutput::text("ok"))
     }
@@ -290,8 +290,8 @@ impl ToolHandler for VerifyRenderLikeTool {
         "verify_render"
     }
 
-    fn schema(&self) -> awidat_core::tool_schema::Tool {
-        awidat_core::tool_schema::Tool {
+    fn schema(&self) -> montage_core::tool_schema::Tool {
+        montage_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Verify a rendered output.".into(),
             input_schema: serde_json::json!({
@@ -311,7 +311,7 @@ impl ToolHandler for VerifyRenderLikeTool {
     async fn handle(
         &self,
         _invocation: ToolInvocation,
-        _ctx: awidat_core::ToolContext,
+        _ctx: montage_core::ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
         Ok(ToolOutput::text("ok"))
     }
@@ -338,11 +338,11 @@ fn capability_manifest_lists_tools_with_stable_order_and_approval_defaults() {
     assert!(!inspect.metadata.graph_mutates);
     assert_eq!(
         inspect.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Unknown
+        montage_core::capabilities::SupportLevel::Unknown
     );
     assert_eq!(
         inspect.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Unknown
+        montage_core::capabilities::SupportLevel::Unknown
     );
     assert!(inspect.metadata.required_indexes.is_empty());
     assert!(!inspect.metadata.approval_required);
@@ -392,7 +392,7 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     assert!(!find_moment.metadata.graph_mutates);
     assert_eq!(
         find_moment.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
 
     let Some(start_render) = manifest
@@ -405,7 +405,7 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     assert!(start_render.metadata.approval_required);
     assert_eq!(
         start_render.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert_eq!(
         start_render.metadata.side_effects,
@@ -423,7 +423,7 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     assert!(!render_preflight.metadata.approval_required);
     assert_eq!(
         render_preflight.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         render_preflight
@@ -467,7 +467,7 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     assert!(!stream_remux.metadata.graph_mutates);
     assert_eq!(
         stream_remux.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         stream_remux
@@ -493,11 +493,11 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     };
     assert_eq!(
         proxy_status.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert_eq!(
         proxy_status.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
     assert!(!proxy_status.metadata.graph_mutates);
     assert!(!proxy_status.metadata.approval_required);
@@ -515,11 +515,11 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     };
     assert_eq!(
         preview_cache_status.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert_eq!(
         preview_cache_status.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
     assert!(!preview_cache_status.metadata.graph_mutates);
     assert!(!preview_cache_status.metadata.approval_required);
@@ -548,30 +548,30 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
         .iter()
         .map(|effect| effect.id.as_str())
         .collect();
-    assert!(effect_ids.contains(&"awidat.speed"));
-    assert!(effect_ids.contains(&"awidat.color_pipeline"));
+    assert!(effect_ids.contains(&"montage.speed"));
+    assert!(effect_ids.contains(&"montage.color_pipeline"));
 
     let Some(speed) = manifest
         .effects
         .iter()
-        .find(|effect| effect.id == "awidat.speed")
+        .find(|effect| effect.id == "montage.speed")
     else {
         panic!("speed effect");
     };
     assert_eq!(speed.display_name, "Speed");
     assert_eq!(
         speed.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Unknown
+        montage_core::capabilities::SupportLevel::Unknown
     );
     assert_eq!(
         speed.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
 
     let Some(color_pipeline) = manifest
         .effects
         .iter()
-        .find(|effect| effect.id == "awidat.color_pipeline")
+        .find(|effect| effect.id == "montage.color_pipeline")
     else {
         panic!("color pipeline effect");
     };
@@ -612,15 +612,15 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
         ]
     );
 
-    let Some(timeline_feature) = awidat_core::capabilities::render_feature_for_backend(
-        &awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+    let Some(timeline_feature) = montage_core::capabilities::render_feature_for_backend(
+        &montage_render::RenderBackendKind::TimelineFfmpegReencode,
     ) else {
         panic!("timeline backend should map to a render feature");
     };
     assert_eq!(timeline_feature.id, "ffmpeg_timeline_export");
     assert_eq!(
         timeline_feature.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
 
     let Some(gpu) = manifest
@@ -644,11 +644,11 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         remux.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
     assert_eq!(
         remux.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         remux
@@ -667,11 +667,11 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         preview_cache.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert_eq!(
         preview_cache.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
     assert!(
         preview_cache
@@ -708,7 +708,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         agent_preview_cache.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         agent_preview_cache
@@ -727,11 +727,11 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         preview_cache_refresh.metadata.preview_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert_eq!(
         preview_cache_refresh.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::NotSupported
+        montage_core::capabilities::SupportLevel::NotSupported
     );
     assert!(preview_cache_refresh.metadata.approval_required);
     assert!(
@@ -758,7 +758,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         backend_evidence.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         backend_evidence
@@ -777,7 +777,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         master_loudnorm.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         master_loudnorm
@@ -796,7 +796,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         libass_sidecar_evidence.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         libass_sidecar_evidence
@@ -822,7 +822,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         caption_safe_area.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         caption_safe_area
@@ -841,7 +841,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     };
     assert_eq!(
         cut_boundary_self_eval.metadata.export_supported,
-        awidat_core::capabilities::SupportLevel::Supported
+        montage_core::capabilities::SupportLevel::Supported
     );
     assert!(
         cut_boundary_self_eval
@@ -941,7 +941,7 @@ Private body text and local paths should not be part of the manifest.
         panic!("write skill file: {error}");
     }
 
-    let (skills, errors) = awidat_core::skills::SkillRegistry::discover(Some(&skills_root), None);
+    let (skills, errors) = montage_core::skills::SkillRegistry::discover(Some(&skills_root), None);
     assert!(errors.is_empty());
 
     let registry = ToolRegistry::new();

@@ -215,13 +215,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
-        // Awidat fork edit: surface Awidat as the user-facing brand
+        // Montage fork edit: surface Montage as the user-facing brand
         // even though codex is the engine. The 0.128.0 version stamp
         // doubles as the OpenAI gateway version (see
         // vendor/codex-rs/login/src/auth/default_client.rs); the
-        // user just sees the Awidat label.
+        // user just sees the Montage label.
         const VERSION: &str = "0.128.0";
-        eprintln!("Awidat (codex engine) v{VERSION}\n--------");
+        eprintln!("Montage (codex engine) v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }

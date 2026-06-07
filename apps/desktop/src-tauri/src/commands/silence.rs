@@ -1,5 +1,5 @@
 //! Silence detection: per-asset silence ranges written as a JSON
-//! sidecar at `<project>/.awidat/silences/<stem>-<hash>.json`. The
+//! sidecar at `<project>/.montage/silences/<stem>-<hash>.json`. The
 //! `find_dead_air` editorial tool reads the sidecar to surface
 //! silence-trim Notes.
 //!
@@ -17,15 +17,15 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_desktop_protocol::{Id, JobKind};
-use awidat_render::SilenceRange;
+use montage_desktop_protocol::{Id, JobKind};
+use montage_render::SilenceRange;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::silences_path_for;
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Default silence threshold in dBFS. Picked for podcast audio:
 /// typical noise floor is `-50 to -60` dBFS, conversational speech
@@ -81,18 +81,18 @@ impl From<SilenceRange> for SilenceRangeRecord {
 /// sidecar path on success.
 pub async fn generate_silences_for_asset_in_project(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
     generate_silences_for_asset_in_project_inner(app, state.inner(), project_root, asset_path).await
 }
 
-/// `&AwidatState` variant of [`generate_silences_for_asset_in_project`].
+/// `&MontageState` variant of [`generate_silences_for_asset_in_project`].
 /// See the motion module for why this variant exists.
 pub async fn generate_silences_for_asset_in_project_inner(
     app: &AppHandle,
-    state: &AwidatState,
+    state: &MontageState,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
@@ -107,7 +107,7 @@ pub async fn generate_silences_for_asset_in_project_inner(
 /// Drive one ffmpeg run end-to-end with a live job card.
 async fn run_one(
     app: &AppHandle,
-    state: &AwidatState,
+    state: &MontageState,
     asset: &Path,
     sidecar: &Path,
 ) -> Result<(), String> {
@@ -128,7 +128,7 @@ async fn run_one(
         format!("scanning silences in {asset_label}"),
     );
 
-    let result = awidat_render::generate_silences(
+    let result = montage_render::generate_silences(
         asset,
         DEFAULT_THRESHOLD_DB,
         DEFAULT_MIN_DURATION_S,
@@ -176,7 +176,7 @@ async fn run_one(
             )));
             Ok(())
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
+        Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             let _ = stderr_tail;
             emitter.cancelled();
             Err("cancelled".into())
@@ -224,7 +224,7 @@ pub async fn read_silences(path: String) -> Result<SilenceSidecar, String> {
     Ok(parsed)
 }
 
-async fn register_job(state: &AwidatState, id: &Id) -> CancellationToken {
+async fn register_job(state: &MontageState, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -235,7 +235,7 @@ async fn register_job(state: &AwidatState, id: &Id) -> CancellationToken {
     token
 }
 
-async fn unregister_job(state: &AwidatState, id: &Id) {
+async fn unregister_job(state: &MontageState, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

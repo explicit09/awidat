@@ -20,7 +20,7 @@ CREATE EXTENSION IF NOT EXISTS pg_net;
 --
 -- To activate in Phase 4, run in the Supabase SQL editor:
 --   SELECT cron.schedule(
---       'awidat-publish-tick',
+--       'montage-publish-tick',
 --       '* * * * *',
 --       $$
 --         SELECT net.http_post(

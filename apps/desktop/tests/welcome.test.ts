@@ -2,7 +2,7 @@
 // (Wave 3 W1).
 //
 // The store is the decision-point for whether the welcome modal fires
-// on app boot. A single localStorage key (`awidat:welcome:shown`) gates
+// on app boot. A single localStorage key (`montage:welcome:shown`) gates
 // it; once set, the modal stays dismissed until Settings "Show welcome
 // again" wipes it.
 

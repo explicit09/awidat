@@ -20,10 +20,10 @@
 Replace the hardcoded single-user actor with real per-user identity from Supabase Auth, feeding the **already-tested** authorization boundary in `crates/social` (`ApiActor`/`ApiOwner` → `TeamPolicy::can_perform` → `OwnerRef`/`TeamRole`/`WorkspaceMemberRole`). The domain authorization logic is reused **unchanged**; the only new work is (a) verifying a Supabase JWT into a `user_id`, (b) loading that user's `WorkspaceMemberRole`s, and (c) constructing `ApiActor`/`ApiOwner` from that real identity at every entry point that currently calls `actor()`/`owner()` with `LOCAL_USER_ID`.
 
 There are two call surfaces because of the server-first architecture (design lines 66-108):
-- **Server (`awidat-social` HTTP service)** — the authoritative entry point for OAuth, scheduling, and the cron worker. JWT verification + role loading lands here. (This is the surface that actually matters for multi-user.)
+- **Server (`montage-social` HTTP service)** — the authoritative entry point for OAuth, scheduling, and the cron worker. JWT verification + role loading lands here. (This is the surface that actually matters for multi-user.)
 - **Desktop client (Tauri commands in `apps/desktop/src-tauri/src/commands/social.rs`)** — must stop using `LOCAL_USER_ID` and instead attach the signed-in user's Supabase access token to server calls; locally it derives the actor from the cached session.
 
-This plan assumes Phases 1-6 have stood up the Supabase project, the Postgres publishing schema, and the `awidat-social` HTTP service wrapper. Where that wrapper does not yet exist as a file, the plan notes it as a dependency and targets the equivalent boundary.
+This plan assumes Phases 1-6 have stood up the Supabase project, the Postgres publishing schema, and the `montage-social` HTTP service wrapper. Where that wrapper does not yet exist as a file, the plan notes it as a dependency and targets the equivalent boundary.
 
 ---
 
@@ -53,7 +53,7 @@ This is a pure, dependency-light module so it stays unit-testable and does not p
 - `pub fn owner_for_user(claims: &AuthClaims) -> ApiOwner` and `pub fn owner_for_workspace(workspace_id: &str) -> ApiOwner` — wrap `ApiOwner::user` / `ApiOwner::workspace`.
 - `AuthContextError` (thiserror): `Missing`, `Expired`, `InvalidSignature`, `MalformedClaims`. Map all of these to `SocialApiError::Unauthorized` (extend the `From`/match in `api.rs:88-104` area if a conversion is wanted, but keep mapping to the existing `Unauthorized` variant so the redaction/HTTP-status contract from earlier phases is unchanged).
 
-**Verification:** unit tests in the same file: a fake `JwtVerifier` that returns fixed claims; assert `build_actor` produces an `ApiActor` whose `user_id` matches `sub` and whose `workspace_roles` round-trip; assert expired/missing tokens yield the right `AuthContextError`. Run `cargo test -p awidat-social auth_context`.
+**Verification:** unit tests in the same file: a fake `JwtVerifier` that returns fixed claims; assert `build_actor` produces an `ApiActor` whose `user_id` matches `sub` and whose `workspace_roles` round-trip; assert expired/missing tokens yield the right `AuthContextError`. Run `cargo test -p montage-social auth_context`.
 
 ## Step 2 — Real JWT verification implementation (server-only, behind a feature/separate module)
 
@@ -64,9 +64,9 @@ This is a pure, dependency-light module so it stays unit-testable and does not p
   2. **Shared-secret fallback:** verify HS256 with the project JWT secret from server env (`SUPABASE_JWT_SECRET`).
 - Reads config from server env only (`SUPABASE_URL`, `SUPABASE_JWT_SECRET` or JWKS URL). Never shipped to desktop.
 
-**Verification:** integration test with a locally-minted token signed by a test key/secret (the `jsonwebtoken` crate's encode in a test); assert a valid token verifies and a tampered/expired one fails. `cargo test -p awidat-social --features server supabase_jwt`.
+**Verification:** integration test with a locally-minted token signed by a test key/secret (the `jsonwebtoken` crate's encode in a test); assert a valid token verifies and a tampered/expired one fails. `cargo test -p montage-social --features server supabase_jwt`.
 
-**Dependency note:** This step depends on Phase 1 having chosen where the Rust service lives. If the service crate exists (e.g. `crates/social-server` or an `apps/` service from Phase 1), put `supabase_jwt.rs` there and have it depend on `awidat-social`'s `auth_context` traits. If no service crate exists yet, this file is the first concrete server-only file and Phase 1's wrapper builds on it.
+**Dependency note:** This step depends on Phase 1 having chosen where the Rust service lives. If the service crate exists (e.g. `crates/social-server` or an `apps/` service from Phase 1), put `supabase_jwt.rs` there and have it depend on `montage-social`'s `auth_context` traits. If no service crate exists yet, this file is the first concrete server-only file and Phase 1's wrapper builds on it.
 
 ## Step 3 — Workspace-membership source + role loader
 
@@ -75,11 +75,11 @@ The `WorkspaceMemberRole` rows must come from somewhere authoritative in the mul
 - **Postgres (Supabase) — per D3, Phase 1 OWNS this table; Phase 7 does NOT redefine it.** The table already exists from Phase 1 in the **payload_json shape** (`workspace_id text, user_id text, payload_json text, PK(workspace_id, user_id)`) preserving the `WorkspaceMemberRole` serde round-trip. Phase 7 only **adds an RLS policy** if desired: a row readable by `auth.uid() = user_id`; the **service role** (the Rust service's connection) bypasses RLS, which is correct because the service is the trusted authorization point. Do NOT add a flat `role` column.
 - **Role loader (per D3 — query the payload_json shape):** add a by-user query `pub fn workspace_member_roles_for_user(&self, user_id: &str) -> Result<Vec<WorkspaceMemberRole>, SocialStoreError>` to the **sync `SocialStore` trait** (per D1), implemented in both `PgSocialStore` and `SqliteSocialStore`. Server SQL: `SELECT payload_json FROM workspace_member_roles WHERE user_id = $1`, then deserialize each `payload_json` into `WorkspaceMemberRole` (do NOT select a `role` column — there isn't one). The existing trait method `workspace_member_roles(workspace_id)` (`store.rs:101-104`) is keyed by *workspace*; this adds the by-user variant the actor needs to authorize against any owner it targets.
 
-**Verification:** unit test the loader against the in-memory store seeded with two workspaces for one user; assert both roles return. For Postgres, an integration test against a local Postgres (the Phase-1 test harness) seeding rows and asserting the loader returns them. `cargo test -p awidat-social roles_for_user`.
+**Verification:** unit test the loader against the in-memory store seeded with two workspaces for one user; assert both roles return. For Postgres, an integration test against a local Postgres (the Phase-1 test harness) seeding rows and asserting the loader returns them. `cargo test -p montage-social roles_for_user`.
 
 ## Step 4 — Wire identity into the server HTTP entry points
 
-This is where multi-user actually takes effect. In the `awidat-social` HTTP service (the axum wrapper introduced by Phase 1/5 — referenced in `commands/social.rs:6-8` as "lift onto an axum wrapper later unchanged"):
+This is where multi-user actually takes effect. In the `montage-social` HTTP service (the axum wrapper introduced by Phase 1/5 — referenced in `commands/social.rs:6-8` as "lift onto an axum wrapper later unchanged"):
 
 - Add an extractor/middleware that: reads `Authorization: Bearer <jwt>` → `JwtVerifier::verify` (Step 2) → `AuthClaims` → `load_roles_for_user` (Step 3) → `build_actor` (Step 1). On any failure, return 401 (mapping `AuthContextError`/`SocialApiError::Unauthorized`).
 - Each route handler then calls the existing `SocialApi::*` function passing the constructed `&ApiActor` and an `&ApiOwner` derived from the request (the request specifies whether it targets the caller-as-user or a workspace; the actor's roles gate workspace access via the unchanged `TeamPolicy`).
@@ -93,7 +93,7 @@ This is where multi-user actually takes effect. In the `awidat-social` HTTP serv
 
 Reuse the existing desktop OAuth/session patterns rather than inventing new ones:
 - Sign-in opens the system browser to Supabase Auth (same browser-OAuth pattern already used for the social providers in `apps/desktop/src-tauri/src/publishing/oauth_listener.rs` and for ChatGPT login in `crates/auth/src/login.rs`). On callback, the desktop receives a Supabase access token + refresh token + `user.id`.
-- Persist the session via the existing keychain helper (`apps/desktop/src-tauri/src/publishing/keychain.rs` `store_token`/`read_token`/`delete_token`, lines 168-201) under a new service/account key (e.g. service `awidat-supabase`, kind `Session`), OR via `awidat-secrets` (`apps/desktop/src-tauri/src/secrets.rs`). Reuse, do not rebuild, the secrets layer.
+- Persist the session via the existing keychain helper (`apps/desktop/src-tauri/src/publishing/keychain.rs` `store_token`/`read_token`/`delete_token`, lines 168-201) under a new service/account key (e.g. service `montage-supabase`, kind `Session`), OR via `montage-secrets` (`apps/desktop/src-tauri/src/secrets.rs`). Reuse, do not rebuild, the secrets layer.
 - Commands: `social_sign_in`, `social_sign_out` (delete cached session), `social_current_user` (return `{ userId, email }` or null). Sign-out must also clear in-memory actor state.
 
 **Verification:** `node:assert`-style desktop tests for the TS side (Step 7) plus a Rust unit test that the session round-trips through the keychain mock. `cargo test -p <desktop crate> social_auth`.
@@ -126,7 +126,7 @@ The existing local SQLite store has rows owned by `OwnerRef::User("local-user")`
 - Provide a one-time, idempotent backfill: on first sign-in, if local rows owned by `"local-user"` exist and no rows yet exist for the real `user.id`, rewrite `owner` on `connected_accounts`, plus `created_by` on `publish_jobs`, from `local-user` → real id. This is desktop-local SQLite only (the design keeps editing/project state local, line 88-89); the server's Postgres starts empty per real user.
 - Gate behind an explicit confirmation or run automatically only when exactly one local user's data exists (the solo-dev case).
 
-**Verification:** unit test: seed store with `local-user`-owned account + job, run backfill with real id, assert `connected_accounts_for_owner(OwnerRef::User(real))` returns them and `local-user` returns none. `cargo test -p awidat-social backfill_local_user` (or in the desktop crate if the migration lives there).
+**Verification:** unit test: seed store with `local-user`-owned account + job, run backfill with real id, assert `connected_accounts_for_owner(OwnerRef::User(real))` returns them and `local-user` returns none. `cargo test -p montage-social backfill_local_user` (or in the desktop crate if the migration lives there).
 
 ## Step 9 — Full workspace verification
 

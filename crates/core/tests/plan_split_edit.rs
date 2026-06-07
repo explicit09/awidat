@@ -1,5 +1,5 @@
-use awidat_core::awidat_mcp::context::McpToolCtx;
-use awidat_core::awidat_mcp::tools::plan_split_edit::{PlanSplitEditArgs, run};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::plan_split_edit::{PlanSplitEditArgs, run};
 use std::error::Error;
 
 fn context() -> serde_json::Value {
@@ -66,7 +66,7 @@ fn j_cut_plan_emits_concrete_audio_lead_edl() -> Result<(), Box<dyn Error>> {
     assert!(edl.contains("*** Set Audio Lead"));
     assert!(edl.contains("@@ anchor: clip_uuid=incoming-clip"));
     assert!(edl.contains("+ lead_s: 0.450"));
-    awidat_core::edl::parse(edl)?;
+    montage_core::edl::parse(edl)?;
     Ok(())
 }
 
@@ -101,6 +101,6 @@ fn l_cut_plan_emits_concrete_audio_trail_edl() -> Result<(), Box<dyn Error>> {
     assert!(edl.contains("*** Set Audio Trail"));
     assert!(edl.contains("@@ anchor: clip_uuid=outgoing-clip"));
     assert!(edl.contains("+ trail_s: 0.500"));
-    awidat_core::edl::parse(edl)?;
+    montage_core::edl::parse(edl)?;
     Ok(())
 }

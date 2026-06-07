@@ -4,8 +4,8 @@
 //! moments and returns draft EDL packages without applying them.
 
 use async_trait::async_trait;
-use awidat_index::{SidecarError, read_sidecar};
-use awidat_proto::index::AssetId;
+use montage_index::{SidecarError, read_sidecar};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;

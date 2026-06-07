@@ -1,6 +1,6 @@
 //! Per-frame compositor scaffold for the GPU motion path.
 //!
-//! `awidat-render-gpu` started as a transitions-only renderer (two
+//! `montage-render-gpu` started as a transitions-only renderer (two
 //! input frames + a progress scalar → one output frame). Motion
 //! (translate / scale / rotate / blur / opacity envelopes) currently
 //! lowers to FFmpeg filter strings, which bypasses the GPU entirely.

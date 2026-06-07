@@ -8,7 +8,7 @@
 //! of direct address).
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -96,7 +96,7 @@ impl ToolHandler for FindSpeakerOncamTool {
         let walker = walk_indexer(&ctx.project_root, "face").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "find_speaker_oncam: face sidecars not readable ({e}). \
-                 Run `awidat index --indexer face <project>` and retry."
+                 Run `montage index --indexer face <project>` and retry."
             ))
         })?;
 
@@ -204,8 +204,8 @@ impl ToolHandler for FindSpeakerOncamTool {
                 "hint": format!(
                     "speaker '{}' not found in any face sidecar's speaker_to_face mapping. \
                      The mapping is only populated when whisper-mcp ran with diarization \
-                     before face-mcp. Run `awidat index --indexer whisper` first \
-                     (with HF_TOKEN set), then re-run `awidat index --indexer face`.",
+                     before face-mcp. Run `montage index --indexer whisper` first \
+                     (with HF_TOKEN set), then re-run `montage index --indexer face`.",
                     args.speaker
                 ),
             })
@@ -249,10 +249,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

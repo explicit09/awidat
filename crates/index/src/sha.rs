@@ -24,7 +24,7 @@ pub fn asset_fingerprint(path: &Path) -> std::io::Result<String> {
     let modified = meta.modified().unwrap_or(UNIX_EPOCH);
     let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
     let identity = format!(
-        "awidat-asset-fingerprint-v1\0{}\0{}\0{}",
+        "montage-asset-fingerprint-v1\0{}\0{}\0{}",
         meta.len(),
         modified.as_secs(),
         modified.subsec_nanos()

@@ -3,13 +3,13 @@
 
 use std::path::Path;
 
-use awidat_core::media_intelligence::{
+use montage_core::media_intelligence::{
     build_media_intelligence_for_asset, build_media_intelligence_package,
 };
-use awidat_core::preview_cache::waveform_path_for;
-use awidat_index::sidecar_path;
-use awidat_proto::index::AssetId;
-use awidat_proto::professional::{
+use montage_core::preview_cache::waveform_path_for;
+use montage_index::sidecar_path;
+use montage_proto::index::AssetId;
+use montage_proto::professional::{
     MediaIntelligenceAggregateState, MediaIntelligenceLayerKind, MediaIntelligenceLayerStatus,
 };
 
@@ -129,7 +129,7 @@ fn missing_source_blocks_dependent_layers_and_preserves_refs() {
 }
 
 fn layer_status(
-    asset: &awidat_proto::professional::MediaIntelligenceAsset,
+    asset: &montage_proto::professional::MediaIntelligenceAsset,
     kind: MediaIntelligenceLayerKind,
 ) -> MediaIntelligenceLayerStatus {
     asset

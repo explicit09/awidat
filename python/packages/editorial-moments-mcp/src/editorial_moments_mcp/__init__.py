@@ -1,4 +1,4 @@
-"""Editorial-moments indexer for Awidat.
+"""Editorial-moments indexer for Montage.
 
 Reads sibling sidecars (whisper transcript + diarization, topic-mcp
 segments, audio-energy curves), runs Claude Haiku per topic-segment
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 from ._schema import (
     BRollNeed,
@@ -60,7 +60,7 @@ def _find_sibling_sidecar(
     """Walk up from `asset_path` to find `<project>/index/<indexer>/<asset_id>.json`.
 
     Mirrors topic-mcp._find_transcript_path. Stops at the project
-    root marker (.awidat/ directory).
+    root marker (.montage/ directory).
     """
     if index_root:
         candidate = Path(index_root).absolute() / indexer / f"{asset_id}.json"
@@ -77,7 +77,7 @@ def _find_sibling_sidecar(
         candidate = ancestor / "index" / indexer / f"{asset_id}.json"
         if candidate.exists():
             return candidate
-        if (ancestor / ".awidat").exists():
+        if (ancestor / ".montage").exists():
             return None
     return None
 
@@ -159,7 +159,7 @@ def _build_segment_context(
 
 
 _SYSTEM_PROMPT = """\
-You are an editorial-moments tagger for awidat, a video editing
+You are an editorial-moments tagger for montage, a video editing
 agent.  Given a topic-segment of a recorded conversation, identify
 2-6 editorial moments that would be useful for an editor: hooks,
 stories, punchlines, setups, questions/answers, CTAs, emotional
@@ -327,7 +327,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     if transcript_path is None:
         raise RuntimeError(
             f"editorial-moments needs the whisper sidecar at "
-            f"index/whisper/{req.asset_id}.json. Run `awidat index --indexer whisper` "
+            f"index/whisper/{req.asset_id}.json. Run `montage index --indexer whisper` "
             f"first, then re-run."
         )
     topic_path = _find_sibling_sidecar(
@@ -336,7 +336,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     if topic_path is None:
         raise RuntimeError(
             f"editorial-moments needs the topic sidecar at "
-            f"index/topic/{req.asset_id}.json. Run `awidat index --indexer topic` "
+            f"index/topic/{req.asset_id}.json. Run `montage index --indexer topic` "
             f"first, then re-run."
         )
 

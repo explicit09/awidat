@@ -3,7 +3,7 @@
 Why this exists
 ---------------
 The editorial-moments indexer assigns 0..1 scores to typed beats
-(hook, punchline, emotional_peak, …). Awidat's claim is that these
+(hook, punchline, emotional_peak, …). Montage's claim is that these
 multimodal scores predict human-rated editorial importance better
 than an LLM-only highlight detector. That claim is only defensible
 if we measure it. This module is the measurement.
@@ -261,7 +261,7 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
     Expected shape:
 
         {
-          "schema": "awidat-editorial-moments-calibration/1",
+          "schema": "montage-editorial-moments-calibration/1",
           "clips": [
             { "clip_path": "...", "labels": {kind: 0..1}, "source": "..." }
           ]

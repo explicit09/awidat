@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Put a desktop surface (connect accounts, schedule a publish, monitor jobs, review audit) on top of the verified `awidat-social` `SocialApi` facade, bridged in-process through Tauri commands, replacing the legacy desktop-local publishing connect/status path as we go.
+**Goal:** Put a desktop surface (connect accounts, schedule a publish, monitor jobs, review audit) on top of the verified `montage-social` `SocialApi` facade, bridged in-process through Tauri commands, replacing the legacy desktop-local publishing connect/status path as we go.
 
-**Architecture:** React 19 surfaces call thin Tauri commands (`commands/social.rs`); each command builds a single-user `ApiActor`/`ApiOwner`, locks a file-backed `SqliteSocialStore` held in `AwidatState`, calls `SocialApi`, and returns a camelCase serde DTO carrying no token material. No HTTP layer; the command bodies lift onto axum later. Worker status uses the crate's mock adapters this pass.
+**Architecture:** React 19 surfaces call thin Tauri commands (`commands/social.rs`); each command builds a single-user `ApiActor`/`ApiOwner`, locks a file-backed `SqliteSocialStore` held in `MontageState`, calls `SocialApi`, and returns a camelCase serde DTO carrying no token material. No HTTP layer; the command bodies lift onto axum later. Worker status uses the crate's mock adapters this pass.
 
-**Tech Stack:** Rust 2024, `awidat-social`, `rusqlite`, Tauri 2, React 19 + TypeScript, existing desktop node test harness.
+**Tech Stack:** Rust 2024, `montage-social`, `rusqlite`, Tauri 2, React 19 + TypeScript, existing desktop node test harness.
 
 Spec: `docs/superpowers/specs/2026-06-03-social-desktop-ui-design.md`.
 
@@ -19,7 +19,7 @@ Spec: `docs/superpowers/specs/2026-06-03-social-desktop-ui-design.md`.
 - Modify `apps/desktop/src-tauri/src/lib.rs` — open the store in `.setup()`, register `social_*` commands.
 - Create `apps/desktop/src-tauri/src/commands/social.rs` — the 13 thin commands + response DTOs + tests.
 - Modify `apps/desktop/src-tauri/src/commands/mod.rs` — declare the `social` module.
-- Modify `apps/desktop/src-tauri/Cargo.toml` — depend on `awidat-social`.
+- Modify `apps/desktop/src-tauri/Cargo.toml` — depend on `montage-social`.
 - Create `apps/desktop/src/app/social/socialModel.ts` — types + pure derivations.
 - Create `apps/desktop/src/app/social/SocialAccounts.tsx`, `SocialSchedule.tsx`, `SocialJobs.tsx`, `SocialAudit.tsx`.
 - Create `apps/desktop/src/app/social/social.test.ts` — model unit tests.
@@ -41,7 +41,7 @@ Add to the `#[cfg(test)] mod tests` block in `crates/social/src/sqlite_store.rs`
 ```rust
 #[test]
 fn open_persists_account_across_reopen() {
-    let dir = std::env::temp_dir().join(format!("awidat_social_open_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("montage_social_open_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("create temp dir: {err}"));
     let path = dir.join("social.sqlite");
     let _ = std::fs::remove_file(&path);
@@ -69,7 +69,7 @@ Note: the existing `connected_account(id)` test helper hardcodes `provider_accou
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p awidat-social sqlite_store::tests::open_persists_account_across_reopen`
+Run: `cargo test -p montage-social sqlite_store::tests::open_persists_account_across_reopen`
 Expected: FAIL — `no function or associated item named `open` found`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -88,12 +88,12 @@ pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SocialStoreError>
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p awidat-social sqlite_store::tests::open_persists_account_across_reopen`
+Run: `cargo test -p montage-social sqlite_store::tests::open_persists_account_across_reopen`
 Expected: PASS.
 
 - [ ] **Step 5: Verify and commit**
 
-Run: `cargo test -p awidat-social && cargo clippy -p awidat-social --all-targets -- -D warnings && cargo fmt --all -- --check`
+Run: `cargo test -p montage-social && cargo clippy -p montage-social --all-targets -- -D warnings && cargo fmt --all -- --check`
 Expected: all pass, fmt exit 0.
 
 ```bash
@@ -103,7 +103,7 @@ git commit -m "feat(social): add file-backed SqliteSocialStore::open"
 
 ---
 
-## Task 2: Wire the store into AwidatState
+## Task 2: Wire the store into MontageState
 
 **Files:**
 - Modify: `apps/desktop/src-tauri/Cargo.toml`
@@ -119,17 +119,17 @@ already used for `codex`/`turn`/`project_root`.
 In `apps/desktop/src-tauri/Cargo.toml`, under `[dependencies]`, add:
 
 ```toml
-awidat-social = { workspace = true }
+montage-social = { workspace = true }
 ```
 
 - [ ] **Step 2: Add the state field**
 
-In `apps/desktop/src-tauri/src/state.rs`, add this field to `struct AwidatState`
+In `apps/desktop/src-tauri/src/state.rs`, add this field to `struct MontageState`
 (after `project_root`), and add the import at the top:
 
 ```rust
 // top of file, with the other use statements:
-use awidat_social::sqlite_store::SqliteSocialStore;
+use montage_social::sqlite_store::SqliteSocialStore;
 ```
 
 ```rust
@@ -156,24 +156,24 @@ closure (where `app` is available), add before the closure returns `Ok(())`:
             std::fs::create_dir_all(&data_dir)
                 .map_err(|err| format!("create app data dir: {err}"))?;
             let social_path = data_dir.join("social.sqlite");
-            let store = awidat_social::sqlite_store::SqliteSocialStore::open(&social_path)
+            let store = montage_social::sqlite_store::SqliteSocialStore::open(&social_path)
                 .map_err(|err| format!("open social store: {err}"))?;
-            let state = app.state::<crate::state::AwidatState>();
-            // `AwidatState.social` is a tokio Mutex; the setup closure is sync,
+            let state = app.state::<crate::state::MontageState>();
+            // `MontageState.social` is a tokio Mutex; the setup closure is sync,
             // so use `blocking_lock()` exactly as the existing setup block does
             // for `project_root`.
             *state.social.blocking_lock() = Some(store);
         }
 ```
 
-The existing `.setup` closure already uses `app.state::<AwidatState>()` and
+The existing `.setup` closure already uses `app.state::<MontageState>()` and
 `.blocking_lock()` (see the `project_root` block) and returns a boxed-error
 `Result`, so the `String` errors above coerce via `?`. If your `String` does not
 coerce, append `.map_err(|e| -> Box<dyn std::error::Error> { e.into() })`.
 
 - [ ] **Step 4: Verify it compiles**
 
-Run: `cargo check -p awidat-desktop` (use the actual desktop crate name from
+Run: `cargo check -p montage-desktop` (use the actual desktop crate name from
 `apps/desktop/src-tauri/Cargo.toml`'s `[package] name`).
 Expected: compiles. (No command uses the field yet — `social` is read in Task 3.)
 
@@ -181,7 +181,7 @@ Expected: compiles. (No command uses the field yet — `social` is read in Task 
 
 ```bash
 git add apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/src/state.rs apps/desktop/src-tauri/src/lib.rs
-git commit -m "feat(desktop): hold file-backed social store in AwidatState"
+git commit -m "feat(desktop): hold file-backed social store in MontageState"
 ```
 
 ---
@@ -206,21 +206,21 @@ the account commands, and this test module:
 //! Server-backed social publishing Tauri commands.
 //!
 //! Each command is a thin translation: build a single-user actor/owner, lock
-//! the file-backed `SqliteSocialStore` in `AwidatState`, call `SocialApi`, and
+//! the file-backed `SqliteSocialStore` in `MontageState`, call `SocialApi`, and
 //! return a serde response carrying no token material. No business logic here.
 
-use awidat_social::api::{
+use montage_social::api::{
     ApiActor, ApiOwner, AccountSummary, OAuthCompleteRequest, OAuthStartRequest, ProviderSummary,
     SocialApi, SocialApiError,
 };
-use awidat_social::model::{OwnerRef, Provider};
-use awidat_social::oauth_url::OAuthProviderConfig;
-use awidat_social::provider::ProviderRegistry;
-use awidat_social::store::SocialStore;
-use awidat_social::token::LocalTokenKeyProvider;
+use montage_social::model::{OwnerRef, Provider};
+use montage_social::oauth_url::OAuthProviderConfig;
+use montage_social::provider::ProviderRegistry;
+use montage_social::store::SocialStore;
+use montage_social::token::LocalTokenKeyProvider;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Stable single-user identity for this pass. Swapped for a real authenticated
 /// user id when an identity service exists; see the design doc.
@@ -244,11 +244,11 @@ fn err_string(err: SocialApiError) -> String {
 
 /// Runs `f` with an exclusive lock on the initialized social store.
 ///
-/// `AwidatState.social` is a `tokio::sync::Mutex`, so this is async and locks
+/// `MontageState.social` is a `tokio::sync::Mutex`, so this is async and locks
 /// via `.lock().await` — matching every other command in this crate.
 async fn with_store<T>(
-    state: &State<'_, AwidatState>,
-    f: impl FnOnce(&mut awidat_social::sqlite_store::SqliteSocialStore) -> Result<T, SocialApiError>,
+    state: &State<'_, MontageState>,
+    f: impl FnOnce(&mut montage_social::sqlite_store::SqliteSocialStore) -> Result<T, SocialApiError>,
 ) -> Result<T, String> {
     let mut guard = state.social.lock().await;
     let store = guard
@@ -265,7 +265,7 @@ pub async fn social_providers() -> Result<Vec<ProviderSummary>, String> {
 
 #[tauri::command]
 pub async fn social_accounts(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<Vec<AccountSummary>, String> {
     let actor = actor();
     let owner = owner();
@@ -279,12 +279,12 @@ pub async fn social_accounts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_social::model::{
+    use montage_social::model::{
         AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus,
         ProviderCapabilities,
     };
-    use awidat_social::sqlite_store::SqliteSocialStore;
-    use awidat_social::store::SocialStore;
+    use montage_social::sqlite_store::SqliteSocialStore;
+    use montage_social::store::SocialStore;
 
     fn store_with_account() -> SqliteSocialStore {
         let mut store = SqliteSocialStore::new_in_memory()
@@ -295,8 +295,8 @@ mod tests {
                 owner: OwnerRef::User(LOCAL_USER_ID.into()),
                 provider: Provider::YouTube,
                 provider_account_id: "channel_1".into(),
-                display_name: "Awidat Channel".into(),
-                handle: Some("@awidat".into()),
+                display_name: "Montage Channel".into(),
+                handle: Some("@montage".into()),
                 avatar_url: None,
                 account_kind: AccountKind::Channel,
                 status: ConnectedAccountStatus::Connected,
@@ -340,7 +340,7 @@ In `apps/desktop/src-tauri/src/commands/mod.rs`, add:
 pub mod social;
 ```
 
-Run: `cargo test -p awidat-desktop social::tests`
+Run: `cargo test -p montage-desktop social::tests`
 Expected: FAIL to compile until `mod.rs` change is saved, then PASS once it is —
 if it already passes, that is acceptable (the test exercises the facade through
 the store directly). The red signal for this task is the module not existing.
@@ -354,7 +354,7 @@ sends; `social_oauth_complete` builds the deterministic stub token bundle (no
 live exchange) described in the spec.
 
 ```rust
-use awidat_social::model::ProviderCapabilities as _Caps; // (only if needed; remove if unused)
+use montage_social::model::ProviderCapabilities as _Caps; // (only if needed; remove if unused)
 ```
 
 ```rust
@@ -373,9 +373,9 @@ pub struct OAuthStartArgs {
 
 #[tauri::command]
 pub async fn social_oauth_start(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: OAuthStartArgs,
-) -> Result<awidat_social::api::OAuthStartResponse, String> {
+) -> Result<montage_social::api::OAuthStartResponse, String> {
     let actor = actor();
     with_store(&state, |store| {
         SocialApi::oauth_start(
@@ -413,14 +413,14 @@ pub struct OAuthCompleteArgs {
 
 #[tauri::command]
 pub async fn social_oauth_complete(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: OAuthCompleteArgs,
-) -> Result<awidat_social::api::OAuthCompleteResponse, String> {
-    use awidat_social::model::{
+) -> Result<montage_social::api::OAuthCompleteResponse, String> {
+    use montage_social::model::{
         AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus,
         ProviderCapabilities,
     };
-    use awidat_social::token_bundle::ProviderTokenBundle;
+    use montage_social::token_bundle::ProviderTokenBundle;
 
     let actor = actor();
     let key_provider = LocalDevKeyProvider;
@@ -470,7 +470,7 @@ pub async fn social_oauth_complete(
 
 #[tauri::command]
 pub async fn social_disconnect_account(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     account_id: String,
     now: i64,
 ) -> Result<AccountSummary, String> {
@@ -496,7 +496,7 @@ Before writing `LocalDevKeyProvider`, open `crates/social/src/token.rs`, read
 the `LocalTokenKeyProvider` trait definition and the `TestKeyProvider` impl, and
 mirror it with a fixed key id/material constant. If `TestKeyProvider` is not
 `#[cfg(test)]`-gated (confirmed: it is `pub` and not test-gated), you may use
-`awidat_social::token::TestKeyProvider::new("desktop-key", "local-key")`
+`montage_social::token::TestKeyProvider::new("desktop-key", "local-key")`
 directly instead of defining `LocalDevKeyProvider` — prefer that if available.
 
 - [ ] **Step 4: Register the commands**
@@ -513,8 +513,8 @@ In `apps/desktop/src-tauri/src/lib.rs`, add inside `tauri::generate_handler![ �
 
 - [ ] **Step 5: Run tests + compile**
 
-Run: `cargo test -p awidat-desktop social::tests`
-Run: `cargo check -p awidat-desktop`
+Run: `cargo test -p montage-desktop social::tests`
+Run: `cargo check -p montage-desktop`
 Expected: tests PASS, crate compiles.
 
 - [ ] **Step 6: Commit**
@@ -743,7 +743,7 @@ the connect/status/disconnect portion now served by the new surface.
 
 - [ ] **Step 7: Verify and commit**
 
-Run the desktop TS test command and `cargo check -p awidat-desktop`.
+Run the desktop TS test command and `cargo check -p montage-desktop`.
 Expected: model tests pass, crate compiles.
 
 ```bash
@@ -770,10 +770,10 @@ Add to the `tests` module in `commands/social.rs`:
 ```rust
 #[test]
 fn bind_validate_schedule_round_trip() {
-    use awidat_social::api::{
+    use montage_social::api::{
         BindTargetRequest, ScheduleTargetRequest, ValidateTargetRequest,
     };
-    use awidat_social::model::{PublishJobStatus, ValidationState};
+    use montage_social::model::{PublishJobStatus, ValidationState};
 
     let mut store = store_with_publishable_account();
     let registry = ProviderRegistry::default_multi_platform();
@@ -826,7 +826,7 @@ account with `upload_video`/`public_posting` capabilities + eligible, owned by
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p awidat-desktop social::tests::bind_validate_schedule_round_trip`
+Run: `cargo test -p montage-desktop social::tests::bind_validate_schedule_round_trip`
 Expected: FAIL to compile — helper missing — then write the helper; the assertion
 logic itself is exercised by the facade.
 
@@ -836,10 +836,10 @@ Append to `commands/social.rs` before the test module. `PublishJobResponse`,
 `CampaignVariantTarget` come from the facade and already serialize.
 
 ```rust
-use awidat_social::api::{
+use montage_social::api::{
     BindTargetRequest, PublishJobResponse, ScheduleTargetRequest, ValidateTargetRequest,
 };
-use awidat_social::model::CampaignVariantTarget;
+use montage_social::model::CampaignVariantTarget;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -855,7 +855,7 @@ pub struct BindArgs {
 
 #[tauri::command]
 pub async fn social_bind_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: BindArgs,
 ) -> Result<CampaignVariantTarget, String> {
     let actor = actor();
@@ -878,7 +878,7 @@ pub async fn social_bind_target(
 
 #[tauri::command]
 pub async fn social_validate_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     target_id: String,
     now: i64,
 ) -> Result<CampaignVariantTarget, String> {
@@ -905,7 +905,7 @@ pub struct ScheduleArgs {
 
 #[tauri::command]
 pub async fn social_schedule_target(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: ScheduleArgs,
 ) -> Result<PublishJobResponse, String> {
     let actor = actor();
@@ -928,7 +928,7 @@ pub async fn social_schedule_target(
 
 #[tauri::command]
 pub async fn social_publish_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<PublishJobResponse, String> {
     let actor = actor();
@@ -940,7 +940,7 @@ pub async fn social_publish_job(
 
 #[tauri::command]
 pub async fn social_cancel_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     now: i64,
 ) -> Result<PublishJobResponse, String> {
@@ -953,7 +953,7 @@ pub async fn social_cancel_job(
 
 #[tauri::command]
 pub async fn social_retry_job(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     now: i64,
 ) -> Result<PublishJobResponse, String> {
@@ -981,7 +981,7 @@ Add to `generate_handler!` in `lib.rs`:
             commands::social::social_retry_job,
 ```
 
-Run: `cargo test -p awidat-desktop social::tests`
+Run: `cargo test -p montage-desktop social::tests`
 Expected: PASS.
 
 - [ ] **Step 5: Add job types + derivations to the model**
@@ -1081,7 +1081,7 @@ list item with `data-status={job.status}` for the status dot.)
 
 - [ ] **Step 7: Run TS tests + compile, commit**
 
-Run the desktop TS test command and `cargo check -p awidat-desktop`.
+Run the desktop TS test command and `cargo check -p montage-desktop`.
 
 ```bash
 git add apps/desktop/src-tauri/src/commands/social.rs apps/desktop/src-tauri/src/lib.rs apps/desktop/src/app/social/
@@ -1108,11 +1108,11 @@ Add to the `tests` module in `commands/social.rs`:
 ```rust
 #[test]
 fn worker_advances_scheduled_job_to_published() {
-    use awidat_social::publish_service::PublishService;
-    use awidat_social::upload_adapter::MockUploadAdapter;
-    use awidat_social::model::PublishJobStatus;
+    use montage_social::publish_service::PublishService;
+    use montage_social::upload_adapter::MockUploadAdapter;
+    use montage_social::model::PublishJobStatus;
     // A processing-then-poll status adapter:
-    use awidat_social::upload_status::{
+    use montage_social::upload_status::{
         UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError,
         UploadStatusRequest, UploadStatusResult,
     };
@@ -1145,7 +1145,7 @@ fn worker_advances_scheduled_job_to_published() {
     let uploaded = SocialApi::execute_claimed_upload_job(
         &mut store,
         &adapter,
-        awidat_social::api::ExecuteUploadRequest {
+        montage_social::api::ExecuteUploadRequest {
             job_id: "job_1".into(),
             title: "t".into(),
             description: None,
@@ -1172,7 +1172,7 @@ Add the `ProcessingUpload` test adapter (an `UploadAdapter` returning
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p awidat-desktop social::tests::worker_advances_scheduled_job_to_published`
+Run: `cargo test -p montage-desktop social::tests::worker_advances_scheduled_job_to_published`
 Expected: FAIL to compile — adapters/helpers missing — then add them; assertions
 are exercised by the facade.
 
@@ -1181,10 +1181,10 @@ are exercised by the facade.
 Append to `commands/social.rs`. They use mock adapters internally this pass.
 
 ```rust
-use awidat_social::api::ExecuteUploadRequest;
-use awidat_social::publish_service::PublishService;
-use awidat_social::upload_adapter::MockUploadAdapter;
-use awidat_social::upload_status::{
+use montage_social::api::ExecuteUploadRequest;
+use montage_social::publish_service::PublishService;
+use montage_social::upload_adapter::MockUploadAdapter;
+use montage_social::upload_status::{
     UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError, UploadStatusRequest,
     UploadStatusResult,
 };
@@ -1224,7 +1224,7 @@ pub struct ExecuteUploadArgs {
 /// Claim any due jobs, then execute the named upload via the mock adapter.
 #[tauri::command]
 pub async fn social_execute_upload(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     args: ExecuteUploadArgs,
 ) -> Result<PublishJobResponse, String> {
     let adapter = MockUploadAdapter::published(
@@ -1253,7 +1253,7 @@ pub async fn social_execute_upload(
 
 #[tauri::command]
 pub async fn social_poll_status(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     job_id: String,
     now: i64,
 ) -> Result<PublishJobResponse, String> {
@@ -1279,7 +1279,7 @@ Add to `generate_handler!`:
             commands::social::social_poll_status,
 ```
 
-Run: `cargo test -p awidat-desktop social::tests`
+Run: `cargo test -p montage-desktop social::tests`
 Expected: PASS.
 
 - [ ] **Step 5: Add the advance action to SocialJobs**
@@ -1290,7 +1290,7 @@ processing), then refreshes. Gate by status using the model helpers.
 
 - [ ] **Step 6: Verify and commit**
 
-Run: `cargo test -p awidat-desktop social::tests` and the TS test command.
+Run: `cargo test -p montage-desktop social::tests` and the TS test command.
 
 ```bash
 git add apps/desktop/src-tauri/src/commands/social.rs apps/desktop/src-tauri/src/lib.rs apps/desktop/src/app/social/SocialJobs.tsx
@@ -1341,7 +1341,7 @@ fn account_audit_returns_owner_scoped_jobs_token_safe() {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p awidat-social api::tests::account_audit_returns_owner_scoped_jobs_token_safe`
+Run: `cargo test -p montage-social api::tests::account_audit_returns_owner_scoped_jobs_token_safe`
 Expected: FAIL — no `account_usage_audit` on `SocialApi`.
 
 - [ ] **Step 3: Add the facade method**
@@ -1392,9 +1392,9 @@ Add the method to `impl SocialApi`, after `retry_job`:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test -p awidat-social api::tests::account_audit_returns_owner_scoped_jobs_token_safe`
+Run: `cargo test -p montage-social api::tests::account_audit_returns_owner_scoped_jobs_token_safe`
 Expected: PASS.
-Run: `cargo test -p awidat-social && cargo clippy -p awidat-social --all-targets -- -D warnings`
+Run: `cargo test -p montage-social && cargo clippy -p montage-social --all-targets -- -D warnings`
 Expected: pass, clean.
 
 - [ ] **Step 5: Add the audit command**
@@ -1402,11 +1402,11 @@ Expected: pass, clean.
 Append to `commands/social.rs`:
 
 ```rust
-use awidat_social::model::AccountUsageAudit;
+use montage_social::model::AccountUsageAudit;
 
 #[tauri::command]
 pub async fn social_account_audit(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     account_id: String,
 ) -> Result<AccountUsageAudit, String> {
     let actor = actor();
@@ -1433,7 +1433,7 @@ pattern; dot+label for status.
 
 - [ ] **Step 7: Verify and commit**
 
-Run: `cargo test -p awidat-social`, `cargo test -p awidat-desktop social::tests`,
+Run: `cargo test -p montage-social`, `cargo test -p montage-desktop social::tests`,
 the TS test command, and `cargo fmt --all -- --check`.
 
 ```bash
@@ -1452,8 +1452,8 @@ git commit -m "feat(social): account audit facade method + desktop audit surface
 Run:
 
 ```bash
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```
@@ -1466,8 +1466,8 @@ is acceptable when exit code is 0); diff-check exit 0.
 Run:
 
 ```bash
-cargo test -p awidat-desktop social::tests
-cargo clippy -p awidat-desktop --all-targets -- -D warnings
+cargo test -p montage-desktop social::tests
+cargo clippy -p montage-desktop --all-targets -- -D warnings
 ```
 
 Expected: pass, clean.
@@ -1503,7 +1503,7 @@ legacy `publishing/` deletion).
 ## Self-Review
 
 - **Spec coverage:** Accounts (Tasks 3–4), schedule (Task 5), jobs/monitoring
-  (Tasks 5–6), audit (Task 7), file-backed store (Task 1), `AwidatState` wiring
+  (Tasks 5–6), audit (Task 7), file-backed store (Task 1), `MontageState` wiring
   (Task 2), single-user actor (Tasks 3+), mock-adapter worker lifecycle
   (Task 6), token-safety tests (Tasks 3,4,7), legacy "replace as we go" cutover
   (Tasks 3,4). All spec sections map to a task.

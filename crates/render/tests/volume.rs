@@ -1,15 +1,15 @@
 //! Integration test for Step 15.3: a project whose OTIO carries a
-//! Clip with an `awidat.volume` Effect lands a `volume=` filter in
+//! Clip with an `montage.volume` Effect lands a `volume=` filter in
 //! the rendered argv.
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -26,8 +26,8 @@ fn write_project_with_volume_effect(dir: &Path) {
         RationalTime::new(0.0, 24.0),
         RationalTime::new(2.0 * 24.0, 24.0),
     ));
-    // Stamp the awidat.volume effect on clip-a.
-    let mut volume_effect = Effect::new("awidat.volume");
+    // Stamp the montage.volume effect on clip-a.
+    let mut volume_effect = Effect::new("montage.volume");
     volume_effect
         .metadata
         .insert("value".to_string(), serde_json::json!(0.5));

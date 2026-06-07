@@ -11,11 +11,11 @@
  * Backend integration:
  *   - On every mutation (toggle / setDisabled) the store invokes the
  *     `write_disabled_indexers` Tauri command for the affected project,
- *     persisting the list to `<project>/.awidat/indexers.json`. The
+ *     persisting the list to `<project>/.montage/indexers.json`. The
  *     dispatcher (`index_project_at_root`) reads the same file at run
  *     time and drops any disabled server before launching.
  *   - `hydrateFromDisk(projectRoot)` lets the app glue prime the store
- *     from `.awidat/indexers.json` whenever a project opens, mirroring
+ *     from `.montage/indexers.json` whenever a project opens, mirroring
  *     state that landed via file sync (Dropbox/git/etc.).
  *
  * Mirrors `state/skills.ts` so the W4.1 pattern stays the only one a
@@ -53,7 +53,7 @@ export type IndexerOverlayStore = {
   ) => void;
   /**
    * Replace the in-memory disabled set for a project with the names
-   * read from `.awidat/indexers.json` via the backend. Does NOT persist
+   * read from `.montage/indexers.json` via the backend. Does NOT persist
    * back to disk — only mirrors what the file already contains. Called
    * by the app glue on project open so the toggle UI reflects any
    * state that arrived via file sync.
@@ -67,7 +67,7 @@ export type IndexerOverlayStore = {
  * The localStorage key. Versioned so we can migrate the shape if we
  * ever switch from name-based to id-based indexer keys.
  */
-const STORAGE_KEY = "awidat:indexers:disabled";
+const STORAGE_KEY = "montage:indexers:disabled";
 
 /**
  * No-op project key for when nothing's loaded. Centralizing this here

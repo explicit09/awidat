@@ -1,41 +1,41 @@
 export function transitionLabel(effectName: string): string {
   switch (effectName) {
     case "SMPTE_Dissolve":
-    case "awidat.cross_dissolve":
+    case "montage.cross_dissolve":
     case "fade":
       return "Dissolve";
-    case "awidat.fade_black":
+    case "montage.fade_black":
     case "fadeblack":
       return "Fade Black";
-    case "awidat.flash_white":
+    case "montage.flash_white":
     case "fadewhite":
       return "Flash";
-    case "awidat.slide_left":
+    case "montage.slide_left":
     case "slideleft":
       return "Slide L";
-    case "awidat.slide_right":
+    case "montage.slide_right":
     case "slideright":
       return "Slide R";
-    case "awidat.smooth_push_left":
+    case "montage.smooth_push_left":
     case "smoothleft":
       return "Push L";
-    case "awidat.wipe_left":
+    case "montage.wipe_left":
     case "wipeleft":
       return "Wipe L";
-    case "awidat.wipe_right":
+    case "montage.wipe_right":
     case "wiperight":
       return "Wipe R";
-    case "awidat.zoom_in":
+    case "montage.zoom_in":
     case "zoomin":
       return "Zoom In";
-    case "awidat.pixelize":
+    case "montage.pixelize":
     case "pixelize":
       return "Pixelize";
-    case "awidat.radial":
+    case "montage.radial":
     case "radial":
       return "Radial";
     default:
-      return effectName.replace(/^awidat\./, "").replace(/_/g, " ");
+      return effectName.replace(/^montage\./, "").replace(/_/g, " ");
   }
 }
 

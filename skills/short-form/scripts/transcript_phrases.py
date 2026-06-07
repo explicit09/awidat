@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared transcript phrase grouping helpers for Awidat skills."""
+"""Shared transcript phrase grouping helpers for Montage skills."""
 
 from __future__ import annotations
 

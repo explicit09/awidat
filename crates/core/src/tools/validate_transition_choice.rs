@@ -15,7 +15,7 @@
 //! function becomes a fallback for the index-only verdict.
 
 use async_trait::async_trait;
-use awidat_proto::transitions::{MotionAlignment, lookup_builtin_transition};
+use montage_proto::transitions::{MotionAlignment, lookup_builtin_transition};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -28,7 +28,7 @@ pub struct ValidateTransitionChoiceTool;
 
 #[derive(Debug, Deserialize)]
 struct Args {
-    /// Stable transition id (e.g. `awidat.whip_pan_left`).
+    /// Stable transition id (e.g. `montage.whip_pan_left`).
     transition_id: String,
     /// Outgoing clip's source asset id (matches the index sidecar key).
     outgoing_asset_id: String,
@@ -137,7 +137,7 @@ struct Verdict {
 }
 
 fn editorial_verdict(
-    transition: &awidat_proto::transitions::BuiltinTransition,
+    transition: &montage_proto::transitions::BuiltinTransition,
     predicted: Option<MotionAlignment>,
     outgoing: Option<MotionAlignment>,
     incoming: Option<MotionAlignment>,
@@ -236,10 +236,10 @@ mod tests {
             project_root: project_root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -270,7 +270,7 @@ mod tests {
     fn validator_is_read_only() {
         assert!(
             !ValidateTransitionChoiceTool.is_mutating(&invoke(serde_json::json!({
-                "transition_id": "awidat.whip_pan_left",
+                "transition_id": "montage.whip_pan_left",
                 "outgoing_asset_id": "raw_a",
                 "outgoing_source_end_s": 1.0,
                 "incoming_asset_id": "raw_b",
@@ -299,7 +299,7 @@ mod tests {
         let out = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.whip_pan_left",
+                    "transition_id": "montage.whip_pan_left",
                     "outgoing_asset_id": "raw_a",
                     "outgoing_source_end_s": 2.0,
                     "incoming_asset_id": "raw_b",
@@ -345,7 +345,7 @@ mod tests {
         let out = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.whip_pan_left",
+                    "transition_id": "montage.whip_pan_left",
                     "outgoing_asset_id": "raw_a",
                     "outgoing_source_end_s": 2.0,
                     "incoming_asset_id": "raw_b",
@@ -372,7 +372,7 @@ mod tests {
         let out = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.whip_pan_left",
+                    "transition_id": "montage.whip_pan_left",
                     "outgoing_asset_id": "raw_unknown_a",
                     "outgoing_source_end_s": 1.0,
                     "incoming_asset_id": "raw_unknown_b",
@@ -399,7 +399,7 @@ mod tests {
         let out = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.cross_dissolve",
+                    "transition_id": "montage.cross_dissolve",
                     "outgoing_asset_id": "raw_anything",
                     "outgoing_source_end_s": 0.0,
                     "incoming_asset_id": "raw_anything",
@@ -422,7 +422,7 @@ mod tests {
         let err = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.not_real",
+                    "transition_id": "montage.not_real",
                     "outgoing_asset_id": "raw_a",
                     "outgoing_source_end_s": 0.0,
                     "incoming_asset_id": "raw_b",
@@ -462,7 +462,7 @@ mod tests {
         let _ = ValidateTransitionChoiceTool
             .handle(
                 invoke(serde_json::json!({
-                    "transition_id": "awidat.whip_pan_left",
+                    "transition_id": "montage.whip_pan_left",
                     "outgoing_asset_id": "raw_a",
                     "outgoing_source_end_s": 1.0,
                     "incoming_asset_id": "raw_b",

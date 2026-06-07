@@ -11,7 +11,7 @@ import {
 } from "./ui/glass";
 
 /* ------------------------------------------------------------------ */
-/*  Awidat "Obsidian Glass" 2026 — showcase                            */
+/*  Montage "Obsidian Glass" 2026 — showcase                            */
 /*  Browser-openable (no Tauri). Three scenes flip via the top switch. */
 /* ------------------------------------------------------------------ */
 
@@ -57,7 +57,7 @@ function LandingScene() {
         the cut.
       </h1>
       <p className="mt-3 max-w-[44ch] text-[13px] leading-relaxed text-[var(--color-text-muted)]">
-        Drop a file. Awidat indexes the transcript, scenes, speakers and silences,
+        Drop a file. Montage indexes the transcript, scenes, speakers and silences,
         then suggests editorial cuts with a reason for each — you accept, reject,
         or refine inline.
       </p>
@@ -196,7 +196,7 @@ function FrostedChrome() {
       <div className="flex items-center gap-2">
         <Mark size={26} />
         <span className="font-mono text-[12px] tracking-[0.22em] text-[var(--color-text-secondary)]">
-          AWIDAT
+          MONTAGE
         </span>
       </div>
       <div

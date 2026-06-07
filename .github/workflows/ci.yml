@@ -63,7 +63,7 @@ jobs:
       - name: Test
         run: |
           set -euo pipefail
-          excludes=(--exclude awidat-desktop)
+          excludes=(--exclude montage-desktop)
           while IFS= read -r package; do
             excludes+=(--exclude "$package")
           done < <(
@@ -122,7 +122,7 @@ jobs:
         run: pnpm --dir apps/desktop exec playwright install --with-deps chromium
       - name: Export protocol bindings
         run: |
-          AWIDAT_EXPORT_TS=1 cargo test -p awidat-desktop-protocol
+          MONTAGE_EXPORT_TS=1 cargo test -p montage-desktop-protocol
           perl -pi -e 's/[ \t]+$//' apps/desktop/src/protocol/generated/*.ts
       - name: Build
         run: pnpm --dir apps/desktop build

@@ -279,9 +279,9 @@ mod tests {
             let defaults = AccountPublishDefaults {
                 connected_account_id: "acct_1".into(),
                 default_privacy: Some("unlisted".into()),
-                default_tags: vec!["awidat".into(), "launch".into()],
-                title_prefix: Some("Awidat: ".into()),
-                description_suffix: Some("Built with Awidat.".into()),
+                default_tags: vec!["montage".into(), "launch".into()],
+                title_prefix: Some("Montage: ".into()),
+                description_suffix: Some("Built with Montage.".into()),
                 updated_at: 2_000,
             };
 
@@ -405,8 +405,8 @@ mod tests {
                 owner,
                 provider: Provider::YouTube,
                 provider_account_id: format!("channel_{id}"),
-                display_name: "Awidat Channel".into(),
-                handle: Some("@awidat".into()),
+                display_name: "Montage Channel".into(),
+                handle: Some("@montage".into()),
                 avatar_url: None,
                 account_kind: AccountKind::Channel,
                 status: ConnectedAccountStatus::Connected,

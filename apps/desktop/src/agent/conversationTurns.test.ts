@@ -9,7 +9,7 @@ const items: Item[] = [
     id: "approval-1",
     phase: "started",
     tool_name: "bash",
-    args_summary: "cargo test -p awidat-desktop",
+    args_summary: "cargo test -p montage-desktop",
     capability_metadata: { side_effects: ["runs command"] },
   },
 ];
@@ -22,6 +22,6 @@ assert.deepEqual(turns[0].parts[0], {
   kind: "approval_request",
   id: "approval-1",
   toolName: "bash",
-  argsSummary: "cargo test -p awidat-desktop",
+  argsSummary: "cargo test -p montage-desktop",
   capabilityMetadata: { side_effects: ["runs command"] },
 });

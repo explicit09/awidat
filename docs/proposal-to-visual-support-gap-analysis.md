@@ -9,7 +9,7 @@ registration, matching, ranking, and proposal interfaces while bundled
 ## Goal
 
 An editor can select transcript text, a topic, quote, claim, chapter, list item,
-or timeline region and ask Awidat for visual support. Awidat returns reviewable
+or timeline region and ask Montage for visual support. Montage returns reviewable
 artifact proposals with evidence, missing-information prompts, preview
 expectations, apply-ready timeline payloads when possible, and render
 verification steps.
@@ -41,7 +41,7 @@ hands accepted work back to the existing `apply_edl` proposal path.
 
 ## Newly Added Systems
 
-- `plan_visual_support_proposals` in the in-process Awidat MCP tool surface.
+- `plan_visual_support_proposals` in the in-process Montage MCP tool surface.
 - `editorial_skills` core module with:
   - `EditorialSkillDefinition` for reusable skill metadata and `SKILL.md`
     linkage
@@ -113,7 +113,7 @@ hands accepted work back to the existing `apply_edl` proposal path.
 - `save_visual_support_defaults` persists clarification answers such as aspect
   ratio, platform, alpha/transparent-background intent, reference assets,
   typography, color palette, motion intensity, safe-area policy, and show brand
-  package to `.awidat/visual_support_defaults.json`. Later proposal planning
+  package to `.montage/visual_support_defaults.json`. Later proposal planning
   reuses those defaults when the editor omits the same values.
 - Initial editorial skills:
   - retention-list-opener
@@ -146,7 +146,7 @@ The focused test suite demonstrates that:
 - A B-roll request with a project-relative generated-media asset produces an
   apply-ready `Insert BRoll` package with no missing-information prompts.
 - Accepted quote, list, and B-roll proposals commit through `apply_edl` into a
-  temporary Awidat project, storing both the review package and the timeline
+  temporary Montage project, storing both the review package and the timeline
   artifact.
 - The accepted project renders through `start_render`.
 - The rendered output passes `verify_render`.
@@ -203,7 +203,7 @@ The focused test suite demonstrates that:
   `editorial_skill_opportunities`, so an agent/pipeline can request proposal
   planning automatically for missing B-roll packages, missing chapter/title
   support, hard-cut B-roll, and caption/topic-support moments.
-- Timeline markers stored in `metadata.awidat.timeline_markers`, topics stored
+- Timeline markers stored in `metadata.montage.timeline_markers`, topics stored
   under `index/topic/**.json`, editorial moments stored under
   `index/editorial-moments/**.json`, transcript segments stored under
   `index/whisper/**.json`, and weak shots stored under `index/shot/**.json`
@@ -222,14 +222,14 @@ The focused test suite demonstrates that:
   `plan_visual_support_proposals`, selects an apply-ready proposal, and opens it
   through the existing Proposal Inspector/ghost-overlay flow.
 - Hybrid editorial-skill matching is covered by
-  `cargo test -p awidat-core --test editorial_skills`, including the
+  `cargo test -p montage-core --test editorial_skills`, including the
   Definition/Instance split and deterministic ranking of competing list/B-roll
   candidates.
 
 Run:
 
 ```bash
-cargo test -p awidat-core plan_visual_support_proposals --lib
+cargo test -p montage-core plan_visual_support_proposals --lib
 ```
 
 Manual end-to-end flow for the required artifacts:

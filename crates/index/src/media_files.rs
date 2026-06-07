@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use awidat_proto::index::AssetId;
+use montage_proto::index::AssetId;
 
 use crate::AssetInput;
 
@@ -71,7 +71,7 @@ pub fn collect_raw_media_inputs(project_root: &Path) -> std::io::Result<Vec<Asse
     })
 }
 
-/// Return true when a path has a media/source-support extension Awidat knows how to catalog.
+/// Return true when a path has a media/source-support extension Montage knows how to catalog.
 pub fn is_media_path(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(OsStr::to_str) else {
         return false;
@@ -129,7 +129,7 @@ pub fn is_ignored_scan_dir(project_root: &Path, dir: &Path) -> bool {
             component,
             Component::Normal(name)
                 if name == OsStr::new("index")
-                    || name == OsStr::new(".awidat")
+                    || name == OsStr::new(".montage")
                     || name == OsStr::new(".git")
                     || name == OsStr::new("target")
         )
@@ -215,7 +215,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path().join("raw/a.mp4"));
         write(dir.path().join("renders/out.mp4"));
-        write(dir.path().join(".awidat/proxies/a.mp4"));
+        write(dir.path().join(".montage/proxies/a.mp4"));
         write(dir.path().join("index/whisper/a.json"));
 
         let found = collect_project_media_files(dir.path(), MediaScanOptions::default()).unwrap();

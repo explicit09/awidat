@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Awidat Social Live Verification</title>
+    <title>Montage Social Live Verification</title>
     <style>
       :root {
         color-scheme: dark;
@@ -89,7 +89,7 @@
   </head>
   <body>
     <main>
-      <h1>Awidat Social Live Verification</h1>
+      <h1>Montage Social Live Verification</h1>
       <p>
         This is the release gate for real-user social publishing. Unit tests can
         prove command shape, but this page defines the live/sandbox/private
@@ -100,7 +100,7 @@
       <div class="gate">
         <h3>End-to-end workflow evidence</h3>
         <ul>
-          <li>OAuth sign-in starts from Awidat and returns a connected account via <code>social_accounts</code>.</li>
+          <li>OAuth sign-in starts from Montage and returns a connected account via <code>social_accounts</code>.</li>
           <li>User selects the destination account and edits metadata before publish.</li>
           <li>Publish path uses <code>social_bind_target</code>, <code>social_validate_target</code>, <code>social_update_target</code> for saved metadata edits on bound jobs, <code>social_schedule_target</code>, and <code>social_upload_artifact</code>.</li>
           <li>Scheduled app-closed firing is proven from hosted cron/tick logs, not a frontend timer.</li>

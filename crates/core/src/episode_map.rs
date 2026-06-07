@@ -19,8 +19,8 @@
 
 use std::path::Path;
 
-use awidat_proto::otio::{StackChild, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{StackChild, TrackChild};
+use montage_proto::project::Project;
 
 /// Render the project into a compact textual map.
 ///
@@ -227,7 +227,7 @@ fn topics_summary(project_root: &Path) -> Vec<TopicRow> {
 /// less than the media reference's available_range duration (when
 /// declared).
 fn timeline_summary(project: &Project) -> (usize, f64, usize) {
-    use awidat_proto::otio::{ExternalReference, MediaReference};
+    use montage_proto::otio::{ExternalReference, MediaReference};
     let mut clip_count = 0usize;
     let mut total_dur = 0.0f64;
     let mut trimmed = 0usize;
@@ -277,7 +277,7 @@ fn walkdir(dir: &Path) -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };

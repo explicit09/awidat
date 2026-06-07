@@ -2,10 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use awidat_proto::AWIDAT_PROJECT_VERSION;
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::Timeline;
-use awidat_proto::professional::{AssetBin, AssetCatalog, AssetRecord};
+use montage_proto::MONTAGE_PROJECT_VERSION;
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::Timeline;
+use montage_proto::professional::{AssetBin, AssetCatalog, AssetRecord};
 use thiserror::Error;
 
 /// Catalog mutation failure.
@@ -25,24 +25,24 @@ pub enum CatalogMutationError {
     MissingAsset(String),
 }
 
-/// Ensure the timeline has `metadata.awidat` and return it.
-pub fn ensure_awidat_metadata(timeline: &mut Timeline) -> &mut AwidatTimelineMetadata {
+/// Ensure the timeline has `metadata.montage` and return it.
+pub fn ensure_montage_metadata(timeline: &mut Timeline) -> &mut MontageTimelineMetadata {
     timeline
         .metadata
-        .awidat
-        .get_or_insert_with(|| AwidatTimelineMetadata {
-            version: AWIDAT_PROJECT_VERSION.to_string(),
-            ..AwidatTimelineMetadata::default()
+        .montage
+        .get_or_insert_with(|| MontageTimelineMetadata {
+            version: MONTAGE_PROJECT_VERSION.to_string(),
+            ..MontageTimelineMetadata::default()
         })
 }
 
 /// Ensure the metadata has a durable asset catalog and return it.
-pub fn ensure_asset_catalog(meta: &mut AwidatTimelineMetadata) -> &mut AssetCatalog {
+pub fn ensure_asset_catalog(meta: &mut MontageTimelineMetadata) -> &mut AssetCatalog {
     meta.asset_catalog.get_or_insert_with(AssetCatalog::default)
 }
 
 /// Upsert an asset into the durable catalog and source asset list.
-pub fn upsert_asset(meta: &mut AwidatTimelineMetadata, record: AssetRecord) {
+pub fn upsert_asset(meta: &mut MontageTimelineMetadata, record: AssetRecord) {
     if !meta.source_assets.iter().any(|asset| asset == &record.path) {
         meta.source_assets.push(record.path.clone());
         meta.source_assets.sort();
@@ -80,7 +80,7 @@ pub fn upsert_asset(meta: &mut AwidatTimelineMetadata, record: AssetRecord) {
 
 /// Create a durable user/agent bin.
 pub fn create_bin(
-    meta: &mut AwidatTimelineMetadata,
+    meta: &mut MontageTimelineMetadata,
     id: String,
     name: String,
     parent_id: Option<String>,
@@ -107,7 +107,7 @@ pub fn create_bin(
 
 /// Move an asset to a durable bin, or clear its bin when `bin_id` is `None`.
 pub fn move_asset_to_bin(
-    meta: &mut AwidatTimelineMetadata,
+    meta: &mut MontageTimelineMetadata,
     asset_id: &str,
     bin_id: Option<String>,
 ) -> Result<(), CatalogMutationError> {
@@ -128,7 +128,7 @@ pub fn move_asset_to_bin(
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::professional::{AssetReadiness, AssetRole};
+    use montage_proto::professional::{AssetReadiness, AssetRole};
 
     use super::*;
 
@@ -143,19 +143,19 @@ mod tests {
     }
 
     #[test]
-    fn ensure_awidat_metadata_creates_missing_block() {
+    fn ensure_montage_metadata_creates_missing_block() {
         let mut timeline = Timeline::empty("test");
-        timeline.metadata.awidat = None;
+        timeline.metadata.montage = None;
 
-        let meta = ensure_awidat_metadata(&mut timeline);
+        let meta = ensure_montage_metadata(&mut timeline);
 
-        assert_eq!(meta.version, AWIDAT_PROJECT_VERSION);
+        assert_eq!(meta.version, MONTAGE_PROJECT_VERSION);
     }
 
     #[test]
     fn upsert_asset_creates_catalog_and_source_asset() {
         let mut timeline = Timeline::empty("test");
-        let meta = ensure_awidat_metadata(&mut timeline);
+        let meta = ensure_montage_metadata(&mut timeline);
 
         upsert_asset(meta, record("raw/a.mp4"));
 
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn create_bin_rejects_missing_parent() {
         let mut timeline = Timeline::empty("test");
-        let meta = ensure_awidat_metadata(&mut timeline);
+        let meta = ensure_montage_metadata(&mut timeline);
 
         let err =
             create_bin(meta, "takes".into(), "Takes".into(), Some("missing".into())).unwrap_err();
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn move_asset_to_bin_updates_asset_bin() {
         let mut timeline = Timeline::empty("test");
-        let meta = ensure_awidat_metadata(&mut timeline);
+        let meta = ensure_montage_metadata(&mut timeline);
         upsert_asset(meta, record("raw/a.mp4"));
         create_bin(meta, "scene-1".into(), "Scene 1".into(), None).unwrap();
 

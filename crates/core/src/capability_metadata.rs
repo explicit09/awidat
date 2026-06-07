@@ -256,20 +256,23 @@ impl CapabilityMetadata {
 
     /// Metadata for a graph-native effect.
     pub fn for_effect(
-        support: awidat_effects::SupportStatus,
-        backend: awidat_effects::BackendKind,
+        support: montage_effects::SupportStatus,
+        backend: montage_effects::BackendKind,
     ) -> Self {
         let export_supported = match (support, backend) {
-            (awidat_effects::SupportStatus::Stable, awidat_effects::BackendKind::FfmpegNative)
+            (
+                montage_effects::SupportStatus::Stable,
+                montage_effects::BackendKind::FfmpegNative,
+            )
             | (
-                awidat_effects::SupportStatus::Experimental,
-                awidat_effects::BackendKind::FfmpegNative,
+                montage_effects::SupportStatus::Experimental,
+                montage_effects::BackendKind::FfmpegNative,
             ) => SupportLevel::Supported,
-            (awidat_effects::SupportStatus::Unavailable, _) => SupportLevel::NotSupported,
-            (_, awidat_effects::BackendKind::SemanticOnly) => SupportLevel::NotSupported,
+            (montage_effects::SupportStatus::Unavailable, _) => SupportLevel::NotSupported,
+            (_, montage_effects::BackendKind::SemanticOnly) => SupportLevel::NotSupported,
         };
         let mut known_limitations = Vec::new();
-        if support == awidat_effects::SupportStatus::Experimental {
+        if support == montage_effects::SupportStatus::Experimental {
             known_limitations.push(
                 "experimental effect support; some parameter combinations may emit render limitations"
                     .into(),

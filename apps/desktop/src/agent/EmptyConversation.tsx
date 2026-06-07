@@ -1,5 +1,5 @@
 // Empty state for the agent rail's conversation pane. Renders a brief
-// "Awidat" intro card followed by four project-aware starter prompts.
+// "Montage" intro card followed by four project-aware starter prompts.
 // Mounted by ChatStream when `items.length === 0`; the Composer and
 // SessionBar continue to render outside this component.
 
@@ -66,7 +66,7 @@ export function EmptyConversation() {
         }}
       >
         <div className="text-[12px] font-semibold text-[var(--color-text-primary)] mb-1">
-          <span className="text-[var(--color-brand)]">▲</span> Awidat
+          <span className="text-[var(--color-brand)]">▲</span> Montage
           <span className="ml-2 text-[10px] text-[var(--color-text-muted)] font-normal">
             · read AGENTS.md · {typeKey ?? "neutral"} mode
           </span>

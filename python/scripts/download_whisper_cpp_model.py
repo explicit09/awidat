@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download the default whisper.cpp model used by Awidat's fast transcript path."""
+"""Download the default whisper.cpp model used by Montage's fast transcript path."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ DEFAULT_URL = (
     "ggml-large-v3-turbo-q5_0.bin"
 )
 DEFAULT_SHA256 = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
-DEFAULT_DIR = Path.home() / ".cache" / "awidat" / "whisper.cpp"
+DEFAULT_DIR = Path.home() / ".cache" / "montage" / "whisper.cpp"
 
 
 def sha256_file(path: Path) -> str:

@@ -8,7 +8,7 @@
 //! against the in-progress output once the file appears.
 
 use async_trait::async_trait;
-use awidat_render::{JobError, JobId};
+use montage_render::{JobError, JobId};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -135,11 +135,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -185,10 +185,10 @@ mod tests {
     /// installed; auto-skips when not.
     #[tokio::test]
     async fn end_to_end_with_real_ffmpeg() {
-        if awidat_render::ffmpeg_path().is_err() {
+        if montage_render::ffmpeg_path().is_err() {
             return;
         }
-        use awidat_render::{JobManager, RenderJobSpec};
+        use montage_render::{JobManager, RenderJobSpec};
         use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
@@ -210,7 +210,7 @@ mod tests {
                 "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
-            backend: awidat_render::RenderBackendKind::AssetPreview,
+            backend: montage_render::RenderBackendKind::AssetPreview,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
@@ -230,7 +230,7 @@ mod tests {
             job_manager: manager,
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

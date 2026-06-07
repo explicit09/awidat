@@ -1,4 +1,4 @@
-//! awidat-social-server — Axum HTTP wrapper over the awidat-social domain crate.
+//! montage-social-server — Axum HTTP wrapper over the montage-social domain crate.
 //!
 //! Phase 1: skeleton with mock upload adapters, real PgSocialStore, and the
 //! /internal/tick endpoint code-guarded by SOCIAL_FIRING_ENABLED=false.
@@ -24,9 +24,9 @@
 //!   GOOGLE_CLIENT_SECRET    — Google OAuth client secret (Phase 2; server-only, never in desktop)
 //!   SOCIAL_TOKEN_AEAD_KEY   — 64 hex chars = 32-byte ChaCha20-Poly1305 key (Phase 2)
 //!   SOCIAL_TOKEN_KEY_ID     — key identifier stored alongside every token (Phase 2)
-//!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://awidat-social.fly.dev"
+//!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://montage-social.fly.dev"
 //!   YOUTUBE_FORCE_PRIVATE   — "false" allows non-private uploads (default "true"; keep true pre-audit)
-//!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/awidat-artifacts")
+//!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/montage-artifacts")
 //!   SOCIAL_MIGRATIONS_DIR   — SQL migration dir (default: ../social/migrations from Cargo manifest)
 //!   SOCIAL_DB_POOL_MAX_SIZE — max Postgres pool size (default "4")
 //!   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
@@ -39,8 +39,19 @@ mod token_refresher;
 mod token_resolver;
 mod user_routes;
 
-use awidat_social::upload_adapter::{TikTokInteractionSettings, UploadPrivacy};
-use awidat_social::{
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{HeaderMap, Response, StatusCode, header},
+    response::{Html, IntoResponse},
+    routing::{get, post},
+};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use constant_time_eq::constant_time_eq;
+use hmac::{Hmac, Mac};
+use montage_social::upload_adapter::{TikTokInteractionSettings, UploadPrivacy};
+use montage_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
     api::{ExecuteUploadRequest, SocialApi},
     instagram_upload::{
@@ -73,17 +84,6 @@ use awidat_social::{
         live::{LiveYouTubeStatusClient, LiveYouTubeUploadClient},
     },
 };
-use axum::{
-    Json, Router,
-    body::Body,
-    extract::{Path, Query, State},
-    http::{HeaderMap, Response, StatusCode, header},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use constant_time_eq::constant_time_eq;
-use hmac::{Hmac, Mac};
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use r2d2_postgres::postgres::NoTls;
@@ -209,7 +209,7 @@ async fn main() {
         .map(|v| v == "true")
         .unwrap_or(false);
     let artifact_base_dir =
-        std::env::var("ARTIFACT_BASE_DIR").unwrap_or_else(|_| "/var/lib/awidat-artifacts".into());
+        std::env::var("ARTIFACT_BASE_DIR").unwrap_or_else(|_| "/var/lib/montage-artifacts".into());
     // Phase 5 desktop dev bearer (single-user until Phase 7 Supabase Auth).
     let desktop_auth_token = std::env::var("DESKTOP_AUTH_TOKEN").unwrap_or_default();
     let desktop_user_id =
@@ -220,7 +220,7 @@ async fn main() {
         social_firing_enabled,
         youtube_force_private,
         tiktok_public_posting_enabled,
-        "awidat-social-server starting — firing enabled: {social_firing_enabled}, youtube_force_private: {youtube_force_private}, tiktok_public_posting_enabled: {tiktok_public_posting_enabled}"
+        "montage-social-server starting — firing enabled: {social_firing_enabled}, youtube_force_private: {youtube_force_private}, tiktok_public_posting_enabled: {tiktok_public_posting_enabled}"
     );
 
     let manager = PostgresConnectionManager::new(
@@ -243,7 +243,7 @@ async fn main() {
     // would re-point + re-enable the deployed cron at a placeholder URL. By
     // default we skip those whenever firing is disabled; local runners can also
     // force skipping while enabling their own in-process tick loop.
-    let skip_infra = std::env::var("AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS")
+    let skip_infra = std::env::var("MONTAGE_SOCIAL_SKIP_INFRA_MIGRATIONS")
         .map(|v| v == "true")
         .unwrap_or(!social_firing_enabled);
     let db_pool_max_size = db_pool_max_size();
@@ -449,7 +449,7 @@ pub(crate) fn bearer_auth(headers: &HeaderMap, secret: &str) -> bool {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 async fn health_handler() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok", "service": "awidat-social-server"}))
+    Json(serde_json::json!({"status": "ok", "service": "montage-social-server"}))
 }
 
 async fn providers_handler(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -744,7 +744,7 @@ fn oauth_success_html(account: &ConnectedAccount) -> String {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Awidat social account connected</title>
+  <title>Montage social account connected</title>
   <style>
     :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
     body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #10131f; color: #f4f6fb; }}
@@ -757,9 +757,9 @@ fn oauth_success_html(account: &ConnectedAccount) -> String {
 </head>
 <body>
   <main>
-    <h1>Connected to Awidat</h1>
+    <h1>Connected to Montage</h1>
     <p><strong>{account_name}</strong> is connected for <strong>{provider}</strong>.</p>
-    <p>You can close this tab and return to Awidat.</p>
+    <p>You can close this tab and return to Montage.</p>
     <p><code>{account_id}</code></p>
   </main>
 </body>
@@ -1038,7 +1038,7 @@ async fn internal_tick_handler(
         let mut youtube_used = 0usize;
 
         for job in claimed {
-            use awidat_social::model::Provider;
+            use montage_social::model::Provider;
             match &job.provider {
                 Provider::YouTube => {
                     if youtube_used >= youtube_quota_remaining {
@@ -1123,7 +1123,7 @@ async fn internal_tick_handler(
                     }
                 }
                 Provider::Instagram => {
-                    use awidat_social::upload_adapter::BlockedUploadAdapter;
+                    use montage_social::upload_adapter::BlockedUploadAdapter;
                     let mut upload = upload_request_for_job(&store, &job, now);
                     let instagram_account_id = match store
                         .connected_account(&job.connected_account_id)
@@ -1183,7 +1183,7 @@ async fn internal_tick_handler(
                     }
                 }
                 Provider::TwitterX => {
-                    use awidat_social::upload_adapter::BlockedUploadAdapter;
+                    use montage_social::upload_adapter::BlockedUploadAdapter;
                     let mut upload = upload_request_for_job(&store, &job, now);
                     let artifact_source = artifact_source::FileArtifactSource::new(
                         artifact_base_dir.clone(),
@@ -1434,7 +1434,7 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                 }
             }
             Provider::Instagram => {
-                use awidat_social::upload_adapter::BlockedUploadAdapter;
+                use montage_social::upload_adapter::BlockedUploadAdapter;
                 let mut upload = upload_request_for_job(&store, &job, now);
                 let instagram_account_id = store
                     .connected_account(&job.connected_account_id)
@@ -1469,7 +1469,7 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                     .map_err(|e| format!("instagram execute: {e}"))?;
             }
             Provider::TwitterX => {
-                use awidat_social::upload_adapter::BlockedUploadAdapter;
+                use montage_social::upload_adapter::BlockedUploadAdapter;
                 let mut upload = upload_request_for_job(&store, &job, now);
                 let artifact_source =
                     artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
@@ -1537,7 +1537,7 @@ pub(crate) async fn poll_processing_publish_job(
         let job = store
             .publish_job(&job_id)
             .map_err(|e| format!("job lookup: {e}"))?;
-        if job.status != awidat_social::model::PublishJobStatus::Processing {
+        if job.status != montage_social::model::PublishJobStatus::Processing {
             return Ok(());
         }
         match &job.provider {
@@ -1682,7 +1682,7 @@ async fn internal_poll_processing_handler(
             .map_err(|e| format!("processing query: {e}"))?;
         let mut advanced = 0usize;
         for job in jobs {
-            use awidat_social::model::Provider;
+            use montage_social::model::Provider;
             match &job.provider {
                 Provider::YouTube => {
                     let resolver = ServerAccessTokenResolver::new(
@@ -1829,7 +1829,7 @@ async fn internal_refresh_tokens_handler(
                     "token refresh unavailable for provider"
                 );
                 let mut account = account;
-                account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                account.status = montage_social::model::ConnectedAccountStatus::NeedsReauth;
                 account.updated_at = now;
                 let _ = store.save_connected_account(account);
                 needs_reauth += 1;
@@ -1845,7 +1845,7 @@ async fn internal_refresh_tokens_handler(
                 }
                 Err(TokenRefreshError::InvalidGrant(_)) => {
                     if let Ok(mut account) = store.connected_account(&account_id) {
-                        account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                        account.status = montage_social::model::ConnectedAccountStatus::NeedsReauth;
                         account.updated_at = now;
                         let _ = store.save_connected_account(account);
                     }
@@ -1854,7 +1854,7 @@ async fn internal_refresh_tokens_handler(
                 Err(TokenRefreshError::Unavailable(msg)) => {
                     tracing::warn!(account_id, "token refresh unavailable: {msg}");
                     if let Ok(mut account) = store.connected_account(&account_id) {
-                        account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                        account.status = montage_social::model::ConnectedAccountStatus::NeedsReauth;
                         account.updated_at = now;
                         let _ = store.save_connected_account(account);
                     }
@@ -2025,7 +2025,7 @@ fn token_endpoint(provider: &Provider) -> &'static str {
 fn token_refresher_for_provider(
     credentials: &SocialOAuthCredentials,
     provider: &Provider,
-    key: awidat_social::token::Aead256Key,
+    key: montage_social::token::Aead256Key,
 ) -> Option<token_refresher::ServerTokenRefresher> {
     match provider {
         Provider::YouTube => {
@@ -2128,11 +2128,11 @@ fn build_connected_account(
     scopes: &[String],
     now: i64,
 ) -> ConnectedAccount {
-    use awidat_social::eligibility::{
+    use montage_social::eligibility::{
         has_instagram_content_publish_scope, instagram_eligibility, tiktok_eligibility,
         twitter_x_eligibility, youtube_eligibility,
     };
-    use awidat_social::model::ConnectedAccountStatus;
+    use montage_social::model::ConnectedAccountStatus;
 
     // Derive capabilities + eligibility from the GRANTED scopes (not defaults),
     // so an account that holds youtube.upload is actually marked upload-capable.
@@ -2379,7 +2379,7 @@ mod tests {
 
     #[test]
     fn direct_fire_skips_quota_when_job_is_not_due() {
-        use awidat_social::{
+        use montage_social::{
             model::PublishJob,
             store::{InMemorySocialStore, SocialStore},
         };
@@ -2412,7 +2412,7 @@ mod tests {
 
     #[test]
     fn direct_fire_restores_due_youtube_job_when_quota_is_exhausted() {
-        use awidat_social::{
+        use montage_social::{
             model::PublishJob,
             store::{InMemorySocialStore, SocialStore},
         };
@@ -2445,7 +2445,7 @@ mod tests {
 
     #[test]
     fn upload_request_for_job_uses_target_platform_fields() {
-        use awidat_social::{
+        use montage_social::{
             model::{
                 CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
                 PublishJobEventType,
@@ -2462,8 +2462,8 @@ mod tests {
             Provider::YouTube,
             serde_json::json!({
                 "title": "Launch clip",
-                "description": "Rendered from Awidat",
-                "tags": ["awidat", "launch"],
+                "description": "Rendered from Montage",
+                "tags": ["montage", "launch"],
                 "privacy": "unlisted"
             }),
             2_000,
@@ -2497,14 +2497,17 @@ mod tests {
 
         let request = upload_request_for_job(&store, &job, 1_001);
         assert_eq!(request.title, "Launch clip");
-        assert_eq!(request.description.as_deref(), Some("Rendered from Awidat"));
-        assert_eq!(request.tags, vec!["awidat", "launch"]);
+        assert_eq!(
+            request.description.as_deref(),
+            Some("Rendered from Montage")
+        );
+        assert_eq!(request.tags, vec!["montage", "launch"]);
         assert_eq!(request.privacy, Some(UploadPrivacy::Unlisted));
     }
 
     #[test]
     fn upload_request_for_job_drops_stale_twitter_x_only_fields() {
-        use awidat_social::{
+        use montage_social::{
             model::{
                 CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
                 PublishJobEventType,
@@ -2565,7 +2568,7 @@ mod tests {
 
     #[test]
     fn upload_request_for_job_maps_instagram_title_to_caption_when_description_is_blank() {
-        use awidat_social::{
+        use montage_social::{
             model::{
                 CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
                 PublishJobEventType,
@@ -2624,7 +2627,7 @@ mod tests {
 
     #[test]
     fn upload_request_for_job_uses_tiktok_interaction_fields() {
-        use awidat_social::{
+        use montage_social::{
             model::{
                 CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
                 PublishJobEventType,

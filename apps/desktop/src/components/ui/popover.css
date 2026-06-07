@@ -4,7 +4,7 @@
  * so we set z-index high enough to clear modal-like surfaces (chat
  * is z<10; this stays below ApprovalRequest/Dialog). */
 
-.awidat-popover {
+.montage-popover {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -23,15 +23,15 @@
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.awidat-popover[data-state="open"] {
-  animation-name: awidat-popover-in;
+.montage-popover[data-state="open"] {
+  animation-name: montage-popover-in;
 }
 
-.awidat-popover[data-state="closed"] {
-  animation-name: awidat-popover-out;
+.montage-popover[data-state="closed"] {
+  animation-name: montage-popover-out;
 }
 
-@keyframes awidat-popover-in {
+@keyframes montage-popover-in {
   from {
     opacity: 0;
     transform: translateY(4px) scale(0.98);
@@ -42,7 +42,7 @@
   }
 }
 
-@keyframes awidat-popover-out {
+@keyframes montage-popover-out {
   from {
     opacity: 1;
   }

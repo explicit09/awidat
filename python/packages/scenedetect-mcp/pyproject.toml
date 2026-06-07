@@ -1,10 +1,10 @@
 [project]
 name = "scenedetect-mcp"
 version = "0.1.0"
-description = "Awidat shot-boundary indexer (PySceneDetect content detector)."
+description = "Montage shot-boundary indexer (PySceneDetect content detector)."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     "scenedetect[opencv]>=0.6.7,<0.7",
 ]
 

@@ -3,7 +3,7 @@
  * Exercises the helpers without spinning up a Zustand store or DOM.
  *
  * Wave 4 T1 added the on-disk persistence — write-on-toggle flushes
- * the project's disabled set to `<project>/.awidat/skills.json` via a
+ * the project's disabled set to `<project>/.montage/skills.json` via a
  * Tauri command. Wave 5 B2 extended the same file to carry version +
  * provenance pins. The store exposes `__setPersistDisabledForTests`
  * and `__setPersistSkillConfigForTests` seams so we can verify the

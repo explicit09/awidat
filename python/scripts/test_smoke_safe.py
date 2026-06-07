@@ -112,8 +112,8 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_COMPOSITION_MODEL_PROJECT": str(project_root),
-                    "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS": "1",
+                    "MONTAGE_COMPOSITION_MODEL_PROJECT": str(project_root),
+                    "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS": "1",
                 },
                 clear=False,
             ):
@@ -125,12 +125,12 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AWIDAT_COMPOSITION_MODEL_PROJECT": "",
-                "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS": "2",
+                "MONTAGE_COMPOSITION_MODEL_PROJECT": "",
+                "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS": "2",
             },
             clear=False,
         ):
-            with self.assertRaisesRegex(SystemExit, "AWIDAT_COMPOSITION_MODEL_PROJECT"):
+            with self.assertRaisesRegex(SystemExit, "MONTAGE_COMPOSITION_MODEL_PROJECT"):
                 smoke_safe.check_composition_model_project_tree_from_env()
 
     def test_env_project_tree_check_treats_empty_optional_thresholds_as_defaults(self) -> None:
@@ -141,9 +141,9 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_COMPOSITION_MODEL_PROJECT": str(project_root),
-                    "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS": "",
-                    "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS": "",
+                    "MONTAGE_COMPOSITION_MODEL_PROJECT": str(project_root),
+                    "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS": "",
+                    "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS": "",
                 },
                 clear=False,
             ):
@@ -160,10 +160,10 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_COMPOSITION_MODEL_PROJECT": str(project_root),
-                    "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS": "1",
-                    "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS": "",
-                    "AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS": "1",
+                    "MONTAGE_COMPOSITION_MODEL_PROJECT": str(project_root),
+                    "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS": "1",
+                    "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS": "",
+                    "MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS": "1",
                 },
                 clear=False,
             ):
@@ -179,9 +179,9 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_COMPOSITION_MODEL_PROJECT": str(project_root),
-                    "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS": "",
-                    "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "2",
+                    "MONTAGE_COMPOSITION_MODEL_PROJECT": str(project_root),
+                    "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS": "",
+                    "MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "2",
                 },
                 clear=False,
             ):
@@ -196,8 +196,8 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_REAL_CORPUS": str(project_root),
-                    "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "1",
+                    "MONTAGE_REAL_CORPUS": str(project_root),
+                    "MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "1",
                 },
                 clear=True,
             ):
@@ -214,8 +214,8 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_REAL_CORPUS": str(project_root),
-                    "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "0",
+                    "MONTAGE_REAL_CORPUS": str(project_root),
+                    "MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS": "0",
                 },
                 clear=True,
             ):
@@ -231,8 +231,8 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_REAL_CORPUS": str(project_root),
-                    "AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "1",
+                    "MONTAGE_REAL_CORPUS": str(project_root),
+                    "MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "1",
                 },
                 clear=True,
             ):
@@ -245,7 +245,7 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
             write_project_marker(project_root)
-            eval_root = project_root / ".awidat" / "eval"
+            eval_root = project_root / ".montage" / "eval"
             eval_root.mkdir(parents=True)
             (eval_root / "transition-planner-flow.json").write_text("{}")
             directory = eval_root / "transition-planners"
@@ -256,8 +256,8 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_REAL_CORPUS": str(project_root),
-                    "AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "2",
+                    "MONTAGE_REAL_CORPUS": str(project_root),
+                    "MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "2",
                 },
                 clear=True,
             ):
@@ -269,15 +269,15 @@ class CompositionModelProjectTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
             write_project_marker(project_root)
-            directory = project_root / ".awidat" / "eval" / "transition-planners"
+            directory = project_root / ".montage" / "eval" / "transition-planners"
             directory.mkdir(parents=True)
             (directory / "sample.JSON").write_text("{}")
 
             with patch.dict(
                 os.environ,
                 {
-                    "AWIDAT_REAL_CORPUS": str(project_root),
-                    "AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "1",
+                    "MONTAGE_REAL_CORPUS": str(project_root),
+                    "MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES": "1",
                 },
                 clear=True,
             ):

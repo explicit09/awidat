@@ -290,15 +290,15 @@ mod tests {
 
     #[test]
     fn youtube_adapter_reports_profile_and_capabilities() {
-        let adapter = MockProviderAdapter::youtube("channel_1", "Awidat", "@awidat");
+        let adapter = MockProviderAdapter::youtube("channel_1", "Montage", "@montage");
         let report =
             adapter.fetch_capabilities(&["https://www.googleapis.com/auth/youtube.upload"]);
 
         assert_eq!(adapter.provider(), Provider::YouTube);
         assert_eq!(report.profile.provider, Provider::YouTube);
         assert_eq!(report.profile.provider_account_id, "channel_1");
-        assert_eq!(report.profile.display_name, "Awidat");
-        assert_eq!(report.profile.handle, Some("@awidat".into()));
+        assert_eq!(report.profile.display_name, "Montage");
+        assert_eq!(report.profile.handle, Some("@montage".into()));
         assert!(report.eligibility.eligible);
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.public_posting);
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn youtube_adapter_blocks_missing_upload_scope() {
-        let adapter = MockProviderAdapter::youtube("channel_1", "Awidat", "@awidat");
+        let adapter = MockProviderAdapter::youtube("channel_1", "Montage", "@montage");
         let report = adapter.fetch_capabilities(&[]);
 
         assert!(!report.eligibility.eligible);

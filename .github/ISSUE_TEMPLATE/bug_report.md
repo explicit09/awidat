@@ -22,7 +22,7 @@ labels: bug
 ## Environment
 
 - OS:
-- Awidat version or commit:
+- Montage version or commit:
 - Install method:
 
 ## Logs or Screenshots

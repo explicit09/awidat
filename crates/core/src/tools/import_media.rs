@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use awidat_proto::professional::{
+use montage_proto::professional::{
     AssetProvenance, AssetReadiness, AssetRecord, AssetRole, ReadinessState,
 };
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::FunctionCallError;
-use crate::media_catalog_mutation::{ensure_awidat_metadata, upsert_asset};
+use crate::media_catalog_mutation::{ensure_montage_metadata, upsert_asset};
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 
@@ -473,7 +473,7 @@ fn record_imported_asset(
     let mut project = Project::read(project_root).map_err(|e| {
         FunctionCallError::RespondToModel(format!("import_media: unable to read project: {e}"))
     })?;
-    let meta = ensure_awidat_metadata(&mut project.timeline);
+    let meta = ensure_montage_metadata(&mut project.timeline);
     upsert_asset(
         meta,
         AssetRecord {
@@ -567,7 +567,7 @@ fn symlink_file(source: &Path, destination: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -578,10 +578,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -707,7 +707,7 @@ mod tests {
         .unwrap();
 
         let project = Project::read(project_dir.path()).unwrap();
-        let meta = project.timeline.metadata.awidat.as_ref().unwrap();
+        let meta = project.timeline.metadata.montage.as_ref().unwrap();
         let asset = &meta.asset_catalog.as_ref().unwrap().assets[0];
         let prov = asset.provenance.as_ref().unwrap();
         assert_eq!(prov.upload_date.as_deref(), Some("2025-01-31"));
@@ -756,7 +756,7 @@ mod tests {
             b"media"
         );
         let project = Project::read(project_dir.path()).unwrap();
-        let meta = project.timeline.metadata.awidat.as_ref().unwrap();
+        let meta = project.timeline.metadata.montage.as_ref().unwrap();
         assert_eq!(meta.source_assets, vec!["raw/take-1.mov".to_string()]);
         let asset = &meta.asset_catalog.as_ref().unwrap().assets[0];
         assert_eq!(asset.id, "raw/take-1.mov");

@@ -1,4 +1,4 @@
-"""Musical beat indexer for Awidat.
+"""Musical beat indexer for Montage.
 
 Produces the `beats.json` shape consumed by `skills/beat-sync-editor`.
 The implementation is intentionally lightweight: ffmpeg decodes media
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from awidat_mcp import IndexAssetRequest, IndexerServer
+    from montage_mcp import IndexAssetRequest, IndexerServer
 except ModuleNotFoundError:  # Allows pure helper tests without uv sync.
     IndexAssetRequest = Any  # type: ignore[assignment]
     IndexerServer = None  # type: ignore[assignment]
@@ -35,14 +35,14 @@ MAX_BPM = 200.0
 
 
 def _ffmpeg_path() -> str:
-    explicit = os.environ.get("AWIDAT_FFMPEG")
+    explicit = os.environ.get("MONTAGE_FFMPEG")
     if explicit:
         return explicit
     found = shutil.which("ffmpeg")
     if found:
         return found
     raise RuntimeError(
-        "ffmpeg not found on PATH; install ffmpeg or set AWIDAT_FFMPEG=/path/to/ffmpeg"
+        "ffmpeg not found on PATH; install ffmpeg or set MONTAGE_FFMPEG=/path/to/ffmpeg"
     )
 
 
@@ -64,7 +64,7 @@ def _load_mono(path: str) -> tuple[list[float], int]:
         "f32le",
         "-",
     ]
-    tmp = tempfile.NamedTemporaryFile(prefix="awidat-beats-", suffix=".f32", delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="montage-beats-", suffix=".f32", delete=False)
     tmp_path = Path(tmp.name)
     tmp.close()
     try:
@@ -206,6 +206,6 @@ else:
 
 def main() -> None:
     if server is None:
-        print("beats-mcp requires awidat-mcp; run through the uv workspace", file=sys.stderr)
+        print("beats-mcp requires montage-mcp; run through the uv workspace", file=sys.stderr)
         raise SystemExit(1)
     server.run()

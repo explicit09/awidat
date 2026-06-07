@@ -1,16 +1,16 @@
 [package]
-name = "awidat-render-gpu"
+name = "montage-render-gpu"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_render_gpu"
+name = "montage_render_gpu"
 path = "src/lib.rs"
 
 [dependencies]
-awidat-proto = { workspace = true }
+montage-proto = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }

@@ -1,27 +1,27 @@
 //! Integration tests for PgSocialStore against a real Postgres.
 //!
-//! Gated behind the `AWIDAT_TEST_PG_URL` environment variable so CI without
+//! Gated behind the `MONTAGE_TEST_PG_URL` environment variable so CI without
 //! Postgres still passes.  Locally:
-//!   AWIDAT_TEST_PG_URL=postgres://postgres:password@localhost:5432/postgres \
-//!   cargo test -p awidat-social --test pg_store
+//!   MONTAGE_TEST_PG_URL=postgres://postgres:password@localhost:5432/postgres \
+//!   cargo test -p montage-social --test pg_store
 //!
 //! Against a local Supabase project:
-//!   AWIDAT_TEST_PG_URL=$(supabase status --output env | grep DB_URL | cut -d= -f2) \
-//!   cargo test -p awidat-social --test pg_store
+//!   MONTAGE_TEST_PG_URL=$(supabase status --output env | grep DB_URL | cut -d= -f2) \
+//!   cargo test -p montage-social --test pg_store
 
-use awidat_social::model::{
+use montage_social::model::{
     AccountEligibility, AccountKind, AccountPublishDefaults, CampaignVariantTarget,
     ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider, ProviderCapabilities, PublishJob,
     PublishJobActorType, PublishJobEvent, PublishJobEventType, PublishJobStatus, TeamRole,
     ValidationState, WorkspaceMemberRole,
 };
-use awidat_social::oauth::{OAuthConnection, OAuthConnectionStatus};
-use awidat_social::pg_store::PgSocialStore;
-use awidat_social::store::{SocialStore, SocialStoreError};
-use awidat_social::token::{TestKeyProvider, TokenSecret};
+use montage_social::oauth::{OAuthConnection, OAuthConnectionStatus};
+use montage_social::pg_store::PgSocialStore;
+use montage_social::store::{SocialStore, SocialStoreError};
+use montage_social::token::{TestKeyProvider, TokenSecret};
 
 fn pg_url() -> Option<String> {
-    std::env::var("AWIDAT_TEST_PG_URL").ok()
+    std::env::var("MONTAGE_TEST_PG_URL").ok()
 }
 
 fn make_store(pg_url: &str) -> PgSocialStore {
@@ -71,8 +71,8 @@ fn connected_account(id: &str) -> ConnectedAccount {
         owner: owner(),
         provider: Provider::YouTube,
         provider_account_id: format!("{id}_channel"),
-        display_name: "Awidat PG Channel".into(),
-        handle: Some("@awidat_pg".into()),
+        display_name: "Montage PG Channel".into(),
+        handle: Some("@montage_pg".into()),
         avatar_url: None,
         account_kind: AccountKind::Channel,
         status: ConnectedAccountStatus::Connected,
@@ -398,9 +398,9 @@ fn pg_persists_defaults_roles_and_account_jobs() {
     let defaults = AccountPublishDefaults {
         connected_account_id: acct_id.clone(),
         default_privacy: Some("unlisted".into()),
-        default_tags: vec!["awidat".into()],
-        title_prefix: Some("Awidat: ".into()),
-        description_suffix: Some("Built with Awidat.".into()),
+        default_tags: vec!["montage".into()],
+        title_prefix: Some("Montage: ".into()),
+        description_suffix: Some("Built with Montage.".into()),
         updated_at: 2_000,
     };
     let role = WorkspaceMemberRole::new(&ws_id, &user_id, TeamRole::Publisher);

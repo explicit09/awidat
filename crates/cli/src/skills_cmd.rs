@@ -1,9 +1,9 @@
-//! `awidat skills` — list and invoke named editorial workflows.
+//! `montage skills` — list and invoke named editorial workflows.
 //!
 //! Two subcommands:
-//!  - `awidat skills list` — print the L1 catalog (name, description,
+//!  - `montage skills list` — print the L1 catalog (name, description,
 //!    tier, source dir) of every discovered skill.
-//!  - `awidat skills run <name> <project>` — open the TUI with a
+//!  - `montage skills run <name> <project>` — open the TUI with a
 //!    pre-staged "please use the <name> skill" prompt so the agent
 //!    loads the skill body on its first turn.
 //!
@@ -19,12 +19,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use awidat_core::skills::SkillRegistry;
+use montage_core::skills::SkillRegistry;
 
-/// Args for `awidat skills list`.
+/// Args for `montage skills list`.
 pub struct ListArgs;
 
-/// Args for `awidat skills run`.
+/// Args for `montage skills run`.
 pub struct RunArgs {
     /// Skill name to invoke (must match an entry in the L1 catalog).
     pub name: String,
@@ -32,7 +32,7 @@ pub struct RunArgs {
     pub project: PathBuf,
 }
 
-/// `awidat skills list`. Prints the discovered skill catalog with
+/// `montage skills list`. Prints the discovered skill catalog with
 /// source paths so the user can edit them.
 pub fn list(_args: ListArgs) -> Result<()> {
     let (registry, errors) = discover_registry()?;
@@ -45,10 +45,10 @@ pub fn list(_args: ListArgs) -> Result<()> {
         println!("No skills installed.");
         println!();
         println!("Drop a skill folder under one of:");
-        for root in awidat_config::defaults::user_skills_roots() {
+        for root in montage_config::defaults::user_skills_roots() {
             println!("  {}/<name>/SKILL.md      (user)", root.display());
         }
-        if let Some(b) = awidat_config::defaults::skills_root() {
+        if let Some(b) = montage_config::defaults::skills_root() {
             println!("  {}/<name>/SKILL.md      (bundled)", b.display());
         }
         return Ok(());
@@ -67,11 +67,11 @@ pub fn list(_args: ListArgs) -> Result<()> {
         println!("    {}", s.root.display());
         println!();
     }
-    println!("Run `awidat skills run <name> <project>` to use one.");
+    println!("Run `montage skills run <name> <project>` to use one.");
     Ok(())
 }
 
-/// `awidat skills run <name> <project>`. Validates the skill exists,
+/// `montage skills run <name> <project>`. Validates the skill exists,
 /// then opens the TUI with a stage-1 user message asking the agent
 /// to use that skill. The TUI flow is the standard one — no special
 /// session shape — but the first prompt is pre-filled so the user
@@ -92,7 +92,7 @@ pub fn prepare_run(args: &RunArgs) -> Result<String> {
         let mut available: Vec<&str> = registry.all().map(|s| s.meta.name.as_str()).collect();
         available.sort();
         let suggestions = if available.is_empty() {
-            "no skills installed; run `awidat skills list` to see how to install one".to_string()
+            "no skills installed; run `montage skills list` to see how to install one".to_string()
         } else {
             format!("available skills: {}", available.join(", "))
         };
@@ -124,9 +124,9 @@ fn initial_prompt_for_skill(name: &str) -> String {
 /// Resolve the same registry the runtime uses. Mirrors what
 /// `Session::new` does internally; lifted here so the `list` /
 /// `run` commands operate against identical state.
-fn discover_registry() -> Result<(SkillRegistry, Vec<awidat_core::skills::SkillError>)> {
-    let bundled = awidat_config::defaults::skills_root();
-    let user_roots = awidat_config::defaults::user_skills_roots();
+fn discover_registry() -> Result<(SkillRegistry, Vec<montage_core::skills::SkillError>)> {
+    let bundled = montage_config::defaults::skills_root();
+    let user_roots = montage_config::defaults::user_skills_roots();
     let (reg, errs) =
         SkillRegistry::discover_many(bundled.as_deref(), user_roots.iter().map(PathBuf::as_path));
     Ok((reg, errs))

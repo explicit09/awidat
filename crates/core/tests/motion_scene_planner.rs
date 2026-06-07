@@ -1,14 +1,14 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 //! MotionScene planner tool contract tests.
 
-use awidat_core::edl::anchor::AnchorContext;
-use awidat_core::edl::apply::apply;
-use awidat_core::edl::op::EdlOp;
-use awidat_core::edl::parser::parse;
-use awidat_core::tools::plan_motion_scene::plan_motion_scene_request;
-use awidat_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
-use awidat_proto::otio::Timeline;
-use awidat_proto::professional::MotionSceneLayerKind;
+use montage_core::edl::anchor::AnchorContext;
+use montage_core::edl::apply::apply;
+use montage_core::edl::op::EdlOp;
+use montage_core::edl::parser::parse;
+use montage_core::tools::plan_motion_scene::plan_motion_scene_request;
+use montage_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
+use montage_proto::otio::Timeline;
+use montage_proto::professional::MotionSceneLayerKind;
 
 #[test]
 fn planner_returns_valid_motion_scene_and_storable_edl() {
@@ -176,7 +176,7 @@ fn visual_route_planner_and_apply_persist_multilayer_motion_scene() {
     let timeline = Timeline::empty("motion-scene-route-apply");
     let (timeline, outcome) =
         apply(&timeline, &envelope, &AnchorContext::empty()).expect("apply generated EDL");
-    let metadata = timeline.metadata.awidat.expect("awidat metadata");
+    let metadata = timeline.metadata.montage.expect("montage metadata");
     let stored_scene = metadata
         .motion_scenes
         .iter()

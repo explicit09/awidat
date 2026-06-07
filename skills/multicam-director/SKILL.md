@@ -53,7 +53,7 @@ read_index(channel="shot", asset_id=<each camera>)
 - **Frame-quality** (optional) — breaks ties toward the sharper angle.
 
 If any are missing, instruct the user to index first
-(`awidat index --indexer whisper|face|shot <project>`). At least two
+(`montage index --indexer whisper|face|shot <project>`). At least two
 `Camera`-role assets are required.
 
 ## 1. Sync the angles
@@ -89,7 +89,7 @@ Apply only the proposals you trust:
 ```
 
 The reference camera needs no sync group (offset 0). After applying,
-`vedit_diff` should show one `awidat.sync_group` effect per non-reference
+`vedit_diff` should show one `montage.sync_group` effect per non-reference
 camera.
 
 ## 2. Direct the program cut

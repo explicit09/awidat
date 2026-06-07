@@ -1,6 +1,6 @@
 import type { Item } from "../protocol";
 import type { ConversationTurn } from "../shell/CommandRail";
-import { isAwidatSentinel } from "../state/introState.ts";
+import { isMontageSentinel } from "../state/introState.ts";
 
 type ToolCallItem = Extract<Item, { kind: "tool_call" }>;
 
@@ -17,7 +17,7 @@ export function itemsToConversationTurns(
       // from the transcript. Open a headerless turn so the agent's
       // response still has a home but no user bubble is drawn for
       // the editorial instruction.
-      if (isAwidatSentinel(it.text)) {
+      if (isMontageSentinel(it.text)) {
         current = {
           id: `sentinel-${it.id.toString()}`,
           userText: "",

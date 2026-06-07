@@ -1,10 +1,10 @@
-//! `awidat render` — synchronous timeline export for non-interactive runs.
+//! `montage render` — synchronous timeline export for non-interactive runs.
 
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use awidat_render::RenderJobSpec;
+use montage_render::RenderJobSpec;
 
 /// Derive a short id from the output mp4 path used to name ffmpeg log
 /// sidecars (`<id>.ffmpeg.stdout.log` / `<id>.ffmpeg.stderr.log`).
@@ -17,13 +17,13 @@ fn manifest_id(output_path: &Path) -> String {
 }
 
 pub fn run(project_root: &Path) -> Result<()> {
-    let spec = awidat_render::build_timeline_render_spec(project_root).with_context(|| {
+    let spec = montage_render::build_timeline_render_spec(project_root).with_context(|| {
         format!(
             "failed to plan timeline render for {}",
             project_root.display()
         )
     })?;
-    let ffmpeg = awidat_render::ffmpeg_path().context("failed to locate ffmpeg")?;
+    let ffmpeg = montage_render::ffmpeg_path().context("failed to locate ffmpeg")?;
     println!(
         "Rendering timeline ({:.2}s) → {}",
         spec.total_duration_s.unwrap_or_default(),
@@ -44,10 +44,10 @@ pub fn run(project_root: &Path) -> Result<()> {
     //   * Command::output(): collected both pipes into memory; the
     //     ~16 KB kernel pipe buffer filled (ffmpeg info-level emits
     //     concat warnings + per-frame progress), ffmpeg blocked on
-    //     write, awidat blocked on read = deadlock at 0 % CPU. Hit
+    //     write, montage blocked on read = deadlock at 0 % CPU. Hit
     //     this with PID 39904.
-    //   * Stdio::inherit(): inherits the awidat parent's terminal;
-    //     when awidat runs in the background, ffmpeg writes to a tty
+    //   * Stdio::inherit(): inherits the montage parent's terminal;
+    //     when montage runs in the background, ffmpeg writes to a tty
     //     it doesn't own → SIGTTOU → process STOPPED. Hit this with
     //     PID 46066 (STAT=T even after SIGCONT).
     // Logs land next to the output mp4 so the user (or a postmortem
@@ -113,7 +113,7 @@ pub fn run(project_root: &Path) -> Result<()> {
             .unwrap_or_default();
         bail!("ffmpeg render failed with status {status}\nlast stderr:\n{stderr_tail}");
     }
-    awidat_render::finalize_render_manifest_file(&manifest_path)
+    montage_render::finalize_render_manifest_file(&manifest_path)
         .with_context(|| format!("finalize render manifest {}", manifest_path.display()))?;
     println!("Render complete: {}", spec.output_path.display());
     println!("Render manifest: {}", manifest_path.display());
@@ -127,52 +127,55 @@ fn write_cli_render_manifest(
     let project_path = project_root.join("project.otio.json");
     let project_hash = if project_path.is_file() {
         Some(
-            awidat_render::fingerprint_file(&project_path, true)
+            montage_render::fingerprint_file(&project_path, true)
                 .with_context(|| format!("fingerprint {}", project_path.display()))?
                 .sha256,
         )
     } else {
         None
     };
-    let ffmpeg = awidat_render::ffmpeg_path().context("failed to locate ffmpeg for manifest")?;
+    let ffmpeg = montage_render::ffmpeg_path().context("failed to locate ffmpeg for manifest")?;
     let mut argv = vec![ffmpeg.to_string_lossy().into_owned()];
     argv.extend(spec.args.iter().cloned());
     let mut metadata = spec.metadata.clone();
     metadata.insert("render_driver".into(), "cli_render".into());
-    metadata.extend(awidat_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
+    metadata.extend(montage_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
     enrich_caption_metadata(project_root, &mut metadata)?;
-    let sidecars = awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
+    let sidecars = montage_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
         .context("fingerprint render sidecars")?;
-    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+    let manifest = montage_render::planned_at_now(montage_render::RenderExecutionManifestInput {
         created_at: String::new(),
-        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        montage_version: env!("CARGO_PKG_VERSION").into(),
         project_root: project_root.to_string_lossy().into_owned(),
         project_hash: project_hash.clone(),
         timeline_hash: project_hash,
         backend: spec.backend.clone(),
-        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+        replay: montage_render::RenderReplayPlan::FfmpegArgv {
             argv,
             cwd: spec
                 .cwd
                 .as_ref()
                 .map(|cwd| cwd.to_string_lossy().into_owned()),
         },
-        inputs: awidat_render::fingerprint_manifest_inputs_sampled(project_root, &spec.input_paths)
-            .context("fingerprint render inputs")?,
-        outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
+        inputs: montage_render::fingerprint_manifest_inputs_sampled(
+            project_root,
+            &spec.input_paths,
+        )
+        .context("fingerprint render inputs")?,
+        outputs: vec![montage_render::output_artifact(&spec.output_path, true)],
         sidecars,
         limitations: spec
             .limitations
             .iter()
             .map(|limitation| {
-                awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+                montage_render::limitation(limitation.kind.clone(), limitation.message.clone())
             })
             .collect(),
         verification: None,
         metadata,
     });
-    let manifest_path = awidat_render::manifest_path_for_output(&spec.output_path);
-    awidat_render::write_render_manifest(&manifest_path, &manifest)
+    let manifest_path = montage_render::manifest_path_for_output(&spec.output_path);
+    montage_render::write_render_manifest(&manifest_path, &manifest)
         .with_context(|| format!("write render manifest {}", manifest_path.display()))?;
     Ok(manifest_path)
 }
@@ -181,26 +184,26 @@ fn enrich_caption_metadata(
     project_root: &Path,
     metadata: &mut std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
-    let project = awidat_proto::project::Project::read(project_root).with_context(|| {
+    let project = montage_proto::project::Project::read(project_root).with_context(|| {
         format!(
             "read project for caption metadata {}",
             project_root.display()
         )
     })?;
-    let summary = awidat_core::captions::summarize_captions(&project);
-    metadata.extend(awidat_core::captions::caption_summary_metadata(&summary));
+    let summary = montage_core::captions::summarize_captions(&project);
+    metadata.extend(montage_core::captions::caption_summary_metadata(&summary));
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
-    use awidat_proto::project::Project;
+    use montage_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
+    use montage_proto::project::Project;
 
     fn caption_clip(name: &str, safe_area: Option<&str>) -> Clip {
         let mut clip = Clip::empty(name);
-        let mut effect = Effect::new("awidat.title");
+        let mut effect = Effect::new("montage.title");
         effect
             .metadata
             .insert("role".into(), serde_json::json!("caption"));
@@ -235,7 +238,7 @@ mod tests {
                 "raw/x.mp4".into(),
                 output_path.to_string_lossy().into_owned(),
             ],
-            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: output_path.clone(),
@@ -252,12 +255,12 @@ mod tests {
 
         assert_eq!(
             manifest_path,
-            awidat_render::manifest_path_for_output(&output_path)
+            montage_render::manifest_path_for_output(&output_path)
         );
-        let manifest = awidat_render::read_render_manifest(&manifest_path).unwrap();
+        let manifest = montage_render::read_render_manifest(&manifest_path).unwrap();
         assert_eq!(
             manifest.backend,
-            awidat_render::RenderBackendKind::TimelineFfmpegReencode
+            montage_render::RenderBackendKind::TimelineFfmpegReencode
         );
         assert_eq!(
             manifest.metadata["timeline_backend_reason"],
@@ -296,7 +299,7 @@ mod tests {
                 "raw/x.mp4".into(),
                 output_path.to_string_lossy().into_owned(),
             ],
-            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path,
@@ -310,7 +313,7 @@ mod tests {
         };
 
         let manifest_path = write_cli_render_manifest(dir.path(), &spec).unwrap();
-        let manifest = awidat_render::read_render_manifest(&manifest_path).unwrap();
+        let manifest = montage_render::read_render_manifest(&manifest_path).unwrap();
 
         assert_eq!(manifest.metadata["caption_authority"], "caption_overlays");
         assert_eq!(manifest.metadata["caption_overlay_count"], "1");
@@ -340,7 +343,7 @@ mod tests {
                 format!("[outv]subtitles='{}'[titled_v]", ass_path.display()),
                 output_path.to_string_lossy().into_owned(),
             ],
-            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            backend: montage_render::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path,
@@ -351,7 +354,7 @@ mod tests {
         };
 
         let manifest_path = write_cli_render_manifest(dir.path(), &spec).unwrap();
-        let manifest = awidat_render::read_render_manifest(&manifest_path).unwrap();
+        let manifest = montage_render::read_render_manifest(&manifest_path).unwrap();
 
         assert_eq!(manifest.sidecars.len(), 1);
         assert_eq!(manifest.sidecars[0].path, ass_path.to_string_lossy());

@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use awidat_core::FunctionCallError;
-use awidat_core::tools::start_render::build_render_argv;
+use montage_core::FunctionCallError;
+use montage_core::tools::start_render::build_render_argv;
 
 fn argv_contains_pair(argv: &[String], a: &str, b: &str) -> bool {
     argv.windows(2).any(|w| w[0] == a && w[1] == b)

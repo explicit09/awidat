@@ -10,7 +10,7 @@
 //! The user has to register an OAuth 2.0 Client ID at
 //! <https://console.cloud.google.com/apis/credentials>, enable the
 //! YouTube Data API v3, and paste the `client_id` + `client_secret`
-//! into `<config_dir>/awidat/publishing.json` (or, post W5.A4, the
+//! into `<config_dir>/montage/publishing.json` (or, post W5.A4, the
 //! Settings UI). Until then `begin_oauth` returns a URL with a literal
 //! `YOUR_CLIENT_ID_HERE` placeholder.
 
@@ -74,7 +74,7 @@ impl YoutubeProvider {
     /// Construct using an explicit credentials path. Tests pass a
     /// tempdir path; production wires it through
     /// [`super::ProviderRegistry::new`] which resolves the default
-    /// `<config_dir>/awidat/publishing.json` location.
+    /// `<config_dir>/montage/publishing.json` location.
     pub fn with_store_path(store_path: PathBuf) -> Self {
         Self { store_path }
     }

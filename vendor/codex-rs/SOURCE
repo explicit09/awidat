@@ -8,17 +8,17 @@ We own this fork. Edits are normal code changes; we do not track upstream
 automatically. To pull a specific upstream change later, cherry-pick from a
 local clone of openai/codex into vendor/codex-rs/.
 
-Awidat workspace lints (unwrap_used=deny, etc.) are scoped to crates/* and
+Montage workspace lints (unwrap_used=deny, etc.) are scoped to crates/* and
 do not apply here.
 
 Our edits (re-apply after every refresh):
 - vendor/codex-rs/exec/src/cli.rs: `#[derive(Parser, Debug, Default)]` on `Cli`
-  so awidat-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.
+  so montage-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.
 - vendor/codex-rs/login/src/auth/default_client.rs,
   vendor/codex-rs/models-manager/src/lib.rs,
   vendor/codex-rs/exec/src/lib.rs, and
   vendor/codex-rs/exec/src/event_processor_with_human_output.rs:
-  stamp Codex client version as "0.128.0" instead of Awidat's inherited
+  stamp Codex client version as "0.128.0" instead of Montage's inherited
   CARGO_PKG_VERSION ("0.1.0"). The working installed CLI sends
   `Codex Desktop/0.128.0 ... (codex_exec; 0.128.0)` and
   `/codex/models?client_version=0.128.0`; sending `0.1.0` in the suffix
@@ -49,19 +49,19 @@ Our edits (re-apply after every refresh):
   they should. Keeps `Never` as the default when the user hasn't set
   a policy, so existing non-interactive callers don't change behavior.
 - vendor/codex-rs/tui/Cargo.toml + vendor/codex-rs/tui/src/lib.rs:
-  add `awidat-proto = { workspace = true }` and `mod awidat;` for the
+  add `montage-proto = { workspace = true }` and `mod montage;` for the
   step-6 side panel.
-- vendor/codex-rs/tui/src/awidat/{mod,timeline,project_insights}.rs:
-  new module hosting the Awidat panel. Always-visible policy:
-  uses `AWIDAT_PROJECT_ROOT` when set, otherwise falls back to
+- vendor/codex-rs/tui/src/montage/{mod,timeline,project_insights}.rs:
+  new module hosting the Montage panel. Always-visible policy:
+  uses `MONTAGE_PROJECT_ROOT` when set, otherwise falls back to
   `current_dir()`. Renders to the right of the chat column (36 cols
   fixed). Pure ratatui widgets reading from disk; refresh by calling
-  `AwidatPanel::refresh()` from App event handling.
+  `MontagePanel::refresh()` from App event handling.
 - vendor/codex-rs/tui/src/app.rs: `App` struct gains
-  `awidat_panel: Option<AwidatPanel>` (initialized via
-  `AwidatPanel::detect()`); `render_chat_widget_frame` does a
+  `montage_panel: Option<MontagePanel>` (initialized via
+  `MontagePanel::detect()`); `render_chat_widget_frame` does a
   horizontal split when the panel is `Some`. Behavior is unchanged in
   vanilla codex sessions (env unset → panel is None → chat gets full
   width).
 - vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
-  inside Awidat's single root workspace.
+  inside Montage's single root workspace.

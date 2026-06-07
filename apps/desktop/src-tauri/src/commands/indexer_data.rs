@@ -8,8 +8,8 @@
 //!   - `index/audio-energy/<asset_id>.json`    → AssetId-keyed
 //!   - `index/face/<asset_id>.json`            → AssetId-keyed
 //!   - `index/color-analysis/<asset_id>.json`  → AssetId-keyed
-//!   - `.awidat/silences/<stem>-<hash>.json`   → proxy-stem + FNV hash
-//!   - `.awidat/motion/<stem>-<hash>.json`     → proxy-stem + FNV hash
+//!   - `.montage/silences/<stem>-<hash>.json`   → proxy-stem + FNV hash
+//!   - `.montage/motion/<stem>-<hash>.json`     → proxy-stem + FNV hash
 //!
 //! Path resolution mirrors `commands::transcript::read_transcript`:
 //! walk `<project>/raw/` and recompute each candidate's proxy filename
@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::index::AssetId;
+use montage_proto::index::AssetId;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::media::{motion_path_for, proxy_path_for, silences_path_for};
@@ -122,7 +122,7 @@ fn resolve_asset(project_root: &Path, stem: &str) -> Option<(PathBuf, String)> {
     if !raw_dir.is_dir() {
         return None;
     }
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let target_proxy_name = format!("{stem}.mp4");
     let abs = walk_for_match(&raw_dir, &proxies_dir, &target_proxy_name)?;
     let rel = abs
@@ -174,9 +174,9 @@ fn read_index_sidecar(
     asset_id: &str,
 ) -> Result<Option<serde_json::Value>, String> {
     let asset = AssetId::new(asset_id);
-    match awidat_index::read_sidecar(project_root, indexer, &asset) {
+    match montage_index::read_sidecar(project_root, indexer, &asset) {
         Ok(v) => Ok(Some(v)),
-        Err(awidat_index::SidecarError::NotFound { .. }) => Ok(None),
+        Err(montage_index::SidecarError::NotFound { .. }) => Ok(None),
         Err(e) => Err(format!("read {indexer} sidecar: {e}")),
     }
 }
@@ -223,7 +223,7 @@ pub async fn read_scenes(project_path: String, stem: String) -> Result<Vec<Scene
     .map_err(|e| format!("read_scenes join: {e}"))?
 }
 
-/// Read silence ranges from `.awidat/silences/<stem>-<hash>.json`. The
+/// Read silence ranges from `.montage/silences/<stem>-<hash>.json`. The
 /// silence sidecar uses the renderer's `SilenceSidecar` shape
 /// (`{ ranges, threshold_db, min_duration_s }`).
 #[tauri::command]
@@ -371,7 +371,7 @@ pub async fn read_faces(project_path: String, stem: String) -> Result<Vec<FaceDe
     .map_err(|e| format!("read_faces join: {e}"))?
 }
 
-/// Read motion-energy regions from `.awidat/motion/<stem>-<hash>.json`.
+/// Read motion-energy regions from `.montage/motion/<stem>-<hash>.json`.
 /// The motion sidecar is a flat `magnitudes[]` at
 /// `samples_per_second`; we expand each sample into a one-window
 /// region so the heat strip can render each cell directly.

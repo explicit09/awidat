@@ -1,7 +1,7 @@
 //! Per-project dismissal memory for editorial findings.
 //!
 //! When the user clicks "Dismiss" on an EditorialNote, the
-//! corresponding pattern lands in `<project>/.awidat/dismissed
+//! corresponding pattern lands in `<project>/.montage/dismissed
 //! _patterns.json`. The agent loads this file at session start and
 //! the editorial-finding tools (find_dead_air, find_filler_words,
 //! find_false_starts) consult it before emitting findings — so a
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Filename inside `.awidat/` that holds the dismissed pattern list.
+/// Filename inside `.montage/` that holds the dismissed pattern list.
 pub const DISMISSAL_FILE: &str = "dismissed_patterns.json";
 
 /// Coarse bucket id for dismissed editorial-finding patterns. The
@@ -149,7 +149,7 @@ impl DismissalFile {
 
 /// Path to the dismissal file for a given project.
 pub fn dismissal_file_path(project_root: &Path) -> PathBuf {
-    project_root.join(".awidat").join(DISMISSAL_FILE)
+    project_root.join(".montage").join(DISMISSAL_FILE)
 }
 
 /// Load dismissed patterns. Returns an empty file when missing or
@@ -175,13 +175,13 @@ pub fn load_dismissals(project_root: &Path) -> DismissalFile {
     }
 }
 
-/// Persist dismissed patterns to disk. Creates the `.awidat/`
+/// Persist dismissed patterns to disk. Creates the `.montage/`
 /// directory if missing. Returns an error string on any I/O or
 /// serialize failure.
 pub fn save_dismissals(project_root: &Path, file: &DismissalFile) -> Result<(), String> {
     let path = dismissal_file_path(project_root);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create .awidat: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create .montage: {e}"))?;
     }
     let json = serde_json::to_vec_pretty(file).map_err(|e| format!("serialize dismissals: {e}"))?;
     std::fs::write(&path, json).map_err(|e| format!("write dismissals: {e}"))?;

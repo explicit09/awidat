@@ -1,8 +1,8 @@
-//! Awidat config: TOML at two locations, project overrides global.
+//! Montage config: TOML at two locations, project overrides global.
 //!
-//! - **Global**: `~/.config/awidat/config.toml` (XDG; on macOS the same path
+//! - **Global**: `~/.config/montage/config.toml` (XDG; on macOS the same path
 //!   under `~/.config/` is used by convention even though XDG isn't native).
-//! - **Project**: `<project>/.awidat/config.toml` (per-project overrides).
+//! - **Project**: `<project>/.montage/config.toml` (per-project overrides).
 //!
 //! The merge rule is "project entirely replaces global per top-level key."
 //! For `[[mcp.servers]]` (the only collection in v1), entries with matching
@@ -91,7 +91,7 @@ pub struct McpConfig {
     pub servers: Vec<McpServer>,
 }
 
-/// One MCP server registration. Mirrors `awidat_mcp::ServerConfig` but is
+/// One MCP server registration. Mirrors `montage_mcp::ServerConfig` but is
 /// the *config* shape (de/serializable) — the engine converts to
 /// `ServerConfig` at launch time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,13 +306,13 @@ impl Config {
 /// (rare; unset HOME on Unix). Does *not* check the file actually exists.
 pub fn global_config_path() -> Result<Option<PathBuf>, ConfigError> {
     let dir = dirs::config_dir().ok_or(ConfigError::NoUserConfigDir)?;
-    Ok(Some(dir.join("awidat").join("config.toml")))
+    Ok(Some(dir.join("montage").join("config.toml")))
 }
 
 /// Path to the project-local config file.
 #[must_use]
 pub fn project_config_path(project_root: &Path) -> PathBuf {
-    project_root.join(".awidat").join("config.toml")
+    project_root.join(".montage").join("config.toml")
 }
 
 #[cfg(test)]

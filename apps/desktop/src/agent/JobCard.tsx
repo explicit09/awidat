@@ -5,7 +5,7 @@
 // Cancel routing: most kinds use the generic `cancel_job` command
 // keyed by the job-item id. Render uses its own
 // `cancel_timeline_render` because that JobManager is separate from
-// the AwidatState::jobs map.
+// the MontageState::jobs map.
 //
 // Output-path artifacts: render and transcode set Item::Job's
 // `output_path` field on Completed. Render's Completed-Ok shows a
@@ -45,7 +45,7 @@ export function JobCard({ item }: Props) {
 
   function cancel() {
     if (item.job_kind === "render") {
-      // Render lives in AwidatState::render_jobs, not the generic
+      // Render lives in MontageState::render_jobs, not the generic
       // jobs map; needs its own cancel command.
       invoke("cancel_timeline_render", { jobId: item.id }).catch(() => {});
     } else {

@@ -2,7 +2,7 @@ CSPLUTV100
 1D
 
 BEGIN METADATA
-awidat_shaper ARRI LogC3 EI 800 → Rec.709 gamma 2.4
+montage_shaper ARRI LogC3 EI 800 → Rec.709 gamma 2.4
 END METADATA
 
 2

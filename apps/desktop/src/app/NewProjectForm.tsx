@@ -2,7 +2,7 @@
 //
 // The picker offers four project shapes — podcast / shorts / tutorial /
 // other — and routes the choice through `init_project`, where it gets
-// stamped into the OTIO timeline's metadata.awidat slot and drives the
+// stamped into the OTIO timeline's metadata.montage slot and drives the
 // agent's per-format system prompt + editorial defaults.
 
 import { useCallback, useEffect, useMemo, useState } from "react";

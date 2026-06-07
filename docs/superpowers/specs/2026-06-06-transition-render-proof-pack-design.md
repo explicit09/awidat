@@ -38,5 +38,5 @@ the same proof shape across representative FFmpeg-backed families.
 
 ## Success Criteria
 
-`cargo test -p awidat-cli --test transition_render_proof` produces a real
+`cargo test -p montage-cli --test transition_render_proof` produces a real
 render and verifies both manifest evidence and pixel-level transition evidence.

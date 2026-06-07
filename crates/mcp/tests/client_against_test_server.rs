@@ -1,5 +1,5 @@
-//! Integration tests that exercise [`awidat_mcp::Client`] against the
-//! tiny `awidat-mcp-test-server` binary in the same crate.
+//! Integration tests that exercise [`montage_mcp::Client`] against the
+//! tiny `montage-mcp-test-server` binary in the same crate.
 //!
 //! Test fixtures (the `cfg`/`client_info` helpers and the path-resolution
 //! for the test-server binary) live in `tests/common/mod.rs`.
@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use awidat_mcp::{Client, McpError, ServerConfig};
+use montage_mcp::{Client, McpError, ServerConfig};
 
 mod common;
 use common::{cfg, client_info};
@@ -18,7 +18,7 @@ use common::{cfg, client_info};
 async fn happy_path_initialize_list_call() {
     let mut c = Client::launch(cfg("normal")).unwrap();
     let info = c.initialize(client_info()).await.unwrap();
-    assert_eq!(info.name, "awidat-test");
+    assert_eq!(info.name, "montage-test");
     assert_eq!(info.version, "0.0.1");
     let tools = c.list_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();

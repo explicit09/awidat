@@ -11,8 +11,8 @@ A footage *indexer* is a process that reads a source asset (a video or
 audio file) and produces a JSON sidecar describing some channel of the
 asset — words, shot boundaries, audio energy, speaker emotion, etc.
 
-Indexers are not part of the `awidat` engine. They are external programs,
-typically Python MCP servers, that the engine launches via `awidat index`.
+Indexers are not part of the `montage` engine. They are external programs,
+typically Python MCP servers, that the engine launches via `montage index`.
 The engine never imports an indexer's code; the only contract between the
 engine and an indexer is the *sidecar JSON shape* defined here.
 
@@ -117,7 +117,7 @@ of "known indexer names" in the engine. Adding a new indexer in v1.5 is a
 pure data operation: drop a new MCP server, register an entry in the
 manifest, write sidecars to a new directory.
 
-`awidat validate` cross-checks the manifest against disk:
+`montage validate` cross-checks the manifest against disk:
 
 - Every manifest entry → corresponding directory exists. (Warning if not.)
 - Every sidecar found on disk → header consistent with the manifest entry
@@ -139,7 +139,7 @@ Indexer ids are lowercase, hyphen-separated, no whitespace, no slashes:
 - `audio/energy` ✗ (no slashes)
 
 The directory name and the value of the `indexer` field always match.
-`awidat validate` warns if they don't.
+`montage validate` warns if they don't.
 
 ## Sidecar filename convention
 
@@ -181,12 +181,12 @@ It exposes a `speaker_emotion.run(asset_id) -> Sidecar` tool. The body
 matches the schema above; the header is filled with `indexer:
 "speaker-emotion"`, the indexer's own version, and `schema_version: "1"`.
 
-### Step 3. Register the indexer in awidat's MCP config.
+### Step 3. Register the indexer in montage's MCP config.
 
-Same shape as any MCP server registration in `~/.config/awidat/config.toml`.
-The engine launches the server when `awidat index` runs.
+Same shape as any MCP server registration in `~/.config/montage/config.toml`.
+The engine launches the server when `montage index` runs.
 
-### Step 4. Run `awidat index <project>`.
+### Step 4. Run `montage index <project>`.
 
 The engine:
 
@@ -207,7 +207,7 @@ and returns it.
 
 - No new types in [`crates/proto/`](src/index.rs).
 - No new struct fields anywhere.
-- No new code paths in `awidat init` / `awidat validate` / `awidat index`.
+- No new code paths in `montage init` / `montage validate` / `montage index`.
 - No new dependency on speaker-emotion's data schema.
 
 That's the whole point.

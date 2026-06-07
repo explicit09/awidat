@@ -797,357 +797,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "awidat-agent-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "codex-arg0",
- "codex-exec",
- "codex-login",
- "codex-utils-cli",
- "tracing",
-]
-
-[[package]]
-name = "awidat-auth"
-version = "0.1.0"
-dependencies = [
- "codex-login",
- "codex-utils-home-dir",
- "pretty_assertions",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "awidat-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "awidat-config",
- "awidat-core",
- "awidat-index",
- "awidat-mcp",
- "awidat-proto",
- "awidat-render",
- "awidat-secrets",
- "clap",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "awidat-codex-bridge"
-version = "0.1.0"
-dependencies = [
- "awidat-desktop-protocol",
- "codex-app-server-client",
- "codex-app-server-protocol",
- "codex-arg0",
- "codex-config",
- "codex-core",
- "codex-feedback",
- "codex-protocol",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "awidat-config"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "awidat-core"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "awidat-config",
- "awidat-effects",
- "awidat-index",
- "awidat-lut",
- "awidat-mcp",
- "awidat-proto",
- "awidat-render",
- "awidat-sandboxing",
- "awidat-secrets",
- "base64 0.22.1",
- "bm25",
- "bytes",
- "chrono",
- "dirs",
- "eventsource-stream",
- "futures",
- "pretty_assertions",
- "reqwest 0.12.28",
- "rmcp",
- "rusqlite",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
- "vedit-core",
-]
-
-[[package]]
-name = "awidat-desktop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "awidat-auth",
- "awidat-codex-bridge",
- "awidat-config",
- "awidat-core",
- "awidat-desktop-protocol",
- "awidat-index",
- "awidat-mcp",
- "awidat-proto",
- "awidat-render",
- "awidat-render-gpu",
- "awidat-secrets",
- "awidat-social",
- "base64 0.22.1",
- "chrono",
- "dirs",
- "keyring",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "awidat-desktop-protocol"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "pretty_assertions",
- "serde",
- "serde_json",
- "ts-rs 10.1.0",
-]
-
-[[package]]
-name = "awidat-effects"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "awidat-index"
-version = "0.1.0"
-dependencies = [
- "awidat-config",
- "awidat-mcp",
- "awidat-proto",
- "awidat-test-support",
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "awidat-lut"
-version = "0.1.0"
-dependencies = [
- "sha2 0.10.9",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "awidat-mcp"
-version = "0.1.0"
-dependencies = [
- "awidat-test-support",
- "pretty_assertions",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "awidat-proto"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "awidat-render"
-version = "0.1.0"
-dependencies = [
- "awidat-proto",
- "awidat-render-gpu",
- "chrono",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "awidat-render-gpu"
-version = "0.1.0"
-dependencies = [
- "awidat-proto",
- "bytemuck",
- "png 0.17.16",
- "pollster",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "wgpu",
-]
-
-[[package]]
-name = "awidat-sandboxing"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "awidat-secrets"
-version = "0.1.0"
-dependencies = [
- "keyring",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "awidat-social"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "chacha20poly1305",
- "postgres",
- "r2d2",
- "r2d2_postgres",
- "rand 0.9.3",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "awidat-social-server"
-version = "0.1.0"
-dependencies = [
- "awidat-social",
- "axum",
- "base64 0.22.1",
- "constant_time_eq 0.3.1",
- "hmac 0.12.1",
- "jsonwebtoken",
- "postgres",
- "r2d2",
- "r2d2_postgres",
- "rand 0.9.3",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "wiremock",
-]
-
-[[package]]
-name = "awidat-test-support"
-version = "0.1.0"
-dependencies = [
- "awidat-mcp",
- "awidat-proto",
- "pretty_assertions",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "awidat-tools"
-version = "0.1.0"
-dependencies = [
- "awidat-proto",
-]
-
-[[package]]
 name = "aws-config"
 version = "1.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4381,7 +4030,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
- "awidat-proto",
  "base64 0.22.1",
  "chrono",
  "clap",
@@ -4444,6 +4092,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "libc",
+ "montage-proto",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -10252,6 +9901,357 @@ dependencies = [
  "smallvec",
  "tagptr",
  "uuid",
+]
+
+[[package]]
+name = "montage-agent-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "codex-arg0",
+ "codex-exec",
+ "codex-login",
+ "codex-utils-cli",
+ "tracing",
+]
+
+[[package]]
+name = "montage-auth"
+version = "0.1.0"
+dependencies = [
+ "codex-login",
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "montage-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "montage-config",
+ "montage-core",
+ "montage-index",
+ "montage-mcp",
+ "montage-proto",
+ "montage-render",
+ "montage-secrets",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "montage-codex-bridge"
+version = "0.1.0"
+dependencies = [
+ "codex-app-server-client",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "montage-desktop-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "montage-config"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "montage-core"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bm25",
+ "bytes",
+ "chrono",
+ "dirs",
+ "eventsource-stream",
+ "futures",
+ "montage-config",
+ "montage-effects",
+ "montage-index",
+ "montage-lut",
+ "montage-mcp",
+ "montage-proto",
+ "montage-render",
+ "montage-sandboxing",
+ "montage-secrets",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "rmcp",
+ "rusqlite",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "vedit-core",
+]
+
+[[package]]
+name = "montage-desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dirs",
+ "keyring",
+ "montage-auth",
+ "montage-codex-bridge",
+ "montage-config",
+ "montage-core",
+ "montage-desktop-protocol",
+ "montage-index",
+ "montage-mcp",
+ "montage-proto",
+ "montage-render",
+ "montage-render-gpu",
+ "montage-secrets",
+ "montage-social",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "montage-desktop-protocol"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "ts-rs 10.1.0",
+]
+
+[[package]]
+name = "montage-effects"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "montage-index"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "montage-config",
+ "montage-mcp",
+ "montage-proto",
+ "montage-test-support",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "montage-lut"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "montage-mcp"
+version = "0.1.0"
+dependencies = [
+ "montage-test-support",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "montage-proto"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "montage-render"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "montage-proto",
+ "montage-render-gpu",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "montage-render-gpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "montage-proto",
+ "png 0.17.16",
+ "pollster",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "wgpu",
+]
+
+[[package]]
+name = "montage-sandboxing"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "montage-secrets"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "montage-social"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "chacha20poly1305",
+ "postgres",
+ "r2d2",
+ "r2d2_postgres",
+ "rand 0.9.3",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "montage-social-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "constant_time_eq 0.3.1",
+ "hmac 0.12.1",
+ "jsonwebtoken",
+ "montage-social",
+ "postgres",
+ "r2d2",
+ "r2d2_postgres",
+ "rand 0.9.3",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "wiremock",
+]
+
+[[package]]
+name = "montage-test-support"
+version = "0.1.0"
+dependencies = [
+ "montage-mcp",
+ "montage-proto",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "montage-tools"
+version = "0.1.0"
+dependencies = [
+ "montage-proto",
 ]
 
 [[package]]

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use async_trait::async_trait;
-use awidat_index::{sidecar_path, walk_indexer};
-use awidat_proto::index::AssetId;
+use montage_index::{sidecar_path, walk_indexer};
+use montage_proto::index::AssetId;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -269,7 +269,7 @@ require the user to choose before extraction or cleanup.\
 mod tests {
     use super::*;
     use crate::tool::{SandboxMode, ToolContext, ToolInvocation};
-    use awidat_render::JobManager;
+    use montage_render::JobManager;
     use tokio::sync::broadcast;
 
     fn ctx_at(root: &std::path::Path) -> ToolContext {
@@ -281,7 +281,7 @@ mod tests {
             job_manager: JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

@@ -41,7 +41,7 @@ use super::ai_disclosure::AiDisclosure;
 use super::errors::ProviderError;
 use super::types::{UploadParams, Visibility};
 
-/// File name (under `<config_dir>/awidat/`) where the default-targets
+/// File name (under `<config_dir>/montage/`) where the default-targets
 /// preferences live. Tiny JSON — list of provider keys the user has
 /// opted into auto-publishing for.
 const PREFS_FILE_NAME: &str = "upload_prefs.json";
@@ -206,7 +206,7 @@ impl UploadJobEntry {
 
 /// Shared, cloneable handle to the in-memory upload queue.
 ///
-/// Lives on `AwidatState`. Cheap to clone — single `Arc<Mutex<_>>`
+/// Lives on `MontageState`. Cheap to clone — single `Arc<Mutex<_>>`
 /// behind it, so concurrent commands and the upload worker tasks can
 /// hold it simultaneously without contention beyond the lock itself.
 #[derive(Clone, Default)]
@@ -216,7 +216,7 @@ pub struct UploadQueue {
 
 impl UploadQueue {
     /// Construct an empty queue. Tests use this directly; production
-    /// goes through `AwidatState::default()` which uses `Default`.
+    /// goes through `MontageState::default()` which uses `Default`.
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
@@ -526,14 +526,14 @@ pub struct UploadPrefs {
     pub default_targets: Vec<String>,
 }
 
-/// Resolve `<config_dir>/awidat/upload_prefs.json`. Same conventions
+/// Resolve `<config_dir>/montage/upload_prefs.json`. Same conventions
 /// as `storage::default_store_path` — kept separate so future
 /// migration of credentials to the OS keychain doesn't affect this
 /// non-secret file.
 pub fn default_prefs_path() -> Result<PathBuf, ProviderError> {
     let cfg = dirs::config_dir()
         .ok_or_else(|| ProviderError::Io("could not resolve platform config_dir".into()))?;
-    Ok(cfg.join("awidat").join(PREFS_FILE_NAME))
+    Ok(cfg.join("montage").join(PREFS_FILE_NAME))
 }
 
 /// Read prefs from disk. Missing file → empty defaults (no error).

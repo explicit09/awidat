@@ -453,7 +453,7 @@ pub fn rule_rhythm(at_s: f64, kind: CutKind, inputs: &ContinuityInputs) -> RuleV
 
 /// FNV-1a hash matching `apps/desktop/.../media.rs::stable_path_hash`.
 /// Required for sidecar path lookup. Identical algorithm copied so
-/// `awidat-core` doesn't depend on the desktop crate.
+/// `montage-core` doesn't depend on the desktop crate.
 fn stable_path_hash(path: &Path) -> u32 {
     let mut hash = 0x811c9dc5_u32;
     for byte in path.to_string_lossy().as_bytes() {
@@ -468,7 +468,7 @@ pub fn motion_sidecar_path(project_root: &Path, asset_id: &str) -> PathBuf {
     let abs = project_root.join(asset_id);
     let stem = abs.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("motion")
         .join(format!("{stem}-{:08x}.json", stable_path_hash(&abs)))
 }
@@ -478,7 +478,7 @@ pub fn silence_sidecar_path(project_root: &Path, asset_id: &str) -> PathBuf {
     let abs = project_root.join(asset_id);
     let stem = abs.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("silences")
         .join(format!("{stem}-{:08x}.json", stable_path_hash(&abs)))
 }

@@ -1,4 +1,4 @@
-# Obsidian Glass — Awidat 2026 UI experiment
+# Obsidian Glass — Montage 2026 UI experiment
 
 A dark-first liquid-glass design layer, built from 2026 dark-glassmorphism
 and Apple Liquid Glass research. Branch: `feat/ui-2026-glass`.

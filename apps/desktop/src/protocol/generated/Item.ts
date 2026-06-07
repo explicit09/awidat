@@ -179,7 +179,7 @@ phase: ItemLifecycle,
 source: ProposalSource,
 /**
  * The full EDL text the user can preview in a "show EDL"
- * toggle. Round-trippable through the awidat-core parser.
+ * toggle. Round-trippable through the montage-core parser.
  */
 edl_text: string,
 /**
@@ -210,7 +210,7 @@ revision: number,
  * trailing pause while preserving speaker cadence…").
  *
  * All five inspector fields below are optional: the agent
- * populates them progressively as Awidat's reasoning matures.
+ * populates them progressively as Montage's reasoning matures.
  * The frontend renders each block only when its field is
  * present, so older producers (User-source edits, simple
  * trims, legacy agent paths) keep working unchanged.

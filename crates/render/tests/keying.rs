@@ -2,12 +2,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -42,7 +42,7 @@ fn write_project_with_effect(dir: &Path, effect: Effect) {
 #[test]
 fn project_with_chroma_key_emits_chromakey_filter() {
     let dir = tempfile::tempdir().unwrap();
-    let mut effect = Effect::new("awidat.chroma_key");
+    let mut effect = Effect::new("montage.chroma_key");
     effect
         .metadata
         .insert("key_color".to_string(), serde_json::json!("0x00ff00"));
@@ -66,7 +66,7 @@ fn project_with_chroma_key_emits_chromakey_filter() {
 #[test]
 fn project_with_luma_key_emits_alpha_filter() {
     let dir = tempfile::tempdir().unwrap();
-    let mut effect = Effect::new("awidat.luma_key");
+    let mut effect = Effect::new("montage.luma_key");
     effect
         .metadata
         .insert("threshold".to_string(), serde_json::json!(0.45));

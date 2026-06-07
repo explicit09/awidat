@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use awidat_index::read_sidecar;
-use awidat_proto::index::AssetId;
-use awidat_proto::professional::{
+use montage_index::read_sidecar;
+use montage_proto::index::AssetId;
+use montage_proto::professional::{
     BrollRecommendationAsset, ClipCandidateAsset, TranscriptAlignmentPackage, UnderstandingAsset,
 };
 use serde_json::Value;

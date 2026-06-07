@@ -82,7 +82,7 @@ pub(crate) use codex_app_server_client::legacy_core;
 mod additional_dirs;
 mod app;
 mod app_backtrack;
-// Awidat fork edit: side-panel that mounts when AWIDAT_PROJECT_ROOT
+// Montage fork edit: side-panel that mounts when MONTAGE_PROJECT_ROOT
 // is set in the env. Renders next to the chat column. See
 // vendor/codex-rs/SOURCE.
 mod app_command;
@@ -94,7 +94,7 @@ mod approval_events;
 mod ascii_animation;
 #[cfg(not(target_os = "linux"))]
 mod audio_device;
-mod awidat;
+mod montage;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod audio_device {

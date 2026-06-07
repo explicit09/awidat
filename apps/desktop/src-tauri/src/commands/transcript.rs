@@ -24,7 +24,7 @@
 //! }
 //! ```
 //!
-//! Caching: `AwidatState::transcript_cache` holds parsed `Transcript`
+//! Caching: `MontageState::transcript_cache` holds parsed `Transcript`
 //! values keyed by stem. The cache is invalidated on indexer-job
 //! Completed (the run-loop emits a `JobKind::Index` event that the
 //! frontend can listen to and re-call `read_transcript`). For v1 we
@@ -33,14 +33,14 @@
 
 use std::path::Path;
 
-use awidat_core::transcript_alignment::{PhraseGroupingOptions, normalize_whisper_alignment};
-use awidat_desktop_protocol::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptWord};
-use awidat_proto::index::AssetId;
+use montage_core::transcript_alignment::{PhraseGroupingOptions, normalize_whisper_alignment};
+use montage_desktop_protocol::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptWord};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 use tauri::State;
 
 use crate::commands::media::proxy_path_for;
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Read the whisper transcript for the asset whose proxy stem is
 /// `stem`. Returns `None` when:
@@ -54,7 +54,7 @@ use crate::state::AwidatState;
 /// re-calls and the result populates.
 #[tauri::command]
 pub async fn read_transcript(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     stem: String,
 ) -> Result<Option<Transcript>, String> {
     let project_root = match state.project_root.lock().await.clone() {
@@ -84,9 +84,9 @@ pub async fn read_transcript(
             .to_string_lossy()
             .replace('\\', "/");
         let asset_id = AssetId::new(asset_id_rel);
-        match awidat_index::read_sidecar(&project_root, "whisper", &asset_id) {
+        match montage_index::read_sidecar(&project_root, "whisper", &asset_id) {
             Ok(value) => Ok(Some(parse_transcript(stem_clone, value)?)),
-            Err(awidat_index::SidecarError::NotFound { .. }) => Ok(None),
+            Err(montage_index::SidecarError::NotFound { .. }) => Ok(None),
             Err(e) => Err(format!("read whisper sidecar: {e}")),
         }
     })
@@ -110,7 +110,7 @@ pub async fn read_transcript(
 /// id→stem mapping (proxy_path_for) requires a raw/ walk per
 /// asset. Re-parsing one or two cached transcripts on the next
 /// tab toggle is cheaper than that walk.
-pub async fn clear_transcript_cache(state: &AwidatState) {
+pub async fn clear_transcript_cache(state: &MontageState) {
     state.transcript_cache.lock().await.clear();
 }
 
@@ -131,7 +131,7 @@ pub async fn clear_transcript_cache(state: &AwidatState) {
 /// indicates the user's `old_id` doesn't exist in the sidecar.
 #[tauri::command]
 pub async fn rename_speaker(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     stem: String,
     old_id: String,
     new_id: String,
@@ -157,10 +157,10 @@ pub async fn rename_speaker(
             .to_string_lossy()
             .replace('\\', "/");
         let asset_id = AssetId::new(asset_id_rel);
-        // Reuse the canonical sidecar-path resolver from awidat-index so
+        // Reuse the canonical sidecar-path resolver from montage-index so
         // the path layout (including the `raw/` segment and the file's
         // original extension) stays consistent with `read_transcript`.
-        let sidecar_path = awidat_index::sidecar_path(&project_root, "whisper", &asset_id)
+        let sidecar_path = montage_index::sidecar_path(&project_root, "whisper", &asset_id)
             .map_err(|e| format!("resolve whisper sidecar path: {e}"))?;
         let bytes = std::fs::read(&sidecar_path)
             .map_err(|e| format!("read whisper sidecar {}: {e}", sidecar_path.display()))?;
@@ -225,7 +225,7 @@ fn resolve_asset_for_stem(project_root: &Path, stem: &str) -> Option<std::path::
     if !raw_dir.is_dir() {
         return None;
     }
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let target_proxy_name = format!("{stem}.mp4");
     walk_for_match(&raw_dir, &proxies_dir, &target_proxy_name)
 }
@@ -415,7 +415,7 @@ fn parse_transcript(asset_stem: String, sidecar: serde_json::Value) -> Result<Tr
 }
 
 fn phrase_id_for_segment(
-    alignment: &awidat_proto::professional::TranscriptAlignmentPackage,
+    alignment: &montage_proto::professional::TranscriptAlignmentPackage,
     start_s: f64,
     end_s: f64,
 ) -> Option<String> {
@@ -518,7 +518,7 @@ mod tests {
         // to find the matching one.
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("raw");
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&raw_dir).unwrap();
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let asset = raw_dir.join("clip.MOV");
@@ -540,7 +540,7 @@ mod tests {
         // match rather than the proxy-stem reverse lookup.
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("raw");
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&raw_dir).unwrap();
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let asset = raw_dir.join("clip.MOV");
@@ -561,7 +561,7 @@ mod tests {
     fn walk_for_match_returns_none_when_nothing_matches() {
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("raw");
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&raw_dir).unwrap();
         std::fs::create_dir_all(&proxies_dir).unwrap();
         std::fs::write(raw_dir.join("clip.MOV"), b"src").unwrap();

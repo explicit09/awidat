@@ -1,4 +1,4 @@
-//! `index_project` command. Wraps `awidat_index::run` with the
+//! `index_project` command. Wraps `montage_index::run` with the
 //! progress callback added in commit dd15fe5, surfacing a single
 //! [`Item::Job`] (kind = `Indexing`) that streams percent + status
 //! as pairs complete.
@@ -7,26 +7,26 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use awidat_config::{Config, IndexerResourceClass, McpServer};
-use awidat_desktop_protocol::{Id, JobKind};
-use awidat_index::{
+use montage_config::{Config, IndexerResourceClass, McpServer};
+use montage_desktop_protocol::{Id, JobKind};
+use montage_index::{
     AssetInput, IndexProgress, PairOutcome, ProgressCallback, media_files::collect_raw_media_inputs,
 };
-use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
+use montage_mcp::ClientInfo;
+use montage_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Tauri-facing entrypoint. Thin wrapper over [`index_project_inner`]
 /// so the auto-chain in `import.rs` can call the real implementation
 /// directly without re-entering the command machinery.
 #[tauri::command]
-pub async fn index_project(app: AppHandle, state: State<'_, AwidatState>) -> Result<(), String> {
+pub async fn index_project(app: AppHandle, state: State<'_, MontageState>) -> Result<(), String> {
     index_project_inner(&app, &state).await
 }
 
@@ -51,7 +51,7 @@ pub struct IndexReadinessSnapshot {
 
 #[tauri::command]
 pub async fn index_readiness(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<IndexReadinessSnapshot, String> {
     let project_root = state
         .project_root
@@ -69,7 +69,7 @@ pub async fn index_readiness(
 /// Cancellable via `cancel_job(job_id)`.
 pub async fn index_project_inner(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
 ) -> Result<(), String> {
     let project_root = state
         .project_root
@@ -85,7 +85,7 @@ pub async fn index_project_inner(
 /// project that created them, even if the UI opens another project.
 pub async fn index_project_at_root(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
 ) -> Result<(), String> {
     index_project_at_root_with_assets(app, state, project_root, None).await
@@ -93,7 +93,7 @@ pub async fn index_project_at_root(
 
 pub async fn index_project_assets_at_root(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
     asset_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -102,7 +102,7 @@ pub async fn index_project_assets_at_root(
 
 async fn index_project_at_root_with_assets(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: std::path::PathBuf,
     scoped_asset_ids: Option<&[String]>,
 ) -> Result<(), String> {
@@ -132,7 +132,7 @@ async fn index_project_at_root_with_assets(
     if servers.is_empty() {
         return Err(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
-                    to your project's `.awidat/config.toml` or `~/.config/awidat/config.toml`."
+                    to your project's `.montage/config.toml` or `~/.config/montage/config.toml`."
                 .into(),
         );
     }
@@ -176,7 +176,7 @@ async fn index_project_at_root_with_assets(
         ),
     );
 
-    // Channel: `awidat_index::run`'s callback (sync, fires from the
+    // Channel: `montage_index::run`'s callback (sync, fires from the
     // dispatcher loop) → mpsc → a forwarder task that drives the
     // emitter. Going via mpsc keeps the callback non-blocking and
     // keeps the emitter calls on a single task.
@@ -266,15 +266,15 @@ async fn index_project_at_root_with_assets(
 
     // Drive the dispatcher.
     let client_info = ClientInfo {
-        name: "awidat-desktop".into(),
+        name: "montage-desktop".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     };
 
-    let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
+    let concurrency = std::env::var("MONTAGE_INDEX_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(2);
-    let dispatch = awidat_index::run(
+    let dispatch = montage_index::run(
         &project_root,
         &servers,
         &assets,
@@ -521,7 +521,7 @@ impl BuiltinPassReport {
 /// sidecars. Honors cancellation between every step.
 async fn run_builtin_passes(
     app: &AppHandle,
-    state: &AwidatState,
+    state: &MontageState,
     project_root: &Path,
     assets: &[AssetInput],
     cancel: &CancellationToken,
@@ -566,10 +566,10 @@ async fn run_builtin_passes(
 /// MacBooks, low-end laptops) gets the safe sequential path that
 /// doesn't starve the user's other apps.
 fn has_headroom_for_parallel_passes() -> bool {
-    if std::env::var("AWIDAT_PARALLEL_PASSES").as_deref() == Ok("1") {
+    if std::env::var("MONTAGE_PARALLEL_PASSES").as_deref() == Ok("1") {
         return true;
     }
-    if std::env::var("AWIDAT_PARALLEL_PASSES").as_deref() == Ok("0") {
+    if std::env::var("MONTAGE_PARALLEL_PASSES").as_deref() == Ok("0") {
         return false;
     }
     let cores = std::thread::available_parallelism()
@@ -644,7 +644,7 @@ fn current_machine_profile() -> MachineProfile {
 }
 
 fn manual_index_mode() -> IndexMode {
-    if std::env::var("AWIDAT_INDEX_MODE").as_deref() == Ok("full-context") {
+    if std::env::var("MONTAGE_INDEX_MODE").as_deref() == Ok("full-context") {
         IndexMode::FullContext
     } else {
         IndexMode::Manual
@@ -856,7 +856,7 @@ fn desktop_indexer_priority(name: &str) -> u8 {
     }
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -867,7 +867,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 
@@ -876,14 +876,14 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
     let scenes = any_json_file(&project_root.join("index").join("scenedetect"));
     let audio = any_json_file(&project_root.join("index").join("audio-energy"));
     let face = any_json_file(&project_root.join("index").join("face"));
-    let motion = any_json_file(&project_root.join(".awidat").join("motion"));
+    let motion = any_json_file(&project_root.join(".montage").join("motion"));
     let color = any_json_file(&project_root.join("index").join("color-analysis"));
     // Silence readiness is "do we have silence segments to feed
     // find_dead_air". audio-energy is RMS magnitude per frame, not
     // boundary segments — falling back to it produced a false-positive
-    // "indexed" for silence. Only the real `.awidat/silences/` sidecar
+    // "indexed" for silence. Only the real `.montage/silences/` sidecar
     // counts.
-    let silence = any_json_file(&project_root.join(".awidat").join("silences"));
+    let silence = any_json_file(&project_root.join(".montage").join("silences"));
     // Speaker labels live INSIDE the whisper sidecar's body when
     // diarization runs (`data.diarized: true` + `data.speakers: [...]`),
     // not in a separate `index/speaker/` directory. Check the whisper
@@ -1033,7 +1033,7 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             cwd: None,
-            kind: awidat_config::McpServerKind::Indexer,
+            kind: montage_config::McpServerKind::Indexer,
             enabled: true,
             depends_on: vec![],
             resource_class: IndexerResourceClass::Light,
@@ -1157,8 +1157,8 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("index/audio-energy/raw")).unwrap();
         std::fs::create_dir_all(dir.path().join("index/face/raw")).unwrap();
         std::fs::create_dir_all(dir.path().join("index/color-analysis/raw")).unwrap();
-        std::fs::create_dir_all(dir.path().join(".awidat/motion")).unwrap();
-        std::fs::create_dir_all(dir.path().join(".awidat/silences")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".montage/motion")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".montage/silences")).unwrap();
 
         std::fs::write(dir.path().join("index/whisper/raw/source.mov.json"), "{}").unwrap();
         std::fs::write(
@@ -1177,8 +1177,8 @@ mod tests {
             "{}",
         )
         .unwrap();
-        std::fs::write(dir.path().join(".awidat/motion/source.json"), "{}").unwrap();
-        std::fs::write(dir.path().join(".awidat/silences/source.json"), "{}").unwrap();
+        std::fs::write(dir.path().join(".montage/motion/source.json"), "{}").unwrap();
+        std::fs::write(dir.path().join(".montage/silences/source.json"), "{}").unwrap();
 
         let readiness = compute_index_readiness_at(dir.path());
 

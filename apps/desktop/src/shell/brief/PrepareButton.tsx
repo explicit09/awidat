@@ -1,7 +1,7 @@
 /**
  * PrepareButton — "Prepare a starting cut" action (Wave 3 B4).
  *
- * Fires a synthetic `start_turn` with the [awidat:prepare] sentinel so
+ * Fires a synthetic `start_turn` with the [montage:prepare] sentinel so
  * the instruction is hidden from the chat transcript. After firing, the
  * button shows "Preparing…" until the agent emits its first pending
  * proposal — at which point the user is looking at proposals, not the

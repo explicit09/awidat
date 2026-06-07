@@ -1,4 +1,4 @@
-# Fly.io deployment manifest for awidat-social-server.
+# Fly.io deployment manifest for montage-social-server.
 #
 # Set the region to match your Supabase project's region to minimise latency
 # between pg_net HTTP calls and this service.  Common Supabase regions:
@@ -8,7 +8,7 @@
 #
 # Apply via: fly deploy --config crates/social-server/fly.toml
 
-app = "awidat-social"
+app = "montage-social"
 primary_region = "iad"  # ← change to match your Supabase region
 
 [build]
@@ -28,9 +28,9 @@ primary_region = "iad"  # ← change to match your Supabase region
 #   GOOGLE_CLIENT_SECRET    — (Phase 2) Google OAuth app client secret (server-only)
 #   SOCIAL_TOKEN_AEAD_KEY   — (Phase 2) 64 hex chars = 32-byte ChaCha20-Poly1305 key
 #   SOCIAL_TOKEN_KEY_ID     — (Phase 2) key identifier (e.g. "k1")
-#   OAUTH_REDIRECT_BASE     — (Phase 2) base URL for OAuth callbacks (e.g. https://awidat-social.fly.dev)
+#   OAUTH_REDIRECT_BASE     — (Phase 2) base URL for OAuth callbacks (e.g. https://montage-social.fly.dev)
 #   YOUTUBE_FORCE_PRIVATE   — (Phase 3) "false" allows non-private uploads (default true; keep true pre-audit)
-#   ARTIFACT_BASE_DIR       — (Phase 3) root dir for file:// artifact refs (default /var/lib/awidat-artifacts)
+#   ARTIFACT_BASE_DIR       — (Phase 3) root dir for file:// artifact refs (default /var/lib/montage-artifacts)
 #   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
 #   DESKTOP_USER_ID         — (Phase 5) user id the dev bearer maps to (default desktop-user)
 #   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs (server-only)
