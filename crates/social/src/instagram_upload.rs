@@ -28,6 +28,7 @@ use crate::upload_status::{
 
 /// Default container media type for rendered short-form video.
 pub const IG_MEDIA_TYPE_REELS: &str = "REELS";
+pub const INSTAGRAM_CAPTION_MAX_CHARS: usize = 2_200;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstagramContainerRequest {
@@ -140,6 +141,11 @@ impl<C: InstagramUploadClient> UploadAdapter for InstagramUploadAdapter<C> {
             .filter(|description| !description.is_empty())
             .unwrap_or_else(|| request.title.trim())
             .to_string();
+        if caption.chars().count() > INSTAGRAM_CAPTION_MAX_CHARS {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "instagram_caption_too_long".into(),
+            });
+        }
 
         let container = self
             .client
@@ -606,6 +612,20 @@ mod tests {
 
         let seen = adapter.client.seen.borrow().clone().expect("request seen");
         assert_eq!(seen.caption, "Real Instagram caption");
+    }
+
+    #[test]
+    fn upload_rejects_caption_over_instagram_limit() {
+        let adapter = InstagramUploadAdapter::new(RecordingInstagramClient::default());
+        let mut req = request();
+        req.description = Some("x".repeat(2_201));
+
+        assert_eq!(
+            adapter.upload(&req),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "instagram_caption_too_long".into()
+            })
+        );
     }
 
     #[test]
