@@ -20,6 +20,8 @@ import { useAgentStore } from "./agent/store";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
+import { shouldReplaceDeferredChatHistory } from "./app/deferredHydrationGuards";
+import { deferNonCriticalHydration } from "./app/startupHydration";
 import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { SettingsModal } from "./app/SettingsModal";
@@ -144,7 +146,9 @@ function App() {
   // backend once on mount. Local mirror in localStorage means the UI
   // doesn't flash an "off" state in the meantime.
   useEffect(() => {
-    void useUploadPrefs.getState().hydrate();
+    return deferNonCriticalHydration(() => {
+      void useUploadPrefs.getState().hydrate();
+    });
   }, []);
 
   const current = useProjectStore((s) => s.current);
@@ -741,7 +745,10 @@ function App() {
     }
   }
 
-  async function loadInitialChatHistory() {
+  async function loadInitialChatHistory(args?: {
+    scheduledProject: string | null;
+    scheduledItemCount: number;
+  }) {
     if (demoMode || !isTauri() || !current) {
       setChatSessions([]);
       setActiveChatSession(null);
@@ -754,8 +761,20 @@ function App() {
         invoke<ChatHistory>("load_chat_history"),
       ]);
       setChatSessions(sessions);
-      setActiveChatSession(history.session);
-      replaceAgentItems(history.items);
+      const agentState = useAgentStore.getState();
+      if (
+        !args ||
+        shouldReplaceDeferredChatHistory({
+          scheduledProject: args.scheduledProject,
+          currentProject: useProjectStore.getState().current,
+          scheduledItemCount: args.scheduledItemCount,
+          currentItemCount: agentState.items.length,
+          running: agentState.running,
+        })
+      ) {
+        setActiveChatSession(history.session);
+        replaceAgentItems(history.items);
+      }
     } catch (e) {
       console.warn("chat history load failed", e);
     } finally {
@@ -921,11 +940,6 @@ function App() {
   // these once the redesigned chrome handlers land.
 
   useEffect(() => {
-    if (!isTauri()) return;
-    void refreshProject();
-  }, [refreshProject]);
-
-  useEffect(() => {
     return onMenuCommand((id) => {
       if (id === MENU_COMMANDS.IMPORT_FILES) {
         void chooseAndImportFiles();
@@ -1014,28 +1028,31 @@ function App() {
   }, [activeProposal, current, demoMode, hasImportedMedia, setStage, timelineDuration]);
 
   useEffect(() => {
-    if (!demoMode) {
-      void refreshMedia();
-    }
-  }, [current, demoMode, refreshMedia]);
-
-  useEffect(() => {
     if (demoMode || !isTauri() || !current) {
       clearGeneratedMedia();
       return;
     }
-    void refreshGeneratedMedia();
+    return deferNonCriticalHydration(() => {
+      void refreshGeneratedMedia();
+    });
   }, [clearGeneratedMedia, current, demoMode, refreshGeneratedMedia]);
 
   useEffect(() => {
-    void loadInitialChatHistory();
+    const scheduledProject = current;
+    const scheduledItemCount = useAgentStore.getState().items.length;
+    return deferNonCriticalHydration(() => {
+      void loadInitialChatHistory({ scheduledProject, scheduledItemCount });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode]);
 
   useEffect(() => {
     if (!running) {
-      void refreshChatSessions();
+      return deferNonCriticalHydration(() => {
+        void refreshChatSessions();
+      });
     }
+    return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
@@ -1057,37 +1074,38 @@ function App() {
     }
     const { thumbnailDir, waveformPath } = firstTimelineSidecars(timelineSnapshot);
     let cancelled = false;
+    if (!thumbnailDir) setRealVideoFrames([]);
+    if (!waveformPath) setRealAudioPeaks([]);
 
-    if (thumbnailDir) {
-      invoke<string[]>("list_thumbnail_frames", { dir: thumbnailDir })
-        .then((paths) => {
-          if (cancelled) return;
-          setRealVideoFrames(sampleEvenly(paths, 24).map((path) => convertFileSrc(path)));
-        })
-        .catch((e) => {
-          console.warn("list_thumbnail_frames failed", e);
-          if (!cancelled) setRealVideoFrames([]);
-        });
-    } else {
-      setRealVideoFrames([]);
-    }
+    const cancelDeferred = deferNonCriticalHydration(() => {
+      if (thumbnailDir) {
+        invoke<string[]>("list_thumbnail_frames", { dir: thumbnailDir })
+          .then((paths) => {
+            if (cancelled) return;
+            setRealVideoFrames(sampleEvenly(paths, 24).map((path) => convertFileSrc(path)));
+          })
+          .catch((e) => {
+            console.warn("list_thumbnail_frames failed", e);
+            if (!cancelled) setRealVideoFrames([]);
+          });
+      }
 
-    if (waveformPath) {
-      invoke<number[]>("read_waveform", { path: waveformPath })
-        .then((buckets) => {
-          if (cancelled) return;
-          setRealAudioPeaks(downsamplePeaks(buckets, 180));
-        })
-        .catch((e) => {
-          console.warn("read_waveform failed", e);
-          if (!cancelled) setRealAudioPeaks([]);
-        });
-    } else {
-      setRealAudioPeaks([]);
-    }
+      if (waveformPath) {
+        invoke<number[]>("read_waveform", { path: waveformPath })
+          .then((buckets) => {
+            if (cancelled) return;
+            setRealAudioPeaks(downsamplePeaks(buckets, 180));
+          })
+          .catch((e) => {
+            console.warn("read_waveform failed", e);
+            if (!cancelled) setRealAudioPeaks([]);
+          });
+      }
+    });
 
     return () => {
       cancelled = true;
+      cancelDeferred();
     };
   }, [demoMode, timelineSnapshot]);
 
@@ -1124,16 +1142,19 @@ function App() {
       return;
     }
     let cancelled = false;
-    invoke<IndexerConfigSnapshot>("read_indexer_config")
-      .then((snapshot) => {
-        if (!cancelled) setIndexerConfig(snapshot);
-      })
-      .catch((e) => {
-        console.warn("read_indexer_config failed", e);
-        if (!cancelled) setIndexerConfig(undefined);
-      });
+    const cancelDeferred = deferNonCriticalHydration(() => {
+      invoke<IndexerConfigSnapshot>("read_indexer_config")
+        .then((snapshot) => {
+          if (!cancelled) setIndexerConfig(snapshot);
+        })
+        .catch((e) => {
+          console.warn("read_indexer_config failed", e);
+          if (!cancelled) setIndexerConfig(undefined);
+        });
+    });
     return () => {
       cancelled = true;
+      cancelDeferred();
     };
   }, [current, demoMode]);
 
@@ -1141,9 +1162,11 @@ function App() {
   // the right initial value. Falls back to "manual" on error.
   useEffect(() => {
     if (!isTauri()) return;
-    invoke<PermissionMode>("get_permission_mode")
-      .then((mode) => setPermissionModeState(mode))
-      .catch(() => setPermissionModeState("manual"));
+    return deferNonCriticalHydration(() => {
+      invoke<PermissionMode>("get_permission_mode")
+        .then((mode) => setPermissionModeState(mode))
+        .catch(() => setPermissionModeState("manual"));
+    });
   }, []);
 
   async function changePermissionMode(next: PermissionMode) {
@@ -1222,15 +1245,28 @@ function App() {
   }, [items]);
 
   useEffect(() => {
-    void loadIndexReadiness();
-    void loadProjectEpisodes();
-    void loadRunningJobIds();
+    setIndexReadiness(undefined);
+    useIndexReadinessStore.getState().setSnapshot(undefined);
+    setEpisodeSummary(undefined);
+    useEpisodesStore.getState().setSnapshot(undefined);
+    setRunningJobIds(undefined);
+    setMediaReadiness(undefined);
+  }, [current, demoMode]);
+
+  useEffect(() => {
+    return deferNonCriticalHydration(() => {
+      void loadIndexReadiness();
+      void loadProjectEpisodes();
+      void loadRunningJobIds();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode, completedJobKinds.size, activeJobs.length, timelineSnapshot.cut_boundaries.length]);
 
   useEffect(() => {
     mediaReadinessCommandUnavailableRef.current = false;
-    void loadMediaReadiness();
+    return deferNonCriticalHydration(() => {
+      void loadMediaReadiness();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode, completedJobKinds.size, activeJobs.length, sources.length, proxies.length]);
 
@@ -1251,10 +1287,12 @@ function App() {
   // session — the disk state is the source of truth either way).
   useEffect(() => {
     function onFocus() {
-      void loadIndexReadiness();
-      void loadProjectEpisodes();
-      void loadMediaReadiness();
-      void loadRunningJobIds();
+      void deferNonCriticalHydration(() => {
+        void loadIndexReadiness();
+        void loadProjectEpisodes();
+        void loadMediaReadiness();
+        void loadRunningJobIds();
+      });
     }
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
