@@ -74,6 +74,7 @@ export function SettingsModal() {
   const refreshAuth = useAuth((s) => s.refresh);
   const openAuth = useAuth((s) => s.open);
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("project");
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Lazy-load the indexer config so the modal stays cheap when closed.
   // Calls the same `read_indexer_config` invoke used by App.tsx.
@@ -115,21 +116,38 @@ export function SettingsModal() {
 
   if (!isOpen) return null;
 
-  function openFolder(path: string) {
-    if (!isTauri()) return;
-    openPath(path).catch((e) => console.warn("openPath failed", e));
+  async function openFolder(path: string) {
+    setActionError(null);
+    if (!isTauri()) {
+      setActionError("Folder actions are only available in the desktop app.");
+      return;
+    }
+    try {
+      await openPath(path);
+    } catch (e) {
+      try {
+        await revealItemInDir(path);
+      } catch {
+        setActionError(String(e));
+      }
+    }
   }
 
-  function revealFolder(path: string) {
-    if (!isTauri()) return;
-    revealItemInDir(path).catch((e) => console.warn("revealItemInDir failed", e));
+  async function revealFolder(path: string) {
+    setActionError(null);
+    if (!isTauri()) {
+      setActionError("Finder actions are only available in the desktop app.");
+      return;
+    }
+    try {
+      await revealItemInDir(path);
+    } catch (e) {
+      setActionError(String(e));
+    }
   }
 
   function editAgentsMd() {
     if (!projectPath) return;
-    // Close Settings first so the editor opens on a clean backdrop —
-    // stacked modals make ⌘W / Esc ambiguous.
-    close();
     openAgentsMdEditor();
   }
 
@@ -141,8 +159,6 @@ export function SettingsModal() {
   }
 
   function manageSignIn() {
-    // Close Settings before opening the auth chooser to avoid stacked modals.
-    close();
     openAuth();
   }
 
@@ -157,8 +173,8 @@ export function SettingsModal() {
               <SettingsRow label="Path" mono value={projectPath ?? "No project loaded"}>
                 {projectPath ? (
                   <>
-                    <GlassButton onClick={() => openFolder(projectPath)}>Open folder</GlassButton>
-                    <GlassButton variant="ghost" onClick={() => revealFolder(projectPath)}>
+                    <GlassButton onClick={() => void openFolder(projectPath)}>Open folder</GlassButton>
+                    <GlassButton variant="ghost" onClick={() => void revealFolder(projectPath)}>
                       Reveal in Finder
                     </GlassButton>
                   </>
@@ -173,6 +189,7 @@ export function SettingsModal() {
                   Edit AGENTS.md
                 </GlassButton>
               </SettingsRow>
+              {actionError ? <SettingsError message={actionError} /> : null}
             </SettingsCard>
           </>
         );
@@ -276,7 +293,7 @@ export function SettingsModal() {
               value={indexerConfig?.projectPath ?? "Unavailable"}
             >
               {indexerConfig?.projectPath ? (
-                <GlassButton variant="ghost" onClick={() => openFolder(indexerConfig.projectPath!)}>
+                <GlassButton variant="ghost" onClick={() => void openFolder(indexerConfig.projectPath!)}>
                   Open
                 </GlassButton>
               ) : null}
@@ -287,7 +304,7 @@ export function SettingsModal() {
               value={indexerConfig?.globalPath ?? "Unavailable"}
             >
               {indexerConfig?.globalPath ? (
-                <GlassButton variant="ghost" onClick={() => openFolder(indexerConfig.globalPath!)}>
+                <GlassButton variant="ghost" onClick={() => void openFolder(indexerConfig.globalPath!)}>
                   Open
                 </GlassButton>
               ) : null}
@@ -442,6 +459,17 @@ function SettingsRow({
         ) : null}
         {children}
       </div>
+    </div>
+  );
+}
+
+function SettingsError({ message }: { message: string }) {
+  return (
+    <div
+      role="alert"
+      className="rounded-lg border border-[rgba(239,68,68,0.34)] bg-[rgba(239,68,68,0.10)] px-3 py-2 text-[12px] text-[var(--color-text-danger,#f87171)]"
+    >
+      {message}
     </div>
   );
 }
