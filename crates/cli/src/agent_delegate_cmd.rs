@@ -2,6 +2,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+struct AgentCommand {
+    program: OsString,
+    args: Vec<OsString>,
+}
+
 pub struct AgentChatArgs {
     pub project_root: PathBuf,
     pub prompt: Option<String>,
@@ -43,13 +48,15 @@ pub fn run_prepared(args: AgentPreparedRunArgs) -> ExitCode {
 }
 
 fn run_agent(args: Vec<OsString>) -> ExitCode {
-    let Ok(agent_bin) = resolve_agent_binary() else {
+    let Ok(command) = resolve_agent_command(args) else {
         eprintln!(
-            "error: awidat-agent binary not found. Build it with `cargo build -p awidat-agent-cli --bin awidat-agent`, or set AWIDAT_AGENT_BIN."
+            "error: awidat-agent binary not found. Build it with `cargo build -p awidat-agent-cli --bin awidat-agent`, run from the Awidat workspace, or set AWIDAT_AGENT_BIN."
         );
         return ExitCode::from(1);
     };
-    let status = std::process::Command::new(agent_bin).args(args).status();
+    let status = std::process::Command::new(command.program)
+        .args(command.args)
+        .status();
     match status {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
@@ -60,9 +67,12 @@ fn run_agent(args: Vec<OsString>) -> ExitCode {
     }
 }
 
-fn resolve_agent_binary() -> Result<PathBuf, std::env::VarError> {
+fn resolve_agent_command(args: Vec<OsString>) -> Result<AgentCommand, std::env::VarError> {
     if let Ok(path) = std::env::var("AWIDAT_AGENT_BIN") {
-        return Ok(PathBuf::from(path));
+        return Ok(AgentCommand {
+            program: PathBuf::from(path).into_os_string(),
+            args,
+        });
     }
     let exe = std::env::current_exe().map_err(|_| std::env::VarError::NotPresent)?;
     let parent = exe.parent().ok_or(std::env::VarError::NotPresent)?;
@@ -71,12 +81,58 @@ fn resolve_agent_binary() -> Result<PathBuf, std::env::VarError> {
     } else {
         "awidat-agent"
     };
-    let candidate = parent.join(name);
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(std::env::VarError::NotPresent)
+    resolve_agent_command_with(Some(parent.join(name)), args)
+}
+
+fn resolve_agent_command_with(
+    sibling_candidate: Option<PathBuf>,
+    args: Vec<OsString>,
+) -> Result<AgentCommand, std::env::VarError> {
+    if let Some(candidate) = sibling_candidate {
+        if candidate.exists() {
+            return Ok(AgentCommand {
+                program: candidate.into_os_string(),
+                args,
+            });
+        }
     }
+
+    let manifest_path = workspace_manifest_path();
+    let agent_manifest_path = workspace_root()
+        .join("crates")
+        .join("agent-cli")
+        .join("Cargo.toml");
+    if manifest_path.exists() && agent_manifest_path.exists() {
+        let mut cargo_args = vec![
+            OsString::from("run"),
+            OsString::from("--manifest-path"),
+            OsString::from(manifest_path.display().to_string()),
+            OsString::from("-p"),
+            OsString::from("awidat-agent-cli"),
+            OsString::from("--bin"),
+            OsString::from("awidat-agent"),
+            OsString::from("--"),
+        ];
+        cargo_args.extend(args);
+        return Ok(AgentCommand {
+            program: OsString::from("cargo"),
+            args: cargo_args,
+        });
+    }
+
+    Err(std::env::VarError::NotPresent)
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|crates_dir| crates_dir.parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn workspace_manifest_path() -> PathBuf {
+    workspace_root().join("Cargo.toml")
 }
 
 fn agent_chat_args(args: AgentChatArgs) -> Vec<OsString> {
@@ -175,6 +231,31 @@ mod tests {
                 OsString::from("awidat skills run"),
                 OsString::from("--model"),
                 OsString::from("gpt-test"),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_sibling_agent_falls_back_to_workspace_cargo_run() {
+        let args = vec![OsString::from("tui"), OsString::from("project")];
+        let command =
+            resolve_agent_command_with(Some(PathBuf::from("/missing/awidat-agent")), args.clone())
+                .expect("workspace cargo fallback should be available");
+
+        assert_eq!(command.program, OsString::from("cargo"));
+        assert_eq!(
+            command.args,
+            vec![
+                OsString::from("run"),
+                OsString::from("--manifest-path"),
+                OsString::from(workspace_manifest_path().display().to_string()),
+                OsString::from("-p"),
+                OsString::from("awidat-agent-cli"),
+                OsString::from("--bin"),
+                OsString::from("awidat-agent"),
+                OsString::from("--"),
+                OsString::from("tui"),
+                OsString::from("project"),
             ]
         );
     }
