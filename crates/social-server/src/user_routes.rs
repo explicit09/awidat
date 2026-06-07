@@ -677,19 +677,6 @@ fn state_registry() -> montage_social::provider::ProviderRegistry {
     montage_social::provider::ProviderRegistry::default_multi_platform()
 }
 
-/// 32 bytes (256 bits) of CSPRNG entropy, hex-encoded. Used for the OAuth CSRF
-/// `state` and the connection handle so neither is guessable.
-fn random_token() -> String {
-    use rand::TryRngCore;
-    let mut buf = [0u8; 32];
-    // OsRng pulls directly from the OS CSPRNG. try_fill_bytes only errors if the
-    // OS entropy source is unavailable, which is fatal — fail loudly.
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut buf)
-        .unwrap_or_else(|e| panic!("OS CSPRNG unavailable: {e}"));
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 struct OAuthHandles {
     connection_id: String,
     raw_state: String,
@@ -790,10 +777,10 @@ mod tests {
     }
 
     #[test]
-    fn random_token_is_long_and_unique() {
-        let a = random_token();
-        let b = random_token();
-        assert_eq!(a.len(), 64, "32 bytes hex-encoded");
+    fn random_token_128_is_long_and_unique() {
+        let a = random_token_128();
+        let b = random_token_128();
+        assert_eq!(a.len(), 32, "16 bytes hex-encoded");
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b, "two draws must differ (CSPRNG)");
     }
