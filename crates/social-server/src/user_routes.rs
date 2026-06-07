@@ -217,8 +217,9 @@ pub(crate) async fn oauth_start_handler(
     // suffix keeps `state` unguessable; complete_oauth still validates the full
     // `state` against the stored hash.
     let now = now_secs();
-    let connection_id = format!("oauthconn-{provider_str}-{}", random_token());
-    let raw_state = format!("{connection_id}~{}", random_token());
+    let handles = oauth_handles(&provider_str);
+    let connection_id = handles.connection_id;
+    let raw_state = handles.raw_state;
     let config = OAuthProviderConfig {
         client_id,
         redirect_uri,
@@ -689,6 +690,28 @@ fn random_token() -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+struct OAuthHandles {
+    connection_id: String,
+    raw_state: String,
+}
+
+fn oauth_handles(provider_str: &str) -> OAuthHandles {
+    let connection_id = format!("oauthconn-{provider_str}-{}", random_token_128());
+    OAuthHandles {
+        raw_state: format!("{connection_id}~{}", random_token_128()),
+        connection_id,
+    }
+}
+
+fn random_token_128() -> String {
+    use rand::TryRngCore;
+    let mut buf = [0u8; 16];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut buf)
+        .unwrap_or_else(|e| panic!("OS CSPRNG unavailable: {e}"));
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// The storage object path for a job's artifact. Derived solely from
 /// `(bucket, job_id)` — never from client input — so the worker can only ever
 /// read the artifact the server itself staged.
@@ -773,6 +796,23 @@ mod tests {
         assert_eq!(a.len(), 64, "32 bytes hex-encoded");
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b, "two draws must differ (CSPRNG)");
+    }
+
+    #[test]
+    fn oauth_handles_keep_twitter_x_state_within_pkce_verifier_limit() {
+        let handles = oauth_handles("twitter_x");
+
+        assert!(handles.connection_id.starts_with("oauthconn-twitter_x-"));
+        assert!(
+            handles
+                .raw_state
+                .starts_with(&format!("{}~", handles.connection_id))
+        );
+        assert!(
+            (43..=128).contains(&handles.raw_state.len()),
+            "Twitter/X reuses raw OAuth state as PKCE verifier, got {} chars",
+            handles.raw_state.len()
+        );
     }
 
     #[test]
