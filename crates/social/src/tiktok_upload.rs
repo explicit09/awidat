@@ -30,6 +30,7 @@ use std::time::Duration;
 pub const TIKTOK_SELF_ONLY: &str = "SELF_ONLY";
 pub const TIKTOK_PUBLIC: &str = "PUBLIC_TO_EVERYONE";
 pub const TIKTOK_FRIENDS: &str = "MUTUAL_FOLLOW_FRIENDS";
+pub const TIKTOK_CAPTION_MAX_CHARS: usize = 150;
 const TIKTOK_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,6 +178,11 @@ impl<C: TikTokUploadClient> UploadAdapter for TikTokUploadAdapter<C> {
         if caption.trim().is_empty() {
             return Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "tiktok_caption_required".into(),
+            });
+        }
+        if caption.chars().count() > TIKTOK_CAPTION_MAX_CHARS {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "tiktok_caption_too_long".into(),
             });
         }
 
@@ -767,6 +773,20 @@ mod tests {
             adapter.upload(&req),
             Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "tiktok_caption_required".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn upload_rejects_caption_over_tiktok_limit() {
+        let adapter = TikTokUploadAdapter::new(RecordingTikTokClient::default());
+        let mut req = request(UploadPrivacy::Private);
+        req.title = "x".repeat(151);
+
+        assert_eq!(
+            adapter.upload(&req),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "tiktok_caption_too_long".into(),
             })
         );
     }
