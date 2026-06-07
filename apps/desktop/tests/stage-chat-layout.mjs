@@ -7,14 +7,16 @@ const conversation = readFileSync(resolve(root, "src/shell/StageConversation.tsx
 const source = `${shell}\n${conversation}`;
 
 const checks = [
-  ["renders chat as a right-side pane", /stage-chat-pane[\s\S]+right:\s*chatRight/],
-  ["reserves right stage space for open chat", /paddingRight:\s*rightReserve/],
+  ["renders a single right-side editor pane", /stage-right-pane[\s\S]+right:\s*RIGHT_PANE_GUTTER/],
+  ["right pane includes readable horizontal tabs", /RIGHT_PANES[\s\S]+chat[\s\S]+transcript[\s\S]+media[\s\S]+inspector[\s\S]+index[\s\S]+vedit/],
+  ["reserves right stage space for the right pane", /paddingRight:\s*RIGHT_PANE_RESERVE/],
   ["renders the timeline unconditionally", /className="absolute inset-x-20 bottom-24 z-20"/],
-  ["offsets timeline from the right chat pane", /right:\s*rightReserve/],
+  ["offsets timeline from the right pane", /right:\s*RIGHT_PANE_RESERVE/],
+  ["removes the vertical right tool dock", /group\/tools/.test(source) === false],
+  ["removes slash destination chips from composer", /\/deliver/.test(source) === false],
   ["does not use draggable floating chat", /setPointerCapture/.test(source) === false],
   ["does not offer a left dock control", /Dock conversation left/.test(source) === false],
-  ["uses icons for chat controls", /PanelRight[\s\S]+Minimize2/],
-  ["keeps chat control buttons square", /className="stage-chat-icon"/],
+  ["uses tab buttons for right-pane selection", /className="stage-right-tab"/],
 ];
 
 for (const [label, pattern] of checks) {
