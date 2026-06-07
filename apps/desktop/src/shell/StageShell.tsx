@@ -43,16 +43,7 @@ function mediumColor(m: BriefMedium): string {
   return MEDIUM_COLOR[m] ?? "#94A3B8";
 }
 
-type DockItem = { id: Stage; glyph: string; label: string };
-const DOCK: DockItem[] = [
-  { id: "edit", glyph: "▶", label: "Stage" },
-  { id: "deliver", glyph: "↑", label: "Deliver" },
-  { id: "schedule", glyph: "◷", label: "Schedule" },
-  { id: "skills", glyph: "✦", label: "Skills" },
-  { id: "history", glyph: "◷", label: "History" },
-];
-
-// Right-pane tools. Transcript leads: it's the click-a-word→seek surface.
+// Side-pane tools. Transcript leads: it's the click-a-word→seek surface.
 type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
 
 // Timeline strip sizing — fits ALL tracks without vertical scroll.
@@ -60,17 +51,24 @@ const TL_BASE = 48; // header/padding chrome
 const TL_ROW = 58; // per-track lane height
 const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
 
-const RIGHT_PANE_W = 460;
-const RIGHT_PANE_GUTTER = 12;
-const RIGHT_PANE_RESERVE = RIGHT_PANE_W + RIGHT_PANE_GUTTER + 12;
-type RightPaneKey = "chat" | ToolKey;
-const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
-  { id: "chat", label: "Chat" },
+const SIDE_PANE_W = 388;
+const SIDE_PANE_GUTTER = 12;
+const LEFT_PANE_RESERVE = SIDE_PANE_W + SIDE_PANE_GUTTER + 12;
+const RIGHT_PANE_RESERVE = SIDE_PANE_W + SIDE_PANE_GUTTER + 12;
+type LeftPaneKey = "transcript" | "media" | "index";
+type RightPaneKey = "chat" | "deliver" | "schedule" | "inspector" | "vedit" | "history";
+const LEFT_PANES: { id: LeftPaneKey; label: string }[] = [
   { id: "transcript", label: "Transcript" },
   { id: "media", label: "Media" },
-  { id: "inspector", label: "Inspector" },
   { id: "index", label: "Index" },
+];
+const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
+  { id: "chat", label: "Chat" },
+  { id: "deliver", label: "Deliver" },
+  { id: "schedule", label: "Schedule" },
+  { id: "inspector", label: "Inspector" },
   { id: "vedit", label: "Vedit" },
+  { id: "history", label: "History" },
 ];
 
 export type StageShellProps = {
@@ -152,10 +150,15 @@ export function StageShell(props: StageShellProps) {
 
   const cur = pending[Math.min(active, Math.max(0, pending.length - 1))];
 
-  // The right editor pane is stable: chat, transcript, media, inspector,
-  // index, and vedit all live under one readable tab strip.
+  // Stable editor panes: source/navigation tools on the left, chat/output
+  // tools on the right.
   const devTool = (import.meta.env?.VITE_AWIDAT_TOOL as ToolKey | undefined) ?? null;
-  const [rightPane, setRightPane] = useState<RightPaneKey>(devTool ?? "chat");
+  const [leftPane, setLeftPane] = useState<LeftPaneKey>(
+    devTool === "media" || devTool === "index" ? devTool : "transcript",
+  );
+  const [rightPane, setRightPane] = useState<RightPaneKey>(
+    devTool === "inspector" || devTool === "vedit" ? devTool : "chat",
+  );
   useEffect(() => {
     if (running) setRightPane("chat");
   }, [running]);
@@ -178,7 +181,10 @@ export function StageShell(props: StageShellProps) {
   // yet (no tracks) AND nothing proposed. "No proposals" alone is not empty —
   // the user may already have footage they're working with.
   const stageEmpty = pending.length === 0 && tracks === 0;
-  const rightNode = rightPane === "chat" ? null : toolNode(rightPane, tools);
+  const leftNode = toolNode(leftPane, tools);
+  const rightNode = rightPane === "chat" ? null : rightPaneNode(rightPane, {
+    deliver, schedule, history, tools,
+  });
 
   const submit = () => {
     const text = draft.trim();
@@ -186,10 +192,16 @@ export function StageShell(props: StageShellProps) {
     // Command routes: bare destination words navigate; everything else
     // is an editorial instruction to the agent.
     const lower = text.toLowerCase().replace(/^\//, "");
-    if (lower === "transcript" || lower === "media" || lower === "inspector" || lower === "index" || lower === "vedit") {
-      onStage("edit"); // tools live on the Stage
-      setRightPane(lower as ToolKey);
-    } else if (lower === "deliver" || lower === "schedule" || lower === "skills" || lower === "history" || lower === "stage" || lower === "edit") {
+    if (lower === "transcript" || lower === "media" || lower === "index") {
+      onStage("edit");
+      setLeftPane(lower as LeftPaneKey);
+    } else if (lower === "inspector" || lower === "vedit") {
+      onStage("edit");
+      setRightPane(lower as RightPaneKey);
+    } else if (lower === "deliver" || lower === "schedule" || lower === "history") {
+      onStage("edit");
+      setRightPane(lower as RightPaneKey);
+    } else if (lower === "skills" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
@@ -227,33 +239,40 @@ export function StageShell(props: StageShellProps) {
         </div>
       </div>
 
-      {/* left dock */}
-      <div className="group/dock absolute left-3 top-1/2 z-40 -translate-y-1/2">
-        <div className="glass glass-strong flex flex-col gap-1 p-1.5" style={{ borderRadius: 16 }}>
-          {DOCK.map((d) => {
-            const on = stage === d.id;
-            return (
+      {/* Left source pane — readable tabs for source/navigation tools. */}
+      {onStage_ ? (
+        <div
+          className="stage-left-pane glass glass-strong z-30 flex flex-col overflow-hidden"
+          style={{
+            position: "absolute",
+            top: 64,
+            bottom: 88,
+            left: SIDE_PANE_GUTTER,
+            right: "auto",
+            width: SIDE_PANE_W,
+            maxWidth: "calc(100vw - 24px)",
+            borderRadius: 10,
+          }}>
+          <div className="stage-left-tabs flex items-center gap-1 overflow-x-auto border-b border-[var(--glass-border)] px-2 py-2">
+            {LEFT_PANES.map((pane) => (
               <button
-                key={d.id}
-                onClick={() => onStage(d.id)}
-                data-perf-stage-switch={d.id}
-                data-active={on ? "true" : "false"}
-                className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
-                style={{
-                  background: on ? "linear-gradient(180deg,#FB7185,#EF4444)" : "transparent",
-                  color: on ? "#FFFFFF" : "var(--color-text-muted)",
-                  boxShadow: on ? "0 0 18px rgba(239,68,68,0.45)" : "none",
-                }}>
-                <span className="grid w-5 place-items-center text-[13px]">{d.glyph}</span>
-                <span className="max-w-0 overflow-hidden whitespace-nowrap text-[12px] font-semibold opacity-0 transition-all duration-200 group-hover/dock:max-w-[80px] group-hover/dock:opacity-100">{d.label}</span>
+                key={pane.id}
+                onClick={() => setLeftPane(pane.id)}
+                className="stage-left-tab"
+                data-active={leftPane === pane.id ? "true" : "false"}
+              >
+                {pane.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
+          <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">
+            {leftNode}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Right editor pane — DaVinci-style readable tabs instead of floating
-          launchers. Chat is first-class beside transcript and tools. */}
+      {/* Right output pane — DaVinci-style readable tabs for chat and
+          delivery/session output tools. */}
       {onStage_ ? (
         <div
           className="stage-right-pane glass glass-strong z-30 flex flex-col overflow-hidden"
@@ -261,9 +280,9 @@ export function StageShell(props: StageShellProps) {
             position: "absolute",
             top: 64,
             bottom: 88,
-            right: RIGHT_PANE_GUTTER,
+            right: SIDE_PANE_GUTTER,
             left: "auto",
-            width: RIGHT_PANE_W,
+            width: SIDE_PANE_W,
             maxWidth: "calc(100vw - 24px)",
             borderRadius: 10,
           }}>
@@ -281,7 +300,14 @@ export function StageShell(props: StageShellProps) {
           </div>
           <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">
             {rightPane === "chat" ? (
-              <ConversationPanel agentRead={agentRead} />
+              <ConversationPanel
+                agentRead={agentRead}
+                draft={draft}
+                running={running}
+                onDraft={setDraft}
+                onSubmit={submit}
+                onCancel={onCancel}
+              />
             ) : rightNode}
           </div>
         </div>
@@ -294,7 +320,8 @@ export function StageShell(props: StageShellProps) {
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: `calc(96px + 56px + ${timelineHeight})`,
+          paddingBottom: `calc(28px + ${timelineHeight})`,
+          paddingLeft: LEFT_PANE_RESERVE,
           paddingRight: RIGHT_PANE_RESERVE,
         }}>
         <div className="relative flex min-w-0 flex-1 flex-col gap-2">
@@ -315,7 +342,7 @@ export function StageShell(props: StageShellProps) {
                       className="glass-cta rounded-xl px-4 py-2 text-[13px] font-semibold"
                     >Prepare a starting cut</button>
                     <button
-                      onClick={() => { onStage("edit"); setRightPane("media"); }}
+                      onClick={() => { onStage("edit"); setLeftPane("media"); }}
                       className="glass-ghost rounded-xl px-4 py-2 text-[13px]"
                     >Open media</button>
                   </div>
@@ -357,7 +384,7 @@ export function StageShell(props: StageShellProps) {
           is visible at once; past the soft cap it scrolls (never clips a
           track). Chat lives on the right, so the bottom timeline remains
           available while the conversation is open. */}
-      <div className="absolute inset-x-20 bottom-24 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: RIGHT_PANE_RESERVE }}>
+      <div className="absolute bottom-6 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", left: LEFT_PANE_RESERVE, right: RIGHT_PANE_RESERVE }}>
         <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
           {timeline}
         </div>
@@ -384,30 +411,6 @@ export function StageShell(props: StageShellProps) {
         </div>
       ) : null}
 
-      {/* command bar + conversation home — edits, navigates, and shows
-          the agent's replies in a glass thread that grows from the bar */}
-      <div className="absolute inset-x-0 bottom-0 z-40 flex flex-col items-center px-8 pb-6">
-        <div className="glass glass-strong glass-reactive flex w-full max-w-[760px] items-center gap-3 rounded-2xl px-4 py-3" style={{ borderRadius: 18 }}>
-          <button
-            onClick={() => setRightPane("chat")}
-            title="Show conversation"
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg transition"
-            style={{ background: rightPane === "chat" ? "rgba(239,68,68,0.30)" : "rgba(239,68,68,0.16)", color: "#FCA5A5" }}
-          >◇</button>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            placeholder="ask, trim, propose…"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
-          />
-          {running ? (
-            <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-xl text-[13px]">■</button>
-          ) : (
-            <button onClick={submit} className="glass-cta grid h-8 w-8 place-items-center rounded-xl text-[13px]">▸</button>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -415,4 +418,15 @@ export function StageShell(props: StageShellProps) {
 function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
   if (!tools) return null;
   return tools[key];
+}
+
+function rightPaneNode(
+  key: RightPaneKey,
+  nodes: Pick<StageShellProps, "deliver" | "schedule" | "history" | "tools">,
+): ReactNode {
+  if (key === "deliver") return nodes.deliver;
+  if (key === "schedule") return nodes.schedule;
+  if (key === "history") return nodes.history;
+  if (key === "inspector" || key === "vedit") return toolNode(key, nodes.tools);
+  return null;
 }

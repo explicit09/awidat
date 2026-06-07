@@ -513,12 +513,15 @@ html, body, #root { background: #0a0a12; }
   color: #FCA5A5;
 }
 
+.stage-left-tabs,
 .stage-right-tabs {
   scrollbar-width: none;
 }
+.stage-left-tabs::-webkit-scrollbar,
 .stage-right-tabs::-webkit-scrollbar {
   display: none;
 }
+.stage-left-tab,
 .stage-right-tab {
   min-height: 26px;
   flex: 0 0 auto;
@@ -531,11 +534,13 @@ html, body, #root { background: #0a0a12; }
   line-height: 1;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
+.stage-left-tab:hover,
 .stage-right-tab:hover {
   background: rgba(255,255,255,0.055);
   border-color: rgba(255,255,255,0.10);
   color: var(--color-text-primary);
 }
+.stage-left-tab[data-active="true"],
 .stage-right-tab[data-active="true"] {
   background: rgba(239,68,68,0.18);
   border-color: rgba(251,113,133,0.34);
