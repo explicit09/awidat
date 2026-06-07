@@ -46,6 +46,16 @@ assert(
   "Auth chooser should be a glass settings sub-page with Back to settings",
 );
 assert(
+  authChooser.includes("auth-current-wallet") && authChooser.includes("auth-options") &&
+    authChooser.includes("auth-option-grid"),
+  "Auth chooser should use a cleaner account layout instead of stacked generic cards",
+);
+assert(
+  authChooser.includes("Change account") && authChooser.includes("Disconnect") &&
+    !authChooser.includes("{signedIn ? ("),
+  "Auth chooser should avoid duplicate bottom sign-out controls",
+);
+assert(
   agentsEditor.includes("Back to settings") && agentsEditor.includes("settingsOpen") &&
     agentsEditor.includes("glass glass-strong") && !agentsEditor.includes('className="modal agents-md-editor"'),
   "AGENTS.md editor should be a glass settings sub-page with Back to settings",

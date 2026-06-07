@@ -616,14 +616,27 @@ html, body, #root { background: #0a0a12; }
 }
 .stage-chat-input {
   border: 0;
-  min-height: 38px;
+  min-height: 34px;
   max-height: 132px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  padding-block: 7px;
 }
 .stage-chat-input:focus {
   outline: none;
   box-shadow: none;
+}
+.stage-chat-action-well {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+}
+.auth-option-grid .glass-cta:disabled {
+  border-color: rgba(255, 255, 255, 0.10) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: var(--color-text-muted) !important;
+  box-shadow: none !important;
 }
 .stage-chat-composer .awidat-mention-picker {
   position: absolute;

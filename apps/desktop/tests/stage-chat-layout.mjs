@@ -50,6 +50,8 @@ const checks = [
   ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(stageSource) === false],
   ["keeps composer inside conversation panel", /stage-chat-composer/],
   ["stage composer wraps text in a textarea", /<textarea[\s\S]+className="[^"]*stage-chat-input/],
+  ["stage composer uses a fixed action well", /stage-chat-action-well[\s\S]+onSubmit/],
+  ["stage composer aligns the send control", /\.stage-chat-action-well[\s\S]+align-items:\s*center/],
   ["stage composer accepts media suggestions", /mediaSuggestions\?:\s*MediaSuggestion\[\]/],
   ["stage composer renders the mention picker", /awidat-mention-picker/],
   ["stage composer registers picked media", /onPickMedia\?\.\(suggestion\)/],

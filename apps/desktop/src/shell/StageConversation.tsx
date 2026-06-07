@@ -108,7 +108,7 @@ export function ConversationPanel({
         <ChatStream />
       </div>
       <div className="stage-chat-composer border-t border-[var(--glass-border)] p-2">
-        <div className="stage-chat-card glass glass-reactive relative flex items-end gap-2 rounded-lg px-3 py-2">
+        <div className="stage-chat-card glass glass-reactive relative grid grid-cols-[minmax(0,1fr)_32px] items-center gap-2 rounded-lg px-3 py-2">
           <textarea
             ref={inputRef}
             value={draft}
@@ -175,9 +175,13 @@ export function ConversationPanel({
             </div>
           ) : null}
           {running ? (
-            <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-lg text-[13px]">■</button>
+            <div className="stage-chat-action-well">
+              <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-lg text-[13px]">■</button>
+            </div>
           ) : (
-            <button onClick={onSubmit} className="glass-cta grid h-8 w-8 place-items-center rounded-lg text-[13px]">▸</button>
+            <div className="stage-chat-action-well">
+              <button onClick={onSubmit} className="glass-cta grid h-8 w-8 place-items-center rounded-lg text-[13px]">▸</button>
+            </div>
           )}
         </div>
       </div>
