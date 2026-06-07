@@ -176,6 +176,22 @@ pub async fn social_retry_job(
     client(&state).await?.retry_job(&job_id).await
 }
 
+#[tauri::command]
+pub async fn social_fire_due_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<PublishJobResponse, String> {
+    client(&state).await?.fire_due_job(&job_id).await
+}
+
+#[tauri::command]
+pub async fn social_poll_publish_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<PublishJobResponse, String> {
+    client(&state).await?.poll_publish_job(&job_id).await
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RescheduleArgs {

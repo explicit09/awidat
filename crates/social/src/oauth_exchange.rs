@@ -231,6 +231,11 @@ impl OAuthTokenExchange for PlatformOAuthExchange {
             .json()
             .await
             .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+        if let Some(message) = oauth_error_message(&json) {
+            return Err(OAuthExchangeError::Http(format!(
+                "token endpoint oauth error: {message}"
+            )));
+        }
 
         let mut access_token = string_field(&json, "access_token")?;
         let refresh_token = json["refresh_token"].as_str().map(ToOwned::to_owned);
@@ -334,6 +339,29 @@ fn string_field(json: &serde_json::Value, field: &str) -> Result<String, OAuthEx
         .as_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| OAuthExchangeError::InvalidResponse(format!("missing {field}")))
+}
+
+fn oauth_error_message(json: &serde_json::Value) -> Option<String> {
+    let error = json["error"]
+        .as_str()
+        .or_else(|| json["error_type"].as_str())
+        .or_else(|| json["code"].as_str())?;
+    let mut parts = vec![error.to_string()];
+    if let Some(description) = json["error_description"]
+        .as_str()
+        .or_else(|| json["message"].as_str())
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(description.to_string());
+    }
+    if let Some(log_id) = json["log_id"]
+        .as_str()
+        .or_else(|| json["logid"].as_str())
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("log_id={log_id}"));
+    }
+    Some(parts.join(": "))
 }
 
 fn token_expires_in(
@@ -790,6 +818,56 @@ pub mod tests {
 
         assert_eq!(output.token_response.provider_account_id, "open_id_1");
         assert_eq!(output.display_name.as_deref(), Some("Awidat Creator"));
+    }
+
+    #[tokio::test]
+    async fn platform_exchange_reports_provider_oauth_error_before_missing_access_token() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("client_key=tiktok-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "error": "invalid_client",
+                "error_description": "client_key and client_secret do not match",
+                "log_id": "20260607TOKEN"
+            })))
+            .mount(&server)
+            .await;
+
+        let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+            provider: Provider::TikTok,
+            client_id: "tiktok-key".into(),
+            client_secret: "wrong-secret".into(),
+            token_endpoint: format!("{}/oauth/token", server.uri()),
+            profile_endpoint: None,
+        });
+
+        let err = exchange
+            .exchange(TokenExchangeInput {
+                provider: Provider::TikTok,
+                code: "auth-code".into(),
+                redirect_uri: "https://app.example/oauth/callback/tiktok".into(),
+                code_verifier: None,
+            })
+            .await
+            .unwrap_err();
+
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid_client"),
+            "message should include provider error code, got {message}"
+        );
+        assert!(
+            message.contains("client_key and client_secret do not match"),
+            "message should include provider description, got {message}"
+        );
+        assert!(
+            !message.contains("missing access_token"),
+            "provider OAuth errors should not be hidden as parser errors: {message}"
+        );
     }
 
     #[tokio::test]

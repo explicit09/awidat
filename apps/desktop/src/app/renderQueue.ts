@@ -27,6 +27,17 @@ export type RenderTargetKind =
   | "captions"
   | "still";
 
+export type RenderProgressPhase =
+  | "rendering_source"
+  | "rendering_target";
+
+export type RenderProgressDetails = {
+  phase?: RenderProgressPhase;
+  etaS?: number | null;
+  timeDoneS?: number | null;
+  logExcerpt?: string | null;
+};
+
 /**
  * Per-target upload lifecycle for the server-backed social publish
  * job created after a render lands. `state` is the tag; the other
@@ -34,7 +45,7 @@ export type RenderTargetKind =
  *
  *   - `pending`    — render done, upload not started yet
  *   - `uploading`  — in flight; `progress` is 0..1 (or NaN unknown)
- *   - `published`  — provider accepted; `remote_url` is shareable
+ *   - `published`  — provider accepted; `remote_url` appears when shareable
  *   - `failed`     — terminal failure; `reason` is shown verbatim
  */
 export type RenderUploadState =
@@ -42,7 +53,7 @@ export type RenderUploadState =
   | { state: "uploading"; progress: number }
   | { state: "scheduled"; job_id: string; scheduled_for?: number }
   | { state: "processing"; job_id: string }
-  | { state: "published"; remote_url: string; remote_id: string }
+  | { state: "published"; remote_url?: string; remote_id: string }
   | { state: "failed"; reason: string; job_id?: string };
 
 export type UploadTargetActions = {
@@ -139,6 +150,11 @@ export type RenderQueueEntry = {
   status: "pending" | "running" | "done" | "failed" | "cancelled";
   /** 0–100 while running; undefined otherwise. */
   progress?: number;
+  /** More detail from live render polling; not persisted per tick. */
+  progressPhase?: RenderProgressPhase;
+  progressEtaS?: number | null;
+  progressTimeDoneS?: number | null;
+  progressLogExcerpt?: string | null;
   /** Absolute output path once known. */
   outputPath?: string;
   /** Error message when status === "failed". */
@@ -274,6 +290,101 @@ export function renderQueueStatusLabel(
   return "Running";
 }
 
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0s";
+  const rounded = Math.round(seconds);
+  if (rounded < 60) return `${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = rounded % 60;
+  if (remainingSeconds === 0) return `${minutes}m`;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+function progressPercent(entry: RenderQueueEntry): number | null {
+  if (typeof entry.progress !== "number" || !Number.isFinite(entry.progress)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(entry.progress)));
+}
+
+function progressPhaseLabel(entry: RenderQueueEntry): string {
+  if (entry.progressPhase === "rendering_source") return "Rendering source";
+  if (entry.progressPhase === "rendering_target") {
+    return entry.targetId === "tiktok"
+      ? "Rendering TikTok format"
+      : `Rendering ${entry.label}`;
+  }
+  if (entry.kind === "video_reframe") {
+    return entry.targetId === "tiktok"
+      ? "Rendering TikTok format"
+      : `Rendering ${entry.label}`;
+  }
+  if (entry.internal || entry.kind === "video_master") return "Rendering source";
+  return "Rendering";
+}
+
+export function renderQueueProgressCopy(
+  entry: RenderQueueEntry,
+  entries?: RenderQueueEntry[],
+): string | null {
+  const source = sourceEntryFor(entry, entries);
+  if (
+    entry.status === "pending" &&
+    source &&
+    (source.status === "pending" || source.status === "running")
+  ) {
+    return renderQueueProgressCopy(source) ?? "Waiting for source render";
+  }
+  if (entry.status !== "running") return null;
+  const parts = [progressPhaseLabel(entry)];
+  const percent = progressPercent(entry);
+  if (percent !== null) parts.push(`${percent}%`);
+  if (
+    typeof entry.progressEtaS === "number" &&
+    Number.isFinite(entry.progressEtaS)
+  ) {
+    parts.push(`~${formatDuration(entry.progressEtaS)} left`);
+  }
+  return parts.join(" · ");
+}
+
+export function sourceDependencyFailure(
+  entry: RenderQueueEntry,
+  entries: RenderQueueEntry[],
+): string | null {
+  const source = sourceEntryFor(entry, entries);
+  if (!source) return null;
+  if (source.status === "failed") {
+    return `source render failed: ${source.error ?? "unknown error"}`;
+  }
+  if (source.status === "cancelled") {
+    return "source render was cancelled";
+  }
+  return null;
+}
+
+export function reframeMasterPathForEntry(
+  entry: RenderQueueEntry,
+  entries: RenderQueueEntry[],
+  lastMasterPath: string | null,
+): string | null {
+  if (entry.reframeMasterPath) return entry.reframeMasterPath;
+  const source = sourceEntryFor(entry, entries);
+  if (source?.status === "done" && source.outputPath) return source.outputPath;
+  return lastMasterPath;
+}
+
+export function hasRunnablePendingWithoutRunning(
+  entries: RenderQueueEntry[],
+): boolean {
+  return entries.some((entry) => entry.status === "pending") &&
+    !entries.some(
+      (entry) =>
+        entry.status === "running" ||
+        (entry.status === "done" && hasActiveUpload(entry.uploadStates)),
+    );
+}
+
 export function renderQueueApprovalCopy(entry: RenderQueueEntry): string | null {
   if (entry.reviewStatus === "approved") {
     if (hasActiveUpload(entry.uploadStates)) {
@@ -294,7 +405,11 @@ type State = {
   entries: RenderQueueEntry[];
   enqueue: (entries: RenderQueueEntry[]) => void;
   markRunning: (id: string, jobId?: string) => void;
-  markProgress: (id: string, percent: number) => void;
+  markProgress: (
+    id: string,
+    percent: number,
+    details?: RenderProgressDetails,
+  ) => void;
   markDone: (id: string, outputPath?: string) => void;
   markReviewed: (
     id: string,
@@ -434,11 +549,27 @@ export const useRenderQueueStore = create<State>((set) => ({
       return { entries: next };
     });
   },
-  markProgress: (id, percent) => {
+  markProgress: (id, percent, details) => {
     // Skip persistence for progress ticks — too chatty for localStorage.
     set((state) => ({
       entries: state.entries.map((e) =>
-        e.id === id ? { ...e, progress: percent } : e,
+        e.id === id
+          ? {
+              ...e,
+              progress: percent,
+              progressPhase: details?.phase ?? e.progressPhase,
+              progressEtaS:
+                details && "etaS" in details ? details.etaS : e.progressEtaS,
+              progressTimeDoneS:
+                details && "timeDoneS" in details
+                  ? details.timeDoneS
+                  : e.progressTimeDoneS,
+              progressLogExcerpt:
+                details && "logExcerpt" in details
+                  ? details.logExcerpt
+                  : e.progressLogExcerpt,
+            }
+          : e,
       ),
     }));
   },

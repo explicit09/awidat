@@ -18,7 +18,10 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  hasRunnablePendingWithoutRunning,
+  reframeMasterPathForEntry,
   renderQueueSelectors,
+  sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
   type RenderUploadState,
@@ -79,13 +82,14 @@ type StillExportInfo = {
 };
 
 const POLL_INTERVAL_MS = 500;
+const WORKER_WATCHDOG_INTERVAL_MS = 1_000;
 
 function publishedUrlsFromStates(
   states: Record<string, RenderUploadState>,
 ): Record<string, string> {
   const urls: Record<string, string> = {};
   for (const [provider, state] of Object.entries(states)) {
-    if (state.state === "published") {
+    if (state.state === "published" && state.remote_url) {
       urls[provider] = state.remote_url;
     }
   }
@@ -93,11 +97,11 @@ function publishedUrlsFromStates(
 }
 
 function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
-  if (job.status === "published" && job.providerPostUrl) {
+  if (job.status === "published") {
     return {
       state: "published",
-      remote_url: job.providerPostUrl,
       remote_id: job.providerPostId ?? job.id,
+      ...(job.providerPostUrl ? { remote_url: job.providerPostUrl } : {}),
     };
   }
   if (
@@ -188,7 +192,17 @@ export function useRenderQueueWorker(): void {
     // Kick the worker once on mount in case there are pending entries
     // already (e.g. after page reload restoring localStorage).
     drainQueue();
-    return () => unsub();
+    const watchdog = window.setInterval(() => {
+      if (!hasRunnablePendingWithoutRunning(useRenderQueueStore.getState().entries)) {
+        return;
+      }
+      busyRef.current = false;
+      drainQueue();
+    }, WORKER_WATCHDOG_INTERVAL_MS);
+    return () => {
+      unsub();
+      window.clearInterval(watchdog);
+    };
   }, []);
 }
 
@@ -207,8 +221,17 @@ async function runEntry(
     return;
   }
   if (entry.kind === "video_reframe") {
-    const master =
-      entry.reframeMasterPath ?? lastMasterPathRef.current ?? null;
+    const entries = useRenderQueueStore.getState().entries;
+    const sourceFailure = sourceDependencyFailure(entry, entries);
+    if (sourceFailure) {
+      store.markFailed(entry.id, sourceFailure);
+      return;
+    }
+    const master = reframeMasterPathForEntry(
+      entry,
+      entries,
+      lastMasterPathRef.current,
+    );
     if (!master) {
       store.markFailed(
         entry.id,
@@ -368,7 +391,12 @@ async function pollVideoJob(
       return;
     }
     if (status.progress_pct !== null) {
-      store.markProgress(queueId, status.progress_pct);
+      store.markProgress(queueId, status.progress_pct, {
+        phase: "rendering_source",
+        etaS: status.eta_s,
+        timeDoneS: status.time_done_s,
+        logExcerpt: status.log_excerpt,
+      });
     }
     if (status.state === "done") {
       store.markDone(queueId, outputPath);
@@ -404,7 +432,9 @@ async function pollReframeJobViaAgentStore(
     );
     if (!match || match.kind !== "job") continue;
     if (typeof match.percent === "number") {
-      store.markProgress(queueId, match.percent);
+      store.markProgress(queueId, match.percent, {
+        phase: "rendering_target",
+      });
     }
     if (match.phase === "completed") {
       const result = match.result;

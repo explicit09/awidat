@@ -10,10 +10,14 @@ import { strict as assert } from "node:assert";
 import {
   deriveUploadTargetActions,
   deriveUploadTargetRetryMode,
+  hasRunnablePendingWithoutRunning,
   newQueueId,
+  reframeMasterPathForEntry,
   renderQueueApprovalCopy,
+  renderQueueProgressCopy,
   renderQueueStatusLabel,
   renderQueueVisibleEntries,
+  sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
   type RenderUploadState,
@@ -271,6 +275,32 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   );
 }
 
+// ---- render done + private provider publish reads complete without URL ----
+{
+  const privatePublishedEntry = sampleEntry({
+    status: "done",
+    outputPath: "/tmp/tiktok.mp4",
+    reviewStatus: "approved",
+    uploadTargets: ["tiktok"],
+    uploadStates: {
+      tiktok: {
+        state: "published",
+        remote_id: "v_pub_file~private",
+      },
+    },
+  });
+  assert.equal(
+    renderQueueStatusLabel(privatePublishedEntry),
+    "Done",
+    "a completed private provider publish without a public URL must not stay in Publishing",
+  );
+  assert.equal(
+    renderQueueApprovalCopy(privatePublishedEntry),
+    "Approved for delivery.",
+    "approval copy should read complete for private provider publishes without a URL",
+  );
+}
+
 // ---- internal source renders stay out of the visible user queue ----
 {
   const internalMaster = sampleEntry({
@@ -334,6 +364,151 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
     renderQueueStatusLabel(tiktokEntry, [internalMaster, tiktokEntry]),
     "Preparing source",
     "TikTok should show source preparation instead of generic queued while its hidden source render runs",
+  );
+}
+
+// ---- progress ticks retain ETA detail for queue copy ----
+{
+  resetStore();
+  const entry = sampleEntry({
+    id: "source_with_eta",
+    label: "Source master render",
+    kind: "video_master",
+    status: "running",
+  });
+  useRenderQueueStore.getState().enqueue([entry]);
+  useRenderQueueStore.getState().markProgress(entry.id, 42, {
+    phase: "rendering_source",
+    etaS: 75,
+    timeDoneS: 32,
+  });
+  const stored = useRenderQueueStore
+    .getState()
+    .entries.find((candidate) => candidate.id === entry.id);
+  assert.equal(stored?.progress, 42);
+  assert.equal(stored?.progressEtaS, 75);
+  assert.equal(stored?.progressTimeDoneS, 32);
+  assert.equal(
+    stored ? renderQueueProgressCopy(stored) : null,
+    "Rendering source · 42% · ~1m 15s left",
+    "running renders should show phase, percent, and ETA when the backend provides it",
+  );
+}
+
+// ---- dependent TikTok row shows hidden source progress and ETA ----
+{
+  const internalMaster = sampleEntry({
+    id: "internal_master_eta",
+    label: "Source master render",
+    internal: true,
+    status: "running",
+    progress: 31,
+    progressEtaS: 90,
+    progressPhase: "rendering_source",
+  });
+  const tiktokEntry = sampleEntry({
+    id: "tiktok_waiting_on_source",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    sourceEntryId: "internal_master_eta",
+  });
+  assert.equal(
+    renderQueueProgressCopy(tiktokEntry, [internalMaster, tiktokEntry]),
+    "Rendering source · 31% · ~1m 30s left",
+    "visible platform rows should explain hidden source-render progress",
+  );
+}
+
+// ---- reframe can resume from a persisted completed source after reload ----
+{
+  const internalMaster = sampleEntry({
+    id: "internal_master_done",
+    label: "Source master render",
+    internal: true,
+    status: "done",
+    outputPath: "/tmp/source-master.mp4",
+  });
+  const tiktokEntry = sampleEntry({
+    id: "tiktok_entry",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    sourceEntryId: "internal_master_done",
+  });
+  assert.equal(
+    reframeMasterPathForEntry(tiktokEntry, [internalMaster, tiktokEntry], null),
+    "/tmp/source-master.mp4",
+    "after reload, a reframe should use its completed source entry instead of requiring an in-memory lastMasterPathRef",
+  );
+}
+
+// ---- reframe surfaces source failure instead of generic missing master ----
+{
+  const failedSource = sampleEntry({
+    id: "failed_source",
+    label: "Source master render",
+    internal: true,
+    status: "failed",
+    error: "no project loaded",
+  });
+  const tiktokEntry = sampleEntry({
+    id: "tiktok_entry",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    sourceEntryId: "failed_source",
+  });
+  assert.equal(
+    sourceDependencyFailure(tiktokEntry, [failedSource, tiktokEntry]),
+    "source render failed: no project loaded",
+    "a dependent reframe should report the hidden source failure",
+  );
+}
+
+// ---- worker can detect a stale lock with pending entries but no running work ----
+{
+  const pendingSource = sampleEntry({
+    id: "pending_source",
+    label: "Source master render",
+    internal: true,
+    status: "pending",
+  });
+  const pendingTikTok = sampleEntry({
+    id: "pending_tiktok",
+    targetId: "tiktok",
+    label: "TikTok",
+    kind: "video_reframe",
+    sourceEntryId: "pending_source",
+    status: "pending",
+  });
+  assert.equal(
+    hasRunnablePendingWithoutRunning([pendingSource, pendingTikTok]),
+    true,
+    "pending queue entries with no running entry mean a busy worker lock is stale and should be reset",
+  );
+  assert.equal(
+    hasRunnablePendingWithoutRunning([
+      { ...pendingSource, status: "running" },
+      pendingTikTok,
+    ]),
+    false,
+    "a real running render should keep the worker lock intact",
+  );
+  assert.equal(
+    hasRunnablePendingWithoutRunning([
+      {
+        ...pendingSource,
+        status: "done",
+        uploadTargets: ["youtube"],
+        uploadStates: {
+          youtube: { state: "scheduled", job_id: "job_youtube" },
+        },
+      },
+      pendingTikTok,
+    ]),
+    false,
+    "a completed render with active upload polling should keep the worker lock intact",
   );
 }
 

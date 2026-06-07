@@ -363,6 +363,84 @@ pub(crate) async fn retry_job_handler(
     Ok(Json(job))
 }
 
+// ── POST /social/jobs/{id}/fire ─────────────────────────────────────────────
+
+pub(crate) async fn fire_due_job_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> HttpResult<PublishJobResponse> {
+    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    let job_id_for_check = job_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+
+    crate::fire_due_publish_job(state.clone(), job_id.clone())
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": error })),
+            )
+        })?;
+
+    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        SocialApi::publish_job(&store, &actor, &owner, &job_id)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+    Ok(Json(job))
+}
+
+// ── POST /social/jobs/{id}/poll ─────────────────────────────────────────────
+
+pub(crate) async fn poll_processing_job_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> HttpResult<PublishJobResponse> {
+    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    let job_id_for_check = job_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+
+    crate::poll_processing_publish_job(state.clone(), job_id.clone())
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": error })),
+            )
+        })?;
+
+    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        SocialApi::publish_job(&store, &actor, &owner, &job_id)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+    Ok(Json(job))
+}
+
 // ── POST /social/jobs/{id}/reschedule ──────────────────────────────────────
 
 pub(crate) async fn reschedule_job_handler(

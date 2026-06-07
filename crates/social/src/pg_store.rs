@@ -609,6 +609,48 @@ impl SocialStore for PgSocialStore {
         Ok(claimed)
     }
 
+    fn claim_due_publish_job(
+        &mut self,
+        id: &str,
+        now: i64,
+    ) -> Result<Option<PublishJob>, SocialStoreError> {
+        let mut client = self.get()?;
+        let mut tx = client.transaction().map_err(pg_error)?;
+
+        let scheduled_str = publish_job_status_as_str(&PublishJobStatus::Scheduled);
+        let row = tx
+            .query_opt(
+                "SELECT payload_json FROM publish_jobs
+                 WHERE id = $1 AND status = $2 AND scheduled_for <= $3
+                 FOR UPDATE SKIP LOCKED",
+                &[&id, &scheduled_str, &now],
+            )
+            .map_err(pg_error)?;
+        let Some(row) = row else {
+            tx.commit().map_err(pg_error)?;
+            return Ok(None);
+        };
+        let job: PublishJob = from_json(row.get(0))?;
+        let updated = job.claim_for_upload(now);
+        let payload_json = to_json(&updated)?;
+        tx.execute(
+            "UPDATE publish_jobs SET
+                 status       = $1,
+                 payload_json = $2,
+                 updated_at   = $3
+             WHERE id = $4",
+            &[
+                &publish_job_status_as_str(&updated.status),
+                &payload_json,
+                &updated.updated_at,
+                &updated.id,
+            ],
+        )
+        .map_err(pg_error)?;
+        tx.commit().map_err(pg_error)?;
+        Ok(Some(updated))
+    }
+
     fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
         let mut client = self.get()?;
         let processing_str = publish_job_status_as_str(&PublishJobStatus::Processing);

@@ -311,6 +311,14 @@ async fn main() {
             post(user_routes::retry_job_handler),
         )
         .route(
+            "/social/jobs/{job_id}/fire",
+            post(user_routes::fire_due_job_handler),
+        )
+        .route(
+            "/social/jobs/{job_id}/poll",
+            post(user_routes::poll_processing_job_handler),
+        )
+        .route(
             "/social/jobs/{job_id}/reschedule",
             post(user_routes::reschedule_job_handler),
         )
@@ -1211,6 +1219,237 @@ fn upload_request_for_job(
         privacy: string_field(&fields, "privacy").map(|raw| parse_upload_privacy(&raw)),
         now,
     }
+}
+
+pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> Result<(), String> {
+    if !state.config.social_firing_enabled {
+        return Err("social firing disabled".into());
+    }
+
+    let aead_key = aead_key_from_state(&state.config)
+        .map_err(|(_, body)| body.0["error"].as_str().unwrap_or("key error").to_string())?;
+    let pool = state.pool.clone();
+    let force_private = state.config.youtube_force_private;
+    let tiktok_public_posting_enabled = state.config.tiktok_public_posting_enabled;
+    let artifact_base_dir = state.config.artifact_base_dir.clone();
+    let supabase_url = state.config.supabase_url.clone();
+    let supabase_service_key = state.config.supabase_service_key.clone();
+    let google_client_id = state.config.google_client_id.clone();
+    let google_client_secret = state.config.google_client_secret.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool.clone());
+        let now = now_secs();
+        let preclaim = store
+            .publish_job(&job_id)
+            .map_err(|e| format!("job lookup: {e}"))?;
+        if preclaim.provider == Provider::YouTube {
+            let today_count = store
+                .youtube_upload_quota_today(now)
+                .map_err(|e| format!("quota check: {e}"))?;
+            if today_count >= YOUTUBE_DAILY_QUOTA {
+                return Err("youtube daily upload quota reached".into());
+            }
+        }
+
+        let Some(job) = store
+            .claim_due_publish_job(&job_id, now)
+            .map_err(|e| format!("claim due job: {e}"))?
+        else {
+            return Ok(());
+        };
+
+        match &job.provider {
+            Provider::YouTube => {
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let artifact_source =
+                    artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
+                        .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                            supabase_url.clone(),
+                            supabase_service_key.clone(),
+                            3600,
+                        ));
+                let yt_config = YouTubeClientConfig {
+                    force_private,
+                    ..Default::default()
+                };
+                let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
+                let adapter = YouTubeUploadAdapter::new(client);
+                let refresher = token_refresher::ServerTokenRefresher::new(
+                    google_client_id.clone(),
+                    google_client_secret.clone(),
+                    aead_key_clone(&aead_key),
+                );
+                let upload = upload_request_for_job(&store, &job, now);
+                SocialApi::execute_claimed_upload_job_with_refresher(
+                    &mut store,
+                    &adapter,
+                    &refresher,
+                    upload,
+                    TOKEN_REFRESH_SWEEP_SKEW_SECS,
+                )
+                .map_err(|e| format!("youtube execute: {e}"))?;
+                let _ = store.increment_youtube_quota(now);
+            }
+            Provider::TikTok => {
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let eligible_for_public = tiktok_public_posting_enabled
+                    && store
+                        .connected_account(&job.connected_account_id)
+                        .map(|account| account.capabilities.public_posting)
+                        .unwrap_or(false);
+                let artifact_source =
+                    artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
+                        .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                            supabase_url.clone(),
+                            supabase_service_key.clone(),
+                            3600,
+                        ));
+                let client = LiveTikTokUploadClient::new(resolver, artifact_source);
+                let adapter =
+                    TikTokUploadAdapter::with_public_eligibility(client, eligible_for_public);
+                let upload = upload_request_for_job(&store, &job, now);
+                SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    .map_err(|e| format!("tiktok execute: {e}"))?;
+            }
+            Provider::Instagram => {
+                use awidat_social::upload_adapter::BlockedUploadAdapter;
+                let mut upload = upload_request_for_job(&store, &job, now);
+                let instagram_account_id = store
+                    .connected_account(&job.connected_account_id)
+                    .map(|account| account.provider_account_id)
+                    .ok()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| "instagram account id missing".to_string())?;
+                let artifact_source =
+                    artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
+                        .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                            supabase_url.clone(),
+                            supabase_service_key.clone(),
+                            3600,
+                        ));
+                match artifact_source.provider_fetch_url(&job.artifact_ref) {
+                    Ok(url) => upload.artifact_ref = Some(url),
+                    Err(_) => {
+                        let blocked = BlockedUploadAdapter::new(
+                            Provider::Instagram,
+                            "artifact_not_provider_fetchable",
+                        );
+                        SocialApi::execute_claimed_upload_job(&mut store, &blocked, upload)
+                            .map_err(|e| format!("instagram artifact blocker: {e}"))?;
+                        return Ok(());
+                    }
+                }
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveInstagramUploadClient::new(resolver, instagram_account_id);
+                let adapter = InstagramUploadAdapter::new(client);
+                SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    .map_err(|e| format!("instagram execute: {e}"))?;
+            }
+            Provider::TwitterX => {
+                use awidat_social::upload_adapter::BlockedUploadAdapter;
+                let mut upload = upload_request_for_job(&store, &job, now);
+                let artifact_source =
+                    artifact_source::FileArtifactSource::new(artifact_base_dir.clone())
+                        .with_storage_resolver(artifact_source::SupabaseStorageResolver::new(
+                            supabase_url.clone(),
+                            supabase_service_key.clone(),
+                            3600,
+                        ));
+                match artifact_source.provider_fetch_url(&job.artifact_ref) {
+                    Ok(url) => upload.artifact_ref = Some(url),
+                    Err(_) => {
+                        let blocked = BlockedUploadAdapter::new(
+                            Provider::TwitterX,
+                            "artifact_not_provider_fetchable",
+                        );
+                        SocialApi::execute_claimed_upload_job(&mut store, &blocked, upload)
+                            .map_err(|e| format!("twitter artifact blocker: {e}"))?;
+                        return Ok(());
+                    }
+                }
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveTwitterXUploadClient::new(resolver);
+                let adapter = TwitterXUploadAdapter::new(client);
+                SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                    .map_err(|e| format!("twitter execute: {e}"))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+}
+
+pub(crate) async fn poll_processing_publish_job(
+    state: SharedState,
+    job_id: String,
+) -> Result<(), String> {
+    if !state.config.social_firing_enabled {
+        return Err("social firing disabled".into());
+    }
+
+    let aead_key = aead_key_from_state(&state.config)
+        .map_err(|(_, body)| body.0["error"].as_str().unwrap_or("key error").to_string())?;
+    let pool = state.pool.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool.clone());
+        let now = now_secs();
+        let job = store
+            .publish_job(&job_id)
+            .map_err(|e| format!("job lookup: {e}"))?;
+        if job.status != awidat_social::model::PublishJobStatus::Processing {
+            return Ok(());
+        }
+        match &job.provider {
+            Provider::YouTube => {
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveYouTubeStatusClient::new(resolver);
+                let adapter = YouTubeStatusAdapter::new(client);
+                SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now)
+                    .map_err(|e| format!("youtube poll status: {e}"))?;
+            }
+            Provider::TikTok => {
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveTikTokStatusClient::new(resolver);
+                let adapter = TikTokStatusAdapter::new(client);
+                SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now)
+                    .map_err(|e| format!("tiktok poll status: {e}"))?;
+            }
+            Provider::Instagram => {
+                let account_id = store
+                    .connected_account(&job.connected_account_id)
+                    .map(|account| account.provider_account_id)
+                    .ok()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| "instagram account id missing".to_string())?;
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveInstagramStatusClient::new(resolver, account_id);
+                let adapter = InstagramStatusAdapter::new(client);
+                SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now)
+                    .map_err(|e| format!("instagram poll status: {e}"))?;
+            }
+            Provider::TwitterX => {
+                let resolver =
+                    ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
+                let client = LiveTwitterXStatusClient::new(resolver);
+                let adapter = TwitterXStatusAdapter::new(client);
+                SocialApi::poll_upload_status(&mut store, &adapter, &job.id, now)
+                    .map_err(|e| format!("twitter poll status: {e}"))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
 }
 
 fn scheduled_target_platform_fields(

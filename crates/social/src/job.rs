@@ -152,6 +152,22 @@ impl PublishJob {
         self
     }
 
+    pub fn publish_with_optional_url(
+        mut self,
+        provider_post_id: impl Into<String>,
+        provider_post_url: Option<String>,
+        now: i64,
+    ) -> Self {
+        self.status = PublishJobStatus::Published;
+        self.provider_post_id = Some(provider_post_id.into());
+        self.provider_post_url = provider_post_url;
+        self.normalized_error = None;
+        self.raw_error_ref = None;
+        self.requires_action_reason = None;
+        self.updated_at = now;
+        self
+    }
+
     pub fn cancel(mut self, now: i64) -> Self {
         self.status = PublishJobStatus::Cancelled;
         self.updated_at = now;
