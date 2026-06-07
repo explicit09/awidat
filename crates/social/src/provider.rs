@@ -1,6 +1,6 @@
 use crate::eligibility::{
-    ProviderEligibilityReport, instagram_eligibility, tiktok_eligibility, twitter_x_eligibility,
-    youtube_eligibility,
+    ProviderEligibilityReport, has_instagram_content_publish_scope, instagram_eligibility,
+    tiktok_eligibility, twitter_x_eligibility, youtube_eligibility,
 };
 use crate::model::{AccountEligibility, Provider, ProviderCapabilities};
 use std::collections::BTreeMap;
@@ -110,7 +110,7 @@ impl SocialProviderAdapter for MockProviderAdapter {
                 &self.provider_account_id,
                 &self.display_name,
                 self.is_professional,
-                scopes.contains(&"instagram_content_publish"),
+                has_instagram_content_publish_scope(scopes),
             ),
             Provider::TwitterX => twitter_x_eligibility(
                 &self.provider_account_id,
@@ -178,7 +178,10 @@ impl ProviderRegistry {
             ProviderDescriptor {
                 provider: Provider::Instagram,
                 display_name: "Instagram",
-                scopes: vec!["instagram_content_publish"],
+                scopes: vec![
+                    "instagram_business_basic",
+                    "instagram_business_content_publish",
+                ],
                 capabilities: ProviderCapabilities {
                     native_scheduling: false,
                     queue_scheduling: true,
@@ -341,9 +344,19 @@ mod tests {
     #[test]
     fn instagram_adapter_allows_professional_publish_scope() {
         let adapter = MockProviderAdapter::instagram("ig_1", "Creator", true);
-        let report = adapter.fetch_capabilities(&["instagram_content_publish"]);
+        let report = adapter.fetch_capabilities(&["instagram_business_content_publish"]);
 
         assert_eq!(adapter.provider(), Provider::Instagram);
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
+    }
+
+    #[test]
+    fn instagram_adapter_keeps_legacy_publish_scope_as_fallback() {
+        let adapter = MockProviderAdapter::instagram("ig_1", "Creator", true);
+        let report = adapter.fetch_capabilities(&["instagram_content_publish"]);
+
         assert!(report.eligibility.eligible);
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.public_posting);

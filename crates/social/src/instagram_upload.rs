@@ -10,8 +10,8 @@
 //!      `media_id`; then `GET /{media-id}?fields=permalink`.
 //!
 //! Gate facts (Step 0): Instagram Business/Creator (professional) account +
-//! `instagram_content_publish` permission + Meta App Review; the video must be a
-//! publicly fetchable URL (PULL, like TikTok → Supabase Storage signed URL);
+//! `instagram_business_content_publish` permission + Meta App Review; the video
+//! must be a publicly fetchable URL (PULL, like TikTok → Supabase Storage signed URL);
 //! daily publish rate limit historically ~25/24h.
 //!
 //! Model: the upload adapter creates the container and returns `processing:true`
@@ -242,7 +242,7 @@ fn instagram_status_client_error(error: InstagramStatusClientError) -> UploadSta
     UploadStatusAdapterError::NetworkOrServer { message }
 }
 
-pub const INSTAGRAM_GRAPH_BASE: &str = "https://graph.facebook.com/v24.0";
+pub const INSTAGRAM_GRAPH_BASE: &str = "https://graph.instagram.com/v24.0";
 
 pub struct LiveInstagramUploadClient<R> {
     token_resolver: R,
@@ -477,7 +477,11 @@ fn instagram_upload_error(
     let code = json["error"]["code"].as_i64().unwrap_or_default();
     let message = json["error"]["message"].as_str().unwrap_or_default();
     if status == 401 || status == 403 || code == 10 || code == 190 || code == 200 {
-        if message.contains("instagram_content_publish") || code == 10 || code == 200 {
+        if message.contains("instagram_business_content_publish")
+            || message.contains("instagram_content_publish")
+            || code == 10
+            || code == 200
+        {
             return Some(InstagramUploadClientError::MissingScope);
         }
         return Some(InstagramUploadClientError::NotProfessional);
@@ -591,6 +595,11 @@ mod tests {
             adapter.upload(&req),
             Err(UploadAdapterError::MissingUploadToken)
         );
+    }
+
+    #[test]
+    fn live_instagram_clients_default_to_instagram_graph_host() {
+        assert_eq!(INSTAGRAM_GRAPH_BASE, "https://graph.instagram.com/v24.0");
     }
 
     #[test]

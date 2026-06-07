@@ -234,11 +234,9 @@ impl OAuthTokenExchange for PlatformOAuthExchange {
 
         let access_token = string_field(&json, "access_token")?;
         let refresh_token = json["refresh_token"].as_str().map(ToOwned::to_owned);
-        let expires_in = json["expires_in"]
-            .as_i64()
-            .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing expires_in".to_string()))?;
+        let expires_in = token_expires_in(&self.config.provider, &json)?;
         let refresh_expires_in = json["refresh_expires_in"].as_i64();
-        let scopes = json["scope"].as_str().unwrap_or("").to_string();
+        let scopes = token_scopes(&self.config.provider, &json);
         let profile = provider_profile(
             &self.config.provider,
             &json,
@@ -267,6 +265,37 @@ fn string_field(json: &serde_json::Value, field: &str) -> Result<String, OAuthEx
         .as_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| OAuthExchangeError::InvalidResponse(format!("missing {field}")))
+}
+
+fn token_expires_in(
+    provider: &Provider,
+    json: &serde_json::Value,
+) -> Result<i64, OAuthExchangeError> {
+    if let Some(expires_in) = json["expires_in"].as_i64() {
+        return Ok(expires_in);
+    }
+    if provider == &Provider::Instagram {
+        return Ok(3_600);
+    }
+    Err(OAuthExchangeError::InvalidResponse(
+        "missing expires_in".to_string(),
+    ))
+}
+
+fn token_scopes(provider: &Provider, json: &serde_json::Value) -> String {
+    if let Some(scope) = json["scope"].as_str() {
+        return scope.to_string();
+    }
+    if provider == &Provider::Instagram {
+        return json["permissions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|permission| permission.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    String::new()
 }
 
 struct ProviderProfile {
@@ -692,6 +721,55 @@ pub mod tests {
 
         assert_eq!(output.token_response.provider_account_id, "open_id_1");
         assert_eq!(output.display_name.as_deref(), Some("Awidat Creator"));
+    }
+
+    #[tokio::test]
+    async fn platform_exchange_accepts_instagram_login_token_shape() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/access_token"))
+            .and(body_string_contains("client_id=ig-client"))
+            .and(body_string_contains("client_secret=ig-secret"))
+            .and(body_string_contains("grant_type=authorization_code"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "ig-access",
+                "user_id": "ig_user_1",
+                "permissions": [
+                    "instagram_business_basic",
+                    "instagram_business_content_publish"
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+            provider: Provider::Instagram,
+            client_id: "ig-client".into(),
+            client_secret: "ig-secret".into(),
+            token_endpoint: format!("{}/oauth/access_token", server.uri()),
+            profile_endpoint: None,
+        });
+
+        let output = exchange
+            .exchange(TokenExchangeInput {
+                provider: Provider::Instagram,
+                code: "auth-code".into(),
+                redirect_uri: "https://app.example/oauth/callback/instagram".into(),
+                code_verifier: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.access_token, "ig-access");
+        assert_eq!(output.token_response.provider_account_id, "ig_user_1");
+        assert_eq!(
+            output.token_response.scopes,
+            "instagram_business_basic,instagram_business_content_publish"
+        );
+        assert_eq!(output.token_response.expires_in, 3_600);
     }
 
     #[tokio::test]
