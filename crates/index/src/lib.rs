@@ -826,7 +826,7 @@ async fn run_pair(
     }
     launch_init = launch_started.elapsed();
 
-    let args = index_asset_args(project_root, item);
+    let args = index_asset_args(project_root, index_dir, item);
     // Generous timeout for indexer runs; whisper on a long episode is the
     // worst case.
     let tool_started = Instant::now();
@@ -1002,9 +1002,10 @@ fn telemetry_for_terminal(
     }
 }
 
-fn index_asset_args(project_root: &Path, item: &WorkItem) -> serde_json::Value {
+fn index_asset_args(project_root: &Path, index_dir: &Path, item: &WorkItem) -> serde_json::Value {
     serde_json::json!({
         "project_root": project_root.to_string_lossy(),
+        "index_root": index_dir.to_string_lossy(),
         "asset_path": item.asset_path.to_string_lossy(),
         "asset_id": item.asset_id.as_str(),
         "asset_sha256": item.asset_sha,
@@ -1240,9 +1241,14 @@ mod tests {
             queued_at: Instant::now(),
         };
 
-        let args = index_asset_args(Path::new("/tmp/project"), &item);
+        let args = index_asset_args(
+            Path::new("/tmp/project"),
+            Path::new("/tmp/report/index-run-1"),
+            &item,
+        );
 
         assert_eq!(args["project_root"], "/tmp/project");
+        assert_eq!(args["index_root"], "/tmp/report/index-run-1");
         assert_eq!(args["asset_path"], "/Volumes/Media/video.mp4");
         assert_eq!(args["asset_id"], "external/0001-video.mp4");
         assert_eq!(args["asset_sha256"], "abc123");

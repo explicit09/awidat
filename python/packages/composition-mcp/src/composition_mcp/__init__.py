@@ -51,8 +51,14 @@ def _project_root_from(req: IndexAssetRequest) -> Path:
     return Path(req.asset_path).absolute().parent
 
 
-def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
-    path = project_root / "index" / indexer / f"{asset_id}.json"
+def _index_root_from(req: IndexAssetRequest, project_root: Path) -> Path:
+    if req.index_root:
+        return Path(req.index_root).absolute()
+    return project_root / "index"
+
+
+def _read_sidecar(index_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
+    path = index_root / indexer / f"{asset_id}.json"
     if not path.exists():
         return None
     try:
@@ -266,16 +272,17 @@ def _verify_regions(regions: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _handle(req: IndexAssetRequest) -> dict[str, Any]:
     project_root = _project_root_from(req)
-    scenes_doc = _read_sidecar(project_root, "scenedetect", req.asset_id)
+    index_root = _index_root_from(req, project_root)
+    scenes_doc = _read_sidecar(index_root, "scenedetect", req.asset_id)
     if not scenes_doc:
         raise RuntimeError(
             f"composition-mcp: missing scenedetect sidecar at "
             f"<project>/index/scenedetect/{req.asset_id}.json"
         )
     scenes_body = scenes_doc.get("data", {})
-    face_doc = _read_sidecar(project_root, "face", req.asset_id)
-    gaze_doc = _read_sidecar(project_root, "gaze", req.asset_id)
-    model_doc = _read_sidecar(project_root, "composition-model", req.asset_id)
+    face_doc = _read_sidecar(index_root, "face", req.asset_id)
+    gaze_doc = _read_sidecar(index_root, "gaze", req.asset_id)
+    model_doc = _read_sidecar(index_root, "composition-model", req.asset_id)
     regions = _regions_from_sidecars(
         scenes_body,
         face_doc.get("data", {}) if face_doc else None,

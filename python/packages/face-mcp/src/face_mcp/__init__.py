@@ -241,14 +241,17 @@ def _cluster_faces(
 
 
 def _read_diarization(
-    project_root: Path | None, asset_id: str
+    project_root: Path | None, asset_id: str, index_root: Path | None = None
 ) -> list[dict[str, Any]] | None:
     """Look up the whisper sidecar for this asset and return its
     diarization segments if present. None means no diarization
     available — speaker mapping just gets skipped."""
-    if project_root is None:
+    if index_root is not None:
+        sidecar = index_root / "whisper" / f"{asset_id}.json"
+    elif project_root is not None:
+        sidecar = project_root / "index" / "whisper" / f"{asset_id}.json"
+    else:
         return None
-    sidecar = project_root / "index" / "whisper" / f"{asset_id}.json"
     if not sidecar.exists():
         return None
     try:
@@ -366,7 +369,8 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             if (project_root / "index").is_dir():
                 break
             project_root = project_root.parent
-    diarization = _read_diarization(project_root, req.asset_id)
+    index_root = Path(req.index_root).absolute() if req.index_root else None
+    diarization = _read_diarization(project_root, req.asset_id, index_root)
     speaker_to_face = _map_speakers_to_faces(per_frame, diarization)
 
     # Track-level summary: total seconds each face_id is on screen.

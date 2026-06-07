@@ -178,6 +178,23 @@ fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: V
                 Vec::new()
             }
         };
+        let index_task = {
+            let app = app.clone();
+            let project_root = project_root.clone();
+            tokio::spawn(async move {
+                let state = app.state::<AwidatState>();
+                if let Err(e) = crate::commands::index::index_project_assets_at_root(
+                    &app,
+                    &state,
+                    project_root,
+                    asset_ids,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "auto-index failed");
+                }
+            })
+        };
         for asset in assets {
             if let Err(e) = process_imported_asset(&app, &state, &project_root, &asset).await {
                 tracing::warn!(
@@ -187,18 +204,8 @@ fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: V
                 );
             }
         }
-
-        // The indexer is sha-keyed; running on already-indexed assets
-        // is a fast no-op.
-        if let Err(e) = crate::commands::index::index_project_assets_at_root(
-            &app,
-            &state,
-            project_root.clone(),
-            asset_ids,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "auto-index failed");
+        if let Err(e) = index_task.await {
+            tracing::warn!(error = %e, "auto-index task failed");
         }
     });
 }
