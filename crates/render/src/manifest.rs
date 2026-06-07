@@ -1127,7 +1127,7 @@ mod tests {
         let input_paths = vec![
             PathBuf::from("raw/source.mp4"),
             PathBuf::from("raw/source.mp4"),
-            media.clone(),
+            media,
         ];
         let mut calls = 0usize;
 
