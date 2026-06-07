@@ -51,7 +51,8 @@ type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
 // Timeline strip sizing — fits ALL tracks without vertical scroll.
 const TL_BASE = 48; // header/padding chrome
 const TL_ROW = 58; // per-track lane height
-const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
+const TL_MIN_PX = 120;
+const TL_MAX_VH = 0.58; // soft cap; beyond this the strip scrolls (never clips)
 
 const SIDE_PANE_W = 360;
 const SIDE_PANE_MIN_W = 260;
@@ -72,6 +73,7 @@ const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
 ];
 type PaneSide = "left" | "right";
 type PaneResize = { side: PaneSide; startX: number; startWidth: number };
+type TimelineResize = { startY: number; startHeight: number };
 
 export type StageShellProps = {
   hasProject: boolean;
@@ -165,7 +167,10 @@ export function StageShell(props: StageShellProps) {
   );
   const [leftPaneWidth, setLeftPaneWidth] = useState(SIDE_PANE_W);
   const [rightPaneWidth, setRightPaneWidth] = useState(SIDE_PANE_W);
+  const [timelineHeightPx, setTimelineHeightPx] = useState(TL_BASE + TL_ROW);
+  const [timelineHeightManual, setTimelineHeightManual] = useState(false);
   const paneResize = useRef<PaneResize | null>(null);
+  const timelineResize = useRef<TimelineResize | null>(null);
   const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
   useEffect(() => {
     if (running) setRightPane("chat");
@@ -187,7 +192,11 @@ export function StageShell(props: StageShellProps) {
   // Falls back to the live store count if App didn't pass one.
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
   const tracks = trackCount || storeTrackCount;
-  const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
+  const autoTimelineHeightPx = clampTimelineHeight(TL_BASE + Math.max(1, tracks) * TL_ROW);
+  useEffect(() => {
+    if (!timelineHeightManual) setTimelineHeightPx(autoTimelineHeightPx);
+  }, [autoTimelineHeightPx, timelineHeightManual]);
+  const timelineHeight = `${timelineHeightPx}px`;
   const LEFT_PANE_RESERVE = leftPaneWidth + SIDE_PANE_GUTTER + 12;
   const RIGHT_PANE_RESERVE = rightPaneWidth + SIDE_PANE_GUTTER + 12;
   const paneBottom = `calc(36px + ${timelineHeight})`;
@@ -216,6 +225,25 @@ export function StageShell(props: StageShellProps) {
   };
   const endPaneResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     paneResize.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+  const beginTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    timelineResize.current = {
+      startY: event.clientY,
+      startHeight: timelineHeightPx,
+    };
+    setTimelineHeightManual(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = timelineResize.current;
+    if (!resize) return;
+    setTimelineHeightPx(clampTimelineHeight(resize.startHeight - (event.clientY - resize.startY)));
+  };
+  const endTimelineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    timelineResize.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -413,11 +441,6 @@ export function StageShell(props: StageShellProps) {
               </div>
             ) : null}
           </div>
-          {agentRead ? (
-            <div className="flex items-center gap-2 pl-1 text-[11px] text-[var(--color-text-muted)]">
-              <span className="text-[var(--color-brand-hover)]">◇</span> {agentRead}
-            </div>
-          ) : null}
         </div>
 
         {pending.length > 0 && cur ? (
@@ -448,7 +471,17 @@ export function StageShell(props: StageShellProps) {
           track). Chat lives on the right, so the bottom timeline remains
           available while the conversation is open. */}
       <div className="absolute bottom-6 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", left: 0, right: 0 }}>
-        <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
+        <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight, position: "relative" }}>
+          <div
+            className="stage-timeline-resize-handle"
+            onPointerDown={beginTimelineResize}
+            onPointerMove={moveTimelineResize}
+            onPointerUp={endTimelineResize}
+            onPointerCancel={endTimelineResize}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize timeline"
+          />
           {timeline}
         </div>
       </div>
@@ -494,4 +527,10 @@ function rightPaneNode(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function clampTimelineHeight(value: number): number {
+  const viewportCap =
+    typeof window === "undefined" ? 520 : Math.max(TL_MIN_PX, Math.round(window.innerHeight * TL_MAX_VH));
+  return Math.round(clamp(value, TL_MIN_PX, viewportCap));
 }

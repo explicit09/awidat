@@ -1967,12 +1967,11 @@ function App() {
       </div>
     </div>
   );
-  // Bare timeline canvas — no Hybrid tab/zoom chrome in the Stage strip.
-  // `.stage-timeline` hides TimelinePane's internal header (track count /
-  // +Track / zoom) via glass.css so the strip reads as a clean ribbon.
+  // Bare timeline canvas — no Hybrid tabs in the Stage strip. TimelinePane's
+  // compact header stays visible for transport, track, and zoom controls.
   const stageTimeline = (
     <div className="stage-timeline h-full w-full overflow-hidden">
-      <TimelinePane />
+      <TimelinePane previewRate={previewRate} onPreviewRate={setPreviewRate} />
     </div>
   );
 

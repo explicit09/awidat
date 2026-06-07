@@ -2186,6 +2186,52 @@ button {
   margin-left: auto;
 }
 
+.timeline-transport-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.timeline-transport-controls button,
+.timeline-transport-controls select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elev2, var(--bg-elev));
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.timeline-transport-controls button {
+  min-width: 26px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.timeline-transport-controls select {
+  min-width: 48px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.timeline-transport-controls button:hover,
+.timeline-transport-controls select:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.timeline-transport-controls button:disabled,
+.timeline-transport-controls select:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .timeline-zoom-group {
   display: inline-flex;
   align-items: center;
@@ -2283,6 +2329,30 @@ button {
   min-height: 0;
   overflow: auto;
   position: relative;
+}
+
+.stage-timeline-resize-handle {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 30;
+  height: 8px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.stage-timeline-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 2px 44% auto 44%;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.stage-timeline-resize-handle:hover::before {
+  opacity: 1;
 }
 
 .timeline-canvas-wrap {

@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useTimelineStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
@@ -15,7 +16,17 @@ import { TimelineSurface } from "./TimelineSurface.tsx";
 import { computePps } from "./layout.ts";
 import { countCompletedTimelineEdits } from "./refreshActivity.ts";
 
-export function TimelinePane() {
+type TimelinePaneProps = {
+  previewRate?: number;
+  onPreviewRate?: (rate: number) => void;
+};
+
+const PLAYBACK_RATES = [1, 1.5, 2] as const;
+
+export function TimelinePane({
+  previewRate = 1,
+  onPreviewRate,
+}: TimelinePaneProps = {}) {
   const projectReady = useProjectStore((s) => s.current !== null);
   const projectRoot = useProjectStore((s) => s.current);
   const snapshot = useTimelineStore((s) => s.snapshot);
@@ -137,6 +148,10 @@ export function TimelinePane() {
             : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
         </span>
         <AddTrackButton />
+        <TimelineTransportControls
+          previewRate={previewRate}
+          setPreviewRate={onPreviewRate}
+        />
         <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
       </header>
       <div className="timeline-stage" ref={stageRef}>
@@ -144,6 +159,83 @@ export function TimelinePane() {
         <ProposalActions />
       </div>
     </section>
+  );
+}
+
+function TimelineTransportControls({
+  previewRate,
+  setPreviewRate,
+}: {
+  previewRate: number;
+  setPreviewRate?: (rate: number) => void;
+}) {
+  const isPlaying = useMediaStore((s) => s.isPlaying);
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const timelineDurationS = useMediaStore((s) => s.timelineDurationS);
+  const sourceDurationS = useMediaStore((s) => s.durationS);
+  const setPlaying = useMediaStore((s) => s.setPlaying);
+  const requestSeek = useMediaStore((s) => s.requestSeek);
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const previewDurationS = timelineDurationS > 0 ? timelineDurationS : sourceDurationS;
+  const requestPreviewSeek = (timeS: number) => {
+    if (timelineDurationS > 0) {
+      requestTimelineSeek(timeS);
+    } else {
+      requestSeek(timeS);
+    }
+  };
+
+  const toggle = () => {
+    if (isPlaying) {
+      setPlaying(false);
+      return;
+    }
+    if (timelineDurationS > 0 && timelineTime >= timelineDurationS) {
+      requestPreviewSeek(0);
+    }
+    setPlaying(true);
+  };
+
+  return (
+    <div className="timeline-transport-controls" aria-label="Timeline playback controls">
+      <button
+        type="button"
+        onClick={() => requestPreviewSeek(0)}
+        aria-label="Jump to start"
+        title="Jump to start"
+      >
+        <SkipBack className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={isPlaying ? "Pause timeline" : "Play timeline"}
+        title="Space"
+      >
+        {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+      </button>
+      <button
+        type="button"
+        onClick={() => requestPreviewSeek(previewDurationS)}
+        aria-label="Jump to end"
+        title="Jump to end"
+        disabled={previewDurationS <= 0}
+      >
+        <SkipForward className="h-3.5 w-3.5" />
+      </button>
+      <select
+        aria-label="Playback speed"
+        value={String(previewRate)}
+        onChange={(event) => setPreviewRate?.(Number(event.currentTarget.value))}
+        disabled={!setPreviewRate}
+      >
+        {PLAYBACK_RATES.map((rate) => (
+          <option key={rate} value={rate}>
+            {rate}x
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
