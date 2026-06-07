@@ -45,6 +45,8 @@ pub enum UploadStatusAdapterError {
     ProviderMismatch,
     #[error("missing provider post id")]
     MissingProviderPostId,
+    #[error("provider status requires action: {reason}")]
+    RequiresAction { reason: String },
     #[error("network or server error: {message}")]
     NetworkOrServer { message: String },
 }
@@ -92,7 +94,13 @@ impl UploadStatusService {
             return Err(UploadStatusServiceError::ProviderMismatch);
         }
         if let Some(reason) = account_status_requires_action_reason(&account.status) {
-            return persist_requires_action(store, job, reason, input.now);
+            return persist_requires_action(
+                store,
+                job,
+                reason,
+                PublishJobActorType::Worker,
+                input.now,
+            );
         }
         if !account.eligibility.eligible {
             let reason = account
@@ -101,10 +109,22 @@ impl UploadStatusService {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "account_not_eligible".into());
-            return persist_requires_action(store, job, reason, input.now);
+            return persist_requires_action(
+                store,
+                job,
+                reason,
+                PublishJobActorType::Worker,
+                input.now,
+            );
         }
         if !account.capabilities.upload_video {
-            return persist_requires_action(store, job, "missing_publish_capability", input.now);
+            return persist_requires_action(
+                store,
+                job,
+                "missing_publish_capability",
+                PublishJobActorType::Worker,
+                input.now,
+            );
         }
         let provider_post_id = job
             .provider_post_id
@@ -119,9 +139,19 @@ impl UploadStatusService {
             provider_post_id: provider_post_id.clone(),
             access_token_ref: format!("token_secret:{}", account.id),
         };
-        let result = adapter
-            .poll_status(&request)
-            .map_err(status_adapter_error)?;
+        let result = match adapter.poll_status(&request) {
+            Ok(result) => result,
+            Err(UploadStatusAdapterError::RequiresAction { reason }) => {
+                return persist_requires_action(
+                    store,
+                    job,
+                    reason,
+                    PublishJobActorType::Provider,
+                    input.now,
+                );
+            }
+            Err(error) => return Err(status_adapter_error(error)),
+        };
         if result.status != UploadProcessingStatus::Published
             && result.provider_post_id != provider_post_id
         {
@@ -159,6 +189,9 @@ fn status_adapter_error(error: UploadStatusAdapterError) -> UploadStatusServiceE
         UploadStatusAdapterError::MissingProviderPostId => {
             UploadStatusServiceError::MissingProviderPostId
         }
+        UploadStatusAdapterError::RequiresAction { reason } => {
+            UploadStatusServiceError::Store(SocialStoreError::Storage(reason))
+        }
         UploadStatusAdapterError::NetworkOrServer { message } => {
             UploadStatusServiceError::Store(SocialStoreError::Storage(message))
         }
@@ -195,12 +228,13 @@ fn persist_requires_action(
     store: &mut impl SocialStore,
     job: PublishJob,
     reason: impl Into<String>,
+    actor_type: PublishJobActorType,
     now: i64,
 ) -> Result<PublishJob, UploadStatusServiceError> {
     let reason = reason.into();
     let next = job.requires_action(reason.clone(), now);
     store.save_publish_job(next.clone())?;
-    append_requires_action_event(store, &next, &reason, now)?;
+    append_requires_action_event(store, &next, &reason, actor_type, now)?;
     Ok(next)
 }
 
@@ -208,6 +242,7 @@ fn append_requires_action_event(
     store: &mut impl SocialStore,
     job: &PublishJob,
     reason: &str,
+    actor_type: PublishJobActorType,
     now: i64,
 ) -> Result<(), UploadStatusServiceError> {
     let event_id = next_requires_action_event_id(store, &job.id)?;
@@ -215,7 +250,7 @@ fn append_requires_action_event(
         event_id,
         job.id.clone(),
         PublishJobEventType::RequiresAction,
-        PublishJobActorType::Worker,
+        actor_type,
         "provider status poll requires action",
         serde_json::json!({
             "provider": job.provider.as_str(),
@@ -526,6 +561,33 @@ mod tests {
             Err(UploadStatusServiceError::JobNotProcessing)
         );
         assert_eq!(adapter.call_count(), 0);
+    }
+
+    #[test]
+    fn poll_processing_job_persists_requires_action_from_status_adapter() {
+        let mut store = store_with_processing_job();
+        let adapter = RecordingStatusAdapter::failing(UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        });
+
+        let job = UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(job.requires_action_reason.as_deref(), Some("missing_scope"));
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("events: {err}"));
+        assert_eq!(events[0].event_type, PublishJobEventType::RequiresAction);
+        assert_eq!(events[0].actor_type, PublishJobActorType::Provider);
+        assert_eq!(events[0].metadata["reason"], "missing_scope");
     }
 
     #[test]

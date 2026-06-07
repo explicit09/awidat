@@ -83,6 +83,7 @@ pub enum TwitterXMediaState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TwitterXStatusClientError {
+    MissingScope,
     RateLimited,
     NetworkOrServer(String),
 }
@@ -239,6 +240,9 @@ impl<C: TwitterXStatusClient> UploadStatusAdapter for TwitterXStatusAdapter<C> {
 
 fn twitter_x_status_client_error(error: TwitterXStatusClientError) -> UploadStatusAdapterError {
     match error {
+        TwitterXStatusClientError::MissingScope => UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        },
         TwitterXStatusClientError::RateLimited => UploadStatusAdapterError::NetworkOrServer {
             message: "rate_limited".into(),
         },
@@ -341,10 +345,8 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXStatusClient<R> 
         if status == 429 {
             return Err(TwitterXStatusClientError::RateLimited);
         }
-        if !http_success(status) {
-            return Err(TwitterXStatusClientError::NetworkOrServer(format!(
-                "twitter_x status {status}: {json}"
-            )));
+        if let Some(error) = twitter_x_error(status, &json) {
+            return Err(twitter_x_upload_to_status_error(error));
         }
         let state = json["data"]["processing_info"]["state"]
             .as_str()
@@ -651,9 +653,7 @@ async fn create_tweet(
 fn twitter_x_upload_to_status_error(error: TwitterXUploadClientError) -> TwitterXStatusClientError {
     match error {
         TwitterXUploadClientError::RateLimited => TwitterXStatusClientError::RateLimited,
-        TwitterXUploadClientError::MissingScope => {
-            TwitterXStatusClientError::NetworkOrServer("missing_scope".into())
-        }
+        TwitterXUploadClientError::MissingScope => TwitterXStatusClientError::MissingScope,
         TwitterXUploadClientError::NetworkOrServer(message) => {
             TwitterXStatusClientError::NetworkOrServer(message)
         }
@@ -989,6 +989,36 @@ mod tests {
             response.post_url.as_deref(),
             Some("https://x.com/i/web/status/tweet_123")
         );
+    }
+
+    #[tokio::test]
+    async fn live_twitter_x_status_client_maps_missing_scope_to_requires_action() {
+        let api = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/2/media/upload"))
+            .and(query_param("media_id", "media_123"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": [{ "title": "Forbidden" }]
+            })))
+            .mount(&api)
+            .await;
+
+        let client =
+            LiveTwitterXStatusClient::with_base(FixedTokenResolver("x-access".into()), api.uri());
+        let response = tokio::task::spawn_blocking(move || {
+            client.publish_if_ready(&TwitterXStatusRequest {
+                processing_ref: TwitterXProcessingRef {
+                    media_id: "media_123".into(),
+                    text: "Launch clip".into(),
+                },
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(response, Err(TwitterXStatusClientError::MissingScope));
     }
 
     #[test]
