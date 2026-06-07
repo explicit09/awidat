@@ -2809,7 +2809,7 @@ function ProjectMediaPanel({
         onRefresh={onRefreshGeneratedMedia}
         onUse={onPlaceGeneratedMedia}
       />
-      <Stack gap="2">
+      <div className="stage-media-grid grid grid-cols-2 gap-2">
         {media.length > 0 ? media.map((item) => (
           <div
             key={item.id}
@@ -2823,7 +2823,7 @@ function ProjectMediaPanel({
               event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
-            className="stage-media-item glass-content cursor-pointer px-3 py-2 text-left"
+            className="stage-media-item glass-content cursor-pointer overflow-hidden p-0 text-left"
             data-selected={item.stem === selectedMediaStem ? "true" : "false"}
             title={item.title}
             draggable={item.assetId !== undefined}
@@ -2834,8 +2834,28 @@ function ProjectMediaPanel({
               event.dataTransfer.effectAllowed = "copy";
             }}
           >
-            <Inline justify="between" align="start" gap="2">
-              <Stack gap="1" className="min-w-0">
+            <div className="stage-media-thumb rounded-t-xl">
+              {item.thumbnail ? (
+                <img
+                  src={item.thumbnail}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  draggable={false}
+                />
+              ) : (
+                <div className="stage-media-thumb-fallback">
+                  <span>{mediaInitials(item.title)}</span>
+                </div>
+              )}
+              <div className="absolute left-2 top-2">
+                <StatusPillFromMapping
+                  mapping={mediaStatusPill(item.status)}
+                  label={mediaStatusLabel(item.status)}
+                />
+              </div>
+            </div>
+            <div className="grid gap-1 p-2.5">
+              <div className="min-w-0">
                 <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
                   {item.title}
                 </span>
@@ -2852,15 +2872,10 @@ function ProjectMediaPanel({
                     />
                   </div>
                 ) : null}
-              </Stack>
-              <StatusPillFromMapping
-                mapping={mediaStatusPill(item.status)}
-                label={mediaStatusLabel(item.status)}
-                className="shrink-0"
-              />
-            </Inline>
+              </div>
+            </div>
             {item.assetId ? (
-              <div className="mt-2 flex justify-end">
+              <div className="flex justify-end px-2.5 pb-2.5">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -2875,7 +2890,7 @@ function ProjectMediaPanel({
             ) : null}
           </div>
         )) : (
-          <Card padding="sm">
+          <Card padding="sm" className="stage-media-empty">
             <Stack gap="2">
               <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
                 No media yet
@@ -2886,9 +2901,16 @@ function ProjectMediaPanel({
             </Stack>
           </Card>
         )}
-      </Stack>
+      </div>
     </Stack>
   );
+}
+
+function mediaInitials(title: string): string {
+  const base = title.replace(/\.[^.]+$/, "").trim();
+  const words = base.split(/[\s_-]+/).filter(Boolean);
+  if (words.length >= 2) return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+  return (base.slice(0, 2) || "M").toUpperCase();
 }
 
 function mediaStatusPill(status: IndexingMediaItem["status"]): StatusPillMapping {

@@ -62,9 +62,14 @@ const checks = [
   ["uses tab buttons for right-pane selection", /className="stage-right-tab"/],
   ["uses tab buttons for left-pane selection", /className="stage-left-tab"/],
   ["inspector does not show the publish bridge", /EditorPublishBridge/.test(inspector) === false],
-  ["stage media rows know the selected media", /const selectedMediaStem = useMediaStore\(\(s\) => s\.selectedStem\)/],
-  ["stage media rows expose selected state", /data-selected=\{item\.stem === selectedMediaStem \? "true" : "false"\}/],
+  ["stage media grid shows source media visually", /stage-media-grid grid grid-cols-2/],
+  ["stage media cards render thumbnails when available", /item\.thumbnail[\s\S]+<img[\s\S]+src=\{item\.thumbnail\}/],
+  ["stage media cards include thumbnail fallbacks", /mediaInitials\(item\.title\)/],
+  ["stage media cards know the selected media", /const selectedMediaStem = useMediaStore\(\(s\) => s\.selectedStem\)/],
+  ["stage media cards expose selected state", /data-selected=\{item\.stem === selectedMediaStem \? "true" : "false"\}/],
   ["stage media selected state uses visible contrast", /\.stage-media-item\[data-selected="true"\][\s\S]+rgba\(239,68,68,0\.22\)/],
+  ["stage media thumbnails use dedicated glass styling", /\.stage-media-thumb[\s\S]+aspect-ratio:\s*16 \/ 9/],
+  ["stage media empty state spans the grid", /\.stage-media-empty[\s\S]+grid-column:\s*1 \/ -1/],
   ["source preview selector has liquid-visible contrast", /\.media-asset-select[\s\S]+rgba\(10,\s*10,\s*18,\s*0\.86\)/],
 ];
 

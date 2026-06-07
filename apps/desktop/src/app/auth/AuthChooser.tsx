@@ -26,7 +26,7 @@ export function AuthChooser() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
-  // Esc closes — same convention as SettingsModal.
+  // Esc closes the same way SettingsModal does.
   useEffect(() => {
     if (!isOpen) return;
     function onKeyDown(event: KeyboardEvent) {
@@ -113,7 +113,7 @@ export function AuthChooser() {
               title="Sign in with ChatGPT"
               wallet="Uses your ChatGPT plan"
               recommended
-              detail="Spends your ChatGPT Plus / Pro / Business plan's Codex allowance — no per-token API charges, subject to your plan's usage limits."
+              detail="Spends your ChatGPT Plus / Pro / Business plan's Codex allowance. No per-token API charges, subject to your plan's usage limits."
               footnote="After signing in, an auto-generated API key may appear in your OpenAI dashboard; that's expected and isn't what's billed here."
               active={status?.mode === "chatgpt"}
             >
@@ -175,15 +175,15 @@ function ActiveWalletBanner({
   return (
     <div className="glass-content flex items-center justify-between gap-3 rounded-xl p-3">
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: "var(--color-text-primary)", fontSize: "var(--text-body-sm)" }}>
+        <div className="text-[14px] font-semibold leading-snug text-[var(--color-text-primary)]">
           Powered by: {title}
           {status?.accountHint ? (
-            <span style={{ color: "var(--color-text-muted)", fontWeight: 400 }}> · {status.accountHint}</span>
+            <span className="font-normal text-[var(--color-text-muted)]"> · {status.accountHint}</span>
           ) : null}
         </div>
-        <div style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-caption)" }}>{detail}</div>
+        <div className="mt-1 text-[13px] leading-snug text-[var(--color-text-secondary)]">{detail}</div>
         {status?.viaEnv ? (
-          <div style={{ color: "var(--color-text-warning, #c90)", fontSize: "var(--text-caption)" }}>
+          <div className="mt-1 text-[12px] leading-snug text-[var(--color-text-warning,#fbbf24)]">
             A {status.envVar ?? "credential"} in your environment is overriding this; unset it to
             use the wallet you choose here.
           </div>
@@ -225,14 +225,14 @@ function OptionCard({
     >
       <div className="grid gap-2">
         <div className="flex items-center gap-2">
-          <span style={{ fontWeight: 600, color: "var(--color-text-primary)" }}>{title}</span>
+          <span className="text-[14px] font-semibold leading-snug text-[var(--color-text-primary)]">{title}</span>
           {recommended ? <Tag label="Recommended" /> : null}
           {active ? <Tag label="Active" tone="active" /> : null}
         </div>
-        <span style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-body-sm)" }}>{wallet}</span>
-        <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)" }}>{detail}</span>
+        <span className="text-[13px] leading-snug text-[var(--color-text-secondary)]">{wallet}</span>
+        <span className="text-[13px] leading-snug text-[var(--color-text-muted)]">{detail}</span>
         {footnote ? (
-          <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)", fontStyle: "italic" }}>
+          <span className="text-[12px] leading-snug text-[var(--color-text-muted)]">
             {footnote}
           </span>
         ) : null}

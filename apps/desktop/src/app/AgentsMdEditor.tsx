@@ -1,9 +1,9 @@
-// AgentsMdEditor — modal mono-text editor for the project's
+// AgentsMdEditor: modal mono-text editor for the project's
 // AGENTS.md (Wave 3 T2).
 //
 // AGENTS.md is the editorial brief the agent reads every turn. Round-
 // tripping changes through an external editor is slow; this modal
-// closes the loop — edit, save, agent picks up changes on the next
+// closes the loop: edit, save, agent picks up changes on the next
 // turn.
 //
 // Reachable from:
@@ -14,7 +14,7 @@
 //
 // Scope discipline:
 //   - No markdown rendering. Plain `<textarea>` with mono font is
-//     deliberate — a real markdown editor is a follow-up.
+//     deliberate. A real markdown editor is a follow-up.
 //   - No new npm deps.
 //   - Tokens-only styling. Modal chrome reuses `.modal-*`; the
 //     editor-specific bits are scoped under `.agents-md-editor` so
@@ -33,7 +33,7 @@ import { useSettings } from "../state/settings";
 
 /** Starter template shown when the project has no AGENTS.md yet.
  *  Saving writes this (or whatever the user edits it into) to disk.
- *  Kept minimal so the user isn't overwhelmed — the existing project
+ *  Kept minimal so the user isn't overwhelmed. The existing project
  *  starter template lives in `commands/project.rs` and is what
  *  `init_project` writes; this in-product template is for the
  *  AGENTS.md-deleted case. */
@@ -70,7 +70,7 @@ export function AgentsMdEditor() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Load the file when the modal opens. If the backend returns null
-  // (file missing), seed the textarea with the starter template — the
+  // (file missing), seed the textarea with the starter template. The
   // first Save then creates the file.
   useEffect(() => {
     if (!isOpen || !projectPath) {
@@ -81,7 +81,7 @@ export function AgentsMdEditor() {
     setSaveStatus({ kind: "idle" });
 
     if (!isTauri()) {
-      // Storybook / vite-preview mode — start with the template so
+      // Storybook / vite-preview mode: start with the template so
       // the editor remains usable for design review.
       setContent(STARTER_TEMPLATE);
       setLoaded(true);
@@ -107,7 +107,7 @@ export function AgentsMdEditor() {
     };
   }, [isOpen, projectPath]);
 
-  // Cancel handler — confirms before discarding unsaved edits.
+  // Cancel handler: confirms before discarding unsaved edits.
   const cancel = useCallback(() => {
     if (
       isDirty &&
@@ -118,12 +118,12 @@ export function AgentsMdEditor() {
     close();
   }, [isDirty, close]);
 
-  // Save handler — shared between the button, ⌘S, and ⌘Enter.
+  // Save handler: shared between the button, ⌘S, and ⌘Enter.
   const save = useCallback(async () => {
     if (!projectPath) return;
     if (!isDirty) return;
     if (!isTauri()) {
-      // No backend in design review — pretend it succeeded so the
+      // No backend in design review. Pretend it succeeded so the
       // UX still demos.
       markClean();
       setSaveStatus({ kind: "saved", at: Date.now() });
@@ -142,7 +142,7 @@ export function AgentsMdEditor() {
     }
   }, [projectPath, isDirty, content, markClean]);
 
-  // Esc / ⌘S / ⌘Enter handlers — registered at document level so
+  // Esc / ⌘S / ⌘Enter handlers: registered at document level so
   // they win regardless of which child has focus.
   useEffect(() => {
     if (!isOpen) return;
@@ -154,13 +154,13 @@ export function AgentsMdEditor() {
       }
       const meta = event.metaKey || event.ctrlKey;
       if (!meta) return;
-      // ⌘S — save
+      // ⌘S: save
       if (event.key === "s" || event.key === "S") {
         event.preventDefault();
         void save();
         return;
       }
-      // ⌘Enter — save (parity with composer convention)
+      // ⌘Enter: save (parity with composer convention)
       if (event.key === "Enter") {
         event.preventDefault();
         void save();
@@ -223,11 +223,11 @@ export function AgentsMdEditor() {
             ×
           </button>
         </header>
-        <div className="ame-body min-h-0 flex-1 bg-[rgba(10,10,14,0.24)] p-5">
+        <div className="ame-body flex min-h-0 flex-1 flex-col bg-[rgba(10,10,14,0.24)] p-5">
           {settingsOpen ? (
             <button
               type="button"
-              className="glass-ghost mb-3 rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+              className="glass-ghost mb-3 w-fit rounded-lg px-3 py-1.5 text-[12px] font-semibold"
               onClick={cancel}
             >
               Back to settings
@@ -235,12 +235,12 @@ export function AgentsMdEditor() {
           ) : null}
           <textarea
             ref={textareaRef}
-            className="ame-textarea h-full w-full resize-none rounded-xl border border-[var(--glass-border)] bg-[rgba(8,9,12,0.66)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-text-primary)] outline-none focus:border-[rgba(239,68,68,0.45)]"
+            className="ame-textarea min-h-0 flex-1 resize-none rounded-xl border border-[var(--glass-border)] bg-[rgba(8,9,12,0.66)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-text-primary)] outline-none focus:border-[rgba(239,68,68,0.45)]"
             value={content}
             onChange={(event) => {
               setContent(event.target.value);
               markDirty();
-              // A fresh edit invalidates the "Saved" chip — without
+              // A fresh edit invalidates the "Saved" chip. Without
               // this the user sees "Saved 2s ago" while typing into
               // a now-dirty buffer.
               if (saveStatus.kind === "saved" || saveStatus.kind === "error") {

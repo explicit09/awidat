@@ -729,6 +729,40 @@ html, body, #root { background: #0a0a12; }
   background: rgba(239,68,68,0.22);
   box-shadow: inset 3px 0 0 #EF4444, 0 12px 28px rgba(0, 0, 0, 0.26);
 }
+.stage-media-grid {
+  align-items: start;
+}
+.stage-media-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at 30% 18%, rgba(239, 68, 68, 0.24), transparent 40%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+.stage-media-thumb img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+.stage-media-thumb-fallback {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.72);
+}
+.stage-media-thumb-fallback span {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.stage-media-empty {
+  grid-column: 1 / -1;
+}
 .stage-tool-body .transcript-action-button,
 .stage-tool-body .properties-apply,
 .stage-tool-body .properties-secondary,
