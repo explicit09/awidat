@@ -263,12 +263,12 @@ const RECIPES: &[IndexerRecipe] = &[
         group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
-        name: "scenedetect",
-        package: "scenedetect-mcp",
+        name: "face",
+        package: "face-mcp",
         env: &[],
         depends_on: &[],
         resource_class: IndexerResourceClass::Vision,
-        group: IndexerGroup::Navigation,
+        group: IndexerGroup::Vision,
     },
     IndexerRecipe {
         name: "whisper",
@@ -311,32 +311,16 @@ const RECIPES: &[IndexerRecipe] = &[
         package: "clip-mcp",
         env: &[],
         depends_on: &[],
-        resource_class: IndexerResourceClass::Exclusive,
+        resource_class: IndexerResourceClass::Embedding,
         group: IndexerGroup::Vision,
     },
     IndexerRecipe {
-        name: "face",
-        package: "face-mcp",
+        name: "color-analysis",
+        package: "color-analysis-mcp",
         env: &[],
         depends_on: &[],
-        resource_class: IndexerResourceClass::Vision,
-        group: IndexerGroup::Vision,
-    },
-    IndexerRecipe {
-        name: "shot",
-        package: "shot-mcp",
-        env: &[],
-        depends_on: &["scenedetect", "face", "gaze"],
-        resource_class: IndexerResourceClass::Vision,
-        group: IndexerGroup::Vision,
-    },
-    IndexerRecipe {
-        name: "gaze",
-        package: "gaze-mcp",
-        env: &[],
-        depends_on: &["face"],
-        resource_class: IndexerResourceClass::Vision,
-        group: IndexerGroup::Vision,
+        resource_class: IndexerResourceClass::Light,
+        group: IndexerGroup::Quality,
     },
     IndexerRecipe {
         name: "frame-quality",
@@ -347,12 +331,28 @@ const RECIPES: &[IndexerRecipe] = &[
         group: IndexerGroup::Quality,
     },
     IndexerRecipe {
-        name: "color-analysis",
-        package: "color-analysis-mcp",
+        name: "scenedetect",
+        package: "scenedetect-mcp",
         env: &[],
         depends_on: &[],
-        resource_class: IndexerResourceClass::Light,
-        group: IndexerGroup::Quality,
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Navigation,
+    },
+    IndexerRecipe {
+        name: "gaze",
+        package: "gaze-mcp",
+        env: &[],
+        depends_on: &["face"],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Vision,
+    },
+    IndexerRecipe {
+        name: "shot",
+        package: "shot-mcp",
+        env: &[],
+        depends_on: &["scenedetect", "face", "gaze"],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Vision,
     },
 ];
 
@@ -426,6 +426,20 @@ mod tests {
     }
 
     #[test]
+    fn defaults_prioritize_measured_non_transcription_critical_path() {
+        let cfg = with_defaults();
+        let names: Vec<&str> = cfg.mcp.servers.iter().map(|s| s.name.as_str()).collect();
+
+        assert_order(&names, "beats", "face");
+        assert_order(&names, "face", "clip");
+        assert_order(&names, "clip", "color-analysis");
+        assert_order(&names, "color-analysis", "frame-quality");
+        assert_order(&names, "frame-quality", "scenedetect");
+        assert_order(&names, "scenedetect", "gaze");
+        assert_order(&names, "gaze", "shot");
+    }
+
+    #[test]
     fn defaults_are_indexer_kind() {
         let cfg = with_defaults();
         assert!(
@@ -445,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             cfg.find_server("clip").unwrap().resource_class,
-            IndexerResourceClass::Exclusive
+            IndexerResourceClass::Embedding
         );
         assert_eq!(
             cfg.find_server("face").unwrap().resource_class,
@@ -531,4 +545,13 @@ mod tests {
     // `set_var` is unsafe in 2024-edition Rust. The integration test
     // for the resolution path runs as part of the CLI smoke (where
     // we can set the env in the spawned process).
+
+    fn assert_order(names: &[&str], before: &str, after: &str) {
+        let before_index = names.iter().position(|name| *name == before).unwrap();
+        let after_index = names.iter().position(|name| *name == after).unwrap();
+        assert!(
+            before_index < after_index,
+            "expected {before:?} before {after:?} in {names:?}"
+        );
+    }
 }
