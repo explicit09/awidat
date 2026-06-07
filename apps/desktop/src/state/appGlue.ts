@@ -258,8 +258,7 @@ export function useAppGlue() {
       } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
         setStage("edit");
       }
-      // The legacy pane toggles that do not map to v2 lenses are kept
-      // enabled for menu completeness but intentionally do not resize panes.
+      // View items that do not map to v2 lenses are omitted from the native menu.
     });
   }, [
     activeProposal,
