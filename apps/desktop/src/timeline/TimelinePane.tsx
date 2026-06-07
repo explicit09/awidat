@@ -141,18 +141,24 @@ export function TimelinePane({
   return (
     <section className="timeline-pane">
       <header className="timeline-header">
-        <span className="timeline-label">Timeline</span>
-        <span className="timeline-meta">
-          {snapshot.tracks.length === 0
-            ? "no tracks yet"
-            : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
-        </span>
-        <AddTrackButton />
-        <TimelineTransportControls
-          previewRate={previewRate}
-          setPreviewRate={onPreviewRate}
-        />
-        <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
+        <div className="timeline-header-left">
+          <span className="timeline-label">Timeline</span>
+          <span className="timeline-meta">
+            {snapshot.tracks.length === 0
+              ? "no tracks yet"
+              : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
+          </span>
+          <AddTrackButton />
+        </div>
+        <div className="timeline-header-center">
+          <TimelineTransportControls
+            previewRate={previewRate}
+            setPreviewRate={onPreviewRate}
+          />
+        </div>
+        <div className="timeline-header-right">
+          <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
+        </div>
       </header>
       <div className="timeline-stage" ref={stageRef}>
         <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />

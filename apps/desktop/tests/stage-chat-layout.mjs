@@ -29,6 +29,8 @@ const checks = [
   ["stage timeline toolbar uses glass styling", /\.stage-timeline \.timeline-header[\s\S]+backdrop-filter:\s*blur/],
   ["timeline toolbar shows pixels-per-second readout", /px\/s/],
   ["timeline toolbar has an explicit fit button", />\s*Fit\s*</],
+  ["timeline header separates left transport and zoom regions", /timeline-header-left[\s\S]+timeline-header-center[\s\S]+timeline-header-right/],
+  ["timeline transport is centered by CSS grid", /\.timeline-header[\s\S]+grid-template-columns:\s*minmax\(0,\s*1fr\) auto minmax\(0,\s*1fr\)/],
   ["timeline toolbar exposes playback controls", /TimelineTransportControls[\s\S]+aria-label=\{isPlaying \? "Pause timeline" : "Play timeline"\}/],
   ["timeline toolbar exposes jump controls", /aria-label="Jump to start"[\s\S]+aria-label="Jump to end"/],
   ["timeline toolbar exposes playback speed presets", /setPreviewRate[\s\S]+1\.5[\s\S]+2/],

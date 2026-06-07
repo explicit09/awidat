@@ -2159,13 +2159,34 @@ button {
 }
 
 .timeline-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: transparent;
   flex-shrink: 0;
+}
+
+.timeline-header-left,
+.timeline-header-center,
+.timeline-header-right {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.timeline-header-left {
+  gap: 8px;
+}
+
+.timeline-header-center {
+  justify-content: center;
+}
+
+.timeline-header-right {
+  justify-content: flex-end;
 }
 
 .timeline-label {
@@ -2183,14 +2204,12 @@ button {
 .timeline-zoom-controls {
   display: inline-flex;
   gap: 8px;
-  margin-left: auto;
 }
 
 .timeline-transport-controls {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: 8px;
 }
 
 .timeline-transport-controls button,
