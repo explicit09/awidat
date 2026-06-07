@@ -495,6 +495,21 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
     false,
     "a real running render should keep the worker lock intact",
   );
+  assert.equal(
+    hasRunnablePendingWithoutRunning([
+      {
+        ...pendingSource,
+        status: "done",
+        uploadTargets: ["youtube"],
+        uploadStates: {
+          youtube: { state: "scheduled", job_id: "job_youtube" },
+        },
+      },
+      pendingTikTok,
+    ]),
+    false,
+    "a completed render with active upload polling should keep the worker lock intact",
+  );
 }
 
 // ---- replacing upload targets resets state to Pending ----

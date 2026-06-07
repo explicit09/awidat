@@ -378,7 +378,11 @@ export function hasRunnablePendingWithoutRunning(
   entries: RenderQueueEntry[],
 ): boolean {
   return entries.some((entry) => entry.status === "pending") &&
-    !entries.some((entry) => entry.status === "running");
+    !entries.some(
+      (entry) =>
+        entry.status === "running" ||
+        (entry.status === "done" && hasActiveUpload(entry.uploadStates)),
+    );
 }
 
 export function renderQueueApprovalCopy(entry: RenderQueueEntry): string | null {

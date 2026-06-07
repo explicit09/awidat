@@ -73,6 +73,8 @@ async function invoke<T>(
 
 {
   const updates: string[] = [];
+  const sleeps: number[] = [];
+  let now = 1_000;
   const result = await publishRenderTargetsViaServer({
     renderQueueId: "queue_1",
     renderJobId: "render_1",
@@ -91,10 +93,15 @@ async function invoke<T>(
     },
     invoke,
     idFactory: (prefix) => `${prefix}_1`,
-    nowSeconds: () => 1_000,
+    nowSeconds: () => now,
+    sleepMs: async (ms) => {
+      sleeps.push(ms);
+      now += Math.ceil(ms / 1000);
+    },
     onState: (provider, state) => updates.push(`${provider}:${state.state}`),
   });
 
+  assert.deepEqual(sleeps, [1_000, 2_000]);
   assert.deepEqual(calls, [
     "social_accounts",
     "social_bind_target",
@@ -117,6 +124,101 @@ async function invoke<T>(
   });
   assert.deepEqual(result.publishedUrls, {
     youtube: "https://youtube.example/watch?v=yt_1",
+  });
+}
+
+calls.length = 0;
+
+{
+  const updates: string[] = [];
+  const sleeps: number[] = [];
+  let now = 1_000;
+  let fireAttempts = 0;
+  async function racedFireInvoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    calls.push(command);
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct_yt",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_validate_target") {
+      return { id: "target_1", validation_state: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job_race", status: "scheduled", scheduledFor: 1_001 } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return { id: "job_race", status: "scheduled", scheduledFor: 1_001 } as T;
+    }
+    if (command === "social_fire_due_job") {
+      assert.equal(args?.jobId, "job_race");
+      fireAttempts += 1;
+      return fireAttempts === 1
+        ? ({ id: "job_race", status: "scheduled", scheduledFor: 1_001 } as T)
+        : ({ id: "job_race", status: "processing" } as T);
+    }
+    if (command === "social_poll_publish_job") {
+      assert.equal(args?.jobId, "job_race");
+      return {
+        id: "job_race",
+        status: "published",
+        providerPostId: "yt_race",
+        providerPostUrl: "https://youtube.example/watch?v=yt_race",
+      } as T;
+    }
+    if (command === "social_publish_job") {
+      throw new Error("near-due scheduled jobs should keep firing, not read only");
+    }
+    throw new Error(`unexpected command: ${command}`);
+  }
+
+  const result = await publishRenderTargetsViaServer({
+    renderQueueId: "queue_1",
+    renderJobId: "render_1",
+    outputPath: "/tmp/render.mp4",
+    title: "YouTube 1080p",
+    targets: ["youtube"],
+    metadataByProvider: {},
+    invoke: racedFireInvoke,
+    idFactory: (prefix) => `${prefix}_1`,
+    nowSeconds: () => now,
+    sleepMs: async (ms) => {
+      sleeps.push(ms);
+      now += Math.ceil(ms / 1000);
+    },
+    onState: (provider, state) => updates.push(`${provider}:${state.state}`),
+  });
+
+  assert.deepEqual(calls, [
+    "social_accounts",
+    "social_bind_target",
+    "social_validate_target",
+    "social_schedule_target",
+    "social_upload_artifact",
+    "social_fire_due_job",
+    "social_fire_due_job",
+    "social_poll_publish_job",
+  ]);
+  assert.deepEqual(sleeps, [1_000, 2_000, 2_000]);
+  assert.deepEqual(updates, [
+    "youtube:uploading",
+    "youtube:scheduled",
+    "youtube:processing",
+    "youtube:published",
+    "youtube:published",
+  ]);
+  assert.deepEqual(result.states.youtube, {
+    state: "published",
+    remote_url: "https://youtube.example/watch?v=yt_race",
+    remote_id: "yt_race",
   });
 }
 
