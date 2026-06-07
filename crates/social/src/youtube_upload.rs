@@ -65,6 +65,7 @@ pub enum YouTubeProcessingState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum YouTubeStatusClientError {
+    MissingScope,
     NetworkOrServer(String),
 }
 
@@ -236,6 +237,9 @@ fn youtube_privacy(privacy: &UploadPrivacy) -> &'static str {
 
 fn youtube_status_client_error(error: YouTubeStatusClientError) -> UploadStatusAdapterError {
     match error {
+        YouTubeStatusClientError::MissingScope => UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        },
         YouTubeStatusClientError::NetworkOrServer(message) => {
             UploadStatusAdapterError::NetworkOrServer { message }
         }
@@ -254,6 +258,11 @@ fn youtube_client_error(error: YouTubeUploadClientError) -> UploadAdapterError {
             UploadAdapterError::NetworkOrServer { message }
         }
     }
+}
+
+#[cfg(feature = "youtube-live")]
+fn youtube_error_is_permission_denied(body: &str) -> bool {
+    body.contains("insufficientPermissions") || body.contains("forbidden")
 }
 
 // ── Token + artifact resolution seams (always compiled, never networked) ──────
@@ -637,6 +646,9 @@ pub mod live {
             if !resp.status().is_success() {
                 let status = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
+                if status == 401 || (status == 403 && youtube_error_is_permission_denied(&body)) {
+                    return Err(YouTubeStatusClientError::MissingScope);
+                }
                 return Err(YouTubeStatusClientError::NetworkOrServer(format!(
                     "videos API {status}: {body}"
                 )));
@@ -985,6 +997,21 @@ mod tests {
             assert_eq!(
                 result.raw_error_ref.as_deref(),
                 Some("youtube/status/yt_video_1/copyright_claim")
+            );
+        }
+
+        #[test]
+        fn maps_missing_scope_to_requires_action() {
+            let adapter = YouTubeStatusAdapter::new(RecordingYouTubeStatusClient {
+                response: None,
+                error: Some(YouTubeStatusClientError::MissingScope),
+            });
+
+            assert_eq!(
+                adapter.poll_status(&status_request()),
+                Err(UploadStatusAdapterError::RequiresAction {
+                    reason: "missing_scope".into()
+                })
             );
         }
 

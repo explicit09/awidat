@@ -95,6 +95,9 @@ pub struct TikTokStatusResponse {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TikTokStatusClientError {
+    MissingScope,
+    AccountNotEligible { reason: String },
+    RateLimited,
     NetworkOrServer(String),
 }
 
@@ -292,6 +295,15 @@ fn tiktok_client_error(error: TikTokUploadClientError) -> UploadAdapterError {
 
 fn tiktok_status_client_error(error: TikTokStatusClientError) -> UploadStatusAdapterError {
     match error {
+        TikTokStatusClientError::MissingScope => UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        },
+        TikTokStatusClientError::AccountNotEligible { reason } => {
+            UploadStatusAdapterError::RequiresAction { reason }
+        }
+        TikTokStatusClientError::RateLimited => UploadStatusAdapterError::NetworkOrServer {
+            message: "rate_limited".into(),
+        },
         TikTokStatusClientError::NetworkOrServer(message) => {
             UploadStatusAdapterError::NetworkOrServer { message }
         }
@@ -556,6 +568,22 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTikTokStatusClient<R> {
             .map_err(|e| TikTokStatusClientError::NetworkOrServer(e.to_string()))?;
         let code = json["error"]["code"].as_str().unwrap_or("ok");
         if !resp_status_success(status) || code != "ok" {
+            if status == 401 || code == "scope_not_authorized" || code == "access_token_invalid" {
+                return Err(TikTokStatusClientError::MissingScope);
+            }
+            if status == 403 || code == "unaudited_client_can_only_post_to_private_accounts" {
+                let reason = if code.is_empty() || code == "ok" {
+                    "account_not_eligible"
+                } else {
+                    code
+                };
+                return Err(TikTokStatusClientError::AccountNotEligible {
+                    reason: reason.to_string(),
+                });
+            }
+            if status == 429 || code == "rate_limit_exceeded" {
+                return Err(TikTokStatusClientError::RateLimited);
+            }
             return Err(TikTokStatusClientError::NetworkOrServer(format!(
                 "tiktok status {status}: {json}"
             )));
@@ -838,6 +866,7 @@ mod tests {
 
     struct StubStatusClient {
         response: TikTokStatusResponse,
+        error: Option<TikTokStatusClientError>,
     }
 
     impl TikTokStatusClient for StubStatusClient {
@@ -845,6 +874,9 @@ mod tests {
             &self,
             _request: &TikTokStatusRequest,
         ) -> Result<TikTokStatusResponse, TikTokStatusClientError> {
+            if let Some(error) = &self.error {
+                return Err(error.clone());
+            }
             Ok(self.response.clone())
         }
     }
@@ -869,6 +901,7 @@ mod tests {
                 post_id: None,
                 failure_reason: None,
             },
+            error: None,
         });
         let result = adapter
             .poll_status(&status_request())
@@ -887,6 +920,7 @@ mod tests {
                 post_id: Some("9".into()),
                 failure_reason: None,
             },
+            error: None,
         });
         let result = adapter
             .poll_status(&status_request())
@@ -909,6 +943,7 @@ mod tests {
                 post_id: None,
                 failure_reason: Some("spam_risk".into()),
             },
+            error: None,
         });
         let result = adapter
             .poll_status(&status_request())
@@ -921,6 +956,27 @@ mod tests {
         assert_eq!(
             result.raw_error_ref.as_deref(),
             Some("tiktok/status/pub_123/spam_risk")
+        );
+    }
+
+    #[test]
+    fn status_missing_scope_maps_to_requires_action() {
+        let adapter = TikTokStatusAdapter::new(StubStatusClient {
+            response: TikTokStatusResponse {
+                publish_id: "pub_123".into(),
+                state: TikTokProcessingState::Processing,
+                share_url: None,
+                post_id: None,
+                failure_reason: None,
+            },
+            error: Some(TikTokStatusClientError::MissingScope),
+        });
+
+        assert_eq!(
+            adapter.poll_status(&status_request()),
+            Err(UploadStatusAdapterError::RequiresAction {
+                reason: "missing_scope".into()
+            })
         );
     }
 
