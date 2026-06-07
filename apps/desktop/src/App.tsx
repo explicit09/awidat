@@ -2096,6 +2096,12 @@ function App() {
         }}
         mediaSuggestions={mediaSuggestions}
         onPickMedia={attachMediaPick}
+        chatSessions={chatSessions}
+        activeChatSession={activeChatSession}
+        chatLoading={chatLoading}
+        onOpenHistory={() => void refreshChatSessions()}
+        onSelectChatSession={(session) => void selectChatSession(session)}
+        onNewChat={() => void startNewChat()}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject

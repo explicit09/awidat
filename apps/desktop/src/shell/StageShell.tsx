@@ -8,7 +8,7 @@ import type { Stage } from "../state/stages";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
 import { ConversationPanel } from "./StageConversation";
-import type { MediaSuggestion } from "./CommandRail";
+import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 import mark from "../brand/montage-mark.svg";
 
 /**
@@ -108,6 +108,12 @@ export type StageShellProps = {
   onCancel: () => void;
   mediaSuggestions?: MediaSuggestion[];
   onPickMedia?: (suggestion: MediaSuggestion) => void;
+  chatSessions?: ChatSessionSummary[];
+  activeChatSession?: ChatSessionSummary | null;
+  chatLoading?: boolean;
+  onOpenHistory?: () => void;
+  onSelectChatSession?: (session: ChatSessionSummary) => void;
+  onNewChat?: () => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -122,6 +128,8 @@ export function StageShell(props: StageShellProps) {
     hasProject, landing, preview, timeline, trackCount = 0, tools, autoInspect,
     deliver, schedule, skills, history,
     stage, onStage, onCommand, running, onCancel, mediaSuggestions = [], onPickMedia,
+    chatSessions = [], activeChatSession = null, chatLoading = false,
+    onOpenHistory, onSelectChatSession, onNewChat,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -394,6 +402,12 @@ export function StageShell(props: StageShellProps) {
                 onCancel={onCancel}
                 mediaSuggestions={mediaSuggestions}
                 onPickMedia={onPickMedia}
+                chatSessions={chatSessions}
+                activeChatSession={activeChatSession}
+                chatLoading={chatLoading}
+                onOpenHistory={onOpenHistory}
+                onSelectChatSession={onSelectChatSession}
+                onNewChat={onNewChat}
               />
             ) : rightNode}
           </div>

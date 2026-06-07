@@ -41,8 +41,8 @@ export function EmptyConversation() {
   const opener = allReady
     ? "I've indexed your clip — speech, scenes, color, audio all ready. Tell me how you want this cut, or pick a starting move below."
     : current
-      ? "Reading your media in the background. You can still send a message; I'll work on it once indexing finishes."
-      : "Open or create a project, then tell me how you want it cut — or pick a starting move below.";
+      ? "You can send an edit request now. If more indexing context becomes available, Montage will use it in the next turn."
+      : "Open or create a project, then tell me how you want it cut, or pick a starting move below.";
 
   async function sendPrompt(prompt: string) {
     if (running || !current) return;

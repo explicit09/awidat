@@ -7,9 +7,10 @@ const conversation = readFileSync(resolve(root, "src/shell/StageConversation.tsx
 const timelinePane = readFileSync(resolve(root, "src/timeline/TimelinePane.tsx"), "utf8");
 const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const inspector = readFileSync(resolve(root, "src/inspector/ClipInspector.tsx"), "utf8");
+const emptyConversation = readFileSync(resolve(root, "src/agent/EmptyConversation.tsx"), "utf8");
 const glass = readFileSync(resolve(root, "src/ui/glass.css"), "utf8");
 const appCss = readFileSync(resolve(root, "src/App.css"), "utf8");
-const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${glass}\n${appCss}`;
+const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${emptyConversation}\n${glass}\n${appCss}`;
 const stageSource = `${shell}\n${conversation}`;
 const rightPanesBlock = shell.match(/const RIGHT_PANES:[\s\S]+?\];/)?.[0] ?? "";
 
@@ -49,6 +50,10 @@ const checks = [
   ["removes slash destination chips from composer", /\/deliver/.test(stageSource) === false],
   ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(stageSource) === false],
   ["keeps composer inside conversation panel", /stage-chat-composer/],
+  ["stage chat exposes visible session controls", /stage-chat-session-header[\s\S]+Chat history[\s\S]+New chat/],
+  ["stage chat lists saved sessions", /chatSessions\.map\(\(session\)[\s\S]+onSelectChatSession\?\.\(session\)/],
+  ["stage shell passes chat sessions into stage chat", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{onSelectChatSession\}/],
+  ["app wires stage chat session handlers", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{\(session\) => void selectChatSession\(session\)\}[\s\S]+onNewChat=\{\(\) => void startNewChat\(\)\}/],
   ["stage composer wraps text in a textarea", /<textarea[\s\S]+className="[^"]*stage-chat-input/],
   ["stage composer uses a fixed action well", /stage-chat-action-well[\s\S]+onSubmit/],
   ["stage composer aligns the send control", /\.stage-chat-action-well[\s\S]+align-items:\s*center/],
@@ -73,6 +78,7 @@ const checks = [
   ["stage media thumbnails use dedicated glass styling", /\.stage-media-thumb[\s\S]+aspect-ratio:\s*16 \/ 9/],
   ["stage media empty state spans the grid", /\.stage-media-empty[\s\S]+grid-column:\s*1 \/ -1/],
   ["source preview selector has liquid-visible contrast", /\.media-asset-select[\s\S]+rgba\(10,\s*10,\s*18,\s*0\.86\)/],
+  ["empty conversation does not promise to work only after indexing", /I'll work on it once indexing finishes/.test(emptyConversation) === false],
 ];
 
 for (const [label, pattern] of checks) {
