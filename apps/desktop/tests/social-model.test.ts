@@ -124,6 +124,28 @@ assert.deepEqual(
     title: "Post text",
   },
 );
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "tiktok",
+    privacy: "private",
+    title: "TikTok caption",
+    description: "Ignored unused description",
+    tagsInput: "ignored",
+    thumbnailPath: "/tmp/ignored-thumb.jpg",
+    tiktokInteractions: {
+      disableDuet: true,
+      disableComment: false,
+      disableStitch: true,
+    },
+  }),
+  {
+    privacy: "private",
+    title: "TikTok caption",
+    disableDuet: true,
+    disableComment: false,
+    disableStitch: true,
+  },
+);
 
 // Terminal-state detection (drives passive polling — firing is server-side now).
 assert.equal(isTerminal("published"), true);

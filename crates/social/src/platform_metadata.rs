@@ -21,7 +21,7 @@ pub fn profile_for(provider: &Provider) -> PlatformMetadataProfile {
         Provider::TikTok => PlatformMetadataProfile {
             title_required: true,
             title_max: Some(150),
-            description_max: Some(4_000),
+            description_max: None,
             tags_total_max: None,
             caption_max: None,
         },
@@ -125,6 +125,18 @@ mod tests {
             }),
         );
         assert_eq!(reasons, vec!["caption.too_long"]);
+    }
+
+    #[test]
+    fn tiktok_profile_ignores_unused_description_field() {
+        let reasons = validate_platform_fields(
+            &Provider::TikTok,
+            &serde_json::json!({
+                "title": "Launch clip",
+                "description": "x".repeat(4_001)
+            }),
+        );
+        assert_eq!(reasons, Vec::<String>::new());
     }
 
     #[test]

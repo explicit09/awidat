@@ -1284,17 +1284,17 @@ fn upload_request_for_job(
     ExecuteUploadRequest {
         job_id: job.id.clone(),
         title,
-        description: if job.provider == Provider::TwitterX {
+        description: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             None
         } else {
             description
         },
-        tags: if job.provider == Provider::TwitterX {
+        tags: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             Vec::new()
         } else {
             string_array_field(&fields, "tags")
         },
-        thumbnail_ref: if job.provider == Provider::TwitterX {
+        thumbnail_ref: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             None
         } else {
             string_field(&fields, "thumbnailRef").or_else(|| string_field(&fields, "thumbnail_ref"))
@@ -2564,6 +2564,67 @@ mod tests {
         assert!(request.tags.is_empty());
         assert_eq!(request.thumbnail_ref, None);
         assert_eq!(request.privacy, None);
+    }
+
+    #[test]
+    fn upload_request_for_job_drops_stale_tiktok_unused_fields() {
+        use montage_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            serde_json::json!({
+                "title": "Launch TikTok caption",
+                "description": "stale generic description",
+                "tags": ["stale", "ignored"],
+                "thumbnailRef": "render://thumb_1",
+                "privacy": "private"
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert_eq!(request.title, "Launch TikTok caption");
+        assert_eq!(request.description, None);
+        assert!(request.tags.is_empty());
+        assert_eq!(request.thumbnail_ref, None);
+        assert_eq!(request.privacy, Some(UploadPrivacy::Private));
     }
 
     #[test]

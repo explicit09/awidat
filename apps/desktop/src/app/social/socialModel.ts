@@ -116,6 +116,9 @@ export function buildPlatformFieldsForPublish(
     delete fields.thumbnailRef;
   }
   if (input.provider === "tiktok") {
+    delete fields.description;
+    delete fields.tags;
+    delete fields.thumbnailRef;
     fields.disableDuet = input.tiktokInteractions?.disableDuet ?? false;
     fields.disableComment = input.tiktokInteractions?.disableComment ?? false;
     fields.disableStitch = input.tiktokInteractions?.disableStitch ?? false;

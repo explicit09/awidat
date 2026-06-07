@@ -169,6 +169,11 @@ assert.deepEqual(
   ),
   ["private:Private", "unlisted:Friends only", "public:Public"],
 );
+assert.equal(
+  schedulerMetadataFieldConfig("tiktok").showDescription,
+  false,
+  "TikTok Direct Post sends the title as caption and should not expose an unused description field",
+);
 assert.equal(schedulerMetadataFieldConfig("youtube").descriptionLabel, "Description");
 assert.equal(
   schedulerMetadataControlProvider([
@@ -383,8 +388,6 @@ assert.deepEqual(
   {
     privacy: "private",
     title: "TikTok launch",
-    description: "TikTok caption",
-    tags: [],
     disableDuet: true,
     disableComment: true,
     disableStitch: true,
