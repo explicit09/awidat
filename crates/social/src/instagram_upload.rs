@@ -240,15 +240,20 @@ fn instagram_client_error(error: InstagramUploadClientError) -> UploadAdapterErr
 }
 
 fn instagram_status_client_error(error: InstagramStatusClientError) -> UploadStatusAdapterError {
-    // The status path has no RequiresAction channel (the UploadStatusAdapterError
-    // surface is intentionally narrow), so auth/eligibility regressions surface
-    // as a retryable server error; the worker's account re-check on the next
-    // execute tick flips the account to NeedsReauth.
-    let message = match error {
-        InstagramStatusClientError::NetworkOrServer(message) => message,
-        other => format!("{other:?}"),
-    };
-    UploadStatusAdapterError::NetworkOrServer { message }
+    match error {
+        InstagramStatusClientError::NotProfessional => UploadStatusAdapterError::RequiresAction {
+            reason: "instagram_professional_account_required".into(),
+        },
+        InstagramStatusClientError::MissingScope => UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        },
+        InstagramStatusClientError::RateLimited => UploadStatusAdapterError::NetworkOrServer {
+            message: "rate_limited".into(),
+        },
+        InstagramStatusClientError::NetworkOrServer(message) => {
+            UploadStatusAdapterError::NetworkOrServer { message }
+        }
+    }
 }
 
 pub const INSTAGRAM_GRAPH_BASE: &str = "https://graph.instagram.com/v24.0";
@@ -687,6 +692,7 @@ mod tests {
 
     struct StubStatusClient {
         status: InstagramContainerState,
+        status_error: Option<InstagramStatusClientError>,
         publish: Result<InstagramPublishResponse, InstagramStatusClientError>,
         publish_calls: RefCell<usize>,
     }
@@ -695,6 +701,7 @@ mod tests {
         fn new(status: InstagramContainerState) -> Self {
             Self {
                 status,
+                status_error: None,
                 publish: Ok(InstagramPublishResponse {
                     media_id: "media_5".into(),
                     permalink: Some("https://instagram.com/p/abc".into()),
@@ -710,6 +717,9 @@ mod tests {
             _creation_id: &str,
             _token: &str,
         ) -> Result<InstagramContainerState, InstagramStatusClientError> {
+            if let Some(error) = &self.status_error {
+                return Err(error.clone());
+            }
             Ok(self.status.clone())
         }
 
@@ -779,6 +789,20 @@ mod tests {
         assert_eq!(
             result.normalized_error.as_deref(),
             Some("platform_processing_failed")
+        );
+    }
+
+    #[test]
+    fn status_missing_scope_maps_to_requires_action() {
+        let mut client = StubStatusClient::new(InstagramContainerState::InProgress);
+        client.status_error = Some(InstagramStatusClientError::MissingScope);
+        let adapter = InstagramStatusAdapter::new(client);
+
+        assert_eq!(
+            adapter.poll_status(&status_request()),
+            Err(UploadStatusAdapterError::RequiresAction {
+                reason: "missing_scope".into()
+            })
         );
     }
 
