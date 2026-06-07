@@ -7,6 +7,10 @@ use crate::upload_status::{
     UploadStatusResult,
 };
 
+pub const YOUTUBE_TITLE_MAX_CHARS: usize = 100;
+pub const YOUTUBE_DESCRIPTION_MAX_CHARS: usize = 5_000;
+pub const YOUTUBE_TAGS_TOTAL_MAX_CHARS: usize = 500;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct YouTubeUploadRequest {
     pub artifact_ref: String,
@@ -105,6 +109,31 @@ impl<C: YouTubeUploadClient> UploadAdapter for YouTubeUploadAdapter<C> {
         if request.title.trim().is_empty() {
             return Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "youtube_title_required".into(),
+            });
+        }
+        if request.title.chars().count() > YOUTUBE_TITLE_MAX_CHARS {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_title_too_long".into(),
+            });
+        }
+        if request
+            .description
+            .as_deref()
+            .is_some_and(|description| description.chars().count() > YOUTUBE_DESCRIPTION_MAX_CHARS)
+        {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_description_too_long".into(),
+            });
+        }
+        if request
+            .tags
+            .iter()
+            .map(|tag| tag.chars().count())
+            .sum::<usize>()
+            > YOUTUBE_TAGS_TOTAL_MAX_CHARS
+        {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_tags_too_long".into(),
             });
         }
         if request.access_token_ref.trim().is_empty() {
@@ -758,6 +787,37 @@ mod tests {
             adapter.upload(&request),
             Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "youtube_title_required".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn youtube_adapter_rejects_over_limit_metadata() {
+        let adapter = YouTubeUploadAdapter::new(RecordingYouTubeClient::default());
+        let mut request = youtube_request();
+        request.title = "x".repeat(101);
+        assert_eq!(
+            adapter.upload(&request),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_title_too_long".into(),
+            })
+        );
+
+        request = youtube_request();
+        request.description = Some("x".repeat(5_001));
+        assert_eq!(
+            adapter.upload(&request),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_description_too_long".into(),
+            })
+        );
+
+        request = youtube_request();
+        request.tags = vec!["x".repeat(501)];
+        assert_eq!(
+            adapter.upload(&request),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "youtube_tags_too_long".into(),
             })
         );
     }
