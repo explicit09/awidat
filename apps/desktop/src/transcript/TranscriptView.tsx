@@ -518,9 +518,14 @@ function updateComposedTranscriptActive(
 }
 
 function SingleStemTranscript({ stem }: { stem: string | null }) {
+  const load = useTranscriptStore((s) => s.load);
   const state = useTranscriptStore((s) =>
     stem ? s.byStem[stem] : undefined,
   );
+
+  useEffect(() => {
+    void load(stem);
+  }, [load, stem]);
 
   if (!stem) {
     return (

@@ -22,6 +22,7 @@ import {
   computeGetPin,
   computeIsDisabled,
   deserialize,
+  shouldApplySkillHydration,
   serialize,
   useSkillsStore,
   type PinnedSkill,
@@ -418,6 +419,13 @@ import {
     __setPersistDisabledForTests(restoreDisabled);
     __setPersistSkillConfigForTests(restorePins);
   }
+}
+
+// Deferred disk hydration must not clobber local edits made after the
+// hydrate read was scheduled.
+{
+  assert.equal(shouldApplySkillHydration(0, 0), true);
+  assert.equal(shouldApplySkillHydration(0, 1), false);
 }
 
 console.log("skills-store: OK");

@@ -35,7 +35,7 @@ type State = {
    *  already invalidates its own cache, but we need to wipe the front-
    *  end byStem entry too so the next render sees the new labels. */
   reload: (stem: string) => Promise<void>;
-  /** Switch the active stem. Triggers a load if needed. */
+  /** Switch the active stem. Visible transcript surfaces own loading. */
   setActiveStem: (stem: string | null) => void;
   /** Clear all cached transcripts (called on whisper-job Completed
    *  events from the agent store). */
@@ -100,7 +100,6 @@ export const useTranscriptStore = create<State>((set, get) => ({
 
   setActiveStem: (stem) => {
     set({ activeStem: stem, selection: null });
-    if (stem) void get().load(stem);
   },
 
   clearCache: () =>

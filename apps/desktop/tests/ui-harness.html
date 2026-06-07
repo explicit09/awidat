@@ -15,15 +15,26 @@
         mockIPC,
         mockWindows,
       } from "@tauri-apps/api/mocks";
-      import App from "/src/App.tsx";
-      import { useAgentStore } from "/src/agent/store.ts";
-      import { useTimelineSelectionStore } from "/src/properties/store.ts";
-      import { useProposalStore } from "/src/timeline/proposal.ts";
 
       const params = new URLSearchParams(window.location.search);
       const projectLoaded = params.get("project") === "1";
       const scenario = params.get("scenario") || "shell";
+      const slowNonCritical = params.get("slowNonCritical") === "1";
       const projectRoot = "/tmp/awidat-ui-eval";
+      const nonCriticalIpc = new Set([
+        "get_permission_mode",
+        "get_project_episodes",
+        "index_readiness",
+        "list_chat_sessions",
+        "list_generated_media",
+        "load_chat_history",
+        "read_disabled_indexers",
+        "read_indexer_config",
+        "read_media_readiness",
+        "read_skill_config",
+        "running_job_ids",
+        "social_accounts",
+      ]);
 
       const timeline = {
         duration_s: 18,
@@ -74,7 +85,9 @@
                 duration_s: 8,
                 asset_id: "raw/intro.mp4",
                 source_start_s: 0,
-                proxy_path: null,
+                proxy_path: "/tests/fixtures/perf-preview.mp4",
+                playable_path: "/tests/fixtures/perf-preview.mp4",
+                playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
                 volume: null,
@@ -88,6 +101,9 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                motion_shape: null,
+                motion_image: null,
+                animations: [],
                 audio_lead_s: 0.35,
                 audio_trail_s: null,
                 split_edit_reason: "Let the room tone lead the visual cut.",
@@ -116,8 +132,10 @@
                 track_start_s: 6,
                 duration_s: 4,
                 asset_id: "raw/context.mp4",
-                source_start_s: 1,
-                proxy_path: null,
+                source_start_s: 0,
+                proxy_path: "/tests/fixtures/perf-preview.mp4",
+                playable_path: "/tests/fixtures/perf-preview.mp4",
+                playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
                 volume: null,
@@ -131,6 +149,9 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                motion_shape: null,
+                motion_image: null,
+                animations: [],
                 audio_lead_s: null,
                 audio_trail_s: 0.2,
                 split_edit_reason: "Hold dialogue under the incoming reaction.",
@@ -159,8 +180,10 @@
                 track_start_s: 10,
                 duration_s: 4,
                 asset_id: "raw/reaction.mp4",
-                source_start_s: 2,
-                proxy_path: null,
+                source_start_s: 0,
+                proxy_path: "/tests/fixtures/perf-preview.mp4",
+                playable_path: "/tests/fixtures/perf-preview.mp4",
+                playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
                 volume: null,
@@ -174,6 +197,9 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                motion_shape: null,
+                motion_image: null,
+                animations: [],
                 audio_lead_s: null,
                 audio_trail_s: null,
                 split_edit_reason: null,
@@ -202,8 +228,10 @@
                 track_start_s: 14,
                 duration_s: 4,
                 asset_id: "raw/outro.mp4",
-                source_start_s: 1,
-                proxy_path: null,
+                source_start_s: 0,
+                proxy_path: "/tests/fixtures/perf-preview.mp4",
+                playable_path: "/tests/fixtures/perf-preview.mp4",
+                playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
                 volume: null,
@@ -217,6 +245,9 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                motion_shape: null,
+                motion_image: null,
+                animations: [],
                 audio_lead_s: null,
                 audio_trail_s: null,
                 split_edit_reason: null,
@@ -240,6 +271,8 @@
                 asset_id: null,
                 source_start_s: 0,
                 proxy_path: null,
+                playable_path: null,
+                playable_kind: "missing",
                 thumbnail_dir: null,
                 waveform_path: null,
                 volume: null,
@@ -261,6 +294,8 @@
                   reveal: "none",
                 },
                 video_overlay: null,
+                motion_shape: null,
+                motion_image: null,
                 animations: [
                   {
                     id: "title-drift-existing",
@@ -360,30 +395,79 @@
 
       mockWindows("main");
       mockConvertFileSrc("macos");
+      window.isTauri = true;
       window.__lastEdlText = "";
+      window.__awidatIpcCalls = [];
+      const ipcStart = performance.now();
       let proposalCounter = 0;
+      let useAgentStore;
+      let useTimelineSelectionStore;
+      let useProposalStore;
       mockIPC((cmd, args) => {
+        window.__awidatIpcCalls.push({
+          command: cmd,
+          atMs: performance.now() - ipcStart,
+        });
+        const reply = (value) => {
+          if (!slowNonCritical || !nonCriticalIpc.has(cmd)) return value;
+          return new Promise((resolve) => window.setTimeout(() => resolve(value), 2000));
+        };
         switch (cmd) {
           case "current_project_root":
-            return projectLoaded ? projectRoot : null;
+            return reply(projectLoaded ? projectRoot : null);
           case "recent_projects":
-            return projectLoaded ? [projectRoot] : [];
+            return reply(projectLoaded ? [projectRoot] : []);
           case "read_timeline":
-            return timeline;
+            return reply(timeline);
           case "list_notes":
-            return notes;
+            return reply(notes);
+          case "list_source_media":
+            return reply([
+              {
+                id: "raw/intro.mp4",
+                name: "intro.mp4",
+                path: `${projectRoot}/raw/intro.mp4`,
+                size_bytes: 123456,
+              },
+            ]);
           case "list_proxies":
-            return [];
+            return reply([]);
+          case "media_url_for_path":
+            return reply("/tests/fixtures/perf-preview.mp4");
           case "read_transcript":
-            return null;
+            return reply(null);
+          case "list_generated_media":
+            return reply([]);
           case "list_chat_sessions":
-            return [];
+            return reply([]);
           case "load_chat_history":
-            return { items: [] };
+            return reply({ items: [] });
+          case "read_indexer_config":
+            return reply({ disabled: [] });
+          case "read_skill_config":
+            return reply({ version: 2, disabled: [], pinned: [] });
+          case "read_disabled_indexers":
+            return reply([]);
+          case "index_readiness":
+            return reply(null);
+          case "get_project_episodes":
+            return reply({
+              total: 0,
+              accepted: 0,
+              review_needed: 0,
+              rejected: 0,
+              episodes: [],
+            });
+          case "running_job_ids":
+            return reply([]);
+          case "read_media_readiness":
+            return reply(null);
+          case "social_accounts":
+            return reply([]);
           case "list_vedit_commits":
-            return commits;
+            return reply(commits);
           case "diff_vedit_refs":
-            return {
+            return reply({
               fromRef: "sha256:aaaaaaaaaaaaaaaa",
               toRef: "sha256:bbbbbbbbbbbbbbbb",
               changeCount: 1,
@@ -391,21 +475,21 @@
               changedClipIds: ["clip-1"],
               changes: [{ kind: "Trimmed", clip_uuid: "clip-1" }],
               animationChanges: [],
-            };
+            });
           case "restore_vedit_ref":
           case "set_menu_item_enabled":
           case "set_view_state":
           case "start_turn":
-            return null;
+            return reply(null);
           case "accept_proposal":
           case "reject_proposal":
-            useProposalStore.getState().clear();
-            return null;
+            useProposalStore?.getState().clear();
+            return reply(null);
           case "propose_user_edit":
             window.__lastEdlText = args?.edlText ?? "";
             proposalCounter += 1;
             const proposalId = `proposal-ui-test-${proposalCounter}`;
-            useProposalStore.getState().ingest({
+            useProposalStore?.getState().ingest({
               kind: "proposed_edit",
               id: proposalId,
               phase: "started",
@@ -416,15 +500,30 @@
               summary: "Assessor recommendation",
               revision: 0,
             });
-            return proposalId;
+            return reply(proposalId);
           case "get_permission_mode":
-            return "ask";
+            return reply("ask");
           case "get_project_type":
-            return "editorial";
+            return reply("editorial");
           default:
-            return null;
+            return reply(null);
         }
       }, { shouldMockEvents: true });
+
+      const [
+        { default: App },
+        agentStoreModule,
+        timelineSelectionModule,
+        proposalStoreModule,
+      ] = await Promise.all([
+        import("/src/App.tsx"),
+        import("/src/agent/store.ts"),
+        import("/src/properties/store.ts"),
+        import("/src/timeline/proposal.ts"),
+      ]);
+      useAgentStore = agentStoreModule.useAgentStore;
+      useTimelineSelectionStore = timelineSelectionModule.useTimelineSelectionStore;
+      useProposalStore = proposalStoreModule.useProposalStore;
 
       function seedProposal() {
         useProposalStore.getState().ingest({

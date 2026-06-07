@@ -135,6 +135,24 @@ export function StageShell(props: StageShellProps) {
   const [draft, setDraft] = useState("");
 
   const onStage_ = stage === "edit";
+  const [visibleDestination, setVisibleDestination] = useState<Stage | null>(
+    onStage_ ? null : stage,
+  );
+  useEffect(() => {
+    if (!onStage_) {
+      setVisibleDestination(stage);
+      return undefined;
+    }
+    let secondFrame: number | null = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setVisibleDestination(null));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [onStage_, stage]);
+
   const cur = pending[Math.min(active, Math.max(0, pending.length - 1))];
 
   // Conversation home: the command bar expands into a glass thread.
@@ -224,7 +242,11 @@ export function StageShell(props: StageShellProps) {
           {DOCK.map((d) => {
             const on = stage === d.id;
             return (
-              <button key={d.id} onClick={() => onStage(d.id)}
+              <button
+                key={d.id}
+                onClick={() => onStage(d.id)}
+                data-perf-stage-switch={d.id}
+                data-active={on ? "true" : "false"}
                 className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition"
                 style={{
                   background: on ? "linear-gradient(180deg,#FF8B33,#FF7A18)" : "transparent",
@@ -292,10 +314,9 @@ export function StageShell(props: StageShellProps) {
       {/* STAGE LAYER — preview hero + proposal deck (dims when a destination
           opens). Bottom padding tracks the (track-sized) timeline height so
           the hero flexes; right padding makes room for an open tool panel. */}
-      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16 transition-all duration-300"
+      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
         style={{
-          filter: onStage_ ? "none" : "blur(8px) brightness(0.5)",
-          transform: onStage_ ? "none" : "scale(0.98)",
+          filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
           paddingBottom: convoOpen ? 120 : `calc(96px + 56px + ${timelineHeight})`,
           paddingRight: tool ? TOOL_RESERVE : undefined,
@@ -361,7 +382,7 @@ export function StageShell(props: StageShellProps) {
           track). Hidden while the conversation panel is open so the two don't
           fight for the bottom region. */}
       {!convoOpen ? (
-        <div className="absolute inset-x-20 bottom-24 z-20 transition-opacity duration-300" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? TOOL_RESERVE : undefined }}>
+        <div className="absolute inset-x-20 bottom-24 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", right: tool ? TOOL_RESERVE : undefined }}>
           <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
             {timeline}
           </div>
@@ -369,15 +390,21 @@ export function StageShell(props: StageShellProps) {
       ) : null}
 
       {/* destination sheets slide over the dimmed stage */}
-      {!onStage_ ? (
-        <div className="absolute inset-0 z-30 flex items-stretch px-20 pt-16 pb-44">
+      {visibleDestination ? (
+        <div
+          className="absolute inset-0 z-30 flex items-stretch px-20 pt-16 pb-44"
+          style={{
+            opacity: onStage_ ? 0 : 1,
+            pointerEvents: onStage_ ? "none" : "auto",
+          }}
+        >
           <div className="glass glass-strong relative mx-auto flex h-full w-full max-w-[1000px] flex-col overflow-hidden" style={{ borderRadius: 22 }}>
             <div className="flex items-center gap-3 border-b border-[var(--glass-border)] px-5 py-3">
-              <span className="text-[14px] font-bold capitalize text-[var(--color-text-primary)]">{stage}</span>
+              <span className="text-[14px] font-bold capitalize text-[var(--color-text-primary)]">{visibleDestination}</span>
               <button onClick={() => onStage("edit")} className="glass-ghost ml-auto rounded-lg px-3 py-1.5 text-[12px]">← Stage</button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
-              {stage === "deliver" ? deliver : stage === "schedule" ? schedule : stage === "skills" ? skills : stage === "history" ? history : null}
+              {visibleDestination === "deliver" ? deliver : visibleDestination === "schedule" ? schedule : visibleDestination === "skills" ? skills : visibleDestination === "history" ? history : null}
             </div>
           </div>
         </div>
