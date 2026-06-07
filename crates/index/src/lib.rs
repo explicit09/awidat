@@ -39,6 +39,8 @@ pub use manifest_io::{read_manifest, write_manifest};
 pub use sha::{asset_fingerprint, asset_sha256};
 pub use sidecar_io::{SidecarError, read_sidecar, sidecar_path, walk_indexer};
 
+const INDEXER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Errors from the indexer dispatcher. Per-asset / per-indexer errors land
 /// in [`IndexReport::failures`] instead.
 #[derive(Debug, Error)]
@@ -774,7 +776,10 @@ async fn run_pair(
     };
     let mut rss_monitor = RssMonitor::start(client.child_pid());
 
-    if let Err(e) = client.initialize(client_info).await {
+    if let Err(e) = client
+        .initialize_with_timeout(client_info, INDEXER_INITIALIZE_TIMEOUT)
+        .await
+    {
         launch_init = launch_started.elapsed();
         peak_rss_bytes = stop_rss_monitor(&mut rss_monitor).await;
         return PairOutcome::Failed {
@@ -793,11 +798,7 @@ async fn run_pair(
     }
     launch_init = launch_started.elapsed();
 
-    let args = serde_json::json!({
-        "asset_path": item.asset_path.to_string_lossy(),
-        "asset_id": item.asset_id.as_str(),
-        "asset_sha256": item.asset_sha,
-    });
+    let args = index_asset_args(project_root, &item);
     // Generous timeout for indexer runs; whisper on a long episode is the
     // worst case.
     let tool_started = Instant::now();
@@ -971,6 +972,15 @@ fn telemetry_for_terminal(
         },
         peak_rss_bytes,
     }
+}
+
+fn index_asset_args(project_root: &Path, item: &WorkItem) -> serde_json::Value {
+    serde_json::json!({
+        "project_root": project_root.to_string_lossy(),
+        "asset_path": item.asset_path.to_string_lossy(),
+        "asset_id": item.asset_id.as_str(),
+        "asset_sha256": item.asset_sha,
+    })
 }
 
 fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
@@ -1185,6 +1195,29 @@ mod tests {
         assert_eq!(r.counts(), (1, 1, 1, 0));
         assert!(r.has_failures());
         assert_eq!(r.failures().count(), 1);
+    }
+
+    #[test]
+    fn indexer_initialize_timeout_allows_heavy_python_startup() {
+        assert_eq!(INDEXER_INITIALIZE_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn index_asset_args_include_project_root_for_external_sidecar_lookup() {
+        let item = WorkItem {
+            server: server("dummy", IndexerResourceClass::Light, vec![], "/bin/false"),
+            asset_id: AssetId::new("external/0001-video.mp4"),
+            asset_path: PathBuf::from("/Volumes/Media/video.mp4"),
+            asset_sha: "abc123".into(),
+            queued_at: Instant::now(),
+        };
+
+        let args = index_asset_args(Path::new("/tmp/project"), &item);
+
+        assert_eq!(args["project_root"], "/tmp/project");
+        assert_eq!(args["asset_path"], "/Volumes/Media/video.mp4");
+        assert_eq!(args["asset_id"], "external/0001-video.mp4");
+        assert_eq!(args["asset_sha256"], "abc123");
     }
 
     #[test]

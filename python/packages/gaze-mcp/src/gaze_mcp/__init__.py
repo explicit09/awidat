@@ -54,7 +54,16 @@ server = IndexerServer(
 )
 
 
-def _read_face_sidecar(asset_path: str, asset_id: str) -> dict[str, Any] | None:
+def _read_face_sidecar(
+    asset_path: str, asset_id: str, project_root: str | None = None
+) -> dict[str, Any] | None:
+    if project_root:
+        candidate = Path(project_root).absolute() / "index" / "face" / f"{asset_id}.json"
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text()).get("data", {})
+            except (OSError, json.JSONDecodeError):
+                return None
     asset = Path(asset_path).absolute()
     for ancestor in asset.parents:
         candidate = ancestor / "index" / "face" / f"{asset_id}.json"
@@ -206,7 +215,9 @@ def _gaze_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
-    from_face = _gaze_from_face_sidecar(_read_face_sidecar(req.asset_path, req.asset_id))
+    from_face = _gaze_from_face_sidecar(
+        _read_face_sidecar(req.asset_path, req.asset_id, req.project_root)
+    )
     if from_face is not None:
         return from_face
 

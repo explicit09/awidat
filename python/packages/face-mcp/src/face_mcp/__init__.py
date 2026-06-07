@@ -45,10 +45,11 @@ INDEXER_NAME = "face"
 INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
 
-# One frame every two seconds by default. Face detection is one of the most
-# expensive visual passes; this still gives speaker/face evidence without
-# making long-form indexing wait on thousands of dlib runs.
-SAMPLE_FPS = float(os.environ.get("FACE_SAMPLE_FPS", "0.5"))
+# One frame every four seconds by default. Face detection is one of the most
+# expensive visual passes; this keeps long-form auto-indexing responsive while
+# preserving enough speaker/face evidence for agent context. Set
+# FACE_SAMPLE_FPS=0.5 or higher for a deeper manual pass.
+SAMPLE_FPS = float(os.environ.get("FACE_SAMPLE_FPS", "0.25"))
 
 # DBSCAN cosine epsilon. dlib face embeddings cluster cleanly at
 # eps=0.4 in cosine distance per the face_recognition project README;
@@ -240,11 +241,13 @@ def _cluster_faces(
 
 
 def _read_diarization(
-    project_root: Path, asset_id: str
+    project_root: Path | None, asset_id: str
 ) -> list[dict[str, Any]] | None:
     """Look up the whisper sidecar for this asset and return its
     diarization segments if present. None means no diarization
     available — speaker mapping just gets skipped."""
+    if project_root is None:
+        return None
     sidecar = project_root / "index" / "whisper" / f"{asset_id}.json"
     if not sidecar.exists():
         return None
@@ -355,12 +358,14 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         per_frame.append({"t_s": i / SAMPLE_FPS, "faces": out_faces})
 
     # Pass 3: speaker-to-face mapping (cross-indexer; fail-soft).
-    project_root = Path(req.asset_path).absolute()
-    # Walk up to find the project root — the dir containing `index/`.
-    while project_root != project_root.parent:
-        if (project_root / "index").is_dir():
-            break
-        project_root = project_root.parent
+    project_root = Path(req.project_root).absolute() if req.project_root else None
+    if project_root is None:
+        project_root = Path(req.asset_path).absolute()
+        # Walk up to find the project root — the dir containing `index/`.
+        while project_root != project_root.parent:
+            if (project_root / "index").is_dir():
+                break
+            project_root = project_root.parent
     diarization = _read_diarization(project_root, req.asset_id)
     speaker_to_face = _map_speakers_to_faces(per_frame, diarization)
 

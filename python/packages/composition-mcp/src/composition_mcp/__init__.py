@@ -40,13 +40,15 @@ server = (
 )
 
 
-def _project_root_from(asset_path: str) -> Path:
-    p = Path(asset_path).absolute()
+def _project_root_from(req: IndexAssetRequest) -> Path:
+    if req.project_root:
+        return Path(req.project_root).absolute()
+    p = Path(req.asset_path).absolute()
     while p != p.parent:
         if (p / "index").is_dir():
             return p
         p = p.parent
-    return Path(asset_path).absolute().parent
+    return Path(req.asset_path).absolute().parent
 
 
 def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
@@ -263,7 +265,7 @@ def _verify_regions(regions: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _handle(req: IndexAssetRequest) -> dict[str, Any]:
-    project_root = _project_root_from(req.asset_path)
+    project_root = _project_root_from(req)
     scenes_doc = _read_sidecar(project_root, "scenedetect", req.asset_id)
     if not scenes_doc:
         raise RuntimeError(

@@ -1,9 +1,29 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from composition_mcp import _region_for_shot, _regions_from_sidecars, _verify_regions
+from awidat_mcp import IndexAssetRequest
+
+from composition_mcp import (
+    _project_root_from,
+    _region_for_shot,
+    _regions_from_sidecars,
+    _verify_regions,
+)
 
 
 class CompositionMcpTests(unittest.TestCase):
+    def test_project_root_prefers_request_field_for_external_assets(self) -> None:
+        with TemporaryDirectory() as project_dir, TemporaryDirectory() as media_dir:
+            req = IndexAssetRequest(
+                project_root=project_dir,
+                asset_path=str(Path(media_dir) / "external.mp4"),
+                asset_id="external/0001-external.mp4",
+                asset_sha256="sha",
+            )
+
+            self.assertEqual(_project_root_from(req), Path(project_dir).absolute())
+
     def test_region_for_shot_labels_primary_speaker_foreground(self) -> None:
         region = _region_for_shot(
             {"start_s": 0.0, "end_s": 4.0},
