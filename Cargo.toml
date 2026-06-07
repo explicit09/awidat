@@ -21,6 +21,7 @@ members = [
     "crates/index",
     "crates/desktop-protocol",
     "crates/codex-bridge",
+    "crates/agent-cli",
     "apps/desktop/src-tauri",
 
     # Forked codex harness — see vendor/codex-rs/SOURCE.

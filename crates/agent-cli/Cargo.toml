@@ -1,0 +1,21 @@
+[package]
+name = "awidat-agent-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "awidat-agent"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+codex-arg0 = { workspace = true }
+codex-exec = { workspace = true }
+codex-login = { workspace = true }
+codex-utils-cli = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
