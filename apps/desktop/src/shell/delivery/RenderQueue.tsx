@@ -10,6 +10,7 @@ import {
   deriveUploadTargetActions,
   deriveUploadTargetRetryMode,
   renderQueueApprovalCopy,
+  renderQueueProgressCopy,
   renderQueueStatusLabel,
   renderQueueVisibleEntries,
   useRenderQueueStore,
@@ -206,6 +207,22 @@ function queueStatusPill(entry: RenderQueueEntry, entries: RenderQueueEntry[]) {
   return <StatusPill family="job" state="idle" size="sm" label="Queued" />;
 }
 
+function queueProgressValue(
+  entry: RenderQueueEntry,
+  entries: RenderQueueEntry[],
+): number | null {
+  if (entry.status === "running" && typeof entry.progress === "number") {
+    return Math.max(0, Math.min(100, entry.progress));
+  }
+  if (entry.status === "pending" && entry.sourceEntryId) {
+    const source = entries.find((candidate) => candidate.id === entry.sourceEntryId);
+    if (source && typeof source.progress === "number") {
+      return Math.max(0, Math.min(100, source.progress));
+    }
+  }
+  return null;
+}
+
 function RenderQueueRow({
   entry,
   entries,
@@ -223,6 +240,8 @@ function RenderQueueRow({
     reviewStatus: NonNullable<RenderQueueEntry["reviewStatus"]>,
   ) => void;
 }) {
+  const progressCopy = renderQueueProgressCopy(entry, entries);
+  const progressValue = queueProgressValue(entry, entries);
   return (
     <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2 text-[var(--text-caption)]">
       <Inline justify="between" align="center" className="gap-2">
@@ -256,11 +275,16 @@ function RenderQueueRow({
           ) : null}
         </Inline>
       </Inline>
-      {entry.status === "running" && typeof entry.progress === "number" ? (
+      {progressCopy ? (
+        <p className="mt-1 text-[var(--color-text-secondary)]">
+          {progressCopy}
+        </p>
+      ) : null}
+      {progressValue !== null ? (
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
           <div
             className="h-full rounded-full bg-[var(--color-brand)]"
-            style={{ width: `${entry.progress}%` }}
+            style={{ width: `${progressValue}%` }}
           />
         </div>
       ) : null}
@@ -576,15 +600,19 @@ function UploadTargetRow({
       <li className="grid gap-1 text-[var(--color-success)]">
         <span className="flex items-center gap-1">
           <span aria-hidden>→</span>
-          <a
-            href={state.remote_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:underline"
-            title={state.remote_url}
-          >
-            Published on {label} ↗
-          </a>
+          {state.remote_url ? (
+            <a
+              href={state.remote_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+              title={state.remote_url}
+            >
+              Published on {label} ↗
+            </a>
+          ) : (
+            <span>Published privately on {label}</span>
+          )}
         </span>
         {accountSelector}
       </li>
