@@ -22,6 +22,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BookOpen, FolderOpen, Plus, Sparkles } from "lucide-react";
 
+import { deferNonCriticalHydration } from "../app/startupHydration";
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { useSkillsStore } from "../state";
@@ -76,9 +77,10 @@ function useSkills(): {
       setLoading(false);
       return;
     }
+    const isRefresh = nonce > 0;
     setLoading(true);
     setError(null);
-    invoke<SkillEntry[]>("list_skills")
+    const loadSkills = () => invoke<SkillEntry[]>("list_skills")
       .then((rows) => {
         if (cancelled) return;
         setSkills(rows);
@@ -91,8 +93,14 @@ function useSkills(): {
         if (cancelled) return;
         setLoading(false);
       });
+    const cancelDeferredLoad = isRefresh
+      ? (loadSkills(), () => {})
+      : deferNonCriticalHydration(() => {
+          void loadSkills();
+        });
     return () => {
       cancelled = true;
+      cancelDeferredLoad();
     };
     // Refresh when the project changes — different projects can
     // ship different skill folders. `nonce` lets callers (e.g., the
@@ -157,20 +165,23 @@ function useUserSkillsDir(): string | null {
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
-    invoke<string>("ensure_user_skills_dir")
-      .then((path) => {
-        if (cancelled) return;
-        setDir(path);
-      })
-      .catch((e: unknown) => {
-        // Non-fatal: the "Open skills folder" link just stays
-        // hidden. A locked-down home dir is the only realistic
-        // cause; logging is enough.
-        // eslint-disable-next-line no-console
-        console.warn("ensure_user_skills_dir failed", e);
+    const cancelDeferredLoad = deferNonCriticalHydration(() => {
+      invoke<string>("ensure_user_skills_dir")
+        .then((path) => {
+          if (cancelled) return;
+          setDir(path);
+        })
+        .catch((e: unknown) => {
+          // Non-fatal: the "Open skills folder" link just stays
+          // hidden. A locked-down home dir is the only realistic
+          // cause; logging is enough.
+          // eslint-disable-next-line no-console
+          console.warn("ensure_user_skills_dir failed", e);
+        });
       });
     return () => {
       cancelled = true;
+      cancelDeferredLoad();
     };
   }, []);
   return dir;

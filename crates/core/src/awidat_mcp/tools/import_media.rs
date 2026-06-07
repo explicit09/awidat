@@ -178,6 +178,7 @@ fn record_imported_asset(
                 imported_from,
                 checksum: None,
                 created_by: Some(created_by.to_string()),
+                upload_date: None,
             }),
             ..AssetRecord::default()
         },

@@ -274,6 +274,10 @@ pub struct AssetProvenance {
     /// Optional ingest tool or agent id.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub created_by: Option<String>,
+    /// Optional upload date as reported by the source (e.g. yt-dlp
+    /// `%(upload_date)s`), normalized to `YYYY-MM-DD`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub upload_date: Option<String>,
 }
 
 /// Asset usage summary.

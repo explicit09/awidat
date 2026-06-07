@@ -1,10 +1,35 @@
 """Speech-to-text + diarization indexer for Awidat using WhisperX.
 
 Produces:
-- `words[]` — every word with `text`, `start_s`, `end_s`, `speaker_id`
-  (when diarization runs).
+- `words[]` — every word with `text`, `start_s`, `end_s`, `speaker_id`,
+  and `speaker_name` (when diarization runs).
 - `segments[]` — sentence-level groupings with the same fields.
-- `speakers[]` — derived list of `{id, total_speech_s}`.
+- `speakers[]` — derived list of `{id, name, total_speech_s}`.
+
+Speaker name mapping (opt-in, additive)
+----------------------------------------
+Diarization labels are anonymous (`SPEAKER_00`, `Speaker 0`, …). To attach
+real names, drop a `speaker_names.json` next to the asset or in an ancestor
+directory (or point `WHISPER_SPEAKER_NAMES` at an explicit path). When found,
+each word/segment gains a `speaker_name` field and `speakers[]` entries gain a
+`name`. The field is `null` for any speaker the map doesn't cover, and the
+existing schema is otherwise unchanged.
+
+Three map shapes are supported (mix freely in one file):
+
+1. Direct id → name:
+   `{"SPEAKER_00": "Tadiwa", "SPEAKER_01": "Elvis"}`
+   (Deepgram ids look like `"Speaker 0"`.)
+
+2. By total-speech-time rank — when you don't know which anonymous id is
+   which, label by how much each person talks (most talk-time first):
+   `{"@by_rank": ["Tadiwa", "Elvis"]}`  → primary speaker = Tadiwa.
+
+3. By first-to-speak order:
+   `{"@by_order": ["Host", "Guest"]}`  → whoever speaks first = Host.
+
+Direct ids win over `@by_rank`, which wins over `@by_order`, so you can pin one
+known speaker by id and let ranking fill in the rest.
 
 WhisperX gives forced-alignment word timestamps (via wav2vec2), not the
 interpolated ones faster-whisper emits natively. Word-accurate boundaries
@@ -111,6 +136,14 @@ WHISPER_CPP_NO_GPU = os.environ.get("WHISPER_CPP_NO_GPU", "").lower() in (
 WHISPER_CPP_EXTRA_ARGS = os.environ.get("WHISPER_CPP_EXTRA_ARGS", "")
 MAX_WORD_DUR_S = float(os.environ.get("WHISPER_MAX_WORD_DUR_S", "3"))
 MAX_SEGMENT_DUR_S = float(os.environ.get("WHISPER_MAX_SEGMENT_DUR_S", "30"))
+# Optional explicit path to a speaker-name map; otherwise we look for
+# `speaker_names.json` beside the asset and up its ancestor directories.
+SPEAKER_NAMES_PATH = os.environ.get("WHISPER_SPEAKER_NAMES")
+SPEAKER_NAMES_FILENAME = "speaker_names.json"
+# Reserved keys in speaker_names.json that carry ordering hints instead of a
+# direct id → name mapping.
+SPEAKER_NAMES_RANK_KEY = "@by_rank"
+SPEAKER_NAMES_ORDER_KEY = "@by_order"
 
 
 server = IndexerServer(
@@ -135,6 +168,10 @@ def _device_and_compute_type() -> tuple[str, str]:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    return _attach_speaker_names(_transcribe(req), req.asset_path)
+
+
+def _transcribe(req: IndexAssetRequest) -> dict[str, Any]:
     if BACKEND in ("deepgram", "deepgram-cloud", "cloud"):
         return _handle_deepgram(req)
     if BACKEND == "whisperx":
@@ -883,6 +920,145 @@ def _flatten_result(
         "speakers": speakers,
         "diarized": speakers_used,
     }
+
+
+# ---------------------------------------------------------------------------
+# Speaker name mapping (opt-in, additive). See module docstring for the JSON
+# shapes. These helpers are pure (no ML deps) so every backend can call them.
+# ---------------------------------------------------------------------------
+
+
+def _find_speaker_names_file(asset_path: str) -> Path | None:
+    """Locate a `speaker_names.json` for this asset, or None.
+
+    Resolution order:
+    1. `WHISPER_SPEAKER_NAMES` env var (explicit file path).
+    2. `speaker_names.json` beside the asset, then each ancestor directory
+       (lets one map cover a whole project tree).
+    """
+    if SPEAKER_NAMES_PATH:
+        explicit = Path(SPEAKER_NAMES_PATH).expanduser()
+        return explicit if explicit.is_file() else None
+
+    asset = Path(asset_path).expanduser()
+    for directory in [asset.parent, *asset.parent.parents]:
+        candidate = directory / SPEAKER_NAMES_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_speaker_name_map(asset_path: str) -> dict[str, Any]:
+    """Read the raw speaker-name map for this asset ({} when absent/invalid)."""
+    path = _find_speaker_names_file(asset_path)
+    if path is None:
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(
+            f"whisper-mcp: ignoring {path} — unreadable speaker name map ({e})",
+            file=sys.stderr,
+        )
+        return {}
+    if not isinstance(data, dict):
+        print(
+            f"whisper-mcp: ignoring {path} — expected a JSON object",
+            file=sys.stderr,
+        )
+        return {}
+    return data
+
+
+def _resolve_speaker_names(
+    raw_map: dict[str, Any],
+    speakers: list[dict[str, Any]],
+    first_seen_order: list[str],
+) -> dict[str, str]:
+    """Build a concrete `speaker_id -> name` map from raw config + signals.
+
+    Direct id entries win over `@by_rank` (by total_speech_s, descending),
+    which wins over `@by_order` (first-to-speak). `speakers` carries the
+    `total_speech_s` used for ranking; `first_seen_order` is ids in the order
+    they first appear in the transcript.
+    """
+    if not raw_map:
+        return {}
+
+    resolved: dict[str, str] = {}
+
+    def _assign(ids: list[str], names: Any) -> None:
+        if not isinstance(names, list):
+            return
+        for sid, name in zip(ids, names):
+            if sid in resolved:
+                continue
+            if isinstance(name, str) and name.strip():
+                resolved[sid] = name.strip()
+
+    # First writer wins, so apply in descending precedence: direct ids, then
+    # @by_rank (total_speech_s desc), then @by_order (first-to-speak). Applying
+    # order first would invert the documented precedence and let order shadow
+    # a rank mapping for an already-seen speaker.
+    for key, value in raw_map.items():
+        if key in (SPEAKER_NAMES_RANK_KEY, SPEAKER_NAMES_ORDER_KEY):
+            continue
+        if isinstance(value, str) and value.strip():
+            resolved[key] = value.strip()
+
+    rank_ids = [
+        s["id"]
+        for s in sorted(
+            speakers,
+            key=lambda s: (-float(s.get("total_speech_s", 0.0)), str(s.get("id"))),
+        )
+    ]
+    _assign(rank_ids, raw_map.get(SPEAKER_NAMES_RANK_KEY))
+
+    order_ids = list(first_seen_order)
+    _assign(order_ids, raw_map.get(SPEAKER_NAMES_ORDER_KEY))
+
+    return resolved
+
+
+def _attach_speaker_names(body: dict[str, Any], asset_path: str) -> dict[str, Any]:
+    """Add `speaker_name`/`name` fields to a transcript body in place.
+
+    Always runs (additive + null-safe): `speaker_name` is set on every word and
+    segment, and `name` on every `speakers[]` entry. When no map applies the
+    values are null, preserving the existing schema for unmapped speakers.
+    """
+    words = body.get("words") or []
+    segments = body.get("segments") or []
+    speakers = body.get("speakers") or []
+
+    first_seen_order: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        sid = word.get("speaker_id")
+        if sid and sid not in seen:
+            seen.add(sid)
+            first_seen_order.append(sid)
+
+    raw_map = _load_speaker_name_map(asset_path)
+    name_by_id = _resolve_speaker_names(raw_map, speakers, first_seen_order)
+
+    def _name_for(sid: Any) -> str | None:
+        return name_by_id.get(sid) if isinstance(sid, str) else None
+
+    for word in words:
+        word["speaker_name"] = _name_for(word.get("speaker_id"))
+    for segment in segments:
+        segment["speaker_name"] = _name_for(segment.get("speaker_id"))
+    for speaker in speakers:
+        speaker["name"] = _name_for(speaker.get("id"))
+
+    if name_by_id:
+        print(
+            f"whisper-mcp: applied speaker names {name_by_id}",
+            file=sys.stderr,
+        )
+    return body
 
 
 def main() -> None:

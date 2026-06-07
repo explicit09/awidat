@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
-    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
-    BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType, SemanticCutSpec,
-    SplitEditSpec, cut_boundary_key,
+    AudioRange, AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BrandKit,
+    BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, ClipAudioOverride, CutType,
+    SemanticCutSpec, SplitEditSpec, cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
@@ -691,6 +691,8 @@ fn apply_one(
             font_weight,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_insert_title(
             working,
             index,
@@ -703,6 +705,8 @@ fn apply_one(
             *font_weight,
             *animation,
             *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
         ),
         EdlOp::InsertRichTitle {
             start_s,
@@ -712,8 +716,20 @@ fn apply_one(
             font_size,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_insert_rich_title(
-            working, index, *start_s, *end_s, segments, *position, *font_size, *animation, *phases,
+            working,
+            index,
+            *start_s,
+            *end_s,
+            segments,
+            *position,
+            *font_size,
+            *animation,
+            *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
         ),
         EdlOp::InstantiateMotionTemplate {
             template_id,
@@ -741,6 +757,8 @@ fn apply_one(
             font_weight,
             animation,
             phases,
+            font_family,
+            font_path,
         } => apply_set_title(
             working,
             index,
@@ -754,6 +772,8 @@ fn apply_one(
             *font_weight,
             *animation,
             *phases,
+            font_family.as_deref(),
+            font_path.as_deref(),
             ctx,
             locator,
         ),
@@ -766,6 +786,7 @@ fn apply_one(
             color,
             safe_area,
             word_timings,
+            style_json,
         } => apply_insert_caption(
             working,
             index,
@@ -777,6 +798,7 @@ fn apply_one(
             color,
             safe_area,
             word_timings,
+            style_json.as_ref(),
         ),
         EdlOp::InsertAnnotation {
             start_s,
@@ -980,6 +1002,7 @@ fn apply_one(
                 readiness.stages.len()
             ))
         }
+        EdlOp::SetBrandKit { kit } => apply_set_brand_kit(working, index, kit),
     }
 }
 
@@ -1062,6 +1085,7 @@ fn resolve_locator_for_op(
         | EdlOp::AddPreflightReport { .. }
         | EdlOp::SetWorkflowLens { .. }
         | EdlOp::SetPipelineReadiness { .. }
+        | EdlOp::SetBrandKit { .. }
         | EdlOp::TrimTrackTail { .. }
         | EdlOp::InsertTrack { .. }
         | EdlOp::DeleteTrack { .. } => return Ok(None),
@@ -8106,6 +8130,8 @@ fn apply_insert_title(
     font_weight: super::op::TitleWeight,
     animation: super::op::TitleAnimation,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
 ) -> Result<String, ApplyError> {
     apply_insert_text_overlay(
         working,
@@ -8113,7 +8139,7 @@ fn apply_insert_title(
         "title",
         None,
         None,
-        None,
+        font_overlay_metadata(font_family, font_path),
         start_s,
         end_s,
         text,
@@ -8137,6 +8163,8 @@ fn apply_insert_rich_title(
     font_size: u32,
     animation: super::op::TitleAnimation,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
 ) -> Result<String, ApplyError> {
     if segments.is_empty() || segments.iter().all(|segment| segment.text.is_empty()) {
         return Err(ApplyError::Invalid {
@@ -8148,7 +8176,7 @@ fn apply_insert_rich_title(
         .iter()
         .map(|segment| segment.text.as_str())
         .collect::<String>();
-    let mut extra_metadata = serde_json::Map::new();
+    let mut extra_metadata = font_overlay_metadata(font_family, font_path).unwrap_or_default();
     extra_metadata.insert(
         "rich_segments".into(),
         serde_json::to_value(segments).map_err(|error| ApplyError::Invalid {
@@ -8191,6 +8219,7 @@ fn apply_insert_caption(
     color: &str,
     safe_area: &str,
     word_timings: &[super::op::CaptionWordTiming],
+    style_json: Option<&serde_json::Value>,
 ) -> Result<String, ApplyError> {
     if safe_area.trim().is_empty() {
         return Err(ApplyError::Invalid {
@@ -8212,17 +8241,22 @@ fn apply_insert_caption(
             });
         }
     }
-    let extra_metadata = if word_timings.is_empty() {
+    let extra_metadata = if word_timings.is_empty() && style_json.is_none() {
         None
     } else {
         let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            "word_timings".to_string(),
-            serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
-                index,
-                message: format!("insert_caption: failed to serialize word_timings: {e}"),
-            })?,
-        );
+        if !word_timings.is_empty() {
+            metadata.insert(
+                "word_timings".to_string(),
+                serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
+                    index,
+                    message: format!("insert_caption: failed to serialize word_timings: {e}"),
+                })?,
+            );
+        }
+        if let Some(style) = style_json {
+            metadata.insert("caption_style".to_string(), style.clone());
+        }
         Some(metadata)
     };
     apply_insert_text_overlay(
@@ -8369,6 +8403,27 @@ fn annotation_kind_str(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Arrow => "arrow",
         AnnotationKind::Bracket => "bracket",
         AnnotationKind::Blur => "blur",
+    }
+}
+
+/// Build optional `font_family` / `font_path` effect metadata for a
+/// title overlay. Returns `None` when neither is set so the render
+/// layer falls back to its system-font probe (unchanged behavior).
+fn font_overlay_metadata(
+    font_family: Option<&str>,
+    font_path: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut metadata = serde_json::Map::new();
+    if let Some(family) = font_family.filter(|s| !s.trim().is_empty()) {
+        metadata.insert("font_family".to_string(), serde_json::json!(family));
+    }
+    if let Some(path) = font_path.filter(|s| !s.trim().is_empty()) {
+        metadata.insert("font_path".to_string(), serde_json::json!(path));
+    }
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
     }
 }
 
@@ -8624,6 +8679,10 @@ fn apply_set_broadcast_overlay(
 ) -> Result<String, ApplyError> {
     validate_broadcast_overlay_config(index, config)?;
     let meta = timeline_awidat_metadata(working);
+    let mut config = config.clone();
+    if let Some(kit) = &meta.brand_kit {
+        config.apply_brand_kit(kit);
+    }
     meta.broadcast_overlay = Some(config.clone());
     Ok(format!(
         "set broadcast overlay enabled={}, title={:?}, topics={}, chapters={}",
@@ -8632,6 +8691,53 @@ fn apply_set_broadcast_overlay(
         config.topics.len(),
         config.chapters.len(),
     ))
+}
+
+fn apply_set_brand_kit(
+    working: &mut Timeline,
+    index: usize,
+    kit: &BrandKit,
+) -> Result<String, ApplyError> {
+    validate_brand_kit(index, kit)?;
+    let meta = timeline_awidat_metadata(working);
+    meta.brand_kit = Some(kit.clone());
+    // Backfill an already-stored overlay so an existing overlay also picks
+    // up newly-set shared brand identity, not just overlays set afterwards.
+    if let Some(overlay) = meta.broadcast_overlay.as_mut() {
+        overlay.apply_brand_kit(kit);
+    }
+    Ok(format!(
+        "set brand kit (logo={}, palette={}, social_handles={})",
+        kit.logo_path.is_some(),
+        kit.palette.len(),
+        kit.social_handles.len(),
+    ))
+}
+
+fn validate_brand_kit(index: usize, kit: &BrandKit) -> Result<(), ApplyError> {
+    validate_optional_project_path(index, "logo_path", kit.logo_path.as_deref())?;
+    validate_optional_project_path(index, "font_primary_path", kit.font_primary_path.as_deref())?;
+    validate_optional_project_path(
+        index,
+        "font_secondary_path",
+        kit.font_secondary_path.as_deref(),
+    )?;
+    validate_optional_project_path(index, "music_path", kit.music_path.as_deref())?;
+    // Palette entries flow into overlay color options (e.g. gold_hex →
+    // drawbox/drawtext `color=`), which are interpolated straight into the
+    // FFmpeg filter graph. Reject anything that isn't a plain hex/named color
+    // so a malformed or option-bearing value can't corrupt the filter string.
+    for (i, color) in kit.palette.iter().enumerate() {
+        if !valid_graphic_color(color) {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_brand_kit: palette[{i}] must be #RGB/#RGBA/#RRGGBB/#RRGGBBAA hex or an alphanumeric color name"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_broadcast_overlay_config(
@@ -8770,6 +8876,8 @@ fn apply_set_title(
     font_weight: Option<super::op::TitleWeight>,
     animation: Option<super::op::TitleAnimation>,
     phases: Option<super::op::TitlePhases>,
+    font_family: Option<&str>,
+    font_path: Option<&str>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
@@ -8845,6 +8953,23 @@ fn apply_set_title(
             message: format!("set_title: phases could not serialize: {error}"),
         })?;
         effect.metadata.insert("phases".to_string(), serialized);
+    }
+    if let Some(family) = font_family.filter(|s| !s.trim().is_empty()) {
+        effect
+            .metadata
+            .insert("font_family".to_string(), serde_json::json!(family));
+        // Render resolves `font_path` before `font_family`, so a stale explicit
+        // font file would shadow the requested family switch. Drop it here —
+        // unless this same op also supplies a new path, which is re-inserted
+        // immediately below.
+        if font_path.filter(|s| !s.trim().is_empty()).is_none() {
+            effect.metadata.remove("font_path");
+        }
+    }
+    if let Some(path) = font_path.filter(|s| !s.trim().is_empty()) {
+        effect
+            .metadata
+            .insert("font_path".to_string(), serde_json::json!(path));
     }
 
     // start_s / end_s require both the effect metadata AND the
@@ -14840,6 +14965,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Bold,
                 animation: super::super::op::TitleAnimation::FadeInOut,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -14886,6 +15013,42 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_title_stamps_custom_font_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Brand".into(),
+                position: super::super::op::TitlePosition::Top,
+                font_size: 72,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+                phases: None,
+                font_family: Some("Brand Sans".into()),
+                font_path: Some("/fonts/Brand.ttf".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track at index 1")
+        };
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!("expected title clip on titles track")
+        };
+        let effect = &title_clip.effects[0];
+        assert_eq!(
+            effect.metadata.get("font_path").and_then(|v| v.as_str()),
+            Some("/fonts/Brand.ttf"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_family").and_then(|v| v.as_str()),
+            Some("Brand Sans"),
+        );
+    }
+
+    #[test]
     fn apply_insert_caption_creates_caption_overlay_node() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
@@ -14898,6 +15061,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 safe_area: "mobile".into(),
                 word_timings: Vec::new(),
+                style_json: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -14948,6 +15112,7 @@ mod tests {
                         end_s: 1.5,
                     },
                 ],
+                style_json: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -14966,6 +15131,53 @@ mod tests {
         assert_eq!(
             timings[0].get("text").and_then(|value| value.as_str()),
             Some("This")
+        );
+    }
+
+    #[test]
+    fn insert_caption_stores_style_json_on_the_caption_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertCaption {
+                start_s: 1.0,
+                end_s: 2.5,
+                text: "AI changed everything".into(),
+                position: super::super::op::TitlePosition::Bottom,
+                font_size: 52,
+                color: "#FFFFFF".into(),
+                safe_area: "mobile".into(),
+                word_timings: Vec::new(),
+                style_json: Some(serde_json::json!({
+                    "font_size": 52,
+                    "weight": "bold",
+                    "casing": "upper",
+                    "primary_color": "#FFFFFF",
+                    "highlight_color": "#FFD700",
+                    "reveal": "active_word_pop",
+                    "background": { "kind": "none" }
+                })),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track")
+        };
+        let TrackChild::Clip(caption_clip) = &titles.children[0] else {
+            panic!("expected caption clip")
+        };
+        let style = caption_clip.effects[0]
+            .metadata
+            .get("caption_style")
+            .expect("caption_style metadata must be present");
+        assert_eq!(
+            style.get("reveal").and_then(|v| v.as_str()),
+            Some("active_word_pop"),
+            "reveal must be stored as snake_case string"
+        );
+        assert_eq!(style.get("weight").and_then(|v| v.as_str()), Some("bold"),);
+        assert_eq!(
+            style.get("highlight_color").and_then(|v| v.as_str()),
+            Some("#FFD700"),
         );
     }
 
@@ -15036,6 +15248,8 @@ mod tests {
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
                     phases: None,
+                    font_family: None,
+                    font_path: None,
                 },
                 EdlOp::InsertTitle {
                     start_s: 5.0,
@@ -15047,6 +15261,8 @@ mod tests {
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
                     phases: None,
+                    font_family: None,
+                    font_path: None,
                 },
             ],
         };
@@ -15095,6 +15311,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -15117,6 +15335,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -15140,6 +15360,8 @@ mod tests {
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
@@ -15172,6 +15394,8 @@ mod tests {
                 font_weight: Some(super::super::op::TitleWeight::Bold),
                 animation: None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
@@ -15203,6 +15427,77 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_title_family_change_clears_stale_font_path() {
+        // Insert a title with an explicit font_path, then SetTitle with only a
+        // font_family. Render resolves font_path before font_family, so the
+        // stale path must be cleared for the family switch to take effect.
+        let tl = timeline_with_three_clips();
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Original".into(),
+                position: super::super::op::TitlePosition::Center,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+                phases: None,
+                font_family: None,
+                font_path: Some("fonts/Custom.ttf".into()),
+            }],
+        };
+        let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &after_insert.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!()
+        };
+        let title_uuid = title_clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("clip_uuid"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .expect("title clip should have a stamped clip_uuid");
+
+        let set_env = EdlEnvelope {
+            ops: vec![EdlOp::SetTitle {
+                anchor: Anchor::ClipUuid { uuid: title_uuid },
+                start_s: None,
+                end_s: None,
+                text: None,
+                position: None,
+                font_size: None,
+                color: None,
+                font_weight: None,
+                animation: None,
+                phases: None,
+                font_family: Some("Helvetica".into()),
+                font_path: None,
+            }],
+        };
+        let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles2) = &after_set.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(updated) = &titles2.children[0] else {
+            panic!()
+        };
+        let effect = &updated.effects[0];
+        assert_eq!(
+            effect.metadata.get("font_family").and_then(|v| v.as_str()),
+            Some("Helvetica"),
+        );
+        assert!(
+            !effect.metadata.contains_key("font_path"),
+            "stale font_path must be cleared when only font_family is set",
+        );
+    }
+
+    #[test]
     fn apply_set_title_rejects_clip_without_title_effect() {
         // Anchor a clip-on-V1 (no awidat.title effect) → error.
         let tl = timeline_with_three_clips();
@@ -15220,6 +15515,8 @@ mod tests {
                 font_weight: None,
                 animation: None,
                 phases: None,
+                font_family: None,
+                font_path: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -15324,6 +15621,142 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
+        );
+    }
+
+    #[test]
+    fn apply_set_brand_kit_stores_timeline_metadata() {
+        use awidat_proto::awidat_meta::SocialHandle;
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("branding/logo.png".into()),
+            font_primary_path: Some("branding/primary.ttf".into()),
+            palette: vec!["#FFD700".into(), "#00CED1".into()],
+            music_path: Some("branding/theme.wav".into()),
+            social_handles: vec![SocialHandle {
+                platform: "youtube".into(),
+                handle: "@awidat".into(),
+                url: Some("https://youtube.com/@awidat".into()),
+            }],
+            ..BrandKit::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetBrandKit { kit: kit.clone() }],
+        };
+        let (new_tl, applied) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(applied.applied.len(), 1);
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.brand_kit.as_ref())
+            .expect("brand kit should be stored");
+        assert_eq!(stored.logo_path.as_deref(), Some("branding/logo.png"));
+        assert_eq!(stored.palette, vec!["#FFD700", "#00CED1"]);
+        assert_eq!(stored.social_handles[0].handle, "@awidat");
+    }
+
+    #[test]
+    fn apply_set_brand_kit_rejects_unsafe_paths() {
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("../secret.png".into()),
+            ..BrandKit::default()
+        };
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBrandKit { kit }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
+        );
+    }
+
+    #[test]
+    fn apply_set_brand_kit_rejects_malformed_palette_color() {
+        let tl = timeline_with_three_clips();
+        // A palette value carrying filter-option characters must be rejected so
+        // it can't be interpolated raw into a drawbox/drawtext `color=` option.
+        let kit = BrandKit {
+            palette: vec!["#FFD700".into(), "red:foo@1".into()],
+            ..BrandKit::default()
+        };
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBrandKit { kit }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("palette[1]")),
+            "expected palette[1] rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn broadcast_overlay_reads_brand_logo_from_kit_when_unset() {
+        let tl = timeline_with_three_clips();
+        // Store the brand kit first, then an overlay with no local logo.
+        let kit = BrandKit {
+            logo_path: Some("branding/logo.png".into()),
+            palette: vec!["#112233".into()],
+            ..BrandKit::default()
+        };
+        let overlay = BroadcastOverlayConfig {
+            episode_title: "Episode 1".into(),
+            ..BroadcastOverlayConfig::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetBrandKit { kit },
+                EdlOp::SetBroadcastOverlay { config: overlay },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .expect("overlay should be stored");
+        // Logo and primary accent fell back to the brand kit.
+        assert_eq!(stored.brand_logo_path.as_deref(), Some("branding/logo.png"));
+        assert_eq!(stored.style.gold_hex, "#112233");
+    }
+
+    #[test]
+    fn broadcast_overlay_keeps_local_logo_over_brand_kit() {
+        let tl = timeline_with_three_clips();
+        let kit = BrandKit {
+            logo_path: Some("branding/kit_logo.png".into()),
+            ..BrandKit::default()
+        };
+        let overlay = BroadcastOverlayConfig {
+            brand_logo_path: Some("branding/local_logo.png".into()),
+            ..BroadcastOverlayConfig::default()
+        };
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetBrandKit { kit },
+                EdlOp::SetBroadcastOverlay { config: overlay },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .unwrap();
+        assert_eq!(
+            stored.brand_logo_path.as_deref(),
+            Some("branding/local_logo.png")
         );
     }
 

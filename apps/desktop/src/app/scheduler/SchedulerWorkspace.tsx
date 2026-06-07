@@ -17,6 +17,7 @@ import {
   useRenderQueueStore,
   type RenderQueueEntry,
 } from "../renderQueue";
+import { deferNonCriticalHydration } from "../startupHydration";
 import { refreshServerUploadState } from "../useRenderQueueWorker";
 import type { UploadVisibility } from "../../state/uploadMetadata";
 import type { AccountSummary } from "../social/socialModel";
@@ -107,9 +108,12 @@ export function SchedulerWorkspace() {
         setAccountError(result.error);
       }
     }
-    void loadAccountsOnce();
+    const cancelDeferredLoad = deferNonCriticalHydration(() => {
+      void loadAccountsOnce();
+    });
     return () => {
       cancelled = true;
+      cancelDeferredLoad();
     };
   }, []);
 

@@ -13,6 +13,7 @@ use awidat_index::{
     AssetInput, IndexProgress, PairOutcome, ProgressCallback, media_files::collect_raw_media_inputs,
 };
 use awidat_mcp::ClientInfo;
+use awidat_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
@@ -87,12 +88,29 @@ pub async fn index_project_at_root(
     state: &State<'_, AwidatState>,
     project_root: std::path::PathBuf,
 ) -> Result<(), String> {
+    index_project_at_root_with_assets(app, state, project_root, None).await
+}
+
+pub async fn index_project_assets_at_root(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: std::path::PathBuf,
+    asset_ids: Vec<String>,
+) -> Result<(), String> {
+    index_project_at_root_with_assets(app, state, project_root, Some(&asset_ids)).await
+}
+
+async fn index_project_at_root_with_assets(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: std::path::PathBuf,
+    scoped_asset_ids: Option<&[String]>,
+) -> Result<(), String> {
     // Load config (project-scoped overlays the global one). If no
     // indexers are configured the message mirrors the CLI's so a
     // user troubleshooting can match.
     let config = Config::load(Some(&project_root)).map_err(|e| format!("load config: {e}"))?;
     let mut servers: Vec<_> = config.indexers().cloned().collect();
-    prepare_desktop_indexers(&mut servers);
     // Per-project overlay (Wave 4 T3) — drop any indexer the user has
     // disabled via the IndexersStrip popover. Reading the overlay file
     // server-side keeps the front-end IPC contract unchanged (no
@@ -105,6 +123,12 @@ pub async fn index_project_at_root(
     if !disabled.is_empty() {
         servers.retain(|server| !disabled.iter().any(|name| name == &server.name));
     }
+    let mode = if scoped_asset_ids.is_some() {
+        IndexMode::FastContext
+    } else {
+        manual_index_mode()
+    };
+    plan_indexers_for_mode(&mut servers, mode, current_machine_profile());
     if servers.is_empty() {
         return Err(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
@@ -115,7 +139,13 @@ pub async fn index_project_at_root(
 
     // Discover assets under raw/ — same walk as the CLI's
     // `index_cmd::collect_assets` minus the explicit-paths branch.
-    let assets = collect_assets(&project_root).map_err(|e| format!("scan raw/: {e}"))?;
+    let resolved_assets = resolve_assets_for_request(
+        &project_root,
+        scoped_asset_ids,
+        ScopedFallback::WholeProject,
+    )?;
+    let scope_label = resolved_assets.scope.progress_label();
+    let assets = resolved_assets.assets;
     if assets.is_empty() {
         return Err(format!(
             "no assets to index. Drop source files under '{}/raw' or use Import.",
@@ -133,7 +163,7 @@ pub async fn index_project_at_root(
         job_id.clone(),
         JobKind::Indexing,
         format!(
-            "indexing {} asset(s) with {} indexer(s)",
+            "indexing {} asset(s) with {} indexer(s) ({scope_label})",
             assets.len(),
             servers.len()
         ),
@@ -141,8 +171,8 @@ pub async fn index_project_at_root(
     emitter.progress(
         Some(0),
         format!(
-            "preparing {} source media item(s) · hashing before indexers launch",
-            assets.len()
+            "preparing {} source media item(s) ({scope_label}) · hashing before indexers launch",
+            assets.len(),
         ),
     );
 
@@ -253,6 +283,7 @@ pub async fn index_project_at_root(
         Some(cb),
     );
 
+    let run_builtins = should_run_builtin_passes(mode);
     // Built-in passes (motion + silence) live outside the MCP
     // dispatcher. By default they run *after* the dispatcher returns,
     // serializing what could be parallel. On machines with headroom
@@ -264,7 +295,7 @@ pub async fn index_project_at_root(
     let parallel = has_headroom_for_parallel_passes();
     let state_for_passes = state.inner();
     let passes_fut = async {
-        if parallel {
+        if run_builtins && parallel {
             run_builtin_passes(app, state_for_passes, &project_root, &assets, &cancel).await
         } else {
             BuiltinPassReport::default()
@@ -296,7 +327,7 @@ pub async fn index_project_at_root(
             // or we run them now serially. Per-asset calls are
             // mtime-fresh-checked, so the second-pass invocation
             // skips any sidecar that landed during the parallel run.
-            let post_passes = if parallel {
+            let post_passes = if !run_builtins || parallel {
                 BuiltinPassReport::default()
             } else {
                 run_builtin_passes(app, state.inner(), &project_root, &assets, &cancel).await
@@ -556,6 +587,10 @@ fn has_headroom_for_parallel_passes() -> bool {
     }
 }
 
+fn should_run_builtin_passes(mode: IndexMode) -> bool {
+    !matches!(mode, IndexMode::FastContext)
+}
+
 /// Read the system 1-minute load average. macOS via sysctl,
 /// Linux/BSD via /proc/loadavg. Returns None on Windows or any
 /// failure — caller treats that as "no headroom signal".
@@ -588,8 +623,171 @@ fn read_load_avg_1min() -> Option<f64> {
     None
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexMode {
+    FastContext,
+    FullContext,
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineProfile {
+    Average,
+    Powerful,
+}
+
+fn current_machine_profile() -> MachineProfile {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    profile_for_signals(cores, read_load_avg_1min())
+}
+
+fn manual_index_mode() -> IndexMode {
+    if std::env::var("AWIDAT_INDEX_MODE").as_deref() == Ok("full-context") {
+        IndexMode::FullContext
+    } else {
+        IndexMode::Manual
+    }
+}
+
+fn profile_for_signals(cores: usize, load_1min: Option<f64>) -> MachineProfile {
+    match load_1min {
+        Some(load) if cores >= 8 && load < (cores as f64) * 0.5 => MachineProfile::Powerful,
+        _ => MachineProfile::Average,
+    }
+}
+
 fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetInput>> {
     collect_raw_media_inputs(project_root)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopedFallback {
+    WholeProject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolvedIndexScope {
+    All,
+    Scoped,
+    FallbackAll { reason: String },
+}
+
+impl ResolvedIndexScope {
+    fn progress_label(&self) -> String {
+        match self {
+            Self::All => "all raw source media".to_string(),
+            Self::Scoped => "newly imported media".to_string(),
+            Self::FallbackAll { reason } => {
+                format!("all raw source media after fallback: {reason}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResolvedIndexAssets {
+    assets: Vec<AssetInput>,
+    scope: ResolvedIndexScope,
+}
+
+fn resolve_assets_for_request(
+    project_root: &Path,
+    scoped_asset_ids: Option<&[String]>,
+    fallback: ScopedFallback,
+) -> Result<ResolvedIndexAssets, String> {
+    let Some(asset_ids) = scoped_asset_ids else {
+        return collect_assets(project_root)
+            .map(|assets| ResolvedIndexAssets {
+                assets,
+                scope: ResolvedIndexScope::All,
+            })
+            .map_err(|e| format!("scan raw/: {e}"));
+    };
+    if asset_ids.is_empty() {
+        return collect_assets(project_root)
+            .map(|assets| ResolvedIndexAssets {
+                assets,
+                scope: ResolvedIndexScope::All,
+            })
+            .map_err(|e| format!("scan raw/: {e}"));
+    }
+
+    match resolve_scoped_assets(project_root, asset_ids) {
+        Ok(assets) => Ok(ResolvedIndexAssets {
+            assets,
+            scope: ResolvedIndexScope::Scoped,
+        }),
+        Err(reason) => match fallback {
+            ScopedFallback::WholeProject => collect_assets(project_root)
+                .map(|assets| ResolvedIndexAssets {
+                    assets,
+                    scope: ResolvedIndexScope::FallbackAll { reason },
+                })
+                .map_err(|e| format!("scan raw/: {e}")),
+        },
+    }
+}
+
+fn resolve_scoped_assets(
+    project_root: &Path,
+    asset_ids: &[String],
+) -> Result<Vec<AssetInput>, String> {
+    let mut assets = Vec::with_capacity(asset_ids.len());
+    for asset_id in asset_ids {
+        let normalized = normalize_scoped_raw_asset_id(asset_id)?;
+        let path = project_root.join(&normalized);
+        if !path.is_file() {
+            return Err(format!("missing scoped asset '{}'", normalized));
+        }
+        assets.push(AssetInput {
+            id: AssetId::new(normalized),
+            path,
+        });
+    }
+    Ok(assets)
+}
+
+fn normalize_scoped_raw_asset_id(asset_id: &str) -> Result<String, String> {
+    let trimmed = asset_id.trim();
+    if trimmed.is_empty() {
+        return Err("scoped asset id cannot be empty".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "scoped asset '{}' must be project-relative",
+            trimmed
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                let Some(part) = part.to_str() else {
+                    return Err(format!("scoped asset '{}' is not valid UTF-8", trimmed));
+                };
+                parts.push(part);
+            }
+            _ => {
+                return Err(format!(
+                    "scoped asset '{}' must not escape the project",
+                    trimmed
+                ));
+            }
+        }
+    }
+    if parts.first() != Some(&"raw") {
+        return Err(format!("scoped asset '{}' must be under raw/", trimmed));
+    }
+    if parts.len() < 2 {
+        return Err(format!(
+            "scoped asset '{}' must name a file under raw/",
+            trimmed
+        ));
+    }
+    Ok(parts.join("/"))
 }
 
 fn prepare_desktop_indexers(servers: &mut [McpServer]) {
@@ -599,6 +797,42 @@ fn prepare_desktop_indexers(servers: &mut [McpServer]) {
         }
     }
     servers.sort_by_key(|server| desktop_indexer_priority(&server.name));
+}
+
+fn plan_indexers_for_mode(servers: &mut Vec<McpServer>, mode: IndexMode, profile: MachineProfile) {
+    prepare_desktop_indexers(servers);
+    if matches!(mode, IndexMode::FastContext) {
+        servers.retain(|server| {
+            matches!(
+                server.name.as_str(),
+                "whisper" | "audio-energy" | "beats" | "scenedetect" | "topic"
+            )
+        });
+    }
+    if matches!(
+        (mode, profile),
+        (IndexMode::FastContext, MachineProfile::Average)
+    ) {
+        servers.retain(|server| server.name != "beats");
+    }
+    servers.sort_by_key(|server| planned_indexer_priority(&server.name));
+}
+
+fn planned_indexer_priority(name: &str) -> u8 {
+    match name {
+        "whisper" => 0,
+        "audio-energy" => 1,
+        "beats" => 2,
+        "scenedetect" => 3,
+        "topic" => 4,
+        "editorial-moments" => 5,
+        "frame-quality" | "color-analysis" => 6,
+        "face" => 7,
+        "gaze" => 8,
+        "shot" => 9,
+        "clip" => 10,
+        _ => 11,
+    }
 }
 
 fn is_deepgram_whisper(server: &McpServer) -> bool {
@@ -843,6 +1077,79 @@ mod tests {
     }
 
     #[test]
+    fn fast_context_keeps_agent_critical_indexers_first() {
+        let mut servers = vec![
+            test_server("clip"),
+            test_server("topic"),
+            test_server("whisper"),
+            test_server("audio-energy"),
+            test_server("scenedetect"),
+            test_server("editorial-moments"),
+            test_server("frame-quality"),
+        ];
+
+        plan_indexers_for_mode(
+            &mut servers,
+            IndexMode::FastContext,
+            MachineProfile::Average,
+        );
+
+        let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["whisper", "audio-energy", "scenedetect", "topic"]
+        );
+    }
+
+    #[test]
+    fn full_context_on_powerful_machine_retains_visual_indexers_after_semantic_work() {
+        let mut servers = vec![
+            test_server("clip"),
+            test_server("topic"),
+            test_server("whisper"),
+            test_server("face"),
+            test_server("gaze"),
+            test_server("shot"),
+            test_server("audio-energy"),
+        ];
+
+        plan_indexers_for_mode(
+            &mut servers,
+            IndexMode::FullContext,
+            MachineProfile::Powerful,
+        );
+
+        let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "whisper",
+                "audio-energy",
+                "topic",
+                "face",
+                "gaze",
+                "shot",
+                "clip"
+            ]
+        );
+    }
+
+    #[test]
+    fn machine_profile_defaults_to_average_on_low_core_count() {
+        assert_eq!(profile_for_signals(4, Some(0.2)), MachineProfile::Average);
+        assert_eq!(profile_for_signals(8, Some(0.2)), MachineProfile::Powerful);
+        assert_eq!(profile_for_signals(8, Some(8.0)), MachineProfile::Average);
+        assert_eq!(profile_for_signals(8, None), MachineProfile::Average);
+    }
+
+    #[test]
+    fn fast_context_import_indexing_skips_builtin_passes() {
+        assert!(!should_run_builtin_passes(IndexMode::FastContext));
+        assert!(should_run_builtin_passes(IndexMode::Manual));
+        assert!(should_run_builtin_passes(IndexMode::FullContext));
+    }
+
+    #[test]
     fn index_readiness_detects_existing_sidecars() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("index/whisper/raw")).unwrap();
@@ -923,5 +1230,68 @@ mod tests {
         let readiness = compute_index_readiness_at(dir.path());
         assert!(readiness.transcripts);
         assert!(!readiness.speaker, "diarized=false leaves speaker unready");
+    }
+
+    #[test]
+    fn resolve_scoped_assets_uses_only_requested_raw_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw/nested")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+        std::fs::write(dir.path().join("raw/nested/b.wav"), b"b").unwrap();
+        std::fs::write(dir.path().join("raw/other.mp4"), b"c").unwrap();
+
+        let assets = resolve_scoped_assets(
+            dir.path(),
+            &["raw/nested/b.wav".to_string(), "raw/a.mov".to_string()],
+        )
+        .unwrap();
+
+        let ids: Vec<String> = assets.iter().map(|asset| asset.id.to_string()).collect();
+        assert_eq!(ids, vec!["raw/nested/b.wav", "raw/a.mov"]);
+        assert_eq!(assets[0].path, dir.path().join("raw/nested/b.wav"));
+        assert_eq!(assets[1].path, dir.path().join("raw/a.mov"));
+    }
+
+    #[test]
+    fn resolve_scoped_assets_rejects_non_raw_or_missing_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+
+        let outside =
+            resolve_scoped_assets(dir.path(), &["renders/a.mp4".to_string()]).unwrap_err();
+        assert!(outside.contains("must be under raw/"), "{outside}");
+
+        let missing =
+            resolve_scoped_assets(dir.path(), &["raw/missing.mov".to_string()]).unwrap_err();
+        assert!(missing.contains("missing scoped asset"), "{missing}");
+    }
+
+    #[test]
+    fn resolve_assets_for_request_falls_back_to_all_raw_assets_when_scoped_input_is_bad() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        std::fs::write(dir.path().join("raw/a.mov"), b"a").unwrap();
+        std::fs::write(dir.path().join("raw/b.mov"), b"b").unwrap();
+
+        let resolved = resolve_assets_for_request(
+            dir.path(),
+            Some(&["../escape.mov".to_string()]),
+            ScopedFallback::WholeProject,
+        )
+        .unwrap();
+
+        let ids: Vec<String> = resolved
+            .assets
+            .iter()
+            .map(|asset| asset.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["raw/a.mov", "raw/b.mov"]);
+        match resolved.scope {
+            ResolvedIndexScope::FallbackAll { reason } => {
+                assert!(reason.contains("must not escape"), "{reason}");
+            }
+            other => panic!("expected fallback scope, got {other:?}"),
+        }
     }
 }

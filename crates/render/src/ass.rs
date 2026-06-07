@@ -12,10 +12,9 @@
 //! to materialize the subtitle file on disk.
 //!
 //! Coexistence: drawtext stays the default for plain titles,
-//! reveal modes, rich text, and anything without WhisperX-style
-//! word timings. Only role=="caption" + non-empty word_timings
-//! switches the renderer to libass — that's the slice where
-//! karaoke unlocks real value.
+//! reveal modes, and rich text. All caption-role overlays
+//! (role == "caption" | "subtitle") use libass — both
+//! word-timed (karaoke `\k` tags) and whole-cue (plain Dialogue).
 
 use std::fs;
 use std::io;
@@ -23,13 +22,10 @@ use std::path::{Path, PathBuf};
 
 use awidat_proto::subtitle::SubtitleTrack;
 
-use crate::timeline::{TitlePlan, TitlePosition, TitleWeight};
-
-/// 1080p reference frame that title font sizes are authored against.
-/// Mirrors `TIMELINE_RENDER_WIDTH` / `TIMELINE_RENDER_HEIGHT` in
-/// `timeline.rs` so libass renders at the same scale as drawtext.
-pub(crate) const ASS_REFERENCE_WIDTH: u32 = 1920;
-pub(crate) const ASS_REFERENCE_HEIGHT: u32 = 1080;
+use crate::timeline::{
+    CaptionRenderBackground, CaptionRenderCasing, CaptionRenderWeight, RenderCanvas, TitlePlan,
+    TitlePosition, TitleWeight,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct CaptionLayoutProfile {
@@ -50,6 +46,13 @@ impl CaptionLayoutProfile {
                 margin_v_top: 80,
                 max_chars_per_line: 18,
             },
+            Some("lower_third") => Self {
+                margin_l: 80,
+                margin_r: 80,
+                margin_v_bottom: 300, // ~28% of the 1080 reference: clears a typical lower-third banner
+                margin_v_top: 54,
+                max_chars_per_line: 32,
+            },
             _ => Self {
                 margin_l: 80,
                 margin_r: 80,
@@ -61,17 +64,17 @@ impl CaptionLayoutProfile {
     }
 }
 
-/// Auto-detect: a [`TitlePlan`] is rendered via libass when
-/// (a) it has at least one transcript word timing, and
-/// (b) its role is "caption" (or anything caption-shaped — we
-/// don't ASS-render plain `title` overlays since they have no
-/// karaoke timing to gain from libass).
+/// A [`TitlePlan`] is rendered via libass when its role is
+/// "caption" (or any caption-shaped alias: "captions", "subtitle",
+/// "subtitles"). That covers both whole-cue and word-timed karaoke
+/// captions — the industry-standard subtitle engine handles both.
+/// Plain `title` overlays keep the `drawtext` path.
 ///
-/// All other titles continue to fall through to drawtext.
+/// All other roles continue to fall through to drawtext.
 pub(crate) fn is_libass_eligible(title: &TitlePlan) -> bool {
-    if title.word_timings.is_empty() {
-        return false;
-    }
+    // Captions/subtitles always render via libass — the industry-standard
+    // subtitle engine — whether word-timed (karaoke) or whole-cue. Plain
+    // `title` overlays keep the drawtext path.
     matches!(
         title.role.as_str(),
         "caption" | "captions" | "subtitle" | "subtitles"
@@ -85,6 +88,7 @@ pub(crate) fn render_ass_file(
     title: &TitlePlan,
     workdir: &Path,
     sequence: usize,
+    canvas: RenderCanvas,
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(workdir)?;
     let path = workdir.join(format!(
@@ -92,7 +96,7 @@ pub(crate) fn render_ass_file(
         sequence,
         title.start_s.max(0.0)
     ));
-    let body = build_ass_document(title);
+    let body = build_ass_document(title, canvas);
     fs::write(&path, body)?;
     Ok(path)
 }
@@ -102,10 +106,11 @@ pub(crate) fn render_subtitle_track_ass_file(
     track: &SubtitleTrack,
     workdir: &Path,
     sequence: usize,
+    canvas: RenderCanvas,
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(workdir)?;
     let path = workdir.join(format!("subtitle-track-{sequence:04}.ass"));
-    let body = build_subtitle_track_ass_document(track);
+    let body = build_subtitle_track_ass_document(track, canvas);
     fs::write(&path, body)?;
     Ok(path)
 }
@@ -113,35 +118,33 @@ pub(crate) fn render_subtitle_track_ass_file(
 /// Build the ASS subtitle document for a captioned title.
 ///
 /// Layout:
-/// - One global `[Script Info]` header at 1920x1080.
+/// - One global `[Script Info]` header sized to the render canvas.
 /// - One `[V4+ Styles]` row matching the title's font/weight/color.
-/// - One `Dialogue:` line per captioned step. Each Dialogue line
-///   carries karaoke `\k<centiseconds>` tags so libass reveals
-///   words in sync with their transcript timestamps — same
-///   semantics as the cumulative-prefix drawtext fallback, but
-///   without re-drawing the whole frame every word.
-pub(crate) fn build_ass_document(title: &TitlePlan) -> String {
+/// - One or more `Dialogue:` lines. Word-timed captions carry
+///   karaoke `\k<centiseconds>` tags for libass reveal; whole-cue
+///   captions emit a single plain Dialogue covering the full span.
+fn build_ass_document(title: &TitlePlan, canvas: RenderCanvas) -> String {
     let mut out = String::new();
-    push_script_info(&mut out);
+    push_script_info(&mut out, canvas);
     push_styles(&mut out, title);
     push_events(&mut out, title);
     out
 }
 
-fn build_subtitle_track_ass_document(track: &SubtitleTrack) -> String {
+fn build_subtitle_track_ass_document(track: &SubtitleTrack, canvas: RenderCanvas) -> String {
     let mut out = String::new();
-    push_script_info(&mut out);
+    push_script_info(&mut out, canvas);
     push_default_subtitle_styles(&mut out);
     push_subtitle_track_events(&mut out, track);
     out
 }
 
-fn push_script_info(out: &mut String) {
+fn push_script_info(out: &mut String, canvas: RenderCanvas) {
     out.push_str("[Script Info]\n");
     out.push_str("; Generated by awidat-render libass caption path\n");
     out.push_str("ScriptType: v4.00+\n");
-    out.push_str(&format!("PlayResX: {ASS_REFERENCE_WIDTH}\n"));
-    out.push_str(&format!("PlayResY: {ASS_REFERENCE_HEIGHT}\n"));
+    out.push_str(&format!("PlayResX: {}\n", canvas.width));
+    out.push_str(&format!("PlayResY: {}\n", canvas.height));
     out.push_str("WrapStyle: 0\n");
     out.push_str("ScaledBorderAndShadow: yes\n");
     out.push('\n');
@@ -154,18 +157,51 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
          BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, \
          BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
     );
-    let bold_flag = if matches!(title.font_weight, TitleWeight::Bold) {
-        -1
+
+    // Derive style fields — `caption_style` overrides legacy title fields when present.
+    let (bold_flag, primary, border_style, back) = if let Some(style) = &title.caption_style {
+        let bold = if style.weight == CaptionRenderWeight::Bold {
+            -1i32
+        } else {
+            0i32
+        };
+        let primary_col = hex_to_ass_color(&style.primary_color);
+        let (bs, back_col) = match &style.background {
+            CaptionRenderBackground::Box { color, opacity } => {
+                // ASS alpha is inverted: 0x00 = opaque, 0xFF = transparent.
+                let aa = 255u8 - opacity;
+                let trimmed = color.trim().trim_start_matches('#');
+                let parse = |start: usize| {
+                    u8::from_str_radix(trimmed.get(start..start + 2).unwrap_or("00"), 16)
+                        .unwrap_or(0)
+                };
+                let (r, g, b) = (parse(0), parse(2), parse(4));
+                let back_col = format!("&H{aa:02X}{b:02X}{g:02X}{r:02X}");
+                (3i32, back_col)
+            }
+            CaptionRenderBackground::None => (1i32, "&H80000000".to_string()),
+        };
+        (bold, primary_col, bs, back_col)
     } else {
-        0
+        // Legacy path: derive from TitlePlan's own fields — unchanged.
+        let bold = if matches!(title.font_weight, TitleWeight::Bold) {
+            -1i32
+        } else {
+            0i32
+        };
+        (
+            bold,
+            hex_to_ass_color(&title.color),
+            1i32,
+            "&H80000000".to_string(),
+        )
     };
-    let primary = hex_to_ass_color(&title.color);
+
     // Karaoke fill secondary colour: the "unread" word state.
     // libass paints PrimaryColour on already-spoken words and
     // SecondaryColour on the upcoming ones.
     let secondary = "&H00FFFFFF";
     let outline = "&H00000000";
-    let back = "&H80000000";
     // Vertical alignment: bottom = 2, center = 5, top = 8. These
     // numbers are libass numpad-style.
     let alignment = match title.position {
@@ -179,16 +215,25 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         TitlePosition::Center => 0,
         TitlePosition::Bottom => layout.margin_v_bottom,
     };
+    // caption_style.font_size is authoritative when a style is present;
+    // fall back to title.font_size for the legacy path.
+    let size = title
+        .caption_style
+        .as_ref()
+        .map(|s| s.font_size)
+        .unwrap_or(title.font_size);
+
     out.push_str(&format!(
         "Style: Caption,{font},{size},{primary},{secondary},{outline},{back},\
-         {bold},0,0,0,100,100,0,0,1,3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
+         {bold},0,0,0,100,100,0,0,{border_style},3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
         font = default_caption_font_name(),
-        size = title.font_size,
+        size = size,
         primary = primary,
         secondary = secondary,
         outline = outline,
         back = back,
         bold = bold_flag,
+        border_style = border_style,
         alignment = alignment,
         margin_l = layout.margin_l,
         margin_r = layout.margin_r,
@@ -244,6 +289,27 @@ fn push_subtitle_track_events(out: &mut String, track: &SubtitleTrack) {
     }
 }
 
+/// Word-wrap already-escaped caption text to <= max_chars_per_line per visible
+/// line, inserting ASS `\N` hard breaks. Honors the layout width (unlike the
+/// fixed-32 wrap_plain_subtitle_text).
+fn wrap_caption_text(escaped: &str, max_chars_per_line: usize) -> String {
+    let mut out = String::new();
+    let mut visible = 0usize;
+    for word in escaped.split_whitespace() {
+        let n = word.chars().count();
+        if visible > 0 && visible + 1 + n > max_chars_per_line {
+            out.push_str("\\N");
+            visible = 0;
+        } else if visible > 0 {
+            out.push(' ');
+            visible += 1;
+        }
+        out.push_str(word);
+        visible += n;
+    }
+    out
+}
+
 fn wrap_plain_subtitle_text(input: &str) -> String {
     let mut out = String::new();
     let mut visible_line_chars = 0usize;
@@ -284,9 +350,83 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
                 && w.end_s >= w.start_s
         })
         .collect();
-    if words.is_empty() {
-        return Vec::new();
+
+    // ── Active-word-pop: needs both the reveal flag, a highlight color, and
+    //   word timings. When all three are present, emit one Dialogue per word
+    //   spanning [word.start_s, word.end_s]; the active word gets the
+    //   highlight color inline, all others render in the Style's PrimaryColour.
+    //   If any condition is absent, fall through to the whole-cue path below.
+    let style = title.caption_style.as_ref();
+    let active_pop_style = style.filter(|s| {
+        matches!(
+            s.reveal,
+            crate::timeline::CaptionRenderReveal::ActiveWordPop
+        ) && s.highlight_color.is_some()
+            && !words.is_empty()
+    });
+    if let Some(s) = active_pop_style {
+        // SAFETY: the filter above requires `highlight_color.is_some()`.
+        // Fall back to primary so the caption is still visible if the
+        // invariant is ever violated; this branch should never execute.
+        let hi_hex_owned;
+        let hi_hex: &str = match s.highlight_color.as_deref() {
+            Some(c) => c,
+            None => {
+                hi_hex_owned = s.primary_color.clone();
+                &hi_hex_owned
+            }
+        };
+        let primary_col = hex_to_ass_color(&s.primary_color);
+        let hi_col = hex_to_ass_color(hi_hex);
+        let mut dialogues = Vec::with_capacity(words.len());
+        for (active_idx, active_word) in words.iter().enumerate() {
+            let mut line = String::new();
+            for (j, w) in words.iter().enumerate() {
+                if j > 0 {
+                    line.push(' ');
+                }
+                let raw = w.text.trim();
+                let cased = apply_casing(raw, title);
+                let escaped = escape_ass_text(&cased);
+                if j == active_idx {
+                    // Wrap active word: set highlight, then restore primary after.
+                    line.push_str(&format!("{{\\c{hi_col}}}{escaped}{{\\c{primary_col}}}"));
+                } else {
+                    line.push_str(&escaped);
+                }
+            }
+            // Span each line up to the next word's start (last word runs to the
+            // cue end) so the caption stays on screen during inter-word silence
+            // with only the highlight advancing, instead of disappearing in the
+            // gaps between Whisper word timings.
+            let line_end_s = match words.get(active_idx + 1) {
+                Some(next) => next.start_s.max(active_word.end_s),
+                None => title.end_s.max(active_word.end_s),
+            };
+            let start = format_ass_time(active_word.start_s);
+            let end = format_ass_time(line_end_s);
+            dialogues.push(format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{line}"));
+        }
+        return dialogues;
     }
+
+    // ── Whole-cue branch (no word timings) ───────────────────────────────────
+    if words.is_empty() {
+        let raw_text = title.text.trim();
+        if raw_text.is_empty() {
+            return Vec::new();
+        }
+        let cased = apply_casing(raw_text, title);
+        let layout = CaptionLayoutProfile::for_title(title);
+        let wrapped = wrap_caption_text(&escape_ass_text(&cased), layout.max_chars_per_line);
+        let start = format_ass_time(title.start_s.max(0.0));
+        let end = format_ass_time(title.end_s.max(title.start_s));
+        return vec![format!(
+            "Dialogue: 0,{start},{end},Caption,,0,0,0,,{wrapped}"
+        )];
+    }
+
+    // ── Word-by-word karaoke branch ───────────────────────────────────────────
     let start = format_ass_time(title.start_s.max(0.0));
     let end = format_ass_time(title.end_s.max(title.start_s));
 
@@ -304,7 +444,8 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
     for (idx, word) in words.iter().enumerate() {
         let dur_cs = seconds_to_centiseconds((word.end_s - word.start_s).max(0.0));
         let raw_glyphs = word.text.trim();
-        let glyphs = escape_ass_text(raw_glyphs);
+        let cased_glyphs = apply_casing(raw_glyphs, title);
+        let glyphs = escape_ass_text(&cased_glyphs);
         if idx > 0 {
             let next_chars = raw_glyphs.chars().count();
             if visible_line_chars > 0
@@ -315,6 +456,13 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
             } else {
                 text.push(' ');
                 visible_line_chars += 1;
+            }
+            // Inter-word silence: hold the karaoke clock for the gap before this
+            // word so later words don't reveal early when the transcript has
+            // pauses between words.
+            let gap_cs = seconds_to_centiseconds((word.start_s - words[idx - 1].end_s).max(0.0));
+            if gap_cs > 0 {
+                text.push_str(&format!("{{\\k{gap_cs}}}"));
             }
         }
         text.push_str(&format!("{{\\k{dur_cs}}}{glyphs}"));
@@ -372,6 +520,16 @@ pub(crate) fn hex_to_ass_color(hex: &str) -> String {
             format!("&H{a:02X}{b:02X}{g:02X}{r:02X}")
         }
         _ => "&H00FFFFFF".to_string(),
+    }
+}
+
+/// Apply casing to text based on the title's `caption_style`. When
+/// `caption_style` is absent or casing is `AsIs`, returns the input
+/// unchanged. When casing is `Upper`, uppercases the whole string.
+fn apply_casing(text: &str, title: &TitlePlan) -> String {
+    match title.caption_style.as_ref().map(|s| &s.casing) {
+        Some(CaptionRenderCasing::Upper) => text.to_uppercase(),
+        _ => text.to_owned(),
     }
 }
 
@@ -473,11 +631,17 @@ pub fn default_caption_font_name() -> String {
     resolve_caption_font_name(|key| std::env::var(key).ok())
 }
 
-/// Test-visible re-export of [`build_ass_document`] so integration
-/// tests in `crates/render/tests/` can assert on the writer output
-/// without the whole timeline scaffolding.
+/// Test-visible re-export of [`build_ass_document`] using the default 1920×1080
+/// canvas so existing callers stay unchanged.
 pub fn build_ass_document_for_test(title: &TitlePlan) -> String {
-    build_ass_document(title)
+    build_ass_document(title, RenderCanvas::default())
+}
+
+/// Test helper: build an ASS document with an explicit render canvas.
+/// Use this to assert that `PlayResX`/`PlayResY` match the canvas dimensions.
+#[cfg(test)]
+pub fn build_ass_document_with_canvas(title: &TitlePlan, canvas: RenderCanvas) -> String {
+    build_ass_document(title, canvas)
 }
 
 /// ffmpeg's `subtitles=` filter parses its argument as a key/value
@@ -496,6 +660,29 @@ mod tests {
     use crate::timeline::{
         CaptionWordTiming, TextReveal, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
     };
+
+    fn caption_title(text: &str, word_timings: Vec<CaptionWordTiming>) -> TitlePlan {
+        TitlePlan {
+            text: text.into(),
+            start_s: 1.0,
+            end_s: 3.0,
+            position: TitlePosition::Bottom,
+            font_size: 44,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            phases: None,
+            reveal: TextReveal::None,
+            role: "caption".into(),
+            safe_area: Some("standard".into()),
+            rich_segments: Vec::new(),
+            word_timings,
+            animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
+        }
+    }
 
     fn caption_with_words() -> TitlePlan {
         TitlePlan {
@@ -525,24 +712,32 @@ mod tests {
                 },
             ],
             animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
         }
     }
 
     #[test]
-    fn eligibility_requires_caption_role_and_word_timings() {
+    fn eligibility_requires_caption_role() {
         let mut title = caption_with_words();
         assert!(is_libass_eligible(&title));
         title.role = "title".into();
         assert!(!is_libass_eligible(&title));
+        // Whole-cue captions (no word timings) are still eligible — they
+        // render via the plain Dialogue branch rather than karaoke.
         title.role = "caption".into();
         title.word_timings.clear();
-        assert!(!is_libass_eligible(&title));
+        assert!(
+            is_libass_eligible(&title),
+            "whole-cue caption must still use libass"
+        );
     }
 
     #[test]
     fn ass_document_contains_karaoke_tags_and_word_text() {
         let title = caption_with_words();
-        let doc = build_ass_document(&title);
+        let doc = build_ass_document(&title, RenderCanvas::default());
         assert!(doc.contains("[Script Info]"));
         assert!(doc.contains("[V4+ Styles]"));
         assert!(doc.contains("[Events]"));
@@ -593,7 +788,7 @@ mod tests {
             },
         ];
 
-        let doc = build_ass_document(&title);
+        let doc = build_ass_document(&title, RenderCanvas::default());
 
         assert!(
             doc.contains(",2,160,160,216,1"),
@@ -631,7 +826,7 @@ mod tests {
             },
         ];
 
-        let doc = build_ass_document(&title);
+        let doc = build_ass_document(&title, RenderCanvas::default());
 
         assert!(doc.contains(",2,80,80,162,1"));
         assert!(
@@ -667,10 +862,257 @@ mod tests {
     fn render_ass_file_writes_to_workdir() {
         let dir = tempfile::tempdir().unwrap();
         let title = caption_with_words();
-        let path = render_ass_file(&title, dir.path(), 0).unwrap();
+        let path = render_ass_file(&title, dir.path(), 0, RenderCanvas::default()).unwrap();
         assert!(path.exists());
         assert!(path.extension().and_then(|e| e.to_str()) == Some("ass"));
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("\\k"));
+    }
+
+    #[test]
+    fn caption_without_word_timings_is_libass_eligible() {
+        let t = caption_title("hello world", vec![]);
+        assert!(
+            is_libass_eligible(&t),
+            "whole-cue captions must use libass, not drawtext"
+        );
+    }
+
+    #[test]
+    fn whole_cue_caption_emits_one_dialogue_with_full_text() {
+        let t = caption_title("the rise of solo entrepreneurs", vec![]);
+        let doc = build_ass_document(&t, RenderCanvas::default());
+        let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
+        assert_eq!(
+            dialogues.len(),
+            1,
+            "exactly one whole-cue dialogue, got: {dialogues:?}"
+        );
+        assert!(doc.contains("rise") && doc.contains("entrepreneurs"));
+        assert!(
+            !dialogues[0].contains("\\k"),
+            "whole-cue must not emit karaoke \\k tags"
+        );
+    }
+
+    #[test]
+    fn lower_third_safe_area_raises_bottom_margin() {
+        let mut t = caption_title("x", vec![]);
+        t.safe_area = Some("lower_third".into());
+        let raised = CaptionLayoutProfile::for_title(&t);
+        t.safe_area = Some("standard".into());
+        let standard = CaptionLayoutProfile::for_title(&t);
+        assert_eq!(
+            raised.margin_v_bottom, 300,
+            "lower_third clears the banner band"
+        );
+        assert_eq!(standard.margin_v_bottom, 162, "standard unchanged");
+        assert!(raised.margin_v_bottom > standard.margin_v_bottom);
+    }
+
+    fn styled(
+        spec: crate::timeline::CaptionRenderStyle,
+        text: &str,
+        wt: Vec<crate::timeline::CaptionWordTiming>,
+    ) -> crate::timeline::TitlePlan {
+        let mut t = caption_title(text, wt);
+        t.caption_style = Some(spec);
+        t
+    }
+
+    #[test]
+    fn upper_casing_uppercases_dialogue_text() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(
+            &styled(spec, "rise of solo", vec![]),
+            RenderCanvas::default(),
+        );
+        assert!(
+            doc.contains("RISE OF SOLO"),
+            "Upper casing must uppercase text: {doc}"
+        );
+    }
+
+    #[test]
+    fn boxed_background_uses_opaque_border_style() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 48,
+            weight: CaptionRenderWeight::Normal,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::Box {
+                color: "#000000".into(),
+                opacity: 153,
+            },
+        };
+        let doc = build_ass_document(&styled(spec, "hi", vec![]), RenderCanvas::default());
+        let style_line = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .expect("style row");
+        let fields: Vec<&str> = style_line
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
+        // fields[0]="Caption"; BorderStyle is the 16th field => index 15.
+        assert_eq!(
+            fields[15], "3",
+            "boxed background must set BorderStyle=3: {style_line}"
+        );
+    }
+
+    #[test]
+    fn bold_weight_sets_bold_flag() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(&styled(spec, "hi", vec![]), RenderCanvas::default());
+        let fields: Vec<&str> = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .unwrap()
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
+        assert_eq!(fields[7], "-1", "Bold flag must be -1 for Bold weight"); // Bold is the 8th field
+    }
+
+    #[test]
+    fn active_word_pop_emits_one_dialogue_per_word_with_one_highlight() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::Upper,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: CaptionRenderReveal::ActiveWordPop,
+            background: CaptionRenderBackground::None,
+        };
+        let wt = vec![
+            CaptionWordTiming {
+                text: "five".into(),
+                start_s: 1.0,
+                end_s: 1.4,
+            },
+            CaptionWordTiming {
+                text: "ten".into(),
+                start_s: 1.4,
+                end_s: 2.0,
+            },
+        ];
+        let doc = build_ass_document(&styled(spec, "five ten", wt), RenderCanvas::default());
+        let dialogues: Vec<&str> = doc.lines().filter(|l| l.starts_with("Dialogue:")).collect();
+        assert_eq!(dialogues.len(), 2, "one dialogue per word: {dialogues:?}");
+        // full (uppercased) line shown in each
+        assert!(dialogues[0].contains("FIVE") && dialogues[0].contains("TEN"));
+        // exactly one highlight color override marker per dialogue line
+        let hi = hex_to_ass_color("#FFE000");
+        assert_eq!(
+            dialogues[0].matches(&hi).count(),
+            1,
+            "exactly one highlighted word: {}",
+            dialogues[0]
+        );
+        // the highlighted word in dialogue[0] is the first word; dialogue[1] highlights the second
+        assert_eq!(dialogues[1].matches(&hi).count(), 1);
+        // timing spans the word window
+        assert!(
+            dialogues[0].contains(&format_ass_time(1.0))
+                && dialogues[0].contains(&format_ass_time(1.4))
+        );
+    }
+
+    #[test]
+    fn active_word_pop_without_timings_degrades_to_whole_cue() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 64,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: Some("#FFE000".into()),
+            reveal: CaptionRenderReveal::ActiveWordPop,
+            background: CaptionRenderBackground::None,
+        };
+        let doc = build_ass_document(
+            &styled(spec, "hello world", vec![]),
+            RenderCanvas::default(),
+        );
+        let n = doc.lines().filter(|l| l.starts_with("Dialogue:")).count();
+        assert_eq!(n, 1, "no word timings -> single whole-cue dialogue");
+    }
+
+    #[test]
+    fn ass_playres_matches_render_canvas() {
+        use crate::timeline::RenderCanvas;
+        let t = caption_title("hi", vec![]);
+        let portrait = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+            },
+        );
+        assert!(
+            portrait.contains("PlayResX: 1080") && portrait.contains("PlayResY: 1920"),
+            "vertical canvas must drive PlayRes: {portrait}"
+        );
+        let landscape = build_ass_document_with_canvas(
+            &t,
+            RenderCanvas {
+                width: 1920,
+                height: 1080,
+            },
+        );
+        assert!(landscape.contains("PlayResX: 1920") && landscape.contains("PlayResY: 1080"));
+    }
+
+    #[test]
+    fn caption_style_font_size_overrides_title_font_size() {
+        use crate::timeline::*;
+        let spec = CaptionRenderStyle {
+            font_size: 72,
+            weight: CaptionRenderWeight::Bold,
+            casing: CaptionRenderCasing::AsIs,
+            primary_color: "#FFFFFF".into(),
+            highlight_color: None,
+            reveal: CaptionRenderReveal::WholeCue,
+            background: CaptionRenderBackground::None,
+        };
+        let mut t = styled(spec, "hi", vec![]);
+        t.font_size = 30; // top-level differs; style must win
+        let doc = build_ass_document(&t, RenderCanvas::default());
+        let fields: Vec<&str> = doc
+            .lines()
+            .find(|l| l.starts_with("Style: Caption"))
+            .unwrap()
+            .trim_start_matches("Style: ")
+            .split(',')
+            .collect();
+        // Format: Name, Fontname, Fontsize, ... => index 0=Name, 1=Fontname, 2=Fontsize
+        assert_eq!(
+            fields[2], "72",
+            "caption_style.font_size must drive the Style row: {fields:?}"
+        );
     }
 }

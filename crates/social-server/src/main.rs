@@ -1861,7 +1861,7 @@ fn token_endpoint(provider: &Provider) -> &'static str {
     match provider {
         Provider::YouTube => "https://oauth2.googleapis.com/token",
         Provider::TikTok => "https://open.tiktokapis.com/v2/oauth/token/",
-        Provider::Instagram => "https://graph.facebook.com/v24.0/oauth/access_token",
+        Provider::Instagram => "https://api.instagram.com/oauth/access_token",
         Provider::TwitterX => "https://api.x.com/2/oauth2/token",
     }
 }
@@ -1870,9 +1870,7 @@ fn profile_endpoint(provider: &Provider) -> Option<&'static str> {
     match provider {
         Provider::YouTube => Some("https://www.googleapis.com/youtube/v3/channels"),
         Provider::TikTok => Some("https://open.tiktokapis.com/v2/user/info/"),
-        Provider::Instagram => Some(
-            "https://graph.facebook.com/v24.0/me/accounts?fields=instagram_business_account{id,username,name}",
-        ),
+        Provider::Instagram => None,
         Provider::TwitterX => Some("https://api.x.com/2/users/me?user.fields=username,name"),
     }
 }
@@ -1922,7 +1920,8 @@ fn build_connected_account(
     now: i64,
 ) -> ConnectedAccount {
     use awidat_social::eligibility::{
-        instagram_eligibility, tiktok_eligibility, twitter_x_eligibility, youtube_eligibility,
+        has_instagram_content_publish_scope, instagram_eligibility, tiktok_eligibility,
+        twitter_x_eligibility, youtube_eligibility,
     };
     use awidat_social::model::ConnectedAccountStatus;
 
@@ -1940,7 +1939,7 @@ fn build_connected_account(
             &provider_account_id,
             &display_name,
             true,
-            scope_refs.contains(&"instagram_content_publish"),
+            has_instagram_content_publish_scope(&scope_refs),
         ),
         Provider::TwitterX => {
             twitter_x_eligibility(&provider_account_id, &display_name, None, &scope_refs)
@@ -2112,6 +2111,15 @@ mod tests {
     }
 
     #[test]
+    fn instagram_oauth_uses_instagram_login_endpoints() {
+        assert_eq!(
+            token_endpoint(&Provider::Instagram),
+            "https://api.instagram.com/oauth/access_token"
+        );
+        assert_eq!(profile_endpoint(&Provider::Instagram), None);
+    }
+
+    #[test]
     fn connected_account_builder_uses_provider_specific_eligibility() {
         let account = build_connected_account(
             "twitter_x:x_user_1".into(),
@@ -2129,6 +2137,27 @@ mod tests {
 
         assert_eq!(account.provider, Provider::TwitterX);
         assert!(account.capabilities.upload_video);
+        assert!(account.eligibility.eligible);
+    }
+
+    #[test]
+    fn connected_instagram_account_accepts_business_publish_scope() {
+        let account = build_connected_account(
+            "instagram:ig_user_1".into(),
+            OwnerRef::User("user_1".into()),
+            Provider::Instagram,
+            "ig_user_1".into(),
+            "Creator".into(),
+            &[
+                "instagram_business_basic".into(),
+                "instagram_business_content_publish".into(),
+            ],
+            100,
+        );
+
+        assert_eq!(account.provider, Provider::Instagram);
+        assert!(account.capabilities.upload_video);
+        assert!(account.capabilities.public_posting);
         assert!(account.eligibility.eligible);
     }
 

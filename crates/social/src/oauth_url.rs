@@ -50,7 +50,10 @@ fn scopes_for(provider: &Provider) -> Vec<&'static str> {
             "https://www.googleapis.com/auth/youtube.readonly",
         ],
         Provider::TikTok => vec!["user.info.basic", "video.publish"],
-        Provider::Instagram => vec!["instagram_basic", "instagram_content_publish"],
+        Provider::Instagram => vec![
+            "instagram_business_basic",
+            "instagram_business_content_publish",
+        ],
         Provider::TwitterX => vec!["users.read", "tweet.write", "media.write", "offline.access"],
     }
 }
@@ -69,7 +72,7 @@ fn authorization_url(
     let base_url = match provider {
         Provider::YouTube => "https://accounts.google.com/o/oauth2/v2/auth",
         Provider::TikTok => "https://www.tiktok.com/v2/auth/authorize/",
-        Provider::Instagram => "https://www.facebook.com/v24.0/dialog/oauth",
+        Provider::Instagram => "https://www.instagram.com/oauth/authorize",
         Provider::TwitterX => "https://twitter.com/i/oauth2/authorize",
     };
     let client_key = match provider {
@@ -91,6 +94,9 @@ fn authorization_url(
     if provider == &Provider::TwitterX {
         params.push(("code_challenge", raw_state));
         params.push(("code_challenge_method", "plain"));
+    }
+    if provider == &Provider::Instagram {
+        params.push(("force_reauth", "true"));
     }
 
     let query = params
@@ -204,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn instagram_authorize_url_uses_meta_endpoint_and_publish_scope() {
+    fn instagram_authorize_url_uses_meta_endpoint_and_business_publish_scope() {
         let request = begin_provider_oauth(
             "oauth_1",
             OwnerRef::User("user_1".into()),
@@ -219,13 +225,14 @@ mod tests {
         assert!(
             request
                 .authorization_url
-                .starts_with("https://www.facebook.com/v24.0/dialog/oauth?")
+                .starts_with("https://www.instagram.com/oauth/authorize?")
         );
         assert!(
             request
                 .authorization_url
-                .contains("scope=instagram_basic%2Cinstagram_content_publish")
+                .contains("scope=instagram_business_basic%2Cinstagram_business_content_publish")
         );
+        assert!(request.authorization_url.contains("force_reauth=true"));
         assert!(request.authorization_url.contains("client_id=client_123"));
         assert!(
             request

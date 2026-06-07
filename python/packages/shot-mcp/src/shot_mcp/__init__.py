@@ -95,18 +95,26 @@ server = IndexerServer(
 )
 
 
-def _project_root_from(asset_path: str) -> Path:
+def _project_root_from(req: IndexAssetRequest) -> Path:
     """Walk up from the asset to the dir containing `index/`."""
-    p = Path(asset_path).absolute()
+    if req.project_root:
+        return Path(req.project_root).absolute()
+    p = Path(req.asset_path).absolute()
     while p != p.parent:
         if (p / "index").is_dir():
             return p
         p = p.parent
-    return Path(asset_path).absolute().parent
+    return Path(req.asset_path).absolute().parent
 
 
-def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
-    p = project_root / "index" / indexer / f"{asset_id}.json"
+def _index_root_from(req: IndexAssetRequest, project_root: Path) -> Path:
+    if req.index_root:
+        return Path(req.index_root).absolute()
+    return project_root / "index"
+
+
+def _read_sidecar(index_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:
+    p = index_root / indexer / f"{asset_id}.json"
     if not p.exists():
         return None
     try:
@@ -115,8 +123,8 @@ def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, 
         return None
 
 
-def _read_clip_bodies(project_root: Path) -> list[tuple[str, dict[str, Any]]]:
-    clip_dir = project_root / "index" / "clip"
+def _read_clip_bodies(index_root: Path) -> list[tuple[str, dict[str, Any]]]:
+    clip_dir = index_root / "clip"
     if not clip_dir.exists():
         return []
     bodies: list[tuple[str, dict[str, Any]]] = []
@@ -715,9 +723,10 @@ def _deduplicate_match_candidates(candidates: list[dict[str, Any]]) -> list[dict
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
-    project_root = _project_root_from(req.asset_path)
+    project_root = _project_root_from(req)
+    index_root = _index_root_from(req, project_root)
 
-    scenes_doc = _read_sidecar(project_root, "scenedetect", req.asset_id)
+    scenes_doc = _read_sidecar(index_root, "scenedetect", req.asset_id)
     if not scenes_doc:
         raise RuntimeError(
             f"shot-mcp: missing scenedetect sidecar at "
@@ -732,21 +741,21 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             {"index": 0, "start_s": 0.0, "end_s": duration_s}
         ]
 
-    face_doc = _read_sidecar(project_root, "face", req.asset_id)
+    face_doc = _read_sidecar(index_root, "face", req.asset_id)
     per_frame_faces = (
         face_doc.get("data", {}).get("per_frame", []) if face_doc else []
     )
     detect_w = int(face_doc.get("data", {}).get("detect_width", 0)) if face_doc else 0
     detect_h = int(face_doc.get("data", {}).get("detect_height", 0)) if face_doc else 0
-    gaze_doc = _read_sidecar(project_root, "gaze", req.asset_id)
+    gaze_doc = _read_sidecar(index_root, "gaze", req.asset_id)
     per_frame_gaze = (
         gaze_doc.get("data", {}).get("per_frame", []) if gaze_doc else []
     )
-    clip_doc = _read_sidecar(project_root, "clip", req.asset_id)
+    clip_doc = _read_sidecar(index_root, "clip", req.asset_id)
     clip_body = clip_doc.get("data", {}) if clip_doc else None
-    composition_doc = _read_sidecar(project_root, "composition", req.asset_id)
+    composition_doc = _read_sidecar(index_root, "composition", req.asset_id)
     composition_body = composition_doc.get("data", {}) if composition_doc else None
-    candidate_clip_bodies = _read_clip_bodies(project_root)
+    candidate_clip_bodies = _read_clip_bodies(index_root)
     if not candidate_clip_bodies and clip_body:
         candidate_clip_bodies = [(req.asset_id, clip_body)]
     clip_index = _prepare_clip_index(clip_body, candidate_clip_bodies)
