@@ -182,6 +182,18 @@ impl SocialClient {
         self.post_empty(&path).await
     }
 
+    /// `POST /social/jobs/{id}/fire`
+    pub async fn fire_due_job(&self, job_id: &str) -> Result<PublishJobResponse, String> {
+        let path = format!("/social/jobs/{job_id}/fire");
+        self.post_empty(&path).await
+    }
+
+    /// `POST /social/jobs/{id}/poll`
+    pub async fn poll_publish_job(&self, job_id: &str) -> Result<PublishJobResponse, String> {
+        let path = format!("/social/jobs/{job_id}/poll");
+        self.post_empty(&path).await
+    }
+
     /// `POST /social/jobs/{id}/reschedule`
     pub async fn reschedule_job(
         &self,

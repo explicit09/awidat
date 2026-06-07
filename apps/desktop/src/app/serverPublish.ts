@@ -86,11 +86,11 @@ function failed(reason: string, jobId?: string): RenderUploadState {
 }
 
 function stateFromServerJob(job: PublishJob): RenderUploadState {
-  if (job.status === "published" && job.providerPostUrl) {
+  if (job.status === "published") {
     return {
       state: "published",
-      remote_url: job.providerPostUrl,
       remote_id: job.providerPostId ?? job.id,
+      ...(job.providerPostUrl ? { remote_url: job.providerPostUrl } : {}),
     };
   }
   if (
@@ -160,6 +160,10 @@ function isTerminalJob(job: PublishJob): boolean {
   );
 }
 
+function shouldFireImmediately(scheduledFor: number | undefined, now: number): boolean {
+  return scheduledFor === undefined || scheduledFor <= now + 60;
+}
+
 async function pollServerPublishJob(
   invoke: InvokeFn,
   provider: string,
@@ -170,7 +174,11 @@ async function pollServerPublishJob(
   const started = Date.now();
   while (!isTerminalJob(current) && Date.now() - started < JOB_POLL_TIMEOUT_MS) {
     await sleep(JOB_POLL_INTERVAL_MS);
-    current = await invoke<PublishJob>("social_publish_job", { jobId: current.id });
+    const command =
+      current.status === "processing" || current.status === "uploading"
+        ? "social_poll_publish_job"
+        : "social_publish_job";
+    current = await invoke<PublishJob>(command, { jobId: current.id });
     onState?.(provider, stateFromServerJob(current));
   }
   return current;
@@ -251,16 +259,33 @@ export async function publishRenderTargetsViaServer({
         filePath: outputPath,
       });
 
-      states[provider] = stateFromServerJob(uploaded);
+      const fired =
+        uploaded.status === "scheduled" &&
+        shouldFireImmediately(uploaded.scheduledFor ?? scheduledFor, now)
+          ? await invoke<PublishJob>("social_fire_due_job", {
+              jobId: uploaded.id,
+            })
+          : uploaded;
+
+      states[provider] = stateFromServerJob(fired);
       onState?.(provider, states[provider]);
+      if (
+        fired.status === "scheduled" &&
+        !shouldFireImmediately(fired.scheduledFor ?? scheduledFor, now)
+      ) {
+        continue;
+      }
       const finalJob = await pollServerPublishJob(
         invoke,
         provider,
-        uploaded,
+        fired,
         onState,
       );
       states[provider] = stateFromServerJob(finalJob);
-      if (states[provider].state === "published") {
+      if (
+        states[provider].state === "published" &&
+        states[provider].remote_url
+      ) {
         publishedUrls[provider] = states[provider].remote_url;
       }
       onState?.(provider, states[provider]);

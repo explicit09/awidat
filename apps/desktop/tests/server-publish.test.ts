@@ -55,7 +55,11 @@ async function invoke<T>(
     assert.deepEqual(args, { jobId: "job_1", filePath: "/tmp/render.mp4" });
     return { id: "job_1", status: "scheduled", scheduledFor: 1_001 } as T;
   }
-  if (command === "social_publish_job") {
+  if (command === "social_fire_due_job") {
+    assert.deepEqual(args, { jobId: "job_1" });
+    return { id: "job_1", status: "processing" } as T;
+  }
+  if (command === "social_poll_publish_job") {
     assert.equal(args?.jobId, "job_1");
     return {
       id: "job_1",
@@ -97,11 +101,12 @@ async function invoke<T>(
     "social_validate_target",
     "social_schedule_target",
     "social_upload_artifact",
-    "social_publish_job",
+    "social_fire_due_job",
+    "social_poll_publish_job",
   ]);
   assert.deepEqual(updates, [
     "youtube:uploading",
-    "youtube:scheduled",
+    "youtube:processing",
     "youtube:published",
     "youtube:published",
   ]);
@@ -154,6 +159,9 @@ calls.length = 0;
     if (command === "social_upload_artifact") {
       return { id: "job_1", status: "published" } as T;
     }
+    if (command === "social_fire_due_job") {
+      throw new Error("already-published jobs should not be fired");
+    }
     throw new Error(`unexpected command: ${command}`);
   }
 
@@ -171,6 +179,157 @@ calls.length = 0;
   });
   assert.equal(boundAccountId, "acct_yt_b");
   assert.notEqual(result.states.youtube.state, "failed");
+}
+
+calls.length = 0;
+
+{
+  const updates: string[] = [];
+  async function privateTikTokInvoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    calls.push(command);
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct_tt",
+          provider: "tiktok",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_validate_target") {
+      return { id: "target_1", validation_state: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job_private_tiktok", status: "scheduled" } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return {
+        id: "job_private_tiktok",
+        status: "processing",
+        providerPostId: "v_pub_file~private",
+      } as T;
+    }
+    if (command === "social_fire_due_job") {
+      throw new Error("processing jobs should not be fired");
+    }
+    if (command === "social_poll_publish_job") {
+      assert.equal(args?.jobId, "job_private_tiktok");
+      return {
+        id: "job_private_tiktok",
+        status: "published",
+        providerPostId: "v_pub_file~private",
+        providerPostUrl: null,
+      } as T;
+    }
+    throw new Error(`unexpected command: ${command}`);
+  }
+
+  const result = await publishRenderTargetsViaServer({
+    renderQueueId: "queue_1",
+    renderJobId: "render_1",
+    outputPath: "/tmp/render.mp4",
+    title: "TikTok private clip",
+    targets: ["tiktok"],
+    metadataByProvider: {
+      tiktok: {
+        title: "TikTok private clip",
+        description: "",
+        tags: [],
+        visibility: "private",
+        scheduledAt: undefined,
+      },
+    },
+    invoke: privateTikTokInvoke,
+    idFactory: (prefix) => `${prefix}_1`,
+    nowSeconds: () => 1_000,
+    onState: (provider, state) => updates.push(`${provider}:${state.state}`),
+  });
+
+  assert.deepEqual(updates, [
+    "tiktok:uploading",
+    "tiktok:processing",
+    "tiktok:published",
+    "tiktok:published",
+  ]);
+  assert.deepEqual(result.states.tiktok, {
+    state: "published",
+    remote_id: "v_pub_file~private",
+  });
+  assert.deepEqual(result.publishedUrls, {});
+}
+
+calls.length = 0;
+
+{
+  async function futureScheduledInvoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    calls.push(command);
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct_yt",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_validate_target") {
+      return { id: "target_1", validation_state: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job_future", status: "scheduled", scheduledFor: 1_900 } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return { id: "job_future", status: "scheduled", scheduledFor: 1_900 } as T;
+    }
+    if (command === "social_fire_due_job") {
+      throw new Error("future scheduled jobs should not fire immediately");
+    }
+    if (command === "social_publish_job") {
+      return { id: "job_future", status: "scheduled", scheduledFor: 1_900 } as T;
+    }
+    throw new Error(`unexpected command: ${command}`);
+  }
+
+  const result = await publishRenderTargetsViaServer({
+    renderQueueId: "queue_1",
+    renderJobId: "render_1",
+    outputPath: "/tmp/render.mp4",
+    title: "Scheduled YouTube",
+    targets: ["youtube"],
+    metadataByProvider: {
+      youtube: {
+        title: "Scheduled YouTube",
+        description: "",
+        tags: [],
+        visibility: "private",
+        scheduledAt: 1_900,
+      },
+    },
+    invoke: futureScheduledInvoke,
+    idFactory: (prefix) => `${prefix}_1`,
+    nowSeconds: () => 1_000,
+  });
+
+  assert.deepEqual(calls, [
+    "social_accounts",
+    "social_bind_target",
+    "social_validate_target",
+    "social_schedule_target",
+    "social_upload_artifact",
+  ]);
+  assert.deepEqual(result.states.youtube, {
+    state: "scheduled",
+    job_id: "job_future",
+    scheduled_for: 1_900,
+  });
 }
 
 calls.length = 0;
@@ -200,7 +359,11 @@ calls.length = 0;
     if (command === "social_upload_artifact") {
       return { id: "job_failed", status: "scheduled" } as T;
     }
-    if (command === "social_publish_job") {
+    if (command === "social_fire_due_job") {
+      assert.equal(args?.jobId, "job_failed");
+      return { id: "job_failed", status: "failed", normalizedError: "youtube_title_required" } as T;
+    }
+    if (command === "social_poll_publish_job") {
       assert.equal(args?.jobId, "job_failed");
       return {
         id: "job_failed",

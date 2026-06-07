@@ -283,6 +283,8 @@ pub fn run() {
             commands::social::social_publish_job,
             commands::social::social_cancel_job,
             commands::social::social_retry_job,
+            commands::social::social_fire_due_job,
+            commands::social::social_poll_publish_job,
             commands::social::social_reschedule_job,
             commands::social::social_account_audit,
             commands::social::social_upload_artifact,
