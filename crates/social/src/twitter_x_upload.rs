@@ -520,6 +520,12 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         let state = json["data"]["processing_info"]["state"]
             .as_str()
             .unwrap_or("succeeded");
+        if state == "failed" {
+            return Err(TwitterXUploadClientError::NetworkOrServer(format!(
+                "twitter_x media processing failed: {}",
+                twitter_x_processing_error_reason(&json)
+            )));
+        }
         Ok(matches!(state, "pending" | "in_progress"))
     }
 
@@ -588,6 +594,14 @@ fn declared_content_length(resp: &reqwest::Response) -> Option<u64> {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .or_else(|| resp.content_length())
+}
+
+fn twitter_x_processing_error_reason(json: &serde_json::Value) -> String {
+    json["data"]["processing_info"]["error"]["name"]
+        .as_str()
+        .or_else(|| json["data"]["processing_info"]["error"]["code"].as_str())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 async fn create_tweet(
@@ -743,6 +757,73 @@ mod tests {
             Some("https://x.com/i/web/status/tweet_123")
         );
         assert!(!response.processing);
+    }
+
+    #[tokio::test]
+    async fn live_twitter_x_upload_client_rejects_failed_media_processing_before_tweet() {
+        let media = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/render.mp4"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1, 2, 3, 4]))
+            .mount(&media)
+            .await;
+
+        let api = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/initialize"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "media_123", "media_key": "13_media_123" }
+            })))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/media_123/append"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/media_123/finalize"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "media_123",
+                    "processing_info": {
+                        "state": "failed",
+                        "error": { "code": "InvalidMedia", "name": "invalid_media" }
+                    }
+                }
+            })))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/tweets"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": { "id": "tweet_123", "text": "Launch clip" }
+            })))
+            .expect(0)
+            .mount(&api)
+            .await;
+
+        let client =
+            LiveTwitterXUploadClient::with_base(FixedTokenResolver("x-access".into()), api.uri());
+        let response = tokio::task::spawn_blocking(move || {
+            client.create_post_with_media(&TwitterXUploadRequest {
+                media_url: format!("{}/render.mp4", media.uri()),
+                text: "Launch clip".into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Err(TwitterXUploadClientError::NetworkOrServer(
+                "twitter_x media processing failed: invalid_media".into()
+            ))
+        );
     }
 
     #[tokio::test]
