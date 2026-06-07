@@ -22,6 +22,18 @@ assert.deepEqual(buildTurnContext(chips), [
 
 assert.deepEqual(
   buildTurnContext([
+    {
+      label: "Clip: Demo",
+      kind: "media",
+      mediaId: "asset-demo-1",
+      mediaToken: "Demo",
+    },
+  ]),
+  ["media: Clip: Demo | asset_id=asset-demo-1 | token=@Demo"],
+);
+
+assert.deepEqual(
+  buildTurnContext([
     { label: "Project: Episode 12", kind: "project" },
     { label: "  ", kind: "media" },
     { label: "Clip: intro-cam-a", kind: "media" },

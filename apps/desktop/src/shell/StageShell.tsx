@@ -58,7 +58,7 @@ const SIDE_PANE_MIN_W = 260;
 const SIDE_PANE_MAX_W = 520;
 const SIDE_PANE_GUTTER = 12;
 type LeftPaneKey = "transcript" | "media" | "index";
-type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit" | "history";
+type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit";
 const LEFT_PANES: { id: LeftPaneKey; label: string }[] = [
   { id: "media", label: "Media" },
   { id: "transcript", label: "Transcript" },
@@ -69,7 +69,6 @@ const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
   { id: "deliver", label: "Deliver" },
   { id: "inspector", label: "Inspector" },
   { id: "vedit", label: "Vedit" },
-  { id: "history", label: "History" },
 ];
 type PaneSide = "left" | "right";
 type PaneResize = { side: PaneSide; startX: number; startWidth: number };
@@ -228,7 +227,7 @@ export function StageShell(props: StageShellProps) {
   const stageEmpty = pending.length === 0 && tracks === 0;
   const leftNode = toolNode(leftPane, tools);
   const rightNode = rightPane === "chat" ? null : rightPaneNode(rightPane, {
-    deliver, history, tools,
+    deliver, tools,
   });
 
   const submit = () => {
@@ -243,10 +242,10 @@ export function StageShell(props: StageShellProps) {
     } else if (lower === "inspector" || lower === "vedit") {
       onStage("edit");
       setRightPane(lower as RightPaneKey);
-    } else if (lower === "deliver" || lower === "history") {
+    } else if (lower === "deliver") {
       onStage("edit");
       setRightPane(lower as RightPaneKey);
-    } else if (lower === "schedule" || lower === "skills" || lower === "stage" || lower === "edit") {
+    } else if (lower === "history" || lower === "schedule" || lower === "skills" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
@@ -486,10 +485,9 @@ function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
 
 function rightPaneNode(
   key: RightPaneKey,
-  nodes: Pick<StageShellProps, "deliver" | "history" | "tools">,
+  nodes: Pick<StageShellProps, "deliver" | "tools">,
 ): ReactNode {
   if (key === "deliver") return nodes.deliver;
-  if (key === "history") return nodes.history;
   if (key === "inspector" || key === "vedit") return toolNode(key, nodes.tools);
   return null;
 }

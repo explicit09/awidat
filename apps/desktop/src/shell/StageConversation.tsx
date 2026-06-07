@@ -104,7 +104,7 @@ export function ConversationPanel({
           <span className="text-[10px] text-[var(--color-text-muted)]">{agentRead}</span>
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="stage-chat-scroll min-h-0 flex-1 overflow-auto">
         <ChatStream />
       </div>
       <div className="stage-chat-composer border-t border-[var(--glass-border)] p-2">

@@ -1361,7 +1361,12 @@ function App() {
   function attachMediaPick(suggestion: MediaSuggestion) {
     setPickedMediaChips((prev) => {
       if (prev.some((c) => c.label === suggestion.chipLabel)) return prev;
-      return [...prev, { label: suggestion.chipLabel, kind: "media" as const }];
+      return [...prev, {
+        label: suggestion.chipLabel,
+        kind: "media" as const,
+        mediaId: suggestion.id,
+        mediaToken: suggestion.token,
+      }];
     });
   }
 

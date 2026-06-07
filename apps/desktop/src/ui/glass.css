@@ -455,6 +455,10 @@ html, body, #root { background: #0a0a12; }
   gap: 10px;
   padding: 14px 16px 16px;
 }
+.stage-chat-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .stage-convo .item {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
@@ -660,12 +664,29 @@ html, body, #root { background: #0a0a12; }
 .stage-tool-body .media-empty,
 .stage-tool-body .properties-pane,
 .stage-tool-body .index-rail { background: transparent !important; }
+.stage-tool-body .glass-content,
+.stage-tool-body .panel,
+.stage-tool-body .card {
+  border-radius: 8px;
+}
 .stage-tool-body button:not(.stage-left-tab):not(.stage-right-tab):not(.stage-pane-resize):not(.gk-close) {
   border-radius: 7px;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(255,255,255,0.045);
   color: var(--color-text-secondary);
+  min-height: 28px;
+  font-size: 12px;
+  font-weight: 600;
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+.stage-tool-body input,
+.stage-tool-body textarea,
+.stage-tool-body select {
+  border-radius: 8px !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(10, 10, 18, 0.72) !important;
+  color: var(--color-text-primary) !important;
+  font-size: 12px;
 }
 .stage-tool-body button:not(.stage-left-tab):not(.stage-right-tab):not(.stage-pane-resize):not(.gk-close):hover:not(:disabled) {
   background: rgba(255,255,255,0.08);
