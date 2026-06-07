@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 from fractions import Fraction
 from typing import Any
@@ -140,7 +141,9 @@ def _frame_score(prev_bgr: np.ndarray, curr_bgr: np.ndarray) -> float:
 
 
 def _sampled_shots(asset_path: str) -> dict[str, Any]:
+    setup_start = time.perf_counter()
     frames, w, h, frame_rate, duration_s = _extract_frames_bgr(asset_path, SAMPLE_FPS)
+    setup_ms = round((time.perf_counter() - setup_start) * 1000)
     _log.info(
         "scenedetect-mcp: sampled backend streaming frames at %.2ffps %dx%d",
         SAMPLE_FPS,
@@ -151,15 +154,29 @@ def _sampled_shots(asset_path: str) -> dict[str, Any]:
     prev: np.ndarray | None = None
     last_cut = 0.0
     frame_count = 0
-    for idx, frame in enumerate(frames):
+    decode_read_ms = 0
+    analysis_ms = 0
+    iterator = iter(frames)
+    idx = 0
+    while True:
+        read_start = time.perf_counter()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+            break
+        decode_read_ms += round((time.perf_counter() - read_start) * 1000)
         t_s = idx / SAMPLE_FPS
         if prev is not None:
+            analysis_start = time.perf_counter()
             score = _frame_score(prev, frame)
+            analysis_ms += round((time.perf_counter() - analysis_start) * 1000)
             if score >= THRESHOLD and t_s - last_cut >= MIN_SHOT_S:
                 cuts.append(t_s)
                 last_cut = t_s
         prev = frame
         frame_count += 1
+        idx += 1
 
     if duration_s <= 0.0 and frame_count > 0:
         duration_s = frame_count / SAMPLE_FPS
@@ -189,6 +206,12 @@ def _sampled_shots(asset_path: str) -> dict[str, Any]:
         "detect_height": h,
         "frame_count": frame_count,
         "shots": shots,
+        "perf": {
+            "setup_ms": setup_ms,
+            "decode_read_ms": decode_read_ms,
+            "analysis_ms": analysis_ms,
+            "frames_processed": frame_count,
+        },
     }
 
 

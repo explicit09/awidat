@@ -2,7 +2,7 @@
 
 Two-pass pipeline:
 
-1. **Detect + embed.** Sample 1 fps via ffmpeg, run dlib's HOG face
+1. **Detect + embed.** Sample frames via ffmpeg, run dlib's HOG face
    detector, landmarks, gaze heuristic, and 128-dim recognition encoder
    on each frame. Per-frame output includes box, face id, gaze score,
    and at-camera flag.
@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -67,8 +68,8 @@ DBSCAN_MIN_SAMPLES = 1  # singleton clusters are valid (a guest who appears once
 # candidates` returning multi-cam wide-shot moments as "B-roll"
 # candidates — exactly the wrong kind of footage.
 # 960 puts the same 5-10% face at 48-96px, in HOG's reliable range.
-# Cost: ~4x more pixels per detect, ~2x wallclock per frame, fine
-# at the 0.5fps sample rate.
+# Cost: ~4x more pixels per detect, ~2x wallclock per frame, acceptable
+# at the 0.25fps sample rate.
 DETECT_WIDTH = int(os.environ.get("FACE_DETECT_WIDTH", "960"))
 
 AT_CAMERA_THRESHOLD = 0.15
@@ -307,8 +308,12 @@ def _map_speakers_to_faces(
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    probe_start = time.perf_counter()
     duration_s = _probe_duration_s(req.asset_path)
+    probe_ms = round((time.perf_counter() - probe_start) * 1000)
+    setup_start = time.perf_counter()
     frames, w, h = _iter_frames(req.asset_path, SAMPLE_FPS, DETECT_WIDTH)
+    setup_ms = round((time.perf_counter() - setup_start) * 1000)
     _log.info(
         "face-mcp: asset=%s duration=%.2fs streaming frames at %dx%d",
         req.asset_id,
@@ -322,8 +327,20 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     pool: list[np.ndarray] = []  # all embeddings, in detection order
     per_frame_raw: list[list[dict[str, Any]]] = []  # boxes only, paired with pool
     frame_count = 0
-    for frame in frames:
+    decode_read_ms = 0
+    inference_ms = 0
+    iterator = iter(frames)
+    while True:
+        read_start = time.perf_counter()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+            break
+        decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+        inference_start = time.perf_counter()
         dets = _detect_and_embed(frame)
+        inference_ms += round((time.perf_counter() - inference_start) * 1000)
         per_frame_raw.append(
             [
                 {
@@ -339,10 +356,13 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         frame_count += 1
 
     # Pass 2: cluster.
+    cluster_start = time.perf_counter()
     pool_arr = np.array(pool) if pool else np.zeros((0, 128), dtype=np.float64)
     labels = _cluster_faces(pool_arr)
+    cluster_ms = round((time.perf_counter() - cluster_start) * 1000)
 
     # Stitch labels back onto the per-frame faces.
+    stitch_start = time.perf_counter()
     cursor = 0
     per_frame: list[dict[str, Any]] = []
     for i, faces in enumerate(per_frame_raw):
@@ -359,8 +379,10 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             )
             cursor += 1
         per_frame.append({"t_s": i / SAMPLE_FPS, "faces": out_faces})
+    stitch_ms = round((time.perf_counter() - stitch_start) * 1000)
 
     # Pass 3: speaker-to-face mapping (cross-indexer; fail-soft).
+    speaker_start = time.perf_counter()
     project_root = Path(req.project_root).absolute() if req.project_root else None
     if project_root is None:
         project_root = Path(req.asset_path).absolute()
@@ -372,11 +394,13 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     index_root = Path(req.index_root).absolute() if req.index_root else None
     diarization = _read_diarization(project_root, req.asset_id, index_root)
     speaker_to_face = _map_speakers_to_faces(per_frame, diarization)
+    speaker_map_ms = round((time.perf_counter() - speaker_start) * 1000)
 
     # Track-level summary: total seconds each face_id is on screen.
     # Count each face_id at most once per frame — duplicate detections
     # in the same frame (rare; usually a profile + frontal of the same
     # person) shouldn't double-count.
+    summary_start = time.perf_counter()
     onscreen_s: dict[str, float] = defaultdict(float)
     for entry in per_frame:
         seen_in_frame = {f["face_id"] for f in entry["faces"]}
@@ -393,6 +417,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         }
         for fid in sorted(onscreen_s.keys())
     ]
+    summary_ms = round((time.perf_counter() - summary_start) * 1000)
 
     return {
         "frame_rate_sampled": SAMPLE_FPS,
@@ -403,6 +428,17 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "faces": faces_summary,
         "speaker_to_face": speaker_to_face,
         "per_frame": per_frame,
+        "perf": {
+            "probe_ms": probe_ms,
+            "setup_ms": setup_ms,
+            "decode_read_ms": decode_read_ms,
+            "inference_ms": inference_ms,
+            "cluster_ms": cluster_ms,
+            "stitch_ms": stitch_ms,
+            "speaker_map_ms": speaker_map_ms,
+            "summary_ms": summary_ms,
+            "frames_processed": frame_count,
+        },
     }
 
 

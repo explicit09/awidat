@@ -29,6 +29,7 @@ import base64
 import logging
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -177,13 +178,18 @@ def _pack_embeddings_b64(arr: np.ndarray) -> str:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    probe_start = time.perf_counter()
     duration_s = _probe_duration_s(req.asset_path)
+    probe_ms = round((time.perf_counter() - probe_start) * 1000)
     _log.info(
         "clip-mcp: asset=%s duration=%.2fs sampling @ %.2f fps",
         req.asset_id,
         duration_s,
         SAMPLE_FPS,
     )
+    model_start = time.perf_counter()
+    _load_model()
+    model_load_ms = round((time.perf_counter() - model_start) * 1000)
 
     # Encode streamed frames in batches of 32. This avoids buffering the
     # whole decoded video as raw RGB plus PIL objects.
@@ -191,14 +197,28 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     chunks: list[np.ndarray] = []
     batch: list[Image.Image] = []
     frame_count = 0
-    for frame in _iter_frames(req.asset_path, SAMPLE_FPS):
+    decode_read_ms = 0
+    inference_ms = 0
+    iterator = iter(_iter_frames(req.asset_path, SAMPLE_FPS))
+    while True:
+        read_start = time.perf_counter()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+            break
+        decode_read_ms += round((time.perf_counter() - read_start) * 1000)
         batch.append(frame)
         if len(batch) >= BATCH:
+            inference_start = time.perf_counter()
             chunks.append(_encode_batch(batch))
+            inference_ms += round((time.perf_counter() - inference_start) * 1000)
             frame_count += len(batch)
             batch.clear()
     if batch:
+        inference_start = time.perf_counter()
         chunks.append(_encode_batch(batch))
+        inference_ms += round((time.perf_counter() - inference_start) * 1000)
         frame_count += len(batch)
     embeddings = (
         np.concatenate(chunks, axis=0)
@@ -219,6 +239,13 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "frame_count": frame_count,
         "timestamps_s": timestamps,
         "embeddings_b64": _pack_embeddings_b64(embeddings),
+        "perf": {
+            "probe_ms": probe_ms,
+            "model_load_ms": model_load_ms,
+            "decode_read_ms": decode_read_ms,
+            "inference_ms": inference_ms,
+            "frames_processed": frame_count,
+        },
     }
 
 

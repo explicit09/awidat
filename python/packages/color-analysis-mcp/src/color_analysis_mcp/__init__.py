@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -557,25 +558,53 @@ def _ignored_frames(per_frame: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    setup_start = time.perf_counter()
     frames, w, h = _extract_frames_bgr(req.asset_path, SAMPLE_FPS)
+    setup_ms = round((time.perf_counter() - setup_start) * 1000)
     _log.info(
         "color-analysis-mcp: asset=%s streaming frames at %dx%d",
         req.asset_id,
         w,
         h,
     )
-    per_frame = [
-        _score_frame(frame, i / SAMPLE_FPS) for i, frame in enumerate(frames)
-    ]
+    per_frame = []
+    decode_read_ms = 0
+    analysis_ms = 0
+    iterator = iter(frames)
+    i = 0
+    while True:
+        read_start = time.perf_counter()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+            break
+        decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+        analysis_start = time.perf_counter()
+        per_frame.append(_score_frame(frame, i / SAMPLE_FPS))
+        analysis_ms += round((time.perf_counter() - analysis_start) * 1000)
+        i += 1
+    aggregate_start = time.perf_counter()
+    summary = _summarize(per_frame)
+    scenes = _scenes(per_frame)
+    ignored_frames = _ignored_frames(per_frame)
+    aggregate_ms = round((time.perf_counter() - aggregate_start) * 1000)
     return {
         "frame_rate_sampled": SAMPLE_FPS,
         "detect_width": w,
         "detect_height": h,
         "frame_count": len(per_frame),
-        "summary": _summarize(per_frame),
-        "scenes": _scenes(per_frame),
-        "ignored_frames": _ignored_frames(per_frame),
+        "summary": summary,
+        "scenes": scenes,
+        "ignored_frames": ignored_frames,
         "per_frame": per_frame,
+        "perf": {
+            "setup_ms": setup_ms,
+            "decode_read_ms": decode_read_ms,
+            "analysis_ms": analysis_ms,
+            "aggregate_ms": aggregate_ms,
+            "frames_processed": len(per_frame),
+        },
     }
 
 

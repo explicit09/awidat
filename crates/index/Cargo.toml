@@ -9,6 +9,10 @@ license.workspace = true
 name = "awidat_index"
 path = "src/lib.rs"
 
+[[bin]]
+name = "awidat-index-perf"
+path = "src/bin/awidat-index-perf.rs"
+
 [dependencies]
 awidat-proto = { workspace = true }
 awidat-mcp = { workspace = true }

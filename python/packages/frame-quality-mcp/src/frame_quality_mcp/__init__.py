@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -176,7 +177,9 @@ def _thumbnail_candidates(
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    setup_start = time.perf_counter()
     frames, w, h = _extract_frames_bgr(req.asset_path, SAMPLE_FPS)
+    setup_ms = round((time.perf_counter() - setup_start) * 1000)
     _log.info(
         "frame-quality-mcp: asset=%s streaming frames at %dx%d",
         req.asset_id,
@@ -184,10 +187,24 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         h,
     )
     per_frame = []
-    for i, frame in enumerate(frames):
+    decode_read_ms = 0
+    analysis_ms = 0
+    iterator = iter(frames)
+    i = 0
+    while True:
+        read_start = time.perf_counter()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+            break
+        decode_read_ms += round((time.perf_counter() - read_start) * 1000)
+        analysis_start = time.perf_counter()
         scored = {"t_s": i / SAMPLE_FPS, **_score_frame(frame)}
         scored["thumbnail_score"] = _thumbnail_score(scored)
+        analysis_ms += round((time.perf_counter() - analysis_start) * 1000)
         per_frame.append(scored)
+        i += 1
     # Aggregate stats so the agent can read a one-line summary without
     # iterating per_frame.
     if per_frame:
@@ -213,6 +230,12 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "summary": summary,
         "thumbnail_candidates": _thumbnail_candidates(per_frame),
         "per_frame": per_frame,
+        "perf": {
+            "setup_ms": setup_ms,
+            "decode_read_ms": decode_read_ms,
+            "analysis_ms": analysis_ms,
+            "frames_processed": len(per_frame),
+        },
     }
 
 
