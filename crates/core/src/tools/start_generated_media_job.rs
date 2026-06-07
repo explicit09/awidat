@@ -53,7 +53,12 @@ impl ToolHandler for StartGeneratedMediaJobTool {
                     "workflow_purpose": { "type": "string", "enum": ["broll"] },
                     "prompt": { "type": "string" },
                     "model": { "type": "string" },
-                    "duration": { "type": "integer", "minimum": 1 },
+                    "duration": {
+                        "type": "integer",
+                        "minimum": 4,
+                        "maximum": 15,
+                        "description": "Seedance 2.0 generated video duration in seconds. Pass the reviewed finding's duration_s rounded to an integer."
+                    },
                     "resolution": { "type": "string" },
                     "aspect_ratio": { "type": "string" },
                     "generate_audio": { "type": "boolean" }
@@ -121,6 +126,13 @@ impl ToolHandler for StartGeneratedMediaJobTool {
             return Err(FunctionCallError::RespondToModel(
                 "start_generated_media_job: this foundation currently supports artifact_kind=video and workflow_purpose=broll.".into(),
             ));
+        }
+        if let Some(duration) = args.duration
+            && !(4..=15).contains(&duration)
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "start_generated_media_job: duration={duration} out of range. Use 4-15 seconds for Seedance 2.0 generated B-roll."
+            )));
         }
 
         if args.provider == "seedance" {
@@ -310,6 +322,35 @@ mod tests {
             .unwrap_err();
 
         assert!(format!("{err}").contains("Use provider 'openrouter'"));
+        assert!(
+            !dir.path()
+                .join(".montage/generated-media/registry.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_seedance_duration_below_supported_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = StartGeneratedMediaJobTool
+            .handle(
+                crate::tool::ToolInvocation {
+                    call_id: "c1".into(),
+                    name: "start_generated_media_job".into(),
+                    args: serde_json::json!({
+                        "provider": "mock",
+                        "artifact_kind": "video",
+                        "workflow_purpose": "broll",
+                        "prompt": "quick data center detail",
+                        "duration": 3
+                    }),
+                },
+                crate::generated_media::test_support::ctx_at(dir.path()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("Use 4-15 seconds"));
         assert!(
             !dir.path()
                 .join(".montage/generated-media/registry.json")

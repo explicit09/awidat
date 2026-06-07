@@ -1224,11 +1224,14 @@ Never burns captions into the picture.",
 Build a read-only long-form to short-form review plan for one asset. \
 The tool ranks complete standalone candidate moments, allows extended \
 short-form up to five minutes when the idea earns it, recommends B-roll \
-by default when support visuals clarify the idea, plans speaker-aware \
-9:16 layouts for wide long-form sources, and returns reviewable draft EDL \
-packages plus title, caption, platform, confidence, and human review \
-actions. It does not apply edits; use apply_edl separately after review so \
-autopilot/co-pilot/manual approval behavior remains in control.",
+by default when support visuals clarify the idea, returns a speaker-aware \
+9:16 composition contract with split/fill/dynamic layout segments, \
+optionally boosts candidates from \
+supplied X/web/news trend_context, and returns reviewable draft EDL packages \
+plus title, caption, platform, confidence, trend alignment, visual decision \
+plans, and human review actions. It does not apply edits; use apply_edl \
+separately after review so autopilot/co-pilot/manual approval behavior remains \
+in control.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_short_form_review(

@@ -78,6 +78,7 @@ pub mod review;
 pub mod scene_aware_short_form;
 pub mod short_form_intelligence;
 pub mod short_form_review;
+pub mod short_form_review_context;
 pub mod skills;
 pub mod subagent;
 pub mod system_prompt;

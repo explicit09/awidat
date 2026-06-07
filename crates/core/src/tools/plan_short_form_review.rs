@@ -34,6 +34,8 @@ struct Args {
     max_duration_s: Option<f64>,
     #[serde(default)]
     profile: Option<ShortFormProfile>,
+    #[serde(default)]
+    trend_context: serde_json::Value,
 }
 
 #[async_trait]
@@ -79,6 +81,10 @@ impl ToolHandler for PlanShortFormReviewTool {
                         "type": "string",
                         "enum": ["editorial_review", "viral_social"],
                         "description": "Editing profile. editorial_review is cleaner and complete; viral_social optimizes TikTok/Reels retention with aggressive pacing."
+                    },
+                    "trend_context": {
+                        "type": "object",
+                        "description": "Optional X/web/news trend context gathered before planning. Shape: {signals:[{source,label,keywords,weight,reason}]}. Matching signals boost relevant clip candidates; omitted context falls back to episode evidence."
                     }
                 },
                 "required": ["asset_id"]
@@ -123,6 +129,7 @@ impl ToolHandler for PlanShortFormReviewTool {
             frame_quality: sidecar_data(&ctx, "frame-quality", &asset)?,
             composition: sidecar_data(&ctx, "composition", &asset)?,
             broll_assets: sidecar_data(&ctx, "broll-candidates", &asset)?,
+            trend_context: args.trend_context,
         };
         let intelligence = build_short_form_intelligence(&ctx.project_root, &input.asset_id);
         apply_to_short_form_review_input(&mut input, &intelligence);
@@ -161,10 +168,13 @@ fn sidecar_data(
 const DESCRIPTION: &str = "\
 Build a read-only long-form to short-form review plan for one asset. \
 The tool ranks complete standalone candidate moments, allows extended \
-short-form up to five minutes when the idea earns it, recommends B-roll \
-by default when support visuals clarify the idea, plans speaker-aware \
-9:16 layouts for wide long-form sources, and returns reviewable draft EDL \
-packages plus title, caption, platform, confidence, and human review \
-actions. It does not apply edits; use apply_edl separately after review so \
-autopilot/co-pilot/manual approval behavior remains in control.\
+    short-form up to five minutes when the idea earns it, recommends B-roll \
+    by default when support visuals clarify the idea, returns a speaker-aware \
+    9:16 composition contract with split/fill/dynamic layout segments, \
+    optionally boosts candidates from \
+supplied X/web/news trend_context, and returns reviewable draft EDL packages \
+plus title, caption, platform, confidence, trend alignment, visual decision \
+plans, and human review actions. It does not apply edits; use apply_edl \
+separately after review so autopilot/co-pilot/manual approval behavior remains \
+in control.\
 ";
