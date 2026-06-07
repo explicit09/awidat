@@ -24,17 +24,15 @@ assert(
   source.includes("glass-cta"),
   "WelcomeCard primary action should use the shared glass CTA",
 );
+assert(!source.includes("lucide-react"), "WelcomeCard idea rows should not use pictogram icons");
 assert(
-  source.includes("FileSearch") && source.includes("Scissors") && source.includes("CircleCheck"),
-  "WelcomeCard icons should use the quieter editing-oriented icon set",
+  source.includes("step: \"01\"") && source.includes("step: \"02\"") && source.includes("step: \"03\""),
+  "WelcomeCard idea rows should use quiet numbered steps",
 );
 assert(
-  source.includes("h-7 w-7") && source.includes("mt-0.5"),
-  "WelcomeCard icon chips should be smaller and aligned to the title line",
-);
-assert(
-  !source.includes("BookOpen") && !source.includes("GitBranch"),
-  "WelcomeCard should not use the older mismatched welcome icons",
+  source.includes("border-l border-[rgba(239,68,68,0.42)]") &&
+    source.includes("font-mono text-[10px]"),
+  "WelcomeCard idea rows should use a small editorial rail instead of icon chips",
 );
 
 console.log("welcome-card-style: OK");

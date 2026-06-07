@@ -9,24 +9,23 @@
 // Storage lives in `useWelcome`. The shell uses the shared glass system
 // so first launch feels like the rest of the Montage desktop surface.
 
-import { CircleCheck, FileSearch, Scissors } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import mark from "../brand/montage-mark.svg";
 import { useWelcome } from "../state/welcome";
 
-const CORE_IDEAS: ReadonlyArray<{ icon: ReactNode; title: string; body: string }> = [
+const CORE_IDEAS: ReadonlyArray<{ step: string; title: string; body: string }> = [
   {
-    icon: <FileSearch size={14} strokeWidth={1.9} />,
+    step: "01",
     title: "An agent reads your media.",
     body: "Drop a file and Montage indexes transcript, scenes, speakers, and silences. Your editorial brief lives in AGENTS.md.",
   },
   {
-    icon: <Scissors size={14} strokeWidth={1.9} />,
+    step: "02",
     title: "It proposes editorial cuts with rationale.",
     body: "The agent suggests trims, B-roll, color, and captions, each with a one-sentence reason. You see them in the Brief and on the timeline as ghost overlays.",
   },
   {
-    icon: <CircleCheck size={14} strokeWidth={1.9} />,
+    step: "03",
     title: "You accept, reject, or revise inline.",
     body: "Every decision becomes part of the History. Nothing happens without your call.",
   },
@@ -97,7 +96,7 @@ export function WelcomeCard() {
         </header>
         <div className="flex flex-col gap-2.5 bg-[rgba(8,9,12,0.26)] p-4">
           {CORE_IDEAS.map((idea, index) => (
-            <IdeaCard key={index} icon={idea.icon} title={idea.title} body={idea.body} />
+            <IdeaCard key={index} step={idea.step} title={idea.title} body={idea.body} />
           ))}
         </div>
         <footer className="flex items-center justify-end gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-4 py-3">
@@ -121,15 +120,15 @@ export function WelcomeCard() {
 }
 
 /** One of the three core-idea cards. */
-function IdeaCard({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+function IdeaCard({ step, title, body }: { step: string; title: string; body: string }) {
   return (
-    <div className="glass-content flex items-start gap-3 rounded-lg p-3">
-      <div
-        className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md border border-[rgba(239,68,68,0.28)] bg-[rgba(239,68,68,0.10)] text-[var(--color-brand)] shadow-[0_0_14px_rgba(239,68,68,0.12)]"
+    <div className="glass-content flex items-start gap-3 rounded-lg border-l border-[rgba(239,68,68,0.42)] p-3 pl-3.5">
+      <span
+        className="mt-0.5 w-6 shrink-0 font-mono text-[10px] font-semibold leading-4 text-[var(--color-brand)]"
         aria-hidden
       >
-        {icon}
-      </div>
+        {step}
+      </span>
       <div className="min-w-0 flex-1">
         <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
           {title}
