@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { History, Plus } from "lucide-react";
 import { ChatStream } from "../agent/ChatStream";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
@@ -67,6 +68,14 @@ export function ConversationPanel({
     input.style.overflowY = input.scrollHeight > 132 ? "auto" : "hidden";
   }, [draft]);
 
+  function toggleHistory() {
+    setHistoryOpen((open) => {
+      const next = !open;
+      if (next) onOpenHistory?.();
+      return next;
+    });
+  }
+
   function syncMentionFromCaret() {
     const input = inputRef.current;
     if (!input) return;
@@ -116,14 +125,8 @@ export function ConversationPanel({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="glass-ghost min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-semibold"
-            onClick={() => {
-              setHistoryOpen((open) => {
-                const next = !open;
-                if (next) onOpenHistory?.();
-                return next;
-              });
-            }}
+            className="stage-chat-session-trigger glass-ghost min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-semibold"
+            onClick={toggleHistory}
             disabled={chatLoading}
             aria-expanded={historyOpen}
             title="Chat history"
@@ -134,14 +137,28 @@ export function ConversationPanel({
           </button>
           <button
             type="button"
-            className="glass-ghost rounded-lg px-2.5 py-1.5 text-[12px] font-semibold"
+            className="stage-chat-icon-button stage-chat-icon"
+            onClick={toggleHistory}
+            disabled={chatLoading}
+            aria-label="Chat history"
+            title="Chat history"
+            aria-expanded={historyOpen}
+            data-active={historyOpen ? "true" : "false"}
+          >
+            <History className="h-3.5 w-3.5 stroke-[1.75]" />
+          </button>
+          <button
+            type="button"
+            className="stage-chat-icon-button stage-chat-icon"
             onClick={() => {
               onNewChat?.();
               setHistoryOpen(false);
             }}
             disabled={running || chatLoading}
+            aria-label="New chat"
+            title="New chat"
           >
-            New chat
+            <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
           </button>
         </div>
         {historyOpen ? (

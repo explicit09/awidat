@@ -134,6 +134,17 @@ import "./App.css";
 import "./ui/glass.css";
 import { AmbientBackground } from "./ui/glass";
 
+let optimisticUserInputCounter = 0;
+
+function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_input" }> {
+  optimisticUserInputCounter += 1;
+  return {
+    kind: "user_input",
+    id: `optimistic-user-${Date.now()}-${optimisticUserInputCounter}`,
+    text,
+  };
+}
+
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
   useAppGlue();
@@ -156,6 +167,7 @@ function App() {
   const projectType = useProjectStore((s) => s.projectType);
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
+  const upsertAgentItem = useAgentStore((s) => s.upsert);
   const replaceAgentItems = useAgentStore((s) => s.replace);
   const setRunning = useAgentStore((s) => s.setRunning);
   const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
@@ -482,6 +494,7 @@ function App() {
     setCommandError(null);
     setTurnError(null);
     setRunning(true);
+    upsertAgentItem(createOptimisticUserInput(input));
     try {
       const turnId = await invoke<string>("start_turn", {
         input,

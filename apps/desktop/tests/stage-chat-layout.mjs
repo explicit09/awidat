@@ -8,9 +8,10 @@ const timelinePane = readFileSync(resolve(root, "src/timeline/TimelinePane.tsx")
 const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const inspector = readFileSync(resolve(root, "src/inspector/ClipInspector.tsx"), "utf8");
 const emptyConversation = readFileSync(resolve(root, "src/agent/EmptyConversation.tsx"), "utf8");
+const agentStore = readFileSync(resolve(root, "src/agent/store.ts"), "utf8");
 const glass = readFileSync(resolve(root, "src/ui/glass.css"), "utf8");
 const appCss = readFileSync(resolve(root, "src/App.css"), "utf8");
-const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${emptyConversation}\n${glass}\n${appCss}`;
+const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${emptyConversation}\n${agentStore}\n${glass}\n${appCss}`;
 const stageSource = `${shell}\n${conversation}`;
 const rightPanesBlock = shell.match(/const RIGHT_PANES:[\s\S]+?\];/)?.[0] ?? "";
 
@@ -51,6 +52,9 @@ const checks = [
   ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(stageSource) === false],
   ["keeps composer inside conversation panel", /stage-chat-composer/],
   ["stage chat exposes visible session controls", /stage-chat-session-header[\s\S]+Chat history[\s\S]+New chat/],
+  ["stage chat uses compact icon controls", /stage-chat-icon-button[\s\S]+aria-label="Chat history"[\s\S]+<History[\s\S]+aria-label="New chat"[\s\S]+<Plus/],
+  ["app adds optimistic user input before backend history catches up", /createOptimisticUserInput[\s\S]+kind:\s*"user_input"[\s\S]+optimistic-user[\s\S]+upsertAgentItem\(createOptimisticUserInput\(input\)\)/],
+  ["agent store dedupes optimistic user input when backend item arrives", /isOptimisticUserInput[\s\S]+existing\.text === item\.text/],
   ["stage chat lists saved sessions", /chatSessions\.map\(\(session\)[\s\S]+onSelectChatSession\?\.\(session\)/],
   ["stage shell passes chat sessions into stage chat", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{onSelectChatSession\}/],
   ["app wires stage chat session handlers", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{\(session\) => void selectChatSession\(session\)\}[\s\S]+onNewChat=\{\(\) => void startNewChat\(\)\}/],
