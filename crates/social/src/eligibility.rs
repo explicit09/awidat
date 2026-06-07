@@ -17,6 +17,11 @@ pub struct ProviderEligibilityReport {
     pub eligibility: AccountEligibility,
 }
 
+pub fn has_instagram_content_publish_scope(scopes: &[&str]) -> bool {
+    scopes.contains(&"instagram_business_content_publish")
+        || scopes.contains(&"instagram_content_publish")
+}
+
 pub fn youtube_eligibility(
     provider_account_id: impl Into<String>,
     display_name: impl Into<String>,
@@ -232,6 +237,21 @@ mod tests {
         assert!(report.capabilities.upload_video);
         assert!(report.capabilities.public_posting);
         assert_eq!(report.profile.account_kind, AccountKind::Professional);
+    }
+
+    #[test]
+    fn instagram_publish_scope_helper_accepts_business_and_legacy_scopes() {
+        assert!(has_instagram_content_publish_scope(&[
+            "instagram_business_basic",
+            "instagram_business_content_publish",
+        ]));
+        assert!(has_instagram_content_publish_scope(&[
+            "instagram_basic",
+            "instagram_content_publish",
+        ]));
+        assert!(!has_instagram_content_publish_scope(&[
+            "instagram_business_basic",
+        ]));
     }
 
     #[test]

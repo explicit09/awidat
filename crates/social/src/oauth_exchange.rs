@@ -232,13 +232,22 @@ impl OAuthTokenExchange for PlatformOAuthExchange {
             .await
             .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
 
-        let access_token = string_field(&json, "access_token")?;
+        let mut access_token = string_field(&json, "access_token")?;
         let refresh_token = json["refresh_token"].as_str().map(ToOwned::to_owned);
-        let expires_in = json["expires_in"]
-            .as_i64()
-            .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing expires_in".to_string()))?;
+        let mut expires_in = token_expires_in(&self.config.provider, &json)?;
+        if self.config.provider == Provider::Instagram {
+            let long_lived = exchange_instagram_long_lived_token(
+                &self.client,
+                &self.config.token_endpoint,
+                &self.config.client_secret,
+                &access_token,
+            )
+            .await?;
+            access_token = long_lived.access_token;
+            expires_in = long_lived.expires_in;
+        }
         let refresh_expires_in = json["refresh_expires_in"].as_i64();
-        let scopes = json["scope"].as_str().unwrap_or("").to_string();
+        let scopes = token_scopes(&self.config.provider, &json);
         let profile = provider_profile(
             &self.config.provider,
             &json,
@@ -262,11 +271,100 @@ impl OAuthTokenExchange for PlatformOAuthExchange {
     }
 }
 
+struct InstagramLongLivedToken {
+    access_token: String,
+    expires_in: i64,
+}
+
+async fn exchange_instagram_long_lived_token(
+    client: &reqwest::Client,
+    token_endpoint: &str,
+    client_secret: &str,
+    short_lived_access_token: &str,
+) -> Result<InstagramLongLivedToken, OAuthExchangeError> {
+    let endpoint = instagram_long_lived_token_endpoint(token_endpoint)?;
+    let resp = client
+        .get(endpoint)
+        .query(&[
+            ("grant_type", "ig_exchange_token"),
+            ("client_secret", client_secret),
+            ("access_token", short_lived_access_token),
+        ])
+        .send()
+        .await
+        .map_err(|e| OAuthExchangeError::Http(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(OAuthExchangeError::Http(format!(
+            "instagram long-lived token endpoint {status}: {body}"
+        )));
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+    Ok(InstagramLongLivedToken {
+        access_token: string_field(&json, "access_token")?,
+        expires_in: json["expires_in"]
+            .as_i64()
+            .ok_or_else(|| OAuthExchangeError::InvalidResponse("missing expires_in".into()))?,
+    })
+}
+
+fn instagram_long_lived_token_endpoint(
+    token_endpoint: &str,
+) -> Result<reqwest::Url, OAuthExchangeError> {
+    let mut endpoint = reqwest::Url::parse(token_endpoint)
+        .map_err(|e| OAuthExchangeError::InvalidResponse(e.to_string()))?;
+    if endpoint.host_str() == Some("api.instagram.com") {
+        endpoint
+            .set_host(Some("graph.instagram.com"))
+            .map_err(|_| OAuthExchangeError::InvalidResponse("invalid Instagram host".into()))?;
+    }
+    endpoint.set_path("/access_token");
+    endpoint.set_query(None);
+    Ok(endpoint)
+}
+
 fn string_field(json: &serde_json::Value, field: &str) -> Result<String, OAuthExchangeError> {
     json[field]
         .as_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| OAuthExchangeError::InvalidResponse(format!("missing {field}")))
+}
+
+fn token_expires_in(
+    provider: &Provider,
+    json: &serde_json::Value,
+) -> Result<i64, OAuthExchangeError> {
+    if let Some(expires_in) = json["expires_in"].as_i64() {
+        return Ok(expires_in);
+    }
+    if provider == &Provider::Instagram {
+        return Ok(3_600);
+    }
+    Err(OAuthExchangeError::InvalidResponse(
+        "missing expires_in".to_string(),
+    ))
+}
+
+fn token_scopes(provider: &Provider, json: &serde_json::Value) -> String {
+    if let Some(scope) = json["scope"].as_str() {
+        return scope.to_string();
+    }
+    if provider == &Provider::Instagram {
+        return json["permissions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|permission| permission.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    String::new()
 }
 
 struct ProviderProfile {
@@ -692,6 +790,67 @@ pub mod tests {
 
         assert_eq!(output.token_response.provider_account_id, "open_id_1");
         assert_eq!(output.display_name.as_deref(), Some("Awidat Creator"));
+    }
+
+    #[tokio::test]
+    async fn platform_exchange_exchanges_instagram_login_token_for_long_lived_token() {
+        use wiremock::matchers::{body_string_contains, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/access_token"))
+            .and(body_string_contains("client_id=ig-client"))
+            .and(body_string_contains("client_secret=ig-secret"))
+            .and(body_string_contains("grant_type=authorization_code"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "ig-short-access",
+                "user_id": "ig_user_1",
+                "permissions": [
+                    "instagram_business_basic",
+                    "instagram_business_content_publish"
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/access_token"))
+            .and(query_param("grant_type", "ig_exchange_token"))
+            .and(query_param("client_secret", "ig-secret"))
+            .and(query_param("access_token", "ig-short-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "ig-long-access",
+                "token_type": "bearer",
+                "expires_in": 5_184_000
+            })))
+            .mount(&server)
+            .await;
+
+        let exchange = PlatformOAuthExchange::new(PlatformOAuthExchangeConfig {
+            provider: Provider::Instagram,
+            client_id: "ig-client".into(),
+            client_secret: "ig-secret".into(),
+            token_endpoint: format!("{}/oauth/access_token", server.uri()),
+            profile_endpoint: None,
+        });
+
+        let output = exchange
+            .exchange(TokenExchangeInput {
+                provider: Provider::Instagram,
+                code: "auth-code".into(),
+                redirect_uri: "https://app.example/oauth/callback/instagram".into(),
+                code_verifier: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.access_token, "ig-long-access");
+        assert_eq!(output.token_response.provider_account_id, "ig_user_1");
+        assert_eq!(
+            output.token_response.scopes,
+            "instagram_business_basic,instagram_business_content_publish"
+        );
+        assert_eq!(output.token_response.expires_in, 5_184_000);
     }
 
     #[tokio::test]
