@@ -1,7 +1,7 @@
 {
   "version": 1,
   "allProvidersVerified": false,
-  "updatedAt": "2026-06-05",
+  "updatedAt": "2026-06-07",
   "providers": [
     {
       "provider": "youtube",
@@ -12,6 +12,7 @@
         "oauthSignIn": false,
         "selectedAccount": false,
         "metadataValidation": false,
+        "metadataEdit": false,
         "privateOrSandboxPublish": false,
         "scheduledAppClosedFiring": false,
         "statusPolling": false,
@@ -33,6 +34,7 @@
         "oauthSignIn": false,
         "selectedAccount": false,
         "metadataValidation": false,
+        "metadataEdit": false,
         "privateOrSandboxPublish": false,
         "scheduledAppClosedFiring": false,
         "statusPolling": false,
@@ -54,6 +56,7 @@
         "oauthSignIn": false,
         "selectedAccount": false,
         "metadataValidation": false,
+        "metadataEdit": false,
         "privateOrSandboxPublish": false,
         "scheduledAppClosedFiring": false,
         "statusPolling": false,
@@ -75,6 +78,7 @@
         "oauthSignIn": false,
         "selectedAccount": false,
         "metadataValidation": false,
+        "metadataEdit": false,
         "privateOrSandboxPublish": false,
         "scheduledAppClosedFiring": false,
         "statusPolling": false,

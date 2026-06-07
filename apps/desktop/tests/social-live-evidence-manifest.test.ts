@@ -13,6 +13,7 @@ type ProviderEvidence = {
 type EvidenceManifest = {
   version: number;
   allProvidersVerified: boolean;
+  updatedAt: string;
   providers: ProviderEvidence[];
 };
 
@@ -23,6 +24,11 @@ const readme = readFileSync("docs/social-server/README.md", "utf8");
 const contract = readFileSync("docs/social-server/live-verification.html", "utf8");
 
 assert.equal(manifest.version, 1);
+assert.match(manifest.updatedAt, /^\d{4}-\d{2}-\d{2}$/);
+assert.ok(
+  manifest.updatedAt >= "2026-06-07",
+  "manifest updatedAt must cover the metadataEdit evidence schema update",
+);
 assert.equal(
   manifest.allProvidersVerified,
   manifest.providers.every((entry) => entry.status === "verified"),
@@ -39,6 +45,7 @@ const requiredChecks = [
   "oauthSignIn",
   "selectedAccount",
   "metadataValidation",
+  "metadataEdit",
   "privateOrSandboxPublish",
   "scheduledAppClosedFiring",
   "statusPolling",
@@ -58,6 +65,7 @@ for (const entry of manifest.providers) {
   const evidenceIndex = readFileSync(entry.evidenceIndex, "utf8");
   assert.match(evidenceIndex, new RegExp(entry.provider));
   assert.match(evidenceIndex, /OAuth sign-in/i);
+  assert.match(evidenceIndex, /metadata edit/i);
   assert.match(evidenceIndex, /scheduled app-closed firing/i);
   assert.match(evidenceIndex, /provider URL/i);
   for (const check of requiredChecks) {

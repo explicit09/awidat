@@ -102,7 +102,7 @@
         <ul>
           <li>OAuth sign-in starts from Awidat and returns a connected account via <code>social_accounts</code>.</li>
           <li>User selects the destination account and edits metadata before publish.</li>
-          <li>Publish path uses <code>social_bind_target</code>, <code>social_validate_target</code>, <code>social_schedule_target</code>, and <code>social_upload_artifact</code>.</li>
+          <li>Publish path uses <code>social_bind_target</code>, <code>social_validate_target</code>, <code>social_update_target</code> for saved metadata edits on bound jobs, <code>social_schedule_target</code>, and <code>social_upload_artifact</code>.</li>
           <li>Scheduled app-closed firing is proven from hosted cron/tick logs, not a frontend timer.</li>
           <li>Status is read with <code>social_publish_job</code> until final provider URL or actionable failure.</li>
           <li>Evidence includes provider URL, audit history, retry/reconnect behavior, and cleanup.</li>
@@ -154,7 +154,7 @@
         <h3>Required before “ready for users”</h3>
         <ul>
           <li>Update <code>docs/social-server/live-evidence-manifest.json</code>; <code>allProvidersVerified</code> must remain false until every provider check is true.</li>
-          <li>One dated evidence folder per provider with screenshots or JSON logs for account connection, selected account, metadata, schedule time, job id, status history, and final provider URL.</li>
+          <li>One dated evidence folder per provider with screenshots or JSON logs for account connection, selected account, metadata validation, metadata edit via <code>social_update_target</code>, schedule time, job id, status history, and final provider URL.</li>
           <li>One hosted-service log slice showing app-closed scheduled app-closed firing for a due job.</li>
           <li>One negative-path run per provider: missing scope, reconnect required, validation error, or provider requires action.</li>
           <li>Cleanup proof for every real provider post, or a documented reason cleanup is not possible in that provider mode.</li>
