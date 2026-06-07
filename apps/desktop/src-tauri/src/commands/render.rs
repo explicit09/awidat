@@ -113,19 +113,9 @@ fn prepare_desktop_timeline_render_spec(
     } else {
         None
     };
-    let inputs = spec
-        .input_paths
-        .iter()
-        .map(|path| {
-            let resolved = if path.is_absolute() {
-                path.clone()
-            } else {
-                project_root.join(path)
-            };
-            awidat_render::fingerprint_file_sampled(&resolved, true)
-                .map_err(|e| format!("fingerprint input {}: {e}", resolved.display()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let inputs =
+        awidat_render::fingerprint_manifest_inputs_sampled(project_root, &spec.input_paths)
+            .map_err(|e| format!("fingerprint render inputs: {e}"))?;
     let ffmpeg = awidat_render::ffmpeg_path()
         .map_err(|e| format!("failed to locate ffmpeg for manifest: {e}"))?;
     let mut replay_argv = vec![ffmpeg.to_string_lossy().into_owned()];

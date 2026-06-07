@@ -157,7 +157,8 @@ fn write_cli_render_manifest(
                 .as_ref()
                 .map(|cwd| cwd.to_string_lossy().into_owned()),
         },
-        inputs: fingerprint_manifest_inputs(project_root, &spec.input_paths)?,
+        inputs: awidat_render::fingerprint_manifest_inputs_sampled(project_root, &spec.input_paths)
+            .context("fingerprint render inputs")?,
         outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
         sidecars,
         limitations: spec
@@ -189,50 +190,6 @@ fn enrich_caption_metadata(
     let summary = awidat_core::captions::summarize_captions(&project);
     metadata.extend(awidat_core::captions::caption_summary_metadata(&summary));
     Ok(())
-}
-
-fn fingerprint_manifest_inputs(
-    project_root: &Path,
-    input_paths: &[std::path::PathBuf],
-) -> Result<Vec<awidat_render::RenderInputFingerprint>> {
-    // Dedupe by absolute path before fingerprinting. The render plan can
-    // reference the same media asset many times (a 40-min .mov sliced
-    // into 27 segments still fingerprints to the same identity); doing
-    // that 27× blocks ffmpeg spawn and makes the export look hung.
-    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
-    let mut unique: Vec<std::path::PathBuf> = Vec::new();
-    let mut order: Vec<std::path::PathBuf> = Vec::with_capacity(input_paths.len());
-    for path in input_paths {
-        let abs = if path.is_absolute() {
-            path.clone()
-        } else {
-            project_root.join(path)
-        };
-        order.push(abs.clone());
-        if seen.insert(abs.clone()) {
-            unique.push(abs);
-        }
-    }
-    let mut by_path: std::collections::HashMap<
-        std::path::PathBuf,
-        awidat_render::RenderInputFingerprint,
-    > = std::collections::HashMap::new();
-    for abs in unique {
-        let fp = awidat_render::fingerprint_file_sampled(&abs, true)
-            .with_context(|| format!("fingerprint input {}", abs.display()))?;
-        by_path.insert(abs, fp);
-    }
-    // Preserve original ordering + duplicate count by cloning the
-    // cached fingerprint back into the result vec.
-    order
-        .into_iter()
-        .map(|abs| {
-            by_path
-                .get(&abs)
-                .cloned()
-                .with_context(|| format!("missing cached fingerprint for {}", abs.display()))
-        })
-        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]
