@@ -69,8 +69,6 @@ pub enum UploadStatusServiceError {
     MissingProviderPostId,
     #[error("provider status response post id does not match processing job")]
     ProviderPostIdMismatch,
-    #[error("published provider status did not include a provider post url")]
-    MissingProviderPostUrl,
 }
 
 pub struct UploadStatusService;
@@ -117,12 +115,9 @@ impl UploadStatusService {
 
         let next = match result.status {
             UploadProcessingStatus::Processing => job.processing(provider_post_id, input.now),
-            UploadProcessingStatus::Published => job.publish(
+            UploadProcessingStatus::Published => job.publish_with_optional_url(
                 result.provider_post_id.clone(),
-                result
-                    .provider_post_url
-                    .clone()
-                    .ok_or(UploadStatusServiceError::MissingProviderPostUrl)?,
+                result.provider_post_url.clone(),
                 input.now,
             ),
             UploadProcessingStatus::Failed => job.fail(
@@ -279,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn poll_processing_job_rejects_published_status_without_url() {
+    fn poll_processing_job_publishes_without_url_for_private_provider_posts() {
         let mut store = store_with_processing_job();
         let adapter = RecordingStatusAdapter::new(UploadStatusResult {
             provider_post_id: "yt_video_1".into(),
@@ -289,27 +284,23 @@ mod tests {
             raw_error_ref: None,
         });
 
-        let error = match UploadStatusService::poll_processing_job(
+        let job = UploadStatusService::poll_processing_job(
             &mut store,
             &adapter,
             PollUploadStatusInput {
                 job_id: "job_1".into(),
                 now: 2_500,
             },
-        ) {
-            Ok(job) => panic!("expected missing url error, got {job:?}"),
-            Err(error) => error,
-        };
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
 
-        assert_eq!(error, UploadStatusServiceError::MissingProviderPostUrl);
-        let job = store
-            .publish_job("job_1")
-            .unwrap_or_else(|err| panic!("job: {err}"));
-        assert_eq!(job.status, PublishJobStatus::Processing);
+        assert_eq!(job.status, PublishJobStatus::Published);
+        assert_eq!(job.provider_post_id.as_deref(), Some("yt_video_1"));
+        assert_eq!(job.provider_post_url, None);
         let events = store
             .publish_job_events("job_1")
             .unwrap_or_else(|err| panic!("events: {err}"));
-        assert!(events.is_empty());
+        assert_eq!(events[0].event_type, PublishJobEventType::StatusPolled);
     }
 
     #[test]

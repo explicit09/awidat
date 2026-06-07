@@ -76,6 +76,20 @@ pub trait SocialStore {
         limit: usize,
     ) -> Result<Vec<PublishJob>, SocialStoreError>;
 
+    fn claim_due_publish_job(
+        &mut self,
+        id: &str,
+        now: i64,
+    ) -> Result<Option<PublishJob>, SocialStoreError> {
+        let job = self.publish_job(id)?;
+        if job.status != PublishJobStatus::Scheduled || job.scheduled_for > now {
+            return Ok(None);
+        }
+        let updated = job.claim_for_upload(now);
+        self.save_publish_job(updated.clone())?;
+        Ok(Some(updated))
+    }
+
     /// Return jobs currently in `Processing` (the provider accepted the upload
     /// and is still transcoding). The poll-processing sweep drives these to
     /// `Published`/`Failed` via the status adapter. Ordered oldest-first.
@@ -313,6 +327,24 @@ impl SocialStore for InMemorySocialStore {
         }
 
         Ok(claimed)
+    }
+
+    fn claim_due_publish_job(
+        &mut self,
+        id: &str,
+        now: i64,
+    ) -> Result<Option<PublishJob>, SocialStoreError> {
+        let job = self
+            .publish_jobs
+            .get(id)
+            .cloned()
+            .ok_or(SocialStoreError::NotFound)?;
+        if job.status != PublishJobStatus::Scheduled || job.scheduled_for > now {
+            return Ok(None);
+        }
+        let updated = job.claim_for_upload(now);
+        self.publish_jobs.insert(id.to_string(), updated.clone());
+        Ok(Some(updated))
     }
 
     fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
@@ -635,6 +667,58 @@ mod tests {
             store.publish_job("job_a"),
             Ok(later_by_schedule_first_by_id)
         );
+    }
+
+    #[test]
+    fn claims_one_due_publish_job_by_id_without_claiming_other_due_jobs() {
+        let mut store = InMemorySocialStore::default();
+        let requested = publish_job("job_requested", 1_000);
+        let other_due = publish_job("job_other", 900);
+
+        for job in [requested, other_due.clone()] {
+            store
+                .save_publish_job(job)
+                .unwrap_or_else(|err| panic!("save publish job: {err}"));
+        }
+
+        let claimed = store
+            .claim_due_publish_job("job_requested", 2_000)
+            .unwrap_or_else(|err| panic!("claim due publish job: {err}"))
+            .unwrap_or_else(|| panic!("expected job to be claimed"));
+
+        assert_eq!(claimed.id, "job_requested");
+        assert_eq!(claimed.status, PublishJobStatus::Uploading);
+        assert_eq!(claimed.updated_at, 2_000);
+        assert_eq!(store.publish_job("job_requested"), Ok(claimed));
+        assert_eq!(store.publish_job("job_other"), Ok(other_due));
+    }
+
+    #[test]
+    fn exact_claim_leaves_future_or_non_scheduled_job_unchanged() {
+        let mut store = InMemorySocialStore::default();
+        let future = publish_job("job_future", 3_000);
+        let uploading = publish_job("job_uploading", 1_000).claim_for_upload(1_500);
+
+        for job in [future.clone(), uploading.clone()] {
+            store
+                .save_publish_job(job)
+                .unwrap_or_else(|err| panic!("save publish job: {err}"));
+        }
+
+        assert_eq!(
+            store
+                .claim_due_publish_job("job_future", 2_000)
+                .unwrap_or_else(|err| panic!("claim future: {err}")),
+            None
+        );
+        assert_eq!(
+            store
+                .claim_due_publish_job("job_uploading", 2_000)
+                .unwrap_or_else(|err| panic!("claim uploading: {err}")),
+            None
+        );
+        assert_eq!(store.publish_job("job_future"), Ok(future));
+        assert_eq!(store.publish_job("job_uploading"), Ok(uploading));
     }
 
     #[test]

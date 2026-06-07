@@ -488,6 +488,36 @@ impl SocialStore for SqliteSocialStore {
         Ok(claimed)
     }
 
+    fn claim_due_publish_job(
+        &mut self,
+        id: &str,
+        now: i64,
+    ) -> Result<Option<PublishJob>, SocialStoreError> {
+        let payload_json = self
+            .connection
+            .query_row(
+                r#"
+                SELECT payload_json
+                FROM publish_jobs
+                WHERE id = ?1 AND status = ?2 AND scheduled_for <= ?3
+                "#,
+                params![
+                    id,
+                    publish_job_status_as_str(&PublishJobStatus::Scheduled),
+                    now
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some(payload_json) = payload_json else {
+            return Ok(None);
+        };
+        let updated = from_json::<PublishJob>(&payload_json)?.claim_for_upload(now);
+        self.save_publish_job(updated.clone())?;
+        Ok(Some(updated))
+    }
+
     fn processing_publish_jobs(&self, limit: usize) -> Result<Vec<PublishJob>, SocialStoreError> {
         let mut statement = self
             .connection
