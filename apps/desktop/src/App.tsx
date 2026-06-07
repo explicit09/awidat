@@ -15,7 +15,7 @@ import { summarizeEditorPublishing } from "./editor/publishingBridge";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
@@ -34,6 +34,7 @@ import { mediaStreamUrl } from "./media/mediaStreamUrl";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
+import { droppedImportPaths } from "./media/dropImportPaths";
 import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
@@ -1995,6 +1996,7 @@ function App() {
       ready={realIndexingReady}
       episodes={episodeSummary}
       onImport={() => void chooseAndImportFiles()}
+      onImportFiles={(paths) => void importFiles(paths)}
       onImportUrl={() => setShowUrlImport(true)}
       onOpenProject={() => void chooseAndOpenProject()}
       onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
@@ -2686,6 +2688,7 @@ function ProjectMediaPanel({
   ready,
   episodes,
   onImport,
+  onImportFiles,
   onImportUrl,
   onOpenProject,
   onSelectMedia,
@@ -2702,6 +2705,7 @@ function ProjectMediaPanel({
   ready: boolean;
   episodes?: IndexingEpisodeSummary;
   onImport: () => void;
+  onImportFiles: (paths: string[]) => void;
   onImportUrl: () => void;
   onOpenProject: () => void;
   onSelectMedia: (stem: string) => void;
@@ -2721,8 +2725,26 @@ function ProjectMediaPanel({
       : activeCount > 0
         ? "indexing"
         : "needs index";
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const paths = droppedImportPaths(
+      Array.from(event.dataTransfer.files) as Array<{ path?: string }>,
+    );
+    if (paths.length > 0) onImportFiles(paths);
+  }
+
   return (
-    <Stack gap="4" className="p-3">
+    <Stack
+      gap="4"
+      className="p-3"
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={handleDrop}
+    >
       <Stack gap="1">
         <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
           Project media

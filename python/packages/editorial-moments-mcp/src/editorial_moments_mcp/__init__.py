@@ -51,13 +51,21 @@ server = IndexerServer(
 
 
 def _find_sibling_sidecar(
-    asset_path: str, asset_id: str, indexer: str, project_root: str | None = None
+    asset_path: str,
+    asset_id: str,
+    indexer: str,
+    project_root: str | None = None,
+    index_root: str | None = None,
 ) -> Path | None:
     """Walk up from `asset_path` to find `<project>/index/<indexer>/<asset_id>.json`.
 
     Mirrors topic-mcp._find_transcript_path. Stops at the project
     root marker (.awidat/ directory).
     """
+    if index_root:
+        candidate = Path(index_root).absolute() / indexer / f"{asset_id}.json"
+        if candidate.exists():
+            return candidate
     if project_root:
         candidate = (
             Path(project_root).absolute() / "index" / indexer / f"{asset_id}.json"
@@ -314,7 +322,7 @@ def _normalize_moment_dict(moment: dict[str, Any]) -> dict[str, Any]:
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     transcript_path = _find_sibling_sidecar(
-        req.asset_path, req.asset_id, "whisper", req.project_root
+        req.asset_path, req.asset_id, "whisper", req.project_root, req.index_root
     )
     if transcript_path is None:
         raise RuntimeError(
@@ -323,7 +331,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             f"first, then re-run."
         )
     topic_path = _find_sibling_sidecar(
-        req.asset_path, req.asset_id, "topic", req.project_root
+        req.asset_path, req.asset_id, "topic", req.project_root, req.index_root
     )
     if topic_path is None:
         raise RuntimeError(
@@ -344,7 +352,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
 
     # Audio-energy is optional; falling back to MEDIUM is fine.
     audio_path = _find_sibling_sidecar(
-        req.asset_path, req.asset_id, "audio-energy", req.project_root
+        req.asset_path, req.asset_id, "audio-energy", req.project_root, req.index_root
     )
     audio_energy = (
         json.loads(audio_path.read_text()) if audio_path is not None else None

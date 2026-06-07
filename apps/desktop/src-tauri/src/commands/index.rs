@@ -283,6 +283,7 @@ async fn index_project_at_root_with_assets(
         Some(cb),
     );
 
+    let run_builtins = should_run_builtin_passes(mode);
     // Built-in passes (motion + silence) live outside the MCP
     // dispatcher. By default they run *after* the dispatcher returns,
     // serializing what could be parallel. On machines with headroom
@@ -294,7 +295,7 @@ async fn index_project_at_root_with_assets(
     let parallel = has_headroom_for_parallel_passes();
     let state_for_passes = state.inner();
     let passes_fut = async {
-        if parallel {
+        if run_builtins && parallel {
             run_builtin_passes(app, state_for_passes, &project_root, &assets, &cancel).await
         } else {
             BuiltinPassReport::default()
@@ -326,7 +327,7 @@ async fn index_project_at_root_with_assets(
             // or we run them now serially. Per-asset calls are
             // mtime-fresh-checked, so the second-pass invocation
             // skips any sidecar that landed during the parallel run.
-            let post_passes = if parallel {
+            let post_passes = if !run_builtins || parallel {
                 BuiltinPassReport::default()
             } else {
                 run_builtin_passes(app, state.inner(), &project_root, &assets, &cancel).await
@@ -586,6 +587,10 @@ fn has_headroom_for_parallel_passes() -> bool {
     }
 }
 
+fn should_run_builtin_passes(mode: IndexMode) -> bool {
+    !matches!(mode, IndexMode::FastContext)
+}
+
 /// Read the system 1-minute load average. macOS via sysctl,
 /// Linux/BSD via /proc/loadavg. Returns None on Windows or any
 /// failure — caller treats that as "no headroom signal".
@@ -800,12 +805,7 @@ fn plan_indexers_for_mode(servers: &mut Vec<McpServer>, mode: IndexMode, profile
         servers.retain(|server| {
             matches!(
                 server.name.as_str(),
-                "whisper"
-                    | "audio-energy"
-                    | "beats"
-                    | "scenedetect"
-                    | "topic"
-                    | "editorial-moments"
+                "whisper" | "audio-energy" | "beats" | "scenedetect" | "topic"
             )
         });
     }
@@ -1097,13 +1097,7 @@ mod tests {
         let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
         assert_eq!(
             names,
-            vec![
-                "whisper",
-                "audio-energy",
-                "scenedetect",
-                "topic",
-                "editorial-moments"
-            ]
+            vec!["whisper", "audio-energy", "scenedetect", "topic"]
         );
     }
 
@@ -1146,6 +1140,13 @@ mod tests {
         assert_eq!(profile_for_signals(8, Some(0.2)), MachineProfile::Powerful);
         assert_eq!(profile_for_signals(8, Some(8.0)), MachineProfile::Average);
         assert_eq!(profile_for_signals(8, None), MachineProfile::Average);
+    }
+
+    #[test]
+    fn fast_context_import_indexing_skips_builtin_passes() {
+        assert!(!should_run_builtin_passes(IndexMode::FastContext));
+        assert!(should_run_builtin_passes(IndexMode::Manual));
+        assert!(should_run_builtin_passes(IndexMode::FullContext));
     }
 
     #[test]

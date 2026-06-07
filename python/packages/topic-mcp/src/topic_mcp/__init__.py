@@ -76,9 +76,16 @@ server = IndexerServer(
 
 
 def _find_transcript_path(
-    asset_path: str, asset_id: str, project_root: str | None = None
+    asset_path: str,
+    asset_id: str,
+    project_root: str | None = None,
+    index_root: str | None = None,
 ) -> Path | None:
     """Walk up from `asset_path` to find `<project>/index/whisper/<asset_id>.json`."""
+    if index_root:
+        candidate = Path(index_root).absolute() / "whisper" / f"{asset_id}.json"
+        if candidate.exists():
+            return candidate
     if project_root:
         candidate = (
             Path(project_root).absolute() / "index" / "whisper" / f"{asset_id}.json"
@@ -379,7 +386,7 @@ def _label(sentences: list[dict[str, Any]]) -> str:
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     transcript_path = _find_transcript_path(
-        req.asset_path, req.asset_id, req.project_root
+        req.asset_path, req.asset_id, req.project_root, req.index_root
     )
     if transcript_path is None:
         # **Raise** rather than returning an empty success — past
