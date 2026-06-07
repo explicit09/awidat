@@ -4,11 +4,12 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const shell = readFileSync(resolve(root, "src/shell/StageShell.tsx"), "utf8");
 const conversation = readFileSync(resolve(root, "src/shell/StageConversation.tsx"), "utf8");
+const timelinePane = readFileSync(resolve(root, "src/timeline/TimelinePane.tsx"), "utf8");
 const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const inspector = readFileSync(resolve(root, "src/inspector/ClipInspector.tsx"), "utf8");
 const glass = readFileSync(resolve(root, "src/ui/glass.css"), "utf8");
 const appCss = readFileSync(resolve(root, "src/App.css"), "utf8");
-const source = `${shell}\n${conversation}\n${app}\n${inspector}\n${glass}\n${appCss}`;
+const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${glass}\n${appCss}`;
 const stageSource = `${shell}\n${conversation}`;
 const rightPanesBlock = shell.match(/const RIGHT_PANES:[\s\S]+?\];/)?.[0] ?? "";
 
@@ -24,6 +25,10 @@ const checks = [
   ["reserves right stage space for the right pane", /paddingRight:\s*RIGHT_PANE_RESERVE/],
   ["renders the timeline unconditionally", /className="absolute bottom-6 z-20"/],
   ["timeline spans full width", /left:\s*0,\s*right:\s*0/],
+  ["stage keeps timeline toolbar visible", /stage-timeline \.timeline-header \{ display: none/.test(glass) === false],
+  ["stage timeline toolbar uses glass styling", /\.stage-timeline \.timeline-header[\s\S]+backdrop-filter:\s*blur/],
+  ["timeline toolbar shows pixels-per-second readout", /px\/s/],
+  ["timeline toolbar has an explicit fit button", />\s*Fit\s*</],
   ["pane heights stop above timeline", /const paneBottom = `calc\(36px \+ \$\{timelineHeight\}\)`[\s\S]+bottom:\s*paneBottom/],
   ["left pane width is stateful and resizable", /leftPaneWidth[\s\S]+setLeftPaneWidth[\s\S]+beginPaneResize\("left"/],
   ["right pane width is stateful and resizable", /rightPaneWidth[\s\S]+setRightPaneWidth[\s\S]+beginPaneResize\("right"/],

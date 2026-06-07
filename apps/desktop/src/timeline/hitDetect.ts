@@ -6,6 +6,7 @@
 // pointer-down branch.
 
 import type { TimelineSnapshot, TimelineItem } from "./store";
+import { timeToX } from "./layout.ts";
 
 /** Pointer-pixel tolerance for "near a clip edge". */
 export const EDGE_HIT_PX = 6;
@@ -60,10 +61,10 @@ export function hitTestEdge(
 
   for (const item of track.items) {
     if (item.kind !== "clip") continue;
-    const startX = item.track_start_s * pps;
+    const startX = timeToX(item.track_start_s, pps);
     const endX = Math.max(
       startX + 2,
-      (item.track_start_s + item.duration_s) * pps,
+      timeToX(item.track_start_s + item.duration_s, pps),
     );
     if (endX - startX <= EDGE_HIT_PX * 2) continue;
     const dStart = Math.abs(canvasX - startX);
@@ -151,7 +152,7 @@ export function hitTestBoundary(
     const aEndS = a.track_start_s + a.duration_s;
     const bStartS = b.track_start_s;
     if (Math.abs(aEndS - bStartS) > 0.04) continue;
-    const boundaryX = aEndS * pps;
+    const boundaryX = timeToX(aEndS, pps);
     if (Math.abs(canvasX - boundaryX) <= EDGE_HIT_PX) {
       return {
         trackIndex,
@@ -210,10 +211,10 @@ export function hitTestClipBody(
   const track = snapshot.tracks[trackIndex];
   for (const item of track.items) {
     if (item.kind !== "clip") continue;
-    const startX = item.track_start_s * pps;
+    const startX = timeToX(item.track_start_s, pps);
     const endX = Math.max(
       startX + 2,
-      (item.track_start_s + item.duration_s) * pps,
+      timeToX(item.track_start_s + item.duration_s, pps),
     );
     if (canvasX >= startX && canvasX <= endX) {
       return { trackIndex, clipIndex: item.index };
@@ -239,10 +240,10 @@ export function hitTestSelectableBody(
   const track = snapshot.tracks[trackIndex];
   for (const item of track.items) {
     if (item.kind === "gap") continue;
-    const startX = item.track_start_s * pps;
+    const startX = timeToX(item.track_start_s, pps);
     const endX = Math.max(
       startX + 2,
-      (item.track_start_s + item.duration_s) * pps,
+      timeToX(item.track_start_s + item.duration_s, pps),
     );
     if (canvasX >= startX && canvasX <= endX) {
       return { trackIndex, clipIndex: item.index };

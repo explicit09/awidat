@@ -12,6 +12,7 @@ import { useProjectStore } from "../app/state";
 import { ProposalActions } from "./ProposalActions";
 import { TIMELINE_CHANGED_EVENT } from "../protocol";
 import { TimelineSurface } from "./TimelineSurface.tsx";
+import { computePps } from "./layout.ts";
 import { countCompletedTimelineEdits } from "./refreshActivity.ts";
 
 export function TimelinePane() {
@@ -54,6 +55,7 @@ export function TimelinePane() {
   }, [completedEdits, projectReady, refresh]);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageWidth, setStageWidth] = useState(0);
   // Mouse-wheel handlers — must be non-passive so cmd/ctrl+wheel can
   // preventDefault before the browser's page-zoom kicks in. React's
   // synthetic wheel handler is passive in modern React, so we attach
@@ -111,6 +113,16 @@ export function TimelinePane() {
     };
   }, []);
 
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const updateWidth = () => setStageWidth(el.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (!projectReady) {
     return null;
   }
@@ -125,7 +137,7 @@ export function TimelinePane() {
             : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
         </span>
         <AddTrackButton />
-        <ZoomControls />
+        <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
       </header>
       <div className="timeline-stage" ref={stageRef}>
         <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
@@ -138,7 +150,7 @@ export function TimelinePane() {
 /** Compact +/−/fit controls for horizontal time-zoom and vertical
  *  track-zoom. Sits in the timeline header. Keyboard shortcuts still
  *  drive the same store actions for users who prefer the menu. */
-function ZoomControls() {
+function ZoomControls({ pps }: { pps: number }) {
   const zoom = useTimelineStore((s) => s.zoom);
   const trackZoom = useTimelineStore((s) => s.trackZoom);
   const zoomIn = useTimelineStore((s) => s.zoomIn);
@@ -152,10 +164,13 @@ function ZoomControls() {
       <div className="timeline-zoom-group" title="Horizontal zoom (Cmd/Ctrl + wheel)">
         <button type="button" onClick={zoomOut} aria-label="Zoom out">−</button>
         <button type="button" onClick={fitZoom} aria-label="Reset zoom">
-          {zoom.toFixed(2)}×
+          Fit
         </button>
         <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
       </div>
+      <span className="timeline-zoom-readout" title={`${zoom.toFixed(2)}x zoom`}>
+        {pps.toFixed(1)} px/s
+      </span>
       <div className="timeline-zoom-group" title="Track height">
         <button type="button" onClick={trackZoomOut} aria-label="Shrink tracks">▾</button>
         <button type="button" onClick={fitTrackZoom} aria-label="Reset track height">

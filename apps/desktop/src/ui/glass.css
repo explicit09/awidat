@@ -387,9 +387,28 @@ html, body, #root { background: #0a0a12; }
   .panel { background: rgba(18, 18, 22, 0.94) !important; }
 }
 
-/* Stage timeline strip: hide TimelinePane's internal header (track count,
-   +Track, zoom) — the Stage wants a clean ribbon, not cockpit chrome. */
-.stage-timeline .timeline-header { display: none !important; }
+/* Stage timeline strip: compact glass toolbar instead of the older
+   cockpit chrome, keeping zoom / fit controls visible in the Stage. */
+.stage-timeline .timeline-header {
+  min-height: 32px !important;
+  padding: 4px 8px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: rgba(10, 10, 18, 0.62) !important;
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+}
+.stage-timeline .timeline-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+.stage-timeline .timeline-meta {
+  font-size: 10px;
+}
+.stage-timeline .timeline-add-track-button,
+.stage-timeline .timeline-zoom-group button {
+  min-height: 24px;
+  border-radius: 7px;
+}
 .stage-timeline > * { height: 100%; }
 
 /* Project manager — startup surface when no project is open. */

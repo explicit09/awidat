@@ -2216,6 +2216,19 @@ button {
   border-left: 1px solid var(--border);
 }
 
+.timeline-zoom-readout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 7px;
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .timeline-add-track-button {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 11px;

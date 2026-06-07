@@ -82,7 +82,7 @@ cutSnapshot.cut_boundaries = [
 assert.deepEqual(buildCutBadges(cutSnapshot, 10), [
   {
     key: "cut-from::to",
-    x: 30,
+    x: 82,
     y: 24,
     label: "S/RS",
     title: "Shot Reverse Shot - intent: dialogue exchange - audio: sync - matches eyeline",
@@ -102,14 +102,14 @@ const splitSnapshot = snapshot([
 assert.deepEqual(buildSplitOffsets(splitSnapshot, 10), [
   {
     key: "lead-j",
-    x: 34,
+    x: 86,
     y: 66,
     label: "J +1.25s",
     title: "Audio lead: 1.25s - audio establishes next shot - confidence 82%",
   },
   {
     key: "trail-j",
-    x: 30,
+    x: 82,
     y: 66,
     label: "L +2s",
     title: "Audio trail: 2s - audio establishes next shot - confidence 82%",

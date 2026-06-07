@@ -12,13 +12,13 @@
 
 import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { RULER_HEIGHT, timeToX, xToTime } from "./layout.ts";
 import { useProposalStore } from "./proposal";
 import type { AppliedDiff, AdjustField, TimelineSnapshot } from "../protocol";
 
 /** Layout constants — must match TimelinePane.tsx exactly. The
  *  handles overlay the canvas; same ruler offset is baked into both.
  *  Lane height is supplied as a prop so vertical zoom flows through. */
-const RULER_HEIGHT = 22;
 const HANDLE_WIDTH = 8;
 const PX_PER_SECOND_BASE = 12;
 
@@ -102,7 +102,7 @@ function Handle({
     if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
     e.currentTarget.releasePointerCapture(e.pointerId);
     const finalDx = e.clientX - startXRef.current;
-    const baseSeconds = spec.x / Math.max(0.001, pps);
+    const baseSeconds = xToTime(spec.x, pps);
     const newValueS = Math.max(0, baseSeconds + finalDx / Math.max(0.001, pps));
     setDragOffset(0);
     setTooltip(null);
@@ -161,8 +161,8 @@ function handleForDiff(
     case "trim_edge": {
       const item = locateClipItem(snapshot, diff.track_index, diff.item_index);
       if (!item) return null;
-      const xStart = item.track_start_s * pps;
-      const xEnd = (item.track_start_s + item.duration_s) * pps;
+      const xStart = timeToX(item.track_start_s, pps);
+      const xEnd = timeToX(item.track_start_s + item.duration_s, pps);
       const x = diff.side === "left" ? xStart : xEnd;
       const y = RULER_HEIGHT + diff.track_index * laneHeight + 4;
       const h = laneHeight - 8;
@@ -205,7 +205,7 @@ function handleForDiff(
       if (!item) return null;
       // Split anchor sits at the *end* of the left half on the
       // proposed snapshot. We render the handle at that x.
-      const x = (item.track_start_s + item.duration_s) * pps;
+      const x = timeToX(item.track_start_s + item.duration_s, pps);
       const y = RULER_HEIGHT + diff.track_index * laneHeight + 4;
       const h = laneHeight - 8;
       const sourceStart = item.source_start_s ?? 0;

@@ -1,4 +1,4 @@
-import { LANE_HEIGHT, RULER_HEIGHT, computePps } from "./layout.ts";
+import { LANE_HEIGHT, RULER_HEIGHT, TRACK_HEADER_WIDTH, computePps } from "./layout.ts";
 import type { TimelineSnapshot } from "./store.ts";
 
 export type CanvasLayoutInput = {
@@ -37,7 +37,7 @@ export function computeCanvasLayout({
   const pps = computePps(totalDuration, viewportWidth, zoom);
   const cssWidth =
     totalDuration > 0
-      ? Math.max(viewportWidth, totalDuration * pps + 8)
+      ? Math.max(viewportWidth, TRACK_HEADER_WIDTH + totalDuration * pps + 8)
       : viewportWidth;
 
   return {

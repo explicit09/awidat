@@ -15,7 +15,7 @@
 // matching `RULER_HEIGHT` for the top offset. Pass the *current* render
 // values; the helper doesn't read from the store.
 
-import { RULER_HEIGHT } from "./layout.ts";
+import { RULER_HEIGHT, timeToX } from "./layout.ts";
 import type { FlashRange } from "../state/focusController";
 
 const CLIP_FLASH_FILL = "rgba(56, 189, 248, 0.22)";
@@ -38,7 +38,7 @@ export function drawFlashRanges(
   if (flashes.length === 0) return;
   ctx.save();
   for (const flash of flashes) {
-    const x = Math.round(flash.startS * pps);
+    const x = Math.round(timeToX(flash.startS, pps));
     const w = Math.max(6, Math.round((flash.endS - flash.startS) * pps));
     if (flash.trackIndex === null) {
       paintTrackAgnosticBand(ctx, x, w, flash.kind);
