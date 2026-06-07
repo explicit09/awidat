@@ -47,7 +47,9 @@ use awidat_social::{
         InstagramStatusAdapter, InstagramUploadAdapter, LiveInstagramStatusClient,
         LiveInstagramUploadClient,
     },
-    model::{ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobEventType},
+    model::{
+        ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobEventType, PublishJobStatus,
+    },
     oauth_exchange::{
         GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthTokenExchange, PlatformOAuthExchange,
         PlatformOAuthExchangeConfig, TokenExchangeInput,
@@ -1221,6 +1223,36 @@ fn upload_request_for_job(
     }
 }
 
+fn claim_direct_fire_job(
+    store: &mut impl SocialStore,
+    job_id: &str,
+    now: i64,
+) -> Result<Option<PublishJob>, String> {
+    let Some(mut job) = store
+        .claim_due_publish_job(job_id, now)
+        .map_err(|e| format!("claim due job: {e}"))?
+    else {
+        return Ok(None);
+    };
+
+    if job.provider == Provider::YouTube {
+        let today_count = store
+            .youtube_upload_quota_today(now)
+            .map_err(|e| format!("quota check: {e}"))?;
+        if today_count >= YOUTUBE_DAILY_QUOTA {
+            job.status = PublishJobStatus::Scheduled;
+            job.attempt_count = job.attempt_count.saturating_sub(1);
+            job.updated_at = now;
+            store
+                .save_publish_job(job)
+                .map_err(|e| format!("restore quota-blocked job: {e}"))?;
+            return Err("youtube daily upload quota reached".into());
+        }
+    }
+
+    Ok(Some(job))
+}
+
 pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> Result<(), String> {
     if !state.config.social_firing_enabled {
         return Err("social firing disabled".into());
@@ -1240,22 +1272,7 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
     tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool.clone());
         let now = now_secs();
-        let preclaim = store
-            .publish_job(&job_id)
-            .map_err(|e| format!("job lookup: {e}"))?;
-        if preclaim.provider == Provider::YouTube {
-            let today_count = store
-                .youtube_upload_quota_today(now)
-                .map_err(|e| format!("quota check: {e}"))?;
-            if today_count >= YOUTUBE_DAILY_QUOTA {
-                return Err("youtube daily upload quota reached".into());
-            }
-        }
-
-        let Some(job) = store
-            .claim_due_publish_job(&job_id, now)
-            .map_err(|e| format!("claim due job: {e}"))?
-        else {
+        let Some(job) = claim_direct_fire_job(&mut store, &job_id, now)? else {
             return Ok(());
         };
 
@@ -2120,6 +2137,72 @@ mod tests {
         assert_eq!(pending_live_client_reason(&Provider::TikTok), None);
         assert_eq!(pending_live_client_reason(&Provider::Instagram), None);
         assert_eq!(pending_live_client_reason(&Provider::TwitterX), None);
+    }
+
+    #[test]
+    fn direct_fire_skips_quota_when_job_is_not_due() {
+        use awidat_social::{
+            model::PublishJob,
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let now = 1_000;
+        let mut store = InMemorySocialStore::default();
+        for _ in 0..YOUTUBE_DAILY_QUOTA {
+            store.increment_youtube_quota(now).unwrap();
+        }
+        let job = PublishJob::new(
+            "job_not_due",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "file:///tmp/render.mp4",
+            now + 60,
+            "desktop",
+        )
+        .schedule(now);
+        store.save_publish_job(job).unwrap();
+
+        let claimed = claim_direct_fire_job(&mut store, "job_not_due", now).unwrap();
+
+        assert!(claimed.is_none());
+        let persisted = store.publish_job("job_not_due").unwrap();
+        assert_eq!(persisted.status, PublishJobStatus::Scheduled);
+        assert_eq!(persisted.attempt_count, 0);
+    }
+
+    #[test]
+    fn direct_fire_restores_due_youtube_job_when_quota_is_exhausted() {
+        use awidat_social::{
+            model::PublishJob,
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let now = 1_000;
+        let mut store = InMemorySocialStore::default();
+        for _ in 0..YOUTUBE_DAILY_QUOTA {
+            store.increment_youtube_quota(now).unwrap();
+        }
+        let job = PublishJob::new(
+            "job_due",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "file:///tmp/render.mp4",
+            now,
+            "desktop",
+        )
+        .schedule(now);
+        store.save_publish_job(job).unwrap();
+
+        let err = claim_direct_fire_job(&mut store, "job_due", now).unwrap_err();
+
+        assert_eq!(err, "youtube daily upload quota reached");
+        let persisted = store.publish_job("job_due").unwrap();
+        assert_eq!(persisted.status, PublishJobStatus::Scheduled);
+        assert_eq!(persisted.attempt_count, 0);
     }
 
     #[test]
