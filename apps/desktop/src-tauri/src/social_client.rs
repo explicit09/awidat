@@ -6,7 +6,8 @@
 //! over the user-facing routes in `crates/social-server/src/user_routes.rs`.
 //!
 //! Every method:
-//! - attaches `Authorization: Bearer <auth_token>` (the pre-Phase-7 dev token),
+//! - attaches `Authorization: Bearer <auth_token>` (a Supabase user access token
+//!   for multi-user workspaces, or the pre-Phase-7 dev token),
 //! - sends/receives the **re-exported `montage_social::api` DTOs** so client and
 //!   server agree on exactly one serde shape (the big reuse win), and
 //! - maps a non-2xx response to a stable error string (`401` → `"unauthorized"`)
@@ -109,17 +110,20 @@ impl SocialClient {
     /// Resolve the client from the environment.
     ///
     /// Per RECONCILIATION G6 there is no per-field desktop config struct, so the
-    /// server URL + dev token are read from env at setup time (mirroring how
-    /// `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). Returns `None`
-    /// when `MONTAGE_SOCIAL_SERVER_URL` is unset, so the desktop boots fine
-    /// without the server configured — the `social_*` commands then surface a
-    /// clear "social client not initialized" error if used.
+    /// server URL + bearer are read from env at setup time (mirroring how
+    /// `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). For real
+    /// limited-access workspaces, `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` carries
+    /// the signed-in user's Supabase bearer. `MONTAGE_SOCIAL_AUTH_TOKEN` remains
+    /// the single-user dev-token fallback. Returns `None` when
+    /// `MONTAGE_SOCIAL_SERVER_URL` is unset, so the desktop boots fine without
+    /// the server configured — the `social_*` commands then surface a clear
+    /// "social client not initialized" error if used.
     pub fn from_env() -> Option<Self> {
         let base_url = std::env::var("MONTAGE_SOCIAL_SERVER_URL").ok()?;
         if base_url.trim().is_empty() {
             return None;
         }
-        let auth_token = std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").unwrap_or_default();
+        let auth_token = social_auth_token_from_env();
         match std::env::var("MONTAGE_SOCIAL_WORKSPACE_ID")
             .ok()
             .and_then(non_empty_string)
@@ -360,6 +364,23 @@ fn non_empty_string(value: String) -> Option<String> {
     }
 }
 
+fn choose_social_auth_token(
+    supabase_access_token: Option<String>,
+    dev_token: Option<String>,
+) -> String {
+    supabase_access_token
+        .and_then(non_empty_string)
+        .or_else(|| dev_token.and_then(non_empty_string))
+        .unwrap_or_default()
+}
+
+fn social_auth_token_from_env() -> String {
+    choose_social_auth_token(
+        std::env::var("MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN").ok(),
+        std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").ok(),
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -367,7 +388,7 @@ mod tests {
     use montage_social::model::{
         AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -439,6 +460,18 @@ mod tests {
         let client = SocialClient::new_for_workspace(server.uri(), "dev-token", "workspace_1");
         let accounts = client.accounts().await.expect("accounts ok");
         assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn supabase_access_token_takes_precedence_over_dev_token() {
+        let token = choose_social_auth_token(Some(" user-jwt ".into()), Some("dev-token".into()));
+        assert_eq!(token, "user-jwt");
+    }
+
+    #[test]
+    fn social_auth_token_falls_back_to_dev_token() {
+        let token = choose_social_auth_token(Some(" ".into()), Some(" dev-token ".into()));
+        assert_eq!(token, "dev-token");
     }
 
     #[tokio::test]
@@ -539,13 +572,18 @@ mod tests {
 
         let client =
             SocialClient::new_with_timeout(server.uri(), "dev-token", Duration::from_millis(20));
+        let started = Instant::now();
         let err = client
             .publish_job("job_1")
             .await
             .expect_err("must time out");
         assert!(
-            err.contains("timed out") || err.contains("timeout"),
-            "unexpected timeout error: {err}"
+            started.elapsed() < Duration::from_millis(200),
+            "request did not respect the client timeout"
+        );
+        assert!(
+            err.starts_with("request failed:"),
+            "unexpected request error: {err}"
         );
     }
 

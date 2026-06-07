@@ -234,14 +234,16 @@ the current machine-readable evidence status in
 | `OAUTH_REDIRECT_BASE` | Phase 2 | 2 | Base URL for OAuth redirect URIs |
 | `SUPABASE_JWT_SECRET` | Yes for multi-user | 7 | Verifies desktop-forwarded Supabase Auth bearer tokens |
 | `MONTAGE_SOCIAL_SERVER_URL` | Desktop only | 5 | Server base URL used by the desktop social client |
+| `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` | Desktop multi-user | 7 | Signed-in user's Supabase access token; preferred bearer for limited-access workspaces |
 | `MONTAGE_SOCIAL_AUTH_TOKEN` | Desktop dev only | 5 | Dev bearer for single-user fallback when `SUPABASE_JWT_SECRET` is unset |
 | `MONTAGE_SOCIAL_WORKSPACE_ID` | Desktop optional | 7 | Sends `x-montage-workspace-id`; use for shared limited-access publishing workspaces |
 
 For limited-access publishing, seed `workspace_member_roles` with only the
 allowed users. Give you and the co-host `Owner`, `Admin`, or `Publisher` roles
-for the workspace, set `MONTAGE_SOCIAL_WORKSPACE_ID` on the desktop, and keep
-everyone else without a role. `Viewer` can read but cannot schedule, cancel,
-retry, connect, or disconnect publishing accounts.
+for the workspace, set `MONTAGE_SOCIAL_WORKSPACE_ID` on each desktop, and pass
+each person's own Supabase access token as `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN`.
+Keep everyone else without a role. `Viewer` can read but cannot schedule,
+cancel, retry, connect, or disconnect publishing accounts.
 
 ---
 
