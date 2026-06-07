@@ -30,12 +30,21 @@ const STORAGE_KEY = "awidat.deliver.uploadPrefs.v1";
 interface UploadPrefsState {
   /** Provider keys the user has opted into auto-publishing for. */
   enabled: ReadonlySet<DeliveryTargetKey>;
+  /** Monotonic local edit counter used to reject stale deferred hydrates. */
+  revision: number;
   /** Toggle one provider on or off. Persists both backend + local. */
   toggle: (key: DeliveryTargetKey) => Promise<void>;
   /** Replace the full set (used on hydrate). */
   setEnabled: (keys: DeliveryTargetKey[]) => void;
   /** Pull the latest from the backend. Call once on app mount. */
   hydrate: () => Promise<void>;
+}
+
+export function shouldApplyBackendUploadPrefs(
+  scheduledRevision: number,
+  currentRevision: number,
+): boolean {
+  return scheduledRevision === currentRevision;
 }
 
 function loadLocal(): DeliveryTargetKey[] {
@@ -81,6 +90,7 @@ async function persistBackend(
 
 export const useUploadPrefs = create<UploadPrefsState>((set, get) => ({
   enabled: new Set<DeliveryTargetKey>(loadLocal()),
+  revision: 0,
   toggle: async (key) => {
     if (!SUPPORTED.has(key)) return;
     const current = get().enabled;
@@ -90,17 +100,18 @@ export const useUploadPrefs = create<UploadPrefsState>((set, get) => ({
     } else {
       next.add(key);
     }
-    set({ enabled: next });
+    set((state) => ({ enabled: next, revision: state.revision + 1 }));
     persistLocal(next);
     await persistBackend(next);
   },
   setEnabled: (keys) => {
     const filtered = keys.filter((k) => SUPPORTED.has(k));
     const next = new Set(filtered);
-    set({ enabled: next });
+    set((state) => ({ enabled: next, revision: state.revision + 1 }));
     persistLocal(next);
   },
   hydrate: async () => {
+    const scheduledRevision = get().revision;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const prefs = await invoke<{ default_targets: string[] }>(
@@ -109,6 +120,9 @@ export const useUploadPrefs = create<UploadPrefsState>((set, get) => ({
       const keys = prefs.default_targets.filter(
         (k): k is DeliveryTargetKey => SUPPORTED.has(k as DeliveryTargetKey),
       );
+      if (!shouldApplyBackendUploadPrefs(scheduledRevision, get().revision)) {
+        return;
+      }
       const next = new Set(keys);
       set({ enabled: next });
       persistLocal(next);

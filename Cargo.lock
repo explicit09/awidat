@@ -829,6 +829,7 @@ dependencies = [
  "codex-login",
  "codex-utils-cli",
  "rmcp",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

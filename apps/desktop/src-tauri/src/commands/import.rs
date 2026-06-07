@@ -171,6 +171,13 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
 fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: Vec<PathBuf>) {
     tokio::spawn(async move {
         let state = app.state::<AwidatState>();
+        let asset_ids = match asset_ids_for_post_import(&project_root, &assets) {
+            Ok(asset_ids) => asset_ids,
+            Err(e) => {
+                tracing::warn!(error = %e, "post-import scoped asset id derivation failed");
+                Vec::new()
+            }
+        };
         for asset in assets {
             if let Err(e) = process_imported_asset(&app, &state, &project_root, &asset).await {
                 tracing::warn!(
@@ -183,12 +190,35 @@ fn spawn_post_import_chain_many(app: AppHandle, project_root: PathBuf, assets: V
 
         // The indexer is sha-keyed; running on already-indexed assets
         // is a fast no-op.
-        if let Err(e) =
-            crate::commands::index::index_project_at_root(&app, &state, project_root.clone()).await
+        if let Err(e) = crate::commands::index::index_project_assets_at_root(
+            &app,
+            &state,
+            project_root.clone(),
+            asset_ids,
+        )
+        .await
         {
             tracing::warn!(error = %e, "auto-index failed");
         }
     });
+}
+
+fn asset_ids_for_post_import(
+    project_root: &std::path::Path,
+    assets: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    let mut asset_ids = Vec::with_capacity(assets.len());
+    for asset in assets {
+        let relative = asset
+            .strip_prefix(project_root)
+            .map_err(|e| format!("imported asset is outside project: {e}"))?;
+        let asset_id = relative.to_string_lossy().replace('\\', "/");
+        if !asset_id.starts_with("raw/") {
+            return Err(format!("imported asset is not under raw/: {asset_id}"));
+        }
+        asset_ids.push(asset_id);
+    }
+    Ok(asset_ids)
 }
 
 async fn process_imported_asset(
@@ -634,5 +664,27 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("a different file named clip.mov already exists in raw/"));
+    }
+
+    #[test]
+    fn post_import_asset_ids_are_project_relative_raw_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = vec![
+            dir.path().join("raw/a.mov"),
+            dir.path().join("raw/nested/b.wav"),
+        ];
+
+        let asset_ids = asset_ids_for_post_import(dir.path(), &assets).unwrap();
+
+        assert_eq!(asset_ids, vec!["raw/a.mov", "raw/nested/b.wav"]);
+    }
+
+    #[test]
+    fn post_import_asset_ids_reject_non_raw_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let err =
+            asset_ids_for_post_import(dir.path(), &[dir.path().join("renders/a.mp4")]).unwrap_err();
+
+        assert!(err.contains("not under raw/"), "{err}");
     }
 }

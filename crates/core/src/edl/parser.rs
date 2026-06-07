@@ -25,8 +25,8 @@
 //! and `+ end: <new>` are accepted; we use the `+` value as authoritative.
 
 use awidat_proto::awidat_meta::{
-    AudioRelation, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, CutType,
-    SemanticCutSpec, SplitEditSpec,
+    AudioRelation, BrandKit, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry,
+    CutType, SemanticCutSpec, SplitEditSpec,
 };
 use awidat_proto::professional::{
     AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
@@ -284,6 +284,7 @@ enum OpKind {
     AddPreflightReport,
     SetWorkflowLens,
     SetPipelineReadiness,
+    SetBrandKit,
 }
 
 impl OpBuilder {
@@ -354,6 +355,7 @@ impl OpBuilder {
             "Add Preflight Report" => OpKind::AddPreflightReport,
             "Set Workflow Lens" => OpKind::SetWorkflowLens,
             "Set Pipeline Readiness" => OpKind::SetPipelineReadiness,
+            "Set Brand Kit" => OpKind::SetBrandKit,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -1142,6 +1144,8 @@ impl OpBuilder {
                 )?
                 .unwrap_or(TitleAnimation::None);
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::InsertTitle {
                     start_s,
                     end_s,
@@ -1152,6 +1156,8 @@ impl OpBuilder {
                     font_weight,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InsertRichTitle => {
@@ -1183,6 +1189,8 @@ impl OpBuilder {
                 )?
                 .unwrap_or(TitleAnimation::None);
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::InsertRichTitle {
                     start_s,
                     end_s,
@@ -1191,6 +1199,8 @@ impl OpBuilder {
                     font_size,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InstantiateMotionTemplate => {
@@ -1249,6 +1259,8 @@ impl OpBuilder {
                     head,
                 )?;
                 let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
+                let font_family = take_field_string(&mut fields, "font_family");
+                let font_path = take_field_string(&mut fields, "font_path");
                 Ok(EdlOp::SetTitle {
                     anchor,
                     start_s,
@@ -1260,6 +1272,8 @@ impl OpBuilder {
                     font_weight,
                     animation,
                     phases,
+                    font_family,
+                    font_path,
                 })
             }
             OpKind::InsertCaption => {
@@ -1299,6 +1313,8 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or_default();
+                let style_json =
+                    take_field_json::<serde_json::Value>(&mut fields, "style_json", head)?;
                 Ok(EdlOp::InsertCaption {
                     start_s,
                     end_s,
@@ -1308,6 +1324,7 @@ impl OpBuilder {
                     color,
                     safe_area,
                     word_timings,
+                    style_json,
                 })
             }
             OpKind::InsertAnnotation => {
@@ -1573,6 +1590,9 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or_default(),
+            }),
+            OpKind::SetBrandKit => Ok(EdlOp::SetBrandKit {
+                kit: take_required_json::<BrandKit>(&mut fields, "kit_json", head)?,
             }),
         }
     }
@@ -1977,7 +1997,17 @@ fn parse_field(
     if let Ok(n) = raw.parse::<f64>() {
         return Ok((key, FieldValue::Number(n)));
     }
-    // Strip optional surrounding quotes for string values.
+    // String values may be JSON-encoded (the emitters write quoted text via
+    // `json_string()`), so a well-formed JSON string literal is decoded in
+    // full — this round-trips embedded quotes and escapes faithfully rather
+    // than leaking backslashes onto the screen. Anything that merely looks
+    // quoted but isn't valid JSON (or is unquoted) falls back to stripping at
+    // most one surrounding quote pair.
+    if raw.starts_with('"') {
+        if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+            return Ok((key, FieldValue::String(decoded)));
+        }
+    }
     let s = raw
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
@@ -3156,6 +3186,7 @@ mod tests {
                 font_weight,
                 animation,
                 phases: _,
+                ..
             } => {
                 assert!((start_s - 0.0).abs() < 1e-9);
                 assert!((end_s - 3.0).abs() < 1e-9);
@@ -3165,6 +3196,81 @@ mod tests {
                 assert_eq!(color, "#FFAA00");
                 assert_eq!(*font_weight, TitleWeight::Bold);
                 assert_eq!(*animation, TitleAnimation::FadeInOut);
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_text_with_embedded_quotes() {
+        // The emitters write `+ text:` via full JSON encoding, so embedded
+        // double-quotes arrive escaped. The parser must JSON-decode the
+        // field rather than strip a single quote pair, or the backslashes
+        // leak onto the screen. Pre-existing round-trip bug.
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"she said \\\"go\\\"\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle { text, .. } => {
+                assert_eq!(text, "she said \"go\"");
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_with_custom_font_path() {
+        // A `+ font_path:` line round-trips into the InsertTitle op.
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"Brand\"
++ font_path: /fonts/Brand.ttf
++ font_family: Brand Sans
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                font_path,
+                font_family,
+                ..
+            } => {
+                assert_eq!(font_path.as_deref(), Some("/fonts/Brand.ttf"));
+                assert_eq!(font_family.as_deref(), Some("Brand Sans"));
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_without_font_fields_defaults_to_none() {
+        // Absent font lines leave both fields None (backward-compatible).
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"Plain\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                font_path,
+                font_family,
+                ..
+            } => {
+                assert!(font_path.is_none());
+                assert!(font_family.is_none());
             }
             other => panic!("want InsertTitle, got {other:?}"),
         }
@@ -3225,6 +3331,7 @@ mod tests {
                 color,
                 font_weight,
                 phases: _,
+                ..
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
                 assert_eq!(text.as_deref(), Some("Updated"));
@@ -3262,6 +3369,7 @@ mod tests {
                 color,
                 safe_area,
                 word_timings,
+                style_json,
             } => {
                 assert!((start_s - 1.0).abs() < 1e-9);
                 assert!((end_s - 2.4).abs() < 1e-9);
@@ -3271,6 +3379,7 @@ mod tests {
                 assert_eq!(color, "#FFFFFF");
                 assert_eq!(safe_area, "mobile");
                 assert!(word_timings.is_empty());
+                assert!(style_json.is_none());
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }
@@ -3293,6 +3402,38 @@ mod tests {
                 assert_eq!(word_timings.len(), 2);
                 assert_eq!(word_timings[0].text, "This");
                 assert!((word_timings[1].start_s - 1.24).abs() < 1e-9);
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_caption_style_json() {
+        let edl = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.0
++ text: \"hi\"
++ position: bottom
++ font_size: 64
++ color: #FFFFFF
++ safe_area: mobile
++ style_json: {\"reveal\":\"active_word_pop\",\"highlight_color\":\"#FFE000\"}
+*** End EDL
+";
+        let env = parse(edl).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption { style_json, .. } => {
+                let sj = style_json.as_ref().expect("style_json should be Some");
+                assert_eq!(
+                    sj.get("reveal").and_then(|v| v.as_str()),
+                    Some("active_word_pop")
+                );
+                assert_eq!(
+                    sj.get("highlight_color").and_then(|v| v.as_str()),
+                    Some("#FFE000")
+                );
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }
@@ -3395,6 +3536,31 @@ mod tests {
                 assert_eq!(config.topics[0].text, "Opening");
             }
             _ => panic!("want SetBroadcastOverlay"),
+        }
+    }
+
+    #[test]
+    fn set_brand_kit_parses_kit_json() {
+        let text = r##"*** Begin EDL
+*** Set Brand Kit
++ kit_json: {"logo_path":"branding/logo.png","font_primary_path":"branding/primary.ttf","palette":["#FFD700","#00CED1"],"music_path":"branding/theme.wav","social_handles":[{"platform":"youtube","handle":"@awidat","url":"https://youtube.com/@awidat"}]}
+*** End EDL
+"##;
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetBrandKit { kit } => {
+                assert_eq!(kit.logo_path.as_deref(), Some("branding/logo.png"));
+                assert_eq!(
+                    kit.font_primary_path.as_deref(),
+                    Some("branding/primary.ttf")
+                );
+                assert_eq!(kit.palette, vec!["#FFD700", "#00CED1"]);
+                assert_eq!(kit.music_path.as_deref(), Some("branding/theme.wav"));
+                assert_eq!(kit.social_handles.len(), 1);
+                assert_eq!(kit.social_handles[0].platform, "youtube");
+                assert_eq!(kit.social_handles[0].handle, "@awidat");
+            }
+            _ => panic!("want SetBrandKit"),
         }
     }
 

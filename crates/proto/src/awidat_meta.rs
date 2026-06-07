@@ -77,6 +77,12 @@ pub struct AwidatTimelineMetadata {
     /// media files.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub broadcast_overlay: Option<BroadcastOverlayConfig>,
+    /// Project-wide reusable brand identity (logo, fonts, palette, music,
+    /// social handles). Titles and overlays read shared brand values from
+    /// here so identity lives in one authoritative place instead of being
+    /// duplicated per overlay/title.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub brand_kit: Option<BrandKit>,
     /// First-class asset catalog independent of timeline clips.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub asset_catalog: Option<AssetCatalog>,
@@ -774,6 +780,26 @@ impl Default for BroadcastOverlayConfig {
     }
 }
 
+impl BroadcastOverlayConfig {
+    /// Fill unset overlay identity from a project [`BrandKit`]. Only values
+    /// the overlay does not already define locally are taken from the kit:
+    /// the logo path when none is set, and the primary accent colour from
+    /// the kit palette when the style still uses the default gold. This is
+    /// the consumption point that makes a brand kit actually drive overlays.
+    pub fn apply_brand_kit(&mut self, kit: &BrandKit) {
+        if self.brand_logo_path.is_none()
+            && let Some(logo) = &kit.logo_path
+        {
+            self.brand_logo_path = Some(logo.clone());
+        }
+        if self.style.gold_hex == default_gold_hex()
+            && let Some(accent) = kit.palette.first()
+        {
+            self.style.gold_hex = accent.clone();
+        }
+    }
+}
+
 /// Host data used by name bars and host intro strips.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BroadcastHost {
@@ -795,6 +821,47 @@ pub struct BroadcastTimedEntry {
     pub time_seconds: f64,
     /// Text displayed at that time.
     pub text: String,
+}
+
+/// Reusable project-wide brand identity. Every field is optional so that
+/// existing projects (with no brand kit) round-trip unchanged and partial
+/// kits are valid. Titles and overlays read shared values (logo, palette)
+/// from here when their own values are unset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrandKit {
+    /// Project-relative path to the brand logo.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub logo_path: Option<String>,
+    /// Project-relative path to the primary brand font.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub font_primary_path: Option<String>,
+    /// Project-relative path to the secondary/accent brand font.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub font_secondary_path: Option<String>,
+    /// Brand palette as ordered hex (`#RRGGBB`) or named colour strings.
+    /// First entry is treated as the primary accent for fallback wiring.
+    #[serde(default)]
+    pub palette: Vec<String>,
+    /// Project-relative path to the brand background/intro music.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub music_path: Option<String>,
+    /// Social handles surfaced by outros, lower thirds, and end cards.
+    #[serde(default)]
+    pub social_handles: Vec<SocialHandle>,
+}
+
+/// A single social media handle for a brand.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocialHandle {
+    /// Platform name, e.g. `"youtube"`, `"x"`, `"instagram"`.
+    #[serde(default)]
+    pub platform: String,
+    /// Displayed handle, e.g. `"@awidat"`.
+    #[serde(default)]
+    pub handle: String,
+    /// Optional canonical profile URL.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub url: Option<String>,
 }
 
 /// Visual/timing defaults for the broadcast overlay.

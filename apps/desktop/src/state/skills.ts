@@ -64,6 +64,8 @@ export type SkillsStore = {
   disabledByProject: Map<string, Set<string>>;
   /** Map of project root → pin list (per skill name). */
   pinnedByProject: Map<string, PinnedSkill[]>;
+  /** Project root -> local edit revision for stale deferred hydrate guards. */
+  revisionByProject: Map<string, number>;
   /** True when the skill is disabled for the given project root. */
   isDisabled: (projectRoot: string | null, skillName: string) => boolean;
   /** Return the pin for a skill, or `undefined` when none. */
@@ -98,6 +100,13 @@ export type SkillsStore = {
     disabled: string[],
     pinned: PinnedSkill[],
   ) => void;
+  hydrateFromDiskIfUnchanged: (
+    projectRoot: string,
+    disabled: string[],
+    pinned: PinnedSkill[],
+    scheduledRevision: number,
+  ) => void;
+  revisionForProject: (projectRoot: string | null) => number;
   /** Clear all per-project state (used by tests). */
   clearForProject: (projectRoot: string) => void;
 };
@@ -116,6 +125,13 @@ const PROJECT_GLOBAL = "__global__";
 
 function projectKey(projectRoot: string | null): string {
   return projectRoot ?? PROJECT_GLOBAL;
+}
+
+export function shouldApplySkillHydration(
+  scheduledRevision: number,
+  currentRevision: number,
+): boolean {
+  return scheduledRevision === currentRevision;
 }
 
 /**
@@ -399,18 +415,39 @@ function pinnedFor(
   return list ? list.map((p) => ({ ...p })) : [];
 }
 
+function revisionFor(
+  map: Map<string, number>,
+  projectRoot: string | null,
+): number {
+  return map.get(projectKey(projectRoot)) ?? 0;
+}
+
+function bumpRevision(
+  map: Map<string, number>,
+  projectRoot: string | null,
+): Map<string, number> {
+  const next = new Map(map);
+  const key = projectKey(projectRoot);
+  next.set(key, (next.get(key) ?? 0) + 1);
+  return next;
+}
+
 export const useSkillsStore = create<SkillsStore>()(
   persist(
     (set, get) => ({
       disabledByProject: new Map(),
       pinnedByProject: new Map(),
+      revisionByProject: new Map(),
       isDisabled: (projectRoot, skillName) =>
         computeIsDisabled(get().disabledByProject, projectRoot, skillName),
       getPin: (projectRoot, skillName) =>
         computeGetPin(get().pinnedByProject, projectRoot, skillName),
       toggle: (projectRoot, skillName) => {
         const nextMap = applyToggle(get().disabledByProject, projectRoot, skillName);
-        set({ disabledByProject: nextMap });
+        set((state) => ({
+          disabledByProject: nextMap,
+          revisionByProject: bumpRevision(state.revisionByProject, projectRoot),
+        }));
         // Only persist when we have a real project root — the global
         // bucket has no on-disk counterpart by design.
         if (projectRoot !== null) {
@@ -424,14 +461,20 @@ export const useSkillsStore = create<SkillsStore>()(
           skillName,
           disabled,
         );
-        set({ disabledByProject: nextMap });
+        set((state) => ({
+          disabledByProject: nextMap,
+          revisionByProject: bumpRevision(state.revisionByProject, projectRoot),
+        }));
         if (projectRoot !== null) {
           void persistDisabled(projectRoot, disabledFor(nextMap, projectRoot));
         }
       },
       setPin: (projectRoot, pin) => {
         const nextPins = applySetPin(get().pinnedByProject, projectRoot, pin);
-        set({ pinnedByProject: nextPins });
+        set((state) => ({
+          pinnedByProject: nextPins,
+          revisionByProject: bumpRevision(state.revisionByProject, projectRoot),
+        }));
         if (projectRoot !== null) {
           // Pins go through the full-config writer so we preserve
           // disabled state on disk in the same write.
@@ -448,7 +491,10 @@ export const useSkillsStore = create<SkillsStore>()(
           projectRoot,
           skillName,
         );
-        set({ pinnedByProject: nextPins });
+        set((state) => ({
+          pinnedByProject: nextPins,
+          revisionByProject: bumpRevision(state.revisionByProject, projectRoot),
+        }));
         if (projectRoot !== null) {
           void persistSkillConfig(
             projectRoot,
@@ -470,15 +516,36 @@ export const useSkillsStore = create<SkillsStore>()(
             pinned,
           ),
         })),
+      hydrateFromDiskIfUnchanged: (
+        projectRoot,
+        disabled,
+        pinned,
+        scheduledRevision,
+      ) => {
+        if (
+          !shouldApplySkillHydration(
+            scheduledRevision,
+            revisionFor(get().revisionByProject, projectRoot),
+          )
+        ) {
+          return;
+        }
+        get().hydrateFromDisk(projectRoot, disabled, pinned);
+      },
+      revisionForProject: (projectRoot) =>
+        revisionFor(get().revisionByProject, projectRoot),
       clearForProject: (projectRoot) =>
         set((state) => {
           const nextDisabled = new Map(state.disabledByProject);
           nextDisabled.delete(projectKey(projectRoot));
           const nextPinned = new Map(state.pinnedByProject);
           nextPinned.delete(projectKey(projectRoot));
+          const nextRevisions = new Map(state.revisionByProject);
+          nextRevisions.delete(projectKey(projectRoot));
           return {
             disabledByProject: nextDisabled,
             pinnedByProject: nextPinned,
+            revisionByProject: nextRevisions,
           };
         }),
     }),
@@ -499,6 +566,7 @@ export const useSkillsStore = create<SkillsStore>()(
           ...current,
           disabledByProject: restored.disabled,
           pinnedByProject: restored.pinned,
+          revisionByProject: new Map(),
         };
       },
     },

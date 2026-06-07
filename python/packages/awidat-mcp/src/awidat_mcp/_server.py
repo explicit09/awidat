@@ -42,6 +42,9 @@ from awidat_mcp._sidecar import Sidecar
 class IndexAssetRequest(BaseModel):
     """Arguments to `index_asset` per `INDEX_SCHEMA.md`."""
 
+    project_root: str | None = None
+    """Absolute Awidat project root where sidecars and manifest live."""
+
     asset_path: str
     """Absolute filesystem path to the source asset."""
 
@@ -94,8 +97,10 @@ class IndexerServer:
             asset_path: str,
             asset_id: str,
             asset_sha256: str,
+            project_root: str | None = None,
         ) -> dict[str, Any]:
             req = IndexAssetRequest(
+                project_root=project_root,
                 asset_path=asset_path,
                 asset_id=asset_id,
                 asset_sha256=asset_sha256,

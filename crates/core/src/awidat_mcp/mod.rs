@@ -99,6 +99,9 @@ use crate::awidat_mcp::tools::manage_assets::{
     self, CreateBinArgs, MarkSelectArgs, MoveToBinArgs, RateAssetArgs, RenameAssetArgs,
     TagAssetArgs,
 };
+use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
+use crate::awidat_mcp::tools::plan_color_grade::{self, PlanColorGradeArgs};
+use crate::awidat_mcp::tools::plan_delivery_export::{self, PlanDeliveryExportArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
@@ -107,6 +110,8 @@ use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
 use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
+use crate::awidat_mcp::tools::plan_sound_design::{self, PlanSoundDesignArgs};
+use crate::awidat_mcp::tools::plan_split_edit::{self, PlanSplitEditArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
 use crate::awidat_mcp::tools::plan_visual_support_proposals::{
@@ -836,6 +841,25 @@ what setup must stay intact when cutting this beat standalone.",
     }
 
     /// `plan_emphasis` — read-only single-clip emphasis-motion planner.
+    /// `plan_delivery_export` — read-only delivery/export planner.
+    #[tool(
+        description = "\
+Read-only delivery/export planner. Pass a human delivery intent plus optional \
+destination. The tool selects an existing Awidat export/package path, returns \
+the intended ExportPreset/profile, preflight checks, ordered follow-up tools \
+(`render_preflight`, `start_render` or `export_package`/`stream_remux`, \
+`poll_render`, `verify_render`, optional packaging), and verification \
+requirements. It never starts a render or writes files.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_delivery_export(
+        &self,
+        args: Parameters<PlanDeliveryExportArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_delivery_export::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     #[tool(
         description = "\
 Read-only emphasis planner. Given a clip id, optional beat times, visual \
@@ -904,6 +928,43 @@ duration, reason, alternate, and EDL fragment. It never applies the edit.",
         args: Parameters<PlanTransitionArgs>,
     ) -> Result<String, ErrorData> {
         plan_transition::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_split_edit` — read-only J/L-cut planner.
+    #[tool(
+        description = "\
+Read-only J-cut/L-cut planner. Pass the JSON object returned by \
+transition_context. The tool recommends one audio-led split edit with a \
+concrete lead_s or trail_s, reason, confidence, alternate hard-cut \
+fallback, and apply-ready Set Audio Lead/Trail EDL fragment. It never \
+applies the edit.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_split_edit(
+        &self,
+        args: Parameters<PlanSplitEditArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_split_edit::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_sound_design` — read-only audio/sound-design planner.
+    #[tool(
+        description = "\
+Read-only audio/sound-design planner. Pass an intent such as \
+whoosh_transition, impact_hit, riser, ambience_bridge, music_bed, or \
+dialogue_ducking plus optional transition_context and timing. Returns an \
+asset search query, mix guidance, follow-up tool calls, and a parseable EDL \
+template using existing Insert Clip, Set Audio Lead/Trail, and Set Loudness \
+Target operations. It never applies the edit and never invents media.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_sound_design(
+        &self,
+        args: Parameters<PlanSoundDesignArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_sound_design::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1128,6 +1189,29 @@ applied separately with apply_edl only after inspection.",
         args: Parameters<PlanSceneAwareShortFormArgs>,
     ) -> Result<String, ErrorData> {
         plan_scene_aware_short_form::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_captions` — format-aware, read-only caption planner (long_form|accessibility).
+    #[tool(
+        description = "\
+Build a read-only, format-aware caption plan for one clip from its transcript \
+index. Supports long_form and accessibility formats only (use \
+plan_scene_aware_short_form for vertical short-form). Segments transcript words \
+to a <=17 CPS reading ceiling with per-format characters-per-line targets, \
+applies a (format, mood) style, and returns caption recommendations, a \
+readability lint, and a reviewable Insert Caption EDL fragment. Pass the \
+optional `preset` field (values: clean_white | word_pop | boxed) to override \
+the (format, mood) style with a named preset. Note: accessibility uses \
+whole-cue reveal regardless of mood. Apply with apply_edl after inspection. \
+Never burns captions into the picture.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_captions(
+        &self,
+        args: Parameters<PlanCaptionsArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_captions::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1527,6 +1611,30 @@ timeline, then call review_look_regions on the render.",
         args: Parameters<PlanLookRegionsArgs>,
     ) -> Result<String, ErrorData> {
         plan_look_regions::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_color_grade` — sample a clip's frames, derive a correction,
+    /// optionally add a creative look LUT, and emit a validated EDL.
+    ///
+    /// Marked destructive because the run writes `renders/<stem>.edl` and
+    /// `renders/<stem>.json`.
+    #[tool(
+        description = "\
+Plan a render-ready color grade for one clip: sample its frames, measure \
+exposure/contrast/white-balance, and emit a validated EDL that corrects \
+first and then (optionally, only with an existing project .cube) applies a \
+creative look at reduced strength. Writes renders/<stem>.edl and \
+renders/<stem>.json. After this tool, call apply_edl with the returned \
+`edl` text, inspect vedit_diff, then render the timeline.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn plan_color_grade(
+        &self,
+        args: Parameters<PlanColorGradeArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_color_grade::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }

@@ -15,6 +15,8 @@ import { editorDispatch } from "../editor/tauriDispatch";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { shouldStartDeferredIntro } from "../app/deferredHydrationGuards";
+import { deferNonCriticalHydration } from "../app/startupHydration";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
@@ -85,7 +87,10 @@ export function useAppGlue() {
   const introduced = useIntroState((s) => s.introduced);
   const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
-  const hydrateSkillsFromDisk = useSkillsStore((s) => s.hydrateFromDisk);
+  const hydrateSkillsFromDiskIfUnchanged = useSkillsStore(
+    (s) => s.hydrateFromDiskIfUnchanged,
+  );
+  const skillsRevisionForProject = useSkillsStore((s) => s.revisionForProject);
   const hydrateIndexerOverlayFromDisk = useIndexerOverlay((s) => s.hydrateFromDisk);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
@@ -98,22 +103,12 @@ export function useAppGlue() {
   const ingestNote = useNotesStore((s) => s.ingest);
   const proxyBackfillKeyRef = useRef<string | null>(null);
 
-  // Initial project refresh + timeline load.
+  // Initial project refresh. The project-change effect below owns
+  // timeline/media loading so boot does not duplicate those reads.
   useEffect(() => {
     if (!isTauri()) return;
-    let cancelled = false;
-    refresh()
-      .then(() => {
-        if (!cancelled) {
-          return Promise.all([refreshTimeline(), refreshMedia()]);
-        }
-        return undefined;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [refresh, refreshTimeline, refreshMedia]);
+    void refresh();
+  }, [refresh]);
 
   // Tauri event channels — items + turn-end + native menu commands.
   useEffect(() => {
@@ -335,10 +330,6 @@ export function useAppGlue() {
     clearNotes();
     if (isTauri() && current !== null) {
       refreshTimeline().catch(() => {});
-      const retry = window.setTimeout(() => {
-        refreshTimeline().catch(() => {});
-        refreshMedia().catch(() => {});
-      }, 500);
       refreshMedia().catch(() => {});
       // Hydrate the Skills tab's enable/disable state from
       // `<project>/.awidat/skills.json` so the toggles reflect any
@@ -351,32 +342,37 @@ export function useAppGlue() {
       // — so the pin UI on the Skills tab reflects state that landed
       // via file sync. v1 files migrate transparently on the Rust
       // side (empty pin list).
-      invoke<{
-        version: number;
-        disabled: string[];
-        pinned?: Array<{
-          name: string;
-          version?: string;
-          provenance?: "bundled" | "user" | "project";
-        }>;
-      }>("read_skill_config", { projectPath: projectRoot })
-        .then((cfg) =>
-          hydrateSkillsFromDisk(
-            projectRoot,
-            cfg.disabled ?? [],
-            cfg.pinned ?? [],
-          ),
-        )
-        .catch((e) => console.warn("read_skill_config failed", e));
-      // Mirror the skills hydration for the indexers overlay (Wave 4
-      // T3). The IndexersStrip popover reads disabled state from this
-      // store; the dispatcher reads the same .awidat/indexers.json on
-      // run so the two views never disagree.
-      invoke<string[]>("read_disabled_indexers", { projectPath: projectRoot })
-        .then((disabled) => hydrateIndexerOverlayFromDisk(projectRoot, disabled))
-        .catch((e) => console.warn("read_disabled_indexers failed", e));
-      return () => window.clearTimeout(retry);
+      const scheduledSkillsRevision = skillsRevisionForProject(projectRoot);
+      const cancelDeferred = deferNonCriticalHydration(() => {
+        invoke<{
+          version: number;
+          disabled: string[];
+          pinned?: Array<{
+            name: string;
+            version?: string;
+            provenance?: "bundled" | "user" | "project";
+          }>;
+        }>("read_skill_config", { projectPath: projectRoot })
+          .then((cfg) =>
+            hydrateSkillsFromDiskIfUnchanged(
+              projectRoot,
+              cfg.disabled ?? [],
+              cfg.pinned ?? [],
+              scheduledSkillsRevision,
+            ),
+          )
+          .catch((e) => console.warn("read_skill_config failed", e));
+        // Mirror the skills hydration for the indexers overlay (Wave 4
+        // T3). The IndexersStrip popover reads disabled state from this
+        // store; the dispatcher reads the same .awidat/indexers.json on
+        // run so the two views never disagree.
+        invoke<string[]>("read_disabled_indexers", { projectPath: projectRoot })
+          .then((disabled) => hydrateIndexerOverlayFromDisk(projectRoot, disabled))
+          .catch((e) => console.warn("read_disabled_indexers failed", e));
+      });
+      return cancelDeferred;
     }
+    return undefined;
   }, [
     current,
     clearAgent,
@@ -386,7 +382,8 @@ export function useAppGlue() {
     clearMediaSelection,
     clearSelection,
     clearNotes,
-    hydrateSkillsFromDisk,
+    hydrateSkillsFromDiskIfUnchanged,
+    skillsRevisionForProject,
     hydrateIndexerOverlayFromDisk,
     refreshTimeline,
     refreshMedia,
@@ -442,14 +439,35 @@ export function useAppGlue() {
     if (introduced.has(current)) return;
     if (agentRunning || agentItemsCount > 0) return;
     if (mediaSourceCount === 0 && mediaProxyCount === 0) return;
-    // Latch the project before invoking. If `start_turn` fails (codex
-    // not ready), we deliberately do NOT retry — the user can still
-    // type manually. A failed intro should not block the manual path.
-    markIntroduced(current);
-    setRunning(true);
-    invoke("start_turn", { input: INTRO_PROMPT }).catch((err) => {
-      console.warn("intro start_turn failed", err);
-      setRunning(false);
+    const scheduledProject = current;
+    return deferNonCriticalHydration(() => {
+      const agentState = useAgentStore.getState();
+      if (
+        !shouldStartDeferredIntro({
+          scheduledProject,
+          currentProject: useProjectStore.getState().current,
+          introduced: useIntroState.getState().introduced.has(scheduledProject),
+          running: agentState.running,
+          itemCount: agentState.items.length,
+          mediaSourceCount: useMediaStore.getState().sources.length,
+          mediaProxyCount: useMediaStore.getState().proxies.length,
+        })
+      ) {
+        return;
+      }
+      // Latch the project before invoking. If `start_turn` fails (codex
+      // not ready), we deliberately do NOT retry — the user can still
+      // type manually. A failed intro should not block the manual path.
+      markIntroduced(scheduledProject);
+      invoke<string>("start_turn", { input: INTRO_PROMPT })
+        .then((turnId) => {
+          if (useProjectStore.getState().current !== scheduledProject) return;
+          setActiveTurnId(turnId);
+          setRunning(true);
+        })
+        .catch((err) => {
+          console.warn("intro start_turn failed", err);
+        });
     });
   }, [
     current,
