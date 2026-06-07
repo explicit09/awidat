@@ -423,5 +423,8 @@ async fn status_server_error_is_network_error() {
                 "expected status code in message, got: {msg}"
             );
         }
+        YouTubeStatusClientError::MissingScope => {
+            panic!("500 should map to network/server, not missing scope");
+        }
     }
 }
