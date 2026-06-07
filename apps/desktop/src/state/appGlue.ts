@@ -15,6 +15,7 @@ import { editorDispatch } from "../editor/tauriDispatch";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { shouldStartDeferredIntro } from "../app/deferredHydrationGuards";
 import { deferNonCriticalHydration } from "../app/startupHydration";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
@@ -86,7 +87,10 @@ export function useAppGlue() {
   const introduced = useIntroState((s) => s.introduced);
   const markIntroduced = useIntroState((s) => s.markIntroduced);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
-  const hydrateSkillsFromDisk = useSkillsStore((s) => s.hydrateFromDisk);
+  const hydrateSkillsFromDiskIfUnchanged = useSkillsStore(
+    (s) => s.hydrateFromDiskIfUnchanged,
+  );
+  const skillsRevisionForProject = useSkillsStore((s) => s.revisionForProject);
   const hydrateIndexerOverlayFromDisk = useIndexerOverlay((s) => s.hydrateFromDisk);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
@@ -338,6 +342,7 @@ export function useAppGlue() {
       // — so the pin UI on the Skills tab reflects state that landed
       // via file sync. v1 files migrate transparently on the Rust
       // side (empty pin list).
+      const scheduledSkillsRevision = skillsRevisionForProject(projectRoot);
       const cancelDeferred = deferNonCriticalHydration(() => {
         invoke<{
           version: number;
@@ -349,10 +354,11 @@ export function useAppGlue() {
           }>;
         }>("read_skill_config", { projectPath: projectRoot })
           .then((cfg) =>
-            hydrateSkillsFromDisk(
+            hydrateSkillsFromDiskIfUnchanged(
               projectRoot,
               cfg.disabled ?? [],
               cfg.pinned ?? [],
+              scheduledSkillsRevision,
             ),
           )
           .catch((e) => console.warn("read_skill_config failed", e));
@@ -376,7 +382,8 @@ export function useAppGlue() {
     clearMediaSelection,
     clearSelection,
     clearNotes,
-    hydrateSkillsFromDisk,
+    hydrateSkillsFromDiskIfUnchanged,
+    skillsRevisionForProject,
     hydrateIndexerOverlayFromDisk,
     refreshTimeline,
     refreshMedia,
@@ -432,16 +439,35 @@ export function useAppGlue() {
     if (introduced.has(current)) return;
     if (agentRunning || agentItemsCount > 0) return;
     if (mediaSourceCount === 0 && mediaProxyCount === 0) return;
+    const scheduledProject = current;
     return deferNonCriticalHydration(() => {
+      const agentState = useAgentStore.getState();
+      if (
+        !shouldStartDeferredIntro({
+          scheduledProject,
+          currentProject: useProjectStore.getState().current,
+          introduced: useIntroState.getState().introduced.has(scheduledProject),
+          running: agentState.running,
+          itemCount: agentState.items.length,
+          mediaSourceCount: useMediaStore.getState().sources.length,
+          mediaProxyCount: useMediaStore.getState().proxies.length,
+        })
+      ) {
+        return;
+      }
       // Latch the project before invoking. If `start_turn` fails (codex
       // not ready), we deliberately do NOT retry — the user can still
       // type manually. A failed intro should not block the manual path.
-      markIntroduced(current);
-      setRunning(true);
-      invoke("start_turn", { input: INTRO_PROMPT }).catch((err) => {
-        console.warn("intro start_turn failed", err);
-        setRunning(false);
-      });
+      markIntroduced(scheduledProject);
+      invoke<string>("start_turn", { input: INTRO_PROMPT })
+        .then((turnId) => {
+          if (useProjectStore.getState().current !== scheduledProject) return;
+          setActiveTurnId(turnId);
+          setRunning(true);
+        })
+        .catch((err) => {
+          console.warn("intro start_turn failed", err);
+        });
     });
   }, [
     current,

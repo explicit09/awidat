@@ -20,6 +20,7 @@ import { useAgentStore } from "./agent/store";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
+import { shouldReplaceDeferredChatHistory } from "./app/deferredHydrationGuards";
 import { deferNonCriticalHydration } from "./app/startupHydration";
 import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
@@ -744,7 +745,10 @@ function App() {
     }
   }
 
-  async function loadInitialChatHistory() {
+  async function loadInitialChatHistory(args?: {
+    scheduledProject: string | null;
+    scheduledItemCount: number;
+  }) {
     if (demoMode || !isTauri() || !current) {
       setChatSessions([]);
       setActiveChatSession(null);
@@ -757,8 +761,20 @@ function App() {
         invoke<ChatHistory>("load_chat_history"),
       ]);
       setChatSessions(sessions);
-      setActiveChatSession(history.session);
-      replaceAgentItems(history.items);
+      const agentState = useAgentStore.getState();
+      if (
+        !args ||
+        shouldReplaceDeferredChatHistory({
+          scheduledProject: args.scheduledProject,
+          currentProject: useProjectStore.getState().current,
+          scheduledItemCount: args.scheduledItemCount,
+          currentItemCount: agentState.items.length,
+          running: agentState.running,
+        })
+      ) {
+        setActiveChatSession(history.session);
+        replaceAgentItems(history.items);
+      }
     } catch (e) {
       console.warn("chat history load failed", e);
     } finally {
@@ -1022,8 +1038,10 @@ function App() {
   }, [clearGeneratedMedia, current, demoMode, refreshGeneratedMedia]);
 
   useEffect(() => {
+    const scheduledProject = current;
+    const scheduledItemCount = useAgentStore.getState().items.length;
     return deferNonCriticalHydration(() => {
-      void loadInitialChatHistory();
+      void loadInitialChatHistory({ scheduledProject, scheduledItemCount });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode]);
@@ -1225,6 +1243,15 @@ function App() {
         .map((job) => job.job_kind),
     );
   }, [items]);
+
+  useEffect(() => {
+    setIndexReadiness(undefined);
+    useIndexReadinessStore.getState().setSnapshot(undefined);
+    setEpisodeSummary(undefined);
+    useEpisodesStore.getState().setSnapshot(undefined);
+    setRunningJobIds(undefined);
+    setMediaReadiness(undefined);
+  }, [current, demoMode]);
 
   useEffect(() => {
     return deferNonCriticalHydration(() => {
