@@ -11,6 +11,7 @@ tools_allowlist:
   - find_filler_words
   - find_broll_opportunities
   - find_speaker_oncam
+  - fetch_x_trend_context
   - plan_short_form_review
   - read_index
   - view_timeline
@@ -58,8 +59,10 @@ when the energy, visual, duration, or topic-boundary evidence is weak.
 This is an montage advantage over workflows that only score transcript
 and energy.
 
-When current X/web/news context is available, pass it to
-`plan_short_form_review` as `trend_context`:
+When current X context would help choose clips, call
+`fetch_x_trend_context` with 1-5 specific episode-topic queries, then pass
+the returned payload to `plan_short_form_review` as `trend_context`.
+When web/news context comes from another source, shape it the same way:
 
 ```json
 {
