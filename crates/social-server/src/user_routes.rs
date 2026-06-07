@@ -15,7 +15,8 @@ use awidat_social::{
     api::{
         AccountSummary, ApiActor, ApiOwner, BindTargetRequest, OAuthStartRequest,
         OAuthStartResponse, PublishJobResponse, RescheduleJobRequest, ScheduleTargetRequest,
-        SocialApi, SocialApiError, ValidateTargetRequest, ValidateTargetResponse,
+        SocialApi, SocialApiError, UpdateTargetRequest, ValidateTargetRequest,
+        ValidateTargetResponse,
     },
     auth_context::JwtVerifier,
     model::AccountUsageAudit,
@@ -259,6 +260,25 @@ pub(crate) async fn bind_target_handler(
     let target = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
         SocialApi::bind_target(&mut store, &actor, req)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(map_api_error)?;
+    Ok(Json(target))
+}
+
+// ── POST /social/targets/update ─────────────────────────────────────────────
+
+pub(crate) async fn update_target_handler(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateTargetRequest>,
+) -> HttpResult<awidat_social::model::CampaignVariantTarget> {
+    let (actor, _owner) = desktop_auth(&state, &headers)?;
+    let pool = state.pool.clone();
+    let target = tokio::task::spawn_blocking(move || {
+        let mut store = PgSocialStore::new(pool);
+        SocialApi::update_target(&mut store, &actor, req)
     })
     .await
     .map_err(join_error)?

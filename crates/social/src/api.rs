@@ -19,13 +19,14 @@ use crate::oauth_url::OAuthProviderConfig;
 use crate::provider::{ProviderRegistry, ProviderState};
 use crate::publish_service::{
     BindTargetInput, PublishService, PublishServiceError, RescheduleJobInput, ScheduleTargetInput,
+    UpdateTargetInput,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use crate::team_service::{TeamPolicy, TeamService, TeamServiceError};
 use crate::token::LocalTokenKeyProvider;
 use crate::token_bundle::ProviderTokenBundle;
 use crate::token_refresh::TokenRefresher;
-use crate::upload_adapter::{UploadAdapter, UploadPrivacy};
+use crate::upload_adapter::{TikTokInteractionSettings, UploadAdapter, UploadPrivacy};
 use crate::upload_service::{ExecuteUploadInput, RetryPolicy, UploadService, UploadServiceError};
 use crate::upload_status::{
     PollUploadStatusInput, UploadStatusAdapter, UploadStatusService, UploadStatusServiceError,
@@ -323,6 +324,15 @@ pub struct BindTargetRequest {
     pub now: i64,
 }
 
+/// `POST /campaigns/:campaign_id/variants/:variant_id/target/update` body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateTargetRequest {
+    pub target_id: String,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
 /// `POST /campaigns/:campaign_id/variants/:variant_id/validate` body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidateTargetRequest {
@@ -459,6 +469,8 @@ pub struct ExecuteUploadRequest {
     /// When `None`, [`SocialApi::execute_claimed_upload_job`] falls back to the
     /// connected account's `default_privacy`, then to `Private`.
     pub privacy: Option<UploadPrivacy>,
+    #[serde(default)]
+    pub tiktok_interactions: TikTokInteractionSettings,
     pub now: i64,
 }
 
@@ -595,6 +607,29 @@ impl SocialApi {
             },
         )?;
         Ok(target)
+    }
+
+    /// `POST /campaigns/:campaign_id/variants/:variant_id/target/update`:
+    /// update metadata for an already-bound target before publishing fires.
+    pub fn update_target(
+        store: &mut impl SocialStore,
+        actor: &ApiActor,
+        request: UpdateTargetRequest,
+    ) -> Result<CampaignVariantTarget, SocialApiError> {
+        let target = store.campaign_variant_target(&request.target_id)?;
+        let owner = account_owner(store, &target.connected_account_id)?;
+        actor.authorize(&owner, TeamAction::SchedulePublish)?;
+        let updated = PublishService::update_target(
+            store,
+            &owner,
+            UpdateTargetInput {
+                target_id: request.target_id,
+                platform_fields: request.platform_fields,
+                scheduled_for: request.scheduled_for,
+                now: request.now,
+            },
+        )?;
+        Ok(updated)
     }
 
     /// `POST /campaigns/:campaign_id/variants/:variant_id/validate`: run the
@@ -812,6 +847,7 @@ impl SocialApi {
             thumbnail_ref: request.thumbnail_ref,
             artifact_ref: request.artifact_ref,
             privacy,
+            tiktok_interactions: request.tiktok_interactions,
             now: request.now,
         };
         Ok(execute(store, adapter, input)?)
@@ -1352,6 +1388,61 @@ mod tests {
     }
 
     #[test]
+    fn publish_api_updates_bound_target_metadata_and_requires_revalidation() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        store
+            .save_connected_account(connected_account("acct_1", user_owner()))
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+
+        SocialApi::bind_target(&mut store, &user_actor(), bind_request("acct_1"))
+            .unwrap_or_else(|err| panic!("bind target: {err}"));
+        SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_100,
+            },
+        )
+        .unwrap_or_else(|err| panic!("validate target: {err}"));
+
+        let updated = SocialApi::update_target(
+            &mut store,
+            &user_actor(),
+            UpdateTargetRequest {
+                target_id: "target_1".into(),
+                platform_fields: serde_json::json!({
+                    "privacy": "public",
+                    "title": "Edited launch clip",
+                    "description": "Edited description"
+                }),
+                scheduled_for: 2_500,
+                now: 1_200,
+            },
+        )
+        .unwrap_or_else(|err| panic!("update target: {err}"));
+
+        assert_eq!(updated.validation_state, ValidationState::Pending);
+        assert_eq!(updated.updated_at, 1_200);
+        assert_eq!(updated.scheduled_for, 2_500);
+        assert_eq!(updated.platform_fields["title"], "Edited launch clip");
+
+        let revalidated = SocialApi::validate_target(
+            &mut store,
+            &registry,
+            &user_actor(),
+            ValidateTargetRequest {
+                target_id: "target_1".into(),
+                now: 1_300,
+            },
+        )
+        .unwrap_or_else(|err| panic!("revalidate target: {err}"));
+        assert_eq!(revalidated.validation_state, ValidationState::Valid);
+    }
+
+    #[test]
     fn publish_api_validate_target_returns_reasons_for_invalid_metadata() {
         let mut store = InMemorySocialStore::default();
         let registry = ProviderRegistry::default_multi_platform();
@@ -1772,6 +1863,7 @@ mod tests {
             thumbnail_ref: Some("render://thumb_1".into()),
             artifact_ref: None,
             privacy: None,
+            tiktok_interactions: Default::default(),
             now: 2_000,
         }
     }

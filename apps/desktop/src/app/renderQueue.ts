@@ -38,6 +38,14 @@ export type RenderProgressDetails = {
   logExcerpt?: string | null;
 };
 
+export type RenderUploadEvent = {
+  id: string;
+  eventType: string;
+  message: string;
+  metadata: unknown;
+  createdAt: number;
+};
+
 /**
  * Per-target upload lifecycle for the server-backed social publish
  * job created after a render lands. `state` is the tag; the other
@@ -48,13 +56,14 @@ export type RenderProgressDetails = {
  *   - `published`  — provider accepted; `remote_url` appears when shareable
  *   - `failed`     — terminal failure; `reason` is shown verbatim
  */
-export type RenderUploadState =
+export type RenderUploadState = (
   | { state: "pending" }
   | { state: "uploading"; progress: number }
-  | { state: "scheduled"; job_id: string; scheduled_for?: number }
-  | { state: "processing"; job_id: string }
+  | { state: "scheduled"; job_id: string; target_id?: string; scheduled_for?: number }
+  | { state: "processing"; job_id: string; target_id?: string }
   | { state: "published"; remote_url?: string; remote_id: string }
-  | { state: "failed"; reason: string; job_id?: string };
+  | { state: "failed"; reason: string; job_id?: string; target_id?: string }
+) & { events?: RenderUploadEvent[] };
 
 export type UploadTargetActions = {
   canRefresh: boolean;

@@ -36,10 +36,15 @@ const entry: RenderQueueEntry = {
       visibility: "private",
       scheduledAt: 2_000,
       thumbnailPath: undefined,
+      tiktokInteractions: {
+        disableDuet: true,
+        disableComment: false,
+        disableStitch: true,
+      },
     },
   },
   uploadStates: {
-    youtube: { state: "scheduled", job_id: "job_yt" },
+    youtube: { state: "scheduled", job_id: "job_yt", target_id: "target_yt" },
     tiktok: {
       state: "published",
       remote_url: "https://tiktok.example/post/1",
@@ -63,14 +68,23 @@ assert.deepEqual(
 );
 assert.equal(posts[0].scheduledAt, 1_800);
 assert.equal(posts[0].jobId, "job_yt");
+assert.equal(posts[0].targetId, "target_yt");
 assert.equal(posts[0].visibility, "public");
+assert.deepEqual(posts[0].tags, ["awidat"]);
+assert.equal(posts[0].thumbnailPath, undefined);
 assert.equal(posts[1].providerUrl, "https://tiktok.example/post/1");
+assert.deepEqual(posts[1].tiktokInteractions, {
+  disableDuet: true,
+  disableComment: false,
+  disableStitch: true,
+});
 assert.deepEqual(deriveSchedulerPostActions(posts[0]), {
   canRefresh: true,
   canCancel: true,
   canRetry: false,
   canReschedule: true,
   canOpenProviderUrl: false,
+  canReconnect: false,
 });
 assert.deepEqual(deriveSchedulerPostActions(posts[1]), {
   canRefresh: false,
@@ -78,7 +92,42 @@ assert.deepEqual(deriveSchedulerPostActions(posts[1]), {
   canRetry: false,
   canReschedule: false,
   canOpenProviderUrl: true,
+  canReconnect: false,
 });
+
+const auditEventEntry: RenderQueueEntry = {
+  ...entry,
+  id: "queue_audit_events",
+  uploadTargets: ["youtube"],
+  uploadStates: {
+    youtube: {
+      state: "scheduled",
+      job_id: "job_audit",
+      events: [
+        {
+          id: "event_1",
+          eventType: "scheduled",
+          message: "Queued for YouTube",
+          metadata: { provider: "youtube" },
+          createdAt: 1_750,
+        },
+        {
+          id: "event_2",
+          eventType: "artifact_uploaded",
+          message: "Upload artifact attached",
+          metadata: {},
+          createdAt: 1_760,
+        },
+      ],
+    },
+  },
+};
+
+const auditPost = deriveSchedulerPosts([auditEventEntry], 1_700)[0];
+assert.deepEqual(
+  auditPost.auditEvents.map((event) => `${event.eventType}:${event.message}`),
+  ["scheduled:Queued for YouTube", "artifact_uploaded:Upload artifact attached"],
+);
 
 const targetFilteredEntry: RenderQueueEntry = {
   ...entry,
@@ -274,6 +323,7 @@ assert.deepEqual(
         canRetry: true,
         canReschedule: false,
         canOpenProviderUrl: false,
+        canReconnect: false,
       },
     },
     {
@@ -284,6 +334,7 @@ assert.deepEqual(
         canRetry: true,
         canReschedule: false,
         canOpenProviderUrl: false,
+        canReconnect: true,
       },
     },
     {
@@ -294,6 +345,7 @@ assert.deepEqual(
         canRetry: true,
         canReschedule: false,
         canOpenProviderUrl: false,
+        canReconnect: true,
       },
     },
     {
@@ -304,6 +356,7 @@ assert.deepEqual(
         canRetry: true,
         canReschedule: false,
         canOpenProviderUrl: false,
+        canReconnect: true,
       },
     },
     {
@@ -314,6 +367,7 @@ assert.deepEqual(
         canRetry: true,
         canReschedule: false,
         canOpenProviderUrl: false,
+        canReconnect: false,
       },
     },
   ],

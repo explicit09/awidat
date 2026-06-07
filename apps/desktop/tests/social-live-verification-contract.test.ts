@@ -31,6 +31,7 @@ for (const command of [
   "social_accounts",
   "social_bind_target",
   "social_validate_target",
+  "social_update_target",
   "social_schedule_target",
   "social_upload_artifact",
   "social_publish_job",

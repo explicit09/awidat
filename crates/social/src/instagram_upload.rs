@@ -131,12 +131,15 @@ impl<C: InstagramUploadClient> UploadAdapter for InstagramUploadAdapter<C> {
         if request.access_token_ref.trim().is_empty() {
             return Err(UploadAdapterError::MissingUploadToken);
         }
-        // Instagram captions are optional; default to the title or empty.
-        let caption = if request.title.trim().is_empty() {
-            request.description.clone().unwrap_or_default()
-        } else {
-            request.title.trim().to_string()
-        };
+        // Instagram captions live in the shared description field; title may be
+        // only a scheduler fallback variant id when the platform has no title.
+        let caption = request
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .unwrap_or_else(|| request.title.trim())
+            .to_string();
 
         let container = self
             .client
@@ -534,6 +537,7 @@ mod tests {
             tags: vec!["awidat".into()],
             thumbnail_ref: None,
             privacy: UploadPrivacy::Public,
+            tiktok_interactions: Default::default(),
             scheduled_for: Some(2_000),
             access_token_ref: "token-secret-ref".into(),
         }
@@ -570,9 +574,38 @@ mod tests {
         assert!(result.processing);
         let seen = adapter.client.seen.borrow().clone().expect("request seen");
         assert_eq!(seen.video_url, "https://storage.example/render.mp4");
-        assert_eq!(seen.caption, "Launch clip");
+        assert_eq!(seen.caption, "Description");
         assert_eq!(seen.media_type, IG_MEDIA_TYPE_REELS);
         assert_eq!(seen.access_token_ref, "token-secret-ref");
+    }
+
+    #[test]
+    fn upload_uses_title_when_caption_description_is_empty() {
+        let adapter = InstagramUploadAdapter::new(RecordingInstagramClient::default());
+        let mut req = request();
+        req.description = Some("  ".into());
+
+        adapter
+            .upload(&req)
+            .unwrap_or_else(|err| panic!("upload: {err:?}"));
+
+        let seen = adapter.client.seen.borrow().clone().expect("request seen");
+        assert_eq!(seen.caption, "Launch clip");
+    }
+
+    #[test]
+    fn upload_prefers_description_caption_over_scheduler_title_fallback() {
+        let adapter = InstagramUploadAdapter::new(RecordingInstagramClient::default());
+        let mut req = request();
+        req.title = "instagram-queue_1-job_1".into();
+        req.description = Some("Real Instagram caption".into());
+
+        adapter
+            .upload(&req)
+            .unwrap_or_else(|err| panic!("upload: {err:?}"));
+
+        let seen = adapter.client.seen.borrow().clone().expect("request seen");
+        assert_eq!(seen.caption, "Real Instagram caption");
     }
 
     #[test]

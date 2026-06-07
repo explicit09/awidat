@@ -9,10 +9,11 @@ Required evidence:
 - OAuth sign-in: screenshot or JSON showing `social_accounts` returns the connected TikTok test account without tokens.
 - Selected account: screenshot or JSON showing the chosen TikTok account id in the product surface.
 - Metadata validation: caption/description, tags, privacy/public eligibility, and schedule validation output.
+- Metadata edit: proof that a saved metadata change revalidates the bound target through `social_update_target` before firing.
 - Private or sandbox publish: sandbox/private upload job id and provider response.
 - Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Awidat was closed.
 - Status polling: `social_publish_job` history through terminal state.
 - Provider URL: final TikTok provider URL or sandbox equivalent.
 - Audit history: account/job audit events.
-- Negative path: missing scope, reconnect, validation error, public eligibility, or provider requires-action proof.
+- Negative path: missing scope, reconnect, validation error, oversized media rejection, public eligibility, or provider requires-action proof.
 - Cleanup: deletion/private cleanup proof or documented cleanup limitation.

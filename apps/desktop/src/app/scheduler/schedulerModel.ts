@@ -1,8 +1,12 @@
 import type {
   RenderQueueEntry,
+  RenderUploadEvent,
   RenderUploadState,
 } from "../renderQueue.ts";
-import type { UploadVisibility } from "../../state/uploadMetadata.ts";
+import type {
+  TikTokInteractionSettings,
+  UploadVisibility,
+} from "../../state/uploadMetadata.ts";
 
 export type SchedulerStatus =
   | "draft"
@@ -21,13 +25,18 @@ export type SchedulerPost = {
   provider: string;
   title: string;
   description: string;
+  tags: string[];
   visibility: UploadVisibility;
+  thumbnailPath?: string;
+  tiktokInteractions?: TikTokInteractionSettings;
   scheduledAt: number;
   status: SchedulerStatus;
   jobId?: string;
+  targetId?: string;
   outputPath?: string;
   providerUrl?: string;
   failureReason?: string;
+  auditEvents: RenderUploadEvent[];
   updatedAt: number;
 };
 
@@ -37,6 +46,7 @@ export type SchedulerPostActions = {
   canRetry: boolean;
   canReschedule: boolean;
   canOpenProviderUrl: boolean;
+  canReconnect: boolean;
 };
 
 const STATUS_LABELS: Record<SchedulerStatus, string> = {
@@ -75,6 +85,9 @@ export function deriveSchedulerPostActions(
       hasJob && (post.status === "failed" || post.status === "requires_action"),
     canReschedule: hasJob && post.status === "scheduled",
     canOpenProviderUrl: Boolean(post.providerUrl),
+    canReconnect:
+      post.status === "requires_action" &&
+      isReconnectReason(post.failureReason ?? ""),
   };
 }
 
@@ -142,16 +155,21 @@ function deriveSchedulerPost(
     provider,
     title: metadata?.title || entry.label,
     description: metadata?.description ?? "",
+    tags: metadata?.tags ?? [],
     visibility: metadata?.visibility ?? "private",
+    thumbnailPath: metadata?.thumbnailPath,
+    tiktokInteractions: metadata?.tiktokInteractions,
     scheduledAt,
     status,
     jobId: uploadJobId(uploadState),
+    targetId: uploadTargetId(uploadState),
     outputPath: entry.outputPath,
     providerUrl,
     failureReason:
       status === "failed" || status === "requires_action"
         ? failureReason
         : undefined,
+    auditEvents: uploadState?.events ?? [],
     updatedAt: updatedAt ?? Math.floor(nowSeconds),
   };
 }
@@ -215,6 +233,18 @@ function isRequiresActionReason(reason: string): boolean {
   ].some((marker) => normalized.includes(marker));
 }
 
+function isReconnectReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return [
+    "missing_scope",
+    "permission_required",
+    "reauth_required",
+    "needs_reauth",
+    "needs reauth",
+    "account needs reauth",
+  ].some((marker) => normalized.includes(marker));
+}
+
 function uploadJobId(
   uploadState: RenderUploadState | undefined,
 ): string | undefined {
@@ -224,6 +254,19 @@ function uploadJobId(
     uploadState?.state === "failed"
   ) {
     return uploadState.job_id;
+  }
+  return undefined;
+}
+
+function uploadTargetId(
+  uploadState: RenderUploadState | undefined,
+): string | undefined {
+  if (
+    uploadState?.state === "scheduled" ||
+    uploadState?.state === "processing" ||
+    uploadState?.state === "failed"
+  ) {
+    return uploadState.target_id;
   }
   return undefined;
 }

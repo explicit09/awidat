@@ -24,6 +24,7 @@ import {
   sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
+  type RenderUploadEvent,
   type RenderUploadState,
 } from "./renderQueue";
 import {
@@ -68,6 +69,7 @@ type SocialPublishJob = {
   providerPostUrl?: string | null;
   normalizedError?: string | null;
   requiresActionReason?: string | null;
+  events?: RenderUploadEvent[];
 };
 
 type CaptionSidecarPaths = {
@@ -97,11 +99,13 @@ function publishedUrlsFromStates(
 }
 
 function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
+  const events = job.events && job.events.length > 0 ? job.events : undefined;
   if (job.status === "published") {
     return {
       state: "published",
       remote_id: job.providerPostId ?? job.id,
       ...(job.providerPostUrl ? { remote_url: job.providerPostUrl } : {}),
+      ...(events ? { events } : {}),
     };
   }
   if (
@@ -117,15 +121,23 @@ function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
       state: "failed",
       reason: reasonCopy(reason),
       job_id: job.id,
+      ...(events ? { events } : {}),
     };
   }
   if (job.status === "processing" || job.status === "uploading") {
-    return { state: "processing", job_id: job.id };
+    return {
+      state: "processing",
+      job_id: job.id,
+      ...(events ? { events } : {}),
+    };
   }
   return {
     state: "scheduled",
     job_id: job.id,
-    scheduled_for: job.scheduledFor ?? undefined,
+    ...(job.scheduledFor !== undefined && job.scheduledFor !== null
+      ? { scheduled_for: job.scheduledFor }
+      : {}),
+    ...(events ? { events } : {}),
   };
 }
 

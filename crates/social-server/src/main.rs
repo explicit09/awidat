@@ -39,7 +39,7 @@ mod token_refresher;
 mod token_resolver;
 mod user_routes;
 
-use awidat_social::upload_adapter::UploadPrivacy;
+use awidat_social::upload_adapter::{TikTokInteractionSettings, UploadPrivacy};
 use awidat_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
     api::{ExecuteUploadRequest, SocialApi},
@@ -148,6 +148,29 @@ pub(crate) struct AppState {
     pub(crate) pool: Pool<PostgresConnectionManager<NoTls>>,
     pub(crate) registry: ProviderRegistry,
     pub(crate) config: ServerConfig,
+}
+
+#[derive(Clone)]
+struct SocialOAuthCredentials {
+    google_client_id: String,
+    google_client_secret: String,
+    tiktok_client_key: String,
+    tiktok_client_secret: String,
+    twitter_x_client_id: String,
+    twitter_x_client_secret: String,
+}
+
+impl SocialOAuthCredentials {
+    fn from_config(config: &ServerConfig) -> Self {
+        Self {
+            google_client_id: config.google_client_id.clone(),
+            google_client_secret: config.google_client_secret.clone(),
+            tiktok_client_key: config.tiktok_client_key.clone(),
+            tiktok_client_secret: config.tiktok_client_secret.clone(),
+            twitter_x_client_id: config.twitter_x_client_id.clone(),
+            twitter_x_client_secret: config.twitter_x_client_secret.clone(),
+        }
+    }
 }
 
 pub(crate) type SharedState = Arc<AppState>;
@@ -294,6 +317,10 @@ async fn main() {
         .route(
             "/social/targets/bind",
             post(user_routes::bind_target_handler),
+        )
+        .route(
+            "/social/targets/update",
+            post(user_routes::update_target_handler),
         )
         .route(
             "/social/targets/validate",
@@ -988,8 +1015,7 @@ async fn internal_tick_handler(
     let artifact_base_dir = state.config.artifact_base_dir.clone();
     let supabase_url = state.config.supabase_url.clone();
     let supabase_service_key = state.config.supabase_service_key.clone();
-    let google_client_id = state.config.google_client_id.clone();
-    let google_client_secret = state.config.google_client_secret.clone();
+    let oauth_credentials = SocialOAuthCredentials::from_config(&state.config);
 
     let claimed_count = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool.clone());
@@ -1029,11 +1055,14 @@ async fn internal_tick_handler(
                     let yt_config = YouTubeClientConfig { force_private, ..Default::default() };
                     let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
                     let adapter = YouTubeUploadAdapter::new(client);
-                    let refresher = token_refresher::ServerTokenRefresher::new(
-                        google_client_id.clone(),
-                        google_client_secret.clone(),
+                    let Some(refresher) = token_refresher_for_provider(
+                        &oauth_credentials,
+                        &Provider::YouTube,
                         aead_key_clone(&aead_key),
-                    );
+                    ) else {
+                        tracing::warn!(job_id = %job.id, "YouTube token refresh unavailable: OAuth not configured");
+                        continue;
+                    };
                     let upload = upload_request_for_job(&store, &job, now);
                     if let Err(e) = SocialApi::execute_claimed_upload_job_with_refresher(
                         &mut store,
@@ -1071,9 +1100,25 @@ async fn internal_tick_handler(
                     let adapter =
                         TikTokUploadAdapter::with_public_eligibility(client, eligible_for_public);
                     let upload = upload_request_for_job(&store, &job, now);
-                    if let Err(e) =
-                        SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
-                    {
+                    let Some(refresher) = token_refresher_for_provider(
+                        &oauth_credentials,
+                        &Provider::TikTok,
+                        aead_key_clone(&aead_key),
+                    ) else {
+                        if let Err(e) =
+                            SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                        {
+                            tracing::warn!(job_id = %job.id, provider = ?job.provider, "TikTok execute failed: {e}");
+                        }
+                        continue;
+                    };
+                    if let Err(e) = SocialApi::execute_claimed_upload_job_with_refresher(
+                        &mut store,
+                        &adapter,
+                        &refresher,
+                        upload,
+                        TOKEN_REFRESH_SWEEP_SKEW_SECS,
+                    ) {
                         tracing::warn!(job_id = %job.id, provider = ?job.provider, "TikTok execute failed: {e}");
                     }
                 }
@@ -1171,9 +1216,25 @@ async fn internal_tick_handler(
                     );
                     let client = LiveTwitterXUploadClient::new(resolver);
                     let adapter = TwitterXUploadAdapter::new(client);
-                    if let Err(e) =
-                        SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
-                    {
+                    let Some(refresher) = token_refresher_for_provider(
+                        &oauth_credentials,
+                        &Provider::TwitterX,
+                        aead_key_clone(&aead_key),
+                    ) else {
+                        if let Err(e) =
+                            SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                        {
+                            tracing::warn!(job_id = %job.id, provider = ?job.provider, "Twitter/X execute failed: {e}");
+                        }
+                        continue;
+                    };
+                    if let Err(e) = SocialApi::execute_claimed_upload_job_with_refresher(
+                        &mut store,
+                        &adapter,
+                        &refresher,
+                        upload,
+                        TOKEN_REFRESH_SWEEP_SKEW_SECS,
+                    ) {
                         tracing::warn!(job_id = %job.id, provider = ?job.provider, "Twitter/X execute failed: {e}");
                     }
                 }
@@ -1207,18 +1268,44 @@ fn upload_request_for_job(
     now: i64,
 ) -> ExecuteUploadRequest {
     let fields = scheduled_target_platform_fields(store, job).unwrap_or_default();
-    let title = string_field(&fields, "title")
-        .filter(|title| !title.trim().is_empty())
+    let platform_title = string_field(&fields, "title").filter(|title| !title.trim().is_empty());
+    let title = platform_title
+        .clone()
         .unwrap_or_else(|| job.variant_id.clone());
+    let mut description = string_field(&fields, "description");
+    if job.provider == Provider::Instagram
+        && description
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+    {
+        description = platform_title.map(|title| title.trim().to_string());
+    }
     ExecuteUploadRequest {
         job_id: job.id.clone(),
         title,
-        description: string_field(&fields, "description"),
-        tags: string_array_field(&fields, "tags"),
-        thumbnail_ref: string_field(&fields, "thumbnailRef")
-            .or_else(|| string_field(&fields, "thumbnail_ref")),
+        description: if job.provider == Provider::TwitterX {
+            None
+        } else {
+            description
+        },
+        tags: if job.provider == Provider::TwitterX {
+            Vec::new()
+        } else {
+            string_array_field(&fields, "tags")
+        },
+        thumbnail_ref: if job.provider == Provider::TwitterX {
+            None
+        } else {
+            string_field(&fields, "thumbnailRef").or_else(|| string_field(&fields, "thumbnail_ref"))
+        },
         artifact_ref: None,
-        privacy: string_field(&fields, "privacy").map(|raw| parse_upload_privacy(&raw)),
+        privacy: if job.provider == Provider::TwitterX {
+            None
+        } else {
+            string_field(&fields, "privacy").map(|raw| parse_upload_privacy(&raw))
+        },
+        tiktok_interactions: tiktok_interaction_settings(&fields),
         now,
     }
 }
@@ -1266,8 +1353,7 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
     let artifact_base_dir = state.config.artifact_base_dir.clone();
     let supabase_url = state.config.supabase_url.clone();
     let supabase_service_key = state.config.supabase_service_key.clone();
-    let google_client_id = state.config.google_client_id.clone();
-    let google_client_secret = state.config.google_client_secret.clone();
+    let oauth_credentials = SocialOAuthCredentials::from_config(&state.config);
 
     tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool.clone());
@@ -1293,11 +1379,12 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                 };
                 let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
                 let adapter = YouTubeUploadAdapter::new(client);
-                let refresher = token_refresher::ServerTokenRefresher::new(
-                    google_client_id.clone(),
-                    google_client_secret.clone(),
+                let refresher = token_refresher_for_provider(
+                    &oauth_credentials,
+                    &Provider::YouTube,
                     aead_key_clone(&aead_key),
-                );
+                )
+                .ok_or_else(|| "youtube OAuth not configured".to_string())?;
                 let upload = upload_request_for_job(&store, &job, now);
                 SocialApi::execute_claimed_upload_job_with_refresher(
                     &mut store,
@@ -1328,8 +1415,23 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                 let adapter =
                     TikTokUploadAdapter::with_public_eligibility(client, eligible_for_public);
                 let upload = upload_request_for_job(&store, &job, now);
-                SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                if let Some(refresher) = token_refresher_for_provider(
+                    &oauth_credentials,
+                    &Provider::TikTok,
+                    aead_key_clone(&aead_key),
+                ) {
+                    SocialApi::execute_claimed_upload_job_with_refresher(
+                        &mut store,
+                        &adapter,
+                        &refresher,
+                        upload,
+                        TOKEN_REFRESH_SWEEP_SKEW_SECS,
+                    )
                     .map_err(|e| format!("tiktok execute: {e}"))?;
+                } else {
+                    SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                        .map_err(|e| format!("tiktok execute: {e}"))?;
+                }
             }
             Provider::Instagram => {
                 use awidat_social::upload_adapter::BlockedUploadAdapter;
@@ -1392,8 +1494,23 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                     ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
                 let client = LiveTwitterXUploadClient::new(resolver);
                 let adapter = TwitterXUploadAdapter::new(client);
-                SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                if let Some(refresher) = token_refresher_for_provider(
+                    &oauth_credentials,
+                    &Provider::TwitterX,
+                    aead_key_clone(&aead_key),
+                ) {
+                    SocialApi::execute_claimed_upload_job_with_refresher(
+                        &mut store,
+                        &adapter,
+                        &refresher,
+                        upload,
+                        TOKEN_REFRESH_SWEEP_SKEW_SECS,
+                    )
                     .map_err(|e| format!("twitter execute: {e}"))?;
+                } else {
+                    SocialApi::execute_claimed_upload_job(&mut store, &adapter, upload)
+                        .map_err(|e| format!("twitter execute: {e}"))?;
+                }
             }
         }
         Ok(())
@@ -1506,6 +1623,22 @@ fn string_array_field(fields: &serde_json::Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn bool_field(fields: &serde_json::Value, camel_key: &str, snake_key: &str) -> bool {
+    fields
+        .get(camel_key)
+        .or_else(|| fields.get(snake_key))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn tiktok_interaction_settings(fields: &serde_json::Value) -> TikTokInteractionSettings {
+    TikTokInteractionSettings {
+        disable_duet: bool_field(fields, "disableDuet", "disable_duet"),
+        disable_comment: bool_field(fields, "disableComment", "disable_comment"),
+        disable_stitch: bool_field(fields, "disableStitch", "disable_stitch"),
+    }
 }
 
 fn parse_upload_privacy(raw: &str) -> UploadPrivacy {
@@ -1659,17 +1792,9 @@ async fn internal_refresh_tokens_handler(
             Json(serde_json::json!({"error": "unauthorized"})),
         ));
     }
-    if state.config.google_client_id.is_empty() || state.config.google_client_secret.is_empty() {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "Google OAuth not configured"})),
-        ));
-    }
-
     let aead_key = aead_key_from_state(&state.config)?;
     let pool = state.pool.clone();
-    let client_id = state.config.google_client_id.clone();
-    let client_secret = state.config.google_client_secret.clone();
+    let oauth_credentials = SocialOAuthCredentials::from_config(&state.config);
 
     let summary = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -1680,14 +1805,36 @@ async fn internal_refresh_tokens_handler(
             .token_secrets_due_refresh(deadline)
             .map_err(|e| format!("due query: {e}"))?;
 
-        let refresher =
-            token_refresher::ServerTokenRefresher::new(client_id, client_secret, aead_key);
-
         let mut refreshed = 0usize;
         let mut needs_reauth = 0usize;
         let mut failed = 0usize;
         for secret in due {
             let account_id = secret.connected_account_id.clone();
+            let account = match store.connected_account(&account_id) {
+                Ok(account) => account,
+                Err(e) => {
+                    tracing::warn!(account_id, "token refresh account lookup failed: {e}");
+                    failed += 1;
+                    continue;
+                }
+            };
+            let Some(refresher) = token_refresher_for_provider(
+                &oauth_credentials,
+                &account.provider,
+                aead_key_clone(&aead_key),
+            ) else {
+                tracing::warn!(
+                    account_id,
+                    provider = ?account.provider,
+                    "token refresh unavailable for provider"
+                );
+                let mut account = account;
+                account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                account.updated_at = now;
+                let _ = store.save_connected_account(account);
+                needs_reauth += 1;
+                continue;
+            };
             match refresher.refresh(&account_id, &secret, now) {
                 Ok(fresh) => {
                     if store.save_token_secret(fresh).is_ok() {
@@ -1697,6 +1844,15 @@ async fn internal_refresh_tokens_handler(
                     }
                 }
                 Err(TokenRefreshError::InvalidGrant(_)) => {
+                    if let Ok(mut account) = store.connected_account(&account_id) {
+                        account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
+                        account.updated_at = now;
+                        let _ = store.save_connected_account(account);
+                    }
+                    needs_reauth += 1;
+                }
+                Err(TokenRefreshError::Unavailable(msg)) => {
+                    tracing::warn!(account_id, "token refresh unavailable: {msg}");
                     if let Ok(mut account) = store.connected_account(&account_id) {
                         account.status = awidat_social::model::ConnectedAccountStatus::NeedsReauth;
                         account.updated_at = now;
@@ -1863,6 +2019,59 @@ fn token_endpoint(provider: &Provider) -> &'static str {
         Provider::TikTok => "https://open.tiktokapis.com/v2/oauth/token/",
         Provider::Instagram => "https://api.instagram.com/oauth/access_token",
         Provider::TwitterX => "https://api.x.com/2/oauth2/token",
+    }
+}
+
+fn token_refresher_for_provider(
+    credentials: &SocialOAuthCredentials,
+    provider: &Provider,
+    key: awidat_social::token::Aead256Key,
+) -> Option<token_refresher::ServerTokenRefresher> {
+    match provider {
+        Provider::YouTube => {
+            if credentials.google_client_id.is_empty()
+                || credentials.google_client_secret.is_empty()
+            {
+                None
+            } else {
+                Some(token_refresher::ServerTokenRefresher::new(
+                    credentials.google_client_id.clone(),
+                    credentials.google_client_secret.clone(),
+                    key,
+                ))
+            }
+        }
+        Provider::TikTok => {
+            if credentials.tiktok_client_key.is_empty()
+                || credentials.tiktok_client_secret.is_empty()
+            {
+                None
+            } else {
+                Some(token_refresher::ServerTokenRefresher::new_platform(
+                    Provider::TikTok,
+                    credentials.tiktok_client_key.clone(),
+                    credentials.tiktok_client_secret.clone(),
+                    token_endpoint(provider).to_string(),
+                    key,
+                ))
+            }
+        }
+        Provider::Instagram => None,
+        Provider::TwitterX => {
+            if credentials.twitter_x_client_id.is_empty()
+                || credentials.twitter_x_client_secret.is_empty()
+            {
+                None
+            } else {
+                Some(token_refresher::ServerTokenRefresher::new_platform(
+                    Provider::TwitterX,
+                    credentials.twitter_x_client_id.clone(),
+                    credentials.twitter_x_client_secret.clone(),
+                    token_endpoint(provider).to_string(),
+                    key,
+                ))
+            }
+        }
     }
 }
 
@@ -2291,5 +2500,184 @@ mod tests {
         assert_eq!(request.description.as_deref(), Some("Rendered from Awidat"));
         assert_eq!(request.tags, vec!["awidat", "launch"]);
         assert_eq!(request.privacy, Some(UploadPrivacy::Unlisted));
+    }
+
+    #[test]
+    fn upload_request_for_job_drops_stale_twitter_x_only_fields() {
+        use awidat_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TwitterX,
+            serde_json::json!({
+                "title": "Launch post text",
+                "description": "stale generic description",
+                "tags": ["stale", "ignored"],
+                "thumbnailRef": "render://thumb_1",
+                "privacy": "private"
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TwitterX,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert_eq!(request.title, "Launch post text");
+        assert_eq!(request.description, None);
+        assert!(request.tags.is_empty());
+        assert_eq!(request.thumbnail_ref, None);
+        assert_eq!(request.privacy, None);
+    }
+
+    #[test]
+    fn upload_request_for_job_maps_instagram_title_to_caption_when_description_is_blank() {
+        use awidat_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::Instagram,
+            serde_json::json!({
+                "title": "Shared scheduler title",
+                "description": "",
+                "privacy": "private"
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::Instagram,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert_eq!(request.title, "Shared scheduler title");
+        assert_eq!(
+            request.description.as_deref(),
+            Some("Shared scheduler title")
+        );
+    }
+
+    #[test]
+    fn upload_request_for_job_uses_tiktok_interaction_fields() {
+        use awidat_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            serde_json::json!({
+                "title": "Launch clip",
+                "privacy": "private",
+                "disableDuet": true,
+                "disableComment": true,
+                "disableStitch": true
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert!(request.tiktok_interactions.disable_duet);
+        assert!(request.tiktok_interactions.disable_comment);
+        assert!(request.tiktok_interactions.disable_stitch);
     }
 }

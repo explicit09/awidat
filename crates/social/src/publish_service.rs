@@ -27,6 +27,14 @@ pub struct ScheduleTargetInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateTargetInput {
+    pub target_id: String,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RescheduleJobInput {
     pub job_id: String,
     pub scheduled_for: i64,
@@ -92,6 +100,24 @@ impl PublishService {
         );
         store.save_campaign_variant_target(target.clone())?;
         Ok(target)
+    }
+
+    pub fn update_target(
+        store: &mut impl SocialStore,
+        owner: &OwnerRef,
+        input: UpdateTargetInput,
+    ) -> Result<CampaignVariantTarget, PublishServiceError> {
+        let target = store.campaign_variant_target(&input.target_id)?;
+        let account = store.connected_account(&target.connected_account_id)?;
+        if account.owner != *owner {
+            return Err(PublishServiceError::OwnerMismatch);
+        }
+        if account.provider != target.provider {
+            return Err(PublishServiceError::ProviderMismatch);
+        }
+        let updated = target.update_metadata(input.platform_fields, input.scheduled_for, input.now);
+        store.save_campaign_variant_target(updated.clone())?;
+        Ok(updated)
     }
 
     pub fn validate_target(

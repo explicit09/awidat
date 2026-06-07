@@ -7,6 +7,10 @@
 // `PublishJobResponse`, `AccountUsageAudit`). SRP: derivations here,
 // presentation in the `.tsx` files.
 
+import type { TikTokInteractionSettings } from "../../state/uploadMetadata.ts";
+
+export type { TikTokInteractionSettings } from "../../state/uploadMetadata.ts";
+
 export type Provider = "youtube" | "tiktok" | "instagram" | "twitter_x";
 
 export type OwnerRef = { user: string } | { workspace: string };
@@ -84,6 +88,7 @@ export type ManualPublishFieldsInput = {
   description: string;
   tagsInput: string;
   thumbnailPath: string;
+  tiktokInteractions?: Partial<TikTokInteractionSettings>;
 };
 
 export function buildPlatformFieldsForPublish(
@@ -99,7 +104,21 @@ export function buildPlatformFieldsForPublish(
     fields.thumbnailRef = `file://${input.thumbnailPath.trim()}`;
   }
   if (input.provider === "instagram") {
+    if (!input.description.trim() && input.title.trim()) {
+      fields.description = input.title.trim();
+    }
     delete fields.title;
+  }
+  if (input.provider === "twitter_x") {
+    delete fields.privacy;
+    delete fields.description;
+    delete fields.tags;
+    delete fields.thumbnailRef;
+  }
+  if (input.provider === "tiktok") {
+    fields.disableDuet = input.tiktokInteractions?.disableDuet ?? false;
+    fields.disableComment = input.tiktokInteractions?.disableComment ?? false;
+    fields.disableStitch = input.tiktokInteractions?.disableStitch ?? false;
   }
   return fields;
 }
@@ -124,8 +143,6 @@ const REASON_COPY: Record<string, string> = {
   network_or_server_error: "temporary server/provider error",
   scheduled_time_invalid: "scheduled time is in the past",
   missing_youtube_upload_scope: "missing YouTube upload permission",
-  twitter_x_oauth_client_pending: "Twitter/X connection setup pending",
-  twitter_x_live_client_pending: "Twitter/X live publishing setup pending",
 };
 
 export function reasonCopy(code: string): string {

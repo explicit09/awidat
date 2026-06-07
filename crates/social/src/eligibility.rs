@@ -128,7 +128,7 @@ pub fn twitter_x_eligibility(
     handle: Option<&str>,
     scopes: &[&str],
 ) -> ProviderEligibilityReport {
-    let has_write_scope = scopes.contains(&"tweet.write") || scopes.contains(&"media.write");
+    let has_write_scope = scopes.contains(&"tweet.write") && scopes.contains(&"media.write");
     ProviderEligibilityReport {
         profile: ProviderAccountProfile {
             provider: Provider::TwitterX,
@@ -262,5 +262,32 @@ mod tests {
             report.eligibility.reasons,
             vec!["missing_twitter_x_write_scope"]
         );
+    }
+
+    #[test]
+    fn twitter_x_requires_both_tweet_and_media_write_scopes() {
+        for scopes in [
+            vec!["users.read", "tweet.write"],
+            vec!["users.read", "media.write"],
+        ] {
+            let report = twitter_x_eligibility("x_1", "Creator", Some("@awidat"), &scopes);
+            assert!(!report.eligibility.eligible);
+            assert!(!report.capabilities.upload_video);
+            assert!(!report.capabilities.public_posting);
+            assert_eq!(
+                report.eligibility.reasons,
+                vec!["missing_twitter_x_write_scope"]
+            );
+        }
+
+        let report = twitter_x_eligibility(
+            "x_1",
+            "Creator",
+            Some("@awidat"),
+            &["users.read", "tweet.write", "media.write"],
+        );
+        assert!(report.eligibility.eligible);
+        assert!(report.capabilities.upload_video);
+        assert!(report.capabilities.public_posting);
     }
 }

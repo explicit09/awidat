@@ -21,11 +21,12 @@ import { useRenderQueueStore } from "../renderQueue";
 import {
   mergeSchedulerPublishResults,
   publishSchedulerPostToAccounts,
+  schedulerMetadataControlProvider,
+  schedulerMetadataFieldConfig,
   type SchedulerPublishAccount,
 } from "../scheduler/schedulerPublish";
+import type { UploadVisibility } from "../../state/uploadMetadata";
 import { Button, Card, Inline, Stack } from "../../ui";
-
-type UploadPrivacy = "private" | "unlisted" | "public";
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -52,7 +53,7 @@ export function SocialPublish() {
 
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>("");
-  const [privacy, setPrivacy] = useState<UploadPrivacy>("private");
+  const [privacy, setPrivacy] = useState<UploadVisibility>("private");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tagsInput, setTagsInput] = useState("");
@@ -94,18 +95,19 @@ export function SocialPublish() {
   );
   const selectedEntry = publishable.find((e) => e.id === entryId);
   const eligible = selectedAccounts.length > 0;
-  const firstSelectedProvider = selectedAccounts[0]?.provider;
+  const selectedProvider = schedulerMetadataControlProvider(selectedAccounts);
+  const fieldConfig = schedulerMetadataFieldConfig(selectedProvider);
 
   useEffect(() => {
-    if (!firstSelectedProvider || !selectedEntry) return;
-    const metadata = selectedEntry.uploadMetadata?.[firstSelectedProvider];
+    if (!selectedProvider || !selectedEntry) return;
+    const metadata = selectedEntry.uploadMetadata?.[selectedProvider];
     setPrivacy(metadata?.visibility ?? "private");
     setTitle(metadata?.title ?? "");
     setDescription(metadata?.description ?? "");
     setTagsInput(metadata?.tags.join(", ") ?? "");
     setThumbnailPath(metadata?.thumbnailPath ?? "");
     if (metadata?.scheduledAt) setScheduledFor(metadata.scheduledAt);
-  }, [firstSelectedProvider, selectedEntry?.id]);
+  }, [selectedProvider, selectedEntry?.id]);
 
   /** The full publish chain for one clip. */
   const publish = useCallback(async () => {
@@ -237,57 +239,75 @@ export function SocialPublish() {
                 </select>
               </Field>
 
-              <Field label="Title">
-                <input
-                  className="social-input"
-                  value={title}
-                  placeholder={selectedEntry?.id ?? "Untitled"}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-              </Field>
+              {fieldConfig.showTitle ? (
+                <Field label={fieldConfig.titleLabel}>
+                  <input
+                    className="social-input"
+                    value={title}
+                    placeholder={selectedEntry?.id ?? "Untitled"}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </Field>
+              ) : null}
 
-              <Field label="Description">
-                <textarea
-                  className="social-input min-h-[76px]"
-                  value={description}
-                  placeholder="Caption or description"
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </Field>
+              {fieldConfig.showDescription ? (
+                <Field label={fieldConfig.descriptionLabel}>
+                  <textarea
+                    className="social-input min-h-[76px]"
+                    value={description}
+                    placeholder={fieldConfig.descriptionPlaceholder}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </Field>
+              ) : null}
 
               <Inline gap="3" className="flex-wrap">
-                <Field label="Tags">
-                  <input
-                    className="social-input"
-                    value={tagsInput}
-                    placeholder="tag, tag"
-                    onChange={(e) => setTagsInput(e.target.value)}
-                  />
-                </Field>
-                <Field label="Thumbnail path">
-                  <input
-                    className="social-input"
-                    value={thumbnailPath}
-                    placeholder="/path/to/thumbnail.jpg"
-                    onChange={(e) => setThumbnailPath(e.target.value)}
-                  />
-                </Field>
+                {fieldConfig.showTags ? (
+                  <Field label="Tags">
+                    <input
+                      className="social-input"
+                      value={tagsInput}
+                      placeholder="tag, tag"
+                      onChange={(e) => setTagsInput(e.target.value)}
+                    />
+                  </Field>
+                ) : null}
+                {fieldConfig.showThumbnail ? (
+                  <Field label="Thumbnail path">
+                    <input
+                      className="social-input"
+                      value={thumbnailPath}
+                      placeholder="/path/to/thumbnail.jpg"
+                      onChange={(e) => setThumbnailPath(e.target.value)}
+                    />
+                  </Field>
+                ) : null}
               </Inline>
 
               <Inline gap="3" className="flex-wrap">
-                <Field label="Privacy">
-                  <select
-                    className="social-select"
-                    value={privacy}
-                    onChange={(e) =>
-                      setPrivacy(e.target.value as UploadPrivacy)
-                    }
-                  >
-                    <option value="private">Private</option>
-                    <option value="unlisted">Unlisted</option>
-                    <option value="public">Public</option>
-                  </select>
-                </Field>
+                {fieldConfig.visibilityOptions ? (
+                  <Field label="Privacy">
+                    <select
+                      className="social-select"
+                      value={privacy}
+                      onChange={(e) =>
+                        setPrivacy(e.target.value as UploadVisibility)
+                      }
+                    >
+                      {fieldConfig.visibilityOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : (
+                  <Field label="Visibility">
+                    <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                      Always public on {selectedProvider ?? "this provider"}.
+                    </span>
+                  </Field>
+                )}
                 <Field label="When">
                   <input
                     className="social-input"
