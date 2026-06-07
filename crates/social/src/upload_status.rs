@@ -1,6 +1,6 @@
 use crate::model::{
-    Provider, PublishJob, PublishJobActorType, PublishJobEvent, PublishJobEventType,
-    PublishJobStatus,
+    ConnectedAccountStatus, Provider, PublishJob, PublishJobActorType, PublishJobEvent,
+    PublishJobEventType, PublishJobStatus,
 };
 use crate::store::{SocialStore, SocialStoreError};
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,21 @@ impl UploadStatusService {
         if account.provider != job.provider {
             return Err(UploadStatusServiceError::ProviderMismatch);
         }
+        if let Some(reason) = account_status_requires_action_reason(&account.status) {
+            return persist_requires_action(store, job, reason, input.now);
+        }
+        if !account.eligibility.eligible {
+            let reason = account
+                .eligibility
+                .reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "account_not_eligible".into());
+            return persist_requires_action(store, job, reason, input.now);
+        }
+        if !account.capabilities.upload_video {
+            return persist_requires_action(store, job, "missing_publish_capability", input.now);
+        }
         let provider_post_id = job
             .provider_post_id
             .clone()
@@ -176,12 +191,66 @@ fn append_status_event(
     Ok(())
 }
 
+fn persist_requires_action(
+    store: &mut impl SocialStore,
+    job: PublishJob,
+    reason: impl Into<String>,
+    now: i64,
+) -> Result<PublishJob, UploadStatusServiceError> {
+    let reason = reason.into();
+    let next = job.requires_action(reason.clone(), now);
+    store.save_publish_job(next.clone())?;
+    append_requires_action_event(store, &next, &reason, now)?;
+    Ok(next)
+}
+
+fn append_requires_action_event(
+    store: &mut impl SocialStore,
+    job: &PublishJob,
+    reason: &str,
+    now: i64,
+) -> Result<(), UploadStatusServiceError> {
+    let event_id = next_requires_action_event_id(store, &job.id)?;
+    store.append_publish_job_event(PublishJobEvent::new(
+        event_id,
+        job.id.clone(),
+        PublishJobEventType::RequiresAction,
+        PublishJobActorType::Worker,
+        "provider status poll requires action",
+        serde_json::json!({
+            "provider": job.provider.as_str(),
+            "reason": reason,
+        }),
+        now,
+    ))?;
+    Ok(())
+}
+
+fn account_status_requires_action_reason(status: &ConnectedAccountStatus) -> Option<&'static str> {
+    match status {
+        ConnectedAccountStatus::Connected => None,
+        ConnectedAccountStatus::NeedsReauth => Some("account_needs_reauth"),
+        ConnectedAccountStatus::MissingScope => Some("missing_scope"),
+        ConnectedAccountStatus::Ineligible => Some("account_not_eligible"),
+        ConnectedAccountStatus::Disabled => Some("account_disabled"),
+        ConnectedAccountStatus::Revoked => Some("account_revoked"),
+    }
+}
+
 fn next_event_id(
     store: &impl SocialStore,
     job_id: &str,
 ) -> Result<String, UploadStatusServiceError> {
     let sequence = store.publish_job_events(job_id)?.len() + 1;
     Ok(format!("event_{job_id}_status_polled_{sequence}"))
+}
+
+fn next_requires_action_event_id(
+    store: &impl SocialStore,
+    job_id: &str,
+) -> Result<String, UploadStatusServiceError> {
+    let sequence = store.publish_job_events(job_id)?.len() + 1;
+    Ok(format!("event_{job_id}_requires_action_{sequence}"))
 }
 
 #[cfg(test)]
@@ -455,6 +524,113 @@ mod tests {
                 },
             ),
             Err(UploadStatusServiceError::JobNotProcessing)
+        );
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    #[test]
+    fn poll_processing_job_requires_action_when_account_needs_reauth() {
+        let mut store = store_with_processing_job();
+        let mut account = connected_account();
+        account.status = ConnectedAccountStatus::NeedsReauth;
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let adapter = RecordingStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_1".into(),
+            provider_post_url: None,
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let job = UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("account_needs_reauth")
+        );
+        assert_eq!(adapter.call_count(), 0);
+        let events = store
+            .publish_job_events("job_1")
+            .unwrap_or_else(|err| panic!("events: {err}"));
+        assert_eq!(events[0].event_type, PublishJobEventType::RequiresAction);
+        assert_eq!(events[0].metadata["reason"], "account_needs_reauth");
+    }
+
+    #[test]
+    fn poll_processing_job_requires_action_when_account_is_ineligible() {
+        let mut store = store_with_processing_job();
+        let mut account = connected_account();
+        account.eligibility = AccountEligibility::blocked("account_not_eligible");
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let adapter = RecordingStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_1".into(),
+            provider_post_url: None,
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let job = UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("account_not_eligible")
+        );
+        assert_eq!(adapter.call_count(), 0);
+    }
+
+    #[test]
+    fn poll_processing_job_requires_action_when_publish_capability_is_missing() {
+        let mut store = store_with_processing_job();
+        let mut account = connected_account();
+        account.capabilities.upload_video = false;
+        store
+            .save_connected_account(account)
+            .unwrap_or_else(|err| panic!("save account: {err}"));
+        let adapter = RecordingStatusAdapter::new(UploadStatusResult {
+            provider_post_id: "yt_video_1".into(),
+            provider_post_url: None,
+            status: UploadProcessingStatus::Published,
+            normalized_error: None,
+            raw_error_ref: None,
+        });
+
+        let job = UploadStatusService::poll_processing_job(
+            &mut store,
+            &adapter,
+            PollUploadStatusInput {
+                job_id: "job_1".into(),
+                now: 2_500,
+            },
+        )
+        .unwrap_or_else(|err| panic!("poll status: {err}"));
+
+        assert_eq!(job.status, PublishJobStatus::RequiresAction);
+        assert_eq!(
+            job.requires_action_reason.as_deref(),
+            Some("missing_publish_capability")
         );
         assert_eq!(adapter.call_count(), 0);
     }
