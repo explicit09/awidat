@@ -956,8 +956,8 @@ mod tests {
             owner: owner(),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -1126,9 +1126,9 @@ mod tests {
         let defaults = AccountPublishDefaults {
             connected_account_id: "acct_1".into(),
             default_privacy: Some("unlisted".into()),
-            default_tags: vec!["awidat".into()],
-            title_prefix: Some("Awidat: ".into()),
-            description_suffix: Some("Built with Awidat.".into()),
+            default_tags: vec!["montage".into()],
+            title_prefix: Some("Montage: ".into()),
+            description_suffix: Some("Built with Montage.".into()),
             updated_at: 2_000,
         };
         let role = WorkspaceMemberRole::new("workspace_1", "user_1", TeamRole::Publisher);
@@ -1290,7 +1290,7 @@ mod tests {
 
     #[test]
     fn open_persists_account_across_reopen() {
-        let dir = std::env::temp_dir().join(format!("awidat_social_open_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("montage_social_open_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("create temp dir: {err}"));
         let path = dir.join("social.sqlite");
         let _ = std::fs::remove_file(&path);

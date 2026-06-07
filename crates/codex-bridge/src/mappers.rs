@@ -1,5 +1,5 @@
 //! Pure mapping functions from codex protocol payloads to
-//! [`awidat_desktop_protocol::Item`] values.
+//! [`montage_desktop_protocol::Item`] values.
 //!
 //! These are kept side-effect-free (apart from mutating the caller's
 //! `text_buffers` cache) so the bridge can unit-test the translation
@@ -9,10 +9,6 @@
 
 use std::collections::HashMap;
 
-use awidat_desktop_protocol::Id;
-use awidat_desktop_protocol::Item;
-use awidat_desktop_protocol::ItemLifecycle;
-use awidat_desktop_protocol::PlanStep;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
@@ -21,6 +17,10 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnPlanStepStatus;
+use montage_desktop_protocol::Id;
+use montage_desktop_protocol::Item;
+use montage_desktop_protocol::ItemLifecycle;
+use montage_desktop_protocol::PlanStep;
 use serde_json::json;
 
 /// Item-id prefix for `Item::Text` synthesized from
@@ -34,7 +34,7 @@ const REASONING_PREFIX: &str = "codex-reason";
 /// for the desktop renderer.
 ///
 /// `text_buffers` is a per-pump cache of the cumulative text we have
-/// already emitted for a given codex item id. The Awidat protocol wants
+/// already emitted for a given codex item id. The Montage protocol wants
 /// each `Text` Item to carry the *full* text so the renderer doesn't
 /// have to splice deltas, so we keep the running concatenation here.
 ///
@@ -226,10 +226,10 @@ pub fn map_thread_item(item: &ThreadItem, phase: Phase) -> Vec<Item> {
             error,
             ..
         } => {
-            // For Awidat-MCP tools, surface the bare tool name so the
+            // For Montage-MCP tools, surface the bare tool name so the
             // React per-tool card dispatch works ("apply_edl", not
-            // "awidat.apply_edl"). For other servers, namespace-prefix.
-            let display_name = if server == "awidat" {
+            // "montage.apply_edl"). For other servers, namespace-prefix.
+            let display_name = if server == "montage" {
                 tool.clone()
             } else {
                 format!("{server}.{tool}")
@@ -381,12 +381,12 @@ fn file_change_result(status: &PatchApplyStatus) -> Result<String, String> {
 }
 
 /// True when a `ServerNotification::ItemCompleted` carries an
-/// awidat-MCP tool call that just successfully mutated project state
+/// montage-MCP tool call that just successfully mutated project state
 /// on disk (most importantly `project.otio.json`). Used by the pump
-/// to nudge the desktop's `awidat://timeline-changed` listener so the
+/// to nudge the desktop's `montage://timeline-changed` listener so the
 /// React timeline view refetches.
 ///
-/// Inclusion rule is "any awidat tool tagged `destructive_hint = true`
+/// Inclusion rule is "any montage tool tagged `destructive_hint = true`
 /// that completed successfully." False positives (e.g. `start_render`
 /// queues a job but doesn't touch OTIO) just trigger an idempotent
 /// refetch, which is cheap. False negatives would leave the UI stale,
@@ -404,7 +404,7 @@ pub fn is_project_mutating_completion(notification: &ServerNotification) -> bool
     else {
         return false;
     };
-    if server != "awidat" {
+    if server != "montage" {
         return false;
     }
     if error.is_some() {
@@ -585,10 +585,10 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_awidat_server_drops_namespace_prefix() {
+    fn mcp_tool_montage_server_drops_namespace_prefix() {
         let item = ThreadItem::McpToolCall {
             id: "m-1".into(),
-            server: "awidat".into(),
+            server: "montage".into(),
             tool: "view_timeline".into(),
             status: McpToolCallStatus::Completed,
             arguments: json!({"focus": "1.0s"}),

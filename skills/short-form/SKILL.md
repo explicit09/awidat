@@ -46,7 +46,7 @@ they're not options.
   is what keeps the scroll-stop.
 - **Aspect**: 9:16. When source is 16:9, use `find_speaker_oncam`
   or face/gaze evidence to identify the subject, then call `plan_reframe`
-  and apply its `awidat.reframe` EDL fragment. If a future reviewed
+  and apply its `montage.reframe` EDL fragment. If a future reviewed
   `reframe_path` is available, prefer that path over a static crop and
   preserve its smoothing, safe-area, and evidence-track metadata through
   render handoff.
@@ -64,7 +64,7 @@ When the full index set exists, score more than text. Use
 `viral-clip-extractor/scripts/score_moments.py` with audio-energy,
 editorial-moments, shot, gaze, frame-quality, and topic sidecars. Prefer
 moments that are energetic, sharp, direct-address, and close to a topic
-boundary. This is where awidat's larger index corpus should beat a
+boundary. This is where montage's larger index corpus should beat a
 transcript-only workflow.
 
 The single beat with the highest `intensity` × concreteness is your
@@ -111,7 +111,7 @@ For each selected 16:9 clip that needs vertical delivery, call
 `plan_reframe(clip_id=<clip>, aspect_ratio="9:16", subject_center=<evidence>)`
 and hand its `edl_fragment` to `apply_edl`. If a reviewed subject-aware
 `reframe_path` exists for the selected clip, attach that path as the crop
-contract instead of using a static `awidat.reframe` effect. Reject paths
+contract instead of using a static `montage.reframe` effect. Reject paths
 with unsorted keyframes, centers outside 0..=1, scale below 1.0, or low
 confidence unless the user explicitly approves manual review.
 
@@ -209,7 +209,7 @@ python3 <skill-root>/scripts/caption_plan.py \
   --hot-end-s <highest-intensity-end>
 ```
 
-For interchange or review outside Awidat, emit the same phrase plan as
+For interchange or review outside Montage, emit the same phrase plan as
 SRT:
 
 ```bash

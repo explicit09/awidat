@@ -20,7 +20,7 @@ if audio_tracks.is_empty() {
 }
 ```
 
-- **Coupled mode (default):** no audio tracks → the concat filter pulls each video clip's **muxed** audio alongside its picture (`...concat=n=N:v=1:a=1`). Module doc, `timeline.rs:15`: *"most awidat projects keep video and audio paired in the same source file."* Here audio is locked to picture per clip — **the source of the bug.**
+- **Coupled mode (default):** no audio tracks → the concat filter pulls each video clip's **muxed** audio alongside its picture (`...concat=n=N:v=1:a=1`). Module doc, `timeline.rs:15`: *"most montage projects keep video and audio paired in the same source file."* Here audio is locked to picture per clip — **the source of the bug.**
 - **Decoupled mode:** any audio track present → video tracks render **video-only** (`plan_video_only_filter` → `concat=…:v=1:a=0[vonly]`, `timeline.rs:9768`) and **all** audio is mixed from audio-track plans via `amix` (`plan_audio_mix_filter`, `:9936`). Picture and sound are fully independent.
 
 ### The decoupled mode is already produced automatically — for split edits
@@ -55,7 +55,7 @@ These need authoring ops + a per-clip audio representation that the *existing* s
 Reuse the decoupled path. Add a **clip-level audio override** in metadata; make the synthesis trigger and loop honor it. When any clip carries an override, the whole timeline renders decoupled (video-only + per-segment audio), exactly like split edits today — so audio elsewhere is preserved, and the overridden clip's audio is silenced/cut while its picture stays on the video track.
 
 ### 3.1 Data model — clip audio override
-Add to `AwidatClipMetadata` (`crates/proto/src/awidat_meta.rs`) a typed, optional field (forward-compatible; absent = today's coupled behavior):
+Add to `MontageClipMetadata` (`crates/proto/src/montage_meta.rs`) a typed, optional field (forward-compatible; absent = today's coupled behavior):
 
 ```rust
 pub struct ClipAudioOverride {
@@ -66,7 +66,7 @@ pub struct ClipAudioOverride {
 }
 ```
 
-Carried on the OTIO clip; read when building `TimelineSegment`. (Alternative considered: a dedicated `awidat.audio_override` effect like `awidat.sync_group`. Rejected — audio mute/removal is a property of the clip, not a stackable effect, and J/L already lives in clip metadata via `split_edit`. Keep it with `split_edit`/`audio_relation`.)
+Carried on the OTIO clip; read when building `TimelineSegment`. (Alternative considered: a dedicated `montage.audio_override` effect like `montage.sync_group`. Rejected — audio mute/removal is a property of the clip, not a stackable effect, and J/L already lives in clip metadata via `split_edit`. Keep it with `split_edit`/`audio_relation`.)
 
 ### 3.2 Render — extend synthesis (no new path)
 `TimelineSegment` gains `audio_muted: bool` and `audio_removed_ranges: Vec<(f64,f64)>`, populated from the clip override during segment building.
@@ -87,7 +87,7 @@ In `edl/op.rs` + `edl/parser.rs` + `edl/apply.rs`, mirroring the `Set Volume` / 
 Both validate finiteness/ordering and that ranges fall within the clip, failing before mutation (same discipline as `apply_multicam_plan`).
 
 ### 3.4 Agent surface
-Mirror the ops into `awidat_mcp` if a direct tool is wanted; at minimum they're reachable through `apply_edl`. Update the `split-edit-director` skill (or a small `audio-editor` skill) to mention `Mute Clip` / `Remove Audio` and the "picture is held" guarantee. Classify any new read-only helper as evidence in `capability_metadata.rs` (consistency with the multicam G5 pass).
+Mirror the ops into `montage_mcp` if a direct tool is wanted; at minimum they're reachable through `apply_edl`. Update the `split-edit-director` skill (or a small `audio-editor` skill) to mention `Mute Clip` / `Remove Audio` and the "picture is held" guarantee. Classify any new read-only helper as evidence in `capability_metadata.rs` (consistency with the multicam G5 pass).
 
 ### 3.5 "Detach" semantics
 True NLE "detach audio to its own movable track" (G-S3) is **deferred**. With this design, the audio is already conceptually independent (synthesized per-segment); muting/removing covers the high-value cases. Independent *repositioning* beyond J/L lead/trail is a phase-2 extension (a clip-local audio offset field honored by the same synthesis loop).
@@ -112,7 +112,7 @@ Each phase: build + targeted tests + clippy green, committed as a strategic unit
 
 ## 6. Cross-links (A/V sync follow-ons, separate but adjacent)
 From the multicam audit (`docs/multicam/design.md`):
-- **Render ignores `awidat.sync_group`** — sync offset is realized only by `apply_set_sync_group` repositioning the clip; **negative offsets clamp to 0** (`offset_s.max(0.0)`).
+- **Render ignores `montage.sync_group`** — sync offset is realized only by `apply_set_sync_group` repositioning the clip; **negative offsets clamp to 0** (`offset_s.max(0.0)`).
 - **G1b — multicam source-range ignores offset:** `build_multicam_program_track` uses program time as the source-media start, so separate-device cameras show frames off by their offset. Small follow-on; not part of this branch unless folded in.
 
 ## 7. Open questions

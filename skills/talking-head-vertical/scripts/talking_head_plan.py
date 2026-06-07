@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan a vertical talking-head draft from Awidat evidence sidecars."""
+"""Plan a vertical talking-head draft from Montage evidence sidecars."""
 
 from __future__ import annotations
 
@@ -252,7 +252,7 @@ def reframe_edl(clip_id: str, layout: dict, source_width: int, source_height: in
     return [
         "*** Set Effect",
         f"@@ anchor: clip_uuid={clip_id}",
-        "+ effect: awidat.reframe",
+        "+ effect: montage.reframe",
         "+ params_json: "
         + json.dumps({
             "zoom": round(min(zoom, 3.0), 3),

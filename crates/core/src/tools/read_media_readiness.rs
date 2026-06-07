@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_index::sidecar_path;
-use awidat_proto::index::AssetId;
+use montage_index::sidecar_path;
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -568,10 +568,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

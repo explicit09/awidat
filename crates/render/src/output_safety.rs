@@ -155,7 +155,7 @@ fn preflight_parent_writable(path: &Path) -> Result<(), OutputPathSafetyError> {
         });
     }
 
-    let sentinel = parent.join(format!(".awidat-write-preflight-{}", std::process::id()));
+    let sentinel = parent.join(format!(".montage-write-preflight-{}", std::process::id()));
     let write_result = OpenOptions::new()
         .write(true)
         .create_new(true)

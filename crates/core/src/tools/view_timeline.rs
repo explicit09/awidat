@@ -15,8 +15,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use awidat_proto::otio::{StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -156,8 +156,8 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
                 total_visible += 1;
             }
             let kind_label = match track.kind {
-                awidat_proto::otio::TrackKind::Video => "video",
-                awidat_proto::otio::TrackKind::Audio => "audio",
+                montage_proto::otio::TrackKind::Video => "video",
+                montage_proto::otio::TrackKind::Audio => "audio",
             };
             let suffix = if track_clip_count == 0 {
                 " EMPTY".to_string()
@@ -223,7 +223,7 @@ fn append_visible_timeline_markers(
     lines: &mut Vec<String>,
     line_cap: usize,
 ) {
-    let Some(metadata) = timeline.metadata.awidat.as_ref() else {
+    let Some(metadata) = timeline.metadata.montage.as_ref() else {
         return;
     };
     for marker in &metadata.timeline_markers {
@@ -269,7 +269,7 @@ fn marker_overlaps_window(
 fn format_timeline_marker(
     prefix: &str,
     guide_track_id: Option<&str>,
-    marker: &awidat_proto::awidat_meta::TimelineMarker,
+    marker: &montage_proto::montage_meta::TimelineMarker,
 ) -> String {
     let marker_id = match guide_track_id {
         Some(track_id) => format!("{track_id}/{}", marker.id),
@@ -290,36 +290,36 @@ fn format_timeline_marker(
 }
 
 fn timeline_marker_category_label(
-    category: awidat_proto::awidat_meta::TimelineMarkerCategory,
+    category: montage_proto::montage_meta::TimelineMarkerCategory,
 ) -> &'static str {
     match category {
-        awidat_proto::awidat_meta::TimelineMarkerCategory::Review => "review",
-        awidat_proto::awidat_meta::TimelineMarkerCategory::Section => "section",
-        awidat_proto::awidat_meta::TimelineMarkerCategory::ExportRange => "export_range",
-        awidat_proto::awidat_meta::TimelineMarkerCategory::Note => "note",
-        awidat_proto::awidat_meta::TimelineMarkerCategory::Guide => "guide",
+        montage_proto::montage_meta::TimelineMarkerCategory::Review => "review",
+        montage_proto::montage_meta::TimelineMarkerCategory::Section => "section",
+        montage_proto::montage_meta::TimelineMarkerCategory::ExportRange => "export_range",
+        montage_proto::montage_meta::TimelineMarkerCategory::Note => "note",
+        montage_proto::montage_meta::TimelineMarkerCategory::Guide => "guide",
     }
 }
 
 fn format_line(
-    track: &awidat_proto::otio::Track,
+    track: &montage_proto::otio::Track,
     child: &TrackChild,
     start_s: f64,
     end_s: f64,
 ) -> String {
     let kind = match track.kind {
-        awidat_proto::otio::TrackKind::Video => "V",
-        awidat_proto::otio::TrackKind::Audio => "A",
+        montage_proto::otio::TrackKind::Video => "V",
+        montage_proto::otio::TrackKind::Audio => "A",
     };
     match child {
         TrackChild::Clip(c) => {
             let media = match &c.media_reference {
-                awidat_proto::otio::MediaReference::External(r) => r.target_url.clone(),
-                awidat_proto::otio::MediaReference::Missing(_) => "<missing>".into(),
+                montage_proto::otio::MediaReference::External(r) => r.target_url.clone(),
+                montage_proto::otio::MediaReference::Missing(_) => "<missing>".into(),
             };
             let clip_uuid = c
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|m| m.extra.get("clip_uuid"))
                 .and_then(|v| v.as_str())
@@ -434,10 +434,10 @@ fn _suppress_unused(p: &Path) -> &Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     fn ctx_at(root: &Path) -> ToolContext {
@@ -446,11 +446,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -481,13 +481,15 @@ mod tests {
                 RationalTime::zero(24.0),
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
-            track.children.push(awidat_proto::otio::TrackChild::Clip(c));
+            track
+                .children
+                .push(montage_proto::otio::TrackChild::Clip(c));
         }
         project
             .timeline
             .tracks
             .children
-            .push(awidat_proto::otio::StackChild::Track(track));
+            .push(montage_proto::otio::StackChild::Track(track));
         project.write(dir.path()).unwrap();
         dir
     }
@@ -498,29 +500,29 @@ mod tests {
         let metadata = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .get_or_insert_with(Default::default);
         metadata
             .timeline_markers
-            .push(awidat_proto::awidat_meta::TimelineMarker {
+            .push(montage_proto::montage_meta::TimelineMarker {
                 id: "mk-hook".into(),
                 label: "Hook".into(),
                 time_s: 2.0,
                 duration_s: None,
-                category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::Review),
+                category: Some(montage_proto::montage_meta::TimelineMarkerCategory::Review),
                 ..Default::default()
             });
         metadata
             .guide_tracks
-            .push(awidat_proto::awidat_meta::GuideTrack {
+            .push(montage_proto::montage_meta::GuideTrack {
                 id: "guide-main".into(),
                 label: "Sections".into(),
-                markers: vec![awidat_proto::awidat_meta::TimelineMarker {
+                markers: vec![montage_proto::montage_meta::TimelineMarker {
                     id: "section-1".into(),
                     label: "Section 1".into(),
                     time_s: 5.0,
                     duration_s: Some(10.0),
-                    category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::Section),
+                    category: Some(montage_proto::montage_meta::TimelineMarkerCategory::Section),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -593,7 +595,7 @@ mod tests {
                 RationalTime::zero(24.0),
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
-            v1.children.push(awidat_proto::otio::TrackChild::Clip(c));
+            v1.children.push(montage_proto::otio::TrackChild::Clip(c));
         }
         let a1 = Track::empty("A1", TrackKind::Audio);
         let v2 = Track::empty("V2", TrackKind::Video);
@@ -601,17 +603,17 @@ mod tests {
             .timeline
             .tracks
             .children
-            .push(awidat_proto::otio::StackChild::Track(v1));
+            .push(montage_proto::otio::StackChild::Track(v1));
         project
             .timeline
             .tracks
             .children
-            .push(awidat_proto::otio::StackChild::Track(a1));
+            .push(montage_proto::otio::StackChild::Track(a1));
         project
             .timeline
             .tracks
             .children
-            .push(awidat_proto::otio::StackChild::Track(v2));
+            .push(montage_proto::otio::StackChild::Track(v2));
         project.write(dir.path()).unwrap();
 
         let out = ViewTimelineTool

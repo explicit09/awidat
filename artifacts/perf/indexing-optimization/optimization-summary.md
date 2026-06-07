@@ -32,7 +32,7 @@ Final is 95623ms faster than the fresh baseline and 13612ms faster than the old 
 
 - Restored `face-mcp` default sampling from 0.5fps to 0.25fps, matching the historical long-form benchmark density. Face/gaze sidecars now contain 268 frames on this asset instead of 537.
 - Changed bundled CLIP resource class from `exclusive` to `embedding`, allowing CLIP to overlap with scenedetect/face under the existing scheduler.
-- Added `awidat-index-perf` for repeatable real-video reports with media metadata, queue/tool/write timings, sidecar sizes, sampled frame counts, and explicit temp/cache work directories.
+- Added `montage-index-perf` for repeatable real-video reports with media metadata, queue/tool/write timings, sidecar sizes, sampled frame counts, and explicit temp/cache work directories.
 
 ## Remaining Bottlenecks
 

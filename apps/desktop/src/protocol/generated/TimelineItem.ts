@@ -22,9 +22,9 @@ index: number,
 name: string,
 /**
  * Anchor uuid for `Anchor::ClipUuid` in EDL ops. Pulled from
- * `clip.metadata.awidat.extra["clip_uuid"]` if present;
+ * `clip.metadata.montage.extra["clip_uuid"]` if present;
  * otherwise falls back to the clip's display name (which the
- * `awidat_core::edl::anchor` resolver also matches against).
+ * `montage_core::edl::anchor` resolver also matches against).
  * Drag-to-trim wires this directly into
  * `TrimClip { anchor: ClipUuid { uuid } }`.
  */
@@ -75,7 +75,7 @@ playable_kind: PlayableKind,
 /**
  * Absolute path to the directory holding this asset's
  * extracted filmstrip JPEGs (e.g.
- * `<project>/.awidat/thumbnails/<stem>-<hash>/`). The
+ * `<project>/.montage/thumbnails/<stem>-<hash>/`). The
  * timeline canvas reads `frame-NNNN.jpg` files from this dir
  * and tiles them across the clip's pixel width. `None` when
  * thumbnails haven't been generated yet (the
@@ -85,7 +85,7 @@ playable_kind: PlayableKind,
 thumbnail_dir: string | null,
 /**
  * Absolute path to this asset's waveform-peaks JSON sidecar
- * (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
+ * (e.g. `<project>/.montage/waveforms/<stem>-<hash>.json`).
  * Frontend fetches the sidecar via the `read_waveform` Tauri
  * command and draws a centered amplitude line across the
  * clip's pixel width. `None` when waveform extraction
@@ -94,7 +94,7 @@ thumbnail_dir: string | null,
  */
 waveform_path: string | null,
 /**
- * Per-clip linear gain multiplier (`awidat.volume` Effect).
+ * Per-clip linear gain multiplier (`montage.volume` Effect).
  * `None` when the clip has no volume effect; `1.0` is unity
  * (no gain change). Frontend reads this to populate the
  * PropertiesPane volume slider and to paint a `🔉 0.5×` badge
@@ -102,7 +102,7 @@ waveform_path: string | null,
  */
 volume: number | null,
 /**
- * Per-clip playback rate multiplier (`awidat.speed` Effect).
+ * Per-clip playback rate multiplier (`montage.speed` Effect).
  * `None` when the clip has no speed effect; `1.0` is unity.
  * `2.0` plays at double speed (half timeline length).
  * Frontend reads this to populate the PropertiesPane speed
@@ -148,17 +148,17 @@ has_video: boolean | null,
  */
 has_audio: boolean | null,
 /**
- * Clip-level color controls (`awidat.color_correction` Effect).
+ * Clip-level color controls (`montage.color_correction` Effect).
  * `None` when no correction is stamped on this clip.
  */
 color_correction: ColorCorrectionStyling | null,
 /**
- * Project-relative LUT path (`awidat.lut` Effect), if present.
+ * Project-relative LUT path (`montage.lut` Effect), if present.
  */
 lut_path: string | null,
 /**
  * Title-overlay styling, populated when the clip carries an
- * `awidat.title` Effect (i.e. it's on the Titles track).
+ * `montage.title` Effect (i.e. it's on the Titles track).
  * `None` for ordinary media clips. The frontend renders the
  * title editor in PropertiesPane when this is `Some` and
  * paints the title text inline on the timeline band.
@@ -222,8 +222,8 @@ out_offset_s: number,
  */
 effect_name: string,
 /**
- * Stable semantic Awidat transition id, when the transition
- * carries `metadata.awidat_transition`.
+ * Stable semantic Montage transition id, when the transition
+ * carries `metadata.montage_transition`.
  */
 transition_id: string | null,
 /**

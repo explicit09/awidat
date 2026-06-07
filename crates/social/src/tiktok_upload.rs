@@ -625,7 +625,7 @@ mod tests {
             artifact_ref: "https://storage.example/render.mp4".into(),
             title: "Launch clip".into(),
             description: Some("Description".into()),
-            tags: vec!["awidat".into()],
+            tags: vec!["montage".into()],
             thumbnail_ref: None,
             privacy,
             tiktok_interactions: Default::default(),

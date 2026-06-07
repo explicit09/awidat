@@ -26,7 +26,7 @@ class SpeedRampPlanTest(unittest.TestCase):
             ramp_window_s=0.2,
         )
 
-        self.assertEqual(plan["effect"], "awidat.time_remap")
+        self.assertEqual(plan["effect"], "montage.time_remap")
         self.assertEqual(plan["accent_beats"], [0, 2, 4])
         self.assertEqual(plan["nominal_speed"], 1.0)
         self.assertEqual(plan["speed_points"][0], {"time_s": 0.0, "factor": 0.5})
@@ -77,7 +77,7 @@ class SpeedRampPlanTest(unittest.TestCase):
 
         self.assertIn("*** Set Effect", edl)
         self.assertIn("@@ anchor: clip:hero-shot", edl)
-        self.assertIn("+ effect: awidat.time_remap", edl)
+        self.assertIn("+ effect: montage.time_remap", edl)
         self.assertIn("+ rationale: hit downbeats with speed accents", edl)
         self.assertIn('"curve"', edl)
         self.assertIn('"source_time_s": 1.0', edl)

@@ -24,11 +24,11 @@
 //! shows the old value alongside the new). For trim, both `- end: <old>`
 //! and `+ end: <new>` are accepted; we use the `+` value as authoritative.
 
-use awidat_proto::awidat_meta::{
+use montage_proto::montage_meta::{
     AudioRelation, BrandKit, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry,
     CutType, SemanticCutSpec, SplitEditSpec,
 };
-use awidat_proto::professional::{
+use montage_proto::professional::{
     AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, MotionScene, ParameterAnimation, PipelineReadinessReport,
     PlannerPassContract, PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange,
@@ -743,7 +743,7 @@ impl OpBuilder {
                 let direction = take_field_string(&mut fields, "direction");
                 let params = take_field_json_map(&mut fields, "params_json", head)?;
                 let composition = take_field_json::<
-                    awidat_proto::transitions::TransitionComposition,
+                    montage_proto::transitions::TransitionComposition,
                 >(&mut fields, "composition_json", head)?;
                 let has_semantic_fields = family.is_some()
                     || intent.is_some()
@@ -754,7 +754,7 @@ impl OpBuilder {
                 let semantic_id =
                     transition_id.or_else(|| has_semantic_fields.then(|| kind.clone()));
                 let spec =
-                    semantic_id.map(|id| awidat_proto::transitions::SemanticTransitionSpec {
+                    semantic_id.map(|id| montage_proto::transitions::SemanticTransitionSpec {
                         id,
                         family,
                         intent,
@@ -2634,7 +2634,7 @@ mod tests {
 *** Begin EDL
 *** Insert Transition
 @@ between: clip_uuid=clip-a and clip_uuid=clip-b
-+ id: awidat.slide_left
++ id: montage.slide_left
 + family: slide
 + intent: hide_motion_jump
 + energy: 0.7
@@ -2652,9 +2652,9 @@ mod tests {
                 spec: Some(spec),
                 ..
             } => {
-                assert_eq!(kind, "awidat.slide_left");
+                assert_eq!(kind, "montage.slide_left");
                 assert_eq!(*duration_s, 0.28);
-                assert_eq!(spec.id, "awidat.slide_left");
+                assert_eq!(spec.id, "montage.slide_left");
                 assert_eq!(spec.family.as_deref(), Some("slide"));
                 assert_eq!(spec.intent.as_deref(), Some("hide_motion_jump"));
                 assert_eq!(spec.energy, Some(0.7));
@@ -2664,7 +2664,7 @@ mod tests {
                 assert_eq!(composition.primitives.len(), 2);
                 assert!(matches!(
                     &composition.primitives[0].op,
-                    awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                    montage_proto::transitions::TransitionPrimitiveOp::Push {
                         direction,
                         distance
                     } if direction == "left" && (*distance - 0.9).abs() < 1e-9
@@ -2680,7 +2680,7 @@ mod tests {
 *** Begin EDL
 *** Insert Transition
 @@ between: clip_uuid=clip-a and clip_uuid=clip-b
-+ kind: awidat.whip_pan_right
++ kind: montage.whip_pan_right
 + intent: hide_motion_jump
 + duration_s: 0.18
 *** End EDL
@@ -2692,8 +2692,8 @@ mod tests {
                 spec: Some(spec),
                 ..
             } => {
-                assert_eq!(kind, "awidat.whip_pan_right");
-                assert_eq!(spec.id, "awidat.whip_pan_right");
+                assert_eq!(kind, "montage.whip_pan_right");
+                assert_eq!(spec.id, "montage.whip_pan_right");
                 assert_eq!(spec.intent.as_deref(), Some("hide_motion_jump"));
             }
             other => panic!("want semantic InsertTransition, got {other:?}"),
@@ -2933,7 +2933,7 @@ mod tests {
 *** Begin EDL
 *** Set Effect
 @@ anchor: clip_uuid=clip-1
-+ effect: awidat.color_correction
++ effect: montage.color_correction
 + params_json: {\"contrast\":1.15,\"saturation\":0.9}
 + rationale: subtle correction for flat camera angle
 *** End EDL
@@ -2947,7 +2947,7 @@ mod tests {
                 rationale,
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-1"));
-                assert_eq!(effect, "awidat.color_correction");
+                assert_eq!(effect, "montage.color_correction");
                 assert_eq!(params.get("contrast").and_then(|v| v.as_f64()), Some(1.15));
                 assert_eq!(params.get("saturation").and_then(|v| v.as_f64()), Some(0.9));
                 assert_eq!(
@@ -2978,7 +2978,7 @@ mod tests {
 *** Begin EDL
 *** Set Effect
 @@ anchor: clip_uuid=clip-1
-+ effect: awidat.color_correction
++ effect: montage.color_correction
 + params_json: {\"contrast\":
 *** End EDL
 ";
@@ -3543,7 +3543,7 @@ mod tests {
     fn set_brand_kit_parses_kit_json() {
         let text = r##"*** Begin EDL
 *** Set Brand Kit
-+ kit_json: {"logo_path":"branding/logo.png","font_primary_path":"branding/primary.ttf","palette":["#FFD700","#00CED1"],"music_path":"branding/theme.wav","social_handles":[{"platform":"youtube","handle":"@awidat","url":"https://youtube.com/@awidat"}]}
++ kit_json: {"logo_path":"branding/logo.png","font_primary_path":"branding/primary.ttf","palette":["#FFD700","#00CED1"],"music_path":"branding/theme.wav","social_handles":[{"platform":"youtube","handle":"@montage","url":"https://youtube.com/@montage"}]}
 *** End EDL
 "##;
         let env = parse(text).unwrap();
@@ -3558,7 +3558,7 @@ mod tests {
                 assert_eq!(kit.music_path.as_deref(), Some("branding/theme.wav"));
                 assert_eq!(kit.social_handles.len(), 1);
                 assert_eq!(kit.social_handles[0].platform, "youtube");
-                assert_eq!(kit.social_handles[0].handle, "@awidat");
+                assert_eq!(kit.social_handles[0].handle, "@montage");
             }
             _ => panic!("want SetBrandKit"),
         }

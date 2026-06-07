@@ -1,4 +1,4 @@
-use awidat_social::{
+use montage_social::{
     model::Provider,
     oauth_exchange::{
         GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthExchangeError, PlatformOAuthExchange,
@@ -134,7 +134,7 @@ impl ServerTokenRefresher {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use awidat_social::token::TestKeyProvider;
+    use montage_social::token::TestKeyProvider;
 
     #[test]
     fn missing_refresh_token_is_invalid_grant() {

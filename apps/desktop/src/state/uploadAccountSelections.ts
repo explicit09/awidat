@@ -15,7 +15,7 @@ type UploadAccountSelectionsState = {
   clearSelected: (provider: string) => void;
 };
 
-const STORAGE_KEY = "awidat.deliver.uploadAccountSelections.v1";
+const STORAGE_KEY = "montage.deliver.uploadAccountSelections.v1";
 
 function loadLocal(): Record<string, string> {
   if (typeof localStorage === "undefined") return {};

@@ -6,7 +6,7 @@ import { TopChrome } from "./chrome/TopChrome";
 /**
  * AppShell — the v2 application shell.
  *
- * Layout from the canonical design spec (~/Downloads/Awidat UI Design Concept.md §4):
+ * Layout from the canonical design spec (~/Downloads/Montage UI Design Concept.md §4):
  *
  *   ┌───────────────────────────────────────────────────────── 44 ─┐   top chrome
  *   │┌──────────┐┌─────────────────────────────────┐┌────────────┐│
@@ -70,7 +70,7 @@ export function AppShell({
               // Avoid persisting under the same id when the inspector
               // is in its collapsed/expanded variant — they have
               // different default proportions.
-              inspectorCollapsed ? "awidat.shell.h.inspector-collapsed" : "awidat.shell.h"
+              inspectorCollapsed ? "montage.shell.h.inspector-collapsed" : "montage.shell.h"
             }
             className="h-full min-h-0"
           >
@@ -109,8 +109,8 @@ export function AppShell({
                   direction="vertical"
                   autoSaveId={
                     timelineCollapsed
-                      ? "awidat.shell.v.timeline-collapsed"
-                      : "awidat.shell.v"
+                      ? "montage.shell.v.timeline-collapsed"
+                      : "montage.shell.v"
                   }
                   className="h-full min-h-0"
                 >

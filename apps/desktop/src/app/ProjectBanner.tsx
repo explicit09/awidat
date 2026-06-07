@@ -61,7 +61,7 @@ export function ProjectBanner({ onChange }: Props) {
       const picked = await openDialog({
         directory: true,
         multiple: false,
-        title: "Open Awidat project",
+        title: "Open Montage project",
       });
       if (typeof picked === "string") {
         await invoke("set_project_root", { path: picked });

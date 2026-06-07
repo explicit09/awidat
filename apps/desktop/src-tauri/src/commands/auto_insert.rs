@@ -1,7 +1,7 @@
 //! Auto-insert imported assets onto the timeline.
 //!
 //! Standard editor convention is "import → drag onto timeline." For
-//! awidat's first-asset-on-fresh-project case that's a step too
+//! montage's first-asset-on-fresh-project case that's a step too
 //! many — the user already has nothing on the timeline, they just
 //! imported the only thing, of course they want to see it. We also
 //! support explicit multi-file imports by appending each selected
@@ -9,9 +9,9 @@
 
 use std::path::Path;
 
-use awidat_core::edl::{AnchorContext, EdlEnvelope, EdlOp, InsertTrackKind, apply};
-use awidat_proto::otio::{StackChild, TrackChild, TrackKind};
-use awidat_proto::project::Project;
+use montage_core::edl::{AnchorContext, EdlEnvelope, EdlOp, InsertTrackKind, apply};
+use montage_proto::otio::{StackChild, TrackChild, TrackKind};
+use montage_proto::project::Project;
 
 /// True iff the timeline contains at least one Clip on any video track.
 /// Gaps and audio-only tracks don't count — a fresh project may
@@ -55,7 +55,7 @@ fn timeline_has_any_clips(project: &Project) -> bool {
 /// `raw/<filename>` asset id from the project-relative path.
 ///
 /// `duration_s` is the asset's source duration (probed by the
-/// caller, e.g. via `awidat_render::probe_duration_s` after the
+/// caller, e.g. via `montage_render::probe_duration_s` after the
 /// proxy transcode finishes).
 #[allow(dead_code)]
 pub async fn auto_insert_if_empty(
@@ -88,7 +88,7 @@ pub async fn append_asset(
 pub async fn append_media(
     project_root: &Path,
     asset_abs_path: &Path,
-    probe: &awidat_render::MediaProbe,
+    probe: &montage_render::MediaProbe,
 ) -> Result<bool, String> {
     insert_media(project_root, asset_abs_path, probe, InsertMode::Append).await
 }
@@ -96,7 +96,7 @@ pub async fn append_media(
 pub async fn insert_media_at(
     project_root: &Path,
     asset_abs_path: &Path,
-    probe: &awidat_render::MediaProbe,
+    probe: &montage_render::MediaProbe,
     at_s: f64,
 ) -> Result<bool, String> {
     insert_media(project_root, asset_abs_path, probe, InsertMode::At(at_s)).await
@@ -176,7 +176,7 @@ async fn insert_asset(
             .iter()
             .map(|a| a.description.clone())
             .collect();
-        let action_metadata = awidat_core::vc::ActionMetadata {
+        let action_metadata = montage_core::vc::ActionMetadata {
             source: Some("agent".into()),
             operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
         };
@@ -191,9 +191,9 @@ async fn insert_asset(
 
         // Keep the implicit import -> timeline graph mutation in the
         // same audit trail as explicit apply_edl/proposal writes.
-        match awidat_core::vc::open_or_init(&project_root) {
+        match montage_core::vc::open_or_init(&project_root) {
             Ok(repo) => {
-                if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+                if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
                     &repo,
                     &applied_descriptions,
                     Some("Auto-inserted the first imported asset onto the empty timeline."),
@@ -222,7 +222,7 @@ async fn insert_asset(
 async fn insert_media(
     project_root: &Path,
     asset_abs_path: &Path,
-    probe: &awidat_render::MediaProbe,
+    probe: &montage_render::MediaProbe,
     mode: InsertMode,
 ) -> Result<bool, String> {
     let duration_s = probe.duration_s.ok_or_else(|| {
@@ -327,7 +327,7 @@ async fn insert_media(
             .iter()
             .map(|a| a.description.clone())
             .collect();
-        let action_metadata = awidat_core::vc::ActionMetadata {
+        let action_metadata = montage_core::vc::ActionMetadata {
             source: Some("agent".into()),
             operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
         };
@@ -338,8 +338,8 @@ async fn insert_media(
             .write(&project_root)
             .map_err(|e| format!("auto-insert: write project: {e}"))?;
 
-        if let Ok(repo) = awidat_core::vc::open_or_init(&project_root)
-            && let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+        if let Ok(repo) = montage_core::vc::open_or_init(&project_root)
+            && let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
                 &repo,
                 &applied_descriptions,
                 Some("Auto-inserted imported media onto the timeline."),
@@ -358,7 +358,7 @@ async fn insert_media(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{MediaReference, StackChild, TrackChild};
+    use montage_proto::otio::{MediaReference, StackChild, TrackChild};
 
     fn clip_assets(project: &Project) -> Vec<String> {
         let mut out = Vec::new();

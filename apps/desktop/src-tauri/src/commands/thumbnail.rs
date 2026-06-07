@@ -1,5 +1,5 @@
 //! Filmstrip thumbnail generation: one JPEG per second of source-time
-//! per asset, dropped under `<project>/.awidat/thumbnails/<stem>-<hash>/`.
+//! per asset, dropped under `<project>/.montage/thumbnails/<stem>-<hash>/`.
 //! The timeline canvas tiles these inside each clip.
 //!
 //! Idempotency: if any `frame-*.jpg` exists in the target dir AND its
@@ -9,13 +9,13 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_desktop_protocol::{Id, JobKind};
+use montage_desktop_protocol::{Id, JobKind};
 use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::thumbnails_dir_for;
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Generate (or refresh) filmstrip thumbnails for one asset under a
 /// specific project. Used by the post-import chain so a project switch
@@ -23,7 +23,7 @@ use crate::state::{AwidatState, JobHandle};
 /// the generated frames on success.
 pub async fn generate_thumbnails_for_asset_in_project(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
@@ -38,7 +38,7 @@ pub async fn generate_thumbnails_for_asset_in_project(
 /// Drive one ffmpeg run end-to-end with a live job card.
 async fn run_one(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     asset: &Path,
     output_dir: &Path,
 ) -> Result<(), String> {
@@ -64,7 +64,7 @@ async fn run_one(
     // indeterminate tick so the card shows movement, then resolve.
     emitter.progress(None, format!("{asset_label}: working…"));
 
-    let result = awidat_render::generate_thumbnails(asset, output_dir, cancel.clone()).await;
+    let result = montage_render::generate_thumbnails(asset, output_dir, cancel.clone()).await;
 
     unregister_job(state, &job_id).await;
 
@@ -73,7 +73,7 @@ async fn run_one(
             emitter.ok(Some(format!("filmstrip ready: {asset_label}")));
             Ok(())
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
+        Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             let _ = stderr_tail;
             emitter.cancelled();
             Err("cancelled".into())
@@ -162,7 +162,7 @@ pub async fn list_thumbnail_frames(dir: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn generate_thumbnails_for_asset(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     asset_id: String,
 ) -> Result<Option<String>, String> {
     let project_root = state
@@ -179,7 +179,7 @@ pub async fn generate_thumbnails_for_asset(
     Ok(Some(dir.to_string_lossy().into_owned()))
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -190,7 +190,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

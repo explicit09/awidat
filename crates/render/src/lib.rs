@@ -1,4 +1,4 @@
-//! ffmpeg wrapper for awidat.
+//! ffmpeg wrapper for montage.
 //!
 //! Public surface:
 //! - [`ffmpeg::ffmpeg_path`] / [`ffmpeg::ffprobe_path`] — locate the

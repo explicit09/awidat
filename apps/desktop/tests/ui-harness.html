@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Awidat Desktop UI Harness</title>
+    <title>Montage Desktop UI Harness</title>
   </head>
   <body>
     <div id="root"></div>
@@ -20,7 +20,7 @@
       const projectLoaded = params.get("project") === "1";
       const scenario = params.get("scenario") || "shell";
       const slowNonCritical = params.get("slowNonCritical") === "1";
-      const projectRoot = "/tmp/awidat-ui-eval";
+      const projectRoot = "/tmp/montage-ui-eval";
       const nonCriticalIpc = new Set([
         "get_permission_mode",
         "get_project_episodes",
@@ -116,8 +116,8 @@
                 duration_s: 0.5,
                 in_offset_s: 0.25,
                 out_offset_s: 0.25,
-                effect_name: "awidat.cross_dissolve",
-                transition_id: "awidat.cross_dissolve",
+                effect_name: "montage.cross_dissolve",
+                transition_id: "montage.cross_dissolve",
                 transition_family: "dissolve",
                 transition_intent: "soften_time_shift",
                 transition_direction: null,
@@ -164,8 +164,8 @@
                 duration_s: 0.5,
                 in_offset_s: 0.25,
                 out_offset_s: 0.25,
-                effect_name: "awidat.fade_black",
-                transition_id: "awidat.fade_black",
+                effect_name: "montage.fade_black",
+                transition_id: "montage.fade_black",
                 transition_family: "fade",
                 transition_intent: "chapter_break",
                 transition_direction: null,
@@ -212,8 +212,8 @@
                 duration_s: 0.5,
                 in_offset_s: 0.25,
                 out_offset_s: 0.25,
-                effect_name: "awidat.flash_white",
-                transition_id: "awidat.flash_white",
+                effect_name: "montage.flash_white",
+                transition_id: "montage.flash_white",
                 transition_family: "flash",
                 transition_intent: "heighten_impact",
                 transition_direction: null,
@@ -397,14 +397,14 @@
       mockConvertFileSrc("macos");
       window.isTauri = true;
       window.__lastEdlText = "";
-      window.__awidatIpcCalls = [];
+      window.__montageIpcCalls = [];
       const ipcStart = performance.now();
       let proposalCounter = 0;
       let useAgentStore;
       let useTimelineSelectionStore;
       let useProposalStore;
       mockIPC((cmd, args) => {
-        window.__awidatIpcCalls.push({
+        window.__montageIpcCalls.push({
           command: cmd,
           atMs: performance.now() - ipcStart,
         });

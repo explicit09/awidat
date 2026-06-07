@@ -64,7 +64,7 @@ Verification of this step: a short written confirmation (in the PR description /
 
 1.3 **Tests (TDD, write first):** in the `#[cfg(test)] mod tests` of `tiktok_upload.rs`, copy the shape of the YouTube tests (`crates/social/src/youtube_upload.rs:230`). Use a `RecordingTikTokClient` mock that asserts the request fields (privacy clamp to `SELF_ONLY` when not `eligible_for_public`, token ref passthrough, caption) and returns a canned `publish_id`. Cover: maps init response to processing `UploadResult`; rejects wrong provider (`ProviderMismatch`); rejects empty token (`MissingUploadToken`); maps each client error variant; status adapter maps PROCESSING/COMPLETE/FAILED; privacy-clamp test. Add a token-redaction test asserting the serialized request contains the `token_ref` reference string but not `access_token`/`refresh_token` (matches `crates/social/src/upload_adapter.rs:163`).
 
-**Verify:** `cargo test -p awidat-social tiktok_upload::tests` (expect fail → implement → pass), then `cargo test -p awidat-social`, `cargo clippy -p awidat-social --all-targets -- -D warnings`, `cargo fmt --all -- --check`.
+**Verify:** `cargo test -p montage-social tiktok_upload::tests` (expect fail → implement → pass), then `cargo test -p montage-social`, `cargo clippy -p montage-social --all-targets -- -D warnings`, `cargo fmt --all -- --check`.
 
 ---
 
@@ -76,14 +76,14 @@ Verification of this step: a short written confirmation (in the PR description /
 
 2.1 The decision point of "use real adapter vs BlockedUploadAdapter" lives wherever the worker selects an adapter for a provider (the cron worker / server crate from Phase 4, and the desktop dev path in `apps/desktop/src-tauri/src/commands/social.rs:26` which currently imports only `MockUploadAdapter`). For the domain crate, expose a clear constructor (`TikTokUploadAdapter::new(client)`) and let the caller decide; do not bake routing into the crate.
 
-**Verify:** `cargo test -p awidat-social provider::tests eligibility::tests` and the new TikTok eligibility test.
+**Verify:** `cargo test -p montage-social provider::tests eligibility::tests` and the new TikTok eligibility test.
 
 ---
 
 ### Task 3 — TikTok live HTTP client (server crate, sandbox-integration-tested)
 
 **Files (in the server crate created by Phases 1–3 — likely `crates/social-server/` or wherever Phase 3's real YouTube `YouTubeUploadClient` impl landed; place the TikTok client beside it):**
-- Create the live `TikTokUploadClient`/`TikTokStatusClient` impls using the same HTTP stack Phase 3 chose (`reqwest` is NOT yet a dependency of `awidat-social` per `crates/social/Cargo.toml` — it belongs in the server crate, keeping the domain crate HTTP-free).
+- Create the live `TikTokUploadClient`/`TikTokStatusClient` impls using the same HTTP stack Phase 3 chose (`reqwest` is NOT yet a dependency of `montage-social` per `crates/social/Cargo.toml` — it belongs in the server crate, keeping the domain crate HTTP-free).
 
 3.1 Implement init: `POST https://open.tiktokapis.com/v2/post/publish/video/init/` with `Authorization: Bearer <decrypted access token>` (decrypt via `crates/social/src/token.rs` `decrypt_access_token` using the server's real key provider), body `{ post_info: {title, privacy_level, ...}, source_info: { source: "PULL_FROM_URL", video_url } }`. Parse `data.publish_id`. The `video_url` is a server-reachable signed URL (Supabase Storage) for the rendered artifact — this is the file-transport open question (design line 205); resolve it here as PULL_FROM_URL (no FILE_UPLOAD chunking needed), which is simpler and matches IG.
 3.2 Implement status: `POST /v2/post/publish/status/fetch/` with `{ publish_id }`, map `status` field.
@@ -114,7 +114,7 @@ Depends on Step 0's verified contract.
 
 4.2 **Tests (TDD):** mock `RecordingInstagramClient` asserting field names confirmed in Step 0; cover container-create → processing, status poll `IN_PROGRESS`→Processing / `FINISHED`→publish→Published(permalink) / `ERROR`→Failed, professional-account gate via `RequiresAction`, token redaction. Mirror `crates/social/src/youtube_upload.rs:396` status sub-module.
 
-**Verify:** `cargo test -p awidat-social instagram_upload::tests`, then full `cargo test -p awidat-social`, clippy, fmt.
+**Verify:** `cargo test -p montage-social instagram_upload::tests`, then full `cargo test -p montage-social`, clippy, fmt.
 
 ---
 
@@ -124,7 +124,7 @@ Depends on Step 0's verified contract.
 - `crates/social/src/eligibility.rs` `instagram_eligibility` (line 83) — already gates on professional account + `instagram_content_publish` scope. Reuse unchanged.
 - `crates/social/src/provider.rs` Instagram slot (lines 156–171, currently `blocked("instagram_professional_account_required")`, `public_posting:false`). Same flip pattern as TikTok: stays blocked until account is professional + scoped, then eligible+private gated by audit. Add a test mirroring the TikTok one.
 
-**Verify:** `cargo test -p awidat-social provider::tests eligibility::tests`.
+**Verify:** `cargo test -p montage-social provider::tests eligibility::tests`.
 
 ---
 
@@ -156,7 +156,7 @@ Depends on Step 0's verified contract.
 
 ### Task 8 — Full verification & review
 
-8.1 `cargo test -p awidat-social` (all domain tests green, YouTube tests unchanged — FSM untouched).
+8.1 `cargo test -p montage-social` (all domain tests green, YouTube tests unchanged — FSM untouched).
 8.2 Server-crate tests: unit green in CI; sandbox integration jobs (creds-gated) run manually and recorded.
 8.3 `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `git diff --check`.
 8.4 Dispatch a focused reviewer (scope: token exposure in new adapters, privacy-clamp correctness, error→FSM mapping parity with YouTube, no FSM duplication, IG-flow matches the Step-0 verified contract).
@@ -172,7 +172,7 @@ Depends on Step 0's verified contract.
 
 ## Open risks
 - Instagram content-publishing flow is unverified in research; if Step 0 reveals the real flow differs from the assumed container-then-publish (e.g. Reels-specific fields, mandatory container-status polling before publish, or a different async model), the IG adapter request/response shapes and status-adapter orchestration in Task 4 must be revised before tests are written.
-- Whether the live HTTP `*Client` implementations belong in a separate server crate vs. a feature-gated module of `awidat-social` depends on where Phase 3 placed the real YouTube client; this plan assumes a server crate to keep the domain crate HTTP-free (it currently has no reqwest dependency). Confirm Phase 3's choice.
+- Whether the live HTTP `*Client` implementations belong in a separate server crate vs. a feature-gated module of `montage-social` depends on where Phase 3 placed the real YouTube client; this plan assumes a server crate to keep the domain crate HTTP-free (it currently has no reqwest dependency). Confirm Phase 3's choice.
 - TikTok privacy_level mapping for `Unlisted` has no exact equivalent; the chosen mapping (MUTUAL_FOLLOW_FRIENDS or clamp to SELF_ONLY) needs confirmation against current TikTok docs.
 - Both TikTok and IG use a PULL model requiring a publicly fetchable signed URL; if Phase 1/5 chose a different file-transport mechanism, Tasks 3/6 must adapt (chunked FILE_UPLOAD for TikTok adds significant complexity and is the fallback if PULL is unavailable).
 - Daily rate/quota caps (TikTok per-app, IG ~25/24h) interact with the bounded-retry backoff from Phase 4; ensure retries do not burn the daily cap. Multi-user quota is explicitly out of scope (design line 203).

@@ -2,6 +2,6 @@
 
 /**
  * Lifecycle of an [`Item::EditorialNote`]. Persists across sessions
- * via `<project>/.awidat/notes.json`.
+ * via `<project>/.montage/notes.json`.
  */
 export type EditorialNoteStatus = "open" | "resolved" | "dismissed";

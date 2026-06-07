@@ -1,12 +1,12 @@
 import type { Item } from "../protocol";
-import { isAwidatSentinel, isIntroSyntheticInput } from "../state/introState.ts";
+import { isIntroSyntheticInput, isMontageSentinel } from "../state/introState.ts";
 
 export function visibleChatItems(items: Item[]): Item[] {
   const visible: Item[] = [];
   let hidingIntroReply = false;
 
   for (const item of items) {
-    if (item.kind === "user_input" && isAwidatSentinel(item.text)) {
+    if (item.kind === "user_input" && isMontageSentinel(item.text)) {
       hidingIntroReply = isIntroSyntheticInput(item.text);
       continue;
     }

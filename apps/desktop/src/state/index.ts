@@ -1,5 +1,5 @@
 /**
- * Awidat v2 state stores.
+ * Montage v2 state stores.
  *
  * - useStageStore: Edit → Deliver
  *

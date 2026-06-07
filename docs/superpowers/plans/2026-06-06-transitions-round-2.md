@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Widen Awidat's transition planner using the mined transcript guidance, package the transition research artifacts, and verify with focused tests plus render preparation.
+**Goal:** Widen Montage's transition planner using the mined transcript guidance, package the transition research artifacts, and verify with focused tests plus render preparation.
 
 **Architecture:** Keep `plan_transition` as the visible-transition planner and `plan_split_edit` as the audio-led planner. Add only deterministic context parsing and objective mapping; do not introduce a new engine or speculative GPU-only authoring path.
 
-**Tech Stack:** Rust (`awidat-core`, `awidat-proto` transition registry), Markdown skill/research docs, Awidat EDL, scoped Cargo tests.
+**Tech Stack:** Rust (`montage-core`, `montage-proto` transition registry), Markdown skill/research docs, Montage EDL, scoped Cargo tests.
 
 ---
 
 ## File Structure
 
-- Modify `crates/core/src/awidat_mcp/tools/plan_transition.rs`: parse occlusion scores, expand objective-to-transition selection, and refuse occlusion-only choices without evidence.
+- Modify `crates/core/src/montage_mcp/tools/plan_transition.rs`: parse occlusion scores, expand objective-to-transition selection, and refuse occlusion-only choices without evidence.
 - Create `crates/core/tests/plan_transition.rs`: focused unit tests for the widened planner.
 - Modify `video_editing_transcripts/knowledge/transitions/SKILL.md`: keep the ignored research summary aligned with the mined craft.
 - Modify `video_editing_transcripts/knowledge/transitions/tool-gap.md`: record closed gaps and next-ranked gaps.
@@ -26,18 +26,18 @@
 
 - [ ] **Step 1: Write tests for pass-by, invisible refusal, zoom, iris, and directional wipes**
 
-Create tests that call `awidat_core::awidat_mcp::tools::plan_transition::run` with compact fake `transition_context` JSON packets. Assert the selected transition id and that returned EDL parses with `awidat_core::edl::parse`.
+Create tests that call `montage_core::montage_mcp::tools::plan_transition::run` with compact fake `transition_context` JSON packets. Assert the selected transition id and that returned EDL parses with `montage_core::edl::parse`.
 
 - [ ] **Step 2: Run the new test and confirm it fails before implementation**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core --test plan_transition`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core --test plan_transition`
 
 Expected: tests for new behavior fail because current `plan_transition` does not select pass-by, invisible-cut, zoom, iris, or directional wipe objectives.
 
 ## Task 2: Widen `plan_transition`
 
 **Files:**
-- Modify: `crates/core/src/awidat_mcp/tools/plan_transition.rs`
+- Modify: `crates/core/src/montage_mcp/tools/plan_transition.rs`
 
 - [ ] **Step 1: Parse occlusion scores**
 
@@ -47,15 +47,15 @@ Add outgoing and incoming `occlusion_score` fields to `ContextSummary`, populate
 
 Expand `transition_for_job` so these objectives map to FFmpeg-renderable ids:
 
-- `occlusion_mask`, `pass_by_motion`, `invisible_scene_move` -> `awidat.pass_by_left/right` when direction is left/right, otherwise `awidat.invisible_cut`.
-- `mask_cut`, `occlusion_or_dark_frame`, `hide_camera_reposition` -> `awidat.invisible_cut`.
-- `punch_in`, `forward_momentum` -> `awidat.zoom_in`.
-- `spatial_shift`, `energy_jump` with zoom direction -> `awidat.distance_zoom`.
-- `stylized_reveal`, `vintage_reveal`, `comic_reveal` -> `awidat.iris_open`.
-- `stylized_closure`, `comic_button` -> `awidat.iris_close`.
+- `occlusion_mask`, `pass_by_motion`, `invisible_scene_move` -> `montage.pass_by_left/right` when direction is left/right, otherwise `montage.invisible_cut`.
+- `mask_cut`, `occlusion_or_dark_frame`, `hide_camera_reposition` -> `montage.invisible_cut`.
+- `punch_in`, `forward_momentum` -> `montage.zoom_in`.
+- `spatial_shift`, `energy_jump` with zoom direction -> `montage.distance_zoom`.
+- `stylized_reveal`, `vintage_reveal`, `comic_reveal` -> `montage.iris_open`.
+- `stylized_closure`, `comic_button` -> `montage.iris_close`.
 - `graphic_movement`, `related_scene_change` -> directional wipe ids when direction exists.
 - `social_push`, `screen_direction` -> directional slide ids when direction exists.
-- `tech_context`, `glitch_moment` -> `awidat.pixelize`.
+- `tech_context`, `glitch_moment` -> `montage.pixelize`.
 
 - [ ] **Step 3: Add occlusion refusal**
 
@@ -63,7 +63,7 @@ In `incompatibility_reason`, if the transition metadata avoids `no_occlusion_sig
 
 - [ ] **Step 4: Run planner tests**
 
-Run: `CARGO_INCREMENTAL=0 cargo test -p awidat-core --test plan_transition`
+Run: `CARGO_INCREMENTAL=0 cargo test -p montage-core --test plan_transition`
 
 Expected: all new planner tests pass.
 
@@ -102,16 +102,16 @@ Expected: command exits 0. Existing stable-rustfmt warnings about unstable confi
 Run:
 
 ```bash
-CARGO_INCREMENTAL=0 cargo test -p awidat-core --test plan_transition
-CARGO_INCREMENTAL=0 cargo test -p awidat-core --test plan_split_edit
-CARGO_INCREMENTAL=0 cargo test -p awidat-core --test skill_catalog
+CARGO_INCREMENTAL=0 cargo test -p montage-core --test plan_transition
+CARGO_INCREMENTAL=0 cargo test -p montage-core --test plan_split_edit
+CARGO_INCREMENTAL=0 cargo test -p montage-core --test skill_catalog
 ```
 
 Expected: all tests pass.
 
 - [ ] **Step 3: Run focused clippy**
 
-Run: `CARGO_INCREMENTAL=0 cargo clippy -p awidat-core --test plan_transition --no-deps -- -D warnings`
+Run: `CARGO_INCREMENTAL=0 cargo clippy -p montage-core --test plan_transition --no-deps -- -D warnings`
 
 Expected: command exits 0.
 
@@ -126,17 +126,17 @@ Check `/Volumes/Explicit's Hard Drive/Short6_VCTake.mp4` and nearby short clips.
 
 - [ ] **Step 2: Rebuild CLI**
 
-Run: `CARGO_INCREMENTAL=0 cargo build -p awidat-cli --bin awidat`
+Run: `CARGO_INCREMENTAL=0 cargo build -p montage-cli --bin montage`
 
 Expected: CLI builds successfully.
 
 - [ ] **Step 3: Create a clean scratch project**
 
-Use a path without apostrophes or spaces, e.g. `/Users/explicit/awidat_transition_round2`.
+Use a path without apostrophes or spaces, e.g. `/Users/explicit/montage_transition_round2`.
 
 - [ ] **Step 4: Apply one planner-generated transition EDL and render**
 
-Use Awidat CLI to create/import footage, apply an EDL using a FFmpeg-renderable transition from the widened planner, render, and inspect the manifest for `xfade`/`acrossfade`.
+Use Montage CLI to create/import footage, apply an EDL using a FFmpeg-renderable transition from the widened planner, render, and inspect the manifest for `xfade`/`acrossfade`.
 
 - [ ] **Step 5: Report artifact path**
 

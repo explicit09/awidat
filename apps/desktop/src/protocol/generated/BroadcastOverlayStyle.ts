@@ -3,7 +3,7 @@
 /**
  * Broadcast overlay style values. These remain data-driven so private
  * skills can define their own look without hard-coding branding in
- * Awidat core.
+ * Montage core.
  */
 export type BroadcastOverlayStyle = {
 /**

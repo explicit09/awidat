@@ -14,7 +14,7 @@ const source: SourceMediaEntry = {
 
 const proxy: ProxyEntry = {
   stem: "interview-1080p-abcdef12",
-  proxy_path: "/project/.awidat/proxies/interview-1080p-abcdef12.mp4",
+  proxy_path: "/project/.montage/proxies/interview-1080p-abcdef12.mp4",
   size_bytes: 500,
 };
 

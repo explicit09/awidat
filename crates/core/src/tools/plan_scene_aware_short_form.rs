@@ -6,8 +6,8 @@
 //! an EDL fragment for review.
 
 use async_trait::async_trait;
-use awidat_index::{SidecarError, read_sidecar};
-use awidat_proto::index::AssetId;
+use montage_index::{SidecarError, read_sidecar};
+use montage_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -140,7 +140,7 @@ fn sidecar_data(
 
 const DESCRIPTION: &str = "\
 Build a read-only scene-aware short-form edit plan for one candidate clip. \
-The tool uses existing Awidat evidence sidecars when available: transcript, \
+The tool uses existing Montage evidence sidecars when available: transcript, \
 word timings, topics, editorial moments, audio energy, face/gaze, scene and \
 shot detection, frame quality, composition, and CLIP metadata. It analyzes \
 shot layout, caption safety, negative space, motion intensity, weak visuals, \
@@ -161,10 +161,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

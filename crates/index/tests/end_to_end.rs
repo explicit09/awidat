@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use awidat_config::{McpServer, McpServerKind};
-use awidat_index::{AssetInput, PairOutcome, run};
-use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
-use awidat_proto::project::Project;
+use montage_config::{McpServer, McpServerKind};
+use montage_index::{AssetInput, PairOutcome, run};
+use montage_mcp::ClientInfo;
+use montage_proto::index::AssetId;
+use montage_proto::project::Project;
 
 fn workspace_python_dir() -> PathBuf {
     // crates/index/tests/end_to_end.rs → workspace root
@@ -52,7 +52,7 @@ fn audio_energy_server(python_dir: &Path) -> McpServer {
         kind: McpServerKind::Indexer,
         enabled: true,
         depends_on: vec![],
-        resource_class: awidat_config::IndexerResourceClass::Light,
+        resource_class: montage_config::IndexerResourceClass::Light,
         indexer_group: None,
     }
 }
@@ -92,7 +92,7 @@ async fn audio_energy_indexer_writes_sidecar() {
     }];
     let servers = vec![audio_energy_server(&workspace_python_dir())];
     let client_info = ClientInfo {
-        name: "awidat-test".into(),
+        name: "montage-test".into(),
         version: "0.0.1".into(),
     };
 
@@ -150,7 +150,7 @@ async fn audio_energy_indexer_writes_sidecar() {
         &servers,
         &assets,
         ClientInfo {
-            name: "awidat-test".into(),
+            name: "montage-test".into(),
             version: "0.0.1".into(),
         },
         2,

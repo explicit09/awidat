@@ -3,20 +3,20 @@
 **Date:** 2026-06-04
 **Status:** Approved (brainstorming) → ready for implementation plan
 **Feature:** captions (iteration 2)
-**Branch base:** `feat/awidat-editorial-upgrades`
+**Branch base:** `feat/montage-editorial-upgrades`
 **Builds on:** iteration 1 spec `2026-06-04-caption-readability-and-cross-format-design.md`
 
 ---
 
 ## 1. Goal
 
-Make **awidat itself** render captions correctly (no external/libass workaround) using the
+Make **montage itself** render captions correctly (no external/libass workaround) using the
 industry-standard subtitle engine, and place captions so they **clear an existing
-lower-third / busy bottom region**. Close the loop with awidat-native proof renders the
+lower-third / busy bottom region**. Close the loop with montage-native proof renders the
 user signs off on.
 
 Two concrete problems from iteration 1's proof render motivate this:
-- `awidat render` produced an **invalid ffmpeg `filter_complex`** for whole-cue captions
+- `montage render` produced an **invalid ffmpeg `filter_complex`** for whole-cue captions
   because they fell through to the fragile `drawtext` path (the libass path required word
   timings). Render aborted.
 - Captions placed bottom-center **collided with the Episode's burned-in lower-third banner**.
@@ -113,16 +113,16 @@ ffmpeg `subtitles=` (libass) → rendered mp4.
   emits `safe_area="lower_third"`; with no composition data it emits `"standard"`. The shared
   busy-region helper has a direct unit test; short-form behavior stays green (parity).
 - **EDL unit:** `build_caption_edl_lines` emits the per-cue `safe_area`.
-- **Regression:** full `awidat-core` + `awidat-render` suites green (scoped gate per the disk
+- **Regression:** full `montage-core` + `montage-render` suites green (scoped gate per the disk
   constraint memory).
 - **End-to-end (manual proof, the sign-off):** render the long-form Episode (minimal_cinematic)
-  **through `awidat render`** — captions appear via libass, wrapped, outlined, and raised clear of
+  **through `montage render`** — captions appear via libass, wrapped, outlined, and raised clear of
   the lower-third — and the Short6 short-form regression. User reviews real frames and signs off.
 
 ## 7. Scope boundaries (YAGNI)
 
 **In:** ASS routing for all caption roles; one raised margin profile; composition-aware inset with
-fallback; per-cue `safe_area` emission; awidat-native proof renders (Episode minimal + Short6).
+fallback; per-cue `safe_area` emission; montage-native proof renders (Episode minimal + Short6).
 
 **Out:** the general `drawtext` filter-chain bug (separate chip); the EDL `text` quote round-trip
 fix (separate chip); continuous/pixel-precise margins (discrete profiles suffice for v1); true
@@ -138,7 +138,7 @@ short-form re-architecture.
   (whisper + composition); other recommendations may lack data — acceptable for a caption-focused
   regression render.
 - **Disk constraint** (see `disk_space_full_build_constraint` memory): build/test scoped to
-  `awidat-core` + `awidat-render`, `CARGO_INCREMENTAL=0`.
+  `montage-core` + `montage-render`, `CARGO_INCREMENTAL=0`.
 - Whisper local pipeline already warmed in iteration 1; reuse the `capproof` project + transcript.
 
 ## 9. Open items for review time

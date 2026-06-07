@@ -39,7 +39,7 @@ export function PopoverContent({
   return (
     <RadixPopover.Portal>
       <RadixPopover.Content
-        className={clsx("awidat-popover", className)}
+        className={clsx("montage-popover", className)}
         side={side}
         align={align}
         sideOffset={sideOffset}

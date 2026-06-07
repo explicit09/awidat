@@ -1,6 +1,6 @@
 // WelcomeCard — one-screen first-launch welcome (Wave 3 W1).
 //
-// Awidat is structurally unusual: a local-first AI editorial NLE where
+// Montage is structurally unusual: a local-first AI editorial NLE where
 // the agent has READ your media and AGENTS.md, proposes editorial
 // work, and the human reviews/accepts/rejects. New users don't have a
 // mental model for this. The welcome explains the three core ideas in
@@ -12,7 +12,7 @@
 
 import { BookOpen, Sparkles, GitBranch } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
-import mark from "../brand/awidat-mark.svg";
+import mark from "../brand/montage-mark.svg";
 import { useWelcome } from "../state/welcome";
 import { Button, Inline, Stack } from "../ui";
 

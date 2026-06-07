@@ -10,9 +10,9 @@ use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "awidat-agent",
+    name = "montage-agent",
     version,
-    about = "Codex-backed Awidat terminal agent runner.",
+    about = "Codex-backed Montage terminal agent runner.",
     long_about = None,
 )]
 struct Cli {
@@ -22,7 +22,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Open a non-interactive Codex turn against an Awidat project.
+    /// Open a non-interactive Codex turn against an Montage project.
     Chat {
         path: PathBuf,
         prompt: Option<String>,
@@ -33,7 +33,7 @@ enum Command {
         #[arg(long = "config", short = 'c', value_name = "key=value")]
         config_overrides: Vec<String>,
     },
-    /// Open the Codex TUI against an Awidat project.
+    /// Open the Codex TUI against an Montage project.
     Tui {
         path: PathBuf,
         prompt: Option<String>,
@@ -56,7 +56,7 @@ enum Command {
         project: PathBuf,
         #[arg(long)]
         prompt: String,
-        #[arg(long, default_value = "awidat agent")]
+        #[arg(long, default_value = "montage agent")]
         display_name: String,
         #[arg(long)]
         model: Option<String>,
@@ -77,18 +77,18 @@ struct CodexRunOptions {
 impl CodexRunOptions {
     fn execute(self) -> ExitCode {
         if let Err(err) = set_default_originator("codex_cli_rs".to_string()) {
-            tracing::warn!(?err, "failed to set awidat originator override");
+            tracing::warn!(?err, "failed to set montage originator override");
         }
 
         let abs_project_root = self.project_root.as_deref().map(absolute_project_root);
         if let Some(root) = &abs_project_root {
             // SAFETY: codex_exec's runtime starts after this point.
             unsafe {
-                std::env::set_var("AWIDAT_PROJECT_ROOT", root);
+                std::env::set_var("MONTAGE_PROJECT_ROOT", root);
             }
         }
 
-        let mut raw_overrides = awidat_mcp_overrides(abs_project_root.as_deref());
+        let mut raw_overrides = montage_mcp_overrides(abs_project_root.as_deref());
         raw_overrides.extend(self.config_overrides);
 
         let mut cli = ExecCli {
@@ -131,7 +131,7 @@ fn main() -> ExitCode {
             project_root: Some(path),
             ephemeral: false,
             skip_git_repo_check: true,
-            display_name: "awidat chat".into(),
+            display_name: "montage chat".into(),
         }
         .execute(),
         Command::Tui {
@@ -148,7 +148,7 @@ fn main() -> ExitCode {
             project_root: Some(path),
             ephemeral: false,
             skip_git_repo_check: true,
-            display_name: "awidat tui".into(),
+            display_name: "montage tui".into(),
         }
         .execute(),
         Command::Resume { selector, model } => CodexRunOptions {
@@ -159,7 +159,7 @@ fn main() -> ExitCode {
             project_root: std::env::current_dir().ok(),
             ephemeral: false,
             skip_git_repo_check: true,
-            display_name: "awidat resume".into(),
+            display_name: "montage resume".into(),
         }
         .execute(),
         Command::RunPrepared {
@@ -181,29 +181,29 @@ fn main() -> ExitCode {
     }
 }
 
-fn awidat_mcp_overrides(project_root: Option<&Path>) -> Vec<String> {
+fn montage_mcp_overrides(project_root: Option<&Path>) -> Vec<String> {
     let Ok(self_exe) = std::env::current_exe() else {
-        tracing::warn!("current_exe() failed; skipping awidat-mcp-server auto-registration");
+        tracing::warn!("current_exe() failed; skipping montage-mcp-server auto-registration");
         return Vec::new();
     };
     let Some(parent) = self_exe.parent() else {
         return Vec::new();
     };
-    let server_bin = parent.join("awidat-mcp-server");
+    let server_bin = parent.join("montage-mcp-server");
     if !server_bin.exists() {
         tracing::warn!(
             path = %server_bin.display(),
-            "awidat-mcp-server sibling binary missing; codex will run without Awidat tools"
+            "montage-mcp-server sibling binary missing; codex will run without Montage tools"
         );
         return Vec::new();
     }
 
     let quoted_cmd = format!("{:?}", server_bin.display().to_string());
-    let mut overrides = vec![format!("mcp_servers.awidat.command={quoted_cmd}")];
+    let mut overrides = vec![format!("mcp_servers.montage.command={quoted_cmd}")];
     if let Some(root) = project_root {
         let quoted_root = format!("{:?}", root.display().to_string());
         overrides.push(format!(
-            "mcp_servers.awidat.env.AWIDAT_PROJECT_ROOT={quoted_root}"
+            "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT={quoted_root}"
         ));
     }
     overrides

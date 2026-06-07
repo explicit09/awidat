@@ -97,7 +97,7 @@ export interface BriefDispatch {
    */
   captureTimelineSnapshot: () => Promise<string | undefined>;
   /**
-   * Append a rejection record to `<project>/.awidat/feedback.jsonl`
+   * Append a rejection record to `<project>/.montage/feedback.jsonl`
    * (Wave 5 C2). Fire-and-forget — callers must never block the UI
    * decision on the disk write, and the JSONL is the AGENT-facing
    * source (the localStorage History store remains the UI source of
@@ -107,7 +107,7 @@ export interface BriefDispatch {
 }
 
 /**
- * Wire-shape of one row written to `<project>/.awidat/feedback.jsonl`.
+ * Wire-shape of one row written to `<project>/.montage/feedback.jsonl`.
  * Mirrors `commands::feedback::FeedbackEntry` on the Rust side — keep
  * the two in lock-step. `rationale` and `reason` are nullable so silent
  * rejects (no reason supplied) still log a row, which lets the agent

@@ -11,7 +11,7 @@ Required evidence:
 - Metadata validation: caption/description, tags, privacy/public eligibility, and schedule validation output.
 - Metadata edit: proof that a saved metadata change revalidates the bound target through `social_update_target` before firing.
 - Private or sandbox publish: sandbox/private upload job id and provider response.
-- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Awidat was closed.
+- Scheduled app-closed firing: hosted cron/tick log proving the due job fired while Montage was closed.
 - Status polling: `social_publish_job` history through terminal state.
 - Provider URL: final TikTok provider URL or sandbox equivalent.
 - Audit history: account/job audit events.

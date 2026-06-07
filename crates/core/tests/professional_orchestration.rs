@@ -1,11 +1,11 @@
 //! Tests for professional workflow lens and orchestration helpers.
 
-use awidat_core::professional::{
+use montage_core::professional::{
     LensCorrectionAction, build_workflow_lens_snapshots, inspect_pre_autonomy_readiness,
     record_learning_signal,
 };
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::professional::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::professional::{
     AssetCatalog, AssetRecord, CapabilityArea, CapabilityRegistry, CompositionGraph,
     DeliveryProfile, LearningSignal, PipelineConflict, PlannerPassContract, ReadinessState,
     ReviewStatus, WorkflowLens,
@@ -13,7 +13,7 @@ use awidat_proto::professional::{
 
 #[test]
 fn workflow_lenses_expose_readiness_artifacts_findings_and_actions() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
             assets: vec![AssetRecord {
                 id: "cam-a".into(),
@@ -29,7 +29,7 @@ fn workflow_lenses_expose_readiness_artifacts_findings_and_actions() {
             WorkflowLens::Vfx,
             WorkflowLens::Delivery,
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let snapshots = build_workflow_lens_snapshots(&metadata);
@@ -61,7 +61,7 @@ fn workflow_lenses_expose_readiness_artifacts_findings_and_actions() {
 
 #[test]
 fn orchestration_inspection_uses_registry_and_detects_cross_stage_conflicts() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         capability_registry: Some(CapabilityRegistry::professional_substrate_v1()),
         planner_passes: vec![
             PlannerPassContract {
@@ -86,7 +86,7 @@ fn orchestration_inspection_uses_registry_and_detects_cross_stage_conflicts() {
                 conflicts: Vec::new(),
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let inspection = inspect_pre_autonomy_readiness(&metadata);
@@ -106,7 +106,7 @@ fn orchestration_inspection_uses_registry_and_detects_cross_stage_conflicts() {
 
 #[test]
 fn learning_signal_capture_records_accepted_and_rejected_proposals() {
-    let mut metadata = AwidatTimelineMetadata::default();
+    let mut metadata = MontageTimelineMetadata::default();
 
     record_learning_signal(
         &mut metadata,

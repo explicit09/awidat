@@ -29,43 +29,43 @@ REQUIRED_SIDECAR_KEYS = {
     "data",
 }
 EVAL_WORKFLOW_REQUIRED_STRINGS = [
-    "AWIDAT_REAL_CORPUS",
-    "AWIDAT_REAL_VISUAL_MIN_METADATA_SHOTS",
-    "AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO",
-    "AWIDAT_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS",
-    "AWIDAT_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS",
-    "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS",
-    "AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
-    "AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES",
-    "AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES",
-    "AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES",
-    "AWIDAT_COMPOSITION_MODEL_PROJECT",
-    "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS",
-    "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
-    'test -n "$AWIDAT_REAL_CORPUS"',
-    'test -d "$AWIDAT_REAL_CORPUS"',
-    'test -f "$AWIDAT_REAL_CORPUS/project.otio.json"',
+    "MONTAGE_REAL_CORPUS",
+    "MONTAGE_REAL_VISUAL_MIN_METADATA_SHOTS",
+    "MONTAGE_REAL_VISUAL_MIN_METADATA_RATIO",
+    "MONTAGE_REAL_VISUAL_MIN_MATCH_CANDIDATE_SHOTS",
+    "MONTAGE_REAL_VISUAL_MIN_MODEL_COMPOSITION_SHOTS",
+    "MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS",
+    "MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
+    "MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES",
+    "MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES",
+    "MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES",
+    "MONTAGE_COMPOSITION_MODEL_PROJECT",
+    "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS",
+    "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
+    'test -n "$MONTAGE_REAL_CORPUS"',
+    'test -d "$MONTAGE_REAL_CORPUS"',
+    'test -f "$MONTAGE_REAL_CORPUS/project.otio.json"',
     "python3 python/scripts/smoke_safe.py",
-    "env.AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '0'",
+    "env.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS != '0'",
 ]
 REAL_CORPUS_FIXTURE_GATES = [
     (
-        "AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES",
+        "MONTAGE_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES",
         "assessor-proposal",
-        ".awidat/eval/assessor-proposal-flow.json",
-        ".awidat/eval/assessor-proposals",
+        ".montage/eval/assessor-proposal-flow.json",
+        ".montage/eval/assessor-proposals",
     ),
     (
-        "AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES",
+        "MONTAGE_REAL_MIN_TRANSITION_PLANNER_FIXTURES",
         "transition-planner",
-        ".awidat/eval/transition-planner-flow.json",
-        ".awidat/eval/transition-planners",
+        ".montage/eval/transition-planner-flow.json",
+        ".montage/eval/transition-planners",
     ),
     (
-        "AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES",
+        "MONTAGE_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES",
         "rough-assembly",
-        ".awidat/eval/rough-assembly-flow.json",
-        ".awidat/eval/rough-assemblies",
+        ".montage/eval/rough-assembly-flow.json",
+        ".montage/eval/rough-assemblies",
     ),
 ]
 COMPOSITION_MODEL_ALLOWED_VALUES = {
@@ -123,10 +123,10 @@ def check_package_layout(package_names: list[str]) -> None:
         if not init.is_file():
             fail(f"{package_name} missing src/{module}/__init__.py")
         text = init.read_text()
-        if package_name == "awidat-mcp":
+        if package_name == "montage-mcp":
             for exported in ["Sidecar", "IndexerServer", "IndexAssetRequest"]:
                 if exported not in text:
-                    fail(f"awidat-mcp __init__.py does not export {exported}")
+                    fail(f"montage-mcp __init__.py does not export {exported}")
         else:
             for marker in ["INDEXER_NAME", "INDEXER_VERSION", "SCHEMA_VERSION"]:
                 if marker not in text:
@@ -343,7 +343,7 @@ def _any_non_blank_env(*names: str) -> bool:
 
 
 def _real_corpus_root_for_fixture_gates() -> Path | None:
-    raw_root = _first_non_blank_env("AWIDAT_REAL_CORPUS")
+    raw_root = _first_non_blank_env("MONTAGE_REAL_CORPUS")
     if raw_root is None:
         return None
     return Path(raw_root)
@@ -375,11 +375,11 @@ def check_real_corpus_fixture_gates_from_env() -> dict[str, int]:
 
     project_root = _real_corpus_root_for_fixture_gates()
     if project_root is None:
-        fail("AWIDAT_REAL_CORPUS must be set when real-corpus fixture minimums are configured")
+        fail("MONTAGE_REAL_CORPUS must be set when real-corpus fixture minimums are configured")
     if not project_root.is_dir():
-        fail(f"AWIDAT_REAL_CORPUS must be an existing directory: {project_root}")
+        fail(f"MONTAGE_REAL_CORPUS must be an existing directory: {project_root}")
     if not (project_root / "project.otio.json").is_file():
-        fail(f"AWIDAT_REAL_CORPUS must contain project.otio.json: {project_root}")
+        fail(f"MONTAGE_REAL_CORPUS must contain project.otio.json: {project_root}")
 
     counts: dict[str, int] = {}
     for env_name, label, default_file, directory, minimum in configured:
@@ -394,7 +394,7 @@ def check_real_corpus_fixture_gates_from_env() -> dict[str, int]:
 
 
 def _real_visual_min_regions_env() -> str | None:
-    value = os.environ.get("AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS")
+    value = os.environ.get("MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS")
     if value is None or value.strip() in {"", "0"}:
         return None
     return value
@@ -402,40 +402,40 @@ def _real_visual_min_regions_env() -> str | None:
 
 def _composition_model_project_tree_gate_configured() -> bool:
     return _any_non_blank_env(
-        "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS",
-        "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
-        "AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
+        "MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
     ) or _real_visual_min_regions_env() is not None
 
 
 def check_composition_model_project_tree_from_env() -> tuple[int, int, int] | None:
-    raw_root = _first_non_blank_env("AWIDAT_COMPOSITION_MODEL_PROJECT")
+    raw_root = _first_non_blank_env("MONTAGE_COMPOSITION_MODEL_PROJECT")
     if raw_root is None and _composition_model_project_tree_gate_configured():
-        raw_root = _first_non_blank_env("AWIDAT_REAL_CORPUS")
+        raw_root = _first_non_blank_env("MONTAGE_REAL_CORPUS")
     if not raw_root:
         if _composition_model_project_tree_gate_configured():
             fail(
-                "AWIDAT_COMPOSITION_MODEL_PROJECT or AWIDAT_REAL_CORPUS must be set "
+                "MONTAGE_COMPOSITION_MODEL_PROJECT or MONTAGE_REAL_CORPUS must be set "
                 "when composition-model project-tree thresholds are configured"
             )
         return None
     fallback_min_regions = _first_non_blank_env(
-        "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS",
     )
     if fallback_min_regions is None:
         fallback_min_regions = _real_visual_min_regions_env()
     min_regions = _parse_env_int(
-        "AWIDAT_COMPOSITION_MODEL_MIN_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MIN_REGIONS",
         fallback_min_regions,
         1,
         minimum=1,
     )
     fallback_max_invalid = _first_non_blank_env(
-        "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
-        "AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
+        "MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS",
     )
     max_invalid_regions = _parse_env_int(
-        "AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
+        "MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS",
         fallback_max_invalid,
         0,
         minimum=0,

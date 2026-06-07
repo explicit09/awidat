@@ -1,16 +1,16 @@
 //! Integration test for Step 15.4: a project whose OTIO carries a
-//! Clip with an `awidat.speed` Effect lands setpts/atempo filters
+//! Clip with an `montage.speed` Effect lands setpts/atempo filters
 //! in the rendered argv and the spec's total_duration_s reflects
 //! the rescaled value.
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::Path;
@@ -33,7 +33,7 @@ fn write_project_with_speed_metadata(dir: &Path, metadata: Map<String, Value>) {
         RationalTime::new(0.0, 24.0),
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
-    let mut speed_effect = Effect::new("awidat.speed");
+    let mut speed_effect = Effect::new("montage.speed");
     speed_effect.metadata = metadata;
     clip_a.effects.push(speed_effect);
 

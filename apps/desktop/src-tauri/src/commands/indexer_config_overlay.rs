@@ -5,7 +5,7 @@
 //! inline panel down to read-only chips; Wave 4 T3 restores the
 //! affordance with a small popover. This module mirrors `skill_config`
 //! and persists the disabled set to
-//! `<project>/.awidat/indexers.json` so the state survives reloads,
+//! `<project>/.montage/indexers.json` so the state survives reloads,
 //! syncs through file-based project sharing (Dropbox/git/etc.), and
 //! is visible to `index_project_at_root` when it filters the indexer
 //! list before dispatching.
@@ -34,7 +34,7 @@ use tokio::fs;
 
 /// Subdirectory that holds project-managed state files. Same convention
 /// as `commands/skill_config.rs`, `commands/notes.rs`, etc.
-const AWIDAT_DIR: &str = ".awidat";
+const MONTAGE_DIR: &str = ".montage";
 /// Filename for the indexer enable/disable overlay.
 const INDEXERS_CONFIG_FILENAME: &str = "indexers.json";
 /// Schema version we write today. Bump alongside any breaking
@@ -113,7 +113,7 @@ pub async fn read_disabled_indexers(project_path: String) -> Result<Vec<String>,
 /// frontend invokes this after every toggle; the file is small enough
 /// that re-writing the whole thing is the simplest correct strategy.
 ///
-/// Creates `<project>/.awidat/` if missing so the very first toggle on
+/// Creates `<project>/.montage/` if missing so the very first toggle on
 /// a fresh project still succeeds.
 #[tauri::command]
 pub async fn write_disabled_indexers(
@@ -121,10 +121,10 @@ pub async fn write_disabled_indexers(
     disabled: Vec<String>,
 ) -> Result<(), String> {
     let root = validate_project_root(&project_path)?;
-    let awidat_dir = root.join(AWIDAT_DIR);
-    fs::create_dir_all(&awidat_dir)
+    let montage_dir = root.join(MONTAGE_DIR);
+    fs::create_dir_all(&montage_dir)
         .await
-        .map_err(|e| format!("create {AWIDAT_DIR}/: {e}"))?;
+        .map_err(|e| format!("create {MONTAGE_DIR}/: {e}"))?;
 
     // Sort + dedupe so the on-disk shape is stable across writes —
     // friendly to diff tools and to source control if the user is
@@ -139,16 +139,18 @@ pub async fn write_disabled_indexers(
     };
     let json =
         serde_json::to_vec_pretty(&cfg).map_err(|e| format!("serialize indexers.json: {e}"))?;
-    let path = awidat_dir.join(INDEXERS_CONFIG_FILENAME);
+    let path = montage_dir.join(INDEXERS_CONFIG_FILENAME);
     fs::write(&path, json)
         .await
         .map_err(|e| format!("write indexers.json: {e}"))?;
     Ok(())
 }
 
-/// `<project>/.awidat/indexers.json`.
+/// `<project>/.montage/indexers.json`.
 fn config_path(project_root: &Path) -> PathBuf {
-    project_root.join(AWIDAT_DIR).join(INDEXERS_CONFIG_FILENAME)
+    project_root
+        .join(MONTAGE_DIR)
+        .join(INDEXERS_CONFIG_FILENAME)
 }
 
 /// Same guard `skill_config` uses — reject empty / relative inputs
@@ -196,16 +198,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_creates_awidat_dir_when_missing() {
+    async fn write_creates_montage_dir_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(!tmp.path().join(".awidat").exists());
+        assert!(!tmp.path().join(".montage").exists());
         write_disabled_indexers(
             tmp.path().to_string_lossy().into_owned(),
             vec!["face".to_string()],
         )
         .await
         .unwrap();
-        assert!(tmp.path().join(".awidat/indexers.json").exists());
+        assert!(tmp.path().join(".montage/indexers.json").exists());
     }
 
     #[tokio::test]
@@ -230,8 +232,8 @@ mod tests {
     #[tokio::test]
     async fn read_returns_empty_on_malformed_json() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
-        std::fs::write(tmp.path().join(".awidat/indexers.json"), b"{not json").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
+        std::fs::write(tmp.path().join(".montage/indexers.json"), b"{not json").unwrap();
         let out = read_disabled_indexers(tmp.path().to_string_lossy().into_owned())
             .await
             .unwrap();
@@ -242,9 +244,9 @@ mod tests {
     #[tokio::test]
     async fn read_tolerates_missing_version_field() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
         std::fs::write(
-            tmp.path().join(".awidat/indexers.json"),
+            tmp.path().join(".montage/indexers.json"),
             br#"{"disabled":["face","motion"]}"#,
         )
         .unwrap();
@@ -257,9 +259,9 @@ mod tests {
     #[test]
     fn load_disabled_indexers_sync_matches_async_path() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
         std::fs::write(
-            tmp.path().join(".awidat/indexers.json"),
+            tmp.path().join(".montage/indexers.json"),
             br#"{"version":1,"disabled":["face"]}"#,
         )
         .unwrap();

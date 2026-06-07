@@ -14,7 +14,7 @@
 // with the interpolated UV.
 //
 // The UV is generated in `[0, 1]` from the same four corners. Origin
-// is top-left to match the rest of `awidat-render-gpu`'s convention.
+// is top-left to match the rest of `montage-render-gpu`'s convention.
 
 struct Uniforms {
     transform: mat4x4<f32>,

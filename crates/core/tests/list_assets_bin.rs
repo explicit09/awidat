@@ -10,14 +10,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_core::FunctionCallError;
-use awidat_core::media_catalog_mutation::{
-    create_bin, ensure_awidat_metadata, move_asset_to_bin, upsert_asset,
+use montage_core::FunctionCallError;
+use montage_core::media_catalog_mutation::{
+    create_bin, ensure_montage_metadata, move_asset_to_bin, upsert_asset,
 };
-use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use awidat_core::tools::list_assets::ListAssetsTool;
-use awidat_proto::professional::{AssetReadiness, AssetRecord, AssetRole};
-use awidat_proto::project::Project;
+use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
+use montage_core::tools::list_assets::ListAssetsTool;
+use montage_proto::professional::{AssetReadiness, AssetRecord, AssetRole};
+use montage_proto::project::Project;
 use std::path::Path;
 use tokio::sync::broadcast;
 
@@ -27,14 +27,14 @@ fn ctx_at(root: &Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
         sandbox_mode: SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }
@@ -65,7 +65,7 @@ fn project_with_bins() -> tempfile::TempDir {
     make(&root.join("raw/c.mp4"), &[0u8; 1024]);
     make(&root.join("renders/out.mp4"), &[0u8; 1024]);
 
-    let meta = ensure_awidat_metadata(&mut project.timeline);
+    let meta = ensure_montage_metadata(&mut project.timeline);
     for path in ["raw/a.mp4", "raw/b.mp4", "raw/c.mp4"] {
         upsert_asset(
             meta,

@@ -11,7 +11,7 @@
 //! precise structural index, not embedding similarity.
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -108,7 +108,7 @@ impl ToolHandler for FindBeatTool {
         let walker = walk_indexer(&ctx.project_root, "editorial-moments").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "find_beat: editorial-moments sidecars not readable ({e}). \
-                 Run `awidat index --indexer editorial-moments <project>` and retry."
+                 Run `montage index --indexer editorial-moments <project>` and retry."
             ))
         })?;
 
@@ -199,7 +199,7 @@ Examples:\
 Kinds: hook, story, punchline, setup, question, answer, cta, \
 emotional_peak, dead_air, tangent, explanation.\
 \n\n\
-The editorial-moments index is produced by `awidat index --indexer \
+The editorial-moments index is produced by `montage index --indexer \
 editorial-moments`; if find_beat returns empty, the index hasn't run \
 yet. Each beat's `dependencies` field tells you which other beats it \
 needs as setup — keep those when cutting standalone.\
@@ -216,10 +216,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

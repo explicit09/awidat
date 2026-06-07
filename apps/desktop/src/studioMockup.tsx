@@ -5,7 +5,7 @@ import "./ui/glass.css";
 import { AmbientBackground, useCursorGlass } from "./ui/glass";
 
 /* ====================================================================
-   Awidat "Stage" — NEW 2026 UX (v2, product-driven decisions).
+   Montage "Stage" — NEW 2026 UX (v2, product-driven decisions).
 
    Core bet: the command bar is the OS of the app. One input drives
    BOTH editing ("trim filler") and navigation ("deliver"). Destinations

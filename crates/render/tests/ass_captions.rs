@@ -8,12 +8,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -34,7 +34,7 @@ fn write_project_with_word_timed_caption(dir: &Path) {
         RationalTime::new(1.0 * 24.0, 24.0),
         RationalTime::new(1.5 * 24.0, 24.0),
     ));
-    let mut caption_effect = Effect::new("awidat.title");
+    let mut caption_effect = Effect::new("montage.title");
     caption_effect
         .metadata
         .insert("text".to_string(), serde_json::json!("hello world"));
@@ -75,9 +75,10 @@ fn write_project_with_word_timed_caption(dir: &Path) {
     v1.children.push(TrackChild::Clip(clip_a));
 
     let mut titles_track = Track::empty("Titles", TrackKind::Video);
-    titles_track
-        .metadata
-        .insert("awidat_track_role".to_string(), serde_json::json!("titles"));
+    titles_track.metadata.insert(
+        "montage_track_role".to_string(),
+        serde_json::json!("titles"),
+    );
     titles_track.children.push(TrackChild::Clip(caption_clip));
 
     let mut tl = Timeline::empty("p");

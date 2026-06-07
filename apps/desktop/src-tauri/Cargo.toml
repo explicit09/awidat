@@ -1,15 +1,15 @@
 [package]
-name = "awidat-desktop"
+name = "montage-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Awidat — collaborative video editor with an agent inside"
+description = "Montage — collaborative video editor with an agent inside"
 
 [lib]
 # Tauri convention: lib name must differ from bin name (Windows quirk
 # per https://github.com/rust-lang/cargo/issues/8519).
-name = "awidat_desktop_lib"
+name = "montage_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -44,19 +44,19 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 
-# Awidat crates we wrap.
-awidat-auth = { workspace = true }
-awidat-codex-bridge = { workspace = true }
-awidat-core = { workspace = true }
-awidat-desktop-protocol = { workspace = true }
-awidat-proto = { workspace = true }
-awidat-config = { path = "../../../crates/config" }
-awidat-index = { workspace = true }
-awidat-mcp = { path = "../../../crates/mcp" }
-awidat-render = { workspace = true }
-awidat-render-gpu = { workspace = true }
-awidat-secrets = { workspace = true }
-awidat-social = { workspace = true }
+# Montage crates we wrap.
+montage-auth = { workspace = true }
+montage-codex-bridge = { workspace = true }
+montage-core = { workspace = true }
+montage-desktop-protocol = { workspace = true }
+montage-proto = { workspace = true }
+montage-config = { path = "../../../crates/config" }
+montage-index = { workspace = true }
+montage-mcp = { path = "../../../crates/mcp" }
+montage-render = { workspace = true }
+montage-render-gpu = { workspace = true }
+montage-secrets = { workspace = true }
+montage-social = { workspace = true }
 base64 = "0.22"
 
 serde = { workspace = true }

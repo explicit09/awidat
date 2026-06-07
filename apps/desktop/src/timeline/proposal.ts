@@ -1,5 +1,5 @@
 // Zustand store for the in-flight EDL proposal. Subscribed to the
-// `awidat://item` Tauri channel for `Item::ProposedEdit` deltas.
+// `montage://item` Tauri channel for `Item::ProposedEdit` deltas.
 // Drops Deltas with stale revisions (rapid-drag race protection).
 //
 // The backend's pending_proposals map is per-call_id, so concurrent

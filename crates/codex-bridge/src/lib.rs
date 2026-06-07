@@ -1,5 +1,5 @@
 //! In-process bridge between the codex app-server and the desktop's
-//! [`awidat_desktop_protocol::Item`] event stream.
+//! [`montage_desktop_protocol::Item`] event stream.
 //!
 //! # What this crate owns
 //!
@@ -9,7 +9,7 @@
 //!   `&mut self`-requiring `next_event` loop.
 //! * The mappers (see [`mappers`]) that translate codex
 //!   `ServerNotification` / `ServerRequest` / `v2::ThreadItem` payloads
-//!   into [`awidat_desktop_protocol::Item`] values the React renderer
+//!   into [`montage_desktop_protocol::Item`] values the React renderer
 //!   already understands.
 //! * The approval round-trip: when codex asks for approval via a
 //!   `ServerRequest`, we stash the typed `RequestId` in `pending` keyed
@@ -32,7 +32,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use awidat_desktop_protocol::Item;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::ExecServerRuntimePaths;
@@ -69,6 +68,7 @@ use codex_config::LoaderOverrides;
 use codex_core::config::ConfigBuilder;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use montage_desktop_protocol::Item;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -88,10 +88,10 @@ pub trait ItemEmitter: Send + Sync + 'static {
     /// completion; `Some(msg)` is a turn-fatal failure.
     fn emit_turn_end(&self, turn_id: String, error: Option<String>);
     /// Signal that the project's on-disk OTIO has just been mutated by
-    /// a tool call. The desktop listens on `awidat://timeline-changed`
+    /// a tool call. The desktop listens on `montage://timeline-changed`
     /// and refetches `project.otio.json`. The MCP server lives in a
     /// subprocess that can't talk to Tauri's event bus, so the bridge
-    /// raises this event whenever a mutating awidat-MCP tool completes
+    /// raises this event whenever a mutating montage-MCP tool completes
     /// (apply_edl, manage_assets, import_media, vedit_*, podcast_*, …).
     /// Default impl is a no-op so non-Tauri emitters (tests, future
     /// surfaces) don't have to care.
@@ -236,10 +236,10 @@ impl CodexAppServer {
         //    Config we hand off to the in-process app-server. The
         //    server's ConfigManager only re-applies overrides on later
         //    config reloads — the first turn uses the Config we pass
-        //    directly, so the mcp_servers.awidat entries MUST be in
+        //    directly, so the mcp_servers.montage entries MUST be in
         //    there already. Codex `.env_clear()`s on MCP spawn (see
         //    vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs:259),
-        //    so AWIDAT_PROJECT_ROOT has to ride the per-server env
+        //    so MONTAGE_PROJECT_ROOT has to ride the per-server env
         //    override. DO NOT regress af731e69 / 2889dc59.
         let mut cli_overrides: Vec<(String, toml::Value)> = Vec::new();
 
@@ -258,15 +258,15 @@ impl CodexAppServer {
 
         if let Some(mcp_path) = mcp_server_path {
             cli_overrides.push((
-                "mcp_servers.awidat.command".to_string(),
+                "mcp_servers.montage.command".to_string(),
                 toml::Value::String(mcp_path.display().to_string()),
             ));
             cli_overrides.push((
-                "mcp_servers.awidat.env.AWIDAT_PROJECT_ROOT".to_string(),
+                "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT".to_string(),
                 toml::Value::String(project_root.display().to_string()),
             ));
         } else {
-            warn!("awidat-mcp-server path not provided; codex will run without Awidat tools");
+            warn!("montage-mcp-server path not provided; codex will run without Montage tools");
         }
 
         // 2. Build the app-server Config WITH the overrides applied,
@@ -322,7 +322,7 @@ impl CodexAppServer {
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,
             enable_codex_api_key_env: true,
-            client_name: "awidat-desktop".to_string(),
+            client_name: "montage-desktop".to_string(),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
@@ -335,7 +335,7 @@ impl CodexAppServer {
             .map_err(|e| BridgeError::Startup(format!("InProcessAppServerClient::start: {e}")))?;
         let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
 
-        // 6. Start (or resume) the thread. The Awidat per-format addendum
+        // 6. Start (or resume) the thread. The Montage per-format addendum
         //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides
         //    on `developer_instructions` so codex's base prompt stays
         //    intact while the editorial playbook layers on top.
@@ -700,7 +700,7 @@ async fn handle_pump_event(
                 emit.emit_item(item);
             }
             // Nudge the desktop to refetch project.otio.json after any
-            // mutating awidat-MCP tool completes. The MCP server lives
+            // mutating montage-MCP tool completes. The MCP server lives
             // in a subprocess and can't talk to Tauri's event bus
             // itself, so the bridge is the only hop that knows when
             // OTIO has just been rewritten under the React view.
@@ -779,8 +779,8 @@ async fn handle_server_request(
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
-                id: awidat_desktop_protocol::Id::new(item_id),
-                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                id: montage_desktop_protocol::Id::new(item_id),
+                phase: montage_desktop_protocol::ItemLifecycle::Started,
                 tool_name: "bash".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
@@ -810,8 +810,8 @@ async fn handle_server_request(
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
-                id: awidat_desktop_protocol::Id::new(item_id),
-                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                id: montage_desktop_protocol::Id::new(item_id),
+                phase: montage_desktop_protocol::ItemLifecycle::Started,
                 tool_name: "apply_patch".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
@@ -841,8 +841,8 @@ async fn handle_server_request(
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
-                id: awidat_desktop_protocol::Id::new(item_id),
-                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                id: montage_desktop_protocol::Id::new(item_id),
+                phase: montage_desktop_protocol::ItemLifecycle::Started,
                 tool_name: "permissions".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
@@ -881,8 +881,8 @@ async fn handle_server_request(
                 },
             );
             emit.emit_item(Item::AwaitingUserInput {
-                id: awidat_desktop_protocol::Id::new(item_id),
-                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                id: montage_desktop_protocol::Id::new(item_id),
+                phase: montage_desktop_protocol::ItemLifecycle::Started,
                 question: question_text,
                 options,
             });

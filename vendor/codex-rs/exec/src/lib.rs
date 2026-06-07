@@ -401,9 +401,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     // Load configuration and determine approval policy
     //
-    // Awidat fork edit: honor an explicit `approval_policy` from the
+    // Montage fork edit: honor an explicit `approval_policy` from the
     // user's config or `-c` overrides instead of unconditionally
-    // hardcoding `Never`. This lets `awidat chat-codex -c
+    // hardcoding `Never`. This lets `montage chat-codex -c
     // approval_policy="on-request"` surface the codex approval
     // prompts that `exec` normally suppresses. When the user hasn't
     // set anything, we keep codex's headless default of `Never` so

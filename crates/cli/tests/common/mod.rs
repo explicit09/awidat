@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-pub fn awidat() -> &'static str {
-    env!("CARGO_BIN_EXE_awidat")
+pub fn montage() -> &'static str {
+    env!("CARGO_BIN_EXE_montage")
 }
 
 pub fn tmp_dir(name: &str) -> PathBuf {
@@ -14,12 +14,12 @@ pub fn tmp_dir(name: &str) -> PathBuf {
 
     let mut path = std::env::temp_dir();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.push(format!("awidat-cli-{name}-{}-{n}", std::process::id()));
+    path.push(format!("montage-cli-{name}-{}-{n}", std::process::id()));
     path
 }
 
 pub fn run(args: &[&str]) -> Output {
-    Command::new(awidat()).args(args).output().unwrap()
+    Command::new(montage()).args(args).output().unwrap()
 }
 
 pub fn stdout(output: &Output) -> String {

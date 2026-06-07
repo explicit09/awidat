@@ -1,17 +1,17 @@
 //! Integration tests for `CompositionGraph` node lowering.
 //!
 //! These tests pin the FFmpeg-filter strings emitted by
-//! `awidat_render::professional::lower_composition_graph` so that the
+//! `montage_render::professional::lower_composition_graph` so that the
 //! `CompositionGraph` runtime actually drives the render pipeline rather than
 //! emitting placeholder identifiers. Coverage is currently MVP-scoped to the
 //! Blur and Mask node types (see overnight-wave1-vfx-graph).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_proto::professional::{
+use montage_proto::professional::{
     CompositionEdge, CompositionGraph, CompositionNode, CompositionNodeType,
 };
-use awidat_render::professional::{RenderLoweringStep, lower_composition_graph};
+use montage_render::professional::{RenderLoweringStep, lower_composition_graph};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 

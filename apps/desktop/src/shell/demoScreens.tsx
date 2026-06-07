@@ -88,7 +88,7 @@ type ReviewTranscriptSegment = {
 
 export function resolveDemoScreenId(search: string): DemoScreenId {
   const params = new URLSearchParams(search);
-  const requested = params.get("awidatScreen") ?? params.get("screen");
+  const requested = params.get("montageScreen") ?? params.get("screen");
   return DEMO_SCREEN_IDS.includes(requested as DemoScreenId)
     ? (requested as DemoScreenId)
     : "screen2";
@@ -657,14 +657,14 @@ function ProductConceptBoard() {
         <header className="flex min-h-0 items-start justify-between gap-6 border-b border-[var(--color-border-subtle)] pb-3">
           <Stack gap="1" className="min-w-0">
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-brand-secondary)]">
-              Awidat · Product Concept & Information Architecture
+              Montage · Product Concept & Information Architecture
             </span>
             <h1 className="text-[20px] font-semibold leading-tight text-[var(--color-text-primary)]">
               AI-assisted podcast editing that keeps humans in review.
             </h1>
           </Stack>
           <span className="shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-1.5 text-right font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            Awidat · v0.1 Concept · Internal Design Review
+            Montage · v0.1 Concept · Internal Design Review
           </span>
         </header>
 
@@ -1451,7 +1451,7 @@ function SystemStateBoard() {
             </Stack>
             <Card padding="sm" tone="flat" className="w-full text-left">
               <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-muted)]">
-                Awidat's agents will analyze your content and propose a tight, publish-ready edit.
+                Montage's agents will analyze your content and propose a tight, publish-ready edit.
               </span>
             </Card>
           </Stack>
@@ -1521,7 +1521,7 @@ function SystemStateBoard() {
                 We hit a problem
               </span>
               <span className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
-                Proposal generation is blocked. Awidat couldn't complete the preflight check because 3 media files are missing or offline.
+                Proposal generation is blocked. Montage couldn't complete the preflight check because 3 media files are missing or offline.
               </span>
             </Stack>
             <Card padding="md" tone="danger" className="w-full text-left">

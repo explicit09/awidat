@@ -1,6 +1,6 @@
 //! Phase 3A keyframe evaluation and render support classification.
 
-use awidat_proto::professional::{
+use montage_proto::professional::{
     BezierHandles, Easing, ExtrapolationMode, Keyframe, KeyframeInterpolation, MotionPath,
     MotionPathControlPoint, MotionPathPoint, ParameterAnimation, SpringParameters, TangentMode,
     is_runtime_clip_parameter,
@@ -778,7 +778,7 @@ fn sampled_progress_expr(raw: &str, value_at: impl Fn(f64) -> f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::professional::{Easing, KeyframeInterpolation};
+    use montage_proto::professional::{Easing, KeyframeInterpolation};
     use serde::Deserialize;
     use std::path::PathBuf;
 
@@ -881,7 +881,7 @@ mod tests {
     fn linear_extrapolation_extends_first_and_last_segment_velocity() {
         let animation = ParameterAnimation {
             id: "move".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-a".into(),
                 parameter: "overlay.x".into(),
             },
@@ -1007,16 +1007,16 @@ mod tests {
 
     #[test]
     fn evaluates_motion_path_points() {
-        let path = awidat_proto::professional::MotionPath {
+        let path = montage_proto::professional::MotionPath {
             points: vec![
-                awidat_proto::professional::MotionPathPoint {
+                montage_proto::professional::MotionPathPoint {
                     time_s: 0.0,
                     x: -0.2,
                     y: 0.0,
                     outgoing_control: None,
                     incoming_control: None,
                 },
-                awidat_proto::professional::MotionPathPoint {
+                montage_proto::professional::MotionPathPoint {
                     time_s: 1.0,
                     x: 0.2,
                     y: 0.4,
@@ -1032,24 +1032,24 @@ mod tests {
     #[test]
     fn evaluates_motion_path_spatial_bezier_segment() {
         let path =
-            awidat_proto::professional::MotionPath {
+            montage_proto::professional::MotionPath {
                 points: vec![
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 0.0,
                         x: 0.0,
                         y: 0.0,
                         outgoing_control: Some(
-                            awidat_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
+                            montage_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
                         ),
                         incoming_control: None,
                     },
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 1.0,
                         y: 1.0,
                         outgoing_control: None,
                         incoming_control: Some(
-                            awidat_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
+                            montage_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
                         ),
                     },
                 ],
@@ -1064,24 +1064,24 @@ mod tests {
     #[test]
     fn motion_path_ffmpeg_expression_lowers_spatial_bezier_segment() {
         let path =
-            awidat_proto::professional::MotionPath {
+            montage_proto::professional::MotionPath {
                 points: vec![
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 0.0,
                         x: 0.0,
                         y: 0.0,
                         outgoing_control: Some(
-                            awidat_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
+                            montage_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
                         ),
                         incoming_control: None,
                     },
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 1.0,
                         y: 1.0,
                         outgoing_control: None,
                         incoming_control: Some(
-                            awidat_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
+                            montage_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
                         ),
                     },
                 ],
@@ -1103,7 +1103,7 @@ mod tests {
     fn evaluates_motion_path_with_animation_progress_easing() {
         let animation = ParameterAnimation {
             id: "move-eased".into(),
-            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            target: montage_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: "clip-a".into(),
                 parameter: "title.position".into(),
             },
@@ -1127,16 +1127,16 @@ mod tests {
             metadata_only: false,
             pre_extrapolation: ExtrapolationMode::Hold,
             post_extrapolation: ExtrapolationMode::Hold,
-            motion_path: Some(awidat_proto::professional::MotionPath {
+            motion_path: Some(montage_proto::professional::MotionPath {
                 points: vec![
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 0.0,
                         x: -0.2,
                         y: 0.0,
                         outgoing_control: None,
                         incoming_control: None,
                     },
-                    awidat_proto::professional::MotionPathPoint {
+                    montage_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 0.2,
                         y: 0.4,

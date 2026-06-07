@@ -10,7 +10,7 @@
 //!
 //! ## Caveat record
 //!
-//! Acknowledged URLs persist at `<project>/.awidat/yt_caveats.json`:
+//! Acknowledged URLs persist at `<project>/.montage/yt_caveats.json`:
 //!
 //! ```json
 //! {
@@ -320,7 +320,7 @@ impl ToolHandler for DownloadYtClipTool {
     }
 }
 
-/// Caveat record persisted at `<project>/.awidat/yt_caveats.json`.
+/// Caveat record persisted at `<project>/.montage/yt_caveats.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CaveatFile {
     /// Schema version. Currently 1.
@@ -344,9 +344,9 @@ pub struct CaveatRecord {
     pub acknowledged_at: String,
 }
 
-/// Path: `<project>/.awidat/yt_caveats.json`.
+/// Path: `<project>/.montage/yt_caveats.json`.
 pub fn caveat_file_path(project_root: &Path) -> PathBuf {
-    project_root.join(".awidat").join("yt_caveats.json")
+    project_root.join(".montage").join("yt_caveats.json")
 }
 
 fn persist_caveat(project_root: &Path, url: &str) -> std::io::Result<()> {
@@ -484,7 +484,7 @@ EDL fragment.\
 MUST explain to the user that third-party clips have copyright \
 implications they're responsible for verifying, AND get their \
 explicit confirmation. Acknowledged URLs persist in \
-`<project>/.awidat/yt_caveats.json`.\
+`<project>/.montage/yt_caveats.json`.\
 \n\nAllowed hosts: youtube.com, m.youtube.com, youtu.be, vimeo.com. \
 Anything else is refused with a clear error.\
 \n\nIdempotent on file existence: a previously-downloaded URL hits \

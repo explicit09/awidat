@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
-use awidat_config::{Config, McpServer};
-use awidat_index::AssetInput;
-use awidat_index::perf_report::PerformanceReport;
-use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
+use montage_config::{Config, McpServer};
+use montage_index::AssetInput;
+use montage_index::perf_report::PerformanceReport;
+use montage_mcp::ClientInfo;
+use montage_proto::index::AssetId;
 use serde::Serialize;
 
 use crate::index_cmd;
@@ -57,7 +57,7 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
     }
 
     let config = Config::load(Some(&args.project_root))
-        .with_context(|| "failed to load awidat config (global and/or project)")?;
+        .with_context(|| "failed to load montage config (global and/or project)")?;
     let configured_servers = config.indexers().cloned().collect::<Vec<_>>();
     let servers = select_indexers(
         configured_servers.clone(),
@@ -82,7 +82,7 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
     let measurement_index_dir = measurement_index_dir(&output_dir);
 
     let client_info = ClientInfo {
-        name: "awidat-index-perf".into(),
+        name: "montage-index-perf".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -90,7 +90,7 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
     let index_report = runtime
-        .block_on(awidat_index::run_with_index_dir(
+        .block_on(montage_index::run_with_index_dir(
             &args.project_root,
             &measurement_index_dir,
             &servers,
@@ -146,7 +146,7 @@ fn select_indexers(
     if servers.is_empty() {
         return Err(anyhow!(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
-             to your `<project>/.awidat/config.toml` or `~/.config/awidat/config.toml`."
+             to your `<project>/.montage/config.toml` or `~/.config/montage/config.toml`."
         ));
     }
     if !requested.is_empty() {
@@ -331,7 +331,7 @@ fn render_markdown(envelope: &IndexPerfEnvelope) -> String {
 
 #[cfg(test)]
 mod tests {
-    use awidat_config::{IndexerGroup, IndexerResourceClass, McpServerKind};
+    use montage_config::{IndexerGroup, IndexerResourceClass, McpServerKind};
 
     use super::*;
 
@@ -408,11 +408,11 @@ mod tests {
 
     #[test]
     fn markdown_includes_millisecond_columns_and_budget_status() {
-        let report = PerformanceReport::from_index_report(&awidat_index::IndexReport {
-            outcomes: vec![awidat_index::PairOutcome::Skipped {
+        let report = PerformanceReport::from_index_report(&montage_index::IndexReport {
+            outcomes: vec![montage_index::PairOutcome::Skipped {
                 indexer: "topic".into(),
-                asset: awidat_proto::index::AssetId::new("raw/a.mp4"),
-                telemetry: awidat_index::PairTelemetry {
+                asset: montage_proto::index::AssetId::new("raw/a.mp4"),
+                telemetry: montage_index::PairTelemetry {
                     queued: std::time::Duration::from_millis(1),
                     launch_init: std::time::Duration::from_millis(2),
                     tool: std::time::Duration::from_millis(16_000),

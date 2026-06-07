@@ -3,13 +3,13 @@
 **Date:** 2026-06-04
 **Status:** Approved (brainstorming) → ready for implementation plan
 **Feature:** captions (iteration 1 of the editorial-skills program)
-**Branch base:** `feat/awidat-editorial-upgrades`
+**Branch base:** `feat/montage-editorial-upgrades`
 
 ---
 
 ## 1. Goal
 
-Give awidat a real **caption reading-speed / segmentation model** and lift caption
+Give montage a real **caption reading-speed / segmentation model** and lift caption
 **planning + styling** out of the short-form-only path into a **format-agnostic**
 service, so captions read well on any format — not just vertical short-form.
 
@@ -190,7 +190,7 @@ gap #7 first-class keyword emphasis. No new `CaptionPlacement` variants. No chan
 ## 8. Risks / dependencies
 
 - **Whisper indexing for the Episode (blocking the long-form proof).** Need word
-  timings for a ~60s Episode slice. Verify awidat's local indexing path runs on the
+  timings for a ~60s Episode slice. Verify montage's local indexing path runs on the
   test footage during planning. **Fallback:** import an `.srt`/`.vtt` sidecar as the
   caption source (import path already exists) if local Whisper indexing is not runnable.
 - **Driving the agent loop** needs `ANTHROPIC_API_KEY` in the environment.

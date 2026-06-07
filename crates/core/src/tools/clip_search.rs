@@ -12,8 +12,8 @@
 //! ~80ms (encode_text smoke result).
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
 use base64::Engine as _;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -103,7 +103,7 @@ impl ToolHandler for ClipSearchTool {
             return Err(FunctionCallError::RespondToModel(
                 "clip_search: no MCP server named 'clip' is registered. \
                  Add a [[mcp.servers]] entry pointing at clip-mcp in your \
-                 project's .awidat/config.toml or your global awidat config. \
+                 project's .montage/config.toml or your global montage config. \
                  See python/SMOKE.md for an example block."
                     .into(),
             ));
@@ -155,7 +155,7 @@ impl ToolHandler for ClipSearchTool {
         let walker = walk_indexer(&ctx.project_root, "clip").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "clip_search: clip sidecars not readable ({e}). \
-                 Run `awidat index --indexer clip <project>` and retry."
+                 Run `montage index --indexer clip <project>` and retry."
             ))
         })?;
 

@@ -16,7 +16,7 @@ assert.doesNotMatch(
 );
 assert.match(
   readme,
-  /awidat-publish-tick/,
+  /montage-publish-tick/,
   "Deployment docs must include the pg_cron publish tick schedule.",
 );
 

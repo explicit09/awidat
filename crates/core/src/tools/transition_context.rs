@@ -4,10 +4,10 @@
 //! boundary before any visible transition is chosen.
 
 use async_trait::async_trait;
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, StackChild, Timeline, TrackChild,
 };
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -322,7 +322,7 @@ fn child_duration_s(child: &TrackChild) -> f64 {
 
 fn clip_id(clip: &Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|meta| meta.extra.get("clip_uuid"))
         .and_then(|value| value.as_str())
@@ -444,12 +444,12 @@ fn round3(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::AwidatClipMetadata;
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::MontageClipMetadata;
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
 
     fn ctx_at(project_root: &std::path::Path) -> ToolContext {
         let (tx, _) = tokio::sync::broadcast::channel(8);
@@ -457,10 +457,10 @@ mod tests {
             project_root: project_root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -496,12 +496,12 @@ mod tests {
             RationalTime::new(source_start_s * 24.0, 24.0),
             RationalTime::new(duration_s * 24.0, 24.0),
         ));
-        let mut meta = AwidatClipMetadata::default();
+        let mut meta = MontageClipMetadata::default();
         meta.extra.insert(
             "clip_uuid".into(),
             serde_json::Value::String(uuid.to_string()),
         );
-        clip.metadata.awidat = Some(meta);
+        clip.metadata.montage = Some(meta);
         clip
     }
 

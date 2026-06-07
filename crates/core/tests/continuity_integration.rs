@@ -13,13 +13,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use awidat_core::tools::assess_continuity::AssessContinuityTool;
-use awidat_core::{ToolContext, ToolHandler, ToolInvocation};
-use awidat_proto::otio::{
+use montage_core::tools::assess_continuity::AssessContinuityTool;
+use montage_core::{ToolContext, ToolHandler, ToolInvocation};
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
     TrackChild, TrackKind,
 };
-use awidat_proto::project::{Project, files};
+use montage_proto::project::{Project, files};
 use tokio::sync::broadcast;
 
 // --- fixture builders ---
@@ -30,14 +30,14 @@ fn ctx_at(root: &Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
-        sandbox_mode: awidat_core::tool::SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        sandbox_mode: montage_core::tool::SandboxMode::Default,
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }
@@ -150,7 +150,7 @@ fn write_motion(dir: &Path, asset_id: &str, magnitudes: &[f32]) {
     let abs = dir.join(asset_id);
     let stem = abs.file_stem().unwrap().to_str().unwrap();
     let path = dir
-        .join(".awidat")
+        .join(".montage")
         .join("motion")
         .join(format!("{stem}-{:08x}.json", stable_path_hash(&abs)));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();

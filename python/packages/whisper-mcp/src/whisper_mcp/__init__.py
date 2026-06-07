@@ -1,4 +1,4 @@
-"""Speech-to-text + diarization indexer for Awidat using WhisperX.
+"""Speech-to-text + diarization indexer for Montage using WhisperX.
 
 Produces:
 - `words[]` — every word with `text`, `start_s`, `end_s`, `speaker_id`,
@@ -63,7 +63,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "whisper"
 INDEXER_VERSION = "0.1.0"
@@ -121,7 +121,7 @@ BACKEND = os.environ.get(
 ).lower()
 WHISPER_CPP_MODEL = os.environ.get(
     "WHISPER_CPP_MODEL",
-    str(Path.home() / ".cache/awidat/whisper.cpp/ggml-large-v3-turbo-q5_0.bin"),
+    str(Path.home() / ".cache/montage/whisper.cpp/ggml-large-v3-turbo-q5_0.bin"),
 )
 WHISPER_CPP_CHUNK_S = float(os.environ.get("WHISPER_CPP_CHUNK_S", "30"))
 WHISPER_CPP_OVERLAP_S = float(os.environ.get("WHISPER_CPP_OVERLAP_S", "2"))
@@ -216,7 +216,7 @@ def _handle_deepgram(req: IndexAssetRequest) -> dict[str, Any]:
         f"whisper-mcp: using Deepgram backend model={DEEPGRAM_MODEL}",
         file=sys.stderr,
     )
-    with tempfile.TemporaryDirectory(prefix="awidat-deepgram-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="montage-deepgram-") as tmp:
         audio_path = Path(tmp) / "audio.m4a"
         _extract_upload_audio(asset, audio_path)
         response = _post_deepgram(audio_path)
@@ -621,7 +621,7 @@ def _handle_whispercpp_aligned(req: IndexAssetRequest) -> dict[str, Any]:
         f"whisper-mcp: using whisper.cpp aligned backend model={model_path}",
         file=sys.stderr,
     )
-    with tempfile.TemporaryDirectory(prefix="awidat-whispercpp-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="montage-whispercpp-") as tmp:
         work_dir = Path(tmp)
         duration_s = _media_duration_s(asset)
         raw_segments = _run_whispercpp_chunks(

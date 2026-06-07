@@ -12,7 +12,7 @@ import {
   Users,
   VolumeX,
 } from "lucide-react";
-import wordmark from "../brand/awidat-wordmark.svg";
+import wordmark from "../brand/montage-wordmark.svg";
 import {
   AgentStatusBadge,
   Button,

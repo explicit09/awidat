@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan generated overlay animation slots for Awidat timelines."""
+"""Plan generated overlay animation slots for Montage timelines."""
 
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def build_slot_brief(slot: dict) -> str:
         "- Match the exact duration.",
         "- Use a transparent or keyed background unless the slot is intentionally full-frame.",
         "- Keep typography inside mobile safe areas when the target format is vertical.",
-        "- Export a web-compatible video asset that Awidat can place as a media overlay.",
+        "- Export a web-compatible video asset that Montage can place as a media overlay.",
     ]
     if slot.get("subject_aware"):
         lines.extend([

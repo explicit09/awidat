@@ -1,13 +1,13 @@
 [package]
-name = "awidat-auth"
+name = "montage-auth"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Awidat ↔ codex auth boundary: status, ChatGPT sign-in, API key, logout"
+description = "Montage ↔ codex auth boundary: status, ChatGPT sign-in, API key, logout"
 
 [lib]
-name = "awidat_auth"
+name = "montage_auth"
 path = "src/lib.rs"
 
 [dependencies]

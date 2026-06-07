@@ -1,8 +1,8 @@
 //! `podcast_qc_report` tool — pre-render timeline QC gate.
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, Stack, StackChild, Track, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, Stack, StackChild, Track, TrackChild};
+use montage_proto::project::Project;
 
 use crate::FunctionCallError;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
@@ -51,9 +51,9 @@ pub(crate) fn is_podcast_project(project: &Project) -> bool {
     project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
-        .and_then(|meta| meta.extra.get("awidat_project_type"))
+        .and_then(|meta| meta.extra.get("montage_project_type"))
         .and_then(|value| value.get("kind"))
         .and_then(|value| value.as_str())
         .is_some_and(|kind| kind == "podcast")
@@ -85,7 +85,7 @@ pub(crate) fn build_podcast_qc_report(
     if project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .is_none_or(|meta| meta.cut_boundaries.is_empty())
     {
@@ -128,8 +128,8 @@ fn collect_timeline_issues(
 }
 
 fn collect_primary_av_duration_issue(stack: &Stack, issues: &mut Vec<serde_json::Value>) {
-    let video = first_track_duration(stack, awidat_proto::otio::TrackKind::Video);
-    let audio = first_track_duration(stack, awidat_proto::otio::TrackKind::Audio);
+    let video = first_track_duration(stack, montage_proto::otio::TrackKind::Video);
+    let audio = first_track_duration(stack, montage_proto::otio::TrackKind::Audio);
     let (Some((video_name, video_duration_s)), Some((audio_name, audio_duration_s))) =
         (video, audio)
     else {
@@ -152,7 +152,7 @@ fn collect_primary_av_duration_issue(stack: &Stack, issues: &mut Vec<serde_json:
 
 fn first_track_duration(
     stack: &Stack,
-    kind: awidat_proto::otio::TrackKind,
+    kind: montage_proto::otio::TrackKind,
 ) -> Option<(String, f64)> {
     for child in &stack.children {
         match child {
@@ -194,7 +194,7 @@ fn track_child_duration(child: &TrackChild) -> f64 {
                 StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
                 StackChild::Track(track) => track.children.iter().map(track_child_duration).sum(),
                 StackChild::Stack(stack) => {
-                    first_track_duration(stack, awidat_proto::otio::TrackKind::Video)
+                    first_track_duration(stack, montage_proto::otio::TrackKind::Video)
                         .map(|(_, duration)| duration)
                         .unwrap_or(0.0)
                 }
@@ -263,7 +263,7 @@ fn collect_track_issues(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, Gap, MediaReference, RationalTime, Stack, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };
@@ -275,10 +275,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -313,7 +313,7 @@ mod tests {
         let asset = root.join("raw/episode.mov");
         std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
         std::fs::write(&asset, b"fake").unwrap();
-        let mut stack = awidat_proto::otio::Stack::empty("root");
+        let mut stack = montage_proto::otio::Stack::empty("root");
         for (name, kind, duration_s) in [
             ("Video 1", TrackKind::Video, 30.0),
             ("A1", TrackKind::Audio, 26.0),

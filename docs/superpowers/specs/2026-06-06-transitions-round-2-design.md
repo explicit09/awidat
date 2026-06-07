@@ -8,7 +8,7 @@ planner gaps, and prepare real render tests for user review.
 
 ## Scope
 
-This round is deliberately narrow. Awidat already has an EDL transition
+This round is deliberately narrow. Montage already has an EDL transition
 substrate, a transition catalog, `transition_context`, `plan_transition`,
 `validate_transition_choice`, and the new `plan_split_edit`. The missing work is
 not a new transition engine. It is better research packaging and a wider,
@@ -29,7 +29,7 @@ turns that into the captions/color deliverable shape:
 - `video_editing_transcripts/knowledge/transitions/SKILL.md`: compact but
   deeper craft summary for future agents.
 - `video_editing_transcripts/knowledge/transitions/tool-gap.md`: ranked gap
-  analysis against the current Awidat codebase.
+  analysis against the current Montage codebase.
 - `video_editing_transcripts/knowledge/transitions/sources.md`: list of the
   transition transcript source videos.
 
@@ -41,15 +41,15 @@ They are research artifacts, not hot-path runtime prompt material.
 `plan_transition` remains the single visible-transition planner. It should:
 
 - Parse occlusion scores from `transition_context`.
-- Choose `awidat.pass_by_left/right` for occlusion/pass-by jobs only when a real
+- Choose `montage.pass_by_left/right` for occlusion/pass-by jobs only when a real
   occlusion signal is present and direction is usable.
-- Choose `awidat.invisible_cut` for invisible/mask/dark-frame jobs only when a
+- Choose `montage.invisible_cut` for invisible/mask/dark-frame jobs only when a
   real occlusion signal is present.
-- Choose `awidat.zoom_in` or `awidat.distance_zoom` for punch-in/forward-momentum
+- Choose `montage.zoom_in` or `montage.distance_zoom` for punch-in/forward-momentum
   jobs.
-- Choose `awidat.iris_open/close`, directional wipe/slide, `awidat.flash_white`,
-  `awidat.pixelize`, `awidat.cross_dissolve`, `awidat.match_dissolve`, and
-  `awidat.fade_black` for matching objectives.
+- Choose `montage.iris_open/close`, directional wipe/slide, `montage.flash_white`,
+  `montage.pixelize`, `montage.cross_dissolve`, `montage.match_dissolve`, and
+  `montage.fade_black` for matching objectives.
 - Refuse to emit an occlusion or invisible transition when the context lacks the
   required occlusion signal, returning `Set Cut Intent` instead.
 - Continue clamping duration to handles and catalog min/max ranges.
@@ -60,9 +60,9 @@ The planner should stay read-only and return an apply-ready EDL fragment.
 
 Add focused unit coverage for `plan_transition`:
 
-- occlusion + left direction selects `awidat.pass_by_left`.
+- occlusion + left direction selects `montage.pass_by_left`.
 - invisible-cut objective without occlusion refuses to a hard cut.
-- punch-in objective selects `awidat.zoom_in`.
+- punch-in objective selects `montage.zoom_in`.
 - stylized reveal/closure objectives select iris open/close.
 - directional graphic movement selects wipe/slide variants.
 
@@ -73,7 +73,7 @@ verification set.
 
 After code tests pass, prepare a CLI render proof using local footage. The
 minimum proof is one FFmpeg-renderable visible transition generated from the
-planner and applied through EDL, then rendered with the rebuilt Awidat CLI. If
+planner and applied through EDL, then rendered with the rebuilt Montage CLI. If
 footage is not available on the external drive, stop with the exact missing path
 instead of fabricating a render result.
 

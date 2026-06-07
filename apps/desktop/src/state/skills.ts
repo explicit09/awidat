@@ -19,7 +19,7 @@
  *   - Pin mutations call `write_skill_config` with the full shape so
  *     pins land alongside the disabled list.
  *   - `hydrateFromDisk(projectRoot, disabled, pinned)` primes the
- *     store from `.awidat/skills.json` on project open, reflecting
+ *     store from `.montage/skills.json` on project open, reflecting
  *     state that landed via file sync (Dropbox/git/etc.).
  *
  * The localStorage cache survives across reloads and across sessions
@@ -90,7 +90,7 @@ export type SkillsStore = {
   clearPin: (projectRoot: string | null, skillName: string) => void;
   /**
    * Replace the in-memory disabled set + pin list for a project with
-   * the values read from `.awidat/skills.json` via the backend. Does
+   * the values read from `.montage/skills.json` via the backend. Does
    * NOT persist back to disk — only mirrors what the file already
    * contains. Called by the app glue on project open so the toggle
    * UI reflects any state that arrived via file sync.
@@ -115,7 +115,7 @@ export type SkillsStore = {
  * The localStorage key. Versioned so we can migrate the shape if
  * we ever switch from name-based to id-based skill keys.
  */
-const STORAGE_KEY = "awidat:skills:disabled";
+const STORAGE_KEY = "montage:skills:disabled";
 
 /**
  * No-op project key for when nothing's loaded. Centralizing this

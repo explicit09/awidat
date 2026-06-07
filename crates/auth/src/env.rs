@@ -1,4 +1,4 @@
-//! Resolving *where* codex stores credentials, so awidat writes to the same place.
+//! Resolving *where* codex stores credentials, so montage writes to the same place.
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,7 @@ pub enum ForcedMethod {
 /// managed-install login restrictions.
 ///
 /// Held by value and passed to every operation so a login performed through
-/// awidat lands exactly where the running agent reads it and respects the same
+/// montage lands exactly where the running agent reads it and respects the same
 /// policy codex would enforce.
 #[derive(Debug, Clone)]
 pub struct AuthEnv {
@@ -173,7 +173,7 @@ mod tests {
         let home = TempDir::new().unwrap();
         write_config(
             home.path(),
-            "model = \"gpt-5.5\"\ncli_auth_credentials_store = \"auto\"\n\n[mcp_servers.awidat]\ncommand = \"awidat-mcp-server\"\n",
+            "model = \"gpt-5.5\"\ncli_auth_credentials_store = \"auto\"\n\n[mcp_servers.montage]\ncommand = \"montage-mcp-server\"\n",
         );
         assert_eq!(
             read_policy(home.path()).store_mode,

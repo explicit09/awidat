@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use super::errors::ProviderError;
 use super::keychain::{Keychain, KeychainError, TokenKind};
 
-/// File name under `<config_dir>/awidat/`.
+/// File name under `<config_dir>/montage/`.
 const FILE_NAME: &str = "publishing.json";
 
 /// Per-provider metadata blob. *No secret material* lives in this
@@ -135,11 +135,11 @@ impl PublishingStore {
     }
 }
 
-/// Resolve `<config_dir>/awidat/publishing.json`.
+/// Resolve `<config_dir>/montage/publishing.json`.
 pub fn default_store_path() -> Result<PathBuf, ProviderError> {
     let cfg = dirs::config_dir()
         .ok_or_else(|| ProviderError::Io("could not resolve platform config_dir".into()))?;
-    Ok(cfg.join("awidat").join(FILE_NAME))
+    Ok(cfg.join("montage").join(FILE_NAME))
 }
 
 // ---- Raw deserialization shape: tolerates legacy plaintext fields ----
@@ -575,13 +575,13 @@ mod tests {
     }
 
     #[test]
-    fn default_store_path_is_under_awidat_namespace() {
+    fn default_store_path_is_under_montage_namespace() {
         let p = default_store_path().unwrap();
         assert_eq!(p.file_name().unwrap(), "publishing.json");
         assert_eq!(
             p.parent().unwrap().file_name().unwrap(),
-            "awidat",
-            "publishing.json must live in the awidat config namespace",
+            "montage",
+            "publishing.json must live in the montage config namespace",
         );
     }
 }

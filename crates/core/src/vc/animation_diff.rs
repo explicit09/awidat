@@ -1,12 +1,12 @@
-//! Awidat parameter-animation diffing for vedit commits.
+//! Montage parameter-animation diffing for vedit commits.
 //!
 //! `vedit-core` intentionally models only structural OTIO edit decisions.
-//! Awidat animation preferences live in opaque timeline metadata, so this
-//! module computes a narrow side diff for `metadata.awidat.parameter_animations`.
+//! Montage animation preferences live in opaque timeline metadata, so this
+//! module computes a narrow side diff for `metadata.montage.parameter_animations`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use awidat_proto::professional::{AnimationTarget, Keyframe, ParameterAnimation};
+use montage_proto::professional::{AnimationTarget, Keyframe, ParameterAnimation};
 
 use super::VcError;
 
@@ -129,13 +129,13 @@ fn read_parameter_animations(
     timeline: Option<&serde_json::Value>,
 ) -> Result<Vec<ParameterAnimation>, VcError> {
     let Some(value) =
-        timeline.and_then(|timeline| timeline.pointer("/metadata/awidat/parameter_animations"))
+        timeline.and_then(|timeline| timeline.pointer("/metadata/montage/parameter_animations"))
     else {
         return Ok(Vec::new());
     };
     serde_json::from_value(value.clone()).map_err(|e| {
         VcError::Vedit(format!(
-            "failed to parse awidat parameter_animations metadata: {e}"
+            "failed to parse montage parameter_animations metadata: {e}"
         ))
     })
 }

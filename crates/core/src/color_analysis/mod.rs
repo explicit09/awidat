@@ -11,7 +11,7 @@
 //! creative saturation push to the look stage (`saturation` stays at the
 //! neutral multiplier `1.0`).
 
-use crate::awidat_mcp::tools::color_scopes::ColorScopeSnapshot;
+use crate::montage_mcp::tools::color_scopes::ColorScopeSnapshot;
 
 /// Per-frame luminance/channel statistics derived from a scope snapshot.
 ///
@@ -63,7 +63,7 @@ impl FrameStats {
 
 /// A single bounded color-correction op in canonical registry units.
 ///
-/// Every field is already clamped to the `awidat.color_correction`
+/// Every field is already clamped to the `montage.color_correction`
 /// registry bounds, so callers can emit it without re-validating ranges.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CorrectionRecommendation {
@@ -300,7 +300,7 @@ pub fn aggregate_stats(frames: &[FrameStats]) -> FrameStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::awidat_mcp::tools::color_scopes::{ColorScopeInput, compute_color_scopes};
+    use crate::montage_mcp::tools::color_scopes::{ColorScopeInput, compute_color_scopes};
 
     /// Neutral, well-exposed mid-gray frame stats.
     fn neutral_stats() -> FrameStats {

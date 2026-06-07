@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
-use awidat_proto::project::Project;
-use awidat_proto::validate::{ValidationWarning, validate_project};
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_proto::project::Project;
+use montage_proto::validate::{ValidationWarning, validate_project};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -245,10 +245,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -268,12 +268,12 @@ mod tests {
     fn project_with_media_reference(
         root: &std::path::Path,
         target_url: &str,
-    ) -> awidat_proto::project::Project {
-        use awidat_proto::otio::{
+    ) -> montage_proto::project::Project {
+        use montage_proto::otio::{
             Clip, ExternalReference, MediaReference, StackChild, Track, TrackChild, TrackKind,
         };
 
-        let mut project = awidat_proto::project::Project::init(root).unwrap();
+        let mut project = montage_proto::project::Project::init(root).unwrap();
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip");
         clip.media_reference = MediaReference::External(ExternalReference::new(target_url));

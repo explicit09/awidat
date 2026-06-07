@@ -3,7 +3,7 @@
 //!
 //! # Why this crate exists
 //!
-//! `crates/core` exposes [`SessionEvent`](awidat_core::SessionEvent) — an
+//! `crates/core` exposes [`SessionEvent`](montage_core::SessionEvent) — an
 //! internal enum the TUI consumes directly. The desktop frontend cannot
 //! consume that enum: it is not `serde`-friendly (carries non-serializable
 //! variants like `Usage`), it is not stable across releases, and its
@@ -32,7 +32,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 //!
 //! Types here `#[derive(TS)]` so
-//! `AWIDAT_EXPORT_TS=1 cargo test -p awidat-desktop-protocol` writes `.ts`
+//! `MONTAGE_EXPORT_TS=1 cargo test -p montage-desktop-protocol` writes `.ts`
 //! files into `apps/desktop/src/protocol/generated/`. Hand-edits to generated
 //! files are erased on the next export; edit the Rust source.
 //!
@@ -225,7 +225,7 @@ pub enum Item {
         /// Where the proposal came from.
         source: ProposalSource,
         /// The full EDL text the user can preview in a "show EDL"
-        /// toggle. Round-trippable through the awidat-core parser.
+        /// toggle. Round-trippable through the montage-core parser.
         edl_text: String,
         /// Post-apply snapshot of the timeline. Same shape
         /// `read_timeline` returns. The canvas paints this at
@@ -246,7 +246,7 @@ pub enum Item {
         /// trailing pause while preserving speaker cadence…").
         ///
         /// All five inspector fields below are optional: the agent
-        /// populates them progressively as Awidat's reasoning matures.
+        /// populates them progressively as Montage's reasoning matures.
         /// The frontend renders each block only when its field is
         /// present, so older producers (User-source edits, simple
         /// trims, legacy agent paths) keep working unchanged.
@@ -363,7 +363,7 @@ pub enum Item {
     /// passive (no pending mutation), and lives in its own UI panel
     /// rather than the timeline canvas. Notes have a stable identity
     /// (the `id` field), persist across sessions via
-    /// `<project>/.awidat/notes.json`, and have a three-state
+    /// `<project>/.montage/notes.json`, and have a three-state
     /// lifecycle: `open` → `resolved` (user took action) or
     /// `dismissed` (user explicitly rejected this finding).
     EditorialNote {
@@ -529,46 +529,46 @@ pub enum JobKind {
     UrlImport,
     /// Local-file copy / symlink into `raw/`.
     LocalImport,
-    /// `awidat_render::transcode_proxy` over a single asset. Produces
-    /// a 720p H.264 all-keyframe mp4 under `<project>/.awidat/proxies/`
+    /// `montage_render::transcode_proxy` over a single asset. Produces
+    /// a 720p H.264 all-keyframe mp4 under `<project>/.montage/proxies/`
     /// that the live preview pane can scrub against without choking
     /// on the original's bitrate.
     Transcode,
     /// Filmstrip thumbnail extraction over a single asset's proxy.
     /// Produces a sequence of small JPEGs under
-    /// `<project>/.awidat/thumbnails/<stem>-<hash>/` that the timeline
+    /// `<project>/.montage/thumbnails/<stem>-<hash>/` that the timeline
     /// canvas tiles across each clip. Fires as a follow-up to
     /// `Transcode` once the proxy has landed.
     Thumbnails,
     /// Audio waveform peak extraction over a single asset. Produces a
     /// JSON sidecar of pre-bucketed peak amplitudes under
-    /// `<project>/.awidat/waveforms/<stem>-<hash>.json` that the
+    /// `<project>/.montage/waveforms/<stem>-<hash>.json` that the
     /// timeline canvas reads to draw the per-clip waveform line on
     /// audio tracks. Fires alongside `Thumbnails` once the proxy has
     /// landed.
     Waveform,
     /// Silence range detection over a single asset. Produces a JSON
     /// sidecar of `(start_s, end_s, db_floor)` ranges under
-    /// `<project>/.awidat/silences/<stem>-<hash>.json` that the
+    /// `<project>/.montage/silences/<stem>-<hash>.json` that the
     /// `find_dead_air` tool reads. Fires alongside `Waveform` once
     /// the proxy has landed.
     Silences,
     /// Per-second motion-magnitude sampling over a single asset's
     /// proxy. Produces a JSON sidecar of `Vec<f32>` scene-change
-    /// scores under `<project>/.awidat/motion/<stem>-<hash>.json`
+    /// scores under `<project>/.montage/motion/<stem>-<hash>.json`
     /// that the Phase 2 continuity engine reads to detect
     /// mid-motion cuts. Fires alongside `Silences`.
     Motion,
-    /// `awidat_index::run` over the project.
+    /// `montage_index::run` over the project.
     Indexing,
-    /// `awidat_render::build_timeline_render_spec` + `JobManager::start`
+    /// `montage_render::build_timeline_render_spec` + `JobManager::start`
     /// — desktop-initiated timeline export. Distinct from `Transcode`
     /// (proxy generation) and from agent-initiated `start_render` tool
     /// calls (those surface as `Item::ToolCall`).
     Render,
     /// External-provider video/image generation job (OpenRouter +
     /// SeeDance, etc.). Lifecycle is watched on the desktop side by
-    /// tailing `<project>/.awidat/generated-media/registry.json`;
+    /// tailing `<project>/.montage/generated-media/registry.json`;
     /// the agent itself sees these via `poll_generated_media_job`,
     /// but the user wants visibility into "how many in flight, when
     /// they land" without checking the registry by hand.
@@ -594,9 +594,9 @@ pub enum JobResult {
     Cancelled,
 }
 
-/// Wire-side mirror of `awidat_core::continuity::Verdict`. Lives
+/// Wire-side mirror of `montage_core::continuity::Verdict`. Lives
 /// here in the protocol crate so the frontend can render it via
-/// ts-rs without depending on `awidat-core`. The panel maps each
+/// ts-rs without depending on `montage-core`. The panel maps each
 /// variant to a color: clean → green, risky → amber, dirty → red,
 /// abstain → muted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -684,7 +684,7 @@ pub enum EditorialNoteKind {
 }
 
 /// Lifecycle of an [`Item::EditorialNote`]. Persists across sessions
-/// via `<project>/.awidat/notes.json`.
+/// via `<project>/.montage/notes.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(rename_all = "snake_case")]
@@ -726,7 +726,7 @@ pub enum ProjectType {
 /// User's permission level for the agent's autonomous editing. Maps
 /// to Claude Code's permission modes (manual / accept-edits /
 /// bypass). The dropdown lives in the action bar; selection persists
-/// per project at `<project>/.awidat/permission_mode`.
+/// per project at `<project>/.montage/permission_mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(rename_all = "snake_case")]
@@ -743,7 +743,7 @@ pub enum PermissionMode {
     Autopilot,
 }
 
-/// One row in a Plan item — mirrors `awidat_core::tool::PlanItem` but
+/// One row in a Plan item — mirrors `montage_core::tool::PlanItem` but
 /// stripped to fields the frontend actually renders.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
@@ -932,7 +932,7 @@ pub struct TimelineCutBoundary {
 }
 
 /// Timeline-level broadcast overlay config, stored in OTIO metadata
-/// under `awidat.broadcast_overlay` and surfaced to desktop preview.
+/// under `montage.broadcast_overlay` and surfaced to desktop preview.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct BroadcastOverlayConfig {
@@ -989,7 +989,7 @@ pub struct BroadcastTimedEntry {
 
 /// Broadcast overlay style values. These remain data-driven so private
 /// skills can define their own look without hard-coding branding in
-/// Awidat core.
+/// Montage core.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct BroadcastOverlayStyle {
@@ -1035,7 +1035,7 @@ pub struct TimelineTrack {
     pub name: String,
     /// Track kind: `"video"` or `"audio"`.
     pub kind: String,
-    /// Optional awidat-specific role tag from `track.metadata`.
+    /// Optional montage-specific role tag from `track.metadata`.
     /// Today's only value is `"titles"` (set by InsertTitle's
     /// auto-create); the frontend renders title-role tracks as a
     /// special amber-on-black band rather than a regular video lane.
@@ -1339,9 +1339,9 @@ pub enum TimelineItem {
         /// Display name (clip's OTIO `name` field).
         name: String,
         /// Anchor uuid for `Anchor::ClipUuid` in EDL ops. Pulled from
-        /// `clip.metadata.awidat.extra["clip_uuid"]` if present;
+        /// `clip.metadata.montage.extra["clip_uuid"]` if present;
         /// otherwise falls back to the clip's display name (which the
-        /// `awidat_core::edl::anchor` resolver also matches against).
+        /// `montage_core::edl::anchor` resolver also matches against).
         /// Drag-to-trim wires this directly into
         /// `TrimClip { anchor: ClipUuid { uuid } }`.
         clip_uuid: String,
@@ -1377,7 +1377,7 @@ pub enum TimelineItem {
         playable_kind: PlayableKind,
         /// Absolute path to the directory holding this asset's
         /// extracted filmstrip JPEGs (e.g.
-        /// `<project>/.awidat/thumbnails/<stem>-<hash>/`). The
+        /// `<project>/.montage/thumbnails/<stem>-<hash>/`). The
         /// timeline canvas reads `frame-NNNN.jpg` files from this dir
         /// and tiles them across the clip's pixel width. `None` when
         /// thumbnails haven't been generated yet (the
@@ -1385,20 +1385,20 @@ pub enum TimelineItem {
         /// doesn't resolve to a known thumbnails dir.
         thumbnail_dir: Option<String>,
         /// Absolute path to this asset's waveform-peaks JSON sidecar
-        /// (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
+        /// (e.g. `<project>/.montage/waveforms/<stem>-<hash>.json`).
         /// Frontend fetches the sidecar via the `read_waveform` Tauri
         /// command and draws a centered amplitude line across the
         /// clip's pixel width. `None` when waveform extraction
         /// hasn't completed (the [`JobKind::Waveform`] job hasn't
         /// landed) or the asset has no audio stream.
         waveform_path: Option<String>,
-        /// Per-clip linear gain multiplier (`awidat.volume` Effect).
+        /// Per-clip linear gain multiplier (`montage.volume` Effect).
         /// `None` when the clip has no volume effect; `1.0` is unity
         /// (no gain change). Frontend reads this to populate the
         /// PropertiesPane volume slider and to paint a `🔉 0.5×` badge
         /// on clips with non-default values.
         volume: Option<f64>,
-        /// Per-clip playback rate multiplier (`awidat.speed` Effect).
+        /// Per-clip playback rate multiplier (`montage.speed` Effect).
         /// `None` when the clip has no speed effect; `1.0` is unity.
         /// `2.0` plays at double speed (half timeline length).
         /// Frontend reads this to populate the PropertiesPane speed
@@ -1424,13 +1424,13 @@ pub enum TimelineItem {
         has_video: Option<bool>,
         /// Whether the referenced asset has an audio stream.
         has_audio: Option<bool>,
-        /// Clip-level color controls (`awidat.color_correction` Effect).
+        /// Clip-level color controls (`montage.color_correction` Effect).
         /// `None` when no correction is stamped on this clip.
         color_correction: Option<ColorCorrectionStyling>,
-        /// Project-relative LUT path (`awidat.lut` Effect), if present.
+        /// Project-relative LUT path (`montage.lut` Effect), if present.
         lut_path: Option<String>,
         /// Title-overlay styling, populated when the clip carries an
-        /// `awidat.title` Effect (i.e. it's on the Titles track).
+        /// `montage.title` Effect (i.e. it's on the Titles track).
         /// `None` for ordinary media clips. The frontend renders the
         /// title editor in PropertiesPane when this is `Some` and
         /// paints the title text inline on the timeline band.
@@ -1472,8 +1472,8 @@ pub enum TimelineItem {
         /// Effect name from the OTIO transition (e.g.
         /// `"SMPTE_Dissolve"`).
         effect_name: String,
-        /// Stable semantic Awidat transition id, when the transition
-        /// carries `metadata.awidat_transition`.
+        /// Stable semantic Montage transition id, when the transition
+        /// carries `metadata.montage_transition`.
         transition_id: Option<String>,
         /// Semantic transition family, for example `dissolve` or
         /// `motion_blur`.
@@ -1489,7 +1489,7 @@ pub enum TimelineItem {
     },
 }
 
-/// Clip-level color controls, lifted off `awidat.color_correction`.
+/// Clip-level color controls, lifted off `montage.color_correction`.
 /// Fields are optional because an EDL op can set only the controls
 /// it needs; omitted fields use render defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1512,7 +1512,7 @@ pub struct ColorCorrectionStyling {
 }
 
 /// Styling fields for a title overlay, lifted off the
-/// `awidat.title` Effect's metadata. Mirror of the EDL grammar
+/// `montage.title` Effect's metadata. Mirror of the EDL grammar
 /// values — strings rather than enums on the wire so the frontend
 /// can pass them straight back through `*** Set Title` without
 /// having to know the typed enum names.
@@ -1537,7 +1537,7 @@ pub struct TitleStyling {
 }
 
 /// Clip-level media overlay styling, lifted off
-/// `awidat.video_overlay` effect metadata.
+/// `montage.video_overlay` effect metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct VideoOverlayStyling {
@@ -2426,7 +2426,7 @@ mod tests {
                 state: MediaReadinessState::Partial,
                 playable: Some(PlayableArtifact {
                     kind: PlayableArtifactKind::CompatibilityMedia,
-                    path: Some("/abs/.awidat/compat/interview.mp4".into()),
+                    path: Some("/abs/.montage/compat/interview.mp4".into()),
                     backend: MediaDecodeBackend::Webkit,
                     container: Some("mp4".into()),
                     video_codec: Some("h264".into()),

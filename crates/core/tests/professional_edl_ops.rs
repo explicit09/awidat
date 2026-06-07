@@ -1,17 +1,17 @@
 //! Professional EDL operation contract tests.
 
-use awidat_core::edl::anchor::AnchorContext;
-use awidat_core::edl::apply::apply;
-use awidat_core::edl::op::{
+use montage_core::edl::anchor::AnchorContext;
+use montage_core::edl::apply::apply;
+use montage_core::edl::op::{
     Anchor, AnnotationKind, EdlOp, MotionTemplateAnimation, ProfessionalTimelineEdit, TitleWeight,
 };
-use awidat_core::edl::parser::parse;
-use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-use awidat_proto::otio::{
+use montage_core::edl::parser::parse;
+use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+use montage_proto::otio::{
     Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,
 };
-use awidat_proto::professional::{
+use montage_proto::professional::{
     AnimationTarget, CapabilityArea, CompositionGraph, DeliveryProfile, Keyframe, MotionScene,
     MotionSceneLayer, MotionSceneLayerKind, ParameterAnimation, SourceRange, WorkflowLens,
 };
@@ -108,7 +108,7 @@ fn parser_and_apply_store_motion_scene_documents() {
         Ok(result) => result,
         Err(error) => panic!("apply motion scene edl: {error}"),
     };
-    let Some(metadata) = timeline.metadata.awidat else {
+    let Some(metadata) = timeline.metadata.montage else {
         panic!("timeline metadata missing");
     };
 
@@ -247,9 +247,9 @@ fn motion_template_instantiation_lowers_to_titles_and_runtime_animations() {
     let Some(effect) = first_title
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.title")
+        .find(|effect| effect.effect_name == "montage.title")
     else {
-        panic!("motion template title should carry awidat.title effect");
+        panic!("motion template title should carry montage.title effect");
     };
     assert_eq!(
         effect
@@ -267,7 +267,7 @@ fn motion_template_instantiation_lowers_to_titles_and_runtime_animations() {
     );
     let Some(clip_uuid) = first_title
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(serde_json::Value::as_str)
@@ -275,7 +275,7 @@ fn motion_template_instantiation_lowers_to_titles_and_runtime_animations() {
         panic!("motion template title should have a targetable clip uuid");
     };
 
-    let Some(metadata) = timeline.metadata.awidat else {
+    let Some(metadata) = timeline.metadata.montage else {
         panic!("timeline metadata should include template animations");
     };
     assert_eq!(metadata.parameter_animations.len(), 2);
@@ -408,7 +408,7 @@ fn annotation_primitive_applies_as_virtual_overlay_clip() {
     assert_eq!(
         annotations
             .metadata
-            .get("awidat_track_role")
+            .get("montage_track_role")
             .and_then(serde_json::Value::as_str),
         Some("annotations")
     );
@@ -418,9 +418,9 @@ fn annotation_primitive_applies_as_virtual_overlay_clip() {
     let Some(effect) = annotation_clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.annotation")
+        .find(|effect| effect.effect_name == "montage.annotation")
     else {
-        panic!("annotation clip should carry awidat.annotation effect");
+        panic!("annotation clip should carry montage.annotation effect");
     };
     assert_eq!(
         effect
@@ -510,9 +510,9 @@ fn rich_title_applies_as_title_with_run_metadata() {
     let Some(effect) = title_clip
         .effects
         .iter()
-        .find(|effect| effect.effect_name == "awidat.title")
+        .find(|effect| effect.effect_name == "montage.title")
     else {
-        panic!("rich title should carry awidat.title");
+        panic!("rich title should carry montage.title");
     };
 
     assert_eq!(
@@ -553,7 +553,7 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
         Ok(result) => result,
         Err(error) => panic!("apply professional edl: {error}"),
     };
-    let metadata = match timeline.metadata.awidat {
+    let metadata = match timeline.metadata.montage {
         Some(metadata) => metadata,
         None => panic!("timeline metadata missing"),
     };
@@ -571,7 +571,7 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
 #[test]
 fn set_parameter_animation_rejects_runtime_unsupported_target_by_default() {
     let timeline = Timeline::empty("animation-contract");
-    let envelope = awidat_core::edl::op::EdlEnvelope {
+    let envelope = montage_core::edl::op::EdlEnvelope {
         ops: vec![EdlOp::SetParameterAnimation {
             animation: ParameterAnimation {
                 id: "anim-blur".into(),
@@ -608,7 +608,7 @@ fn set_parameter_animation_rejects_runtime_unsupported_target_by_default() {
 #[test]
 fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
     let timeline = Timeline::empty("animation-contract");
-    let envelope = awidat_core::edl::op::EdlEnvelope {
+    let envelope = montage_core::edl::op::EdlEnvelope {
         ops: vec![EdlOp::SetParameterAnimation {
             animation: ParameterAnimation {
                 id: "anim-blur".into(),
@@ -627,7 +627,7 @@ fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
         Ok(result) => result,
         Err(err) => panic!("metadata-only animation should apply: {err}"),
     };
-    let Some(metadata) = timeline.metadata.awidat else {
+    let Some(metadata) = timeline.metadata.montage else {
         panic!("timeline metadata missing");
     };
 
@@ -640,7 +640,7 @@ fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
 #[test]
 fn set_parameter_animation_accepts_track_volume_db_automation() {
     let timeline = Timeline::empty("animation-contract");
-    let envelope = awidat_core::edl::op::EdlEnvelope {
+    let envelope = montage_core::edl::op::EdlEnvelope {
         ops: vec![EdlOp::SetParameterAnimation {
             animation: ParameterAnimation {
                 id: "music-duck".into(),
@@ -658,7 +658,7 @@ fn set_parameter_animation_accepts_track_volume_db_automation() {
         Ok(result) => result,
         Err(err) => panic!("track volume automation should apply: {err}"),
     };
-    let Some(metadata) = timeline.metadata.awidat else {
+    let Some(metadata) = timeline.metadata.montage else {
         panic!("timeline metadata missing");
     };
 
@@ -685,7 +685,7 @@ fn lowered_professional_timeline_edit_records_metadata() {
         Ok(result) => result,
         Err(error) => panic!("apply professional timeline edit: {error}"),
     };
-    let metadata = match timeline.metadata.awidat {
+    let metadata = match timeline.metadata.montage {
         Some(metadata) => metadata,
         None => panic!("timeline metadata missing"),
     };
@@ -755,12 +755,12 @@ fn test_clip(index: usize, transcript_snippet: &str) -> Clip {
         RationalTime::new(5.0 * 24.0, 24.0),
     ));
     clip.metadata = ClipMetadata {
-        awidat: Some(AwidatClipMetadata {
+        montage: Some(MontageClipMetadata {
             anchor: Some(AwAnchor {
                 transcript_snippet: Some(transcript_snippet.to_string()),
                 ..AwAnchor::default()
             }),
-            ..AwidatClipMetadata::default()
+            ..MontageClipMetadata::default()
         }),
         ..ClipMetadata::default()
     };

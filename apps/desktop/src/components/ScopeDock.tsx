@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "../media/store";
 
-/// Mirrors `awidat_core::tools::color_scopes::ColorScopeSnapshot`.
+/// Mirrors `montage_core::tools::color_scopes::ColorScopeSnapshot`.
 export type RgbHistogram = {
   red: number[];
   green: number[];

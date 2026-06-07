@@ -4,14 +4,14 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use awidat_proto::index::{AssetId, IndexerEntry, Manifest};
-use awidat_proto::project::files;
 use chrono::{DateTime, Utc};
+use montage_proto::index::{AssetId, IndexerEntry, Manifest};
+use montage_proto::project::files;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Project-relative generated-media registry location.
-pub const REGISTRY_RELATIVE_PATH: &str = ".awidat/generated-media/registry.json";
+pub const REGISTRY_RELATIVE_PATH: &str = ".montage/generated-media/registry.json";
 /// Required project-relative prefix for generated media outputs.
 pub const GENERATED_OUTPUT_PREFIX: &str = "raw/generated";
 
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn generated_description_sidecar_registers_manifest_entry() {
         let dir = tempfile::tempdir().unwrap();
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         let record = GeneratedMediaRecord::mock_succeeded(
             "gen-1",
             "raw/generated/mock/gen-1.mp4",
@@ -455,8 +455,8 @@ mod tests {
 
         write_generated_description_sidecar(dir.path(), &record).unwrap();
 
-        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
-        let report = awidat_proto::validate::validate_project(&project).unwrap();
+        let project = montage_proto::project::Project::read(dir.path()).unwrap();
+        let report = montage_proto::validate::validate_project(&project).unwrap();
         assert!(
             report.index_warnings.is_empty(),
             "generated-description sidecar must not create validation noise: {:?}",

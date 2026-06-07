@@ -6,7 +6,7 @@
 //!
 //! # Conventions
 //!
-//! - Service name: `"awidat"`.
+//! - Service name: `"montage"`.
 //! - Account names: lowercase-snake — `"hf_token"`, `"anthropic_api_key"`.
 //! - Env-var names: SCREAMING_SNAKE — `HF_TOKEN`, `ANTHROPIC_API_KEY`.
 //!
@@ -20,7 +20,7 @@ use thiserror::Error;
 use tracing::trace;
 
 /// Service name we register all entries under in the OS keychain.
-pub const SERVICE: &str = "awidat";
+pub const SERVICE: &str = "montage";
 
 /// Errors talking to the keychain. Missing-secret is *not* an error — see
 /// [`get`] which returns `Ok(None)`.
@@ -140,6 +140,6 @@ mod tests {
     fn service_name_is_stable() {
         // If anyone changes this, they need to migrate users. Loud test
         // catches it in review.
-        assert_eq!(SERVICE, "awidat");
+        assert_eq!(SERVICE, "montage");
     }
 }

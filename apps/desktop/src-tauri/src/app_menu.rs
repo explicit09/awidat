@@ -8,7 +8,7 @@ use tauri::menu::{
 use tauri::{AppHandle, Emitter, State, Wry};
 
 /// Mirrors `apps/desktop/src/protocol/index.ts`.
-pub const MENU_COMMAND_EVENT: &str = "awidat://menu-command";
+pub const MENU_COMMAND_EVENT: &str = "montage://menu-command";
 
 pub mod id {
     pub const NEW_PROJECT: &str = "project:new";
@@ -106,7 +106,7 @@ pub fn handle_menu_event(app: &AppHandle<Wry>, event: MenuEvent) {
 #[tauri::command]
 pub async fn set_menu_item_enabled(
     app: AppHandle<Wry>,
-    _state: State<'_, crate::state::AwidatState>,
+    _state: State<'_, crate::state::MontageState>,
     states: Vec<MenuItemEnabled>,
 ) -> Result<(), String> {
     let Some(menu) = app.menu() else {
@@ -152,8 +152,8 @@ fn set_item_enabled(item: &MenuItemKind<Wry>, enabled: bool) -> tauri::Result<()
 }
 
 fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
-    let app_menu = SubmenuBuilder::new(app, "Awidat")
-        .about_with_text("About Awidat", Some(about_metadata()))
+    let app_menu = SubmenuBuilder::new(app, "Montage")
+        .about_with_text("About Montage", Some(about_metadata()))
         .item(&disabled(app, DISABLED_SETTINGS, "Settings…")?)
         .item(&disabled(app, DISABLED_UPDATES, "Check for Updates…")?)
         .separator()
@@ -163,7 +163,7 @@ fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
         .hide_others()
         .show_all()
         .separator()
-        .quit_with_text("Quit Awidat")
+        .quit_with_text("Quit Montage")
         .build()?;
 
     MenuBuilder::new(app)
@@ -405,7 +405,7 @@ fn help_menu(
             if include_about {
                 "Documentation"
             } else {
-                "Awidat Help"
+                "Montage Help"
             },
         )?)
         .item(&disabled(app, DISABLED_SHORTCUTS, "Keyboard Shortcuts")?)
@@ -415,7 +415,7 @@ fn help_menu(
     if include_about {
         builder = builder
             .separator()
-            .about_with_text("About Awidat", Some(about_metadata()));
+            .about_with_text("About Montage", Some(about_metadata()));
     }
 
     builder.build()
@@ -441,9 +441,9 @@ fn disabled(app: &AppHandle<Wry>, id: &str, label: &str) -> tauri::Result<MenuIt
 
 fn about_metadata() -> AboutMetadata<'static> {
     AboutMetadata {
-        name: Some("Awidat".into()),
+        name: Some("Montage".into()),
         version: Some(env!("CARGO_PKG_VERSION").into()),
-        authors: Some(vec!["Awidat Authors".into()]),
+        authors: Some(vec!["Montage Authors".into()]),
         comments: Some("Collaborative video editor with an agent inside".into()),
         license: Some("Apache-2.0".into()),
         ..Default::default()
@@ -489,7 +489,7 @@ fn frontend_command_ids() -> &'static [&'static str] {
 #[cfg(test)]
 fn top_level_menu_labels(platform: MenuPlatform) -> Vec<&'static str> {
     match platform {
-        MenuPlatform::Macos => vec!["Awidat", "File", "Edit", "View", "Window", "Help"],
+        MenuPlatform::Macos => vec!["Montage", "File", "Edit", "View", "Window", "Help"],
         MenuPlatform::Windows => vec!["File", "Edit", "View", "Help"],
     }
 }
@@ -509,7 +509,7 @@ mod tests {
         // Edit.
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Macos),
-            vec!["Awidat", "File", "Edit", "View", "Window", "Help"]
+            vec!["Montage", "File", "Edit", "View", "Window", "Help"]
         );
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Windows),

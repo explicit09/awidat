@@ -32,7 +32,7 @@ const finishedEntry: RenderQueueEntry = {
     youtube: {
       title: "Launch title",
       description: "Launch description",
-      tags: ["awidat", "launch"],
+      tags: ["montage", "launch"],
       visibility: "unlisted",
       scheduledAt: 3_000,
       thumbnailPath: "/tmp/thumb.jpg",
@@ -69,7 +69,7 @@ assert.deepEqual(failedSchedulerAccounts, {
 const editedMetadata = buildSchedulerMetadata({
   title: "Edited title",
   description: "Edited description",
-  tagsInput: "awidat, edited, awidat",
+  tagsInput: "montage, edited, montage",
   thumbnailPath: "  /tmp/edited.jpg  ",
   privacy: "public",
   scheduledFor: 4_000,
@@ -77,7 +77,7 @@ const editedMetadata = buildSchedulerMetadata({
 assert.deepEqual(editedMetadata, {
   title: "Edited title",
   description: "Edited description",
-  tags: ["awidat", "edited"],
+  tags: ["montage", "edited"],
   visibility: "public",
   scheduledAt: 4_000,
   thumbnailPath: "/tmp/edited.jpg",
@@ -286,7 +286,7 @@ async function invoke<T>(
       privacy: "unlisted",
       title: "Launch title",
       description: "Launch description",
-      tags: ["awidat", "launch"],
+      tags: ["montage", "launch"],
       thumbnailRef: "file:///tmp/thumb.jpg",
     });
     return { id: "target_1" } as T;
@@ -324,7 +324,7 @@ const result = await publishSchedulerPostViaServer({
   },
   title: "Launch title",
   description: "Launch description",
-  tagsInput: "awidat, launch",
+  tagsInput: "montage, launch",
   thumbnailPath: "/tmp/thumb.jpg",
   privacy: "unlisted",
   scheduledFor: 3_000,
@@ -343,7 +343,7 @@ assert.deepEqual(result.uploadState, {
 assert.deepEqual(result.metadata, {
   title: "Launch title",
   description: "Launch description",
-  tags: ["awidat", "launch"],
+  tags: ["montage", "launch"],
   visibility: "unlisted",
   scheduledAt: 3_000,
   thumbnailPath: "/tmp/thumb.jpg",
@@ -586,7 +586,7 @@ const multiResults = await publishSchedulerPostToAccounts({
   ],
   title: "Multi title",
   description: "Multi description",
-  tagsInput: "awidat",
+  tagsInput: "montage",
   thumbnailPath: "",
   privacy: "private",
   scheduledFor: 4_000,

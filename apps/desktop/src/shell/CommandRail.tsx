@@ -350,8 +350,8 @@ export function CommandRail({
     if (menuFor === null) return;
     function onDoc(e: MouseEvent) {
       const target = e.target as HTMLElement | null;
-      if (target?.closest(".awidat-chat-row-menu")) return;
-      if (target?.closest(".awidat-chat-row-more")) return;
+      if (target?.closest(".montage-chat-row-menu")) return;
+      if (target?.closest(".montage-chat-row-more")) return;
       setMenuFor(null);
     }
     function onKey(e: KeyboardEvent) {
@@ -691,7 +691,7 @@ export function CommandRail({
             copy above the composer is redundant chrome. */}
         <div
           className={cn(
-            "awidat-composer-card relative rounded-[var(--radius-md)] transition-colors",
+            "montage-composer-card relative rounded-[var(--radius-md)] transition-colors",
             focused ? "shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "",
           )}
         >
@@ -770,7 +770,7 @@ export function CommandRail({
             )}
           />
           {mention !== null && filteredMedia.length > 0 ? (
-            <div className="awidat-mention-picker" role="listbox" aria-label="Attach a clip">
+            <div className="montage-mention-picker" role="listbox" aria-label="Attach a clip">
               {filteredMedia.map((s, i) => (
                 <button
                   key={s.id}
@@ -778,7 +778,7 @@ export function CommandRail({
                   role="option"
                   aria-selected={i === mentionIdx}
                   className={cn(
-                    "awidat-mention-item",
+                    "montage-mention-item",
                     i === mentionIdx ? "is-active" : "",
                   )}
                   onMouseDown={(e) => {
@@ -789,9 +789,9 @@ export function CommandRail({
                   onClick={() => commitMention(s)}
                   onMouseEnter={() => setMentionIdx(i)}
                 >
-                  <span className="awidat-mention-item-label">{s.label}</span>
+                  <span className="montage-mention-item-label">{s.label}</span>
                   {s.detail ? (
-                    <span className="awidat-mention-item-detail">{s.detail}</span>
+                    <span className="montage-mention-item-detail">{s.detail}</span>
                   ) : null}
                 </button>
               ))}
@@ -823,7 +823,7 @@ export function CommandRail({
                 onClick={submit}
                 trailingIcon={<SendHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />}
                 title={sendDisabledReason}
-                className="awidat-send-button"
+                className="montage-send-button"
               >
                 Send
               </Button>
@@ -837,11 +837,11 @@ export function CommandRail({
           const visibleChips = contextChips.filter((c) => c.kind !== "project");
           if (visibleChips.length === 0) return null;
           return (
-            <div className="awidat-context-strip">
+            <div className="montage-context-strip">
               {visibleChips.map((chip, i) => (
                 <span
                   key={`${chip.label}-${i}`}
-                  className="awidat-context-item"
+                  className="montage-context-item"
                   title={chip.label}
                 >
                   <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" />
@@ -860,7 +860,7 @@ export function CommandRail({
                       onRemoveChip(chip, originalIdx);
                     }
                   }}
-                  className="awidat-context-clear"
+                  className="montage-context-clear"
                   aria-label="Clear attached context"
                   title="Clear attached context"
                 >
@@ -880,7 +880,7 @@ export function CommandRail({
   // surface: chats on the left, conversation centered, composer below.
   if (focused) {
     return (
-      <div className="awidat-chat-rail flex h-full min-h-0 w-full bg-[var(--color-surface-page)]">
+      <div className="montage-chat-rail flex h-full min-h-0 w-full bg-[var(--color-surface-page)]">
         <FocusedSidebar
           chatSessions={chatSessions}
           activeChatSession={activeChatSession}
@@ -934,7 +934,7 @@ export function CommandRail({
   }
 
   return (
-    <div className="awidat-chat-rail flex h-full min-h-0 flex-col">
+    <div className="montage-chat-rail flex h-full min-h-0 flex-col">
       {sessionChrome}
 
       <div
@@ -1037,43 +1037,43 @@ function FocusedSidebar({
   renderRow: (session: ChatSessionSummary) => ReactNode;
 }) {
   return (
-    <aside className="awidat-focused-sidebar">
-      <div className="awidat-focused-sidebar-header">
+    <aside className="montage-focused-sidebar">
+      <div className="montage-focused-sidebar-header">
         <button
           type="button"
           onClick={onNewChat}
           disabled={running || chatLoading}
-          className="awidat-focused-sidebar-new"
+          className="montage-focused-sidebar-new"
           title="New chat"
         >
           <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
           <span>New chat</span>
         </button>
       </div>
-      <div className="awidat-focused-sidebar-list">
+      <div className="montage-focused-sidebar-list">
         <button
           type="button"
           className={cn(
-            "awidat-focused-sidebar-item",
+            "montage-focused-sidebar-item",
             activeChatSession === null ? "is-active" : "",
           )}
           disabled={running || chatLoading}
           onClick={() => onNewChat?.()}
         >
           <span className="truncate">New chat</span>
-          <span className="awidat-focused-sidebar-meta">fresh</span>
+          <span className="montage-focused-sidebar-meta">fresh</span>
         </button>
         {chatSessions.map((session) => renderRow(session))}
         {!chatLoading && chatSessions.length === 0 ? (
-          <p className="awidat-focused-sidebar-empty">No saved chats yet.</p>
+          <p className="montage-focused-sidebar-empty">No saved chats yet.</p>
         ) : null}
       </div>
       {onToggleFocus ? (
-        <div className="awidat-focused-sidebar-footer">
+        <div className="montage-focused-sidebar-footer">
           <button
             type="button"
             onClick={onToggleFocus}
-            className="awidat-focused-sidebar-footer-button"
+            className="montage-focused-sidebar-footer-button"
             title="Restore workspace"
           >
             <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
@@ -1411,7 +1411,7 @@ function EmptyState({
   return (
     <Stack gap="2" className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-3 text-[var(--color-text-muted)]">
       <span className="text-[var(--text-caption)] leading-relaxed">
-        Type an editing goal — Awidat uses the attached project, clip, and timeline context.
+        Type an editing goal — Montage uses the attached project, clip, and timeline context.
       </span>
       <Divider />
       <div className="grid gap-1">
@@ -1477,9 +1477,9 @@ function PermissionModeChip({
     autopilot: "Auto — agent applies edits without approval cards.",
   };
   return (
-    <label className="awidat-mode-chip" title={titles[mode]}>
-      <span className="awidat-mode-chip-dot" data-mode={mode} aria-hidden />
-      <span className="awidat-mode-chip-label">{labels[mode]}</span>
+    <label className="montage-mode-chip" title={titles[mode]}>
+      <span className="montage-mode-chip-dot" data-mode={mode} aria-hidden />
+      <span className="montage-mode-chip-label">{labels[mode]}</span>
       <select
         value={mode}
         onChange={(e) => onChange(e.target.value as PermissionMode)}
@@ -1531,9 +1531,9 @@ function ChatRow({
 }) {
   const baseClass =
     variant === "sidebar"
-      ? cn("awidat-focused-sidebar-item awidat-chat-row", isActive ? "is-active" : "")
+      ? cn("montage-focused-sidebar-item montage-chat-row", isActive ? "is-active" : "")
       : cn(
-          "awidat-chat-row mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+          "montage-chat-row mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
           isActive ? "bg-[var(--color-surface-selected)]" : "",
         );
   if (isRenaming) {
@@ -1556,14 +1556,14 @@ function ChatRow({
             // Don't bubble Enter/Escape up to global handlers.
             e.stopPropagation();
           }}
-          className="awidat-chat-row-rename"
+          className="montage-chat-row-rename"
           aria-label="Rename chat"
         />
       </div>
     );
   }
   return (
-    <div className="awidat-chat-row-wrapper">
+    <div className="montage-chat-row-wrapper">
       <button
         type="button"
         className={baseClass}
@@ -1580,7 +1580,7 @@ function ChatRow({
         <span
           className={
             variant === "sidebar"
-              ? "awidat-focused-sidebar-meta"
+              ? "montage-focused-sidebar-meta"
               : "shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]"
           }
         >
@@ -1589,7 +1589,7 @@ function ChatRow({
       </button>
       <button
         type="button"
-        className="awidat-chat-row-more"
+        className="montage-chat-row-more"
         onClick={(e) => {
           e.stopPropagation();
           onOpenMenu();
@@ -1600,7 +1600,7 @@ function ChatRow({
         …
       </button>
       {menuOpen ? (
-        <div className="awidat-chat-row-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+        <div className="montage-chat-row-menu" role="menu" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             role="menuitem"
@@ -1614,7 +1614,7 @@ function ChatRow({
           <button
             type="button"
             role="menuitem"
-            className="awidat-chat-row-menu-danger"
+            className="montage-chat-row-menu-danger"
             onClick={() => {
               onCloseMenu();
               onDelete();

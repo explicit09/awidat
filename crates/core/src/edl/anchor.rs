@@ -4,13 +4,13 @@
 //! `harnesses/codex/codex-rs/apply-patch/src/seek_sequence.rs`, adapted
 //! for video:
 //! 1. **Exact substring** match against the clip's
-//!    `metadata.awidat.anchor.transcript_snippet` (or marker text).
+//!    `metadata.montage.anchor.transcript_snippet` (or marker text).
 //! 2. **Trim-end** tolerance — also strip trailing whitespace on both sides.
 //! 3. **Trim-both** tolerance — strip leading + trailing whitespace.
 //! 4. **Unicode-normalize** — fold smart quotes, dashes, NBSPs to ASCII.
 //! 5. **Clip-uuid fallback** — only if the model passed
 //!    `Anchor::ClipUuid`, match exactly against `name` or
-//!    `awidat.clip_uuid` extra. As a final recovery path, also match
+//!    `montage.clip_uuid` extra. As a final recovery path, also match
 //!    the clip's media-reference target URL / filename / stem when
 //!    exactly one clip references that asset.
 //!
@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_proto::otio::{StackChild, Timeline, TrackChild};
+use montage_proto::otio::{StackChild, Timeline, TrackChild};
 
 use super::op::Anchor;
 
@@ -145,7 +145,7 @@ pub struct ClipLocator {
 ///    clip whose source_range covers that segment timestamp.
 ///
 /// Step 2 is what makes anchoring against real footage work — when
-/// `awidat init` produces a clip with only `asset_id` in its anchor,
+/// `montage init` produces a clip with only `asset_id` in its anchor,
 /// the agent can still say `transcript_snippet="builders network"`
 /// and the resolver pulls the phrase out of the whisper transcript.
 pub fn resolve(
@@ -380,7 +380,7 @@ struct ClipEntry<'a> {
     locator: ClipLocator,
     name: &'a str,
     transcript_snippet: Option<&'a str>,
-    awidat_uuid: Option<String>,
+    montage_uuid: Option<String>,
     marker_notes: Vec<&'a str>,
     /// External asset id (e.g. `raw/clip-1.MOV`). Used by the whisper
     /// sidecar lookup to find the matching transcript file.
@@ -392,7 +392,7 @@ struct ClipEntry<'a> {
 }
 
 fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
-    use awidat_proto::otio::{ExternalReference, MediaReference};
+    use montage_proto::otio::{ExternalReference, MediaReference};
     let mut out = Vec::new();
     for (ti, sc) in timeline.tracks.children.iter().enumerate() {
         let StackChild::Track(track) = sc else {
@@ -402,13 +402,13 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
             if let TrackChild::Clip(c) = tc {
                 let snippet = c
                     .metadata
-                    .awidat
+                    .montage
                     .as_ref()
                     .and_then(|m| m.anchor.as_ref())
                     .and_then(|a| a.transcript_snippet.as_deref());
                 let uuid = c
                     .metadata
-                    .awidat
+                    .montage
                     .as_ref()
                     .and_then(|m| m.extra.get("clip_uuid"))
                     .and_then(|v| v.as_str())
@@ -416,10 +416,15 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                 let marker_notes: Vec<&str> = c
                     .markers
                     .iter()
-                    .filter_map(|m| m.metadata.awidat.as_ref().and_then(|am| am.note.as_deref()))
+                    .filter_map(|m| {
+                        m.metadata
+                            .montage
+                            .as_ref()
+                            .and_then(|am| am.note.as_deref())
+                    })
                     .collect();
                 // Asset id from the external media reference's
-                // target_url. The awidat anchor doesn't carry this
+                // target_url. The montage anchor doesn't carry this
                 // separately — clips on a track always resolve their
                 // media via `media_reference`.
                 let asset_id = match &c.media_reference {
@@ -439,7 +444,7 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                     },
                     name: c.name.as_str(),
                     transcript_snippet: snippet,
-                    awidat_uuid: uuid,
+                    montage_uuid: uuid,
                     marker_notes,
                     asset_id,
                     source_range,
@@ -452,7 +457,7 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
 
 fn resolve_by_uuid(clips: &[ClipEntry<'_>], uuid: &str) -> Result<ClipLocator, AnchorMiss> {
     for clip in clips {
-        if clip.awidat_uuid.as_deref() == Some(uuid) || clip.name == uuid {
+        if clip.montage_uuid.as_deref() == Some(uuid) || clip.name == uuid {
             return Ok(clip.locator);
         }
     }
@@ -473,7 +478,7 @@ fn resolve_by_uuid(clips: &[ClipEntry<'_>], uuid: &str) -> Result<ClipLocator, A
         .iter()
         .flat_map(|c| {
             let mut values = Vec::new();
-            if let Some(uuid) = &c.awidat_uuid {
+            if let Some(uuid) = &c.montage_uuid {
                 values.push(uuid.clone());
             }
             if !c.name.is_empty() {
@@ -493,7 +498,7 @@ fn resolve_by_uuid(clips: &[ClipEntry<'_>], uuid: &str) -> Result<ClipLocator, A
         )
     } else {
         format!(
-            "no clip with uuid '{uuid}' (matched against awidat.clip_uuid, clip name, and unique media filename/stem)"
+            "no clip with uuid '{uuid}' (matched against montage.clip_uuid, clip name, and unique media filename/stem)"
         )
     };
     Err(AnchorMiss {
@@ -547,8 +552,8 @@ fn overlap_score(needle: &str, haystack: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
     };
@@ -565,12 +570,12 @@ mod tests {
                 RationalTime::new(24.0, 24.0),
             ));
             clip.metadata = ClipMetadata {
-                awidat: Some(AwidatClipMetadata {
+                montage: Some(MontageClipMetadata {
                     anchor: Some(AwAnchor {
                         transcript_snippet: Some((*snippet).to_string()),
                         ..AwAnchor::default()
                     }),
-                    ..AwidatClipMetadata::default()
+                    ..MontageClipMetadata::default()
                 }),
                 ..ClipMetadata::default()
             };
@@ -669,14 +674,14 @@ mod tests {
     #[test]
     fn clip_uuid_anchor_matches_extra_field() {
         let mut tl = timeline_with(&["foo"]);
-        // Inject a uuid via the awidat extra map.
+        // Inject a uuid via the montage extra map.
         let StackChild::Track(t) = &mut tl.tracks.children[0] else {
             panic!()
         };
         let TrackChild::Clip(c) = &mut t.children[0] else {
             panic!()
         };
-        c.metadata.awidat.as_mut().unwrap().extra.insert(
+        c.metadata.montage.as_mut().unwrap().extra.insert(
             "clip_uuid".into(),
             serde_json::Value::String("c-9f2".into()),
         );
@@ -802,12 +807,12 @@ mod tests {
     /// at the project, the resolver should find the right clip.
     #[test]
     fn whisper_sidecar_search_resolves_phrase_outside_clip_metadata() {
-        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        use montage_proto::otio::{Clip, ExternalReference, MediaReference};
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path();
 
         // Build a one-clip timeline whose clip-level anchor is just
-        // an asset id (the realistic shape after `awidat init` and a
+        // an asset id (the realistic shape after `montage init` and a
         // manual seed). No transcript_snippet seeded.
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
@@ -884,7 +889,7 @@ mod tests {
     /// rounding shouldn't kill anchoring.
     #[test]
     fn whisper_anchor_resolves_when_segment_starts_just_before_clip() {
-        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        use montage_proto::otio::{Clip, ExternalReference, MediaReference};
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path();
 
@@ -945,7 +950,7 @@ mod tests {
     /// boundary.
     #[test]
     fn whisper_anchor_resolves_when_segment_ends_just_after_clip() {
-        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        use montage_proto::otio::{Clip, ExternalReference, MediaReference};
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path();
 
@@ -1001,7 +1006,7 @@ mod tests {
     /// disambiguation.
     #[test]
     fn whisper_anchor_rejects_segment_outside_clip_range() {
-        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        use montage_proto::otio::{Clip, ExternalReference, MediaReference};
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path();
 

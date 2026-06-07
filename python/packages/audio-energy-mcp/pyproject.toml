@@ -1,10 +1,10 @@
 [project]
 name = "audio-energy-mcp"
 version = "0.1.0"
-description = "Awidat audio energy indexer: RMS over windows, integrated LUFS, silence detection."
+description = "Montage audio energy indexer: RMS over windows, integrated LUFS, silence detection."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     "numpy>=1.26,<3",
     "pyloudnorm>=0.1.1,<0.3",
 ]

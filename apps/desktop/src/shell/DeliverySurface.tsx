@@ -55,7 +55,7 @@ export type {
  *  so a reload survives; on Export, App.tsx copies the drafts onto
  *  each enqueued `RenderQueueEntry.id` so the worker can hand the
  *  per-provider metadata to the backend at upload time. */
-export const DRAFT_METADATA_JOB_ID = "awidat.deliver.draft";
+export const DRAFT_METADATA_JOB_ID = "montage.deliver.draft";
 
 /**
  * DeliverySurface — concept Screen 7.

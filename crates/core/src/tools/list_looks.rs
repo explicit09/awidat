@@ -115,7 +115,7 @@ Returns the agent-facing catalog of named color-corrector looks. \
 Each entry includes id, display_name, description, \
 default_input_space, default_output_space, default_size, \
 recommended_strength_min, recommended_strength_max, and tags. Use \
-this before composing an `awidat.lut` or `awidat.color_pipeline` \
+this before composing an `montage.lut` or `montage.color_pipeline` \
 effect to pick a look that's compatible with the clip's input \
 space and apply a sensible strength.";
 
@@ -134,10 +134,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

@@ -151,8 +151,8 @@ pub struct RenderExecutionManifest {
     pub manifest_id: String,
     /// RFC3339 creation timestamp.
     pub created_at: String,
-    /// Awidat crate version that produced the manifest.
-    pub awidat_version: String,
+    /// Montage crate version that produced the manifest.
+    pub montage_version: String,
     /// Project root used to plan the render.
     pub project_root: String,
     /// Optional hash of the project file.
@@ -186,8 +186,8 @@ pub struct RenderExecutionManifest {
 pub struct RenderExecutionManifestInput {
     /// RFC3339 creation timestamp.
     pub created_at: String,
-    /// Awidat crate version that produced the manifest.
-    pub awidat_version: String,
+    /// Montage crate version that produced the manifest.
+    pub montage_version: String,
     /// Project root used to plan the render.
     pub project_root: String,
     /// Optional hash of the project file.
@@ -333,7 +333,7 @@ impl RenderExecutionManifest {
             schema_version: RENDER_MANIFEST_SCHEMA_VERSION,
             manifest_id: String::new(),
             created_at: input.created_at,
-            awidat_version: input.awidat_version,
+            montage_version: input.montage_version,
             project_root: input.project_root,
             project_hash: input.project_hash,
             timeline_hash: input.timeline_hash,
@@ -367,7 +367,7 @@ impl RenderBackendKind {
 #[derive(Serialize)]
 struct StableManifestView<'a> {
     schema_version: u32,
-    awidat_version: &'a str,
+    montage_version: &'a str,
     project_root: &'a str,
     project_hash: &'a Option<String>,
     timeline_hash: &'a Option<String>,
@@ -384,7 +384,7 @@ struct StableManifestView<'a> {
 fn stable_manifest_id(manifest: &RenderExecutionManifest) -> String {
     let stable = StableManifestView {
         schema_version: manifest.schema_version,
-        awidat_version: &manifest.awidat_version,
+        montage_version: &manifest.montage_version,
         project_root: &manifest.project_root,
         project_hash: &manifest.project_hash,
         timeline_hash: &manifest.timeline_hash,
@@ -481,7 +481,7 @@ pub fn fingerprint_file_sampled(
         .unwrap_or_default();
     let size = metadata.len();
     let mut hasher = Sha256::new();
-    hasher.update(b"awidat-sampled-input-v1");
+    hasher.update(b"montage-sampled-input-v1");
     hasher.update(size.to_le_bytes());
     hasher.update(modified.as_secs().to_le_bytes());
     hasher.update(modified.subsec_nanos().to_le_bytes());
@@ -1038,7 +1038,7 @@ mod tests {
     fn planned_manifest(created_at: &str) -> RenderExecutionManifest {
         RenderExecutionManifest::planned(RenderExecutionManifestInput {
             created_at: created_at.into(),
-            awidat_version: "0.1.0-test".into(),
+            montage_version: "0.1.0-test".into(),
             project_root: "/project".into(),
             project_hash: Some("project-hash".into()),
             timeline_hash: Some("timeline-hash".into()),

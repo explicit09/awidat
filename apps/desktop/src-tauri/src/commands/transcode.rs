@@ -1,5 +1,5 @@
 //! Proxy transcoding: 1080p H.264 all-keyframe mp4 under
-//! `<project>/.awidat/proxies/` for every asset in `raw/` that
+//! `<project>/.montage/proxies/` for every asset in `raw/` that
 //! doesn't already have an up-to-date proxy. The live preview pane
 //! can use the proxy as a performance fallback while source review
 //! can still prefer original media.
@@ -15,8 +15,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use awidat_desktop_protocol::{Id, JobKind};
-use awidat_render::{TranscodeProgress, TranscodeProgressCallback};
+use montage_desktop_protocol::{Id, JobKind};
+use montage_render::{TranscodeProgress, TranscodeProgressCallback};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::mpsc;
@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::proxy_path_for;
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// Proxy cache status for one expected or discovered artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -108,7 +108,7 @@ pub struct ProxyCacheCleanupReport {
 #[tauri::command]
 pub async fn transcode_project_proxies(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<usize, String> {
     let project_root = state
         .project_root
@@ -120,7 +120,7 @@ pub async fn transcode_project_proxies(
     if !raw_dir.is_dir() {
         return Ok(0);
     }
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     tokio::fs::create_dir_all(&proxies_dir)
         .await
         .map_err(|e| format!("create proxies dir: {e}"))?;
@@ -128,7 +128,7 @@ pub async fn transcode_project_proxies(
     let assets = collect_media(&raw_dir).map_err(|e| format!("scan raw/: {e}"))?;
     let mut generated = 0usize;
     for asset in assets {
-        match awidat_render::probe_media(&asset).await {
+        match montage_render::probe_media(&asset).await {
             Ok(probe) if probe.has_video => {}
             Ok(_) => continue,
             Err(e) => {
@@ -150,7 +150,7 @@ pub async fn transcode_project_proxies(
 /// Return a dry-run proxy lifecycle report for the loaded project.
 #[tauri::command]
 pub async fn proxy_cache_lifecycle_report(
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<ProxyCacheCleanupReport, String> {
     let project_root = state
         .project_root
@@ -162,7 +162,7 @@ pub async fn proxy_cache_lifecycle_report(
 }
 
 /// Delete every orphaned proxy artifact in `project_root`'s cache —
-/// any `.mp4` (or `.mp4.pending`) under `.awidat/proxies/` that doesn't
+/// any `.mp4` (or `.mp4.pending`) under `.montage/proxies/` that doesn't
 /// match the expected filename for some asset currently in `raw/`.
 ///
 /// Targets two cases: proxies left behind after a raw file is deleted,
@@ -214,7 +214,7 @@ pub fn cleanup_orphaned_proxies_in(project_root: &Path) -> Result<(usize, u64), 
 pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
     // Use the Tauri-managed runtime handle, not bare `tokio::spawn`: this is
     // called from the `.setup()` thread (e.g. project preloaded via
-    // AWIDAT_DESKTOP_PROJECT or persisted state), which is NOT inside a Tokio
+    // MONTAGE_DESKTOP_PROJECT or persisted state), which is NOT inside a Tokio
     // runtime context, so `tokio::spawn` there aborts the process ("panic in a
     // function that cannot unwind"). `tauri::async_runtime::spawn` resolves the
     // handle explicitly and is safe from any caller.
@@ -267,7 +267,7 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
         let priority = crate::commands::playable::prioritize_for_cursor(&ranges, 0.0);
         let assets = reorder_by_priority(assets, &priority, &project_root);
 
-        let state = app.state::<AwidatState>();
+        let state = app.state::<MontageState>();
         let mut touched = false;
         for asset in assets {
             match transcode_single_asset_in_project(&app, &state, &project_root, &asset).await {
@@ -294,7 +294,7 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
 /// proxy + thumbnails + waveform for each new asset, but a project
 /// opened from a previous schema (or whose import chain partially
 /// failed) can land with `raw/` populated and the corresponding
-/// `.awidat/thumbnails/` or `.awidat/waveforms/` sidecars missing. The
+/// `.montage/thumbnails/` or `.montage/waveforms/` sidecars missing. The
 /// timeline canvas then falls back to its plain-rect rendering for
 /// those clips even though the source media is on disk.
 ///
@@ -321,14 +321,14 @@ pub fn spawn_sidecar_backfill_on_load(app: AppHandle, project_root: PathBuf) {
             return;
         }
 
-        let state = app.state::<AwidatState>();
+        let state = app.state::<MontageState>();
         let mut touched = false;
         for asset in assets {
             // Probe first so we only run the video-only thumbnail
             // generator on video-bearing assets, and so we skip
             // waveform extraction on assets we already know are
             // unreadable.
-            let probe = match awidat_render::probe_media(&asset).await {
+            let probe = match montage_render::probe_media(&asset).await {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!(
@@ -396,7 +396,7 @@ pub fn spawn_sidecar_backfill_on_load(app: AppHandle, project_root: PathBuf) {
 /// an empty vec on any read error (the caller falls back to scan
 /// order, which is still correct, just not optimal).
 fn collect_timeline_asset_ranges(project_root: &Path) -> Vec<(String, f64, f64)> {
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     let project = match Project::read(project_root) {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -411,7 +411,7 @@ fn collect_timeline_asset_ranges(project_root: &Path) -> Vec<(String, f64, f64)>
             continue;
         }
         for item in &track.items {
-            if let awidat_desktop_protocol::TimelineItem::Clip {
+            if let montage_desktop_protocol::TimelineItem::Clip {
                 asset_id: Some(aid),
                 track_start_s,
                 duration_s,
@@ -470,16 +470,16 @@ fn reorder_by_priority(
 /// task wakes up.
 pub async fn transcode_single_asset_in_project(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     tokio::fs::create_dir_all(&proxies_dir)
         .await
         .map_err(|e| format!("create proxies dir: {e}"))?;
     let proxy_path = proxy_path_for(&proxies_dir, asset_path);
-    match awidat_render::probe_media(asset_path).await {
+    match montage_render::probe_media(asset_path).await {
         Ok(probe) if probe.has_video => {}
         Ok(_) => return Ok(None),
         Err(e) => return Err(format!("probe for transcode: {e}")),
@@ -499,7 +499,7 @@ pub async fn transcode_single_asset_in_project(
 /// Run one ffmpeg transcode end-to-end with a live job card.
 async fn transcode_one(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     asset: &Path,
     proxy_path: &Path,
 ) -> Result<bool, String> {
@@ -522,7 +522,7 @@ async fn transcode_one(
 
 async fn transcode_one_reserved(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     asset: &Path,
     proxy_path: &Path,
 ) -> Result<(), String> {
@@ -579,7 +579,7 @@ async fn transcode_one_reserved(
 
     let pending_path = proxy_pending_path(proxy_path);
     let result =
-        awidat_render::transcode_proxy(asset, &pending_path, Some(cb), cancel.clone()).await;
+        montage_render::transcode_proxy(asset, &pending_path, Some(cb), cancel.clone()).await;
 
     unregister_job(state, &job_id).await;
     let emitter = done_rx
@@ -600,7 +600,7 @@ async fn transcode_one_reserved(
             )));
             Ok(())
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
+        Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             // Cancelled is reported as NonZero with stderr_tail =
             // "cancelled" (see transcode_proxy).
             let _ = stderr_tail;
@@ -619,7 +619,7 @@ async fn transcode_one_reserved(
     }
 }
 
-async fn reserve_proxy_transcode(state: &AwidatState, proxy_path: &Path) -> bool {
+async fn reserve_proxy_transcode(state: &MontageState, proxy_path: &Path) -> bool {
     state
         .active_proxy_transcodes
         .lock()
@@ -627,7 +627,7 @@ async fn reserve_proxy_transcode(state: &AwidatState, proxy_path: &Path) -> bool
         .insert(proxy_path.to_path_buf())
 }
 
-async fn release_proxy_transcode(state: &AwidatState, proxy_path: &Path) {
+async fn release_proxy_transcode(state: &MontageState, proxy_path: &Path) {
     state
         .active_proxy_transcodes
         .lock()
@@ -656,7 +656,7 @@ async fn proxy_is_ready(asset: &Path, proxy: &Path) -> bool {
     if !proxy_is_fresh(asset, proxy) {
         return false;
     }
-    awidat_render::probe_media(proxy)
+    montage_render::probe_media(proxy)
         .await
         .is_ok_and(|probe| probe.has_video && probe.duration_s.is_some())
 }
@@ -677,7 +677,7 @@ fn is_pending_proxy_file(path: &Path) -> bool {
 
 fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest, String> {
     let raw_dir = project_root.join("raw");
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let assets = if raw_dir.is_dir() {
         collect_media(&raw_dir).map_err(|e| format!("scan raw/: {e}"))?
     } else {
@@ -838,7 +838,7 @@ fn looks_like_media(path: &Path) -> bool {
     )
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -849,7 +849,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 
@@ -899,7 +899,7 @@ mod tests {
         std::fs::write(&stale_asset, b"stale").unwrap();
         std::fs::write(&missing_asset, b"missing").unwrap();
 
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let fresh_proxy = proxy_path_for(&proxies_dir, &fresh_asset);
         let stale_proxy = proxy_path_for(&proxies_dir, &stale_asset);
@@ -958,7 +958,7 @@ mod tests {
         std::fs::create_dir_all(&raw_dir).unwrap();
         let stale_asset = raw_dir.join("stale.mov");
         std::fs::write(&stale_asset, b"old-source").unwrap();
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let stale_proxy = proxy_path_for(&proxies_dir, &stale_asset);
         std::fs::write(&stale_proxy, b"old-proxy").unwrap();
@@ -1007,7 +1007,7 @@ mod tests {
         std::fs::create_dir_all(&raw_dir).unwrap();
         let asset = raw_dir.join("camera.mov");
         std::fs::write(&asset, b"source").unwrap();
-        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        let proxies_dir = dir.path().join(".montage").join("proxies");
         std::fs::create_dir_all(&proxies_dir).unwrap();
         let current_proxy = proxy_path_for(&proxies_dir, &asset);
         std::fs::write(&current_proxy, b"current").unwrap();
@@ -1029,9 +1029,9 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_transcode_reservation_is_per_output_path() {
-        let state = AwidatState::default();
-        let first = PathBuf::from("/tmp/project/.awidat/proxies/a.mp4");
-        let second = PathBuf::from("/tmp/project/.awidat/proxies/b.mp4");
+        let state = MontageState::default();
+        let first = PathBuf::from("/tmp/project/.montage/proxies/a.mp4");
+        let second = PathBuf::from("/tmp/project/.montage/proxies/b.mp4");
 
         assert!(reserve_proxy_transcode(&state, &first).await);
         assert!(

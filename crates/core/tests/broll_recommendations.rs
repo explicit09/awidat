@@ -1,8 +1,8 @@
 //! B-roll recommendation builder tests.
 #![allow(clippy::too_many_arguments)]
 
-use awidat_core::broll_recommendations::build_broll_recommendation_package;
-use awidat_proto::professional::{
+use montage_core::broll_recommendations::build_broll_recommendation_package;
+use montage_proto::professional::{
     BrollAssetStrategy, BrollRecommendationCategory, FusedMoment, SourceRange, UnderstandingAsset,
     UnderstandingEvidenceKind, UnderstandingEvidenceRef,
 };
@@ -25,7 +25,7 @@ fn builds_deterministic_scored_recommendations() {
             "explanation",
             "Show the dashboard workflow",
             "The app dashboard lets editors review recommendations before assembly.",
-            vec!["Awidat".into()],
+            vec!["Montage".into()],
             30.0,
             38.0,
             0.82,
@@ -47,7 +47,7 @@ fn builds_deterministic_scored_recommendations() {
             "explanation",
             "Show the dashboard workflow",
             "The app dashboard lets editors review recommendations before assembly.",
-            vec!["Awidat".into()],
+            vec!["Montage".into()],
             30.0,
             38.0,
             0.82,

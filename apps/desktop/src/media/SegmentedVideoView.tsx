@@ -19,7 +19,7 @@
 //   active'  ─── plays from sourceStart ──→ next boundary
 //   preroll' ─── load after-next ────────→ ready
 //
-// Same-asset back-to-back segments (the awidat common case) get
+// Same-asset back-to-back segments (the montage common case) get
 // minor benefit since the proxy is already cached; cross-asset
 // crossings get the full benefit (no flash).
 //
@@ -1033,53 +1033,53 @@ function transitionSideProgress(
 }
 
 function isDissolveTransition(kind: string): boolean {
-  return kind === "SMPTE_Dissolve" || kind === "awidat.cross_dissolve" || kind === "fade";
+  return kind === "SMPTE_Dissolve" || kind === "montage.cross_dissolve" || kind === "fade";
 }
 
 function isFadeThroughBlack(kind: string): boolean {
   return (
-    kind === "awidat.fade_black" ||
+    kind === "montage.fade_black" ||
     kind === "fadeblack" ||
-    kind === "awidat.fade_in" ||
-    kind === "awidat.fade_out"
+    kind === "montage.fade_in" ||
+    kind === "montage.fade_out"
   );
 }
 
 function isFlashWhite(kind: string): boolean {
-  return kind === "awidat.flash_white" || kind === "fadewhite";
+  return kind === "montage.flash_white" || kind === "fadewhite";
 }
 
 function isSlideLeft(kind: string): boolean {
   return (
-    kind === "awidat.slide_left" ||
-    kind === "awidat.smooth_push_left" ||
+    kind === "montage.slide_left" ||
+    kind === "montage.smooth_push_left" ||
     kind === "slideleft" ||
     kind === "smoothleft"
   );
 }
 
 function isSlideRight(kind: string): boolean {
-  return kind === "awidat.slide_right" || kind === "slideright" || kind === "smoothright";
+  return kind === "montage.slide_right" || kind === "slideright" || kind === "smoothright";
 }
 
 function isWipeLeft(kind: string): boolean {
-  return kind === "awidat.wipe_left" || kind === "wipeleft";
+  return kind === "montage.wipe_left" || kind === "wipeleft";
 }
 
 function isWipeRight(kind: string): boolean {
-  return kind === "awidat.wipe_right" || kind === "wiperight";
+  return kind === "montage.wipe_right" || kind === "wiperight";
 }
 
 function isZoomIn(kind: string): boolean {
-  return kind === "awidat.zoom_in" || kind === "zoomin";
+  return kind === "montage.zoom_in" || kind === "zoomin";
 }
 
 function isRadial(kind: string): boolean {
-  return kind === "awidat.radial" || kind === "radial";
+  return kind === "montage.radial" || kind === "radial";
 }
 
 function isPixelize(kind: string): boolean {
-  return kind === "awidat.pixelize" || kind === "pixelize";
+  return kind === "montage.pixelize" || kind === "pixelize";
 }
 
 function TimelineVideoOverlays({

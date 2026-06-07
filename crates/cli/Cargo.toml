@@ -1,30 +1,30 @@
 [package]
-name = "awidat-cli"
+name = "montage-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "awidat"
+name = "montage"
 path = "src/main.rs"
 
-# Awidat MCP server, spawned as a child process by codex (or any other
-# MCP client). See crates/core/src/awidat_mcp/mod.rs for the server
+# Montage MCP server, spawned as a child process by codex (or any other
+# MCP client). See crates/core/src/montage_mcp/mod.rs for the server
 # definition. Step 3 of the codex-harness migration ships this with
 # one stub tool; step 5 ports the ~100 video tools onto it.
 [[bin]]
-name = "awidat-mcp-server"
-path = "src/bin/awidat-mcp-server.rs"
+name = "montage-mcp-server"
+path = "src/bin/montage-mcp-server.rs"
 
 [dependencies]
-awidat-proto = { workspace = true }
-awidat-config = { workspace = true }
-awidat-core = { workspace = true }
-awidat-index = { workspace = true }
-awidat-mcp = { workspace = true }
-awidat-render = { workspace = true }
-awidat-secrets = { workspace = true }
+montage-proto = { workspace = true }
+montage-config = { workspace = true }
+montage-core = { workspace = true }
+montage-index = { workspace = true }
+montage-mcp = { workspace = true }
+montage-render = { workspace = true }
+montage-secrets = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "signal"] }
@@ -33,7 +33,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-# Needed by the awidat-mcp-server binary for ServiceExt and the stdio
+# Needed by the montage-mcp-server binary for ServiceExt and the stdio
 # transport entrypoint. Feature set mirrors crates/core's rmcp dep.
 rmcp = { workspace = true, features = ["server", "macros", "schemars", "base64", "transport-io"] }
 

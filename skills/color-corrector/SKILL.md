@@ -167,7 +167,7 @@ default cube size, recommended `strength` range, and tags. Call
 the `list_looks` tool (no arguments) to read it as structured
 JSON before reasoning about which look to plan — the catalog
 is the source of truth, the planner script validates against it,
-and the agent-facing `awidat.color_pipeline` effect accepts the
+and the agent-facing `montage.color_pipeline` effect accepts the
 same color-space ids.
 
 Camera Log encodings (ARRI LogC3/LogC4, Sony S-Log3, Panasonic
@@ -175,7 +175,7 @@ V-Log, Blackmagic Film Gen 5) come with bundled 1D shaper LUTs
 under `shapers/`. When a clip's `clip_input_space` is one of
 these and the look LUT is authored in `rec709_g24`, set
 `shaper_lut = "skills/color-corrector/shapers/<space>_to_rec709_g24.csp"`
-on the `awidat.color_pipeline` effect. The shaper converts the
+on the `montage.color_pipeline` effect. The shaper converts the
 log-encoded source into Rec.709 g2.4 *before* the look LUT runs,
 so the LUT sees the pixel values it was authored for. To
 regenerate the shapers (e.g. after updating a vendor EOTF
@@ -200,7 +200,7 @@ For each corrected clip, emit one anchored op:
 ```
 
 Only include fields you intend to set. Re-applying replaces the existing
-`awidat.color_correction` effect on that clip, so do not stack multiple
+`montage.color_correction` effect on that clip, so do not stack multiple
 correction ops to simulate one grade.
 
 ### 3. Apply LUTs through the graph
@@ -242,7 +242,7 @@ start_render(scope="timeline")
 poll_render
 ```
 
-Confirm the diff shows `awidat.color_correction` or `awidat.lut` effects
+Confirm the diff shows `montage.color_correction` or `montage.lut` effects
 on the intended clips. Render at least a timeline preview for user-facing
 finishing work. If render fails, fix the graph or report the exact
 filter/LUT blocker.
@@ -270,7 +270,7 @@ source of truth.
 For look-region plans, the minimum verification package is:
 
 1. Apply the generated EDL via `apply_edl`.
-2. Review `vedit_diff` and confirm expected `awidat.lut` effects and any
+2. Review `vedit_diff` and confirm expected `montage.lut` effects and any
    split boundaries.
 3. Render `scope="timeline"` or a relevant segment.
 4. Generate a contact sheet at each timeline `regions[].sample_times_s`.

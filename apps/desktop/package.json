@@ -1,11 +1,11 @@
 {
-  "name": "awidat-desktop",
+  "name": "montage-desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@10.12.3",
   "scripts": {
-    "mcp-server": "cargo build -p awidat-cli --bin awidat-mcp-server",
+    "mcp-server": "cargo build -p montage-cli --bin montage-mcp-server",
     "dev": "pnpm mcp-server && vite",
     "build": "pnpm mcp-server && tsc && vite build",
     "test:tokens": "node tests/tokens-presence.mjs",

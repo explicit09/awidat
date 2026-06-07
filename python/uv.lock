@@ -13,8 +13,8 @@ resolution-markers = [
 [manifest]
 members = [
     "audio-energy-mcp",
-    "awidat-mcp",
-    "awidat-python-workspace",
+    "montage-mcp",
+    "montage-python-workspace",
     "beats-mcp",
     "clip-mcp",
     "color-analysis-mcp",
@@ -191,14 +191,14 @@ name = "audio-energy-mcp"
 version = "0.1.0"
 source = { editable = "packages/audio-energy-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "pyloudnorm" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pyloudnorm", specifier = ">=0.1.1,<0.3" },
 ]
@@ -220,9 +220,9 @@ wheels = [
 ]
 
 [[package]]
-name = "awidat-mcp"
+name = "montage-mcp"
 version = "0.1.0"
-source = { editable = "packages/awidat-mcp" }
+source = { editable = "packages/montage-mcp" }
 dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
@@ -235,7 +235,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "awidat-python-workspace"
+name = "montage-python-workspace"
 version = "0.0.0"
 source = { virtual = "." }
 
@@ -244,12 +244,12 @@ name = "beats-mcp"
 version = "0.1.0"
 source = { editable = "packages/beats-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
 ]
 
 [[package]]
@@ -355,7 +355,7 @@ name = "clip-mcp"
 version = "0.1.0"
 source = { editable = "packages/clip-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "open-clip-torch" },
     { name = "pillow" },
@@ -364,7 +364,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "open-clip-torch", specifier = ">=2.24,<3" },
     { name = "pillow", specifier = ">=10.0" },
@@ -376,14 +376,14 @@ name = "color-analysis-mcp"
 version = "0.1.0"
 source = { editable = "packages/color-analysis-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.9" },
 ]
@@ -414,11 +414,11 @@ name = "composition-mcp"
 version = "0.1.0"
 source = { editable = "packages/composition-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "awidat-mcp", editable = "packages/awidat-mcp" }]
+requires-dist = [{ name = "montage-mcp", editable = "packages/montage-mcp" }]
 
 [[package]]
 name = "contourpy"
@@ -564,14 +564,14 @@ version = "0.1.0"
 source = { editable = "packages/editorial-moments-mcp" }
 dependencies = [
     { name = "anthropic" },
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40,<1" },
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "pydantic", specifier = ">=2,<3" },
 ]
 
@@ -589,7 +589,7 @@ name = "face-mcp"
 version = "0.1.0"
 source = { editable = "packages/face-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "face-recognition" },
     { name = "face-recognition-models" },
     { name = "numpy" },
@@ -600,7 +600,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "face-recognition", specifier = ">=1.3,<2" },
     { name = "face-recognition-models", git = "https://github.com/ageitgey/face_recognition_models" },
     { name = "numpy", specifier = ">=1.26" },
@@ -693,14 +693,14 @@ name = "frame-quality-mcp"
 version = "0.1.0"
 source = { editable = "packages/frame-quality-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.9" },
 ]
@@ -777,7 +777,7 @@ name = "gaze-mcp"
 version = "0.1.0"
 source = { editable = "packages/gaze-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "face-recognition" },
     { name = "face-recognition-models" },
     { name = "numpy" },
@@ -786,7 +786,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "face-recognition", specifier = ">=1.3,<2" },
     { name = "face-recognition-models", git = "https://github.com/ageitgey/face_recognition_models" },
     { name = "numpy", specifier = ">=1.26" },
@@ -2419,13 +2419,13 @@ name = "scenedetect-mcp"
 version = "0.1.0"
 source = { editable = "packages/scenedetect-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "scenedetect", extra = ["opencv"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "scenedetect", extras = ["opencv"], specifier = ">=0.6.7,<0.7" },
 ]
 
@@ -2518,14 +2518,14 @@ name = "shot-mcp"
 version = "0.1.0"
 source = { editable = "packages/shot-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.9" },
 ]
@@ -2678,7 +2678,7 @@ name = "topic-mcp"
 version = "0.1.0"
 source = { editable = "packages/topic-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "numpy" },
     { name = "sentence-transformers" },
 ]
@@ -2694,7 +2694,7 @@ ollama = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'claude'", specifier = ">=0.40,<1" },
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.5,<1" },
     { name = "sentence-transformers", specifier = ">=3,<4" },
@@ -2947,14 +2947,14 @@ name = "whisper-mcp"
 version = "0.1.0"
 source = { editable = "packages/whisper-mcp" }
 dependencies = [
-    { name = "awidat-mcp" },
+    { name = "montage-mcp" },
     { name = "torch" },
     { name = "whisperx" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "montage-mcp", editable = "packages/montage-mcp" },
     { name = "torch", specifier = ">=2.3,<3" },
     { name = "whisperx", specifier = ">=3.8.5,<4" },
 ]

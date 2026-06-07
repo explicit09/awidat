@@ -4,20 +4,20 @@
 //! directory so tests never dirty the source tree. To intentionally refresh
 //! `apps/desktop/src/protocol/generated/`, run:
 //!
-//! `AWIDAT_EXPORT_TS=1 cargo test -p awidat-desktop-protocol`.
+//! `MONTAGE_EXPORT_TS=1 cargo test -p montage-desktop-protocol`.
 
 use std::path::PathBuf;
 
 fn main() {
     // Workspace root is two levels up from this crate's manifest dir
-    // (crates/desktop-protocol/ -> awidat/).
+    // (crates/desktop-protocol/ -> montage/).
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let export_dir = if std::env::var_os("AWIDAT_EXPORT_TS").is_some() {
+    let export_dir = if std::env::var_os("MONTAGE_EXPORT_TS").is_some() {
         workspace_root.join("apps/desktop/src/protocol/generated")
     } else {
         PathBuf::from(std::env::var("OUT_DIR").unwrap_or_else(|_| "target".into()))
@@ -32,5 +32,5 @@ fn main() {
     // assumptions are baked in here).
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=AWIDAT_EXPORT_TS");
+    println!("cargo:rerun-if-env-changed=MONTAGE_EXPORT_TS");
 }

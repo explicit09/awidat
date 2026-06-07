@@ -686,7 +686,7 @@ mod tests {
             assert_eq!(request.access_token_ref, "token-secret-ref");
             assert_eq!(request.title, "Launch clip");
             assert_eq!(request.description, Some("Description".into()));
-            assert_eq!(request.tags, vec!["awidat"]);
+            assert_eq!(request.tags, vec!["montage"]);
             assert_eq!(request.privacy, "private");
             assert_eq!(request.scheduled_for, Some(2_000));
             if let Some(error) = self.error.clone() {
@@ -713,7 +713,7 @@ mod tests {
                 artifact_ref: "file:///tmp/render.mp4".into(),
                 title: "Launch clip".into(),
                 description: Some("Description".into()),
-                tags: vec!["awidat".into()],
+                tags: vec!["montage".into()],
                 thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
                 privacy: UploadPrivacy::Private,
                 tiktok_interactions: Default::default(),
@@ -824,7 +824,7 @@ mod tests {
             artifact_ref: "file:///tmp/render.mp4".into(),
             title: "Launch clip".into(),
             description: Some("Description".into()),
-            tags: vec!["awidat".into()],
+            tags: vec!["montage".into()],
             thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
             privacy: UploadPrivacy::Private,
             tiktok_interactions: Default::default(),

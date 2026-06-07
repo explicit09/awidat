@@ -6,15 +6,15 @@
 
 ## Problem
 
-Awidat's agent is powered by the vendored codex harness. Codex authenticates to OpenAI
+Montage's agent is powered by the vendored codex harness. Codex authenticates to OpenAI
 two ways: **Sign in with ChatGPT** (OAuth — spends the user's ChatGPT plan) or an **API key**
-(billed at standard API rates). Today awidat fully delegates this: the user must run
+(billed at standard API rates). Today montage fully delegates this: the user must run
 `codex login` in a terminal and codex reads `~/.codex/auth.json`. There is **no auth UI in
-awidat itself** — no way to see who you're signed in as, switch modes, or understand which
+montage itself** — no way to see who you're signed in as, switch modes, or understand which
 "wallet" gets charged.
 
 The product goal: most people already pay for ChatGPT and don't use their Codex allowance, so
-let them **sign in with their ChatGPT account inside awidat** and spend that existing
+let them **sign in with their ChatGPT account inside montage** and spend that existing
 subscription — while offering an API-key path for users who prefer/need it.
 
 ## Critical context: the ToS reality (must read)
@@ -39,7 +39,7 @@ Research finding that shapes the whole design:
 
 **Design consequences:**
 1. The API-key path is **first-class**, not a footnote — it is the only ToS-sanctioned mode.
-2. The OAuth client ID is **centralized + env-overridable** (`AWIDAT_OAUTH_CLIENT_ID`). Caveat:
+2. The OAuth client ID is **centralized + env-overridable** (`MONTAGE_OAUTH_CLIENT_ID`). Caveat:
    the override only changes the initial browser *authorize* — codex's vendored token *refresh*
    and *revoke* still use its built-in client, so a full pivot also needs codex-side changes.
    `oauth_client_id()` logs a warning when an override is active so the limitation isn't silent.
@@ -51,23 +51,23 @@ Research finding that shapes the whole design:
   fully-functional fallback. (User chose "Both, ChatGPT default".)
 - **Drive the vendored `codex-login` crate in-process** — do not reimplement OAuth, do not shell
   out to `codex login`. This is DRY (one OAuth/refresh/storage implementation, codex's) and
-  keeps awidat's stored creds byte-identical to what codex reads.
+  keeps montage's stored creds byte-identical to what codex reads.
 - **Write where codex reads:** same `CODEX_HOME` (`~/.codex`) and same credential store mode
-  codex uses, so a login performed in awidat is immediately visible to the running agent.
+  codex uses, so a login performed in montage is immediately visible to the running agent.
 
 ## Architecture
 
 Three layers, each with one responsibility (SOC/SRP):
 
 ```
-React AuthChooser modal  ── invoke() ──▶  Tauri auth commands  ──▶  awidat-auth crate  ──▶  codex-login
+React AuthChooser modal  ── invoke() ──▶  Tauri auth commands  ──▶  montage-auth crate  ──▶  codex-login
 (apps/desktop/src)                        (src-tauri/src/auth)      (crates/auth)            (vendor)
    which-wallet UI                          thin #[tauri::command]   pure-Rust wrapper        OAuth/apikey/logout
 ```
 
-### Layer 1 — `crates/auth` (new crate `awidat-auth`)
+### Layer 1 — `crates/auth` (new crate `montage-auth`)
 
-Pure-Rust, UI-agnostic, unit-testable. Single responsibility: **the awidat↔codex auth
+Pure-Rust, UI-agnostic, unit-testable. Single responsibility: **the montage↔codex auth
 boundary.** Depends only on `codex-login`, `codex-utils-home-dir`, and `codex-config` (for the
 store-mode enum, already re-exported by codex-login).
 
@@ -76,7 +76,7 @@ Public API (intended shape):
 ```rust
 /// Which OAuth client to use for ChatGPT sign-in. Centralized + env-overridable so the
 /// policy-risky reuse of codex's first-party client lives in exactly one place.
-pub fn oauth_client_id() -> String;              // env AWIDAT_OAUTH_CLIENT_ID else codex_login::CLIENT_ID
+pub fn oauth_client_id() -> String;              // env MONTAGE_OAUTH_CLIENT_ID else codex_login::CLIENT_ID
 
 pub struct AuthEnv { codex_home: PathBuf, store_mode: AuthCredentialsStoreMode }
 impl AuthEnv { pub fn resolve() -> io::Result<Self>; }   // find_codex_home + config.toml store mode (default File)
@@ -143,7 +143,7 @@ A small DTO module mirrors the crate types for serde across the Tauri boundary.
 
 ## Testing
 
-- Crate unit tests (cargo, scoped `-p awidat-auth`): validation, status classification against
+- Crate unit tests (cargo, scoped `-p montage-auth`): validation, status classification against
   temp `CODEX_HOME`, wallet labels, client-id override.
 - Tauri command layer: kept logic-free so the crate tests carry correctness.
 - Frontend: manual verification (chooser renders, both flows reachable). No e2e in v1.

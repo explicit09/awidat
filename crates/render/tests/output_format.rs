@@ -1,24 +1,24 @@
 //! Integration tests for `set_output_format`: the timeline's
 //! `output_format` aspect ratio (written into
-//! `Timeline.metadata.awidat.extra["output_format"]` by the
+//! `Timeline.metadata.montage.extra["output_format"]` by the
 //! `set_output_format` EDL op) must drive the render conform canvas, so
 //! a 9:16 project renders vertical instead of being letterboxed into
 //! the default 16:9 1920x1080 frame.
 
 #![allow(clippy::unwrap_used)]
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
 /// Write a two-cut project whose timeline carries an `output_format`
-/// aspect ratio in its awidat metadata `extra` map. Two segments force
+/// aspect ratio in its montage metadata `extra` map. Two segments force
 /// a `concat` filter graph (past the single-segment stream-copy fast
 /// path), which is where the conform canvas is chosen — mirroring a
 /// scene-aware short-form EDL that cuts the source into scenes.
@@ -50,7 +50,7 @@ fn write_project_with_output_format(dir: &Path, aspect_ratio: &str) {
     stack.children.push(StackChild::Track(track));
     tl.tracks = stack;
 
-    let mut meta = AwidatTimelineMetadata::default();
+    let mut meta = MontageTimelineMetadata::default();
     meta.extra.insert(
         "output_format".to_string(),
         serde_json::json!({
@@ -59,7 +59,7 @@ fn write_project_with_output_format(dir: &Path, aspect_ratio: &str) {
             "safe_area": "mobile",
         }),
     );
-    tl.metadata.awidat = Some(meta);
+    tl.metadata.montage = Some(meta);
 
     fs::write(
         dir.join(files::OTIO),

@@ -1,7 +1,7 @@
 //! Typed OTIO 1.x superset.
 //!
 //! Models the subset of OpenTimelineIO 1.x types we need for v1, plus the
-//! `metadata.awidat` namespace. See `OTIO_NOTES.md` for the rationale on
+//! `metadata.montage` namespace. See `OTIO_NOTES.md` for the rationale on
 //! which types are in scope and which are deliberately skipped.
 //!
 //! # Schema versioning
@@ -16,7 +16,7 @@
 //! - **Unknown name** → hard fail with [`crate::ProtoError::UnknownOtioSchema`].
 //!
 //! Forward compat is forgiving on purpose. Hand-edited files from a future
-//! Awidat or a future OTIO adapter should not crash the engine; they should
+//! Montage or a future OTIO adapter should not crash the engine; they should
 //! load with a warning the user can act on.
 
 mod nodes;

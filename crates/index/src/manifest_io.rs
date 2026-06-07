@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use awidat_proto::index::Manifest;
+use montage_proto::index::Manifest;
 
 use crate::IndexError;
 

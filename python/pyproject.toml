@@ -1,26 +1,26 @@
-# Python workspace root for awidat indexers.
+# Python workspace root for montage indexers.
 #
 # This is a `uv` workspace. Each indexer is its own package under
-# `packages/<name>-mcp/`; `awidat-mcp` is the shared library every indexer
+# `packages/<name>-mcp/`; `montage-mcp` is the shared library every indexer
 # imports. Single lockfile, editable cross-package deps.
 #
 # To add a new indexer (e.g. for a v1.5 signal):
 #   1. mkdir packages/myname-mcp && drop a pyproject.toml + src/.
 #   2. List it under [tool.uv.workspace] members.
-#   3. Add a `[[mcp.servers]]` entry to the awidat config pointing at
+#   3. Add a `[[mcp.servers]]` entry to the montage config pointing at
 #      `uv --directory python/packages/myname-mcp run myname-mcp`.
 # No engine code changes — this is the data-not-code rule from
 # `INDEX_SCHEMA.md`.
 
 [project]
-name = "awidat-python-workspace"
+name = "montage-python-workspace"
 version = "0.0.0"
 description = "Workspace root — not installed."
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
 members = [
-    "packages/awidat-mcp",
+    "packages/montage-mcp",
     "packages/whisper-mcp",
     "packages/scenedetect-mcp",
     "packages/audio-energy-mcp",
@@ -39,4 +39,4 @@ members = [
 [tool.uv.sources]
 # Members reference each other by name; uv resolves them as workspace
 # editable installs automatically. No path = needed.
-awidat-mcp = { workspace = true }
+montage-mcp = { workspace = true }

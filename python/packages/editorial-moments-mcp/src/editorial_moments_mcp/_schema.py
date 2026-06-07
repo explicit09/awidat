@@ -1,6 +1,6 @@
 """Typed schema for editorial moments.
 
-The headline data structure of the awidat indexer corpus. Every other
+The headline data structure of the montage indexer corpus. Every other
 indexer emits *raw signals* (transcript, energy, scenes, topics);
 this one emits *editorial decisions* — the candidate moves the agent
 should consider when editing.

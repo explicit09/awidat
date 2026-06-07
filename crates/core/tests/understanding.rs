@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use awidat_core::clip_candidates::build_clip_candidate_package;
-use awidat_core::understanding::build_understanding_for_asset;
-use awidat_index::sidecar_path;
-use awidat_proto::index::AssetId;
-use awidat_proto::professional::UnderstandingEvidenceKind;
+use montage_core::clip_candidates::build_clip_candidate_package;
+use montage_core::understanding::build_understanding_for_asset;
+use montage_index::sidecar_path;
+use montage_proto::index::AssetId;
+use montage_proto::professional::UnderstandingEvidenceKind;
 
 #[test]
 fn understanding_fuses_scene_topic_audio_transcript_and_moment() {

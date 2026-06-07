@@ -1,9 +1,9 @@
 //! `podcast_visual_polish` tool — forced visual/multicam planning pass.
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
-use awidat_proto::otio::{MediaReference, StackChild, Track, TrackChild, TrackKind};
-use awidat_proto::project::Project;
+use montage_index::walk_indexer;
+use montage_proto::otio::{MediaReference, StackChild, Track, TrackChild, TrackKind};
+use montage_proto::project::Project;
 
 use crate::FunctionCallError;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
@@ -50,14 +50,14 @@ impl ToolHandler for PodcastVisualPolishTool {
         let has_broadcast_overlay = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|meta| meta.broadcast_overlay.as_ref())
             .is_some();
         let broll_recommendation_count = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|meta| meta.broll_recommendations.as_ref())
             .map(|package| {
@@ -251,7 +251,7 @@ fn collect_broll_overlay_windows(track: &Track, health: &mut TimelineVisualHealt
     }
 }
 
-fn is_broll_clip(clip: &awidat_proto::otio::Clip) -> bool {
+fn is_broll_clip(clip: &montage_proto::otio::Clip) -> bool {
     let name = clip.name.to_ascii_lowercase();
     name.contains("broll")
         || name.contains("b-roll")
@@ -277,7 +277,7 @@ fn has_adjacent_transition(track: &Track, index: usize) -> bool {
             .is_some_and(|child| matches!(child, TrackChild::Transition(_)))
 }
 
-fn clip_asset_id(clip: &awidat_proto::otio::Clip) -> Option<&str> {
+fn clip_asset_id(clip: &montage_proto::otio::Clip) -> Option<&str> {
     match &clip.media_reference {
         MediaReference::External(reference) => Some(reference.target_url.as_str()),
         MediaReference::Missing(_) => None,
@@ -322,7 +322,7 @@ fn round3(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, Gap, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
@@ -334,10 +334,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

@@ -5,8 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -740,7 +740,7 @@ before calling `start_generated_media_job`.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };

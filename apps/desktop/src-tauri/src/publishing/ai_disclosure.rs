@@ -23,10 +23,10 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use awidat_core::generated_media::registry::{
+use montage_core::generated_media::registry::{
     GeneratedMediaRecord, REGISTRY_RELATIVE_PATH, Registry,
 };
-use awidat_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
+use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
 use serde::{Deserialize, Serialize};
 
 /// One generated-media credit pulled out of the cut.
@@ -105,7 +105,7 @@ impl AiDisclosure {
 ///    project-relative path. Generated assets always live under
 ///    `raw/generated/`, so a fast prefix check rejects irrelevant
 ///    clips before we touch the registry.
-/// 2. The registry at `<project>/.awidat/generated-media/registry.json`
+/// 2. The registry at `<project>/.montage/generated-media/registry.json`
 ///    — each record carries the provider / model / prompt the
 ///    disclosure surface needs.
 ///
@@ -195,7 +195,7 @@ fn visit_track_child(child: &TrackChild, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn collect_clip(clip: &awidat_proto::otio::Clip, out: &mut Vec<PathBuf>) {
+fn collect_clip(clip: &montage_proto::otio::Clip, out: &mut Vec<PathBuf>) {
     if !clip.active {
         return;
     }
@@ -337,7 +337,7 @@ pub fn disclosure_for_timeline(timeline: &Timeline, project_root: &Path) -> AiDi
 
 /// Relative path under the project root where the registry lives.
 /// Re-exported so external callers can compose the absolute path
-/// without depending on `awidat-core` directly.
+/// without depending on `montage-core` directly.
 #[allow(dead_code)]
 pub fn registry_relative_path() -> &'static str {
     REGISTRY_RELATIVE_PATH
@@ -346,7 +346,7 @@ pub fn registry_relative_path() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, Stack, StackChild, Timeline, TimelineMetadata,
         Track, TrackChild, TrackKind,
     };

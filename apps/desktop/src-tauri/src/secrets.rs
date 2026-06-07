@@ -3,16 +3,16 @@
 //!
 //! # Why this exists
 //!
-//! `awidat-secrets` checks env first, then the OS keychain. The
+//! `montage-secrets` checks env first, then the OS keychain. The
 //! desktop's `Session::new` flow uses that, so the agent loop works
 //! whether the key lives in env or keychain. But MCP indexer
-//! subprocesses spawned by `awidat-index::run` only see the parent
+//! subprocesses spawned by `montage-index::run` only see the parent
 //! process's env — they don't get the keychain. So when a user
 //! stored their `ANTHROPIC_API_KEY` in the macOS keychain, the
 //! `editorial-moments` indexer (which calls Claude Haiku) fails
 //! with "ANTHROPIC_API_KEY not in env."
 //!
-//! The fix: at app startup, ask `awidat-secrets` for each key we
+//! The fix: at app startup, ask `montage-secrets` for each key we
 //! care about; if it came from keychain, write it to the parent
 //! process's env via `std::env::set_var` so subprocesses inherit.
 //! ONE keychain read per process lifetime, no matter how many
@@ -32,14 +32,14 @@
 //! on HF_TOKEN) silently skipped — and the symptom was a "Speaker
 //! diarization: Missing" row in the UI with no clue why.
 //!
-//! Opt out via `AWIDAT_PREFETCH_KEYCHAIN=0` if the prompt-per-launch
+//! Opt out via `MONTAGE_PREFETCH_KEYCHAIN=0` if the prompt-per-launch
 //! is genuinely worse than losing the secrets. Setting the key in
 //! shell env (e.g. `export HF_TOKEN=...`) also avoids both the
 //! prompt and the keychain hit entirely.
 
 use std::sync::OnceLock;
 
-use awidat_secrets::{accounts, env_vars};
+use montage_secrets::{accounts, env_vars};
 use tracing::{info, warn};
 
 /// Set of well-known keys we resolve at startup.
@@ -72,7 +72,7 @@ pub fn resolve_at_startup() {
         return;
     }
     for (env_name, account) in RESOLVE_AT_STARTUP {
-        match awidat_secrets::get(env_name, account) {
+        match montage_secrets::get(env_name, account) {
             Ok(Some(value)) if std::env::var(env_name).is_err() => {
                 // Came from keychain (env was unset before the get
                 // call), or we'd have hit the env branch). Export to
@@ -108,7 +108,7 @@ fn prefetch_enabled() -> bool {
     // Opt out via env var. Empty string is treated as "not set" so
     // shell defaults that pass through empty values don't disable.
     matches!(
-        std::env::var("AWIDAT_PREFETCH_KEYCHAIN")
+        std::env::var("MONTAGE_PREFETCH_KEYCHAIN")
             .ok()
             .as_deref()
             .filter(|s| !s.is_empty()),

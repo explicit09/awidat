@@ -9,7 +9,7 @@ import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
 import { ConversationPanel } from "./StageConversation";
 import type { MediaSuggestion } from "./CommandRail";
-import mark from "../brand/awidat-mark.svg";
+import mark from "../brand/montage-mark.svg";
 
 /**
  * StageShell — the 2026 "Stage" application shell (replaces the
@@ -160,7 +160,7 @@ export function StageShell(props: StageShellProps) {
 
   // Stable editor panes: source/navigation tools on the left, chat/output
   // tools on the right.
-  const devTool = (import.meta.env?.VITE_AWIDAT_TOOL as ToolKey | undefined) ?? null;
+  const devTool = (import.meta.env?.VITE_MONTAGE_TOOL as ToolKey | undefined) ?? null;
   const [leftPane, setLeftPane] = useState<LeftPaneKey>(
     devTool === "media" || devTool === "index" ? devTool : "transcript",
   );

@@ -942,7 +942,7 @@ fn reframe_edl_operations(
     let mut ops = vec![format!(
         "*** Set Effect\n\
 @@ anchor: transcript_snippet=\"{anchor}\"\n\
-+ effect: awidat.reframe\n\
++ effect: montage.reframe\n\
 + params_json: {params}\n\
 + rationale: speaker-aware 9:16 review reframe\n",
         anchor = edl_string(&hook_from_text(&moment.text)),
@@ -957,7 +957,7 @@ fn reframe_edl_operations(
         ops.push(format!(
             "*** Set Effect\n\
 @@ anchor: transcript_snippet=\"{anchor}\"\n\
-+ effect: awidat.reframe\n\
++ effect: montage.reframe\n\
 + params_json: {viral_params}\n\
 + rationale: viral_punch_in cadence every 1-3 seconds\n",
             anchor = edl_string(&hook_from_text(&moment.text)),

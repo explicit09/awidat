@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Awidat is a Rust workspace with a Tauri desktop app, Python `uv` MCP indexers,
+Montage is a Rust workspace with a Tauri desktop app, Python `uv` MCP indexers,
 and bundled editorial skills. Read local docs before changing behavior,
 especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 
@@ -16,9 +16,10 @@ especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 
 ## Commands
 
-- Workspace check: `make check`
-- Rust checks: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- CLI dev: `cargo run -p awidat-cli -- <command>`
+- Workspace compile check: `cargo check --workspace --all-targets`
+- Rust checks: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, targeted `cargo test -p <crate>` for touched crates.
+- Historical full gate: `make check` still runs `cargo test --workspace`, including vendored Codex tests; use it when validating the vendored workspace, not as the default narrow check.
+- CLI dev: `cargo run -p montage-cli --bin montage -- <command>`
 - Desktop dev: `make desktop`
 - Python sync: `cd python && uv sync --all-packages`
 
@@ -27,7 +28,7 @@ especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 - Follow workspace lints in `Cargo.toml`; avoid `unwrap` and `expect` unless the local crate or test explicitly allows them.
 - Keep changes within existing crate boundaries and match nearby patterns.
 - Do not hand-edit `apps/desktop/src/protocol/generated/` unless the generation path is unavailable and the change is explicitly scoped.
-- Python indexers live under `python/packages/*-mcp/`; use shared `awidat-mcp` patterns and avoid broad smoke tests that trigger model downloads unless required.
+- Python indexers live under `python/packages/*-mcp/`; use shared `montage-mcp` patterns and avoid broad smoke tests that trigger model downloads unless required.
 - Bundled skills live under `skills/<name>/SKILL.md`; prefer scripts for repeatable skill logic.
 
 ## Review Artifacts

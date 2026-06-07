@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use awidat_core::editorial_skills::{EditorialSkillRegistry, MatchEditorialSkillsRequest};
+use montage_core::editorial_skills::{EditorialSkillRegistry, MatchEditorialSkillsRequest};
 
 #[test]
 fn registry_separates_skill_definitions_from_ranked_instances() {

@@ -6,7 +6,7 @@
 //! the user.
 //!
 //! State of the world per proposal:
-//! - **Pending**: lives in `AwidatState::pending_proposals`, keyed
+//! - **Pending**: lives in `MontageState::pending_proposals`, keyed
 //!   by call_id. Frontend has the corresponding `Item::ProposedEdit`
 //!   ghost rendered on the canvas.
 //! - **Adjusted**: user dragged a handle. `adjust_proposal` mutates
@@ -29,22 +29,22 @@
 
 use std::path::Path;
 
-use awidat_core::awidat_mcp::tools::plan_visual_support_proposals::{
+use montage_core::edl::{ApplyError, EdlEnvelope, EdlOp, apply, parse};
+use montage_core::montage_mcp::tools::plan_visual_support_proposals::{
     PlanVisualSupportProposalArgs, merge_visual_support_defaults, plan_visual_support_proposals,
 };
-use awidat_core::edl::{ApplyError, EdlEnvelope, EdlOp, apply, parse};
-use awidat_core::tool::ApprovalDecision;
-use awidat_desktop_protocol::{
+use montage_core::tool::ApprovalDecision;
+use montage_desktop_protocol::{
     AdjustField, AppliedDiff, ConfidenceTier, EditAdjustment, Id, Item, ItemLifecycle,
     ProposalEvidence, ProposalEvidenceKind, ProposalSource, RiskLevel, Side, TimelineSnapshot,
 };
-use awidat_proto::otio::Timeline;
-use awidat_proto::professional::{EvidenceTrace, ReviewStatus};
-use awidat_proto::project::Project;
+use montage_proto::otio::Timeline;
+use montage_proto::professional::{EvidenceTrace, ReviewStatus};
+use montage_proto::project::Project;
 use tauri::{AppHandle, State};
 
 use crate::events::emit_item;
-use crate::state::{AwidatState, PendingProposal};
+use crate::state::{MontageState, PendingProposal};
 
 /// Build a fresh proposal from raw EDL text + the project's current
 /// timeline. Runs `apply()` against a clone (the original is
@@ -68,7 +68,7 @@ use crate::state::{AwidatState, PendingProposal};
 #[allow(clippy::too_many_arguments)]
 pub async fn build_proposal(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     id: String,
     edl_text: String,
     project_root: &Path,
@@ -102,7 +102,7 @@ pub async fn build_proposal(
     let original_for_apply = original_timeline.clone();
     let (proposed_timeline, applied) =
         match tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
-            let ctx = awidat_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
+            let ctx = montage_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
             let (proposed, outcome) = apply(&original_for_apply, &envelope_for_apply, &ctx)?;
             Ok((proposed, outcome.applied))
         })
@@ -212,7 +212,7 @@ fn allow_agent_to_receive_apply_error(
 #[tauri::command]
 pub async fn accept_proposal(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     call_id: String,
 ) -> Result<(), String> {
     let proposal = state
@@ -241,10 +241,10 @@ pub async fn accept_proposal(
         // Resolve the seat-holder identity once, at the handler
         // entry point, so the spawn_blocking closure carries an
         // owned `CommitAuthor`. Without this the auto-commit hook
-        // would stamp every desktop apply_edl as "awidat agent" even
+        // would stamp every desktop apply_edl as "montage agent" even
         // though the user is the one driving the keyboard.
         let seat_author = crate::commands::vedit::desktop_commit_author();
-        let action_metadata = awidat_core::vc::ActionMetadata {
+        let action_metadata = montage_core::vc::ActionMetadata {
             source: Some("agent".into()),
             operations: proposal
                 .applied
@@ -265,9 +265,9 @@ pub async fn accept_proposal(
             // are logged but never unwind the disk write. The `_as`
             // variant stamps the seat-holder on the commit; passing
             // `None` for the author falls back to the env + default chain.
-            match awidat_core::vc::open_or_init(&project_root) {
+            match montage_core::vc::open_or_init(&project_root) {
                 Ok(repo) => {
-                    if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+                    if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
                         &repo,
                         &applied_descriptions,
                         None,
@@ -366,7 +366,7 @@ pub async fn accept_proposal(
 #[tauri::command]
 pub async fn reject_proposal(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     call_id: String,
 ) -> Result<(), String> {
     let proposal = state
@@ -417,7 +417,7 @@ pub async fn reject_proposal(
 #[tauri::command]
 pub async fn adjust_proposal(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     call_id: String,
     adjustments: Vec<EditAdjustment>,
 ) -> Result<(), String> {
@@ -437,7 +437,7 @@ pub async fn adjust_proposal(
     let project_root_for_ctx = proposal.project_root.clone();
     let (proposed_timeline, applied) =
         tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
-            let ctx = awidat_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
+            let ctx = montage_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
             let (proposed, outcome) = apply(&original_for_apply, &envelope_for_apply, &ctx)?;
             Ok((proposed, outcome.applied))
         })
@@ -516,7 +516,7 @@ pub async fn adjust_proposal(
 #[tauri::command]
 pub async fn propose_user_edit(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     edl_text: String,
 ) -> Result<String, String> {
     let project_root = state
@@ -678,7 +678,7 @@ fn visual_support_proposal_edls(
 #[tauri::command]
 pub async fn propose_visual_support(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     payload: VisualSupportProposalPayload,
 ) -> Result<String, String> {
     let project_root = state
@@ -740,7 +740,7 @@ pub async fn propose_visual_support(
 /// item index by comparing track lengths.
 fn build_diff_hints(
     envelope: &EdlEnvelope,
-    applied: &[awidat_core::edl::AppliedOp],
+    applied: &[montage_core::edl::AppliedOp],
     original: &Timeline,
     proposed: &Timeline,
 ) -> Vec<AppliedDiff> {
@@ -863,10 +863,10 @@ fn build_diff_hints(
                 if let Some(loc) = locator {
                     let (orig_start, orig_end) = clip_source_range(original, loc);
                     let (side, delta_s) = match edge {
-                        awidat_core::edl::op::RippleTrimEdge::Start => {
+                        montage_core::edl::op::RippleTrimEdge::Start => {
                             (Side::Left, value_s - orig_start)
                         }
-                        awidat_core::edl::op::RippleTrimEdge::End => {
+                        montage_core::edl::op::RippleTrimEdge::End => {
                             (Side::Right, orig_end - value_s)
                         }
                     };
@@ -940,8 +940,8 @@ fn build_diff_hints(
 /// Read a clip's source_range bounds at the given locator. Returns
 /// (0.0, 0.0) for non-clip locators (transitions/gaps shouldn't be
 /// the target of trim ops; defensive).
-fn clip_source_range(timeline: &Timeline, loc: awidat_core::edl::ClipLocator) -> (f64, f64) {
-    use awidat_proto::otio::{StackChild, TrackChild};
+fn clip_source_range(timeline: &Timeline, loc: montage_core::edl::ClipLocator) -> (f64, f64) {
+    use montage_proto::otio::{StackChild, TrackChild};
     let Some(StackChild::Track(track)) = timeline.tracks.children.get(loc.track_index) else {
         return (0.0, 0.0);
     };
@@ -967,7 +967,7 @@ fn find_inserted_position(
     at_position: Option<usize>,
     name: Option<&str>,
 ) -> Option<(usize, usize)> {
-    use awidat_proto::otio::{StackChild, TrackChild};
+    use montage_proto::otio::{StackChild, TrackChild};
     let original_len = original
         .tracks
         .children
@@ -1000,7 +1000,7 @@ fn find_inserted_position(
 }
 
 fn find_inserted_clip_by_prefix(timeline: &Timeline, name_prefix: &str) -> Option<(usize, usize)> {
-    use awidat_proto::otio::{StackChild, TrackChild};
+    use montage_proto::otio::{StackChild, TrackChild};
     for (track_index, child) in timeline.tracks.children.iter().enumerate() {
         let StackChild::Track(track) = child else {
             continue;
@@ -1017,9 +1017,9 @@ fn find_inserted_clip_by_prefix(timeline: &Timeline, name_prefix: &str) -> Optio
 fn find_moved_clip_position(
     original: &Timeline,
     proposed: &Timeline,
-    loc: awidat_core::edl::ClipLocator,
+    loc: montage_core::edl::ClipLocator,
 ) -> Option<(usize, usize)> {
-    use awidat_proto::otio::{StackChild, TrackChild};
+    use montage_proto::otio::{StackChild, TrackChild};
     let StackChild::Track(original_track) = original.tracks.children.get(loc.track_index)? else {
         return None;
     };
@@ -1043,9 +1043,9 @@ fn find_moved_clip_position(
     None
 }
 
-fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
+fn clip_uuid_or_name(clip: &montage_proto::otio::Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|m| m.extra.get("clip_uuid"))
         .and_then(|v| v.as_str())
@@ -1282,12 +1282,12 @@ fn summarize_envelope(envelope: &EdlEnvelope) -> String {
 mod tests {
     use super::*;
 
-    use awidat_core::edl::{Anchor, AppliedOp, AppliedOpMetadata, ClipLocator, EdlOp};
-    use awidat_proto::otio::{
+    use montage_core::edl::{Anchor, AppliedOp, AppliedOpMetadata, ClipLocator, EdlOp};
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         CapabilityArea, EvidenceTrace, ProposalPackage, ReviewStatus,
     };
 
@@ -1435,10 +1435,10 @@ mod tests {
     #[test]
     fn visual_support_selection_applies_saved_project_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".awidat")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".montage")).unwrap();
         std::fs::write(
             dir.path()
-                .join(".awidat")
+                .join(".montage")
                 .join("visual_support_defaults.json"),
             r#"{"reference_assets":["references/brand-style.png"]}"#,
         )
@@ -1630,7 +1630,7 @@ mod tests {
                 anchor: Anchor::ClipUuid { uuid: "u0".into() },
                 asset: "raw/broll.mp4".into(),
                 duration_s: 2.0,
-                position: awidat_core::edl::BRollPosition::Overlay,
+                position: montage_core::edl::BRollPosition::Overlay,
             }],
         };
         let applied = vec![applied_at(0, 0)];
@@ -1664,7 +1664,7 @@ mod tests {
                 asset: "raw/pip.mp4".into(),
                 duration_s: 2.0,
                 source_start_s: 0.0,
-                corner: awidat_core::edl::PiPCorner::BottomRight,
+                corner: montage_core::edl::PiPCorner::BottomRight,
                 scale: 0.28,
                 margin_pct: 0.035,
             }],
@@ -1733,7 +1733,7 @@ mod tests {
             RationalTime::new(duration * 24.0, 24.0),
         ));
         clip.metadata
-            .awidat
+            .montage
             .get_or_insert_with(Default::default)
             .extra
             .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));

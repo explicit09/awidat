@@ -1,10 +1,10 @@
 [project]
 name = "beats-mcp"
 version = "0.1.0"
-description = "Awidat musical beats indexer: tempo and beat-time detection for beat-sync editing."
+description = "Montage musical beats indexer: tempo and beat-time detection for beat-sync editing."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
 ]
 
 [project.scripts]

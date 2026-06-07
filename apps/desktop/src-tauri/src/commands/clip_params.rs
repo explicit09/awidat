@@ -11,16 +11,16 @@
 //!
 //! # Skipped commands (no existing EDL op)
 //! - `set_clip_crop` — no `SetCrop` EDL op exists; would require adding
-//!   a new core op. Deferred until a `SetEffect("awidat.crop", ...)` op is
+//!   a new core op. Deferred until a `SetEffect("montage.crop", ...)` op is
 //!   wired through the apply layer.
 //! - `set_clip_transform` — no `SetTransform` EDL op exists. Deferred.
 
-use awidat_core::edl::op::{Anchor, InsertTrackKind};
-use awidat_core::edl::{AnchorContext, EdlEnvelope, EdlOp, apply};
-use awidat_proto::project::Project;
+use montage_core::edl::op::{Anchor, InsertTrackKind};
+use montage_core::edl::{AnchorContext, EdlEnvelope, EdlOp, apply};
+use montage_proto::project::Project;
 use tauri::{AppHandle, State};
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Apply a single-op EDL envelope to the project on disk, auto-commit
 /// via vedit, and emit `timeline_changed`. This is the shared inner
@@ -32,7 +32,7 @@ use crate::state::AwidatState;
 /// `accept_proposal`.
 async fn apply_single_op(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     op: EdlOp,
     description: &str,
 ) -> Result<(), String> {
@@ -73,13 +73,13 @@ async fn apply_single_op(
         } else {
             descriptions
         };
-        let action_metadata = awidat_core::vc::ActionMetadata {
+        let action_metadata = montage_core::vc::ActionMetadata {
             source: Some("user".into()),
             operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
         };
-        match awidat_core::vc::open_or_init(&project_root_buf) {
+        match montage_core::vc::open_or_init(&project_root_buf) {
             Ok(repo) => {
-                if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+                if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
                     &repo,
                     &descriptions,
                     None,
@@ -118,7 +118,7 @@ async fn apply_single_op(
 #[tauri::command]
 pub async fn set_clip_volume(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     clip_uuid: String,
     volume: f64,
 ) -> Result<(), String> {
@@ -159,7 +159,7 @@ pub async fn set_clip_volume(
 #[tauri::command]
 pub async fn set_clip_speed(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     clip_uuid: String,
     speed: f64,
 ) -> Result<(), String> {
@@ -200,7 +200,7 @@ pub async fn set_clip_speed(
 #[tauri::command]
 pub async fn set_clip_fade(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     clip_uuid: String,
     fade_in_s: Option<f64>,
     fade_out_s: Option<f64>,
@@ -248,7 +248,7 @@ pub async fn set_clip_fade(
 #[tauri::command]
 pub async fn trim_timeline_tail(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
 ) -> Result<(), String> {
     let project_root = state
         .project_root
@@ -267,7 +267,7 @@ pub async fn trim_timeline_tail(
             .children
             .iter()
             .filter_map(|child| match child {
-                awidat_proto::otio::StackChild::Track(t) => Some(t.name.clone()),
+                montage_proto::otio::StackChild::Track(t) => Some(t.name.clone()),
                 _ => None,
             })
             .collect();
@@ -294,12 +294,12 @@ pub async fn trim_timeline_tail(
             .map(|a| a.description.clone())
             .collect();
         if !descriptions.is_empty() {
-            let action_metadata = awidat_core::vc::ActionMetadata {
+            let action_metadata = montage_core::vc::ActionMetadata {
                 source: Some("user".into()),
                 operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
             };
-            if let Ok(repo) = awidat_core::vc::open_or_init(&project_root_buf) {
-                if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+            if let Ok(repo) = montage_core::vc::open_or_init(&project_root_buf) {
+                if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
                     &repo,
                     &descriptions,
                     None,
@@ -325,7 +325,7 @@ pub async fn trim_timeline_tail(
 #[tauri::command]
 pub async fn insert_timeline_track(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     name: String,
     kind: String,
 ) -> Result<(), String> {
@@ -366,11 +366,11 @@ pub async fn insert_timeline_track(
 /// mutated timeline. Exposed for unit tests.
 #[cfg(test)]
 pub(crate) fn apply_set_volume_inner(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     clip_uuid: &str,
     volume: f64,
     project_root: &std::path::Path,
-) -> Result<awidat_proto::otio::Timeline, String> {
+) -> Result<montage_proto::otio::Timeline, String> {
     let envelope = EdlEnvelope {
         ops: vec![EdlOp::SetVolume {
             anchor: Anchor::ClipUuid {
@@ -388,11 +388,11 @@ pub(crate) fn apply_set_volume_inner(
 /// mutated timeline. Exposed for unit tests.
 #[cfg(test)]
 pub(crate) fn apply_set_speed_inner(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     clip_uuid: &str,
     speed: f64,
     project_root: &std::path::Path,
-) -> Result<awidat_proto::otio::Timeline, String> {
+) -> Result<montage_proto::otio::Timeline, String> {
     let envelope = EdlEnvelope {
         ops: vec![EdlOp::SetSpeed {
             anchor: Anchor::ClipUuid {
@@ -410,12 +410,12 @@ pub(crate) fn apply_set_speed_inner(
 /// the mutated timeline. Exposed for unit tests.
 #[cfg(test)]
 pub(crate) fn apply_set_fade_inner(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     clip_uuid: &str,
     fade_in_s: Option<f64>,
     fade_out_s: Option<f64>,
     project_root: &std::path::Path,
-) -> Result<awidat_proto::otio::Timeline, String> {
+) -> Result<montage_proto::otio::Timeline, String> {
     let envelope = EdlEnvelope {
         ops: vec![EdlOp::SetAudioFade {
             anchor: Anchor::ClipUuid {
@@ -439,7 +439,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
         Track, TrackChild, TrackKind,
     };
@@ -457,7 +457,7 @@ mod tests {
         ));
         // Stamp the clip UUID on the metadata so Anchor::ClipUuid resolves.
         clip.metadata
-            .awidat
+            .montage
             .get_or_insert_with(Default::default)
             .extra
             .insert(
@@ -469,7 +469,7 @@ mod tests {
         timeline
     }
 
-    /// Extract the `awidat.volume` effect value from the first clip on
+    /// Extract the `montage.volume` effect value from the first clip on
     /// track 0, or return `None` if no such effect is present.
     fn clip_volume(timeline: &Timeline) -> Option<f64> {
         let StackChild::Track(track) = timeline.tracks.children.first()? else {
@@ -479,7 +479,7 @@ mod tests {
             return None;
         };
         for effect in &clip.effects {
-            if effect.effect_name == "awidat.volume" {
+            if effect.effect_name == "montage.volume" {
                 // The apply layer serializes the value into effect metadata.
                 if let Some(v) = effect.metadata.get("value").and_then(|v| v.as_f64()) {
                     return Some(v);
@@ -489,7 +489,7 @@ mod tests {
         None
     }
 
-    /// Extract the `awidat.speed` effect factor (or the speed stored in
+    /// Extract the `montage.speed` effect factor (or the speed stored in
     /// effect metadata) from the first clip. Alternatively, the apply
     /// layer may encode speed via clip metadata — look in both places.
     #[allow(dead_code)]
@@ -501,21 +501,21 @@ mod tests {
             return None;
         };
         for effect in &clip.effects {
-            if effect.effect_name == "awidat.speed" {
+            if effect.effect_name == "montage.speed" {
                 if let Some(v) = effect.metadata.get("factor").and_then(|v| v.as_f64()) {
                     return Some(v);
                 }
             }
         }
-        // Also check clip metadata for speed stored via awidat extra.
+        // Also check clip metadata for speed stored via montage extra.
         clip.metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.extra.get("speed_factor"))
             .and_then(|v| v.as_f64())
     }
 
-    /// Extract the `awidat.audio_fade` effect from the first clip.
+    /// Extract the `montage.audio_fade` effect from the first clip.
     fn clip_fade(timeline: &Timeline) -> Option<(Option<f64>, Option<f64>)> {
         let StackChild::Track(track) = timeline.tracks.children.first()? else {
             return None;
@@ -524,7 +524,7 @@ mod tests {
             return None;
         };
         for effect in &clip.effects {
-            if effect.effect_name == "awidat.audio_fade" {
+            if effect.effect_name == "montage.audio_fade" {
                 let fade_in = effect.metadata.get("fade_in_s").and_then(|v| v.as_f64());
                 let fade_out = effect.metadata.get("fade_out_s").and_then(|v| v.as_f64());
                 return Some((fade_in, fade_out));
@@ -588,7 +588,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn set_volume_stamps_awidat_volume_effect() {
+    fn set_volume_stamps_montage_volume_effect() {
         let timeline = minimal_timeline("clip-001");
         let dir = tempfile::tempdir().unwrap();
 
@@ -603,7 +603,7 @@ mod tests {
         let volume = clip_volume(&new_timeline);
         assert!(
             volume.is_some(),
-            "expected awidat.volume effect on clip; got effects: {:#?}",
+            "expected montage.volume effect on clip; got effects: {:#?}",
             {
                 let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else {
                     panic!()
@@ -715,7 +715,7 @@ mod tests {
         let fade = clip_fade(&new_timeline);
         assert!(
             fade.is_some(),
-            "expected awidat.audio_fade effect on clip; got effects: {:#?}",
+            "expected montage.audio_fade effect on clip; got effects: {:#?}",
             {
                 let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else {
                     panic!()

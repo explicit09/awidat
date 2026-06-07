@@ -39,7 +39,7 @@ use crate::tool_schema::Tool as ToolSchema;
 pub const MAX_DOWNLOADS_PER_SESSION: usize = 10;
 
 /// Process-wide counter. Tools are stateless per the trait; we keep
-/// the budget here. A second `awidat` process would have its own
+/// the budget here. A second `montage` process would have its own
 /// budget — that's fine, the cap is a runaway-loop guard not a
 /// long-lived quota.
 static DOWNLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -291,9 +291,9 @@ async fn fetch_video_by_id(
     // other Pexels caller uses search; only `use_broll` needs by-id.
     // Until we have a second by-id caller, the helper lives here.
     let url = format!("{}/videos/videos/{id}", pexels::DEFAULT_BASE_URL);
-    let key = awidat_secrets::get(
-        awidat_secrets::env_vars::PEXELS_API_KEY,
-        awidat_secrets::accounts::PEXELS_API_KEY,
+    let key = montage_secrets::get(
+        montage_secrets::env_vars::PEXELS_API_KEY,
+        montage_secrets::accounts::PEXELS_API_KEY,
     )
     .map_err(|e| {
         FunctionCallError::RespondToModel(format!("use_broll: keychain access failed: {e}"))
@@ -385,7 +385,7 @@ fn map_pexels_err(err: pexels::PexelsError) -> FunctionCallError {
     match err {
         pexels::PexelsError::MissingApiKey => FunctionCallError::RespondToModel(
             "use_broll: PEXELS_API_KEY not set. Set the env var or store via OS keychain \
-             (service 'awidat', account 'pexels_api_key')."
+             (service 'montage', account 'pexels_api_key')."
                 .into(),
         ),
         pexels::PexelsError::Api { status: 404, .. } => FunctionCallError::RespondToModel(

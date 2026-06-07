@@ -1427,7 +1427,7 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
-            // Awidat fork edit: the installed Codex 0.128.0 CLI does not send this
+            // Montage fork edit: the installed Codex 0.128.0 CLI does not send this
             // websocket-only client metadata field, and newer-model access is gated
             // on matching that client surface.
             if previous_response_id_from_untraced_warmup {

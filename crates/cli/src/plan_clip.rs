@@ -3,12 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use awidat_proto::otio::{Clip, MediaReference, Stack, StackChild, Track, TrackChild, TrackKind};
+use montage_proto::otio::{Clip, MediaReference, Stack, StackChild, Track, TrackChild, TrackKind};
 
 /// External video clip selected for a planner command.
 #[derive(Debug, Clone)]
 pub struct SelectedClip {
-    /// Stable clip anchor, preferring `metadata.awidat.extra.clip_uuid`.
+    /// Stable clip anchor, preferring `metadata.montage.extra.clip_uuid`.
     pub clip_uuid: String,
     /// Project-relative or absolute media asset path.
     pub asset: String,
@@ -86,7 +86,7 @@ fn clip_candidate(track: &Track, clip: &Clip) -> Option<SelectedClip> {
 
 fn clip_uuid(clip: &Clip) -> Option<&str> {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(|value| value.as_str())

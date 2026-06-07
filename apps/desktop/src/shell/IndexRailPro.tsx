@@ -266,7 +266,7 @@ function PadTile() {
 /**
  * Per-indexer enable/disable popover (Wave 4 T3) — restores the
  * affordance the legacy IndexReadinessPanel exposed inline. Mirrors
- * the W4.1 skills pattern: store hydrated from `.awidat/indexers.json`
+ * the W4.1 skills pattern: store hydrated from `.montage/indexers.json`
  * on project open; every toggle persists back through
  * `write_disabled_indexers`; the dispatcher reads the same file at
  * run time, so any view that omits the popover (CLI, auto-chain)

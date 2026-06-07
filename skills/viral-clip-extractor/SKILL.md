@@ -54,7 +54,7 @@ sharp, direct-address, visually dynamic, or close to a topic boundary.
 Use `score_breakdown` and `visual_breakdown` to explain why a candidate
 won. Reject candidates whose total score is propped up by text alone
 when the energy, visual, duration, or topic-boundary evidence is weak.
-This is an awidat advantage over workflows that only score transcript
+This is an montage advantage over workflows that only score transcript
 and energy.
 
 Use `--max-overlap-ratio` when selecting several clips from one source so a

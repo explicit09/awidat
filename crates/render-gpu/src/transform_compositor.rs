@@ -66,7 +66,7 @@ impl TransformCompositor {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    label: Some("awidat-render-gpu-transform-compositor"),
+                    label: Some("montage-render-gpu-transform-compositor"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
                 },

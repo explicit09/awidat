@@ -18,7 +18,7 @@ pub struct VeditDiffTool;
 
 #[derive(Debug, Deserialize)]
 struct Args {
-    /// From-ref. Default `"session-start"` (the branch awidat stamps
+    /// From-ref. Default `"session-start"` (the branch montage stamps
     /// at session open). Pass an explicit ref (branch name, full
     /// hash, or short hash) to compare against an earlier point.
     #[serde(default)]
@@ -129,10 +129,10 @@ mod tests {
             project_root,
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

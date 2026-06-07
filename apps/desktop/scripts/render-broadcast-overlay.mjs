@@ -11,7 +11,7 @@ const args = parseArgs(process.argv.slice(2));
 const desktopRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const width = Number(args.width ?? 1920);
 const height = Number(args.height ?? 1080);
-const fps = Number(process.env.AWIDAT_BROADCAST_OVERLAY_FPS ?? args.fps ?? 30);
+const fps = Number(process.env.MONTAGE_BROADCAST_OVERLAY_FPS ?? args.fps ?? 30);
 const duration = Number(args.duration);
 
 const projectRoot = args["project-root"];
@@ -43,9 +43,9 @@ try {
     viewport: { width, height },
     deviceScaleFactor: 1,
   });
-  await page.route("**/__awidat_asset__/**", async (route) => {
+  await page.route("**/__montage_asset__/**", async (route) => {
     const url = new URL(route.request().url());
-    const marker = "/__awidat_asset__/";
+    const marker = "/__montage_asset__/";
     const markerIndex = url.pathname.indexOf(marker);
     const relPath = markerIndex >= 0 ? url.pathname.slice(markerIndex + marker.length) : "";
     const decoded = relPath
@@ -69,7 +69,7 @@ try {
     }
   });
   await page.addInitScript(({ payload }) => {
-    window.__AWIDAT_OVERLAY_PAYLOAD__ = payload;
+    window.__MONTAGE_OVERLAY_PAYLOAD__ = payload;
   }, {
     payload: {
       overlay,
@@ -88,7 +88,7 @@ try {
     const root = document.getElementById("root");
     if (root) root.style.background = "transparent";
   });
-  await page.waitForFunction(() => window.__AWIDAT_OVERLAY_READY__ === true);
+  await page.waitForFunction(() => window.__MONTAGE_OVERLAY_READY__ === true);
   await page.waitForFunction(async () => {
     await document.fonts?.ready;
     const images = Array.from(document.images);
@@ -133,7 +133,7 @@ try {
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (ffmpegFailure) break;
       const t = frame / fps;
-      await page.evaluate((time) => window.__AWIDAT_SET_OVERLAY_TIME__?.(time), t);
+      await page.evaluate((time) => window.__MONTAGE_SET_OVERLAY_TIME__?.(time), t);
       const png = await page.screenshot({
         omitBackground: true,
         animations: "allow",

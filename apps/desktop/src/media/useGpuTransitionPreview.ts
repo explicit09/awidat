@@ -2,7 +2,7 @@
 //
 // Called from SegmentedVideoView when the playhead enters a
 // transition window whose `transitionId` maps to a GPU shader CSS
-// cannot fake (today: `awidat.match_dissolve` with its keyframed
+// cannot fake (today: `montage.match_dissolve` with its keyframed
 // Blur curve; in the future: shake / chromatic_split / agent
 // composites). Returns a `data:image/png;base64,…` URL the consumer
 // drops into an `<img>` overlay.
@@ -26,30 +26,30 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { PreviewTransition } from "../timeline/usePlaySegments";
 
-/** Set of awidat transition ids that should render via the GPU
+/** Set of montage transition ids that should render via the GPU
  *  command instead of the CSS-based overlay. Kept in sync with
  *  `resolve_shader_for_id` in the Rust preview command — adding a
  *  named GPU preset to the registry means adding it here too. */
 const GPU_ROUTED_TRANSITION_IDS = new Set<string>([
   // Phase 4 demonstrator: keyframed Blur curve renders correctly
   // only on the GPU; the CSS opacity-only blend loses the animation.
-  "awidat.match_dissolve",
+  "montage.match_dissolve",
   // Luma-mask transitions — procedural reveals (clock, blinds,
   // checkerboard, spiral, burst, jaws) have no FFmpeg xfade
   // equivalent and no CSS approximation, so the only correct
   // preview is the GPU path.
-  "awidat.clock_wipe",
-  "awidat.venetian_blinds_h",
-  "awidat.checkerboard_dissolve",
-  "awidat.spiral_wipe",
-  "awidat.burst_wipe",
-  "awidat.jaws_wipe",
+  "montage.clock_wipe",
+  "montage.venetian_blinds_h",
+  "montage.checkerboard_dissolve",
+  "montage.spiral_wipe",
+  "montage.burst_wipe",
+  "montage.jaws_wipe",
   // Hyperframes-port GPU shaders. Each has a distinct visual that
   // neither CSS overlays nor xfade can fake.
-  "awidat.light_leak",
-  "awidat.swirl_vortex",
-  "awidat.cinematic_pan_left",
-  "awidat.cinematic_pan_right",
+  "montage.light_leak",
+  "montage.swirl_vortex",
+  "montage.cinematic_pan_left",
+  "montage.cinematic_pan_right",
 ]);
 
 export function shouldRenderTransitionOnGpu(transition: PreviewTransition | null): boolean {

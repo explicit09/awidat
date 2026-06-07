@@ -1,16 +1,16 @@
 [package]
-name = "awidat-tools"
+name = "montage-tools"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_tools"
+name = "montage_tools"
 path = "src/lib.rs"
 
 [dependencies]
-awidat-proto = { workspace = true }
+montage-proto = { workspace = true }
 
 [lints]
 workspace = true

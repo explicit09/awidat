@@ -1,10 +1,10 @@
-//! `awidat apply-edl` — apply a freeform EDL envelope to a project timeline.
+//! `montage apply-edl` — apply a freeform EDL envelope to a project timeline.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use awidat_core::edl::{AnchorContext, apply, parse};
-use awidat_proto::project::Project;
+use montage_core::edl::{AnchorContext, apply, parse};
+use montage_proto::project::Project;
 
 pub fn run(project_root: &Path, edl_path: &Path) -> Result<()> {
     let edl = std::fs::read_to_string(edl_path)

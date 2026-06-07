@@ -1,7 +1,7 @@
 # Transition Registry Contract
 
-Awidat transitions use one data model across editor decisions, OTIO
-metadata, render planning, and the future `awidat-transitions` package.
+Montage transitions use one data model across editor decisions, OTIO
+metadata, render planning, and the future `montage-transitions` package.
 
 The core rule is:
 
@@ -17,20 +17,20 @@ commands, plugin code, or generated backend code inside the project. The
 agent may author `composition_json`, but that composition is constrained to
 the stable primitive vocabulary in `crates/proto/src/transitions.rs`.
 
-## In Awidat
+## In Montage
 
-Awidat owns the harness contract:
+Montage owns the harness contract:
 
 - `SemanticTransitionSpec`: metadata stored on OTIO `Transition.1` nodes.
 - `TransitionComposition`: versioned data-only recipe.
 - `TransitionPrimitiveOp`: stable primitive API.
-- `awidat.composite`: one-off agent-authored recipe id.
+- `montage.composite`: one-off agent-authored recipe id.
 - FFmpeg phase-one lowering from composition data to safe `xfade` names.
 
-`awidat.hard_cut` is not written as a transition node. It means "leave the
+`montage.hard_cut` is not written as a transition node. It means "leave the
 cut alone".
 
-`awidat.composite` is not a stable preset. It is the editor-side authoring
+`montage.composite` is not a stable preset. It is the editor-side authoring
 id for custom, context-specific recipes.
 
 ## Stable Presets
@@ -38,8 +38,8 @@ id for custom, context-specific recipes.
 Stable presets are exportable through:
 
 ```rust
-awidat_proto::transitions::stable_builtin_transition_manifests()
-awidat_proto::transitions::stable_builtin_transition_manifest_json()
+montage_proto::transitions::stable_builtin_transition_manifests()
+montage_proto::transitions::stable_builtin_transition_manifest_json()
 ```
 
 The manifest shape is intentionally extraction-ready:
@@ -61,8 +61,8 @@ The manifest shape is intentionally extraction-ready:
 - `params`
 - `composition`
 
-When the external `awidat-transitions` repo becomes authoritative,
-Awidat should import a pinned revision and adapt that package's stable
+When the external `montage-transitions` repo becomes authoritative,
+Montage should import a pinned revision and adapt that package's stable
 registry into this same manifest shape.
 
 ## Backend Lowering
@@ -80,7 +80,7 @@ constrained:
 - `pixelize` -> `pixelize`
 - `blur` -> `hblur`
 - `opacity` -> `fade`
-- `atomic` -> registered Awidat transition id only
+- `atomic` -> registered Montage transition id only
 
 Primitives such as `shake` and `chromatic_split` can be stored and
 validated now, but they require richer backend support before they affect
@@ -88,11 +88,11 @@ phase-one FFmpeg output directly.
 
 ## Extraction Boundary
 
-Move stable presets into `awidat-transitions`.
+Move stable presets into `montage-transitions`.
 
-Keep these in Awidat:
+Keep these in Montage:
 
-- `awidat.composite`
+- `montage.composite`
 - EDL/OTIO metadata shape
 - project validation
 - render planner integration

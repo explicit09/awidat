@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { Clock3, FolderOpen, Import, MoreVertical, Plus, Search } from "lucide-react";
-import mark from "../../brand/awidat-mark.svg";
+import mark from "../../brand/montage-mark.svg";
 import { useProjectStore } from "../../app/state";
 import { MENU_COMMANDS, emitMenuCommand } from "../../app/menuCommands";
 
@@ -74,7 +74,6 @@ export function Landing() {
         className="absolute inset-x-0 top-0 z-20 h-12 border-b border-[rgba(255,255,255,0.07)]"
         data-tauri-drag-region
       />
-
       <div className="relative z-10 grid h-full grid-cols-[292px_minmax(0,1fr)] pt-12">
         <aside className="pm-glass pm-sidebar mx-4 mb-4 mt-4 px-5 py-5">
           <div className="mb-8 flex items-center gap-3" data-tauri-drag-region={false}>

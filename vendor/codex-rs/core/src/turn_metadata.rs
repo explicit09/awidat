@@ -216,7 +216,7 @@ impl TurnMetadataState {
         );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
-            // Awidat fork edit: match the installed Codex 0.128.0 CLI request
+            // Montage fork edit: match the installed Codex 0.128.0 CLI request
             // surface for ChatGPT-subscription newer-model access.
             None,
             thread_source,

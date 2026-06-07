@@ -6,7 +6,7 @@ Modes:
 - audio-energy: real MCP sidecar path through the Rust dispatcher against
   a tiny checked-in WAV fixture. No model downloads.
 - full: explicit guard for human-run model indexer smoke. It prints the
-  required commands and refuses to run unless AWIDAT_RUN_FULL_INDEXER_SMOKE=1
+  required commands and refuses to run unless MONTAGE_RUN_FULL_INDEXER_SMOKE=1
   is set, because full sync can download GBs and some indexers need gates.
 """
 
@@ -40,7 +40,7 @@ def run_audio_energy() -> None:
             "cargo",
             "test",
             "-p",
-            "awidat-index",
+            "montage-index",
             "--test",
             "end_to_end",
             "audio_energy_indexer_writes_sidecar",
@@ -53,13 +53,13 @@ def run_audio_energy() -> None:
 
 
 def run_full() -> None:
-    if os.environ.get("AWIDAT_RUN_FULL_INDEXER_SMOKE") != "1":
+    if os.environ.get("MONTAGE_RUN_FULL_INDEXER_SMOKE") != "1":
         print(
             "full indexer smoke is intentionally guarded.\n"
             "It can download large model weights and may require HF_TOKEN and accepted model terms.\n\n"
             "To run it locally:\n"
             "  cd python && uv sync --all-packages\n"
-            "  export AWIDAT_RUN_FULL_INDEXER_SMOKE=1\n"
+            "  export MONTAGE_RUN_FULL_INDEXER_SMOKE=1\n"
             "  python scripts/smoke_indexers.py --full\n\n"
             "Then follow the real-asset commands in python/SMOKE.md for whisper/topic/clip/face/gaze/shot/frame-quality.",
             file=sys.stderr,

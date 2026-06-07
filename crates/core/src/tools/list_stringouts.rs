@@ -1,15 +1,15 @@
 //! `list_stringouts` tool — enumerate ordered select-collections.
 //!
 //! Slice C2 (wave3-bin-aware). A project can now keep multiple
-//! [`awidat_proto::professional::Stringout`] entries (e.g. one per
+//! [`montage_proto::professional::Stringout`] entries (e.g. one per
 //! arc, cold-open, alt-cut) instead of being limited to a single
 //! ordered list. This tool returns them in the order they appear in
-//! [`awidat_proto::awidat_meta::AwidatTimelineMetadata::stringouts`].
+//! [`montage_proto::montage_meta::MontageTimelineMetadata::stringouts`].
 //!
 //! Read-only.
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -63,7 +63,7 @@ impl ToolHandler for ListStringoutsTool {
         let stringouts: Vec<_> = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .map(|meta| meta.stringouts.clone())
             .unwrap_or_default();
@@ -97,12 +97,12 @@ stringouts in parallel (e.g. per arc, alt-cut, cold-open).\
 mod tests {
     use std::path::Path;
 
-    use awidat_proto::professional::Stringout;
-    use awidat_proto::project::Project;
+    use montage_proto::professional::Stringout;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
-    use crate::media_catalog_mutation::ensure_awidat_metadata;
+    use crate::media_catalog_mutation::ensure_montage_metadata;
     use crate::tool::SandboxMode;
 
     fn ctx_at(root: &Path) -> ToolContext {
@@ -111,10 +111,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -146,7 +146,7 @@ mod tests {
     async fn preserves_insertion_order_and_item_counts() {
         let dir = tempfile::tempdir().unwrap();
         let mut project = Project::init(dir.path()).unwrap();
-        let meta = ensure_awidat_metadata(&mut project.timeline);
+        let meta = ensure_montage_metadata(&mut project.timeline);
         meta.stringouts.push(Stringout {
             id: "stringout-a".into(),
             name: Some("Arc A".into()),

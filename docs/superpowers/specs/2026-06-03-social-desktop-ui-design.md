@@ -4,7 +4,7 @@
 
 This is the first post-Phase-6 sub-project of the server-backed social
 publishing pipeline. It puts a desktop surface on top of the verified
-`awidat-social` `SocialApi` facade so a user can connect a creator account,
+`montage-social` `SocialApi` facade so a user can connect a creator account,
 schedule a campaign variant to publish, watch the job progress, and review the
 audit trail — all driven by the server-owned domain layer rather than the
 legacy desktop-local publishing stack.
@@ -26,7 +26,7 @@ The repo has two social-publishing implementations:
    own OAuth listener, OS-keychain token storage, providers, and upload queue;
    surfaced by `PublishingSettings.tsx`, `DeliverySurface.tsx`, and
    `CampaignApprovalPanel.tsx`. Tokens live on the desktop.
-2. **Server-backed** — `crates/social/` (`awidat-social`). The server owns
+2. **Server-backed** — `crates/social/` (`montage-social`). The server owns
    identity, posting state, and encrypted tokens; the desktop receives only
    account IDs, display/eligibility data, and job status.
 
@@ -96,7 +96,7 @@ Tauri commands  apps/desktop/src-tauri/src/commands/social.rs
    social_execute_upload / social_poll_status
         │  thin translation only
         ▼
-awidat_social::api::SocialApi   (framework-neutral facade — DONE)
+montage_social::api::SocialApi   (framework-neutral facade — DONE)
         │
         ▼
 SqliteSocialStore  (file in app data dir)  +  mock upload/status adapters
@@ -104,7 +104,7 @@ SqliteSocialStore  (file in app data dir)  +  mock upload/status adapters
 
 ### Where state lives
 
-A `social` field is added to `AwidatState`
+A `social` field is added to `MontageState`
 (`apps/desktop/src-tauri/src/state.rs`):
 
 ```rust
@@ -116,7 +116,7 @@ pub social: Mutex<SqliteSocialStore>,
 is added alongside the existing `new_in_memory`; it runs the same schema
 setup). Commands lock the mutex, call `SocialApi`, and drop the lock. The
 single-process desktop has no concurrent-writer problem; the mutex serializes
-access, matching how `AwidatState` already guards `codex`, `turn`, and `jobs`.
+access, matching how `MontageState` already guards `codex`, `turn`, and `jobs`.
 
 ### The actor
 
@@ -132,7 +132,7 @@ threaded through every command rather than hard-coded inside `SocialApi` calls.
 ### 1. `SqliteSocialStore::open(path)` (crate change)
 
 `crates/social/src/sqlite_store.rs` gains a file-backed constructor mirroring
-`new_in_memory`'s schema initialization. This is the only `awidat-social`
+`new_in_memory`'s schema initialization. This is the only `montage-social`
 change in this sub-project; it is store-level, not new business logic.
 
 ### 2. Tauri command module `commands/social.rs`
@@ -218,7 +218,7 @@ paired with a text label, never color alone.
 
 - **Crate:** a focused test for `SqliteSocialStore::open(path)` (round-trips an
   account through a real file, then reopens and reads it back).
-- **Command layer (Rust):** per-command tests over an `AwidatState` backed by a
+- **Command layer (Rust):** per-command tests over an `MontageState` backed by a
   temp-file `SqliteSocialStore`, asserting the command translates correctly and
   responses carry no token material (serialize + substring check, mirroring the
   crate's token-safety tests).
@@ -234,7 +234,7 @@ paired with a text label, never color alone.
 
 1. `SqliteSocialStore::open(path)` + crate test.
 2. `commands/social.rs` account commands (providers/accounts/oauth/disconnect) +
-   `AwidatState.social` wiring + registration; retire legacy connect commands.
+   `MontageState.social` wiring + registration; retire legacy connect commands.
 3. `SocialAccounts.tsx` + `socialModel.ts` + model tests; swap legacy connect
    UI.
 4. Publish commands (bind/validate/schedule/publish_job/cancel/retry) +

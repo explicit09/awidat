@@ -39,7 +39,7 @@ export type SourceMediaEntry = {
 type MediaState = {
   /** All source assets under `raw/`, sorted by project-relative id. */
   sources: SourceMediaEntry[];
-  /** All proxies in `.awidat/proxies/`, sorted by stem. */
+  /** All proxies in `.montage/proxies/`, sorted by stem. */
   proxies: ProxyEntry[];
   /** Stem of the currently-selected asset, or null if none / no proxies. */
   selectedStem: string | null;

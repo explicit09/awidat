@@ -25,7 +25,7 @@ const SUPPORTED: ReadonlySet<DeliveryTargetKey> = new Set([
   "twitter_x",
 ]);
 
-const STORAGE_KEY = "awidat.deliver.uploadPrefs.v1";
+const STORAGE_KEY = "montage.deliver.uploadPrefs.v1";
 
 interface UploadPrefsState {
   /** Provider keys the user has opted into auto-publishing for. */

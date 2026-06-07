@@ -605,7 +605,7 @@ mod tests {
                 job_id: "job_1".into(),
                 title: "Launch clip".into(),
                 description: Some("Description".into()),
-                tags: vec!["awidat".into()],
+                tags: vec!["montage".into()],
                 thumbnail_ref: Some("render://thumb_1".into()),
                 artifact_ref: None,
                 privacy: UploadPrivacy::Private,
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(request.artifact_ref, "render://artifact_1");
         assert_eq!(request.title, "Launch clip");
         assert_eq!(request.description.as_deref(), Some("Description"));
-        assert_eq!(request.tags, vec!["awidat"]);
+        assert_eq!(request.tags, vec!["montage"]);
         assert_eq!(request.thumbnail_ref.as_deref(), Some("render://thumb_1"));
         assert_eq!(request.scheduled_for, Some(1_800));
         assert_eq!(request.access_token_ref, "token_secret:acct_1");
@@ -1287,8 +1287,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider: Provider::YouTube,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,

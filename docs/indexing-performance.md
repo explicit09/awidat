@@ -1,9 +1,9 @@
 # Indexing Performance Review
 
-Awidat has a dedicated CLI path for indexing performance review:
+Montage has a dedicated CLI path for indexing performance review:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project
 ```
 
 The command runs configured indexers, captures per-pair dispatcher telemetry in
@@ -23,13 +23,13 @@ explicitly asks for it.
 Use `--include-whisper` when transcription is part of the review:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project --include-whisper
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project --include-whisper
 ```
 
 Use indexer filters to focus a run:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project \
   --indexer audio-energy \
   --indexer scenedetect \
   --indexer frame-quality
@@ -38,7 +38,7 @@ cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
 Use exclusions to keep one expensive or irrelevant indexer out of a run:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project \
   --exclude-indexer clip
 ```
 
@@ -53,7 +53,7 @@ For local performance runs, a useful real-video corpus exists at:
 Suggested first pass:
 
 ```bash
-cargo run -p awidat-cli --bin awidat -- index-perf /path/to/project \
+cargo run -p montage-cli --bin montage -- index-perf /path/to/project \
   --asset /Users/explicit/Projects/video-editor/VideoEditor/Tools/eval_corpus/public_seed/varied_720p_24fps_30s.mp4 \
   --asset /Users/explicit/Projects/video-editor/VideoEditor/Tools/eval_corpus/public_seed/varied_1080p_60fps_20s.mp4 \
   --asset /Users/explicit/Projects/video-editor/VideoEditor/Tools/eval_corpus/public_seed/varied_4k_30fps_10s.mp4 \

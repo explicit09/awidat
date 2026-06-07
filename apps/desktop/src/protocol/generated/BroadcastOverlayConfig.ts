@@ -5,7 +5,7 @@ import type { BroadcastTimedEntry } from "./BroadcastTimedEntry";
 
 /**
  * Timeline-level broadcast overlay config, stored in OTIO metadata
- * under `awidat.broadcast_overlay` and surfaced to desktop preview.
+ * under `montage.broadcast_overlay` and surfaced to desktop preview.
  */
 export type BroadcastOverlayConfig = {
 /**

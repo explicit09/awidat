@@ -1,14 +1,14 @@
-//! Awidat desktop app — Tauri backend.
+//! Montage desktop app — Tauri backend.
 //!
 //! Step 8 cut the desktop over to driving the codex engine via a
 //! subprocess per turn (`codex-exec --json`). The legacy in-process
-//! `awidat-core` `Session` is no longer instantiated from here; the
+//! `montage-core` `Session` is no longer instantiated from here; the
 //! Tauri commands translate codex's JSONL event stream into the
-//! desktop wire protocol [`Item`](awidat_desktop_protocol::Item) shape.
+//! desktop wire protocol [`Item`](montage_desktop_protocol::Item) shape.
 //!
 //! # Module layout
 //!
-//! - `state.rs` — `AwidatState` (the type Tauri threads through commands)
+//! - `state.rs` — `MontageState` (the type Tauri threads through commands)
 //! - `events.rs` — Tauri channel name constants + `emit_item` helper
 //! - `codex_runner.rs` — spawn/monitor the `codex-exec` subprocess
 //! - `commands/turn.rs` — `start_turn`, `cancel_turn`, `respond_*`
@@ -37,7 +37,7 @@ mod state;
 
 use std::path::PathBuf;
 
-use state::AwidatState;
+use state::MontageState;
 use tauri::Manager;
 use tracing::{error, warn};
 
@@ -53,7 +53,7 @@ pub fn run() {
     let codex_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(16 * 1024 * 1024)
-        .thread_name("awidat-tokio")
+        .thread_name("montage-tokio")
         .build()
         .unwrap_or_else(|err| panic!("build tokio runtime with 16 MB worker stacks: {err}"));
     tauri::async_runtime::set(codex_runtime.handle().clone());
@@ -66,15 +66,15 @@ pub fn run() {
     // Idempotent — guarded by a OnceLock.
     secrets::resolve_at_startup();
 
-    let state = AwidatState::default();
+    let state = MontageState::default();
 
     // Dev convenience — preload project_root from env when set.
-    if let Ok(p) = std::env::var("AWIDAT_DESKTOP_PROJECT") {
+    if let Ok(p) = std::env::var("MONTAGE_DESKTOP_PROJECT") {
         let buf = PathBuf::from(&p);
         if buf.is_dir() && buf.join("project.otio.json").is_file() {
             *state.project_root.blocking_lock() = Some(buf);
         } else {
-            warn!(path = %p, "AWIDAT_DESKTOP_PROJECT is not an awidat project; ignoring");
+            warn!(path = %p, "MONTAGE_DESKTOP_PROJECT is not an montage project; ignoring");
         }
     }
 
@@ -88,7 +88,7 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             if let Some(project_root) = app
-                .state::<AwidatState>()
+                .state::<MontageState>()
                 .project_root
                 .blocking_lock()
                 .clone()
@@ -96,7 +96,7 @@ pub fn run() {
                 commands::project::allow_project_asset_dirs(app.handle(), &project_root);
                 // Mirror what set_project_root does for explicit opens:
                 // kick the proxy + sidecar backfill so a project loaded
-                // from persistence (or AWIDAT_DESKTOP_PROJECT env) gets
+                // from persistence (or MONTAGE_DESKTOP_PROJECT env) gets
                 // its preview chain repaired without waiting for the
                 // user to re-pick the project. Without this, projects
                 // whose proxy never completed (e.g. ran out of disk
@@ -113,20 +113,20 @@ pub fn run() {
             }
 
             // Build the server-backed social publishing client from the
-            // environment and park it in AwidatState for the `social_*`
+            // environment and park it in MontageState for the `social_*`
             // commands (Phase 5). Per RECONCILIATION G6 there is no per-field
             // desktop config struct, so the server URL + dev bearer come from
-            // `AWIDAT_SOCIAL_SERVER_URL` / `AWIDAT_SOCIAL_AUTH_TOKEN` (mirroring
-            // how `project_root` defaults from `AWIDAT_DESKTOP_PROJECT`). When
+            // `MONTAGE_SOCIAL_SERVER_URL` / `MONTAGE_SOCIAL_AUTH_TOKEN` (mirroring
+            // how `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). When
             // the URL is unset the client stays `None` and the commands surface
             // a clear "not initialized" error rather than hanging. The desktop
             // no longer opens a local `social.sqlite` — all publishing state
             // lives server-side.
             if let Some(social_client) = social_client::SocialClient::from_env() {
-                *app.state::<AwidatState>().social_client.blocking_lock() = Some(social_client);
+                *app.state::<MontageState>().social_client.blocking_lock() = Some(social_client);
             } else {
                 warn!(
-                    "AWIDAT_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
+                    "MONTAGE_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
                 );
             }
             Ok(())
@@ -309,7 +309,7 @@ pub fn run() {
     // JSONRPC drain land before Tauri tears the runtime down.
     app.run(move |handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            let state = handle.state::<AwidatState>();
+            let state = handle.state::<MontageState>();
             tauri::async_runtime::block_on(async {
                 // Cancel the in-flight turn first so the bridge's
                 // pump-task drains a TurnInterrupt-shaped completion

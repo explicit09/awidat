@@ -105,7 +105,7 @@ fn check_timeline_renders(project_root: &Path) -> CheckVerdict {
         };
     }
     let mut warnings = Vec::new();
-    match awidat_proto::project::read_otio_timeline(&timeline_path, &mut warnings) {
+    match montage_proto::project::read_otio_timeline(&timeline_path, &mut warnings) {
         Ok(_) => CheckVerdict {
             id: "timeline_renders".into(),
             pass: true,
@@ -120,7 +120,7 @@ fn check_timeline_renders(project_root: &Path) -> CheckVerdict {
             pass: false,
             message: format!(
                 "timeline failed to parse: {e}. The most recent apply_edl probably \
-                 wrote a malformed OTIO. Run `awidat validate <project>` for a \
+                 wrote a malformed OTIO. Run `montage validate <project>` for a \
                  detailed diagnostic, then revert the offending edit."
             ),
         },
@@ -307,7 +307,7 @@ fn probe_stream_durations(path: &Path) -> Result<StreamDurations, String> {
 fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
     const ID: &str = "transcript_cut_alignment";
 
-    let project = match awidat_proto::project::Project::read(project_root) {
+    let project = match montage_proto::project::Project::read(project_root) {
         Ok(p) => p,
         Err(_) => {
             // The timeline_renders check has the actionable diagnostic
@@ -330,17 +330,17 @@ fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
     // care about Track-typed children for this check (nested stacks
     // are vanishingly rare in V1 footage).
     for stack_child in &project.timeline.tracks.children {
-        let awidat_proto::otio::StackChild::Track(track) = stack_child else {
+        let montage_proto::otio::StackChild::Track(track) = stack_child else {
             continue;
         };
         for child in &track.children {
-            let awidat_proto::otio::TrackChild::Clip(clip) = child else {
+            let montage_proto::otio::TrackChild::Clip(clip) = child else {
                 continue;
             };
-            let Some(awidat_meta) = clip.metadata.awidat.as_ref() else {
+            let Some(montage_meta) = clip.metadata.montage.as_ref() else {
                 continue;
             };
-            let Some(anchor) = awidat_meta.anchor.as_ref() else {
+            let Some(anchor) = montage_meta.anchor.as_ref() else {
                 continue;
             };
             let Some(snippet) = anchor.transcript_snippet.as_deref() else {
@@ -349,7 +349,7 @@ fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
             anchored += 1;
 
             let asset_id = match &clip.media_reference {
-                awidat_proto::otio::MediaReference::External(ext) => ext.target_url.clone(),
+                montage_proto::otio::MediaReference::External(ext) => ext.target_url.clone(),
                 _ => {
                     skipped += 1;
                     continue;
@@ -365,8 +365,8 @@ fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
             let clip_end = clip_start + sr.duration.value / sr.duration.rate;
 
             // Locate the whisper sidecar; project-relative.
-            let asset = awidat_proto::index::AssetId::new(asset_id.clone());
-            let sidecar = match awidat_index::read_sidecar(project_root, "whisper", &asset) {
+            let asset = montage_proto::index::AssetId::new(asset_id.clone());
+            let sidecar = match montage_index::read_sidecar(project_root, "whisper", &asset) {
                 Ok(s) => s,
                 Err(_) => {
                     skipped += 1;
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn valid_project_passes_tier_2() {
         let dir = tempfile::tempdir().unwrap();
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         let result = tier_2(dir.path(), "test step");
         match result {
             VerifyResult::Pass { checks } => {
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn malformed_timeline_fails_with_actionable_diagnostic() {
         let dir = tempfile::tempdir().unwrap();
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
         // Corrupt the timeline.
         std::fs::write(
             dir.path().join("project.otio.json"),
@@ -668,13 +668,13 @@ mod tests {
         seg_start_s: f64,
         seg_end_s: f64,
     ) -> tempfile::TempDir {
-        use awidat_proto::awidat_meta::{Anchor, AwidatClipMetadata};
-        use awidat_proto::otio::{
+        use montage_proto::montage_meta::{Anchor, MontageClipMetadata};
+        use montage_proto::otio::{
             Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
             TimeRange, Track, TrackChild, TrackKind,
         };
         let dir = tempfile::tempdir().unwrap();
-        let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
+        let mut project = montage_proto::project::Project::init(dir.path()).unwrap();
 
         let mut clip = Clip::empty("c0");
         clip.media_reference =
@@ -684,12 +684,12 @@ mod tests {
             RationalTime::new(clip_dur_s * 24.0, 24.0),
         ));
         clip.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(Anchor {
                     transcript_snippet: Some(snippet.to_string()),
                     ..Anchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };
@@ -767,13 +767,13 @@ mod tests {
     fn transcript_alignment_skips_clips_without_sidecar() {
         // Clip exists with anchor, but no whisper sidecar on disk.
         // V1: skip-with-pass (verifier doesn't demand indexers ran).
-        use awidat_proto::awidat_meta::{Anchor, AwidatClipMetadata};
-        use awidat_proto::otio::{
+        use montage_proto::montage_meta::{Anchor, MontageClipMetadata};
+        use montage_proto::otio::{
             Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
             TimeRange, Track, TrackChild, TrackKind,
         };
         let dir = tempfile::tempdir().unwrap();
-        let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
+        let mut project = montage_proto::project::Project::init(dir.path()).unwrap();
         let mut clip = Clip::empty("c0");
         clip.media_reference =
             MediaReference::External(ExternalReference::new("raw/x.mp4".to_string()));
@@ -782,12 +782,12 @@ mod tests {
             RationalTime::new(120.0, 24.0),
         ));
         clip.metadata = ClipMetadata {
-            awidat: Some(AwidatClipMetadata {
+            montage: Some(MontageClipMetadata {
                 anchor: Some(Anchor {
                     transcript_snippet: Some("anything".into()),
                     ..Anchor::default()
                 }),
-                ..AwidatClipMetadata::default()
+                ..MontageClipMetadata::default()
             }),
             ..ClipMetadata::default()
         };

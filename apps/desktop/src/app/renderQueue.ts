@@ -467,7 +467,7 @@ type State = {
   setAiDisclosure: (id: string, disclosure: AiDisclosure | undefined) => void;
 };
 
-const PERSIST_KEY = "awidat.deliver.renderQueue.v1";
+const PERSIST_KEY = "montage.deliver.renderQueue.v1";
 
 function loadPersisted(): RenderQueueEntry[] {
   if (typeof localStorage === "undefined") return [];

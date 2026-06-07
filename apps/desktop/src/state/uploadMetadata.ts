@@ -15,7 +15,7 @@
 //     so the form can look up its values without coupling.
 //
 // Persistence:
-//   - localStorage mirror keyed by `awidat.deliver.uploadMetadata.v1`
+//   - localStorage mirror keyed by `montage.deliver.uploadMetadata.v1`
 //     so reloading the app preserves form state across reload.
 //   - Tauri command `set_upload_metadata(job_id, provider, metadata)`
 //     pushes the value to the backend so the upload dispatcher can
@@ -238,7 +238,7 @@ interface UploadMetadataState {
   forgetJob: (jobId: string) => void;
 }
 
-const STORAGE_KEY = "awidat.deliver.uploadMetadata.v1";
+const STORAGE_KEY = "montage.deliver.uploadMetadata.v1";
 
 function loadLocal(): Record<string, UploadMetadata> {
   if (typeof localStorage === "undefined") return {};
@@ -315,7 +315,7 @@ export const useUploadMetadata = create<UploadMetadataState>((set, get) => ({
 /** Visibility options the form exposes for each provider. Maps to the
  *  backend's three-value `Visibility` enum but the labels (and which
  *  values are surfaced) differ per platform — Instagram and Twitter/X
- *  have no visibility toggle in Awidat's current publish path. */
+ *  have no visibility toggle in Montage's current publish path. */
 export function visibilityOptionsFor(
   provider: string,
 ): Array<{ value: UploadVisibility; label: string }> | null {

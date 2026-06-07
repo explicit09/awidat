@@ -1271,7 +1271,7 @@ function buildDeleteRangeOps(args: {
     // apply_split, so we can't know it ahead of time. The
     // anchor-by-clip-name path the resolver uses ("name = original-
     // b") works since the parent's name is known. The resolver
-    // also matches against awidat.clip_uuid, so giving it the
+    // also matches against montage.clip_uuid, so giving it the
     // synthesized name as a clip_uuid value invokes the name-
     // match fallback branch on resolve_by_uuid. (Step 5's resolver
     // hardening + the clip-name fallback path covers this round-
@@ -1290,7 +1290,7 @@ function buildDeleteRangeOps(args: {
 
 /** After Split, the right piece's *name* is `<parent>-b`. The
  *  parent's display name is what came in (Step 8.1 stamps a fresh
- *  awidat.clip_uuid on the right piece, but the name-match
+ *  montage.clip_uuid on the right piece, but the name-match
  *  fallback in the anchor resolver matches against this synthesized
  *  string). */
 function nameAfterSplit(parent: string): string {

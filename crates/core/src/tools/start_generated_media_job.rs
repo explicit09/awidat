@@ -232,7 +232,7 @@ fn write_mock_output(project_root: &std::path::Path, output_path: &str) -> std::
         fs::create_dir_all(parent)?;
     }
     if !path.exists() {
-        fs::write(path, b"awidat generated media mock placeholder\n")?;
+        fs::write(path, b"montage generated media mock placeholder\n")?;
     }
     Ok(())
 }
@@ -279,7 +279,7 @@ mod tests {
         );
         assert!(
             dir.path()
-                .join(".awidat/generated-media/registry.json")
+                .join(".montage/generated-media/registry.json")
                 .exists()
         );
         assert!(
@@ -312,7 +312,7 @@ mod tests {
         assert!(format!("{err}").contains("Use provider 'openrouter'"));
         assert!(
             !dir.path()
-                .join(".awidat/generated-media/registry.json")
+                .join(".montage/generated-media/registry.json")
                 .exists()
         );
     }

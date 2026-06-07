@@ -37,10 +37,10 @@ import { Button, Inline, Stack } from "../ui";
 import type { IndexerConfigSnapshot } from "../shell";
 
 const APP_VERSION = "0.1.0";
-// `Awidat Pro 1.2` is the placeholder label Wave 1 used in the footer.
+// `Montage Pro 1.2` is the placeholder label Wave 1 used in the footer.
 // When the backend exposes a `get_agent_model` invoke we can replace
 // this with the real value — see `TODO(redesign):` below.
-const AGENT_MODEL = "Awidat Pro 1.2";
+const AGENT_MODEL = "Montage Pro 1.2";
 const AGENT_CONTEXT = "local";
 const AGENT_PROVIDER = "Codex bridge";
 
@@ -330,7 +330,7 @@ export function SettingsModal() {
             {/* Build SHA isn't surfaced to the renderer right now — leave
                 a hook so we can wire it once a vite-time `__BUILD_SHA__`
                 define is in place. */}
-            <Row label="Awidat" value="Studio for agent-driven editing" />
+            <Row label="Montage" value="Studio for agent-driven editing" />
           </Section>
         </div>
         <footer className="modal-footer">

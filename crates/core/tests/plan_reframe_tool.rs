@@ -1,7 +1,7 @@
 //! Integration tests for the first-class `plan_reframe` agent tool.
 
-use awidat_core::tools::plan_reframe::PlanReframeTool;
-use awidat_core::{FunctionCallError, ToolContext, ToolHandler, ToolInvocation};
+use montage_core::tools::plan_reframe::PlanReframeTool;
+use montage_core::{FunctionCallError, ToolContext, ToolHandler, ToolInvocation};
 use tokio::sync::broadcast;
 
 fn ctx_at(root: &std::path::Path) -> ToolContext {
@@ -10,14 +10,14 @@ fn ctx_at(root: &std::path::Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
-        sandbox_mode: awidat_core::tool::SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        sandbox_mode: montage_core::tool::SandboxMode::Default,
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }
@@ -95,7 +95,7 @@ async fn plan_reframe_returns_apply_edl_ready_vertical_reframe_fragment() {
     };
     assert!(edl.contains("*** Set Effect"));
     assert!(edl.contains("+ anchor: clip_uuid=clip-1"));
-    assert!(edl.contains("+ effect: awidat.reframe"));
+    assert!(edl.contains("+ effect: montage.reframe"));
     assert!(edl.contains(r#"+ params_json: {"zoom":3.0,"x":0.2,"y":-0.16}"#));
     assert!(edl.contains("+ rationale: Subject-aware 9:16 reframe"));
 }

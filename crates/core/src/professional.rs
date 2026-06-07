@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
-use awidat_proto::otio::{
+use montage_proto::montage_meta::MontageTimelineMetadata;
+use montage_proto::otio::{
     Clip, Marker, MediaReference, Stack, StackChild, Timeline, Track, TrackChild,
     TrackKind as OtioTrackKind,
 };
-use awidat_proto::professional::{
+use montage_proto::professional::{
     AssetBin, AssetCatalog, AssetProvenance, AssetReadiness, AssetRecord, AssetRole,
     AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState, AudioMeterReading,
     AudioRole, CapabilityArea, CapabilityRegistry, ColorFinishingState, ColorManagement,
@@ -86,7 +86,7 @@ pub struct VfxPipelinePackage {
 /// Per-shot VFX handoff record.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VfxShotManifest {
-    /// Stable Awidat VFX shot id.
+    /// Stable Montage VFX shot id.
     pub shot_id: String,
     /// Timeline clip id.
     pub clip_id: String,
@@ -124,7 +124,7 @@ pub struct SecureReviewPackage {
     /// Stable package id.
     pub id: String,
     /// Pending proposal packages included for review.
-    pub proposals: Vec<awidat_proto::professional::ProposalPackage>,
+    pub proposals: Vec<montage_proto::professional::ProposalPackage>,
     /// Artifact references reviewers need to inspect.
     pub artifact_refs: Vec<String>,
     /// Current reviewable versions exposed to collaborators.
@@ -428,7 +428,7 @@ pub struct DeliveryArtifact {
 
 /// Build the nine workflow lens snapshots without cloning an NLE UI.
 pub fn build_workflow_lens_snapshots(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
 ) -> Vec<WorkflowLensSnapshot> {
     let readiness = metadata.build_professional_readiness_report();
     all_lenses()
@@ -438,7 +438,7 @@ pub fn build_workflow_lens_snapshots(
 }
 
 fn lens_snapshot(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     readiness: &PipelineReadinessReport,
     lens: WorkflowLens,
 ) -> WorkflowLensSnapshot {
@@ -462,7 +462,7 @@ fn lens_snapshot(
     }
 }
 
-fn lens_artifacts(metadata: &AwidatTimelineMetadata, lens: WorkflowLens) -> Vec<String> {
+fn lens_artifacts(metadata: &MontageTimelineMetadata, lens: WorkflowLens) -> Vec<String> {
     match lens {
         WorkflowLens::Media => metadata
             .asset_catalog
@@ -593,7 +593,7 @@ fn all_lenses() -> Vec<WorkflowLens> {
 /// Derive an assistant-editor asset catalog from declared sources and timeline usage.
 pub fn derive_assistant_asset_catalog(project_root: &Path, timeline: &Timeline) -> AssetCatalog {
     let mut assets = BTreeMap::new();
-    if let Some(metadata) = &timeline.metadata.awidat {
+    if let Some(metadata) = &timeline.metadata.montage {
         for asset in &metadata.source_assets {
             upsert_assistant_asset(project_root, &mut assets, asset, "source", None);
         }
@@ -708,7 +708,7 @@ fn assistant_asset_record(
     let checksum = resolved
         .as_ref()
         .filter(|resolved| resolved.is_file())
-        .and_then(|resolved| awidat_index::asset_sha256(resolved).ok());
+        .and_then(|resolved| montage_index::asset_sha256(resolved).ok());
     let online = if checksum.is_some() {
         ReadinessState::Ready
     } else {
@@ -732,7 +732,7 @@ fn assistant_asset_record(
         provenance: Some(AssetProvenance {
             imported_from: Some(path.to_string()),
             checksum,
-            created_by: Some("awidat-assistant-catalog".to_string()),
+            created_by: Some("montage-assistant-catalog".to_string()),
             upload_date: None,
         }),
         usage: Default::default(),
@@ -762,7 +762,7 @@ fn assistant_proxy_path(project_root: &Path, asset_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("asset");
-    project_root.join(".awidat").join("proxies").join(format!(
+    project_root.join(".montage").join("proxies").join(format!(
         "{stem}-{:08x}.mp4",
         assistant_stable_path_hash(asset_path)
     ))
@@ -781,8 +781,8 @@ fn assistant_index_readiness(project_root: &Path, asset_path: &str) -> Readiness
     if asset_path.contains("://") {
         return ReadinessState::Unavailable;
     }
-    let asset_id = awidat_proto::index::AssetId::new(asset_path.to_string());
-    let index_root = project_root.join(awidat_proto::project::files::INDEX_DIR);
+    let asset_id = montage_proto::index::AssetId::new(asset_path.to_string());
+    let index_root = project_root.join(montage_proto::project::files::INDEX_DIR);
     let Ok(entries) = std::fs::read_dir(index_root) else {
         return ReadinessState::Pending;
     };
@@ -794,7 +794,8 @@ fn assistant_index_readiness(project_root: &Path, asset_path: &str) -> Readiness
             continue;
         }
         let indexer = entry.file_name().to_string_lossy().to_string();
-        let Ok(sidecar_path) = awidat_index::sidecar_path(project_root, &indexer, &asset_id) else {
+        let Ok(sidecar_path) = montage_index::sidecar_path(project_root, &indexer, &asset_id)
+        else {
             continue;
         };
         if sidecar_path.is_file() {
@@ -971,7 +972,7 @@ fn media_proxy_target(project_root: &Path, asset: &AssetRecord) -> Option<String
 
 fn assistant_clip_id(clip: &Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(|value| value.as_str())
@@ -1075,7 +1076,7 @@ fn collect_clip_source_selects(
 fn marker_select_decision(marker: &Marker) -> Option<SelectDecision> {
     let category = marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.category.as_deref())
         .or_else(|| marker.name.split_whitespace().next())
@@ -1107,13 +1108,13 @@ fn marker_source_range(clip: &Clip, marker: &Marker) -> Option<SourceRange> {
 fn source_select_take_group(clip: &Clip, marker: &Marker) -> Option<String> {
     marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("take_group_id"))
         .and_then(serde_json::Value::as_str)
         .or_else(|| {
             clip.metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|metadata| metadata.extra.get("take_group_id"))
                 .and_then(serde_json::Value::as_str)
@@ -1124,7 +1125,7 @@ fn source_select_take_group(clip: &Clip, marker: &Marker) -> Option<String> {
 fn source_select_rank(marker: &Marker) -> Option<u32> {
     marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("rank"))
         .and_then(serde_json::Value::as_u64)
@@ -1134,14 +1135,14 @@ fn source_select_rank(marker: &Marker) -> Option<u32> {
 fn source_select_reason(marker: &Marker) -> Option<String> {
     marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.note.clone())
         .or_else(|| marker.comment.clone())
 }
 
 fn source_select_evidence_refs(marker: &Marker) -> Vec<String> {
-    let Some(metadata) = marker.metadata.awidat.as_ref() else {
+    let Some(metadata) = marker.metadata.montage.as_ref() else {
         return Vec::new();
     };
     let mut refs = Vec::new();
@@ -1176,7 +1177,7 @@ fn source_select_notes(marker: &Marker) -> Vec<String> {
         .chain(
             marker
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|metadata| metadata.note.as_ref()),
         )
@@ -1291,7 +1292,7 @@ fn collect_clip_sync_group(
     track_kind: Option<OtioTrackKind>,
     groups: &mut BTreeMap<String, AssistantSyncGroupBuilder>,
 ) {
-    let Some(metadata) = clip.metadata.awidat.as_ref() else {
+    let Some(metadata) = clip.metadata.montage.as_ref() else {
         return;
     };
     let Some(group_id) = assistant_string_extra(metadata, "sync_group_id")
@@ -1326,7 +1327,7 @@ fn collect_clip_sync_group(
 }
 
 fn assistant_string_extra(
-    metadata: &awidat_proto::awidat_meta::AwidatClipMetadata,
+    metadata: &montage_proto::montage_meta::MontageClipMetadata,
     key: &str,
 ) -> Option<String> {
     metadata
@@ -1339,7 +1340,7 @@ fn assistant_string_extra(
 }
 
 fn merge_assistant_source_review(
-    metadata: &mut AwidatTimelineMetadata,
+    metadata: &mut MontageTimelineMetadata,
     source_review: AssistantSourceReview,
 ) {
     let mut select_ids = metadata
@@ -1563,7 +1564,7 @@ fn default_audio_automation(
 fn derive_audio_meter_readings(timeline: &Timeline) -> Vec<AudioMeterReading> {
     let Some(measurements) = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("audio_measurements"))
         .and_then(serde_json::Value::as_object)
@@ -1698,7 +1699,7 @@ fn collect_clip_audio_post_cues(clip: &Clip, clip_start_s: f64, cues: &mut Vec<A
             label: marker.name.clone(),
             note: marker
                 .metadata
-                .awidat
+                .montage
                 .as_ref()
                 .and_then(|metadata| metadata.note.clone())
                 .or_else(|| marker.comment.clone()),
@@ -1709,7 +1710,7 @@ fn collect_clip_audio_post_cues(clip: &Clip, clip_start_s: f64, cues: &mut Vec<A
 fn audio_post_cue_kind(marker: &Marker) -> Option<String> {
     let category = marker
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.category.as_deref())
         .or_else(|| marker.name.split_whitespace().next())
@@ -1977,7 +1978,7 @@ fn grade_stage_string_param(stage: &GradeStage, key: &str) -> Option<String> {
 
 fn clip_extra_string(clip: &Clip, key: &str) -> Option<String> {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get(key))
         .and_then(|value| value.as_str())
@@ -2458,7 +2459,7 @@ fn vfx_matte_sidecar(shot: &VfxShot) -> MatteSidecar {
 
 /// Derive a secure review bundle for pending professional proposals.
 pub fn derive_secure_review_package(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     reviewer: impl Into<String>,
     cut_id: impl Into<String>,
 ) -> SecureReviewPackage {
@@ -2478,7 +2479,7 @@ pub fn derive_secure_review_package(
     let artifact_refs = collect_review_artifact_refs(metadata, &proposals);
     let review_versions = derive_review_versions(&id, &cut_id, &artifact_refs, &proposals);
     let comments = derive_review_comments(&reviewer, &proposals);
-    let watermark = format!("Awidat review / {cut_id} / {reviewer} / {id}");
+    let watermark = format!("Montage review / {cut_id} / {reviewer} / {id}");
 
     SecureReviewPackage {
         id,
@@ -2496,8 +2497,8 @@ pub fn derive_secure_review_package(
 }
 
 fn collect_review_artifact_refs(
-    metadata: &AwidatTimelineMetadata,
-    proposals: &[awidat_proto::professional::ProposalPackage],
+    metadata: &MontageTimelineMetadata,
+    proposals: &[montage_proto::professional::ProposalPackage],
 ) -> Vec<String> {
     let mut refs = BTreeSet::new();
     for proposal in proposals {
@@ -2536,7 +2537,7 @@ fn derive_review_versions(
     package_id: &str,
     cut_id: &str,
     artifact_refs: &[String],
-    proposals: &[awidat_proto::professional::ProposalPackage],
+    proposals: &[montage_proto::professional::ProposalPackage],
 ) -> Vec<ReviewVersion> {
     if artifact_refs.is_empty() && proposals.is_empty() {
         return Vec::new();
@@ -2559,7 +2560,7 @@ fn derive_review_versions(
 
 fn derive_review_comments(
     reviewer: &str,
-    proposals: &[awidat_proto::professional::ProposalPackage],
+    proposals: &[montage_proto::professional::ProposalPackage],
 ) -> Vec<ReviewComment> {
     let mut comments = Vec::new();
     for proposal in proposals {
@@ -2638,7 +2639,7 @@ fn non_empty_trimmed(value: &str) -> Option<String> {
 
 /// Derive final delivery, QC, and archive requirements from current manifests.
 pub fn derive_delivery_master_package(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     audio: &AudioPostPackage,
 ) -> DeliveryMasterPackage {
     let profile = metadata
@@ -2712,7 +2713,7 @@ pub fn derive_delivery_master_package(
     }
 }
 
-fn delivery_manifest_artifacts(metadata: &AwidatTimelineMetadata) -> BTreeSet<String> {
+fn delivery_manifest_artifacts(metadata: &MontageTimelineMetadata) -> BTreeSet<String> {
     metadata
         .package_manifests
         .iter()
@@ -2750,7 +2751,7 @@ fn delivery_caption_path(profile_id: &str, package_artifacts: &BTreeSet<String>)
         .unwrap_or_else(|| format!("deliveries/{profile_id}/subtitles/en.srt"))
 }
 
-fn delivery_qc_reports(metadata: &AwidatTimelineMetadata, profile_id: &str) -> Vec<String> {
+fn delivery_qc_reports(metadata: &MontageTimelineMetadata, profile_id: &str) -> Vec<String> {
     let mut reports = BTreeSet::new();
     for report in &metadata.preflight_reports {
         if report.profile_id == profile_id || metadata.delivery_profiles.is_empty() {
@@ -3058,7 +3059,7 @@ pub fn derive_professional_pipeline_snapshot(
         &assistant_workflow.source_review.selects,
     );
 
-    let mut metadata = timeline.metadata.awidat.clone().unwrap_or_default();
+    let mut metadata = timeline.metadata.montage.clone().unwrap_or_default();
     metadata.asset_catalog = Some(asset_catalog.clone());
     merge_assistant_source_review(&mut metadata, assistant_workflow.source_review.clone());
     metadata.audio_finishing = Some(audio_finishing.clone());
@@ -3086,7 +3087,7 @@ pub fn derive_professional_pipeline_snapshot(
 
 /// Inspect registry, planner pass data-flow, and conflicts for autopilot gates.
 pub fn inspect_pre_autonomy_readiness(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
 ) -> OrchestrationInspection {
     let registry = metadata
         .capability_registry
@@ -3102,7 +3103,7 @@ pub fn inspect_pre_autonomy_readiness(
 }
 
 fn merge_metadata_readiness(
-    metadata: &AwidatTimelineMetadata,
+    metadata: &MontageTimelineMetadata,
     readiness: &mut PipelineReadinessReport,
 ) {
     let metadata_readiness = metadata.build_professional_readiness_report();
@@ -3161,7 +3162,7 @@ fn planner_edges(passes: &[PlannerPassContract]) -> Vec<PlannerPassEdge> {
 }
 
 /// Capture a learning signal from an accepted or rejected proposal.
-pub fn record_learning_signal(metadata: &mut AwidatTimelineMetadata, signal: LearningSignal) {
+pub fn record_learning_signal(metadata: &mut MontageTimelineMetadata, signal: LearningSignal) {
     metadata.learning_signals.push(signal);
 }
 
@@ -3171,13 +3172,13 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use awidat_proto::awidat_meta::{AwidatClipMetadata, AwidatMarkerMetadata};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{MontageClipMetadata, MontageMarkerMetadata};
+    use montage_proto::otio::{
         Clip, Effect, ExternalReference, Marker, MediaReference, Stack, StackChild, Timeline,
         Track, TrackChild, TrackKind,
     };
-    use awidat_proto::otio::{RationalTime, TimeRange};
-    use awidat_proto::professional::{
+    use montage_proto::otio::{RationalTime, TimeRange};
+    use montage_proto::professional::{
         AssetRole, CompositionNodeType, DeliveryProfile, EvidenceTrace, FindingSeverity,
         MaskOperation, PackageManifest, PreflightCheckKind, PreflightFinding, PreflightReport,
         ProposalPackage, ReadinessState, ReviewStatus,
@@ -3200,8 +3201,8 @@ mod tests {
         fs::write(camera_sidecar, "{}").unwrap();
 
         let mut timeline = Timeline::empty("assistant catalog");
-        let awidat = timeline.metadata.awidat.as_mut().unwrap();
-        awidat.source_assets = vec![
+        let montage = timeline.metadata.montage.as_mut().unwrap();
+        montage.source_assets = vec![
             "raw/cam-a.mov".to_string(),
             "raw/dialogue.wav".to_string(),
             "raw/missing.mov".to_string(),
@@ -3280,7 +3281,7 @@ mod tests {
         fs::write(camera_sidecar, "{}").unwrap();
 
         let mut timeline = Timeline::empty("media operations");
-        timeline.metadata.awidat.as_mut().unwrap().source_assets = vec![
+        timeline.metadata.montage.as_mut().unwrap().source_assets = vec![
             "raw/cam-a.mov".to_string(),
             "raw/dialogue.wav".to_string(),
             "raw/missing.mov".to_string(),
@@ -3320,7 +3321,7 @@ mod tests {
             "raw/dialogue.wav",
             "generate_proxy",
             Some("raw/dialogue.wav"),
-            Some(".awidat/proxies/dialogue"),
+            Some(".montage/proxies/dialogue"),
             false,
         );
         assert_media_action(
@@ -3366,10 +3367,10 @@ mod tests {
             ),
         );
         adr_marker.comment = Some("replace noisy production line".into());
-        adr_marker.metadata.awidat = Some(AwidatMarkerMetadata {
+        adr_marker.metadata.montage = Some(MontageMarkerMetadata {
             category: Some("adr".into()),
             note: Some("boom rustle under dialogue".into()),
-            ..AwidatMarkerMetadata::default()
+            ..MontageMarkerMetadata::default()
         });
         dialogue_clip.markers.push(adr_marker);
         dialogue_track
@@ -3389,10 +3390,10 @@ mod tests {
             ),
         );
         foley_marker.comment = Some("sweeten door contact".into());
-        foley_marker.metadata.awidat = Some(AwidatMarkerMetadata {
+        foley_marker.metadata.montage = Some(MontageMarkerMetadata {
             category: Some("foley".into()),
             note: Some("add handle rattle".into()),
-            ..AwidatMarkerMetadata::default()
+            ..MontageMarkerMetadata::default()
         });
         sfx_clip.markers.push(foley_marker);
         sfx_track.children.push(TrackChild::Clip(sfx_clip));
@@ -3402,7 +3403,7 @@ mod tests {
             StackChild::Track(sfx_track),
             StackChild::Track(Track::empty("V1 Picture", TrackKind::Video)),
         ];
-        timeline.metadata.awidat.as_mut().unwrap().extra.insert(
+        timeline.metadata.montage.as_mut().unwrap().extra.insert(
             "audio_measurements".to_string(),
             serde_json::json!({
                 "master": {
@@ -3518,7 +3519,7 @@ mod tests {
         let mut timeline = Timeline::empty("color finish");
         let mut video = Track::empty("V1 Picture", TrackKind::Video);
         let mut wide_a = timeline_clip("Wide A", "raw/cam-a.mov", "c-a1");
-        let wide_a_metadata = wide_a.metadata.awidat.as_mut().unwrap();
+        let wide_a_metadata = wide_a.metadata.montage.as_mut().unwrap();
         wide_a_metadata.extra.insert(
             "camera_color_space".to_string(),
             serde_json::json!("ARRI LogC4"),
@@ -3646,7 +3647,7 @@ mod tests {
                 RationalTime::new(288.0, 24.0),
             ));
         }
-        let hero_metadata = hero.metadata.awidat.as_mut().unwrap();
+        let hero_metadata = hero.metadata.montage.as_mut().unwrap();
         hero_metadata
             .extra
             .insert("vfx_shot_name".into(), serde_json::json!("SC010_SH020"));
@@ -3656,11 +3657,11 @@ mod tests {
         hero_metadata
             .extra
             .insert("vfx_version".into(), serde_json::json!("v003"));
-        hero.effects.push(Effect::new("awidat.vfx.screen_replace"));
-        hero.effects.push(Effect::new("awidat.vfx.roto_mask"));
-        hero.effects.push(Effect::new("awidat.vfx.green_key"));
+        hero.effects.push(Effect::new("montage.vfx.screen_replace"));
+        hero.effects.push(Effect::new("montage.vfx.roto_mask"));
+        hero.effects.push(Effect::new("montage.vfx.green_key"));
         let mut clean = timeline_clip("Clean Plate", "raw/clean.mov", "c-clean");
-        clean.effects.push(Effect::new("awidat.color_correction"));
+        clean.effects.push(Effect::new("montage.color_correction"));
 
         let mut video = Track::empty("V1 Picture", TrackKind::Video);
         video.children.push(TrackChild::Clip(hero));
@@ -3783,13 +3784,13 @@ mod tests {
         assert!(
             manifest
                 .effect_names
-                .contains(&"awidat.vfx.screen_replace".to_string())
+                .contains(&"montage.vfx.screen_replace".to_string())
         );
     }
 
     #[test]
     fn secure_review_package_collects_pending_proposals_and_watermarks_reviewer() {
-        let metadata = AwidatTimelineMetadata {
+        let metadata = MontageTimelineMetadata {
             proposal_packages: vec![
                 ProposalPackage {
                     id: "proposal-color".into(),
@@ -3827,7 +3828,7 @@ mod tests {
                 artifacts: vec!["deliveries/youtube.mp4".into()],
                 validation_reports: vec!["qc/youtube.json".into()],
             }],
-            ..AwidatTimelineMetadata::default()
+            ..MontageTimelineMetadata::default()
         };
 
         let package =
@@ -3919,7 +3920,7 @@ mod tests {
             PreflightCheckKind::Loudness,
             PreflightCheckKind::Captions,
         ];
-        let metadata = AwidatTimelineMetadata {
+        let metadata = MontageTimelineMetadata {
             delivery_profiles: vec![feature_profile],
             preflight_reports: vec![PreflightReport {
                 id: "preflight-feature".into(),
@@ -3938,7 +3939,7 @@ mod tests {
                 ],
                 validation_reports: vec!["qc/feature_theatrical/video-qc.json".into()],
             }],
-            ..AwidatTimelineMetadata::default()
+            ..MontageTimelineMetadata::default()
         };
         let audio = AudioPostPackage {
             stem_deliverables: vec![
@@ -4035,7 +4036,7 @@ mod tests {
 
     #[test]
     fn delivery_master_package_blocks_on_error_preflight_findings() {
-        let metadata = AwidatTimelineMetadata {
+        let metadata = MontageTimelineMetadata {
             preflight_reports: vec![PreflightReport {
                 id: "preflight-streaming".into(),
                 profile_id: "youtube_1080p".into(),
@@ -4046,7 +4047,7 @@ mod tests {
                     fix_ref: None,
                 }],
             }],
-            ..AwidatTimelineMetadata::default()
+            ..MontageTimelineMetadata::default()
         };
 
         let package = derive_delivery_master_package(&metadata, &AudioPostPackage::default());
@@ -4178,15 +4179,15 @@ mod tests {
         fs::write(dir.path().join("raw/dialogue.wav"), b"dialogue").unwrap();
 
         let mut timeline = Timeline::empty("pipeline snapshot");
-        timeline.metadata.awidat.as_mut().unwrap().source_assets =
+        timeline.metadata.montage.as_mut().unwrap().source_assets =
             vec!["raw/hero.mov".into(), "raw/dialogue.wav".into()];
         let mut hero = timeline_clip("Hero", "raw/hero.mov", "c-hero");
-        hero.effects.push(Effect::new("awidat.vfx.screen_replace"));
+        hero.effects.push(Effect::new("montage.vfx.screen_replace"));
         hero.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(48.0, 24.0),
         ));
-        let hero_metadata = hero.metadata.awidat.as_mut().unwrap();
+        let hero_metadata = hero.metadata.montage.as_mut().unwrap();
         hero_metadata.extra.insert(
             "sync_group_id".into(),
             serde_json::json!("scene-12a-take-3"),
@@ -4202,10 +4203,10 @@ mod tests {
             TimeRange::new(RationalTime::new(12.0, 24.0), RationalTime::new(24.0, 24.0)),
         );
         select_marker.comment = Some("best performance".into());
-        select_marker.metadata.awidat = Some(AwidatMarkerMetadata {
+        select_marker.metadata.montage = Some(MontageMarkerMetadata {
             category: Some("favorite".into()),
             note: Some("director circled this take".into()),
-            ..AwidatMarkerMetadata::default()
+            ..MontageMarkerMetadata::default()
         });
         hero.markers.push(select_marker);
         let mut dialogue = timeline_clip("Dialogue", "raw/dialogue.wav", "c-dialogue");
@@ -4213,7 +4214,7 @@ mod tests {
             RationalTime::zero(48_000.0),
             RationalTime::new(96_000.0, 48_000.0),
         ));
-        let dialogue_metadata = dialogue.metadata.awidat.as_mut().unwrap();
+        let dialogue_metadata = dialogue.metadata.montage.as_mut().unwrap();
         dialogue_metadata.extra.insert(
             "sync_group_id".into(),
             serde_json::json!("scene-12a-take-3"),
@@ -4231,7 +4232,7 @@ mod tests {
         timeline.tracks.children = vec![StackChild::Track(video), StackChild::Track(audio)];
         timeline
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .proposal_packages
@@ -4338,7 +4339,7 @@ mod tests {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("asset");
-        project_root.join(".awidat").join("proxies").join(format!(
+        project_root.join(".montage").join("proxies").join(format!(
             "{stem}-{:08x}.mp4",
             test_stable_path_hash(asset_path)
         ))
@@ -4395,9 +4396,9 @@ mod tests {
         );
         let mut clip = Clip::empty(name);
         clip.media_reference = MediaReference::External(ExternalReference::new(asset));
-        clip.metadata.awidat = Some(AwidatClipMetadata {
+        clip.metadata.montage = Some(MontageClipMetadata {
             extra,
-            ..AwidatClipMetadata::default()
+            ..MontageClipMetadata::default()
         });
         clip
     }

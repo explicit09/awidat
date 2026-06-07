@@ -1,4 +1,4 @@
-"""Shot-type + camera-motion classifier for Awidat.
+"""Shot-type + camera-motion classifier for Montage.
 
 Reads `index/scenedetect/<asset>.json` for shot boundaries,
 `index/face/<asset>.json` for face boxes,
@@ -39,7 +39,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "shot"
 INDEXER_VERSION = "0.1.0"
@@ -169,7 +169,7 @@ def _bucket_motion_signal(magnitude: float) -> str:
 
 
 def _read_motion_signal(project_root: Path, asset_path: str) -> dict[str, Any] | None:
-    motion_dir = project_root / ".awidat" / "motion"
+    motion_dir = project_root / ".montage" / "motion"
     if not motion_dir.exists():
         return None
     stem = Path(asset_path).stem

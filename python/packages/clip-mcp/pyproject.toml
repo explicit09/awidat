@@ -1,10 +1,10 @@
 [project]
 name = "clip-mcp"
 version = "0.1.0"
-description = "Awidat CLIP frame indexer — per-second image embeddings for visual search."
+description = "Montage CLIP frame indexer — per-second image embeddings for visual search."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     # ViT-B-32 / OpenAI weights via the open-source open_clip lib.
     # Pinned-conservative; the model id we load is fixed below.
     "open-clip-torch>=2.24,<3",

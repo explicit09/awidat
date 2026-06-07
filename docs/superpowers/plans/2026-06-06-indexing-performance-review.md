@@ -4,9 +4,9 @@
 
 **Goal:** Add a CLI-first indexing performance review workflow that measures non-transcription indexers in milliseconds and writes JSON plus Markdown reports against explicit targets.
 
-**Architecture:** `awidat-index` owns reusable timing report models built from `IndexReport`. `awidat-cli` owns the `index-perf` command, asset/indexer selection, command metadata, machine metadata, and report file output. Normal `awidat index` output remains unchanged.
+**Architecture:** `montage-index` owns reusable timing report models built from `IndexReport`. `montage-cli` owns the `index-perf` command, asset/indexer selection, command metadata, machine metadata, and report file output. Normal `montage index` output remains unchanged.
 
-**Tech Stack:** Rust, clap, serde/serde_json, existing `awidat_index::PairTelemetry`, targeted cargo tests.
+**Tech Stack:** Rust, clap, serde/serde_json, existing `montage_index::PairTelemetry`, targeted cargo tests.
 
 ---
 
@@ -20,7 +20,7 @@
 - [ ] Add `perf_report.rs` with serializable structs for target milliseconds, measured milliseconds, budget status, pair rows, and report summaries.
 - [ ] Add unit tests that construct `PairOutcome` values with known `PairTelemetry` and verify milliseconds and target comparison.
 - [ ] Re-export the module from `crates/index/src/lib.rs`.
-- [ ] Run `cargo test -p awidat-index perf_report -- --nocapture`.
+- [ ] Run `cargo test -p montage-index perf_report -- --nocapture`.
 
 ### Task 2: CLI Command and Report Output
 
@@ -32,9 +32,9 @@
 
 - [ ] Add `IndexPerf` CLI args: project path, repeated `--asset`, repeated `--indexer`, repeated `--exclude-indexer`, `--output`, `--concurrency`, and `--include-whisper`.
 - [ ] Default exclusions include `whisper` unless `--include-whisper` is passed.
-- [ ] Load config, filter indexer servers, collect assets using the same rules as `awidat index`, run `awidat_index::run`, and write `indexing-performance.json` plus `indexing-performance.md`.
+- [ ] Load config, filter indexer servers, collect assets using the same rules as `montage index`, run `montage_index::run`, and write `indexing-performance.json` plus `indexing-performance.md`.
 - [ ] Add unit tests for default whisper exclusion and Markdown rendering.
-- [ ] Run `cargo test -p awidat-cli index_perf -- --nocapture`.
+- [ ] Run `cargo test -p montage-cli index_perf -- --nocapture`.
 
 ### Task 3: Documentation and Manual Run Recipe
 

@@ -1,7 +1,7 @@
 //! GPU transition renderer.
 //!
-//! This crate is the GPU half of the awidat transition pipeline. It
-//! complements `awidat-render`'s FFmpeg backend: shaders here can
+//! This crate is the GPU half of the montage transition pipeline. It
+//! complements `montage-render`'s FFmpeg backend: shaders here can
 //! express transitions FFmpeg's `xfade` cannot (camera shake,
 //! chromatic split, future shader-only catalogue entries) and, by
 //! design, share the same code path between offline export and live
@@ -98,7 +98,7 @@ pub enum TransitionShader {
     ChromaticSplit,
     /// Box-blur transition. Reads `extra_params[0]` as the per-frame
     /// blur amount, so the composer can drive it from a
-    /// [`awidat_proto::transitions::ParamCurve`] evaluated at every
+    /// [`montage_proto::transitions::ParamCurve`] evaluated at every
     /// progress value.
     Blur,
     /// Luma-mask reveal. Reads `extra_params[0]` as the integer mask
@@ -152,7 +152,7 @@ impl TransitionShader {
         }
     }
 
-    /// Parse the stable shader id that `awidat_proto::transitions::
+    /// Parse the stable shader id that `montage_proto::transitions::
     /// resolve_composition_gpu_shader` returns. Used by the render
     /// crate to bridge the proto layer (which cannot depend on
     /// render-gpu) to a concrete `TransitionShader` value.
@@ -242,7 +242,7 @@ impl GpuTransitionRenderer {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    label: Some("awidat-render-gpu"),
+                    label: Some("montage-render-gpu"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
                 },

@@ -1,4 +1,4 @@
-"""Face detection + speaker-to-face mapping indexer for Awidat.
+"""Face detection + speaker-to-face mapping indexer for Montage.
 
 Two-pass pipeline:
 
@@ -40,7 +40,7 @@ import numpy as np
 from PIL import Image
 from sklearn.cluster import DBSCAN
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "face"
 INDEXER_VERSION = "0.1.0"

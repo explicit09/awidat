@@ -13,10 +13,10 @@
 //! background. This tool is the agent's lever, not the GUI's.
 
 use async_trait::async_trait;
-use awidat_config::Config;
-use awidat_index::media_files::collect_raw_media_inputs;
-use awidat_index::{AssetInput, PairOutcome};
-use awidat_mcp::ClientInfo;
+use montage_config::Config;
+use montage_index::media_files::collect_raw_media_inputs;
+use montage_index::{AssetInput, PairOutcome};
+use montage_mcp::ClientInfo;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -114,7 +114,7 @@ impl ToolHandler for StartIndexingTool {
             return Err(FunctionCallError::RespondToModel(
                 "start_indexing: no indexers configured. \
                  Add `[[mcp.servers]]` entries with kind = \"indexer\" \
-                 to <project>/.awidat/config.toml or ~/.config/awidat/config.toml."
+                 to <project>/.montage/config.toml or ~/.config/montage/config.toml."
                     .into(),
             ));
         }
@@ -149,16 +149,16 @@ impl ToolHandler for StartIndexingTool {
         }
 
         let client_info = ClientInfo {
-            name: "awidat-agent".into(),
+            name: "montage-agent".into(),
             version: env!("CARGO_PKG_VERSION").into(),
         };
 
-        let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
+        let concurrency = std::env::var("MONTAGE_INDEX_CONCURRENCY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(2);
 
-        let report = awidat_index::run(
+        let report = montage_index::run(
             &project_root,
             &servers,
             &assets,
@@ -181,8 +181,8 @@ impl ToolHandler for StartIndexingTool {
 }
 
 fn format_report(
-    report: &awidat_index::IndexReport,
-    servers: &[awidat_config::McpServer],
+    report: &montage_index::IndexReport,
+    servers: &[montage_config::McpServer],
     assets: &[AssetInput],
 ) -> String {
     let (skipped, wrote, failed, dep_skipped) = report.counts();
@@ -242,10 +242,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

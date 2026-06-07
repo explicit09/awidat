@@ -89,7 +89,7 @@ impl ToolHandler for FindBlackFramesTool {
             .picture_black_ratio_th
             .unwrap_or(DEFAULT_PICTURE_BLACK_RATIO_TH);
         let min_duration_s = args.min_duration_s.unwrap_or(DEFAULT_MIN_DURATION_S);
-        let ranges = awidat_render::generate_black_frames(
+        let ranges = montage_render::generate_black_frames(
             &asset_path,
             picture_black_ratio_th,
             min_duration_s,
@@ -148,10 +148,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

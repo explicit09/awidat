@@ -1,4 +1,4 @@
-# Phase 4: pg_cron scheduler + token-refresh sweep firing jobs through the awidat-social service
+# Phase 4: pg_cron scheduler + token-refresh sweep firing jobs through the montage-social service
 
 > **BINDING:** Read `RECONCILIATION.md` first. Where this plan conflicts with it, RECONCILIATION wins. Key: domain stays sync (D1), server crate = `crates/social-server` (D2).
 
@@ -7,7 +7,7 @@
 
 ## Prerequisites
 - [USER] Supabase project must exist with the `pg_cron` and `pg_net` extensions enabled (pg_cron/pg_net are enable-per-project in Supabase) — created in Phase 1, confirmed enabled here.
-- [USER] The awidat-social Rust HTTP service must be deployed and reachable from Supabase (Fly.io/Railway/container per the spec's open question) with a stable base URL — Phase 1 deliverable; Phase 4 assumes it exists.
+- [USER] The montage-social Rust HTTP service must be deployed and reachable from Supabase (Fly.io/Railway/container per the spec's open question) with a stable base URL — Phase 1 deliverable; Phase 4 assumes it exists.
 - [USER] Set a shared cron secret (e.g. CRON_INTERNAL_TOKEN) and the service base URL as Supabase Vault secrets / DB settings, so the migration references them by name rather than embedding literals.
 - [USER] A real YouTube OAuth app (client_id/client_secret) with refresh-token issuance, and at least one connected test account (Phase 2 deliverable) to exercise refresh-on-fire; YouTube API project TOS audit NOT required for Phase 4 — private-mode firing is sufficient to demo.
 - [WE-STAGE] The pg_cron schedule SQL + pg_net http_post glue (Step 5) as a reversible migration.
@@ -44,7 +44,7 @@ Add a method on `PublishJob` that, given the current `attempt_count`, a `max_att
 
 Why here: `attempt_count` is already incremented at claim time (`claim_for_upload`), so after a failed attempt the count reflects attempts-so-far; the decision is pure and belongs next to the FSM it mutates, keeping it unit-testable with no I/O.
 
-**Verify:** add `#[cfg(test)]` cases in `job.rs` mirroring the existing style (see the existing `publish_job_schedule_claim_fail_and_retry_transitions` test, line 336): (a) attempt 1 of 3 → `Requeued` with `scheduled_for == now + base`; (b) attempt 2 → `scheduled_for == now + 2*base`; (c) attempt == max → `Exhausted`, `status==Failed`, `normalized_error` set; (d) backoff capped at ceiling. Run `cargo test -p awidat-social job::`.
+**Verify:** add `#[cfg(test)]` cases in `job.rs` mirroring the existing style (see the existing `publish_job_schedule_claim_fail_and_retry_transitions` test, line 336): (a) attempt 1 of 3 → `Requeued` with `scheduled_for == now + base`; (b) attempt 2 → `scheduled_for == now + 2*base`; (c) attempt == max → `Exhausted`, `status==Failed`, `normalized_error` set; (d) backoff capped at ceiling. Run `cargo test -p montage-social job::`.
 
 ### Step 2 — Wire the backoff decision into the worker upload path
 
@@ -56,7 +56,7 @@ Today the `NetworkOrServer` and (arguably) `MediaConstraintFailed` arms (lines 1
 
 Why: this preserves every existing guard (the account re-check and cancel-race logic stay exactly as-is; we only change which terminal vs non-terminal transition the retryable error arm takes). It keeps crash-safety because the job row is always left in a durable, next-tick-evaluable state (`Scheduled` with a future `scheduled_for`, or terminal `Failed`).
 
-**Verify:** extend `upload_service.rs` tests — the existing `RecordingUploadAdapter::failing(UploadAdapterError::NetworkOrServer{..})` pattern (test infra at line 334) drives this. Add: (a) first network failure → job back to `Scheduled` with bumped `scheduled_for` and a `RetryQueued` event, NOT `Failed`; (b) after `max_attempts` exhausted → `Failed` with event; (c) `MediaConstraintFailed` still terminal on first failure. Run `cargo test -p awidat-social upload_service::`.
+**Verify:** extend `upload_service.rs` tests — the existing `RecordingUploadAdapter::failing(UploadAdapterError::NetworkOrServer{..})` pattern (test infra at line 334) drives this. Add: (a) first network failure → job back to `Scheduled` with bumped `scheduled_for` and a `RetryQueued` event, NOT `Failed`; (b) after `max_attempts` exhausted → `Failed` with event; (c) `MediaConstraintFailed` still terminal on first failure. Run `cargo test -p montage-social upload_service::`.
 
 ### Step 3 — Add a token-freshness check + refresh-driver seam to the domain crate
 
@@ -70,11 +70,11 @@ In `UploadService::execute_claimed_job`, right before the existing `let _token_s
 
 Why: the spec requires a fresh token at fire-time even while the user is offline, and `NeedsReauth` on refresh failure. The account re-check at the top of `execute_claimed_job` (lines 67-83) already short-circuits a `NeedsReauth` account on the *next* tick, so flipping the status is sufficient to stop retries.
 
-**Verify:** add tests using a fake `TokenRefresher` (success / invalid-grant) and the existing in-memory store: (a) expiring token → refresher called, new secret saved, upload proceeds; (b) refresh invalid-grant → account becomes `NeedsReauth`, job `RequiresAction`, adapter never called; (c) non-expiring token → refresher NOT called. `cargo test -p awidat-social`.
+**Verify:** add tests using a fake `TokenRefresher` (success / invalid-grant) and the existing in-memory store: (a) expiring token → refresher called, new secret saved, upload proceeds; (b) refresh invalid-grant → account becomes `NeedsReauth`, job `RequiresAction`, adapter never called; (c) non-expiring token → refresher NOT called. `cargo test -p montage-social`.
 
 ### Step 4 — Add the HTTP worker-tick endpoints on the Rust service
 
-**File:** the service binary/crate created in Phase 1 (per the spec's "awidat-social deployed as a small HTTP service"; today there is no `main.rs` for it — confirmed via workspace scan, only `crates/cli`, desktop, and codex bins exist). Assume Phase 1 added something like `crates/social-service/src/` (axum is already a workspace dep — `Cargo.toml` has `axum = "0.8"`, `sqlx` with `postgres`-capable features, `tokio`). Phase 4 adds two routes to that service:
+**File:** the service binary/crate created in Phase 1 (per the spec's "montage-social deployed as a small HTTP service"; today there is no `main.rs` for it — confirmed via workspace scan, only `crates/cli`, desktop, and codex bins exist). Assume Phase 1 added something like `crates/social-service/src/` (axum is already a workspace dep — `Cargo.toml` has `axum = "0.8"`, `sqlx` with `postgres`-capable features, `tokio`). Phase 4 adds two routes to that service:
 
 1. `POST /internal/cron/run-due-jobs` — the minute-tick worker. Body/params: `{ now, batch_limit }`. Implementation: open the Postgres-backed `SocialStore` (Phase 1), call `PublishService::claim_due_jobs(store, now, batch_limit)`; for each claimed job, build an `ExecuteUploadRequest` (resolve title/description/tags/thumbnail from the campaign/account — reuse `resolve_account_default_privacy` and account defaults already in `api.rs`), ensure a fresh token via the Phase 2 `TokenRefresher` (Step 3), then call `SocialApi::execute_claimed_upload_job` with the real Phase 3 YouTube adapter. Return a JSON summary `{ claimed, published, processing, requeued, requires_action, failed }`.
 

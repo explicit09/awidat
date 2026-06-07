@@ -1,5 +1,5 @@
 // Empty state for the agent rail's conversation pane. Renders a brief
-// "Awidat" intro card followed by four project-aware starter prompts.
+// "Montage" intro card followed by four project-aware starter prompts.
 // Mounted by ChatStream when `items.length === 0`; the Composer and
 // SessionBar continue to render outside this component.
 

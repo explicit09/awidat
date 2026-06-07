@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Run the awidat-social server on localhost against the live Supabase DB.
+# Run the montage-social server on localhost against the live Supabase DB.
 #
 # This is for LOCAL TESTING — no Fly, no deploy. The server binds 127.0.0.1:3000;
-# point the desktop at AWIDAT_SOCIAL_SERVER_URL=http://127.0.0.1:3000.
+# point the desktop at MONTAGE_SOCIAL_SERVER_URL=http://127.0.0.1:3000.
 #
 # SOCIAL_FIRING_ENABLED defaults to "false": the localhost server does NOT fire
 # jobs unless explicitly enabled. With firing off, boot skips cron/extension
@@ -26,7 +26,7 @@ cd "$(dirname "$0")"
 # Put DATABASE_URL (with the Supabase DB password, URL-encoded) in .env.local —
 # that file is gitignored so the password never lands in git. This committed
 # script holds NO secret. See .env.local for the exact connection-string shape;
-# the search_path=awidat_social option is MANDATORY (PgSocialStore uses
+# the search_path=montage_social option is MANDATORY (PgSocialStore uses
 # unqualified table names).
 if [[ -f .env.local ]]; then
   # shellcheck disable=SC1091
@@ -41,7 +41,7 @@ fi
 # (put the Google OAuth secrets there — never in this committed file).
 
 # Bearer the desktop sends to /social/* (dev single-user mode). Must match the
-# desktop's AWIDAT_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
+# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
 export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
@@ -64,7 +64,7 @@ export OAUTH_REDIRECT_BASE="${OAUTH_REDIRECT_BASE:-http://127.0.0.1:3000}"
 
 # ── Local-test posture ──────────────────────────────────────────────────────
 export SOCIAL_FIRING_ENABLED="${SOCIAL_FIRING_ENABLED:-false}"   # no autonomous firing; skips cron migration on boot
-export AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS="${AWIDAT_SOCIAL_SKIP_INFRA_MIGRATIONS:-true}"
+export MONTAGE_SOCIAL_SKIP_INFRA_MIGRATIONS="${MONTAGE_SOCIAL_SKIP_INFRA_MIGRATIONS:-true}"
 # Local direct-publish tests should honor the visibility selected in the desktop.
 # The server binary itself still defaults this to true for deployed/pre-audit use.
 export YOUTUBE_FORCE_PRIVATE="${YOUTUBE_FORCE_PRIVATE:-false}"
@@ -78,13 +78,13 @@ mkdir -p "$ARTIFACT_BASE_DIR"
 # SUPABASE_JWT_SECRET=...                                — Phase 7 per-user auth
 
 if [[ "$SOCIAL_FIRING_ENABLED" != "true" ]]; then
-  echo "Starting awidat-social on $BIND_ADDR (firing disabled; cron migration skipped)..."
-  exec cargo run -p awidat-social-server
+  echo "Starting montage-social on $BIND_ADDR (firing disabled; cron migration skipped)..."
+  exec cargo run -p montage-social-server
 fi
 
-LOCAL_CRON_INTERVAL_SECS="${AWIDAT_SOCIAL_LOCAL_CRON_INTERVAL_SECS:-15}"
-echo "Starting awidat-social on $BIND_ADDR (local firing loop enabled; cron migration skipped)..."
-cargo run -p awidat-social-server &
+LOCAL_CRON_INTERVAL_SECS="${MONTAGE_SOCIAL_LOCAL_CRON_INTERVAL_SECS:-15}"
+echo "Starting montage-social on $BIND_ADDR (local firing loop enabled; cron migration skipped)..."
+cargo run -p montage-social-server &
 server_pid=$!
 
 cleanup() {

@@ -4,7 +4,7 @@
 //
 //   1. Connected accounts — the server-backed social publishing surface
 //      (`<SocialAccounts />`). Connect / list / disconnect run through the
-//      `social_*` Tauri commands over the `awidat-social` SocialApi facade;
+//      `social_*` Tauri commands over the `montage-social` SocialApi facade;
 //      tokens stay server-side. This replaces the legacy desktop-local
 //      OAuth-connection rows ("replace as we go" — see
 //      docs/superpowers/specs/2026-06-03-social-desktop-ui-design.md).
@@ -69,7 +69,7 @@ export function PublishingSettings() {
       </Stack>
 
       {/* BYO-credentials UI removed: the desktop is a thin client of the
-          awidat-social server, which holds the OAuth app server-side. Users
+          montage-social server, which holds the OAuth app server-side. Users
           connect via the server-backed <SocialAccounts /> surface above
           ("just sign in") — they no longer paste per-platform client_id/secret.
           The legacy local-publishing path still exists behind the

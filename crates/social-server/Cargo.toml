@@ -1,5 +1,5 @@
 [package]
-name = "awidat-social-server"
+name = "montage-social-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "awidat-social-server"
+name = "montage-social-server"
 path = "src/main.rs"
 
 [dependencies]
-awidat-social = { workspace = true, features = ["youtube-live"] }
+montage-social = { workspace = true, features = ["youtube-live"] }
 # Axum: workspace dep is default-features=false; we add the features we need (G1).
 axum = { workspace = true, features = ["http1", "tokio", "json", "query"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
@@ -23,7 +23,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 urlencoding = { workspace = true }
-# r2d2 and postgres come transitively via awidat-social; re-declare here so
+# r2d2 and postgres come transitively via montage-social; re-declare here so
 # main.rs can use them directly when building the pool.
 r2d2 = { workspace = true }
 r2d2_postgres = { workspace = true }

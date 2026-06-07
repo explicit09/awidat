@@ -4,13 +4,13 @@
 //! agent-side helpers stay byte-compatible with the desktop transcoder's
 //! own `commands/media.rs::proxy_path_for` (both hash the absolute asset
 //! path via FNV-1a 32-bit and embed the same render-side schema tag).
-//! Bump `awidat_render::PROXY_SCHEMA_TAG` to invalidate old proxies.
+//! Bump `montage_render::PROXY_SCHEMA_TAG` to invalidate old proxies.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
-use awidat_render::PROXY_SCHEMA_TAG;
+use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
+use montage_render::PROXY_SCHEMA_TAG;
 use serde::Serialize;
 
 /// Agent-visible proxy cache status.
@@ -47,7 +47,7 @@ pub struct ProxyStatusEntry {
 /// transcoder's `commands/media.rs::proxy_path_for` byte-for-byte so the
 /// agent's reads land on the same files the desktop writes.
 pub fn proxy_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
-    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxies_dir = project_root.join(".montage").join("proxies");
     let stem = asset_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn proxy_path_is_stable_and_under_awidat() {
+    fn proxy_path_is_stable_and_under_montage() {
         let root = Path::new("/project");
         let asset = Path::new("/project/raw/camera.mov");
 
@@ -158,7 +158,7 @@ mod tests {
         let second = proxy_path_for(root, asset);
 
         assert_eq!(first, second);
-        let needle = format!(".awidat/proxies/camera-{}-", PROXY_SCHEMA_TAG);
+        let needle = format!(".montage/proxies/camera-{}-", PROXY_SCHEMA_TAG);
         assert!(
             first.to_string_lossy().contains(&needle),
             "expected proxy path to contain `{needle}`, got `{}`",

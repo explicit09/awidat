@@ -13,7 +13,7 @@
 //!   `read_timeline_otio_raw` returns the raw `project.otio.json`
 //!   bytes so the frontend can stash them inside a HistoryEntry at
 //!   accept time. We could derive this from `read_timeline`'s
-//!   flattened view but the flattening drops effect metadata, awidat
+//!   flattened view but the flattening drops effect metadata, montage
 //!   metadata, and original schema fields that the restore path
 //!   needs to round-trip. Reading the file directly is simpler and
 //!   honest.
@@ -27,12 +27,12 @@
 //!   timeline to <history-entry timestamp>" — same shape as the
 //!   existing vedit-ref restore.
 
-use awidat_proto::otio::Timeline;
-use awidat_proto::project::Project;
+use montage_proto::otio::Timeline;
+use montage_proto::project::Project;
 use tauri::{AppHandle, State};
 
 use crate::events::emit_timeline_changed;
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Read the active project's `project.otio.json` and return the raw
 /// JSON bytes as a string.
@@ -42,7 +42,7 @@ use crate::state::AwidatState;
 /// Returns an empty-snapshot OTIO string when no project is loaded so
 /// the caller can skip the capture without an error path.
 #[tauri::command]
-pub async fn read_timeline_otio_raw(state: State<'_, AwidatState>) -> Result<String, String> {
+pub async fn read_timeline_otio_raw(state: State<'_, MontageState>) -> Result<String, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(String::new()),
@@ -66,12 +66,12 @@ pub async fn read_timeline_otio_raw(state: State<'_, AwidatState>) -> Result<Str
 /// malformed shapes); the write goes through [`Project::write`] so
 /// the edit-plan + manifest stay in sync with the OTIO file.
 ///
-/// On success emits `awidat://timeline-changed` so the frontend
+/// On success emits `montage://timeline-changed` so the frontend
 /// re-reads the timeline and the canvas reflects the restored state.
 #[tauri::command]
 pub async fn restore_timeline_otio(
     app: AppHandle,
-    state: State<'_, AwidatState>,
+    state: State<'_, MontageState>,
     snapshot_json: String,
 ) -> Result<(), String> {
     let trimmed = snapshot_json.trim();
@@ -111,9 +111,9 @@ pub async fn restore_timeline_otio(
         // proposal — vedit failures log a warning but don't unwind the
         // user-visible disk write.
         let seat_author = crate::commands::vedit::desktop_commit_author();
-        match awidat_core::vc::open_or_init(&project_root_buf) {
+        match montage_core::vc::open_or_init(&project_root_buf) {
             Ok(repo) => {
-                if let Err(e) = awidat_core::vc::commit_current_timeline_as(
+                if let Err(e) = montage_core::vc::commit_current_timeline_as(
                     &repo,
                     "Restore timeline from History snapshot",
                     Some(
@@ -147,7 +147,7 @@ pub async fn restore_timeline_otio(
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::otio::Timeline;
+    use montage_proto::otio::Timeline;
 
     #[test]
     fn snapshot_round_trips_through_serde() {

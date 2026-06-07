@@ -8,7 +8,7 @@
 //!
 //! Optional bin filter (slice C2 / wave3-bin-aware): when `bin` is
 //! provided, the result is restricted to filesystem-discovered assets
-//! whose [`awidat_proto::professional::AssetRecord`] in the project
+//! whose [`montage_proto::professional::AssetRecord`] in the project
 //! catalog has a matching `bin_id`. A bin id of the synthetic form
 //! `role:<role>` (e.g. `role:audio`) filters on the asset's role rather
 //! than a user-defined bin — the same virtual buckets surfaced by
@@ -18,8 +18,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use awidat_index::media_files::{MediaFile, MediaScanOptions, collect_project_media_files};
-use awidat_proto::project::Project;
+use montage_index::media_files::{MediaFile, MediaScanOptions, collect_project_media_files};
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -230,7 +230,7 @@ impl From<MediaFile> for AssetEntry {
 /// Filter entries against the project's durable asset catalog.
 ///
 /// Bin ids beginning with [`ROLE_BIN_PREFIX`] (e.g. `"role:audio"`)
-/// match the [`awidat_proto::professional::AssetRole`] of the catalog
+/// match the [`montage_proto::professional::AssetRole`] of the catalog
 /// record, mirroring the synthetic role buckets surfaced by `list_bins`.
 /// Plain bin ids match `AssetRecord.bin_id`. Filesystem-discovered
 /// entries with no matching catalog record never match a bin filter.
@@ -247,7 +247,7 @@ fn filter_by_bin(
     let catalog = project
         .timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|meta| meta.asset_catalog.as_ref());
     let Some(catalog) = catalog else {
@@ -318,11 +318,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

@@ -1,4 +1,4 @@
-# Awidat Transition Decision Layer
+# Montage Transition Decision Layer
 
 This document defines the strategy for giving agents taste around
 transitions. The transition renderer now knows how to execute semantic
@@ -11,7 +11,7 @@ Good transition choice is primarily editorial, not technical.
 
 - Walter Murch's Rule of Six is a useful priority order for cuts:
   emotion, story, rhythm, eye trace, screen plane, and spatial
-  continuity. Awidat should rank transition decisions the same way:
+  continuity. Montage should rank transition decisions the same way:
   only use visual continuity repair after emotion/story/rhythm justify
   calling attention to the cut.
 - A hard cut is the default continuity tool. A transition needs a job:
@@ -57,7 +57,7 @@ The decision layer must produce one of three outcomes:
 ```json
 {
   "decision": "transition",
-  "id": "awidat.slide_left",
+  "id": "montage.slide_left",
   "duration_s": 0.35,
   "intent": "hide_motion_jump",
   "energy": 0.65,
@@ -70,7 +70,7 @@ The decision layer must produce one of three outcomes:
 ```json
 {
   "decision": "composite",
-  "id": "awidat.composite",
+  "id": "montage.composite",
   "duration_s": 0.42,
   "intent": "beat_hit_motion_cover",
   "energy": 0.82,
@@ -88,7 +88,7 @@ The decision layer must produce one of three outcomes:
 ```
 
 Normal editing must stay data-only. Agents may emit built-in transition
-ids or `awidat.composite` recipes over stable primitives. They must not
+ids or `montage.composite` recipes over stable primitives. They must not
 emit raw FFmpeg filter graphs, GLSL, shell commands, plugin code, or
 opaque generated backend code in project metadata.
 
@@ -149,7 +149,7 @@ bounded context packet around one adjacent clip boundary.
 The packet should be compact enough for agents and tests, but explicit
 enough that a transition decision can be explained and reproduced.
 
-## Signal Sources In Awidat
+## Signal Sources In Montage
 
 | Signal | Existing source | Use in decision |
 | --- | --- | --- |
@@ -192,22 +192,22 @@ Hard cut remains the default. The decision process is:
 
 3. Choose the lowest-attention transition that solves the job.
    - Hard cut when the cut is clean and story/rhythm work.
-   - `awidat.cross_dissolve` for soft topic/time/emotion.
-   - `awidat.match_dissolve` for a real visual echo, memory bridge, or
+   - `montage.cross_dissolve` for soft topic/time/emotion.
+   - `montage.match_dissolve` for a real visual echo, memory bridge, or
      graphic match between related images.
-   - `awidat.fade_black` for strong reset/end/chapter break.
-   - `awidat.flash_white` for beat hit/reveal/high energy.
-   - `awidat.slide_*` or `awidat.smooth_push_left` for motion cover and
+   - `montage.fade_black` for strong reset/end/chapter break.
+   - `montage.flash_white` for beat hit/reveal/high energy.
+   - `montage.slide_*` or `montage.smooth_push_left` for motion cover and
      screen direction.
-   - `awidat.motion_blur` for short motion cover when the visual signal
+   - `montage.motion_blur` for short motion cover when the visual signal
      says motion is the problem but direction is unknown.
-   - `awidat.whip_pan_left/right` for short, fast screen-direction
+   - `montage.whip_pan_left/right` for short, fast screen-direction
      motion only when footage already motivates a pass-by or whip.
-   - `awidat.wipe_*` for deliberate graphic movement.
-   - `awidat.zoom_in` for punch-in or forward momentum.
-   - `awidat.pixelize` only for tech/glitch context.
-   - `awidat.radial` only for stylized reveals.
-   - `awidat.composite` when two jobs need to combine, for example
+   - `montage.wipe_*` for deliberate graphic movement.
+   - `montage.zoom_in` for punch-in or forward momentum.
+   - `montage.pixelize` only for tech/glitch context.
+   - `montage.radial` only for stylized reveals.
+   - `montage.composite` when two jobs need to combine, for example
      push plus flash, or zoom plus blur.
 
 4. Set duration by taste and handle constraints.
@@ -243,7 +243,7 @@ Recommended thresholds:
 - `< 0.35`: hard cut.
 - `0.35..0.60`: use a subtle built-in only if the job is clear.
 - `0.60..0.80`: use a motivated built-in.
-- `> 0.80`: built-in or `awidat.composite`, depending on whether one
+- `> 0.80`: built-in or `montage.composite`, depending on whether one
   transition family solves the job.
 
 The score is not the final answer. It is a traceable prior that the
@@ -304,7 +304,7 @@ ranked decisions:
 {
   "recommended": {
     "decision": "transition",
-    "id": "awidat.slide_left",
+    "id": "montage.slide_left",
     "duration_s": 0.32,
     "intent": "hide_motion_jump",
     "energy": 0.62,
@@ -313,13 +313,13 @@ ranked decisions:
   },
   "alternates": [
     {"decision": "hard_cut", "reason": "..."},
-    {"decision": "transition", "id": "awidat.cross_dissolve", "reason": "..."}
+    {"decision": "transition", "id": "montage.cross_dissolve", "reason": "..."}
   ],
   "edl_fragment": "*** Insert Transition\n..."
 }
 ```
 
-This mirrors other Awidat planning tools: propose structured edits, then
+This mirrors other Montage planning tools: propose structured edits, then
 the agent commits through `apply_edl`. The first implementation is
 conservative: clean/no-job contexts become hard-cut intent; dirty/risky
 or named-job contexts get one supported visible transition only when the
@@ -341,8 +341,8 @@ The agent workflow becomes:
 Add fixtures that prove taste, not just renderability. Product coverage
 now exercises `transition_context` -> `plan_transition` on a synthetic
 boundary, and the live tier accepts mounted real-project transition
-planner fixtures at `.awidat/eval/transition-planner-flow.json` and
-`.awidat/eval/transition-planners/*.json`. Use negative EDL assertions
+planner fixtures at `.montage/eval/transition-planner-flow.json` and
+`.montage/eval/transition-planners/*.json`. Use negative EDL assertions
 for hard-cut cases so fixtures prove no visible transition was emitted:
 
 - same speaker, same sentence -> hard cut
@@ -362,7 +362,7 @@ Tests should assert the decision packet and reason, not only the EDL.
 
 ## Future: Learning Taste
 
-After deterministic planning works, Awidat can learn style from accepted
+After deterministic planning works, Montage can learn style from accepted
 or rejected transitions:
 
 - transition density per minute

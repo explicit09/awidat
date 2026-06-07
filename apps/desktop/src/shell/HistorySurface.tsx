@@ -5,7 +5,7 @@
  * Renders the per-project log of proposal decisions from
  * `useProposalHistoryStore`: every accept, reject, revise, and restore
  * event is surfaced as a chronological row. The data IS the project's
- * history — the propose → ghost → decide loop is Awidat's editorial
+ * history — the propose → ghost → decide loop is Montage's editorial
  * primitive, so the audit trail is the "git log" for a video edit.
  *
  * Layout:

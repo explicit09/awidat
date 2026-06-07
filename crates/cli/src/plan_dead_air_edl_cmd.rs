@@ -1,10 +1,10 @@
-//! `awidat plan-dead-air-edl` — generate a deterministic silence-cleanup EDL.
+//! `montage plan-dead-air-edl` — generate a deterministic silence-cleanup EDL.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use awidat_proto::project::Project;
-use awidat_render::SilenceRange;
+use montage_proto::project::Project;
+use montage_render::SilenceRange;
 use tokio_util::sync::CancellationToken;
 
 use crate::plan_clip::{SelectedClip, resolve_asset_path, select_clip};
@@ -12,7 +12,7 @@ use crate::plan_ranges::{
     SourceRange, build_kept_ranges_edl, kept_ranges_after_removing, push_non_empty_range,
 };
 
-/// Arguments for `awidat plan-dead-air-edl`.
+/// Arguments for `montage plan-dead-air-edl`.
 pub struct PlanDeadAirEdlArgs {
     /// Project directory.
     pub project_root: PathBuf,
@@ -63,7 +63,7 @@ fn detect_silences(
         .build()
         .context("failed to build tokio runtime")?;
     runtime
-        .block_on(awidat_render::generate_silences(
+        .block_on(montage_render::generate_silences(
             asset_path,
             threshold_db,
             min_duration_s,

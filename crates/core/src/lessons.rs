@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 /// One captured editorial decision. Stable on disk: extending this
 /// struct must be additive (new fields with `#[serde(default)]`), since
-/// older session logs may already be on disk when a new awidat reads
+/// older session logs may already be on disk when a new montage reads
 /// them.
 ///
 /// Originally lived in `crate::rollout`; moved here in step 8e/W when
@@ -68,7 +68,7 @@ pub struct EditorialDecision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_reason: Option<String>,
     /// What the user picked. String form for forward-compat: a future
-    /// awidat may add new decision variants and we don't want a session
+    /// montage may add new decision variants and we don't want a session
     /// log to be unreadable just because the enum grew.
     pub decision: String,
     /// When the modal was shown.
@@ -402,17 +402,17 @@ pub fn render_markdown(patterns: &[Pattern], total_decisions: usize) -> Option<S
 }
 
 /// Default location for the rendered learned-style file. Lives under
-/// the user config dir so it survives `awidat upgrade` and follows
-/// XDG conventions. Override with `AWIDAT_LEARNED_STYLE` (used by
+/// the user config dir so it survives `montage upgrade` and follows
+/// XDG conventions. Override with `MONTAGE_LEARNED_STYLE` (used by
 /// tests, by sandboxed dev runs, and by users who want the file
 /// somewhere other than the default).
 pub fn default_output_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("AWIDAT_LEARNED_STYLE")
+    if let Ok(p) = std::env::var("MONTAGE_LEARNED_STYLE")
         && !p.is_empty()
     {
         return Some(PathBuf::from(p));
     }
-    dirs::config_dir().map(|d| d.join("awidat").join("learned-style.md"))
+    dirs::config_dir().map(|d| d.join("montage").join("learned-style.md"))
 }
 
 /// Read the learned-style markdown if it exists. Used by `Session::new`
@@ -514,15 +514,15 @@ pub fn apply_project_format_defaults_from_markdown(
     if !defaults.has_required_format() {
         return Ok(LearnedProjectFormatDefaults::default());
     }
-    let mut project = awidat_proto::project::Project::read(project_root)
+    let mut project = montage_proto::project::Project::read(project_root)
         .map_err(|e| format!("read project for learned format defaults: {e}"))?;
     let meta = project
         .timeline
         .metadata
-        .awidat
-        .get_or_insert_with(awidat_proto::awidat_meta::AwidatTimelineMetadata::default);
+        .montage
+        .get_or_insert_with(montage_proto::montage_meta::MontageTimelineMetadata::default);
     if meta.version.is_empty() {
-        meta.version = awidat_proto::AWIDAT_PROJECT_VERSION.to_string();
+        meta.version = montage_proto::MONTAGE_PROJECT_VERSION.to_string();
     }
     if meta.extra.contains_key("output_format") {
         return Ok(LearnedProjectFormatDefaults::default());
@@ -738,16 +738,16 @@ mod tests {
 - When Set Output Format safe_area=mobile, you accept 80% of the time (4 of 5).
 ";
         let dir = tempfile::tempdir().unwrap();
-        awidat_proto::project::Project::init(dir.path()).unwrap();
+        montage_proto::project::Project::init(dir.path()).unwrap();
 
         let applied = apply_project_format_defaults_from_markdown(dir.path(), markdown).unwrap();
 
         assert_eq!(applied.aspect_ratio.as_deref(), Some("9:16"));
-        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let project = montage_proto::project::Project::read(dir.path()).unwrap();
         let format = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .extra
@@ -773,11 +773,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(second, LearnedProjectFormatDefaults::default());
-        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let project = montage_proto::project::Project::read(dir.path()).unwrap();
         let format = project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .unwrap()
             .extra

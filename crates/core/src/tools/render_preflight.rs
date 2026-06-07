@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -82,7 +82,7 @@ impl ToolHandler for RenderPreflightTool {
                 args.scope
             )));
         }
-        let preflight = awidat_render::analyze_timeline_render_preflight(&ctx.project_root)
+        let preflight = montage_render::analyze_timeline_render_preflight(&ctx.project_root)
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!("render_preflight: {error}"))
             })?;
@@ -188,7 +188,7 @@ fn preview_cache_preflight_json(
     }))
 }
 
-fn render_backend_json_value(backend: &awidat_render::RenderBackendKind) -> String {
+fn render_backend_json_value(backend: &montage_render::RenderBackendKind) -> String {
     serde_json::to_value(backend)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
@@ -197,7 +197,7 @@ fn render_backend_json_value(backend: &awidat_render::RenderBackendKind) -> Stri
 
 fn enrich_render_metadata_with_backend_capability(
     metadata: &mut BTreeMap<String, String>,
-    backend: &awidat_render::RenderBackendKind,
+    backend: &montage_render::RenderBackendKind,
 ) {
     metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
         backend,

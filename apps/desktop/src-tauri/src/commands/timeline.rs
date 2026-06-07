@@ -9,29 +9,29 @@
 
 use std::path::Path;
 
-use awidat_desktop_protocol::{
+use montage_desktop_protocol::{
     TimelineCutBoundary, TimelineItem, TimelinePreviewLimitation, TimelineSnapshot, TimelineTrack,
 };
-use awidat_proto::awidat_meta;
-use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::{
+use montage_proto::montage_meta;
+use montage_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
+use montage_proto::professional::{
     AnimationTarget, Easing, ExtrapolationMode, KeyframeInterpolation, MotionScene,
     MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform, ParameterAnimation,
     is_runtime_clip_parameter,
 };
-use awidat_proto::project::Project;
-use awidat_proto::transitions::{
+use montage_proto::project::Project;
+use montage_proto::transitions::{
     SemanticTransitionSpec, TransitionAudioPolicy, resolve_audio_policy,
 };
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::MontageState;
 
 /// Read `<project>/project.otio.json` and return the flattened
 /// timeline view. Empty snapshot when no project loaded or OTIO
 /// has no clips.
 #[tauri::command]
-pub async fn read_timeline(state: State<'_, AwidatState>) -> Result<TimelineSnapshot, String> {
+pub async fn read_timeline(state: State<'_, MontageState>) -> Result<TimelineSnapshot, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(empty_snapshot()),
@@ -63,14 +63,14 @@ fn empty_snapshot() -> TimelineSnapshot {
 /// pipeline (which already has the timeline in memory after
 /// `apply()`).
 pub fn flatten_timeline_public(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
     project_root: &Path,
 ) -> TimelineSnapshot {
     let mut tracks: Vec<TimelineTrack> = Vec::new();
     let mut max_end_s = 0.0_f64;
     let parameter_animations: &[ParameterAnimation] = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|meta| meta.parameter_animations.as_slice())
         .unwrap_or(&[]);
@@ -85,11 +85,11 @@ pub fn flatten_timeline_public(
             TrackKind::Video => "video",
             TrackKind::Audio => "audio",
         };
-        // Pull the awidat track-role tag if present. Today's only
+        // Pull the montage track-role tag if present. Today's only
         // value is "titles" (set by InsertTitle's auto-create).
         let role = track
             .metadata
-            .get("awidat_track_role")
+            .get("montage_track_role")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let is_titles_track = role.as_deref() == Some("titles");
@@ -131,7 +131,7 @@ pub fn flatten_timeline_public(
                     let (playable_path, playable_kind) = match &proxy_path {
                         Some(path) => (
                             Some(path.clone()),
-                            awidat_desktop_protocol::PlayableKind::Proxy,
+                            montage_desktop_protocol::PlayableKind::Proxy,
                         ),
                         None if asset_id
                             .as_deref()
@@ -141,10 +141,10 @@ pub fn flatten_timeline_public(
                                 asset_id.as_deref().map(|aid| {
                                     project_root.join(aid).to_string_lossy().into_owned()
                                 }),
-                                awidat_desktop_protocol::PlayableKind::Source,
+                                montage_desktop_protocol::PlayableKind::Source,
                             )
                         }
-                        None => (None, awidat_desktop_protocol::PlayableKind::Missing),
+                        None => (None, montage_desktop_protocol::PlayableKind::Missing),
                     };
                     // Thumbnails dir: `None` while the post-import
                     // [`JobKind::Thumbnails`] job is still pending.
@@ -158,12 +158,12 @@ pub fn flatten_timeline_public(
                     let waveform_path = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::waveform_path_for_asset_id(project_root, aid)
                     });
-                    // Prefer clip.metadata.awidat.extra["clip_uuid"];
+                    // Prefer clip.metadata.montage.extra["clip_uuid"];
                     // fall back to display name (the EDL resolver
                     // matches on either, so the fallback round-trips).
                     let clip_uuid = clip
                         .metadata
-                        .awidat
+                        .montage
                         .as_ref()
                         .and_then(|m| m.extra.get("clip_uuid"))
                         .and_then(|v| v.as_str())
@@ -179,19 +179,19 @@ pub fn flatten_timeline_public(
                     let volume = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.volume")
+                        .find(|e| e.effect_name == "montage.volume")
                         .and_then(|e| e.metadata.get("value"))
                         .and_then(|v| v.as_f64());
                     let speed = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.speed")
+                        .find(|e| e.effect_name == "montage.speed")
                         .and_then(|e| e.metadata.get("factor"))
                         .and_then(|v| v.as_f64());
                     let (fade_in_s, fade_out_s) = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.audio_fade")
+                        .find(|e| e.effect_name == "montage.audio_fade")
                         .map(|e| {
                             (
                                 e.metadata.get("fade_in_s").and_then(|v| v.as_f64()),
@@ -201,12 +201,12 @@ pub fn flatten_timeline_public(
                         .unwrap_or((None, None));
                     let split_edit = clip
                         .metadata
-                        .awidat
+                        .montage
                         .as_ref()
                         .and_then(|m| m.split_edit.as_ref());
                     let link_group_id = clip
                         .metadata
-                        .awidat
+                        .montage
                         .as_ref()
                         .and_then(|m| m.extra.get("link_group_id"))
                         .and_then(|v| v.as_str())
@@ -214,8 +214,8 @@ pub fn flatten_timeline_public(
                     let color_correction = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.color_correction")
-                        .map(|e| awidat_desktop_protocol::ColorCorrectionStyling {
+                        .find(|e| e.effect_name == "montage.color_correction")
+                        .map(|e| montage_desktop_protocol::ColorCorrectionStyling {
                             exposure_ev: e.metadata.get("exposure_ev").and_then(|v| v.as_f64()),
                             contrast: e.metadata.get("contrast").and_then(|v| v.as_f64()),
                             saturation: e.metadata.get("saturation").and_then(|v| v.as_f64()),
@@ -227,7 +227,7 @@ pub fn flatten_timeline_public(
                     let lut_path = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.lut")
+                        .find(|e| e.effect_name == "montage.lut")
                         .and_then(|e| e.metadata.get("lut_path"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
@@ -239,8 +239,8 @@ pub fn flatten_timeline_public(
                     let title = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.title")
-                        .map(|e| awidat_desktop_protocol::TitleStyling {
+                        .find(|e| e.effect_name == "montage.title")
+                        .map(|e| montage_desktop_protocol::TitleStyling {
                             text: e
                                 .metadata
                                 .get("text")
@@ -287,8 +287,8 @@ pub fn flatten_timeline_public(
                     let video_overlay = clip
                         .effects
                         .iter()
-                        .find(|e| e.effect_name == "awidat.video_overlay")
-                        .map(|e| awidat_desktop_protocol::VideoOverlayStyling {
+                        .find(|e| e.effect_name == "montage.video_overlay")
+                        .map(|e| montage_desktop_protocol::VideoOverlayStyling {
                             mode: e
                                 .metadata
                                 .get("mode")
@@ -365,7 +365,7 @@ pub fn flatten_timeline_public(
                     let duration_s = t.in_offset.to_seconds() + t.out_offset.to_seconds();
                     let in_offset_s = t.in_offset.to_seconds();
                     let out_offset_s = t.out_offset.to_seconds();
-                    let transition_spec = t.metadata.get("awidat_transition").and_then(|value| {
+                    let transition_spec = t.metadata.get("montage_transition").and_then(|value| {
                         serde_json::from_value::<SemanticTransitionSpec>(value.clone()).ok()
                     });
                     items.push(TimelineItem::Transition {
@@ -408,7 +408,7 @@ pub fn flatten_timeline_public(
             items,
         });
     }
-    if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+    if let Some(metadata) = timeline.metadata.montage.as_ref() {
         if let Some(track) = motion_scene_preview_track(metadata) {
             let track_end_s = track
                 .items
@@ -434,7 +434,7 @@ pub fn flatten_timeline_public(
         duration_s: max_end_s,
         broadcast_overlay: timeline
             .metadata
-            .awidat
+            .montage
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .map(broadcast_overlay_for_protocol),
@@ -444,7 +444,7 @@ pub fn flatten_timeline_public(
             limitations.extend(animation_preview_limitations_for_protocol(
                 parameter_animations,
             ));
-            if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+            if let Some(metadata) = timeline.metadata.montage.as_ref() {
                 limitations.extend(motion_scene_preview_limitations_for_protocol(metadata));
             }
             limitations
@@ -454,7 +454,7 @@ pub fn flatten_timeline_public(
 }
 
 fn motion_scene_preview_track(
-    metadata: &awidat_meta::AwidatTimelineMetadata,
+    metadata: &montage_meta::MontageTimelineMetadata,
 ) -> Option<TimelineTrack> {
     let mut items = Vec::new();
     for scene in &metadata.motion_scenes {
@@ -468,7 +468,7 @@ fn motion_scene_preview_track(
                         continue;
                     };
                     (
-                        Some(awidat_desktop_protocol::TitleStyling {
+                        Some(montage_desktop_protocol::TitleStyling {
                             text,
                             position: layer_string_param(layer, "position")
                                 .unwrap_or_else(|| "center".into()),
@@ -508,7 +508,7 @@ fn motion_scene_preview_track(
                 source_start_s: Some(layer.from_s),
                 proxy_path: None,
                 playable_path: None,
-                playable_kind: awidat_desktop_protocol::PlayableKind::Missing,
+                playable_kind: montage_desktop_protocol::PlayableKind::Missing,
                 thumbnail_dir: None,
                 waveform_path: None,
                 volume: None,
@@ -546,7 +546,7 @@ fn motion_scene_preview_track(
 }
 
 fn motion_scene_preview_limitations_for_protocol(
-    metadata: &awidat_meta::AwidatTimelineMetadata,
+    metadata: &montage_meta::MontageTimelineMetadata,
 ) -> Vec<TimelinePreviewLimitation> {
     metadata
         .motion_scenes
@@ -605,7 +605,7 @@ fn layer_u32_param(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
 
 fn motion_scene_shape_for_protocol(
     layer: &MotionSceneLayer,
-) -> Option<awidat_desktop_protocol::MotionShapeStyling> {
+) -> Option<montage_desktop_protocol::MotionShapeStyling> {
     let is_rect = match layer.kind {
         MotionSceneLayerKind::Shape => matches!(
             layer_string_param(layer, "shape").as_deref(),
@@ -618,7 +618,7 @@ fn motion_scene_shape_for_protocol(
         return None;
     }
     let transform = MotionSceneTransform::from_layer_params(&layer.params);
-    Some(awidat_desktop_protocol::MotionShapeStyling {
+    Some(montage_desktop_protocol::MotionShapeStyling {
         shape: "rect".into(),
         x: transform.x,
         y: transform.y,
@@ -635,7 +635,7 @@ fn motion_scene_shape_for_protocol(
 
 fn motion_scene_image_for_protocol(
     layer: &MotionSceneLayer,
-) -> Option<awidat_desktop_protocol::MotionImageStyling> {
+) -> Option<montage_desktop_protocol::MotionImageStyling> {
     if layer.kind != MotionSceneLayerKind::Image {
         return None;
     }
@@ -643,7 +643,7 @@ fn motion_scene_image_for_protocol(
         .or_else(|| layer_string_param(layer, "asset_id"))
         .filter(|asset| !asset.trim().is_empty())?;
     let transform = MotionSceneTransform::from_layer_params(&layer.params);
-    Some(awidat_desktop_protocol::MotionImageStyling {
+    Some(montage_desktop_protocol::MotionImageStyling {
         asset_id,
         x: transform.x,
         y: transform.y,
@@ -661,28 +661,28 @@ fn motion_scene_image_for_protocol(
 fn motion_scene_layer_animations_for_protocol(
     layer: &MotionSceneLayer,
     clip_uuid: &str,
-) -> Vec<awidat_desktop_protocol::TimelineParameterAnimation> {
+) -> Vec<montage_desktop_protocol::TimelineParameterAnimation> {
     layer
         .motion_animations()
         .into_iter()
         .filter(|animation| is_phase_3a_parameter(&animation.parameter))
         .map(
-            |animation| awidat_desktop_protocol::TimelineParameterAnimation {
+            |animation| montage_desktop_protocol::TimelineParameterAnimation {
                 id: format!("{clip_uuid}:{}", animation.parameter),
-                target: awidat_desktop_protocol::TimelineAnimationTarget {
+                target: montage_desktop_protocol::TimelineAnimationTarget {
                     clip_id: clip_uuid.to_string(),
                     parameter: animation.parameter,
                 },
                 keyframes: animation
                     .keyframes
                     .into_iter()
-                    .map(|keyframe| awidat_desktop_protocol::TimelineKeyframe {
+                    .map(|keyframe| montage_desktop_protocol::TimelineKeyframe {
                         time_s: keyframe.time_s,
                         value: keyframe.value,
                         interpolation: interpolation_name(keyframe.interpolation).to_string(),
                         easing: easing_name(keyframe.easing).to_string(),
                         bezier: keyframe.bezier.map(|handles| {
-                            awidat_desktop_protocol::TimelineBezierHandles {
+                            montage_desktop_protocol::TimelineBezierHandles {
                                 out_x: handles.out_x,
                                 out_y: handles.out_y,
                                 in_x: handles.in_x,
@@ -691,7 +691,7 @@ fn motion_scene_layer_animations_for_protocol(
                         }),
                         tangent_mode: tangent_mode_name(keyframe.tangent_mode).to_string(),
                         spring: keyframe.spring.map(|spring| {
-                            awidat_desktop_protocol::TimelineSpringParameters {
+                            montage_desktop_protocol::TimelineSpringParameters {
                                 mass: spring.mass,
                                 stiffness: spring.stiffness,
                                 damping: spring.damping,
@@ -702,22 +702,22 @@ fn motion_scene_layer_animations_for_protocol(
                 pre_extrapolation: extrapolation_name(animation.pre_extrapolation).to_string(),
                 post_extrapolation: extrapolation_name(animation.post_extrapolation).to_string(),
                 motion_path: animation.motion_path.as_ref().map(|path| {
-                    awidat_desktop_protocol::TimelineMotionPath {
+                    montage_desktop_protocol::TimelineMotionPath {
                         points: path
                             .points
                             .iter()
-                            .map(|point| awidat_desktop_protocol::TimelineMotionPathPoint {
+                            .map(|point| montage_desktop_protocol::TimelineMotionPathPoint {
                                 time_s: point.time_s,
                                 x: point.x,
                                 y: point.y,
                                 outgoing_control: point.outgoing_control.map(|control| {
-                                    awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                    montage_desktop_protocol::TimelineMotionPathControlPoint {
                                         x: control.x,
                                         y: control.y,
                                     }
                                 }),
                                 incoming_control: point.incoming_control.map(|control| {
-                                    awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                    montage_desktop_protocol::TimelineMotionPathControlPoint {
                                         x: control.x,
                                         y: control.y,
                                     }
@@ -754,12 +754,12 @@ fn interpolation_name(value: KeyframeInterpolation) -> &'static str {
     }
 }
 
-fn tangent_mode_name(value: awidat_proto::professional::TangentMode) -> &'static str {
+fn tangent_mode_name(value: montage_proto::professional::TangentMode) -> &'static str {
     match value {
-        awidat_proto::professional::TangentMode::Auto => "auto",
-        awidat_proto::professional::TangentMode::Aligned => "aligned",
-        awidat_proto::professional::TangentMode::Broken => "broken",
-        awidat_proto::professional::TangentMode::Flat => "flat",
+        montage_proto::professional::TangentMode::Auto => "auto",
+        montage_proto::professional::TangentMode::Aligned => "aligned",
+        montage_proto::professional::TangentMode::Broken => "broken",
+        montage_proto::professional::TangentMode::Flat => "flat",
     }
 }
 
@@ -809,7 +809,7 @@ fn easing_name(value: Easing) -> &'static str {
 fn timeline_animation_for_clip(
     animation: &ParameterAnimation,
     clip_id: &str,
-) -> Option<awidat_desktop_protocol::TimelineParameterAnimation> {
+) -> Option<montage_desktop_protocol::TimelineParameterAnimation> {
     let AnimationTarget::ClipParameter {
         clip_id: target_clip_id,
         parameter,
@@ -820,22 +820,22 @@ fn timeline_animation_for_clip(
     if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
         return None;
     }
-    Some(awidat_desktop_protocol::TimelineParameterAnimation {
+    Some(montage_desktop_protocol::TimelineParameterAnimation {
         id: animation.id.clone(),
-        target: awidat_desktop_protocol::TimelineAnimationTarget {
+        target: montage_desktop_protocol::TimelineAnimationTarget {
             clip_id: target_clip_id.clone(),
             parameter: parameter.clone(),
         },
         keyframes: animation
             .keyframes
             .iter()
-            .map(|keyframe| awidat_desktop_protocol::TimelineKeyframe {
+            .map(|keyframe| montage_desktop_protocol::TimelineKeyframe {
                 time_s: keyframe.time_s,
                 value: keyframe.value,
                 interpolation: interpolation_name(keyframe.interpolation).to_string(),
                 easing: easing_name(keyframe.easing).to_string(),
                 bezier: keyframe.bezier.map(|handles| {
-                    awidat_desktop_protocol::TimelineBezierHandles {
+                    montage_desktop_protocol::TimelineBezierHandles {
                         out_x: handles.out_x,
                         out_y: handles.out_y,
                         in_x: handles.in_x,
@@ -844,7 +844,7 @@ fn timeline_animation_for_clip(
                 }),
                 tangent_mode: tangent_mode_name(keyframe.tangent_mode).to_string(),
                 spring: keyframe.spring.map(|spring| {
-                    awidat_desktop_protocol::TimelineSpringParameters {
+                    montage_desktop_protocol::TimelineSpringParameters {
                         mass: spring.mass,
                         stiffness: spring.stiffness,
                         damping: spring.damping,
@@ -855,22 +855,22 @@ fn timeline_animation_for_clip(
         pre_extrapolation: extrapolation_name(animation.pre_extrapolation).to_string(),
         post_extrapolation: extrapolation_name(animation.post_extrapolation).to_string(),
         motion_path: animation.motion_path.as_ref().map(|path| {
-            awidat_desktop_protocol::TimelineMotionPath {
+            montage_desktop_protocol::TimelineMotionPath {
                 points: path
                     .points
                     .iter()
-                    .map(|point| awidat_desktop_protocol::TimelineMotionPathPoint {
+                    .map(|point| montage_desktop_protocol::TimelineMotionPathPoint {
                         time_s: point.time_s,
                         x: point.x,
                         y: point.y,
                         outgoing_control: point.outgoing_control.map(|control| {
-                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                            montage_desktop_protocol::TimelineMotionPathControlPoint {
                                 x: control.x,
                                 y: control.y,
                             }
                         }),
                         incoming_control: point.incoming_control.map(|control| {
-                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                            montage_desktop_protocol::TimelineMotionPathControlPoint {
                                 x: control.x,
                                 y: control.y,
                             }
@@ -951,11 +951,11 @@ fn transition_audio_policy_label(kind: &str) -> Option<String> {
 }
 
 fn cut_boundaries_for_protocol(
-    timeline: &awidat_proto::otio::Timeline,
+    timeline: &montage_proto::otio::Timeline,
 ) -> Vec<TimelineCutBoundary> {
     let mut boundaries = timeline
         .metadata
-        .awidat
+        .montage
         .as_ref()
         .map(|meta| {
             meta.cut_boundaries
@@ -985,37 +985,37 @@ fn cut_boundaries_for_protocol(
     boundaries
 }
 
-fn cut_type_for_protocol(cut_type: awidat_meta::CutType) -> &'static str {
+fn cut_type_for_protocol(cut_type: montage_meta::CutType) -> &'static str {
     match cut_type {
-        awidat_meta::CutType::HardCut => "hard_cut",
-        awidat_meta::CutType::CutOnAction => "cut_on_action",
-        awidat_meta::CutType::Cutaway => "cutaway",
-        awidat_meta::CutType::Insert => "insert",
-        awidat_meta::CutType::EyelineMatch => "eyeline_match",
-        awidat_meta::CutType::ShotReverseShot => "shot_reverse_shot",
-        awidat_meta::CutType::MatchCut => "match_cut",
-        awidat_meta::CutType::SmashCut => "smash_cut",
-        awidat_meta::CutType::JumpCut => "jump_cut",
-        awidat_meta::CutType::CrossCut => "cross_cut",
-        awidat_meta::CutType::JCut => "j_cut",
-        awidat_meta::CutType::LCut => "l_cut",
+        montage_meta::CutType::HardCut => "hard_cut",
+        montage_meta::CutType::CutOnAction => "cut_on_action",
+        montage_meta::CutType::Cutaway => "cutaway",
+        montage_meta::CutType::Insert => "insert",
+        montage_meta::CutType::EyelineMatch => "eyeline_match",
+        montage_meta::CutType::ShotReverseShot => "shot_reverse_shot",
+        montage_meta::CutType::MatchCut => "match_cut",
+        montage_meta::CutType::SmashCut => "smash_cut",
+        montage_meta::CutType::JumpCut => "jump_cut",
+        montage_meta::CutType::CrossCut => "cross_cut",
+        montage_meta::CutType::JCut => "j_cut",
+        montage_meta::CutType::LCut => "l_cut",
     }
 }
 
-fn audio_relation_for_protocol(audio_relation: awidat_meta::AudioRelation) -> &'static str {
+fn audio_relation_for_protocol(audio_relation: montage_meta::AudioRelation) -> &'static str {
     match audio_relation {
-        awidat_meta::AudioRelation::Sync => "sync",
-        awidat_meta::AudioRelation::AudioLeads => "audio_leads",
-        awidat_meta::AudioRelation::AudioTrails => "audio_trails",
-        awidat_meta::AudioRelation::Overlap => "overlap",
-        awidat_meta::AudioRelation::AudioCut => "audio_cut",
+        montage_meta::AudioRelation::Sync => "sync",
+        montage_meta::AudioRelation::AudioLeads => "audio_leads",
+        montage_meta::AudioRelation::AudioTrails => "audio_trails",
+        montage_meta::AudioRelation::Overlap => "overlap",
+        montage_meta::AudioRelation::AudioCut => "audio_cut",
     }
 }
 
 fn broadcast_overlay_for_protocol(
-    config: &awidat_meta::BroadcastOverlayConfig,
-) -> awidat_desktop_protocol::BroadcastOverlayConfig {
-    awidat_desktop_protocol::BroadcastOverlayConfig {
+    config: &montage_meta::BroadcastOverlayConfig,
+) -> montage_desktop_protocol::BroadcastOverlayConfig {
+    montage_desktop_protocol::BroadcastOverlayConfig {
         enabled: config.enabled,
         template_name: config.template_name.clone(),
         episode_title: config.episode_title.clone(),
@@ -1041,12 +1041,12 @@ fn broadcast_overlay_for_protocol(
 }
 
 fn audio_controls_for_track(
-    track: &awidat_proto::otio::Track,
-) -> Option<awidat_desktop_protocol::TrackAudioControls> {
+    track: &montage_proto::otio::Track,
+) -> Option<montage_desktop_protocol::TrackAudioControls> {
     if !matches!(track.kind, TrackKind::Audio) {
         return None;
     }
-    let value = track.metadata.get("awidat_audio");
+    let value = track.metadata.get("montage_audio");
     let role = value
         .and_then(|v| v.get("role"))
         .and_then(|v| v.as_str())
@@ -1067,7 +1067,7 @@ fn audio_controls_for_track(
     let ducking =
         value
             .and_then(|v| v.get("ducking"))
-            .map(|d| awidat_desktop_protocol::DuckingControls {
+            .map(|d| montage_desktop_protocol::DuckingControls {
                 enabled: d.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
                 amount_db: d.get("amount_db").and_then(|v| v.as_f64()).unwrap_or(-12.0),
                 attack_ms: d.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(80.0),
@@ -1076,7 +1076,7 @@ fn audio_controls_for_track(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(300.0),
             });
-    Some(awidat_desktop_protocol::TrackAudioControls {
+    Some(montage_desktop_protocol::TrackAudioControls {
         role,
         volume,
         muted,
@@ -1097,9 +1097,9 @@ fn default_audio_role(track_name: &str) -> String {
 }
 
 fn broadcast_host_for_protocol(
-    host: &awidat_meta::BroadcastHost,
-) -> awidat_desktop_protocol::BroadcastHost {
-    awidat_desktop_protocol::BroadcastHost {
+    host: &montage_meta::BroadcastHost,
+) -> montage_desktop_protocol::BroadcastHost {
+    montage_desktop_protocol::BroadcastHost {
         name: host.name.clone(),
         title: host.title.clone(),
         photo_path: host.photo_path.clone(),
@@ -1107,18 +1107,18 @@ fn broadcast_host_for_protocol(
 }
 
 fn broadcast_timed_entry_for_protocol(
-    entry: &awidat_meta::BroadcastTimedEntry,
-) -> awidat_desktop_protocol::BroadcastTimedEntry {
-    awidat_desktop_protocol::BroadcastTimedEntry {
+    entry: &montage_meta::BroadcastTimedEntry,
+) -> montage_desktop_protocol::BroadcastTimedEntry {
+    montage_desktop_protocol::BroadcastTimedEntry {
         time_seconds: entry.time_seconds,
         text: entry.text.clone(),
     }
 }
 
 fn broadcast_style_for_protocol(
-    style: &awidat_meta::BroadcastOverlayStyle,
-) -> awidat_desktop_protocol::BroadcastOverlayStyle {
-    awidat_desktop_protocol::BroadcastOverlayStyle {
+    style: &montage_meta::BroadcastOverlayStyle,
+) -> montage_desktop_protocol::BroadcastOverlayStyle {
+    montage_desktop_protocol::BroadcastOverlayStyle {
         gold_hex: style.gold_hex.clone(),
         gold_light_hex: style.gold_light_hex.clone(),
         cyan_hex: style.cyan_hex.clone(),
@@ -1156,15 +1156,15 @@ fn project_root_relative(project_root: &Path, target_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_core::edl::anchor::AnchorContext;
-    use awidat_core::edl::apply::apply;
-    use awidat_core::edl::parser::parse;
-    use awidat_proto::awidat_meta::{AwidatClipMetadata, SplitEditSpec};
-    use awidat_proto::otio::{
+    use montage_core::edl::anchor::AnchorContext;
+    use montage_core::edl::apply::apply;
+    use montage_core::edl::parser::parse;
+    use montage_proto::montage_meta::{MontageClipMetadata, SplitEditSpec};
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
         Track, TrackChild, TrackKind, Transition,
     };
-    use awidat_proto::professional::{
+    use montage_proto::professional::{
         AnimationTarget, BezierHandles, Easing, Keyframe, KeyframeInterpolation, MotionScene,
         MotionSceneLayer, MotionSceneLayerKind, ParameterAnimation,
     };
@@ -1179,7 +1179,7 @@ mod tests {
         track
             .children
             .push(TrackChild::Transition(Transition::symmetric(
-                "awidat.whip_pan_right",
+                "montage.whip_pan_right",
                 0.18,
                 24.0,
             )));
@@ -1291,7 +1291,7 @@ mod tests {
     #[test]
     fn flatten_timeline_attaches_supported_parameter_animations() {
         let mut timeline = Timeline::empty("animation-snapshot");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             parameter_animations: vec![ParameterAnimation {
                 id: "anim-title-opacity".to_string(),
                 target: AnimationTarget::ClipParameter {
@@ -1305,12 +1305,13 @@ mod tests {
                 metadata_only: false,
                 rationale: Some("Fade title in".to_string()),
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
         let mut track = Track::empty("Titles", TrackKind::Video);
-        track
-            .metadata
-            .insert("awidat_track_role".to_string(), serde_json::json!("titles"));
+        track.metadata.insert(
+            "montage_track_role".to_string(),
+            serde_json::json!("titles"),
+        );
         track
             .children
             .push(TrackChild::Clip(clip_with_uuid("Title", "title-1")));
@@ -1335,7 +1336,7 @@ mod tests {
     #[test]
     fn flatten_timeline_surfaces_text_motion_scene_as_preview_title() {
         let mut timeline = Timeline::empty("motion-scene-preview");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
                 start_s: 0.0,
@@ -1355,7 +1356,7 @@ mod tests {
                 }],
                 rationale: None,
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
@@ -1386,7 +1387,7 @@ mod tests {
     #[test]
     fn unsupported_motion_scene_preview_layer_surfaces_limitation() {
         let mut timeline = Timeline::empty("motion-scene-preview-limitation");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
                 start_s: 0.0,
@@ -1406,7 +1407,7 @@ mod tests {
                 }],
                 rationale: None,
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
@@ -1421,7 +1422,7 @@ mod tests {
     #[test]
     fn flatten_timeline_surfaces_rectangle_motion_scene_as_preview_shape() {
         let mut timeline = Timeline::empty("motion-scene-shape-preview");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
                 start_s: 0.0,
@@ -1449,7 +1450,7 @@ mod tests {
                 }],
                 rationale: None,
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
@@ -1496,7 +1497,7 @@ mod tests {
     #[test]
     fn flatten_timeline_surfaces_image_motion_scene_as_preview_image() {
         let mut timeline = Timeline::empty("motion-scene-image-preview");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             motion_scenes: vec![MotionScene {
                 id: "scene-a".to_string(),
                 start_s: 0.0,
@@ -1540,7 +1541,7 @@ mod tests {
                 }],
                 rationale: None,
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
@@ -1675,7 +1676,7 @@ mod tests {
     #[test]
     fn unsupported_parameter_animation_surfaces_preview_limitation() {
         let mut timeline = Timeline::empty("animation-limitations");
-        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             parameter_animations: vec![ParameterAnimation {
                 id: "anim-volume".to_string(),
                 target: AnimationTarget::ClipParameter {
@@ -1689,7 +1690,7 @@ mod tests {
                 metadata_only: true,
                 rationale: None,
             }],
-            ..awidat_meta::AwidatTimelineMetadata::default()
+            ..montage_meta::MontageTimelineMetadata::default()
         });
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
@@ -1707,7 +1708,7 @@ mod tests {
             RationalTime::zero(24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
         ));
-        clip.metadata.awidat = Some(AwidatClipMetadata {
+        clip.metadata.montage = Some(MontageClipMetadata {
             split_edit: Some(SplitEditSpec {
                 audio_lead_s: lead_s,
                 audio_lead_from_clip_id: None,
@@ -1716,7 +1717,7 @@ mod tests {
                 reason: Some("test split edit".into()),
                 confidence: Some(0.9),
             }),
-            ..AwidatClipMetadata::default()
+            ..MontageClipMetadata::default()
         });
         clip
     }
@@ -1728,17 +1729,17 @@ mod tests {
             RationalTime::zero(24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
         ));
-        let mut metadata = AwidatClipMetadata::default();
+        let mut metadata = MontageClipMetadata::default();
         metadata
             .extra
             .insert("clip_uuid".to_string(), serde_json::json!(uuid));
-        clip.metadata.awidat = Some(metadata);
+        clip.metadata.montage = Some(metadata);
         clip
     }
 
     #[test]
     fn flatten_marks_clip_source_when_proxy_missing_but_source_exists() {
-        use awidat_desktop_protocol::PlayableKind;
+        use montage_desktop_protocol::PlayableKind;
 
         let tmp = tempfile::tempdir().unwrap();
         let raw_dir = tmp.path().join("raw");
@@ -1777,7 +1778,7 @@ mod tests {
 
     #[test]
     fn flatten_marks_clip_missing_when_source_missing() {
-        use awidat_desktop_protocol::PlayableKind;
+        use montage_desktop_protocol::PlayableKind;
 
         let tmp = tempfile::tempdir().unwrap();
         let mut timeline = Timeline::empty("missing-source-test");

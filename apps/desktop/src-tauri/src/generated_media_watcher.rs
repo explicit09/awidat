@@ -2,7 +2,7 @@
 //!
 //! The agent submits external video-gen jobs (OpenRouter+SeeDance,
 //! etc.) via the MCP server, which writes to
-//! `<project>/.awidat/generated-media/registry.json`. The user can
+//! `<project>/.montage/generated-media/registry.json`. The user can
 //! see that state by hand but the desktop UI never surfaced it —
 //! you'd watch the agent call `poll_generated_media_job` 20 times
 //! in a row and have no idea whether anything was actually happening.
@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use awidat_core::generated_media::registry::{GeneratedMediaState, Registry};
-use awidat_desktop_protocol::{Id, Item, ItemLifecycle, JobKind, JobResult};
+use montage_core::generated_media::registry::{GeneratedMediaState, Registry};
+use montage_desktop_protocol::{Id, Item, ItemLifecycle, JobKind, JobResult};
 use tauri::AppHandle;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +35,7 @@ use crate::events::emit_item;
 /// the UI, loose enough to not hammer the filesystem.
 const TICK_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Handle returned to [`crate::state::AwidatState`]; dropping cancels
+/// Handle returned to [`crate::state::MontageState`]; dropping cancels
 /// the spawned watcher loop on the next tick.
 #[allow(dead_code)]
 pub struct GeneratedMediaWatcher {
@@ -78,7 +78,7 @@ async fn run_loop(
 ) {
     // Track records we've already announced + their last-known phase.
     // Cuts down redundant emissions and lets us send a `Completed`
-    // exactly once per job. `awidat-` prefix on item ids so the chat
+    // exactly once per job. `montage-` prefix on item ids so the chat
     // stream renderer doesn't collide them with any other Items.
     let mut seen: HashMap<String, Phase> = HashMap::new();
 
@@ -99,7 +99,7 @@ async fn run_loop(
                         // lands; the user wants to see it.
                         _ => Phase::Active,
                     };
-                    let id = Id::new(format!("awidat-genmedia-{}", record.job_id));
+                    let id = Id::new(format!("montage-genmedia-{}", record.job_id));
                     let status = describe(record);
                     let output_path = record
                         .output_paths
@@ -192,7 +192,7 @@ async fn run_loop(
     }
 }
 
-fn describe(record: &awidat_core::generated_media::registry::GeneratedMediaRecord) -> String {
+fn describe(record: &montage_core::generated_media::registry::GeneratedMediaRecord) -> String {
     let prompt = first_line(&record.prompt);
     match record.state {
         GeneratedMediaState::Draft => format!("draft · {prompt}"),
@@ -222,7 +222,7 @@ fn first_line(s: &str) -> String {
 #[allow(dead_code)]
 pub fn registry_path(project_root: &Path) -> PathBuf {
     project_root
-        .join(".awidat")
+        .join(".montage")
         .join("generated-media")
         .join("registry.json")
 }

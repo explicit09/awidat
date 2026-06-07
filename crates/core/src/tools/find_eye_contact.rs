@@ -13,7 +13,7 @@
 //! is positional: same frame, same box overlap > 0.7).
 
 use async_trait::async_trait;
-use awidat_index::walk_indexer;
+use montage_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -135,7 +135,7 @@ impl ToolHandler for FindEyeContactTool {
         let face_walker = walk_indexer(&ctx.project_root, "face").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "find_eye_contact: face sidecars not readable ({e}). \
-                 Run `awidat index --indexer face <project>` and retry."
+                 Run `montage index --indexer face <project>` and retry."
             ))
         })?;
         let face_by_asset: std::collections::HashMap<String, serde_json::Value> =
@@ -144,7 +144,7 @@ impl ToolHandler for FindEyeContactTool {
         let gaze_walker = walk_indexer(&ctx.project_root, "gaze").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "find_eye_contact: gaze sidecars not readable ({e}). \
-                 Run `awidat index --indexer gaze <project>` and retry."
+                 Run `montage index --indexer gaze <project>` and retry."
             ))
         })?;
 
@@ -335,10 +335,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

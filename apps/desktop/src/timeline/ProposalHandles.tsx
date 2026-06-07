@@ -185,7 +185,7 @@ function handleForDiff(
         buildAdjustment: (_newTrackSeconds) => {
           // Pointer-up gives us a *track* time. Convert to source.
           // We assume linear mapping (no time stretch) — true for
-          // every awidat clip today.
+          // every montage clip today.
           const trackBound =
             diff.side === "left"
               ? item.track_start_s

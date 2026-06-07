@@ -7,20 +7,20 @@
 //!
 //! Behavior is tweakable through env vars:
 //!
-//! - `AWIDAT_MCP_TEST_MODE=normal` (default) — implements `initialize`,
+//! - `MONTAGE_MCP_TEST_MODE=normal` (default) — implements `initialize`,
 //!   `tools/list`, and a `tools/call` for `echo` and `index_asset`.
-//! - `AWIDAT_MCP_TEST_MODE=crash_on_call` — exits with code 7 the first
+//! - `MONTAGE_MCP_TEST_MODE=crash_on_call` — exits with code 7 the first
 //!   time `tools/call` is invoked.
-//! - `AWIDAT_MCP_TEST_MODE=malformed_init` — replies to `initialize` with
+//! - `MONTAGE_MCP_TEST_MODE=malformed_init` — replies to `initialize` with
 //!   text that isn't a JSON-RPC response.
-//! - `AWIDAT_MCP_TEST_MODE=tool_error` — `tools/call` returns a JSON-RPC
+//! - `MONTAGE_MCP_TEST_MODE=tool_error` — `tools/call` returns a JSON-RPC
 //!   error object.
-//! - `AWIDAT_MCP_TEST_MODE=hang` — receives `initialize` then never
+//! - `MONTAGE_MCP_TEST_MODE=hang` — receives `initialize` then never
 //!   replies (used to test client-side timeouts).
-//! - `AWIDAT_MCP_TEST_MODE=hang_on_call` — replies to `initialize` and
+//! - `MONTAGE_MCP_TEST_MODE=hang_on_call` — replies to `initialize` and
 //!   `tools/list` normally, but hangs on `tools/call` until stdin EOFs
 //!   (used to test mid-call cancellation).
-//! - `AWIDAT_MCP_TEST_MODE=progress_then_reply` — on `tools/call`, emits
+//! - `MONTAGE_MCP_TEST_MODE=progress_then_reply` — on `tools/call`, emits
 //!   three `notifications/progress` frames keyed to the request's
 //!   `_meta.progressToken`, then replies normally (used to test progress
 //!   subscription).
@@ -35,7 +35,7 @@ enum ServerAction {
 }
 
 fn mode() -> String {
-    std::env::var("AWIDAT_MCP_TEST_MODE").unwrap_or_else(|_| "normal".into())
+    std::env::var("MONTAGE_MCP_TEST_MODE").unwrap_or_else(|_| "normal".into())
 }
 
 fn main() -> ExitCode {
@@ -153,7 +153,7 @@ fn initialize_response(id: &serde_json::Value) -> serde_json::Value {
             "protocolVersion": "2025-06-18",
             "capabilities": { "tools": {} },
             "serverInfo": {
-                "name": "awidat-test",
+                "name": "montage-test",
                 "version": "0.0.1"
             }
         }

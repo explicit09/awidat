@@ -1,5 +1,5 @@
-use awidat_core::awidat_mcp::context::McpToolCtx;
-use awidat_core::awidat_mcp::tools::plan_delivery_export::{PlanDeliveryExportArgs, run};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::plan_delivery_export::{PlanDeliveryExportArgs, run};
 use std::error::Error;
 
 fn ctx() -> McpToolCtx {

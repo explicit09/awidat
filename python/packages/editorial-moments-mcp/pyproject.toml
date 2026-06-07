@@ -1,10 +1,10 @@
 [project]
 name = "editorial-moments-mcp"
 version = "0.1.0"
-description = "Awidat editorial-moments indexer — typed beats from whisper + topic + audio-energy sidecars via Claude Haiku."
+description = "Montage editorial-moments indexer — typed beats from whisper + topic + audio-energy sidecars via Claude Haiku."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     "anthropic>=0.40,<1",
     "pydantic>=2,<3",
 ]

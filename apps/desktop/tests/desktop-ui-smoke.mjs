@@ -16,7 +16,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
-const BASE_URL = process.env.SMOKE_URL ?? "http://localhost:1420/";
+const BASE_URL = process.env.SMOKE_URL ?? "http://127.0.0.1:1420/";
+const APP_URL = new URL(BASE_URL);
+const APP_PORT = APP_URL.port || (APP_URL.protocol === "https:" ? "443" : "80");
 const SCREENSHOT_DIR = process.env.SMOKE_OUT_DIR ?? "tests/smoke";
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
@@ -34,9 +36,9 @@ async function canReachApp() {
 async function ensureAppServer() {
   if (await canReachApp()) return;
 
-  appServer = spawn("pnpm", ["--dir", "apps/desktop", "exec", "vite", "--host", "127.0.0.1"], {
+  appServer = spawn("pnpm", ["--dir", "apps/desktop", "exec", "vite", "--host", "127.0.0.1", "--port", APP_PORT, "--strictPort"], {
     cwd: new URL("../../..", import.meta.url),
-    env: { ...process.env, BROWSER: "none" },
+    env: { ...process.env, BROWSER: "none", VITE_MONTAGE_SKIP_WELCOME: "1" },
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -87,7 +89,7 @@ const browser = await chromium.launch();
 // the screen, so text assertions miss and clicks hit the backdrop.
 const SUPPRESS_WELCOME = `
   try {
-    localStorage.setItem("awidat:welcome:shown", new Date().toISOString());
+    localStorage.setItem("montage:welcome:shown", new Date().toISOString());
   } catch {}
 `;
 
@@ -123,7 +125,7 @@ async function makePage() {
 
 function demoUrl(screen) {
   const url = new URL(BASE_URL);
-  url.searchParams.set("awidatScreen", screen);
+  url.searchParams.set("montageScreen", screen);
   return url.toString();
 }
 
@@ -260,7 +262,7 @@ await check("top chrome matches Screen 2 app model", async () => {
     // legacy "Main Desktop Workspace" banner was removed when the
     // top chrome became the WorkspaceRow tablist — Edit/Deliver are
     // the durable navigation labels now.
-    "AWIDAT",
+    "MONTAGE",
     "Edit",
     "Deliver",
   ]) {

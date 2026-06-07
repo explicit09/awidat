@@ -1,5 +1,5 @@
 {
-  "schema": "awidat-editorial-moments-calibration/1",
+  "schema": "montage-editorial-moments-calibration/1",
   "description": "Skeleton calibration fixture set for editorial-moments. Each clip points at a short video file plus per-moment-type human-rated scores in [0, 1]. Real video files are NOT checked in — populate clip_path with paths on a labeler's local disk (or a corpus mount) before running scripts/calibrate.py.",
   "clips": [
     {

@@ -1,7 +1,7 @@
 //! Transcript Alignment v2 normalization helpers.
 
-use awidat_proto::otio::{Clip, MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
-use awidat_proto::professional::{
+use montage_proto::otio::{Clip, MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
+use montage_proto::professional::{
     AlignedTranscriptPhrase, AlignedTranscriptWord, SourceRange, TranscriptAlignmentPackage,
     TranscriptCorrection, TranscriptCorrectionTarget, TranscriptEditAction, TranscriptEditRecord,
 };
@@ -69,7 +69,7 @@ pub enum TranscriptAlignmentError {
     },
 }
 
-/// Normalize a Whisper-like sidecar into Awidat-owned stable alignment records.
+/// Normalize a Whisper-like sidecar into Montage-owned stable alignment records.
 pub fn normalize_whisper_alignment(
     asset_id: &str,
     sidecar: &Value,

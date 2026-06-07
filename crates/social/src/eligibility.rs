@@ -162,8 +162,8 @@ mod tests {
     fn youtube_channel_profile_is_upload_eligible() {
         let report = youtube_eligibility(
             "channel_1",
-            "Awidat",
-            Some("@awidat"),
+            "Montage",
+            Some("@montage"),
             &["https://www.googleapis.com/auth/youtube.upload"],
         );
         assert!(report.eligibility.eligible);
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn youtube_missing_upload_scope_is_ineligible() {
-        let report = youtube_eligibility("channel_1", "Awidat", Some("@awidat"), &[]);
+        let report = youtube_eligibility("channel_1", "Montage", Some("@montage"), &[]);
         assert!(!report.eligibility.eligible);
         assert_eq!(
             report.eligibility.reasons,
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn twitter_x_missing_write_scope_is_ineligible() {
-        let report = twitter_x_eligibility("x_1", "Creator", Some("@awidat"), &["users.read"]);
+        let report = twitter_x_eligibility("x_1", "Creator", Some("@montage"), &["users.read"]);
         assert!(!report.eligibility.eligible);
         assert_eq!(
             report.eligibility.reasons,
@@ -270,7 +270,7 @@ mod tests {
             vec!["users.read", "tweet.write"],
             vec!["users.read", "media.write"],
         ] {
-            let report = twitter_x_eligibility("x_1", "Creator", Some("@awidat"), &scopes);
+            let report = twitter_x_eligibility("x_1", "Creator", Some("@montage"), &scopes);
             assert!(!report.eligibility.eligible);
             assert!(!report.capabilities.upload_video);
             assert!(!report.capabilities.public_posting);
@@ -283,7 +283,7 @@ mod tests {
         let report = twitter_x_eligibility(
             "x_1",
             "Creator",
-            Some("@awidat"),
+            Some("@montage"),
             &["users.read", "tweet.write", "media.write"],
         );
         assert!(report.eligibility.eligible);

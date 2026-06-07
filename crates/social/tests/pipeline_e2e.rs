@@ -12,25 +12,25 @@
 //! be free of provider token material. The full flow runs against both the
 //! in-memory and SQLite stores to prove parity.
 
-use awidat_social::api::{
+use montage_social::api::{
     ApiActor, ApiOwner, BindTargetRequest, ExecuteUploadRequest, OAuthCompleteRequest,
     OAuthStartRequest, ScheduleTargetRequest, SocialApi, ValidateTargetRequest,
 };
-use awidat_social::model::{
+use montage_social::model::{
     AccountEligibility, AccountKind, ConnectedAccount, ConnectedAccountStatus, OwnerRef, Provider,
     ProviderCapabilities, PublishJobStatus, ValidationState,
 };
-use awidat_social::oauth_url::OAuthProviderConfig;
-use awidat_social::provider::ProviderRegistry;
-use awidat_social::publish_service::PublishService;
-use awidat_social::sqlite_store::SqliteSocialStore;
-use awidat_social::store::{InMemorySocialStore, SocialStore};
-use awidat_social::token::TestKeyProvider;
-use awidat_social::token_bundle::ProviderTokenBundle;
-use awidat_social::upload_adapter::{
+use montage_social::oauth_url::OAuthProviderConfig;
+use montage_social::provider::ProviderRegistry;
+use montage_social::publish_service::PublishService;
+use montage_social::sqlite_store::SqliteSocialStore;
+use montage_social::store::{InMemorySocialStore, SocialStore};
+use montage_social::token::TestKeyProvider;
+use montage_social::token_bundle::ProviderTokenBundle;
+use montage_social::upload_adapter::{
     UploadAdapter, UploadAdapterError, UploadRequest, UploadResult,
 };
-use awidat_social::upload_status::{
+use montage_social::upload_status::{
     UploadProcessingStatus, UploadStatusAdapter, UploadStatusAdapterError, UploadStatusRequest,
     UploadStatusResult,
 };
@@ -87,7 +87,7 @@ impl UploadStatusAdapter for PublishedStatusAdapter {
 fn config() -> OAuthProviderConfig {
     OAuthProviderConfig {
         client_id: "client_e2e".into(),
-        redirect_uri: "https://app.awidat.test/social/oauth/callback".into(),
+        redirect_uri: "https://app.montage.test/social/oauth/callback".into(),
     }
 }
 
@@ -97,8 +97,8 @@ fn connected_account(owner: OwnerRef) -> ConnectedAccount {
         owner,
         provider: Provider::YouTube,
         provider_account_id: "channel_e2e".into(),
-        display_name: "Awidat E2E Channel".into(),
-        handle: Some("@awidat".into()),
+        display_name: "Montage E2E Channel".into(),
+        handle: Some("@montage".into()),
         avatar_url: None,
         account_kind: AccountKind::Channel,
         status: ConnectedAccountStatus::Connected,
@@ -278,9 +278,9 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
         &ProcessingUploadAdapter,
         ExecuteUploadRequest {
             job_id: "job_e2e".into(),
-            title: "Awidat E2E launch".into(),
+            title: "Montage E2E launch".into(),
             description: Some("End-to-end pipeline test".into()),
-            tags: vec!["awidat".into(), "e2e".into()],
+            tags: vec!["montage".into(), "e2e".into()],
             thumbnail_ref: Some("render://thumb_e2e".into()),
             artifact_ref: None,
             privacy: None,

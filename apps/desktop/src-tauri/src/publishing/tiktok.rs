@@ -10,7 +10,7 @@
 //! <https://developers.tiktok.com/> with the Content Posting API
 //! scope, get the app approved (TikTok manually reviews apps that
 //! request video.upload), and paste `client_key` + `client_secret`
-//! into `<config_dir>/awidat/publishing.json`.
+//! into `<config_dir>/montage/publishing.json`.
 
 use std::path::PathBuf;
 

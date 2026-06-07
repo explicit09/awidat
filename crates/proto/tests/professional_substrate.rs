@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use awidat_proto::awidat_meta::{
-    AwidatTimelineMetadata, BeatMarker, BeatMarkerRole, EpisodeSpan, EpisodeSpanStatus,
+use montage_proto::montage_meta::{
+    BeatMarker, BeatMarkerRole, EpisodeSpan, EpisodeSpanStatus, MontageTimelineMetadata,
 };
-use awidat_proto::professional::{
+use montage_proto::professional::{
     AlignedTranscriptPhrase, AlignedTranscriptWord, AnimationTarget, AssetCatalog, AssetQuery,
     AssetReadiness, AssetRecord, AssetRole, AudioBus, AudioFinishingState, BezierHandles,
     BrollAssetStrategy, BrollInsertionPlan, BrollRecommendation, BrollRecommendationAsset,
@@ -140,7 +140,7 @@ fn motion_scene_layer_animations_parse_from_params() {
 
 #[test]
 fn timeline_metadata_carries_all_professional_substrate_documents() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
             assets: vec![AssetRecord {
                 id: "asset-a".into(),
@@ -179,7 +179,7 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             affected_clips: vec!["clip-a".into()],
             generated_animations: vec![ParameterAnimation {
                 id: "motion-package-a-opacity".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "title.opacity".into(),
                 },
@@ -234,14 +234,14 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
         pipeline_readiness: Some(PipelineReadinessReport::from_registry(
             CapabilityRegistry::professional_substrate_v1(),
         )),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let json = match serde_json::to_string(&metadata) {
         Ok(json) => json,
         Err(error) => panic!("serialize metadata: {error}"),
     };
-    let roundtrip: AwidatTimelineMetadata = match serde_json::from_str(&json) {
+    let roundtrip: MontageTimelineMetadata = match serde_json::from_str(&json) {
         Ok(metadata) => metadata,
         Err(error) => panic!("deserialize metadata: {error}"),
     };
@@ -294,7 +294,7 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
 
 #[test]
 fn first_class_episode_metadata_roundtrips() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         episodes: vec![
             EpisodeSpan {
                 id: "episode-1".into(),
@@ -331,7 +331,7 @@ fn first_class_episode_metadata_roundtrips() {
                 ..EpisodeSpan::default()
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let json = serde_json::to_string(&metadata).expect("serialize metadata");
@@ -339,7 +339,7 @@ fn first_class_episode_metadata_roundtrips() {
     assert!(json.contains("\"status\":\"review_needed\""));
     assert!(json.contains("\"status\":\"rejected\""));
 
-    let roundtrip: AwidatTimelineMetadata =
+    let roundtrip: MontageTimelineMetadata =
         serde_json::from_str(&json).expect("deserialize metadata");
 
     assert_eq!(roundtrip.episodes.len(), 3);
@@ -365,7 +365,7 @@ fn first_class_episode_metadata_roundtrips() {
 
 #[test]
 fn episode_metadata_validation_flags_invalid_ranges() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         episodes: vec![
             EpisodeSpan {
                 id: "episode-dup".into(),
@@ -392,7 +392,7 @@ fn episode_metadata_validation_flags_invalid_ranges() {
                 ..EpisodeSpan::default()
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let messages = metadata
@@ -487,9 +487,9 @@ fn transcript_alignment_package_round_trips() {
     );
     assert!(roundtrip.validate().is_empty());
 
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         transcript_alignments: vec![roundtrip],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());
 }
@@ -583,9 +583,9 @@ fn media_intelligence_package_round_trips() {
     assert_eq!(roundtrip.assets[0].layers.len(), 10);
     assert!(roundtrip.validate().is_empty());
 
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         media_intelligence: Some(roundtrip),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());
 }
@@ -651,9 +651,9 @@ fn understanding_package_round_trips() {
     );
     assert!(roundtrip.validate().is_empty());
 
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         understanding: Some(roundtrip),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());
 }
@@ -711,9 +711,9 @@ fn clip_candidate_package_round_trips() {
     );
     assert!(roundtrip.validate().is_empty());
 
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         clip_candidates: Some(roundtrip),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());
 }
@@ -776,16 +776,16 @@ fn broll_recommendation_package_round_trips() {
     );
     assert!(roundtrip.validate().is_empty());
 
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         broll_recommendations: Some(roundtrip),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());
 }
 
 #[test]
 fn timeline_metadata_carries_durable_beat_markers() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         beat_markers: vec![
             BeatMarker {
                 id: "beat-001".into(),
@@ -814,14 +814,14 @@ fn timeline_metadata_carries_durable_beat_markers() {
                 selection_reason: Some("keeps cut cadence on musical pulse".into()),
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let json = match serde_json::to_string(&metadata) {
         Ok(json) => json,
         Err(error) => panic!("serialize metadata: {error}"),
     };
-    let roundtrip: AwidatTimelineMetadata = match serde_json::from_str(&json) {
+    let roundtrip: MontageTimelineMetadata = match serde_json::from_str(&json) {
         Ok(metadata) => metadata,
         Err(error) => panic!("deserialize metadata: {error}"),
     };
@@ -837,7 +837,7 @@ fn timeline_metadata_carries_durable_beat_markers() {
 
 #[test]
 fn invalid_beat_markers_block_timeline_readiness() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         beat_markers: vec![
             BeatMarker {
                 id: "beat-001".into(),
@@ -859,7 +859,7 @@ fn invalid_beat_markers_block_timeline_readiness() {
                 ..BeatMarker::default()
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let diagnostics = metadata.validate_professional_substrate();
@@ -918,7 +918,7 @@ fn invalid_beat_markers_block_timeline_readiness() {
 
 #[test]
 fn expression_link_dependency_cycle_is_reported_once() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         expression_links: vec![
             ExpressionLink {
                 id: "expr-a".into(),
@@ -943,7 +943,7 @@ fn expression_link_dependency_cycle_is_reported_once() {
                 ..ExpressionLink::default()
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let diagnostics = metadata.validate_professional_substrate();
@@ -1130,7 +1130,7 @@ fn asset_catalog_query_filters_by_professional_review_fields() {
 
 #[test]
 fn substrate_validation_catches_cross_stage_pipeline_issues() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
             assets: vec![AssetRecord {
                 id: "asset-a".into(),
@@ -1194,7 +1194,7 @@ fn substrate_validation_catches_cross_stage_pipeline_issues() {
             output_node_id: Some("missing-output".into()),
             ..CompositionGraph::default()
         }],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let diagnostics = metadata.validate_professional_substrate();
@@ -1324,7 +1324,7 @@ fn tracking_package_validates_segmentation_prompt_packages() {
             grounding: None,
             output_mask_id: Some("mask-speaker".into()),
             output_matte_id: Some("matte-speaker".into()),
-            status: awidat_proto::professional::ReviewStatus::Accepted,
+            status: montage_proto::professional::ReviewStatus::Accepted,
         }],
         ..TrackingPackage::default()
     };
@@ -1717,7 +1717,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
             }),
             ..MaskSidecar::default()
         }],
-        mattes: vec![awidat_proto::professional::MatteSidecar {
+        mattes: vec![montage_proto::professional::MatteSidecar {
             id: "matte-speaker".into(),
             alpha_source: "generated/mattes/speaker-alpha.webm".into(),
             quality: Some(MaskQualityScorecard {
@@ -1731,7 +1731,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
                 decision: MaskReviewDecision::NeedsReview,
                 notes: vec!["minor hair edge shimmer".into()],
             }),
-            ..awidat_proto::professional::MatteSidecar::default()
+            ..montage_proto::professional::MatteSidecar::default()
         }],
         ..TrackingPackage::default()
     };
@@ -1771,7 +1771,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
             }),
             ..MaskSidecar::default()
         }],
-        mattes: vec![awidat_proto::professional::MatteSidecar {
+        mattes: vec![montage_proto::professional::MatteSidecar {
             id: "matte-bad".into(),
             alpha_source: "".into(),
             quality: Some(MaskQualityScorecard {
@@ -1785,7 +1785,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
                 decision: MaskReviewDecision::Rejected,
                 notes: Vec::new(),
             }),
-            ..awidat_proto::professional::MatteSidecar::default()
+            ..montage_proto::professional::MatteSidecar::default()
         }],
         ..TrackingPackage::default()
     };
@@ -1821,7 +1821,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
 #[test]
 fn tracking_package_validates_matte_generation_recipe() {
     let package = TrackingPackage {
-        mattes: vec![awidat_proto::professional::MatteSidecar {
+        mattes: vec![montage_proto::professional::MatteSidecar {
             id: "matte-speaker".into(),
             alpha_source: "generated/mattes/speaker-alpha.png".into(),
             generation: Some(MatteGenerationRecipe {
@@ -1839,7 +1839,7 @@ fn tracking_package_validates_matte_generation_recipe() {
                 },
                 options: BTreeMap::from([("sam_prompt".into(), serde_json::json!("speaker"))]),
             }),
-            ..awidat_proto::professional::MatteSidecar::default()
+            ..montage_proto::professional::MatteSidecar::default()
         }],
         ..TrackingPackage::default()
     };
@@ -1865,7 +1865,7 @@ fn tracking_package_validates_matte_generation_recipe() {
     assert!(roundtrip.validate().is_empty());
 
     let invalid = TrackingPackage {
-        mattes: vec![awidat_proto::professional::MatteSidecar {
+        mattes: vec![montage_proto::professional::MatteSidecar {
             id: "matte-bad".into(),
             alpha_source: "generated/mattes/bad.png".into(),
             generation: Some(MatteGenerationRecipe {
@@ -1883,7 +1883,7 @@ fn tracking_package_validates_matte_generation_recipe() {
                 },
                 options: BTreeMap::from([(" ".into(), serde_json::json!(true))]),
             }),
-            ..awidat_proto::professional::MatteSidecar::default()
+            ..montage_proto::professional::MatteSidecar::default()
         }],
         ..TrackingPackage::default()
     };
@@ -2361,7 +2361,7 @@ fn export_preset_validation_flags_codec_range_and_ratio_mismatches() {
 
 #[test]
 fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
             assets: vec![AssetRecord {
                 id: "asset-a".into(),
@@ -2386,11 +2386,11 @@ fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
         }],
         cut_boundaries: std::collections::HashMap::from([(
             "clip-a::clip-b".into(),
-            awidat_proto::awidat_meta::SemanticCutSpec {
-                cut_type: awidat_proto::awidat_meta::CutType::HardCut,
+            montage_proto::montage_meta::SemanticCutSpec {
+                cut_type: montage_proto::montage_meta::CutType::HardCut,
                 intent: "speaker_handoff".into(),
                 energy: None,
-                audio_relation: awidat_proto::awidat_meta::AudioRelation::Sync,
+                audio_relation: montage_proto::montage_meta::AudioRelation::Sync,
                 confidence: None,
                 reason: None,
                 extra: std::collections::HashMap::new(),
@@ -2425,7 +2425,7 @@ fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
         delivery_profiles: vec![DeliveryProfile::youtube_1080p()],
         workflow_lenses: vec![WorkflowLens::Media],
         capability_registry: Some(CapabilityRegistry::professional_substrate_v1()),
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let report = metadata.build_professional_readiness_report();
@@ -2447,7 +2447,7 @@ fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
 
 #[test]
 fn metadata_readiness_blocks_stages_with_validation_errors() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
             assets: vec![AssetRecord {
                 id: "asset-a".into(),
@@ -2475,7 +2475,7 @@ fn metadata_readiness_blocks_stages_with_validation_errors() {
             keyframes: vec![Keyframe::linear(2.0, 1.0), Keyframe::linear(1.0, 0.0)],
             ..ParameterAnimation::default()
         }],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let report = metadata.build_professional_readiness_report();
@@ -2504,11 +2504,11 @@ fn metadata_readiness_blocks_stages_with_validation_errors() {
 
 #[test]
 fn duplicate_parameter_animations_report_one_deterministic_conflict() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         parameter_animations: vec![
             ParameterAnimation {
                 id: "anim-a".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "title.opacity".into(),
                 },
@@ -2521,7 +2521,7 @@ fn duplicate_parameter_animations_report_one_deterministic_conflict() {
             },
             ParameterAnimation {
                 id: "anim-b".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "title.opacity".into(),
                 },
@@ -2533,7 +2533,7 @@ fn duplicate_parameter_animations_report_one_deterministic_conflict() {
                 rationale: None,
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let diagnostics = metadata.validate_professional_substrate();
@@ -2552,11 +2552,11 @@ fn duplicate_parameter_animations_report_one_deterministic_conflict() {
 
 #[test]
 fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
-    let metadata = AwidatTimelineMetadata {
+    let metadata = MontageTimelineMetadata {
         parameter_animations: vec![
             ParameterAnimation {
                 id: "anim-opacity".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "overlay.opacity".into(),
                 },
@@ -2569,7 +2569,7 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
             },
             ParameterAnimation {
                 id: "anim-scale".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "overlay.scale".into(),
                 },
@@ -2582,7 +2582,7 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
             },
             ParameterAnimation {
                 id: "anim-blur".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "overlay.blur".into(),
                 },
@@ -2595,7 +2595,7 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
             },
             ParameterAnimation {
                 id: "anim-font-size".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "title.font_size".into(),
                 },
@@ -2608,7 +2608,7 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
             },
             ParameterAnimation {
                 id: "anim-x".into(),
-                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                target: montage_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
                     parameter: "overlay.x".into(),
                 },
@@ -2620,7 +2620,7 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                 rationale: None,
             },
         ],
-        ..AwidatTimelineMetadata::default()
+        ..MontageTimelineMetadata::default()
     };
 
     let diagnostics = metadata.validate_professional_substrate();

@@ -16,7 +16,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_render_gpu::{
+use montage_render_gpu::{
     BlendMode, Compositor, CompositorError, CompositorFrameSpec, LayerSpec, TransformCompositor,
     TransformSpec,
 };

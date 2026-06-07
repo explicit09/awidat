@@ -155,7 +155,7 @@ export function campaignUploadRequests(
 
 // ── Server-backed publishing (Phase 5 path) ────────────────────────────────
 //
-// Publishes campaign variants through the awidat-social SERVER instead of the
+// Publishes campaign variants through the montage-social SERVER instead of the
 // legacy desktop-local render-queue path. Per request: resolve the connected
 // account for the provider, then
 //   social_bind_target → social_validate_target → social_schedule_target

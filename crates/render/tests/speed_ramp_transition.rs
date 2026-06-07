@@ -1,6 +1,6 @@
 //! Integration test for the speed-ramp transition execution path.
 //!
-//! A 2-clip timeline with the `awidat.ramp_in_beat` transition carries
+//! A 2-clip timeline with the `montage.ramp_in_beat` transition carries
 //! a `TimeRemap` primitive in its composition recipe. The render-prepare
 //! step must emit a real `setpts` retime filter for the transition
 //! window — not just the paired-flash xfade fallback. The TimeRemap is
@@ -10,13 +10,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use awidat_proto::otio::{
+use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind, Transition,
 };
-use awidat_proto::project::files;
-use awidat_proto::transitions::builtin_transition_composition;
-use awidat_render::build_timeline_render_spec;
+use montage_proto::project::files;
+use montage_proto::transitions::builtin_transition_composition;
+use montage_render::build_timeline_render_spec;
 use std::fs;
 use std::path::Path;
 
@@ -58,7 +58,7 @@ fn write_two_clip_project_with_speed_ramp(dir: &Path, kind: &str) {
         .unwrap_or_else(|| panic!("registered composition for {kind}"));
     let mut transition = Transition::symmetric(kind, 0.5, 24.0);
     transition.metadata.insert(
-        "awidat_transition".into(),
+        "montage_transition".into(),
         serde_json::json!({
             "id": kind,
             "family": "speed_ramp",
@@ -93,7 +93,7 @@ fn filter_complex(spec_args: &[String]) -> String {
 #[test]
 fn ramp_in_beat_emits_setpts_retime_filter() {
     let dir = tempfile::tempdir().unwrap();
-    write_two_clip_project_with_speed_ramp(dir.path(), "awidat.ramp_in_beat");
+    write_two_clip_project_with_speed_ramp(dir.path(), "montage.ramp_in_beat");
     let spec = build_timeline_render_spec(dir.path()).unwrap();
     let filter = filter_complex(&spec.args);
 
@@ -147,7 +147,7 @@ fn ramp_in_beat_emits_setpts_retime_filter() {
 #[test]
 fn ramp_out_chapter_emits_setpts_retime_filter() {
     let dir = tempfile::tempdir().unwrap();
-    write_two_clip_project_with_speed_ramp(dir.path(), "awidat.ramp_out_chapter");
+    write_two_clip_project_with_speed_ramp(dir.path(), "montage.ramp_out_chapter");
     let spec = build_timeline_render_spec(dir.path()).unwrap();
     let filter = filter_complex(&spec.args);
 

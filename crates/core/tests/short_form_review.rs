@@ -1,16 +1,16 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
-use awidat_core::edl::parser;
-use awidat_core::short_form_review::{
+use montage_core::edl::parser;
+use montage_core::short_form_review::{
     DurationClass, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
     build_short_form_review,
 };
-use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use awidat_core::tools::apply_edl::ApplyEdlTool;
-use awidat_core::tools::export_package::ExportPackageTool;
-use awidat_core::tools::plan_short_form_review::PlanShortFormReviewTool;
-use awidat_core::tools::start_render::StartRenderTool;
+use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
+use montage_core::tools::apply_edl::ApplyEdlTool;
+use montage_core::tools::export_package::ExportPackageTool;
+use montage_core::tools::plan_short_form_review::PlanShortFormReviewTool;
+use montage_core::tools::start_render::StartRenderTool;
 use tokio::sync::broadcast;
 
 fn review_input() -> ShortFormReviewInput {
@@ -181,14 +181,14 @@ fn ctx_at(root: &std::path::Path) -> ToolContext {
         project_root: root.to_path_buf(),
         events_tx: tx,
         user_input_tx: None,
-        job_manager: awidat_render::JobManager::new(),
+        job_manager: montage_render::JobManager::new(),
         approval_tx: None,
         sandbox_mode: SandboxMode::Default,
-        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
-        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
         subagent_return: None,
     }
 }
@@ -478,7 +478,7 @@ fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_comman
             .vertical_layout
             .edl_operations
             .iter()
-            .any(|op| op.contains("*** Set Effect") && op.contains("awidat.reframe"))
+            .any(|op| op.contains("*** Set Effect") && op.contains("montage.reframe"))
     );
     assert!(packet.draft_edl.contains("*** Insert BRoll"));
     assert!(packet.draft_edl.contains("raw/broll/ai-coding-ui.mp4"));

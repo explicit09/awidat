@@ -1,12 +1,12 @@
 [package]
-name = "awidat-config"
+name = "montage-config"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "awidat_config"
+name = "montage_config"
 path = "src/lib.rs"
 
 [dependencies]

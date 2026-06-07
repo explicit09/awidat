@@ -1,5 +1,5 @@
 //! Audio waveform extraction: per-asset peak amplitudes written as a
-//! JSON sidecar at `<project>/.awidat/waveforms/<stem>-<hash>.json`.
+//! JSON sidecar at `<project>/.montage/waveforms/<stem>-<hash>.json`.
 //! The timeline canvas reads the sidecar via `read_waveform` and
 //! draws a centered amplitude line under each audio clip.
 //!
@@ -17,14 +17,14 @@
 
 use std::path::{Path, PathBuf};
 
-use awidat_desktop_protocol::{Id, JobKind};
+use montage_desktop_protocol::{Id, JobKind};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::waveform_path_for;
 use crate::events::JobEmitter;
-use crate::state::{AwidatState, JobHandle};
+use crate::state::{JobHandle, MontageState};
 
 /// On-disk sidecar shape. Wrapped in a struct so future fields land
 /// behind a serde-friendly schema; the frontend mirrors this in
@@ -51,7 +51,7 @@ const DEFAULT_BUCKET_COUNT: usize = 2048;
 /// sidecar path on success, or `None` if the asset has no audio.
 pub async fn generate_waveform_for_asset_in_project(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<Option<PathBuf>, String> {
@@ -69,7 +69,7 @@ pub async fn generate_waveform_for_asset_in_project(
 /// Drive one ffmpeg run end-to-end with a live job card.
 async fn run_one(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &State<'_, MontageState>,
     asset: &Path,
     sidecar: &Path,
 ) -> Result<Option<PathBuf>, String> {
@@ -91,7 +91,7 @@ async fn run_one(
     );
 
     let result =
-        awidat_render::generate_waveform(asset, DEFAULT_BUCKET_COUNT, cancel.clone()).await;
+        montage_render::generate_waveform(asset, DEFAULT_BUCKET_COUNT, cancel.clone()).await;
 
     unregister_job(state, &job_id).await;
 
@@ -133,7 +133,7 @@ async fn run_one(
                 Ok(Some(sidecar.to_path_buf()))
             }
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
+        Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             let _ = stderr_tail;
             emitter.cancelled();
             Err("cancelled".into())
@@ -206,7 +206,7 @@ pub async fn read_waveform(path: String) -> Result<WaveformData, String> {
     })
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -217,7 +217,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

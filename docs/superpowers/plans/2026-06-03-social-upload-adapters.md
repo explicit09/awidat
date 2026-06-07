@@ -4,7 +4,7 @@
 
 **Goal:** Add Phase 4 server-backed upload adapter contracts and a YouTube-first execution path that can publish claimed jobs without exposing provider tokens.
 
-**Architecture:** Keep upload behavior inside `awidat-social` as framework-neutral Rust services. Provider-specific upload code implements a shared adapter trait; the worker service loads a claimed job, account, and token secret from `SocialStore`, calls the adapter, persists the job state, and appends audit events. Live HTTP remains behind a small trait so unit tests use mocked clients and no real provider credentials.
+**Architecture:** Keep upload behavior inside `montage-social` as framework-neutral Rust services. Provider-specific upload code implements a shared adapter trait; the worker service loads a claimed job, account, and token secret from `SocialStore`, calls the adapter, persists the job state, and appends audit events. Live HTTP remains behind a small trait so unit tests use mocked clients and no real provider credentials.
 
 **Tech Stack:** Rust, `serde`, `serde_json`, existing `SocialStore`, existing encrypted `TokenSecret`, existing provider/account/job models.
 
@@ -76,7 +76,7 @@ mod tests {
             artifact_ref: "file:///tmp/render.mp4".into(),
             title: "Launch clip".into(),
             description: Some("Description".into()),
-            tags: vec!["awidat".into()],
+            tags: vec!["montage".into()],
             thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
             privacy: UploadPrivacy::Private,
             scheduled_for: Some(2_000),
@@ -134,7 +134,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social upload_adapter::tests
+cargo test -p montage-social upload_adapter::tests
 ```
 
 Expected: FAIL because `upload_adapter` module is not exported and types do not exist.
@@ -282,7 +282,7 @@ pub mod upload_adapter;
 Run:
 
 ```bash
-cargo test -p awidat-social upload_adapter::tests
+cargo test -p montage-social upload_adapter::tests
 ```
 
 Expected: PASS.
@@ -343,7 +343,7 @@ fn publish_job_can_move_to_processing_and_published() {
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests::publish_job_can_move_to_processing_and_published
+cargo test -p montage-social job::tests::publish_job_can_move_to_processing_and_published
 ```
 
 Expected: FAIL with missing `processing` and `publish` methods.
@@ -382,7 +382,7 @@ pub fn publish(
 Run:
 
 ```bash
-cargo test -p awidat-social job::tests::publish_job_can_move_to_processing_and_published
+cargo test -p montage-social job::tests::publish_job_can_move_to_processing_and_published
 ```
 
 Expected: PASS.
@@ -442,7 +442,7 @@ mod tests {
                 artifact_ref: "file:///tmp/render.mp4".into(),
                 title: "Launch clip".into(),
                 description: Some("Description".into()),
-                tags: vec!["awidat".into()],
+                tags: vec!["montage".into()],
                 thumbnail_ref: Some("file:///tmp/thumb.jpg".into()),
                 privacy: UploadPrivacy::Private,
                 scheduled_for: Some(2_000),
@@ -493,7 +493,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social youtube_upload::tests
+cargo test -p montage-social youtube_upload::tests
 ```
 
 Expected: FAIL because module/types do not exist.
@@ -625,7 +625,7 @@ pub mod youtube_upload;
 Run:
 
 ```bash
-cargo test -p awidat-social youtube_upload::tests
+cargo test -p montage-social youtube_upload::tests
 ```
 
 Expected: PASS.
@@ -686,7 +686,7 @@ mod tests {
                 job_id: "job_1".into(),
                 title: "Launch clip".into(),
                 description: Some("Description".into()),
-                tags: vec!["awidat".into()],
+                tags: vec!["montage".into()],
                 thumbnail_ref: Some("render://thumb_1".into()),
                 now: 2_200,
             },
@@ -819,8 +819,8 @@ mod tests {
             owner: OwnerRef::User("user_1".into()),
             provider,
             provider_account_id: "channel_1".into(),
-            display_name: "Awidat Channel".into(),
-            handle: Some("@awidat".into()),
+            display_name: "Montage Channel".into(),
+            handle: Some("@montage".into()),
             avatar_url: None,
             account_kind: AccountKind::Channel,
             status: ConnectedAccountStatus::Connected,
@@ -859,7 +859,7 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p awidat-social upload_service::tests
+cargo test -p montage-social upload_service::tests
 ```
 
 Expected: FAIL because service types do not exist.
@@ -1025,7 +1025,7 @@ pub mod upload_service;
 Run:
 
 ```bash
-cargo test -p awidat-social upload_service::tests
+cargo test -p montage-social upload_service::tests
 ```
 
 Expected: PASS.
@@ -1047,15 +1047,15 @@ git commit -m "feat(social): execute claimed upload jobs"
 Run:
 
 ```bash
-cargo test -p awidat-social upload_adapter::tests youtube_upload::tests upload_service::tests
+cargo test -p montage-social upload_adapter::tests youtube_upload::tests upload_service::tests
 ```
 
 Expected: Cargo accepts only one filter. Run the three filters separately:
 
 ```bash
-cargo test -p awidat-social upload_adapter::tests
-cargo test -p awidat-social youtube_upload::tests
-cargo test -p awidat-social upload_service::tests
+cargo test -p montage-social upload_adapter::tests
+cargo test -p montage-social youtube_upload::tests
+cargo test -p montage-social upload_service::tests
 ```
 
 Expected: PASS.
@@ -1065,8 +1065,8 @@ Expected: PASS.
 Run:
 
 ```bash
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```
@@ -1094,8 +1094,8 @@ multi-provider boundaries, and test coverage.
 If review rejects, fix the concrete finding, rerun:
 
 ```bash
-cargo test -p awidat-social
-cargo clippy -p awidat-social --all-targets -- -D warnings
+cargo test -p montage-social
+cargo clippy -p montage-social --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

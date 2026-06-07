@@ -1,6 +1,6 @@
 ---
 name: overlay-animation
-description: Plan generated motion-graphic overlay assets as Awidat media overlays, with per-slot briefs, exact durations, and EDL insertion hints.
+description: Plan generated motion-graphic overlay assets as Montage media overlays, with per-slot briefs, exact durations, and EDL insertion hints.
 version: 0.1.0
 tier: creative
 tools_allowlist:
@@ -38,7 +38,7 @@ yet provide.
 
 Generated animation is an asset workflow, not a custom render path. Each
 animation slot produces a project file under `generated/overlays/<slug>/`
-and then enters the timeline with normal Awidat overlay operations.
+and then enters the timeline with normal Montage overlay operations.
 
 Prefer existing graph-native titles, captions, transitions, and
 broadcast overlays when they solve the job. Use generated overlays only
@@ -145,7 +145,7 @@ to be produced, include a `detection` object with `object_classes`,
 available `preview_frame_path` or `occlusion_preview_path` evidence.
 
 When a subject matte is not already available, create or request a
-segmentation prompt package in `metadata.awidat.tracking_package`.
+segmentation prompt package in `metadata.montage.tracking_package`.
 Include the target clip/range, target object id, intended output
 (`subject_matte`, `text_behind_subject`, or `background_treatment`),
 and reviewed positive/negative points, boxes, or mask references. Do

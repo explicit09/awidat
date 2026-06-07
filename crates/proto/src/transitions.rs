@@ -1,15 +1,15 @@
 //! Built-in transition registry and semantic transition metadata.
 //!
 //! This is the phase-one in-tree contract. A future
-//! `awidat-transitions` package can replace the registry data behind
+//! `montage-transitions` package can replace the registry data behind
 //! this shape without changing EDL, OTIO, or render callers.
 
 use serde::{Deserialize, Serialize};
 
-/// Metadata Awidat stores on OTIO `Transition.1` nodes.
+/// Metadata Montage stores on OTIO `Transition.1` nodes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SemanticTransitionSpec {
-    /// Stable transition id, for example `awidat.cross_dissolve`.
+    /// Stable transition id, for example `montage.cross_dissolve`.
     pub id: String,
     /// Broad transition family used for taste/selection.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -26,7 +26,7 @@ pub struct SemanticTransitionSpec {
     /// Backend-specific parameters, kept opaque to the OTIO layer.
     #[serde(skip_serializing_if = "serde_json::Map::is_empty", default)]
     pub params: serde_json::Map<String, serde_json::Value>,
-    /// Optional structured recipe over Awidat's stable transition
+    /// Optional structured recipe over Montage's stable transition
     /// primitives. Agent-authored custom transitions should live here
     /// as data, never as raw FFmpeg/GLSL/backend code.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -38,7 +38,7 @@ pub struct SemanticTransitionSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransitionComposition {
     /// Composition schema version. Starts at 1 so the eventual
-    /// `awidat-transitions` package can version recipes independently
+    /// `montage-transitions` package can version recipes independently
     /// of the project file format.
     #[serde(default = "default_composition_version")]
     pub version: u8,
@@ -347,10 +347,10 @@ pub enum TransitionPrimitiveOp {
         speed: ParamCurve,
     },
     /// Stable named atomic transition that does not decompose cleanly
-    /// into primitives yet. This is still data: it points at an Awidat
+    /// into primitives yet. This is still data: it points at an Montage
     /// transition id, not backend code or a raw filter graph.
     Atomic {
-        /// Stable Awidat transition id.
+        /// Stable Montage transition id.
         id: String,
     },
 }
@@ -358,7 +358,7 @@ pub enum TransitionPrimitiveOp {
 /// Phase-one built-in transition definition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BuiltinTransition {
-    /// Stable Awidat id.
+    /// Stable Montage id.
     pub id: &'static str,
     /// Family name.
     pub family: &'static str,
@@ -503,11 +503,11 @@ pub enum TransitionBackend {
 }
 
 /// Extraction-ready manifest shape for a stable transition. This
-/// intentionally mirrors the planned `awidat-transitions` registry
+/// intentionally mirrors the planned `montage-transitions` registry
 /// while preserving stable composition recipes as data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransitionManifest {
-    /// Stable id, for example `awidat.cross_dissolve`.
+    /// Stable id, for example `montage.cross_dissolve`.
     pub id: String,
     /// Broad transition family used by the agent taste layer.
     pub family: String,
@@ -571,7 +571,7 @@ impl From<TransitionAudioPolicy> for TransitionAudioPolicyManifest {
 /// FFmpeg can export through the current render path.
 pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
     BuiltinTransition {
-        id: "awidat.hard_cut",
+        id: "montage.hard_cut",
         family: "cut",
         display_name: "Hard Cut",
         ffmpeg_xfade: None,
@@ -586,7 +586,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.composite",
+        id: "montage.composite",
         family: "custom",
         display_name: "Agent Composite",
         ffmpeg_xfade: Some("fade"),
@@ -601,7 +601,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.cross_dissolve",
+        id: "montage.cross_dissolve",
         family: "dissolve",
         display_name: "Cross Dissolve",
         ffmpeg_xfade: Some("fade"),
@@ -616,7 +616,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.match_dissolve",
+        id: "montage.match_dissolve",
         family: "dissolve",
         display_name: "Match Dissolve",
         ffmpeg_xfade: Some("fade"),
@@ -631,7 +631,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
     BuiltinTransition {
-        id: "awidat.fade_black",
+        id: "montage.fade_black",
         family: "fade",
         display_name: "Fade Through Black",
         ffmpeg_xfade: Some("fadeblack"),
@@ -646,7 +646,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.flash_white",
+        id: "montage.flash_white",
         family: "flash",
         display_name: "Flash White",
         ffmpeg_xfade: Some("fadewhite"),
@@ -661,7 +661,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::AvoidDarkToBright,
     },
     BuiltinTransition {
-        id: "awidat.ramp_in_beat",
+        id: "montage.ramp_in_beat",
         family: "speed_ramp",
         display_name: "Ramp In Beat",
         ffmpeg_xfade: Some("fadewhite"),
@@ -676,7 +676,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::AvoidBrightToDark,
     },
     BuiltinTransition {
-        id: "awidat.ramp_out_chapter",
+        id: "montage.ramp_out_chapter",
         family: "speed_ramp",
         display_name: "Ramp Out Chapter",
         ffmpeg_xfade: Some("fadeblack"),
@@ -691,7 +691,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.wipe_left",
+        id: "montage.wipe_left",
         family: "wipe",
         display_name: "Wipe Left",
         ffmpeg_xfade: Some("wipeleft"),
@@ -706,7 +706,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.wipe_right",
+        id: "montage.wipe_right",
         family: "wipe",
         display_name: "Wipe Right",
         ffmpeg_xfade: Some("wiperight"),
@@ -721,7 +721,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.slide_left",
+        id: "montage.slide_left",
         family: "slide",
         display_name: "Slide Left",
         ffmpeg_xfade: Some("slideleft"),
@@ -736,7 +736,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.slide_right",
+        id: "montage.slide_right",
         family: "slide",
         display_name: "Slide Right",
         ffmpeg_xfade: Some("slideright"),
@@ -751,7 +751,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.smooth_push_left",
+        id: "montage.smooth_push_left",
         family: "slide",
         display_name: "Smooth Push Left",
         ffmpeg_xfade: Some("smoothleft"),
@@ -766,7 +766,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.motion_blur",
+        id: "montage.motion_blur",
         family: "motion_blur",
         display_name: "Motion Blur",
         ffmpeg_xfade: Some("hblur"),
@@ -785,7 +785,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.whip_pan_left",
+        id: "montage.whip_pan_left",
         family: "motion_blur",
         display_name: "Whip Pan Left",
         ffmpeg_xfade: Some("hblur"),
@@ -804,7 +804,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.whip_pan_right",
+        id: "montage.whip_pan_right",
         family: "motion_blur",
         display_name: "Whip Pan Right",
         ffmpeg_xfade: Some("hblur"),
@@ -823,7 +823,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.pass_by_left",
+        id: "montage.pass_by_left",
         family: "occlusion",
         display_name: "Pass-By Left",
         ffmpeg_xfade: Some("coverleft"),
@@ -838,7 +838,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.pass_by_right",
+        id: "montage.pass_by_right",
         family: "occlusion",
         display_name: "Pass-By Right",
         ffmpeg_xfade: Some("coverright"),
@@ -853,7 +853,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.iris_open",
+        id: "montage.iris_open",
         family: "iris",
         display_name: "Iris Open",
         ffmpeg_xfade: Some("circleopen"),
@@ -868,7 +868,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.iris_close",
+        id: "montage.iris_close",
         family: "iris",
         display_name: "Iris Close",
         ffmpeg_xfade: Some("circleclose"),
@@ -883,7 +883,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.invisible_cut",
+        id: "montage.invisible_cut",
         family: "invisible_cut",
         display_name: "Invisible Cut",
         ffmpeg_xfade: Some("fadefast"),
@@ -906,7 +906,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
     BuiltinTransition {
-        id: "awidat.zoom_in",
+        id: "montage.zoom_in",
         family: "zoom",
         display_name: "Zoom In",
         ffmpeg_xfade: Some("zoomin"),
@@ -921,7 +921,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.pixelize",
+        id: "montage.pixelize",
         family: "glitch",
         display_name: "Pixelize",
         ffmpeg_xfade: Some("pixelize"),
@@ -936,7 +936,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.radial",
+        id: "montage.radial",
         family: "wipe",
         display_name: "Radial",
         ffmpeg_xfade: Some("radial"),
@@ -952,7 +952,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
     },
     // ---------- Phase 3 catalog expansion (10 new transitions) ----------
     BuiltinTransition {
-        id: "awidat.wipe_up",
+        id: "montage.wipe_up",
         family: "wipe",
         display_name: "Wipe Up",
         ffmpeg_xfade: Some("wipeup"),
@@ -971,7 +971,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.wipe_down",
+        id: "montage.wipe_down",
         family: "wipe",
         display_name: "Wipe Down",
         ffmpeg_xfade: Some("wipedown"),
@@ -990,7 +990,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.slide_up",
+        id: "montage.slide_up",
         family: "slide",
         display_name: "Slide Up",
         ffmpeg_xfade: Some("slideup"),
@@ -1005,7 +1005,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.barn_door_open_h",
+        id: "montage.barn_door_open_h",
         family: "wipe",
         display_name: "Barn Door Open Horizontal",
         ffmpeg_xfade: Some("horzopen"),
@@ -1020,7 +1020,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.barn_door_close_h",
+        id: "montage.barn_door_close_h",
         family: "wipe",
         display_name: "Barn Door Close Horizontal",
         ffmpeg_xfade: Some("horzclose"),
@@ -1035,7 +1035,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.barn_door_open_v",
+        id: "montage.barn_door_open_v",
         family: "wipe",
         display_name: "Barn Door Open Vertical",
         ffmpeg_xfade: Some("vertopen"),
@@ -1050,7 +1050,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.barn_door_close_v",
+        id: "montage.barn_door_close_v",
         family: "wipe",
         display_name: "Barn Door Close Vertical",
         ffmpeg_xfade: Some("vertclose"),
@@ -1065,7 +1065,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.diag_tl",
+        id: "montage.diag_tl",
         family: "wipe",
         display_name: "Diagonal Top-Left",
         ffmpeg_xfade: Some("diagtl"),
@@ -1080,7 +1080,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.distance_zoom",
+        id: "montage.distance_zoom",
         family: "zoom",
         display_name: "Distance Zoom",
         ffmpeg_xfade: Some("distance"),
@@ -1095,7 +1095,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.dissolve_grain",
+        id: "montage.dissolve_grain",
         family: "dissolve",
         display_name: "Dissolve (Noisy)",
         ffmpeg_xfade: Some("dissolve"),
@@ -1111,7 +1111,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
     },
     // ---------- Luma-mask transitions (GPU-only) ----------
     BuiltinTransition {
-        id: "awidat.clock_wipe",
+        id: "montage.clock_wipe",
         family: "wipe",
         display_name: "Clock Wipe",
         // GPU-only: no FFmpeg `xfade` covers a rotating pie-slice
@@ -1128,7 +1128,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.venetian_blinds_h",
+        id: "montage.venetian_blinds_h",
         family: "wipe",
         display_name: "Venetian Blinds (Horizontal)",
         ffmpeg_xfade: None,
@@ -1143,7 +1143,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.checkerboard_dissolve",
+        id: "montage.checkerboard_dissolve",
         family: "dissolve",
         display_name: "Checkerboard Dissolve",
         ffmpeg_xfade: None,
@@ -1158,7 +1158,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.spiral_wipe",
+        id: "montage.spiral_wipe",
         family: "wipe",
         display_name: "Spiral Wipe",
         ffmpeg_xfade: None,
@@ -1173,7 +1173,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.burst_wipe",
+        id: "montage.burst_wipe",
         family: "wipe",
         display_name: "Burst Wipe",
         ffmpeg_xfade: None,
@@ -1188,7 +1188,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.jaws_wipe",
+        id: "montage.jaws_wipe",
         family: "wipe",
         display_name: "Jaws Wipe",
         ffmpeg_xfade: None,
@@ -1204,7 +1204,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
     },
     // ---------- Hyperframes-port GPU shaders ----------
     BuiltinTransition {
-        id: "awidat.light_leak",
+        id: "montage.light_leak",
         family: "fade",
         display_name: "Light Leak",
         ffmpeg_xfade: None,
@@ -1227,7 +1227,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::AvoidDarkToBright,
     },
     BuiltinTransition {
-        id: "awidat.swirl_vortex",
+        id: "montage.swirl_vortex",
         family: "stylized",
         display_name: "Swirl Vortex",
         ffmpeg_xfade: None,
@@ -1242,7 +1242,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.cinematic_pan_left",
+        id: "montage.cinematic_pan_left",
         family: "motion_blur",
         display_name: "Cinematic Pan Left",
         ffmpeg_xfade: None,
@@ -1261,7 +1261,7 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
-        id: "awidat.cinematic_pan_right",
+        id: "montage.cinematic_pan_right",
         family: "motion_blur",
         display_name: "Cinematic Pan Right",
         ffmpeg_xfade: None,
@@ -1307,13 +1307,13 @@ fn declared_backends(transition: &BuiltinTransition) -> Vec<TransitionBackend> {
 }
 
 /// Built-in transitions that should graduate to the stable external
-/// registry. `awidat.hard_cut` is represented by no transition node,
-/// and `awidat.composite` stays a harness authoring id for one-off
+/// registry. `montage.hard_cut` is represented by no transition node,
+/// and `montage.composite` stays a harness authoring id for one-off
 /// recipes, so neither belongs in the stable preset registry.
 pub fn stable_builtin_transition_manifests() -> Vec<TransitionManifest> {
     BUILTIN_TRANSITIONS
         .iter()
-        .filter(|transition| !matches!(transition.id, "awidat.hard_cut" | "awidat.composite"))
+        .filter(|transition| !matches!(transition.id, "montage.hard_cut" | "montage.composite"))
         .map(|transition| TransitionManifest {
             id: transition.id.into(),
             family: transition.family.into(),
@@ -1337,10 +1337,10 @@ pub fn stable_builtin_transition_manifests() -> Vec<TransitionManifest> {
                 .map(str::to_string)
                 .collect(),
             license: "Apache-2.0".into(),
-            attribution: "Awidat built-in".into(),
+            attribution: "Montage built-in".into(),
             preview: format!(
                 "transitions/{}/preview.mp4",
-                transition.id.trim_start_matches("awidat.")
+                transition.id.trim_start_matches("montage.")
             ),
             params: serde_json::Map::new(),
             composition: builtin_transition_composition(transition.id),
@@ -1349,7 +1349,7 @@ pub fn stable_builtin_transition_manifests() -> Vec<TransitionManifest> {
 }
 
 /// Export the phase-one stable built-ins as pretty JSON in the same
-/// manifest collection shape that `awidat-transitions` will consume.
+/// manifest collection shape that `montage-transitions` will consume.
 pub fn stable_builtin_transition_manifest_json() -> Result<String, TransitionLookupError> {
     let manifests = stable_builtin_transition_manifests();
     validate_transition_manifests(&manifests)?;
@@ -1364,10 +1364,10 @@ pub fn validate_transition_manifests(
 ) -> Result<(), TransitionLookupError> {
     let mut seen = std::collections::BTreeSet::new();
     for manifest in manifests {
-        if !manifest.id.starts_with("awidat.") {
+        if !manifest.id.starts_with("montage.") {
             return Err(TransitionLookupError::InvalidSpec {
                 message: format!(
-                    "transition manifest id {:?} must start with awidat.",
+                    "transition manifest id {:?} must start with montage.",
                     manifest.id
                 ),
             });
@@ -1432,14 +1432,14 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
         primitives,
     };
     match id {
-        "awidat.composite" => None,
-        "awidat.cross_dissolve" => Some(composition(vec![primitive(
+        "montage.composite" => None,
+        "montage.cross_dissolve" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Opacity {
                 from: ParamCurve::Const(1.0),
                 to: ParamCurve::Const(1.0),
             },
         )])),
-        "awidat.match_dissolve" => Some(composition(vec![
+        "montage.match_dissolve" => Some(composition(vec![
             primitive(TransitionPrimitiveOp::Opacity {
                 from: ParamCurve::Const(1.0),
                 to: ParamCurve::Const(1.0),
@@ -1480,16 +1480,16 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 },
             },
         ])),
-        "awidat.fade_black" => Some(composition(vec![primitive(
+        "montage.fade_black" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.fade_black".into(),
+                id: "montage.fade_black".into(),
             },
         )])),
-        "awidat.flash_white" => Some(composition(vec![primitive(TransitionPrimitiveOp::Flash {
+        "montage.flash_white" => Some(composition(vec![primitive(TransitionPrimitiveOp::Flash {
             color: "#ffffff".into(),
             peak: 1.0,
         })])),
-        "awidat.ramp_in_beat" => Some(composition(vec![
+        "montage.ramp_in_beat" => Some(composition(vec![
             primitive(TransitionPrimitiveOp::TimeRemap {
                 speed: ParamCurve::Keyframes(vec![
                     Keyframe {
@@ -1514,7 +1514,7 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 peak: 0.85,
             }),
         ])),
-        "awidat.ramp_out_chapter" => Some(composition(vec![
+        "montage.ramp_out_chapter" => Some(composition(vec![
             primitive(TransitionPrimitiveOp::TimeRemap {
                 speed: ParamCurve::Keyframes(vec![
                     Keyframe {
@@ -1535,143 +1535,143 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 ]),
             }),
             primitive(TransitionPrimitiveOp::Atomic {
-                id: "awidat.fade_black".into(),
+                id: "montage.fade_black".into(),
             }),
         ])),
-        "awidat.wipe_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
+        "montage.wipe_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
             direction: "left".into(),
             softness: ParamCurve::Const(0.0),
         })])),
-        "awidat.wipe_right" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
+        "montage.wipe_right" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
             direction: "right".into(),
             softness: ParamCurve::Const(0.0),
         })])),
-        "awidat.slide_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Push {
+        "montage.slide_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Push {
             direction: "left".into(),
             distance: 1.0,
         })])),
-        "awidat.slide_right" => Some(composition(vec![primitive(TransitionPrimitiveOp::Push {
+        "montage.slide_right" => Some(composition(vec![primitive(TransitionPrimitiveOp::Push {
             direction: "right".into(),
             distance: 1.0,
         })])),
-        "awidat.smooth_push_left" => Some(composition(vec![TransitionPrimitive {
+        "montage.smooth_push_left" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOut,
             ..primitive(TransitionPrimitiveOp::Push {
                 direction: "left".into(),
                 distance: 1.0,
             })
         }])),
-        "awidat.motion_blur" => Some(composition(vec![TransitionPrimitive {
+        "montage.motion_blur" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
                 amount: ParamCurve::Const(0.75),
                 direction: None,
             })
         }])),
-        "awidat.whip_pan_left" => Some(composition(vec![TransitionPrimitive {
+        "montage.whip_pan_left" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
                 amount: ParamCurve::Const(0.85),
                 direction: Some("left".into()),
             })
         }])),
-        "awidat.whip_pan_right" => Some(composition(vec![TransitionPrimitive {
+        "montage.whip_pan_right" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
                 amount: ParamCurve::Const(0.85),
                 direction: Some("right".into()),
             })
         }])),
-        "awidat.pass_by_left" => Some(composition(vec![primitive(
+        "montage.pass_by_left" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.pass_by_left".into(),
+                id: "montage.pass_by_left".into(),
             },
         )])),
-        "awidat.pass_by_right" => Some(composition(vec![primitive(
+        "montage.pass_by_right" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.pass_by_right".into(),
+                id: "montage.pass_by_right".into(),
             },
         )])),
-        "awidat.iris_open" => Some(composition(vec![primitive(
+        "montage.iris_open" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.iris_open".into(),
+                id: "montage.iris_open".into(),
             },
         )])),
-        "awidat.iris_close" => Some(composition(vec![primitive(
+        "montage.iris_close" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.iris_close".into(),
+                id: "montage.iris_close".into(),
             },
         )])),
-        "awidat.invisible_cut" => Some(composition(vec![primitive(
+        "montage.invisible_cut" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.invisible_cut".into(),
+                id: "montage.invisible_cut".into(),
             },
         )])),
-        "awidat.zoom_in" => Some(composition(vec![primitive(TransitionPrimitiveOp::Zoom {
+        "montage.zoom_in" => Some(composition(vec![primitive(TransitionPrimitiveOp::Zoom {
             scale: ParamCurve::Const(1.25),
         })])),
-        "awidat.pixelize" => Some(composition(vec![primitive(
+        "montage.pixelize" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Pixelize { block_size: 0.6 },
         )])),
-        "awidat.radial" => Some(composition(vec![primitive(
+        "montage.radial" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
-                id: "awidat.radial".into(),
+                id: "montage.radial".into(),
             },
         )])),
-        "awidat.clock_wipe" => Some(composition(vec![primitive(
+        "montage.clock_wipe" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "clock".into(),
                 softness: ParamCurve::Const(0.06),
             },
         )])),
-        "awidat.venetian_blinds_h" => Some(composition(vec![primitive(
+        "montage.venetian_blinds_h" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "blinds_horizontal".into(),
                 softness: ParamCurve::Const(0.08),
             },
         )])),
-        "awidat.checkerboard_dissolve" => Some(composition(vec![primitive(
+        "montage.checkerboard_dissolve" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "checkerboard".into(),
                 softness: ParamCurve::Const(0.04),
             },
         )])),
-        "awidat.spiral_wipe" => Some(composition(vec![primitive(
+        "montage.spiral_wipe" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "spiral".into(),
                 softness: ParamCurve::Const(0.05),
             },
         )])),
-        "awidat.burst_wipe" => Some(composition(vec![primitive(
+        "montage.burst_wipe" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "burst".into(),
                 softness: ParamCurve::Const(0.08),
             },
         )])),
-        "awidat.jaws_wipe" => Some(composition(vec![primitive(
+        "montage.jaws_wipe" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LumaMask {
                 mask_kind: "jaws".into(),
                 softness: ParamCurve::Const(0.06),
             },
         )])),
-        "awidat.light_leak" => Some(composition(vec![primitive(
+        "montage.light_leak" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::LightLeak {
                 intensity: ParamCurve::Const(0.85),
                 warmth: 0.75,
             },
         )])),
-        "awidat.swirl_vortex" => Some(composition(vec![primitive(
+        "montage.swirl_vortex" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::SwirlVortex {
                 strength: ParamCurve::Const(0.6),
             },
         )])),
-        "awidat.cinematic_pan_left" => Some(composition(vec![primitive(
+        "montage.cinematic_pan_left" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::CinematicPan {
                 direction: "left".into(),
                 intensity: ParamCurve::Const(0.85),
             },
         )])),
-        "awidat.cinematic_pan_right" => Some(composition(vec![primitive(
+        "montage.cinematic_pan_right" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::CinematicPan {
                 direction: "right".into(),
                 intensity: ParamCurve::Const(0.85),
@@ -1935,7 +1935,7 @@ pub fn extract_time_remap_setpts(
 /// from other editors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportedTransitionAlias {
-    /// The original third-party family name Awidat recognizes.
+    /// The original third-party family name Montage recognizes.
     pub imported_family: &'static str,
     /// FFmpeg `xfade=transition=` value used as the export downgrade.
     pub ffmpeg_xfade: &'static str,
@@ -1954,9 +1954,9 @@ pub fn resolve_ffmpeg_xfade(kind_or_id: &str) -> Result<Option<&str>, Transition
     match kind_or_id {
         "SMPTE_Dissolve" => Ok(Some("fade")),
         // Legacy aliases kept for old projects. New agent-authored EDLs
-        // should use `awidat.fade_black` for an intentional black dip;
+        // should use `montage.fade_black` for an intentional black dip;
         // `fade_in` / `fade_out` are ambiguous between adjacent clips.
-        "awidat.fade_in" | "awidat.fade_out" => Ok(Some("fadeblack")),
+        "montage.fade_in" | "montage.fade_out" => Ok(Some("fadeblack")),
         // Common raw FFmpeg xfade names remain accepted for old EDLs.
         "fade" | "fadeblack" | "fadewhite" | "distance" | "wipeleft" | "wiperight" | "wipeup"
         | "wipedown" | "slideleft" | "slideright" | "slideup" | "slidedown" | "smoothleft"
@@ -1969,7 +1969,7 @@ pub fn resolve_ffmpeg_xfade(kind_or_id: &str) -> Result<Option<&str>, Transition
         | "revealleft" | "revealright" | "revealup" | "revealdown" | "radial" => {
             Ok(Some(kind_or_id))
         }
-        other if other.starts_with("awidat.") => Err(TransitionLookupError::UnsupportedAwidat {
+        other if other.starts_with("montage.") => Err(TransitionLookupError::UnsupportedMontage {
             id: other.to_string(),
         }),
         other => Err(TransitionLookupError::UnsupportedRaw {
@@ -1989,7 +1989,7 @@ pub fn resolve_audio_policy(
         return Ok(alias.audio_policy);
     }
     match kind_or_id {
-        "SMPTE_Dissolve" | "fade" | "fadeblack" | "awidat.fade_in" | "awidat.fade_out" => {
+        "SMPTE_Dissolve" | "fade" | "fadeblack" | "montage.fade_in" | "montage.fade_out" => {
             Ok(TransitionAudioPolicy::Crossfade)
         }
         "fadewhite" | "distance" | "wipeleft" | "wiperight" | "wipeup" | "wipedown"
@@ -2003,7 +2003,7 @@ pub fn resolve_audio_policy(
         | "revealleft" | "revealright" | "revealup" | "revealdown" | "radial" => {
             Ok(TransitionAudioPolicy::Cut)
         }
-        other if other.starts_with("awidat.") => Err(TransitionLookupError::UnsupportedAwidat {
+        other if other.starts_with("montage.") => Err(TransitionLookupError::UnsupportedMontage {
             id: other.to_string(),
         }),
         other => Err(TransitionLookupError::UnsupportedRaw {
@@ -2110,9 +2110,9 @@ pub fn validate_transition_duration(
 /// Transition lookup failures surfaced before FFmpeg is invoked.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TransitionLookupError {
-    /// An Awidat transition id was not registered.
-    #[error("unsupported Awidat transition id {id:?}")]
-    UnsupportedAwidat {
+    /// An Montage transition id was not registered.
+    #[error("unsupported Montage transition id {id:?}")]
+    UnsupportedMontage {
         /// Unknown transition id.
         id: String,
     },
@@ -2134,7 +2134,7 @@ pub enum TransitionLookupError {
 pub fn validate_semantic_transition_spec(
     spec: &SemanticTransitionSpec,
 ) -> Result<(), TransitionLookupError> {
-    if spec.id.starts_with("awidat.") {
+    if spec.id.starts_with("montage.") {
         let _ = resolve_ffmpeg_xfade(&spec.id)?;
         if let Some(family) = spec.family.as_deref()
             && let Some(def) = lookup_builtin_transition(&spec.id)
@@ -2158,15 +2158,15 @@ pub fn validate_semantic_transition_spec(
     if let Some(composition) = &spec.composition {
         validate_transition_composition(composition)?;
     }
-    if spec.id == "awidat.composite" {
+    if spec.id == "montage.composite" {
         let Some(composition) = &spec.composition else {
             return Err(TransitionLookupError::InvalidSpec {
-                message: "awidat.composite requires composition metadata".into(),
+                message: "montage.composite requires composition metadata".into(),
             });
         };
         if resolve_composition_ffmpeg_xfade(composition).is_none() {
             return Err(TransitionLookupError::InvalidSpec {
-                message: "awidat.composite composition has no phase-one FFmpeg lowering; include at least one lowerable primitive such as push, wipe, zoom, flash, pixelize, blur, opacity, or atomic".into(),
+                message: "montage.composite composition has no phase-one FFmpeg lowering; include at least one lowerable primitive such as push, wipe, zoom, flash, pixelize, blur, opacity, or atomic".into(),
             });
         }
     }
@@ -2175,7 +2175,7 @@ pub fn validate_semantic_transition_spec(
 
 /// Validate an agent-authored transition composition. This keeps
 /// normal editing data-only: compositions may reference stable
-/// primitives and stable Awidat ids, but never arbitrary backend code.
+/// primitives and stable Montage ids, but never arbitrary backend code.
 pub fn validate_transition_composition(
     composition: &TransitionComposition,
 ) -> Result<(), TransitionLookupError> {
@@ -2305,10 +2305,10 @@ fn validate_primitive_op(
             validate_curve_range(idx, "speed", speed, 0.05, 8.0)?;
         }
         TransitionPrimitiveOp::Atomic { id } => {
-            if !id.starts_with("awidat.") || lookup_builtin_transition(id).is_none() {
+            if !id.starts_with("montage.") || lookup_builtin_transition(id).is_none() {
                 return Err(TransitionLookupError::InvalidSpec {
                     message: format!(
-                        "primitive #{idx} atomic id {id:?} must be a registered awidat.* transition id"
+                        "primitive #{idx} atomic id {id:?} must be a registered montage.* transition id"
                     ),
                 });
             }
@@ -2709,13 +2709,13 @@ mod tests {
         // → gpu_shader resolution, and must have no xfade fallback
         // (these are GPU-only by design).
         let cases = [
-            ("awidat.light_leak", "light_leak"),
-            ("awidat.swirl_vortex", "swirl_vortex"),
-            ("awidat.cinematic_pan_left", "cinematic_pan"),
-            ("awidat.cinematic_pan_right", "cinematic_pan"),
-            ("awidat.spiral_wipe", "luma_mask"),
-            ("awidat.burst_wipe", "luma_mask"),
-            ("awidat.jaws_wipe", "luma_mask"),
+            ("montage.light_leak", "light_leak"),
+            ("montage.swirl_vortex", "swirl_vortex"),
+            ("montage.cinematic_pan_left", "cinematic_pan"),
+            ("montage.cinematic_pan_right", "cinematic_pan"),
+            ("montage.spiral_wipe", "luma_mask"),
+            ("montage.burst_wipe", "luma_mask"),
+            ("montage.jaws_wipe", "luma_mask"),
         ];
         for (id, expected_shader) in cases {
             let composition =
@@ -2805,11 +2805,11 @@ mod tests {
 
     #[test]
     fn ramp_in_beat_transition_has_time_remap_and_visual_accent() {
-        let transition = lookup_builtin_transition("awidat.ramp_in_beat").unwrap();
+        let transition = lookup_builtin_transition("montage.ramp_in_beat").unwrap();
         assert_eq!(transition.family, "speed_ramp");
         assert!(transition.best_for.contains(&"beat_hit"));
 
-        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        let composition = builtin_transition_composition("montage.ramp_in_beat").unwrap();
         assert!(
             composition
                 .primitives
@@ -2862,14 +2862,14 @@ mod tests {
 
     #[test]
     fn extract_time_remap_setpts_skips_zero_duration_window() {
-        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        let composition = builtin_transition_composition("montage.ramp_in_beat").unwrap();
         assert!(extract_time_remap_setpts(&composition, 0.0).is_none());
         assert!(extract_time_remap_setpts(&composition, -0.5).is_none());
     }
 
     #[test]
     fn extract_time_remap_setpts_handles_keyframed_ramp_in_beat() {
-        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        let composition = builtin_transition_composition("montage.ramp_in_beat").unwrap();
         let curve = extract_time_remap_setpts(&composition, 0.32).unwrap();
         // Samples are sorted by source time and span the full window.
         let first_in = curve.samples.first().unwrap().0;
@@ -2915,7 +2915,7 @@ mod tests {
         // The composition lowering and GPU resolution should both
         // agree that LumaMask is GPU-only. xfade fallback is None;
         // gpu_shader returns "luma_mask".
-        let composition = builtin_transition_composition("awidat.clock_wipe").unwrap();
+        let composition = builtin_transition_composition("montage.clock_wipe").unwrap();
         assert!(
             resolve_composition_ffmpeg_xfade(&composition).is_none(),
             "clock_wipe has no xfade fallback"
@@ -2940,11 +2940,11 @@ mod tests {
     #[test]
     fn every_transition_documents_best_for() {
         // Every non-cut transition must document at least one editorial
-        // context. `awidat.hard_cut` and `awidat.composite` are the only
+        // context. `montage.hard_cut` and `montage.composite` are the only
         // exceptions (hard_cut has no editorial intent; composite is the
         // agent-authored escape hatch).
         for transition in BUILTIN_TRANSITIONS {
-            if matches!(transition.id, "awidat.hard_cut" | "awidat.composite") {
+            if matches!(transition.id, "montage.hard_cut" | "montage.composite") {
                 continue;
             }
             assert!(
@@ -2997,17 +2997,17 @@ mod tests {
     }
 
     #[test]
-    fn resolves_built_in_awidat_ids_to_ffmpeg() {
+    fn resolves_built_in_montage_ids_to_ffmpeg() {
         assert_eq!(
-            resolve_ffmpeg_xfade("awidat.cross_dissolve").unwrap(),
+            resolve_ffmpeg_xfade("montage.cross_dissolve").unwrap(),
             Some("fade")
         );
         assert_eq!(
-            resolve_ffmpeg_xfade("awidat.slide_left").unwrap(),
+            resolve_ffmpeg_xfade("montage.slide_left").unwrap(),
             Some("slideleft")
         );
         assert_eq!(
-            resolve_ffmpeg_xfade("awidat.composite").unwrap(),
+            resolve_ffmpeg_xfade("montage.composite").unwrap(),
             Some("fade")
         );
     }
@@ -3015,11 +3015,11 @@ mod tests {
     #[test]
     fn resolves_audio_policy_by_transition_family() {
         assert_eq!(
-            resolve_audio_policy("awidat.cross_dissolve").unwrap(),
+            resolve_audio_policy("montage.cross_dissolve").unwrap(),
             TransitionAudioPolicy::Crossfade
         );
         assert_eq!(
-            resolve_audio_policy("awidat.slide_left").unwrap(),
+            resolve_audio_policy("montage.slide_left").unwrap(),
             TransitionAudioPolicy::Cut
         );
         assert_eq!(
@@ -3063,14 +3063,14 @@ mod tests {
 
     #[test]
     fn validates_transition_duration_bounds() {
-        assert!(validate_transition_duration("awidat.cross_dissolve", 0.3).is_ok());
-        let err = validate_transition_duration("awidat.flash_white", 2.0).unwrap_err();
+        assert!(validate_transition_duration("montage.cross_dissolve", 0.3).is_ok());
+        let err = validate_transition_duration("montage.flash_white", 2.0).unwrap_err();
         assert!(err.to_string().contains("outside supported range"));
     }
 
     #[test]
     fn exposes_builtin_compositions_as_data_recipes() {
-        let slide = builtin_transition_composition("awidat.slide_left").unwrap();
+        let slide = builtin_transition_composition("montage.slide_left").unwrap();
         assert_eq!(slide.version, 1);
         assert!(matches!(
             &slide.primitives[0].op,
@@ -3080,12 +3080,12 @@ mod tests {
             } if direction == "left" && (*distance - 1.0).abs() < 1e-9
         ));
 
-        let radial = builtin_transition_composition("awidat.radial").unwrap();
+        let radial = builtin_transition_composition("montage.radial").unwrap();
         assert!(matches!(
             &radial.primitives[0].op,
-            TransitionPrimitiveOp::Atomic { id } if id == "awidat.radial"
+            TransitionPrimitiveOp::Atomic { id } if id == "montage.radial"
         ));
-        assert!(builtin_transition_composition("awidat.composite").is_none());
+        assert!(builtin_transition_composition("montage.composite").is_none());
     }
 
     #[test]
@@ -3195,21 +3195,21 @@ mod tests {
         let manifests = stable_builtin_transition_manifests();
         validate_transition_manifests(&manifests).unwrap();
 
-        assert!(manifests.iter().any(|m| m.id == "awidat.cross_dissolve"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.match_dissolve"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.motion_blur"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.whip_pan_left"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.pass_by_left"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.pass_by_right"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.iris_open"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.iris_close"));
-        assert!(manifests.iter().any(|m| m.id == "awidat.invisible_cut"));
-        assert!(!manifests.iter().any(|m| m.id == "awidat.hard_cut"));
-        assert!(!manifests.iter().any(|m| m.id == "awidat.composite"));
+        assert!(manifests.iter().any(|m| m.id == "montage.cross_dissolve"));
+        assert!(manifests.iter().any(|m| m.id == "montage.match_dissolve"));
+        assert!(manifests.iter().any(|m| m.id == "montage.motion_blur"));
+        assert!(manifests.iter().any(|m| m.id == "montage.whip_pan_left"));
+        assert!(manifests.iter().any(|m| m.id == "montage.pass_by_left"));
+        assert!(manifests.iter().any(|m| m.id == "montage.pass_by_right"));
+        assert!(manifests.iter().any(|m| m.id == "montage.iris_open"));
+        assert!(manifests.iter().any(|m| m.id == "montage.iris_close"));
+        assert!(manifests.iter().any(|m| m.id == "montage.invisible_cut"));
+        assert!(!manifests.iter().any(|m| m.id == "montage.hard_cut"));
+        assert!(!manifests.iter().any(|m| m.id == "montage.composite"));
 
         let slide = manifests
             .iter()
-            .find(|m| m.id == "awidat.slide_left")
+            .find(|m| m.id == "montage.slide_left")
             .unwrap();
         assert_eq!(slide.backends, vec![TransitionBackend::Ffmpeg]);
         assert_eq!(slide.ffmpeg_xfade.as_deref(), Some("slideleft"));
@@ -3235,14 +3235,14 @@ mod tests {
 
         let whip = manifests
             .iter()
-            .find(|m| m.id == "awidat.whip_pan_left")
+            .find(|m| m.id == "montage.whip_pan_left")
             .unwrap();
         assert_eq!(whip.ffmpeg_xfade.as_deref(), Some("hblur"));
         assert!(whip.best_for.iter().any(|tag| tag == "hide_motion_jump"));
 
         let pass_by = manifests
             .iter()
-            .find(|m| m.id == "awidat.pass_by_left")
+            .find(|m| m.id == "montage.pass_by_left")
             .unwrap();
         assert_eq!(pass_by.ffmpeg_xfade.as_deref(), Some("coverleft"));
         assert_eq!(
@@ -3253,7 +3253,7 @@ mod tests {
 
         let iris_open = manifests
             .iter()
-            .find(|m| m.id == "awidat.iris_open")
+            .find(|m| m.id == "montage.iris_open")
             .unwrap();
         assert_eq!(iris_open.ffmpeg_xfade.as_deref(), Some("circleopen"));
         assert!(
@@ -3265,7 +3265,7 @@ mod tests {
 
         let invisible = manifests
             .iter()
-            .find(|m| m.id == "awidat.invisible_cut")
+            .find(|m| m.id == "montage.invisible_cut")
             .unwrap();
         assert_eq!(invisible.ffmpeg_xfade.as_deref(), Some("fadefast"));
         assert_eq!(
@@ -3287,9 +3287,9 @@ mod tests {
         let manifests: Vec<TransitionManifest> = serde_json::from_str(&json).unwrap();
         validate_transition_manifests(&manifests).unwrap();
 
-        assert!(json.contains("\"id\": \"awidat.cross_dissolve\""));
+        assert!(json.contains("\"id\": \"montage.cross_dissolve\""));
         assert!(json.contains("\"composition\""));
-        assert!(!json.contains("awidat.composite"));
+        assert!(!json.contains("montage.composite"));
     }
 
     #[test]
@@ -3297,19 +3297,19 @@ mod tests {
         let mut manifests = stable_builtin_transition_manifests();
         manifests[0].id = "bad.cross_dissolve".into();
         let err = validate_transition_manifests(&manifests).unwrap_err();
-        assert!(err.to_string().contains("must start with awidat"));
+        assert!(err.to_string().contains("must start with montage"));
     }
 
     #[test]
-    fn rejects_unknown_awidat_ids() {
-        let err = resolve_ffmpeg_xfade("awidat.not_registered").unwrap_err();
+    fn rejects_unknown_montage_ids() {
+        let err = resolve_ffmpeg_xfade("montage.not_registered").unwrap_err();
         assert!(err.to_string().contains("unsupported"));
     }
 
     #[test]
     fn validates_semantic_energy_and_family() {
         let mut spec = SemanticTransitionSpec {
-            id: "awidat.cross_dissolve".into(),
+            id: "montage.cross_dissolve".into(),
             family: Some("slide".into()),
             energy: Some(1.2),
             ..SemanticTransitionSpec::default()
@@ -3325,7 +3325,7 @@ mod tests {
     #[test]
     fn validates_composite_requires_lowerable_composition() {
         let mut spec = SemanticTransitionSpec {
-            id: "awidat.composite".into(),
+            id: "montage.composite".into(),
             family: Some("custom".into()),
             ..SemanticTransitionSpec::default()
         };
@@ -3376,6 +3376,6 @@ mod tests {
             }],
         };
         let err = validate_transition_composition(&composition).unwrap_err();
-        assert!(err.to_string().contains("registered awidat"));
+        assert!(err.to_string().contains("registered montage"));
     }
 }

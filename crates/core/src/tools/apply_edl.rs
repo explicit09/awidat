@@ -19,7 +19,7 @@
 //! wrapper.
 
 use async_trait::async_trait;
-use awidat_proto::project::Project;
+use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -165,7 +165,7 @@ impl ToolHandler for ApplyEdlTool {
         // edl_apply; receives the raw EDL text on stdin. Non-zero
         // exit aborts the apply_edl call. Hook config is loaded
         // fresh per call to support live-edit during a session.
-        if let Ok(cfg) = awidat_config::Config::load(Some(&ctx.project_root))
+        if let Ok(cfg) = montage_config::Config::load(Some(&ctx.project_root))
             && let Some(cmd) = cfg.hooks.pre_apply_edl.as_deref()
         {
             run_apply_edl_hook("pre_apply_edl", cmd, &args.edl, &ctx.project_root)?;
@@ -239,7 +239,7 @@ impl ToolHandler for ApplyEdlTool {
             // zero exit is logged but doesn't fail the apply_edl —
             // we already committed; the agent shouldn't have to
             // un-commit on a side-effect's failure.
-            if let Ok(cfg) = awidat_config::Config::load(Some(&ctx.project_root))
+            if let Ok(cfg) = montage_config::Config::load(Some(&ctx.project_root))
                 && let Some(cmd) = cfg.hooks.post_apply_edl.as_deref()
             {
                 let stdin_payload = serde_json::json!({
@@ -365,7 +365,7 @@ fn editorial_tags_for_envelope(envelope: &crate::edl::EdlEnvelope) -> Vec<String
                     .as_ref()
                     .and_then(|spec| spec.family.as_deref())
                     .or_else(|| {
-                        awidat_proto::transitions::lookup_builtin_transition(kind)
+                        montage_proto::transitions::lookup_builtin_transition(kind)
                             .map(|transition| transition.family)
                     })
                 {
@@ -674,20 +674,20 @@ ANCHOR_B` where the two anchors identify ADJACENT clips on the \
 same track. The transition is centered on the cut: half of \
 `duration_s` uses incoming pre-roll before the cut, half uses outgoing \
 post-roll after the cut. In OTIO terms, `in_offset_s` is incoming pre-roll before \
-the cut and `out_offset_s` is outgoing post-roll after the cut. Awidat \
+the cut and `out_offset_s` is outgoing post-roll after the cut. Montage \
 validates source handles before inserting. New EDLs must use a registered \
-`awidat.*` transition id or `SMPTE_Dissolve`; raw FFmpeg transition names \
+`montage.*` transition id or `SMPTE_Dissolve`; raw FFmpeg transition names \
 are render-legacy only. Optional `+ composition_json: {...}` stores a \
 data-only transition recipe over stable primitives (`opacity`, `push`, \
 `wipe`, `zoom`, `blur`, `flash`, `shake`, `chromatic_split`, `pixelize`, \
-or stable `atomic` awidat ids). Do not put raw FFmpeg graphs, GLSL, shell, \
-or plugin code in transition metadata. Use `awidat.composite` for a \
+or stable `atomic` montage ids). Do not put raw FFmpeg graphs, GLSL, shell, \
+or plugin code in transition metadata. Use `montage.composite` for a \
 custom on-the-spot recipe whose `composition_json` defines the actual feel. \
-Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
-for interview/dialogue smoothing. Use `awidat.fade_black` only for \
+Prefer `montage.cross_dissolve` or `SMPTE_Dissolve` \
+for interview/dialogue smoothing. Use `montage.fade_black` only for \
 intentional chapter resets or endings; it is a fade-through-black, \
-not a normal dissolve. Do not use legacy `awidat.fade_in` / \
-`awidat.fade_out` between ordinary adjacent clips unless the user \
+not a normal dissolve. Do not use legacy `montage.fade_in` / \
+`montage.fade_out` between ordinary adjacent clips unless the user \
 explicitly asks for a black dip. Transitions may be chained across \
 adjacent clips; transitions still cannot cross gaps or non-adjacent \
 anchors.\
@@ -713,12 +713,12 @@ anchor.\
 (default 0), `+ corner: <top_left|top_right|bottom_left|bottom_right>` \
 (default bottom_right), `+ scale: <0.10..0.60>` (default 0.28), \
 and `+ margin_pct: <0.0..0.15>` (default 0.035). Anchored to a clip; \
-lands on an upper video track with `awidat.video_overlay` metadata. \
+lands on an upper video track with `montage.video_overlay` metadata. \
 PiP overlay audio is muted in v1.\
 \n  - **Set Volume**: `+ value: <gain>` (required). Linear gain \
 multiplier on the clip's audio: `0.0` mutes, `1.0` is unity (no \
 change — the default for clips with no Set Volume), values above \
-`1.0` amplify (clipping risk). Stamps an `awidat.volume` Effect \
+`1.0` amplify (clipping risk). Stamps an `montage.volume` Effect \
 on the clip; re-applying replaces the existing effect rather than \
 stacking. Render emits `volume=<value>` on this segment's audio \
 stream before concat / xfade.\
@@ -736,9 +736,9 @@ several spans. `+ clear: true` drops all removed spans on the \
 clip. v1 supports unity-speed clips with no split edit; other \
 combinations are reported at render.\
 \n  - **Set Effect**: generic registered clip effect. Required \
-fields: `+ effect: <awidat.effect_id>` and optional `+ params_json: \
+fields: `+ effect: <montage.effect_id>` and optional `+ params_json: \
 {...}` plus optional `+ rationale: <why>`. The effect id must exist \
-in the in-tree `awidat-effects` registry. Parameters are validated \
+in the in-tree `montage-effects` registry. Parameters are validated \
 against the registry before writing, then stamped as OTIO Effect \
 metadata. Same-id effects replace by default unless the registry \
 marks them stackable. Use this when an operation is easier to express \
@@ -746,7 +746,7 @@ as a semantic graph-native effect than as a dedicated EDL op.\
 \n  - **Set Speed**: `+ factor: <multiplier>` (required). Playback \
 rate multiplier: `1.0` is unity (no change), `2.0` plays at double \
 speed (half timeline length), `0.5` plays at half speed (double \
-length). Stamps an `awidat.speed` Effect; replaces any existing \
+length). Stamps an `montage.speed` Effect; replaces any existing \
 one. The clip's contribution to the master timeline duration \
 becomes `source_duration / factor`. Render uses \
 `setpts=<1/factor>*PTS` on video and chained `atempo=` filters on \
@@ -754,7 +754,7 @@ audio (atempo's per-instance range is `[0.5, 2.0]`; factors \
 outside chain — extreme values produce audible artifacts, so \
 keep within `[0.25, 4.0]` unless the clip is silent).\
 \n  - **Set Time Remap**: `+ curve_json: [...]` (required). Anchored \
-to a clip. Stamps an `awidat.time_remap` Effect; re-applying replaces \
+to a clip. Stamps an `montage.time_remap` Effect; re-applying replaces \
 the existing time-remap effect rather than stacking. Curve points should \
 be ordered objects such as `{\\\"source_time_s\\\":0,\\\"timeline_time_s\\\":0}` \
 and can include planner metadata for beat-sync or ramp intent. Use this \
@@ -762,12 +762,12 @@ for variable speed ramps; use Set Speed for one constant multiplier.\
 \n  - **Set Freeze**: `+ freeze_at_source_s: <seconds>` and \
 `+ duration_s: <seconds>` required. Optional `+ freeze_position: at` \
 and `+ audio_behavior: silence`. Anchored to a clip. Stamps an \
-`awidat.freeze` Effect; re-applying replaces the existing freeze effect. \
+`montage.freeze` Effect; re-applying replaces the existing freeze effect. \
 Render inserts a held video frame and generated silence for the hold.\
 \n  - **Set Color Correction**: optional fields `+ exposure_ev`, \
 `+ contrast`, `+ saturation`, `+ temperature`, `+ tint`, `+ shadows`, \
 `+ highlights` (at least one required). Anchored to a clip. Stamps \
-an `awidat.color_correction` Effect; re-applying replaces the existing \
+an `montage.color_correction` Effect; re-applying replaces the existing \
 correction rather than stacking. Render maps these controls to FFmpeg \
 color filters before speed, concat, transitions, and title overlays. \
 Ranges: exposure_ev `[-4,4]`, contrast/saturation `[0,3]`, all other \
@@ -777,14 +777,14 @@ optional `+ interpolation: <nearest|trilinear|tetrahedral|pyramid|prism>`, \
 optional `+ strength: <0.0..=1.0>` (default 1.0 = full LUT; values below \
 1.0 mix the LUT with the un-graded source via FFmpeg's `split → lut3d → \
 blend=all_opacity=<strength>` pattern, where `strength=0.6` means 60% LUT \
-+ 40% original). Anchored to a clip. Stamps an `awidat.lut` Effect with a \
++ 40% original). Anchored to a clip. Stamps an `montage.lut` Effect with a \
 project-relative LUT path; paths must be non-empty, non-absolute, must \
 not contain `.`, `..`, or backslashes, and must end in `.3dl`, `.cube`, \
 `.dat`, `.m3d`, or `.csp`. `.cube` and `.3dl` files are parsed at apply \
 time and a structured error is returned if the LUT is malformed. \
 Re-applying replaces the prior LUT. Render emits `lut3d` for this segment \
 before speed, concat, transitions, and title overlays.\
-\n  - **Remove LUT**: no fields besides the anchor. Clears `awidat.lut` \
+\n  - **Remove LUT**: no fields besides the anchor. Clears `montage.lut` \
 from the clip while leaving color correction, speed, audio, and title \
 effects intact.\
 \n  - **Insert Title**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
@@ -803,7 +803,7 @@ y= positions (top: `h*0.05`, center: `(h-text_h)/2`, bottom: \
 clip_uuid. ALL styling fields are optional — only non-None ones \
 update. Same field set as `Insert Title` plus `start_s` / `end_s` \
 to retime the overlay window. Errors when the anchored clip has \
-no `awidat.title` effect.\
+no `montage.title` effect.\
 \n  - **Insert Caption**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
 `+ text: \"<string>\"` (required). Optional `+ position: <top|center|bottom>` \
 (default `bottom`), `+ font_size: <px>` (default 52), `+ color: <#RRGGBB>` \
@@ -814,7 +814,7 @@ nodes on the Titles track with `role=\"caption\"`; do not burn captions by \
 writing a separate render script.\
 \n  - **Set Output Format**: `+ aspect_ratio: <16:9|9:16|1:1|4:5>` \
 (required). Optional `+ platform: <name>` and `+ safe_area: <profile>`. \
-Stores delivery format intent on `timeline.metadata.awidat.extra.output_format`.\
+Stores delivery format intent on `timeline.metadata.montage.extra.output_format`.\
 \n  - **Set Loudness Target**: `+ integrated_lufs: <negative number>` \
 (required). Optional `+ true_peak_db: <negative ceiling>`. Stores audio \
 delivery intent on the timeline graph.\
@@ -824,7 +824,7 @@ intent on the timeline graph; at least one field is required.\
 \n  - **Set Broadcast Overlay**: timeline-level overlay config for \
 broadcast title cards, lower-thirds, host intro strips, ticker/topic \
 badges, and chapter cards. Preferred form is `+ config_json: {...}` \
-using the `awidat.broadcast_overlay` schema. Simple field form also \
+using the `montage.broadcast_overlay` schema. Simple field form also \
 accepts `+ enabled`, `+ episode_title`, `+ episode_subtitle`, \
 `+ show_name`, `+ host_a_name`, `+ host_a_title`, `+ host_a_photo_path`, \
 `+ host_b_name`, `+ host_b_title`, `+ host_b_photo_path`, `+ sponsors` \
@@ -868,8 +868,8 @@ which is still better than nothing but loses the *why*.\
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
-    use awidat_proto::otio::{
+    use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
+    use montage_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
     };
@@ -882,11 +882,11 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
 
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -919,12 +919,12 @@ mod tests {
                 RationalTime::new(5.0 * 24.0, 24.0),
             ));
             c.metadata = ClipMetadata {
-                awidat: Some(AwidatClipMetadata {
+                montage: Some(MontageClipMetadata {
                     anchor: Some(AwAnchor {
                         transcript_snippet: Some((*snip).to_string()),
                         ..AwAnchor::default()
                     }),
-                    ..AwidatClipMetadata::default()
+                    ..MontageClipMetadata::default()
                 }),
                 ..ClipMetadata::default()
             };
@@ -944,12 +944,12 @@ mod tests {
         project
             .timeline
             .metadata
-            .awidat
+            .montage
             .as_mut()
             .unwrap()
             .extra
             .insert(
-                "awidat_project_type".into(),
+                "montage_project_type".into(),
                 serde_json::json!({"kind": "podcast"}),
             );
         project.write(root).unwrap();
@@ -1421,7 +1421,7 @@ mod tests {
 
 *** Insert Transition
 @@ between: clip_uuid=b and clip_uuid=c
-+ kind: awidat.whip_pan_right
++ kind: montage.whip_pan_right
 + duration_s: 0.180
 + intent: hide_motion_jump
 
@@ -1465,19 +1465,19 @@ mod tests {
 *** Begin EDL
 *** Insert Transition
 @@ between: clip_uuid=a and clip_uuid=b
-+ kind: awidat.flash_white
++ kind: montage.flash_white
 + duration_s: 0.120
 + intent: beat_hit
 
 *** Insert Transition
 @@ between: clip_uuid=b and clip_uuid=c
-+ kind: awidat.whip_pan_right
++ kind: montage.whip_pan_right
 + duration_s: 0.180
 + intent: hide_motion_jump
 
 *** Insert Transition
 @@ between: clip_uuid=c and clip_uuid=d
-+ kind: awidat.zoom_in
++ kind: montage.zoom_in
 + duration_s: 0.160
 + intent: emphasis
 *** End EDL

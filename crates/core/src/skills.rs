@@ -8,20 +8,20 @@
 //!   loading full playbooks into the system prompt.
 //! - **L2**: full `SKILL.md` body loaded only when relevant — the
 //!   agent self-selects via a `load_skill(name)` tool. Even
-//!   `awidat skills run <name>` only stages a first-turn prompt that
+//!   `montage skills run <name>` only stages a first-turn prompt that
 //!   tells the agent to call `load_skill`.
 //! - **L3**: bundled scripts under `<skill>/scripts/`, run via the
 //!   existing `bash` tool. The agent doesn't try to do embedding
 //!   match in its head — it calls scripts/embedding_search.py.
 //!
 //! Discovery hierarchy (highest priority first):
-//! 1. user skill roots, e.g. `~/Library/Application Support/awidat/skills`
-//!    and `~/.config/awidat/skills`
-//! 2. `<install_root>/share/awidat/skills/<name>/SKILL.md` (bundled)
+//! 1. user skill roots, e.g. `~/Library/Application Support/montage/skills`
+//!    and `~/.config/montage/skills`
+//! 2. `<install_root>/share/montage/skills/<name>/SKILL.md` (bundled)
 //! 3. Walk-up dev fallback: `<repo>/skills/<name>/SKILL.md`
 //!
 //! User-scoped skills override bundled by `name`. New names append.
-//! Same overlay rule as `[[mcp.servers]]` in `awidat-config`.
+//! Same overlay rule as `[[mcp.servers]]` in `montage-config`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ pub struct Skill {
 /// description. Everything else optional.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillMeta {
-    /// Stable id. Used in `awidat skills run <name>` and in the
+    /// Stable id. Used in `montage skills run <name>` and in the
     /// L1 catalog line. Must match the directory name.
     pub name: String,
     /// One-sentence summary of what this skill does. Shown to the
@@ -65,17 +65,17 @@ pub struct SkillMeta {
     /// b-roll-suggester). Empty/missing = no restriction.
     #[serde(default)]
     pub tools_allowlist: Vec<String>,
-    /// Optional grouping tag for `awidat skills list` (editorial /
+    /// Optional grouping tag for `montage skills list` (editorial /
     /// technical / creative). Free-form.
     #[serde(default)]
     pub tier: Option<String>,
-    /// Optional minimum Awidat core version required to run this skill.
-    /// Used as a compatibility gate — if the host Awidat is older than
+    /// Optional minimum Montage core version required to run this skill.
+    /// Used as a compatibility gate — if the host Montage is older than
     /// the declared minimum, the skill is skipped from the catalog
     /// with a warning. Same shape as `version` (`MAJOR.MINOR.PATCH`).
     /// Empty / missing = no compatibility check.
     #[serde(default)]
-    pub awidat_min_version: Option<String>,
+    pub montage_min_version: Option<String>,
 }
 
 fn default_version() -> String {
@@ -134,14 +134,14 @@ impl SkillRegistry {
     /// Discover skills from the standard hierarchy:
     ///
     /// 1. `<bundled_root>/skills/` — bundled with the install. Pass
-    ///    the dir resolved by `awidat_config::defaults::python_root`
-    ///    (or its `share/awidat/skills` sibling, depending on the
+    ///    the dir resolved by `montage_config::defaults::python_root`
+    ///    (or its `share/montage/skills` sibling, depending on the
     ///    install layout) — we don't pin the exact location here so
     ///    the caller can pass dev-tree paths during local iteration.
-    /// 2. `~/.config/awidat/skills/` — user overrides.
+    /// 2. `~/.config/montage/skills/` — user overrides.
     ///
     /// User entries win on name conflicts. Returns the registry +
-    /// any non-fatal load errors (so `awidat skills list` can
+    /// any non-fatal load errors (so `montage skills list` can
     /// surface "this skill is malformed, fix it" without
     /// preventing the rest from loading).
     pub fn discover(
@@ -476,22 +476,22 @@ mod tests {
     }
 
     #[test]
-    fn awidat_min_version_round_trips_when_set() {
+    fn montage_min_version_round_trips_when_set() {
         let dir = tempfile::tempdir().unwrap();
         write_skill(
             dir.path(),
             "future-skill",
-            "name: future-skill\ndescription: x\nawidat_min_version: \"0.2.0\"",
+            "name: future-skill\ndescription: x\nmontage_min_version: \"0.2.0\"",
             "body",
         );
         let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
         assert!(errs.is_empty());
         let s = reg.get("future-skill").unwrap();
-        assert_eq!(s.meta.awidat_min_version.as_deref(), Some("0.2.0"));
+        assert_eq!(s.meta.montage_min_version.as_deref(), Some("0.2.0"));
     }
 
     #[test]
-    fn awidat_min_version_absent_when_not_declared() {
+    fn montage_min_version_absent_when_not_declared() {
         let dir = tempfile::tempdir().unwrap();
         write_skill(
             dir.path(),
@@ -502,7 +502,7 @@ mod tests {
         let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
         assert!(errs.is_empty());
         let s = reg.get("current-skill").unwrap();
-        assert!(s.meta.awidat_min_version.is_none());
+        assert!(s.meta.montage_min_version.is_none());
     }
 
     #[test]

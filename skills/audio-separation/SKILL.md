@@ -83,7 +83,7 @@ start_render(scope="timeline")
 poll_render
 ```
 
-`vedit_diff` should show the clip's `awidat` audio override (muted and/or
+`vedit_diff` should show the clip's `montage` audio override (muted and/or
 removed ranges). Render a preview and confirm by ear: the picture is
 unchanged across the edit, the audio is silent where intended, and audio on
 the rest of the timeline is preserved (the project switches to the decoupled

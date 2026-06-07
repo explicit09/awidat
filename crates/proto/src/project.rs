@@ -11,7 +11,7 @@
 //! │   ├── manifest.json     # registry of indexers
 //! │   └── <name>/<asset>.json  # one sidecar per asset, per indexer
 //! ├── renders/              # final renders
-//! └── .awidat/              # ephemeral state (session db, caches)
+//! └── .montage/              # ephemeral state (session db, caches)
 //! ```
 
 use std::fs;
@@ -43,19 +43,19 @@ pub mod files {
     /// Renders dir.
     pub const RENDERS_DIR: &str = "renders";
     /// Ephemeral state dir.
-    pub const AWIDAT_DIR: &str = ".awidat";
+    pub const MONTAGE_DIR: &str = ".montage";
 }
 
-/// Default `.gitignore` written by `awidat init`. Per `PLAN.md` §5.3:
+/// Default `.gitignore` written by `montage init`. Per `PLAN.md` §5.3:
 /// regenerable indexer outputs and ephemeral session state stay out of git
 /// by default; the manifest is carved back in because it's small and
 /// authoritative.
 const GITIGNORE_TEMPLATE: &str = "\
-# Awidat project — keep diffability sharp.
+# Montage project — keep diffability sharp.
 # Regenerable outputs and ephemeral state stay out of git by default.
 
 # Sidecar JSON written by indexers (whisper, scenedetect, ...). Large and
-# rebuildable from `awidat index`.
+# rebuildable from `montage index`.
 /index/*
 # Carve out the manifest: small, hand-curated source of truth.
 !/index/manifest.json
@@ -64,7 +64,7 @@ const GITIGNORE_TEMPLATE: &str = "\
 /renders/
 
 # Ephemeral session state.
-/.awidat/
+/.montage/
 
 # OS noise.
 .DS_Store
@@ -165,8 +165,8 @@ impl Project {
         // Subdirectories.
         let index_dir = root.join(files::INDEX_DIR);
         let renders_dir = root.join(files::RENDERS_DIR);
-        let awidat_dir = root.join(files::AWIDAT_DIR);
-        for d in [&index_dir, &renders_dir, &awidat_dir] {
+        let montage_dir = root.join(files::MONTAGE_DIR);
+        for d in [&index_dir, &renders_dir, &montage_dir] {
             fs::create_dir_all(d).map_err(|e| ProtoError::Io {
                 path: d.display().to_string(),
                 source: e,
@@ -174,7 +174,7 @@ impl Project {
         }
 
         // Project-root .gitignore: index/ and renders/ are regenerable
-        // outputs; .awidat/ is ephemeral session state. None should land in
+        // outputs; .montage/ is ephemeral session state. None should land in
         // git by default. The manifest under index/ is the one exception —
         // small, hand-curated, and the source of truth for which indexers
         // ran. See PLAN.md §5.3.
@@ -286,7 +286,7 @@ impl Project {
 fn default_project_name(root: &Path) -> String {
     root.file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("awidat-project")
+        .unwrap_or("montage-project")
         .to_string()
 }
 
@@ -350,23 +350,23 @@ pub fn read_otio_timeline(
         Ok(tl) => Ok(tl),
         Err(strict_err) => {
             // Strict parse failed. The most common cause we've seen is the
-            // agent writing malformed entries into `metadata.awidat.*`
+            // agent writing malformed entries into `metadata.montage.*`
             // arrays (e.g. a `TimelineMarker` with `name`/`source_time_s`
             // instead of `label`/`time_s`). Those sections are editorial
             // sidecars — losing them is sad but recoverable; rejecting
             // the whole project means the user can't open it at all.
             //
-            // Quarantine pass: walk every array under `metadata.awidat`;
+            // Quarantine pass: walk every array under `metadata.montage`;
             // if any element fails to deserialize against its sibling
             // elements' shape, drop the offenders and re-try. We do this
             // ONLY on a strict-parse failure so well-formed files take
             // the fast path.
-            if let Some(quarantined) = quarantine_awidat_metadata_arrays(value, &file, warnings) {
+            if let Some(quarantined) = quarantine_montage_metadata_arrays(value, &file, warnings) {
                 serde_json::from_value::<Timeline>(quarantined).map_err(|e| {
                     ProtoError::Validation {
                         file,
                         path: JsonPath::root(),
-                        message: format!("{e} (after quarantining metadata.awidat arrays; original error: {strict_err})"),
+                        message: format!("{e} (after quarantining metadata.montage arrays; original error: {strict_err})"),
                     }
                 })
             } else {
@@ -380,46 +380,46 @@ pub fn read_otio_timeline(
     }
 }
 
-/// Best-effort quarantine of malformed entries under `metadata.awidat`.
+/// Best-effort quarantine of malformed entries under `metadata.montage`.
 /// Returns `Some(rewritten_value)` if at least one array was sanitized
 /// (so the caller can retry deserialization), or `None` if there was
 /// nothing to fix (the failure is elsewhere in the document).
 ///
-/// Strategy: for every array directly under `metadata.awidat`, validate
+/// Strategy: for every array directly under `metadata.montage`, validate
 /// each element against the SHAPE of the most-common element by trying
 /// the array as a `Vec<serde_json::Value>` against a per-element
 /// best-effort serde fallback. We can't know the target Rust type here
-/// (this fn is in proto without type-erased knowledge of awidat_meta),
+/// (this fn is in proto without type-erased knowledge of montage_meta),
 /// so we do the cheap-but-effective thing: keep only elements whose
 /// shape matches the FIRST element's keys (a sibling-shape heuristic).
 /// If the very first element is malformed, we still try by checking
 /// against any element in the array as the reference.
 ///
 /// False positives (rejecting valid heterogenous entries) are possible
-/// in principle; in practice every metadata.awidat array we currently
+/// in principle; in practice every metadata.montage array we currently
 /// define is homogeneous by struct, so this is safe.
-fn quarantine_awidat_metadata_arrays(
+fn quarantine_montage_metadata_arrays(
     mut value: serde_json::Value,
     file: &str,
     _warnings: &mut Vec<SchemaWarning>,
 ) -> Option<serde_json::Value> {
-    let awidat = value
-        .pointer_mut("/metadata/awidat")
+    let montage = value
+        .pointer_mut("/metadata/montage")
         .and_then(|v| v.as_object_mut())?;
 
     let mut touched = false;
-    let array_keys: Vec<String> = awidat
+    let array_keys: Vec<String> = montage
         .iter()
         .filter(|(_, v)| v.as_array().is_some_and(|arr| !arr.is_empty()))
         .map(|(k, _)| k.clone())
         .collect();
-    // If every element of an awidat-metadata array is missing every
+    // If every element of an montage-metadata array is missing every
     // anchor field we know of (id / time_s / start_s / clip_id / uuid),
     // the agent likely wrote a fully-wrong shape — drop the lot rather
     // than fail the whole project load. Editorial sidecars losing
     // entries is recoverable; an unreadable project isn't.
     for key in array_keys {
-        let Some(arr_val) = awidat.get_mut(&key) else {
+        let Some(arr_val) = montage.get_mut(&key) else {
             continue;
         };
         let Some(arr) = arr_val.as_array() else {
@@ -440,7 +440,7 @@ fn quarantine_awidat_metadata_arrays(
             *arr_val = serde_json::Value::Array(Vec::new());
             touched = true;
             eprintln!(
-                "warning: {file}: emptied {dropped} malformed entr{plural} from metadata.awidat.{key} (no anchor fields found)",
+                "warning: {file}: emptied {dropped} malformed entr{plural} from metadata.montage.{key} (no anchor fields found)",
                 plural = if dropped == 1 { "y" } else { "ies" }
             );
         }
@@ -532,7 +532,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        p.push(format!("awidat-test-{nanos}-{}-{n}", std::process::id()));
+        p.push(format!("montage-test-{nanos}-{}-{n}", std::process::id()));
         p
     }
 
@@ -556,7 +556,7 @@ mod tests {
         assert!(gi_text.contains("/index/*"));
         assert!(gi_text.contains("!/index/manifest.json"));
         assert!(gi_text.contains("/renders/"));
-        assert!(gi_text.contains("/.awidat/"));
+        assert!(gi_text.contains("/.montage/"));
         assert!(!root.join(files::INDEX_DIR).join(".gitkeep").exists());
         assert_eq!(p.timeline.otio_schema, "Timeline.1");
         fs::remove_dir_all(&root).ok();

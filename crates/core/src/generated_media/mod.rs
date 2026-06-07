@@ -20,10 +20,10 @@ pub mod test_support {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),
@@ -38,11 +38,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_path_is_project_local_awidat_file() {
+    fn registry_path_is_project_local_montage_file() {
         let root = std::path::Path::new("/tmp/episode");
         assert_eq!(
             registry::registry_path(root),
-            root.join(".awidat")
+            root.join(".montage")
                 .join("generated-media")
                 .join("registry.json")
         );

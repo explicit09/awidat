@@ -1,4 +1,4 @@
-"""Fast shot-boundary indexer for Awidat.
+"""Fast shot-boundary indexer for Montage.
 
 Emits `shots[]` — contiguous source-time ranges the agent can use for
 cut-safe navigation. The default path samples scaled frames with ffmpeg
@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from scenedetect import ContentDetector, SceneManager, open_video
 
-from awidat_mcp import IndexAssetRequest, IndexerServer
+from montage_mcp import IndexAssetRequest, IndexerServer
 
 INDEXER_NAME = "scenedetect"
 INDEXER_VERSION = "0.2.0"

@@ -104,7 +104,7 @@ impl ToolHandler for VeditMergeTool {
 }
 
 const DESCRIPTION: &str = "\
-Merge a source vedit ref into a target branch/ref using Awidat's bounded \
+Merge a source vedit ref into a target branch/ref using Montage's bounded \
 non-overlapping clip-id rule. The merge first runs the same preflight as \
 vedit_merge_preflight. If any changed clip/media ids overlap, it refuses \
 the merge and reports a conflict. On success it writes project.otio.json, \
@@ -124,10 +124,10 @@ mod tests {
             project_root,
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

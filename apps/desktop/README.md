@@ -1,6 +1,6 @@
-# Awidat Desktop
+# Montage Desktop
 
-Tauri 2 desktop shell for Awidat. The frontend is React/Vite and the backend
+Tauri 2 desktop shell for Montage. The frontend is React/Vite and the backend
 bridges the UI to the Rust workspace crates.
 
 ## Development

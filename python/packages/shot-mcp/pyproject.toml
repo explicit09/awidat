@@ -1,10 +1,10 @@
 [project]
 name = "shot-mcp"
 version = "0.1.0"
-description = "Awidat shot-type + camera-motion classifier (consumes scenedetect + face sidecars)."
+description = "Montage shot-type + camera-motion classifier (consumes scenedetect + face sidecars)."
 requires-python = ">=3.11"
 dependencies = [
-    "awidat-mcp",
+    "montage-mcp",
     # cv2 ships with scenedetect[opencv]; keep the dep here in case the
     # user runs without scenedetect-mcp installed.
     "opencv-python-headless>=4.9",

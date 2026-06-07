@@ -1,6 +1,6 @@
-# Awidat
+# Montage
 
-Awidat is a terminal-first, agent-native video editing harness. It combines a Rust CLI/TUI, a Tauri desktop app, Python MCP indexers, and bundled editorial skills so an agent can inspect footage, reason about edits, propose timeline changes, and render previews.
+Montage is a terminal-first, agent-native video editing harness. It combines a Rust CLI/TUI, a Tauri desktop app, Python MCP indexers, and bundled editorial skills so an agent can inspect footage, reason about edits, propose timeline changes, and render previews.
 
 The project is early-stage and optimized for local development on macOS and Linux.
 
@@ -9,7 +9,7 @@ The project is early-stage and optimized for local development on macOS and Linu
 - `crates/` - Rust workspace crates for the CLI, TUI, core agent loop, config, MCP client, project protocol, rendering, indexing, and desktop protocol.
 - `apps/desktop/` - Tauri 2 desktop app with a React/Vite frontend.
 - `python/` - `uv` workspace for MCP indexers such as Whisper transcription, scene detection, audio energy, face/gaze detection, CLIP frame search, shot classification, and color analysis.
-- `skills/` - bundled editorial workflows exposed through `awidat skills`.
+- `skills/` - bundled editorial workflows exposed through `montage skills`.
 - `docs/` - design notes and research.
 
 ## Prerequisites
@@ -24,28 +24,28 @@ The project is early-stage and optimized for local development on macOS and Linu
 
 ## Quick Start
 
-Build and test the Rust workspace:
+Build the Rust workspace:
 
 ```bash
-cargo test --workspace
+cargo check --workspace --all-targets
 ```
 
 Create a project and import a source:
 
 ```bash
-cargo run -p awidat-cli -- new my-episode --import /path/to/video.mp4
+cargo run -p montage-cli --bin montage -- new my-episode --import /path/to/video.mp4
 ```
 
 Open the TUI agent on a project:
 
 ```bash
-cargo run -p awidat-cli -- tui my-episode
+cargo run -p montage-cli --bin montage -- tui my-episode
 ```
 
 Store your Anthropic key in the OS keychain:
 
 ```bash
-printf '%s' "$ANTHROPIC_API_KEY" | cargo run -p awidat-cli -- secrets-set
+printf '%s' "$ANTHROPIC_API_KEY" | cargo run -p montage-cli --bin montage -- secrets-set
 ```
 
 ## CLI Commands
@@ -53,23 +53,27 @@ printf '%s' "$ANTHROPIC_API_KEY" | cargo run -p awidat-cli -- secrets-set
 Common commands:
 
 ```bash
-awidat init <path>
-awidat new <name> --import <url-or-path>
-awidat validate <project>
-awidat index <project>
-awidat chat <project>
-awidat tui <project>
-awidat skills list
-awidat skills run <skill-name> <project>
-awidat lessons learn
-awidat lessons show
-awidat resume
+montage init <path>
+montage new <name> --import <url-or-path>
+montage validate <project>
+montage index <project>
+montage index-perf <project>
+montage chat <project>
+montage tui <project>
+montage apply-edl <project> <edl>
+montage render <project>
+montage skills list
+montage skills run <skill-name> <project>
+montage lessons learn
+montage lessons show
+montage resume
+montage version
 ```
 
 During development, prefix commands with:
 
 ```bash
-cargo run -p awidat-cli --
+cargo run -p montage-cli --bin montage --
 ```
 
 ## Desktop App
@@ -97,25 +101,39 @@ cd python
 uv sync --all-packages
 ```
 
-Awidat resolves the Python workspace from `AWIDAT_PYTHON_ROOT`, by walking up from the binary/current directory in development, or from packaged install locations. Most projects can use the bundled defaults without writing custom MCP config.
+Montage resolves the Python workspace from `MONTAGE_PYTHON_ROOT`, by walking up from the binary/current directory in development, or from packaged install locations. Most projects can use the bundled defaults without writing custom MCP config.
 
 Some indexers download large model weights on first use. See `python/SMOKE.md` for low-cost smoke testing and notes on model/API-key requirements.
 
 ## Development Checks
 
-Run the same checks used by the Makefile:
-
-```bash
-make check
-```
-
-Or run them individually:
+For compile, lint, and formatting coverage:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo check --workspace --all-targets
 ```
+
+For the desktop frontend:
+
+```bash
+cd apps/desktop
+pnpm test
+```
+
+For Python indexer setup and the in-tree MCP package:
+
+```bash
+cd python
+uv sync --all-packages
+uv run python -c "import montage_mcp"
+```
+
+`make check` still runs the historical full Rust gate
+(`cargo test --workspace`). In this checkout that includes vendored Codex
+tests, so use it when you are intentionally validating the vendored harness;
+otherwise run the narrower command that matches the changed subsystem.
 
 ## Packaging
 
@@ -125,17 +143,17 @@ commands until the release path is rebuilt.
 
 ## Configuration
 
-Awidat reads user config from the standard platform config directory, usually:
+Montage reads user config from the standard platform config directory, usually:
 
-- macOS: `~/Library/Application Support/awidat/`
-- Linux: `~/.config/awidat/`
+- macOS: `~/Library/Application Support/montage/`
+- Linux: `~/.config/montage/`
 
 Useful environment variables:
 
 - `ANTHROPIC_API_KEY` - Claude access for agent sessions and some indexers.
 - `HF_TOKEN` - Hugging Face access for gated diarization models.
-- `AWIDAT_PYTHON_ROOT` - override bundled Python indexer workspace.
-- `AWIDAT_SKILLS_ROOT` - override bundled skills directory.
+- `MONTAGE_PYTHON_ROOT` - override bundled Python indexer workspace.
+- `MONTAGE_SKILLS_ROOT` - override bundled skills directory.
 
 ## License
 

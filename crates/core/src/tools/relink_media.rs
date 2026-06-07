@@ -3,8 +3,8 @@
 use std::path::{Component, Path};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{Clip, MediaReference, Stack, StackChild, Track, TrackChild};
-use awidat_proto::project::Project;
+use montage_proto::otio::{Clip, MediaReference, Stack, StackChild, Track, TrackChild};
+use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -19,7 +19,7 @@ struct RelinkMediaArgs {
     /// Existing `ExternalReference.target_url` to replace.
     #[serde(default)]
     old_target_url: Option<String>,
-    /// Optional clip id/name to relink. Matches awidat clip_uuid when present, otherwise clip name.
+    /// Optional clip id/name to relink. Matches montage clip_uuid when present, otherwise clip name.
     #[serde(default)]
     clip_id: Option<String>,
     /// New project-relative media target under the project root.
@@ -56,7 +56,7 @@ impl ToolHandler for RelinkMediaTool {
                     },
                     "clip_id": {
                         "type": "string",
-                        "description": "Optional clip id/name to relink. Matches awidat clip_uuid when present, otherwise clip name."
+                        "description": "Optional clip id/name to relink. Matches montage clip_uuid when present, otherwise clip name."
                     },
                     "new_target_url": {
                         "type": "string",
@@ -241,7 +241,7 @@ fn relink_clip(
 
 fn clip_identifier(clip: &Clip) -> String {
     clip.metadata
-        .awidat
+        .montage
         .as_ref()
         .and_then(|metadata| metadata.extra.get("clip_uuid"))
         .and_then(|value| value.as_str())
@@ -279,10 +279,10 @@ clip_id plus a new_target_url that already exists under the project root.\
 
 #[cfg(test)]
 mod tests {
-    use awidat_proto::otio::{
+    use montage_proto::otio::{
         Clip, ExternalReference, MediaReference, Stack, StackChild, Track, TrackChild, TrackKind,
     };
-    use awidat_proto::project::Project;
+    use montage_proto::project::Project;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -293,10 +293,10 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
-            job_manager: awidat_render::JobManager::new(),
+            job_manager: montage_render::JobManager::new(),
             approval_tx: None,
             sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
             }),

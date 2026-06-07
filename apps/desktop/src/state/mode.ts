@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type Mode = "pro" | "creator";
-export const STORAGE_KEY = "awidat:mode";
+export const STORAGE_KEY = "montage:mode";
 
 const isValid = (v: unknown): v is Mode => v === "pro" || v === "creator";
 

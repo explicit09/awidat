@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give awidat a real caption reading-speed/segmentation model and lift caption planning/styling out of the short-form-only path into a format-agnostic service, proven by a short-form regression render and a long-form Episode render.
+**Goal:** Give montage a real caption reading-speed/segmentation model and lift caption planning/styling out of the short-form-only path into a format-agnostic service, proven by a short-form regression render and a long-form Episode render.
 
 **Architecture:** Approach A (extract-and-share). New `caption` module under `crates/core/src/caption/` holding the shared readability core, a style registry, a placement/style strategy trait + planner, and a format-agnostic caption EDL builder. The existing short-form planner becomes a thin caller of these. A new `plan_captions` MCP tool exposes the general path. The `CaptionRecommendation`/`CaptionStyle`/`CaptionPlacement` types move into the shared module and are re-exported from `scene_aware_short_form` so existing call sites keep compiling.
 
-**Tech Stack:** Rust (workspace crate `awidat-core`), `serde`/`serde_json`, `schemars` (MCP arg schemas), `rmcp` `#[tool]` macro. Render via existing `awidat-render` ASS path (unchanged). Spec: `docs/superpowers/specs/2026-06-04-caption-readability-and-cross-format-design.md`.
+**Tech Stack:** Rust (workspace crate `montage-core`), `serde`/`serde_json`, `schemars` (MCP arg schemas), `rmcp` `#[tool]` macro. Render via existing `montage-render` ASS path (unchanged). Spec: `docs/superpowers/specs/2026-06-04-caption-readability-and-cross-format-design.md`.
 
 **Conventions for every task:**
-- Run a single test by name: `cargo test -p awidat-core <test_name> -- --nocapture`
+- Run a single test by name: `cargo test -p montage-core <test_name> -- --nocapture`
 - Module tests live in `#[cfg(test)] mod tests` at the bottom of each module file (matches the codebase).
 - Commit messages end with the project trailer:
   ```
@@ -27,11 +27,11 @@
 - Create: `crates/core/src/caption/styles.rs` — `CaptionFormat`, `CaptionMood`, `CaptionStyleSpec`, `resolve_style()`, `MIN_LEGIBLE_FONT_SIZE`.
 - Create: `crates/core/src/caption/planner.rs` — `CuePlan`, `CaptionPlanStrategy` trait, `LowerSafeZoneStrategy`, `plan()`.
 - Create: `crates/core/src/caption/edl.rs` — `build_caption_edl_lines(recs, spec)` format-agnostic caption EDL.
-- Create: `crates/core/src/awidat_mcp/tools/plan_captions.rs` — new MCP tool `run()`.
+- Create: `crates/core/src/montage_mcp/tools/plan_captions.rs` — new MCP tool `run()`.
 - Modify: `crates/core/src/lib.rs` — add `pub mod caption;` (next to `pub mod captions;`).
 - Modify: `crates/core/src/scene_aware_short_form.rs` — delete moved type defs, add `pub use`, add `ShotAwareStrategy`, rewire `plan_captions`, route caption EDL through `caption::edl`.
-- Modify: `crates/core/src/awidat_mcp/tools/mod.rs` — add `pub mod plan_captions;`.
-- Modify: `crates/core/src/awidat_mcp/mod.rs` — add `use` + `#[tool]` method.
+- Modify: `crates/core/src/montage_mcp/tools/mod.rs` — add `pub mod plan_captions;`.
+- Modify: `crates/core/src/montage_mcp/mod.rs` — add `use` + `#[tool]` method.
 - Modify: `video_editing_transcripts/knowledge/captions/SKILL.md` — add `plan_captions` to `tools_allowlist`.
 
 ---
@@ -154,7 +154,7 @@ mod tests {
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cargo test -p awidat-core caption::readability -- --nocapture`
+Run: `cargo test -p montage-core caption::readability -- --nocapture`
 Expected: FAIL — compile errors (`InputWord`, `segment`, `CaptionFormatProfile`, `Cue` not found).
 
 - [ ] **Step 4: Implement the minimal types + `segment()`**
@@ -353,7 +353,7 @@ fn finalize_timing(cues: &mut [Cue], profile: &CaptionFormatProfile) {
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cargo test -p awidat-core caption::readability -- --nocapture`
+Run: `cargo test -p montage-core caption::readability -- --nocapture`
 Expected: PASS (3 tests).
 
 - [ ] **Step 6: Commit**
@@ -408,7 +408,7 @@ fn lint_is_silent_on_clean_cues() {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p awidat-core caption::readability::tests::lint -- --nocapture`
+Run: `cargo test -p montage-core caption::readability::tests::lint -- --nocapture`
 Expected: FAIL — `lint`, `ReadabilityProposal` not found.
 
 - [ ] **Step 3: Implement `ReadabilityProposal` + `lint()`**
@@ -474,7 +474,7 @@ pub fn lint(cues: &[Cue], profile: &CaptionFormatProfile) -> Vec<ReadabilityProp
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test -p awidat-core caption::readability -- --nocapture`
+Run: `cargo test -p montage-core caption::readability -- --nocapture`
 Expected: PASS (all readability tests).
 
 - [ ] **Step 5: Commit**
@@ -541,7 +541,7 @@ mod tests {
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cargo test -p awidat-core caption::styles -- --nocapture`
+Run: `cargo test -p montage-core caption::styles -- --nocapture`
 Expected: FAIL — types not found.
 
 - [ ] **Step 4: Implement the registry**
@@ -598,7 +598,7 @@ pub fn resolve_style(format: CaptionFormat, mood: CaptionMood) -> CaptionStyleSp
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p awidat-core caption::styles -- --nocapture`
+Run: `cargo test -p montage-core caption::styles -- --nocapture`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Commit**
@@ -656,9 +656,9 @@ If `edl_value` was called as `self.placement.edl_value()` within the module, it 
 
 - [ ] **Step 4: Build to verify the refactor compiles with zero behavior change**
 
-Run: `cargo build -p awidat-core`
+Run: `cargo build -p montage-core`
 Expected: builds clean. Then:
-Run: `cargo test -p awidat-core scene_aware_short_form -- --nocapture`
+Run: `cargo test -p montage-core scene_aware_short_form -- --nocapture`
 Expected: PASS unchanged (placement/style behavior untouched).
 
 - [ ] **Step 5: Commit**
@@ -720,7 +720,7 @@ mod tests {
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cargo test -p awidat-core caption::planner -- --nocapture`
+Run: `cargo test -p montage-core caption::planner -- --nocapture`
 Expected: FAIL — `plan`, `LowerSafeZoneStrategy`, `CaptionPlanStrategy` not found.
 
 - [ ] **Step 4: Implement the trait, `plan()`, and the default strategy**
@@ -794,7 +794,7 @@ NOTE on the `CaptionWordTiming` field names: verify against `caption::types` aft
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p awidat-core caption::planner -- --nocapture`
+Run: `cargo test -p montage-core caption::planner -- --nocapture`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -869,7 +869,7 @@ mod tests {
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cargo test -p awidat-core caption::edl -- --nocapture`
+Run: `cargo test -p montage-core caption::edl -- --nocapture`
 Expected: FAIL — `build_caption_edl_lines` not found.
 
 - [ ] **Step 4: Implement the builder**
@@ -934,7 +934,7 @@ fn json_string(text: &str) -> String {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p awidat-core caption::edl -- --nocapture`
+Run: `cargo test -p montage-core caption::edl -- --nocapture`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Commit**
@@ -992,7 +992,7 @@ fn short_form_captions_obey_readability_and_stay_bottom_or_upper() {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p awidat-core short_form_captions_obey_readability -- --nocapture`
+Run: `cargo test -p montage-core short_form_captions_obey_readability -- --nocapture`
 Expected: FAIL — today's `plan_captions` uses raw `transcript_segments` (no CPS enforcement), so the over-fast single segment violates the ceiling.
 
 - [ ] **Step 3: Add `ShotAwareStrategy` and rewire `plan_captions`**
@@ -1079,9 +1079,9 @@ Delete the old `for caption in captions { lines.extend([... "*** Insert Caption"
 
 - [ ] **Step 5: Run the new regression test + the full short-form suite**
 
-Run: `cargo test -p awidat-core short_form_captions_obey_readability -- --nocapture`
+Run: `cargo test -p montage-core short_form_captions_obey_readability -- --nocapture`
 Expected: PASS.
-Run: `cargo test -p awidat-core scene_aware_short_form short_form_review -- --nocapture`
+Run: `cargo test -p montage-core scene_aware_short_form short_form_review -- --nocapture`
 Expected: PASS. **If a pre-existing test asserts exact old cue text/boundaries** (e.g. `caption_plan[0]["word_timings"][0]["text"]` style assertions), update its expected values to the readability-model output — this is the intended improvement. Tests asserting placement/style/structure must remain unchanged; if one of those breaks, the rewire changed behavior it shouldn't have — fix the code, not the test.
 
 - [ ] **Step 6: Commit**
@@ -1098,12 +1098,12 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 8: `plan_captions` MCP tool — `run()`
 
 **Files:**
-- Create: `crates/core/src/awidat_mcp/tools/plan_captions.rs`
-- Modify: `crates/core/src/awidat_mcp/tools/mod.rs`
+- Create: `crates/core/src/montage_mcp/tools/plan_captions.rs`
+- Modify: `crates/core/src/montage_mcp/tools/mod.rs`
 
 - [ ] **Step 1: Register the module**
 
-In `crates/core/src/awidat_mcp/tools/mod.rs`, add (alphabetical, near the other `plan_*`):
+In `crates/core/src/montage_mcp/tools/mod.rs`, add (alphabetical, near the other `plan_*`):
 
 ```rust
 pub mod plan_captions;
@@ -1111,13 +1111,13 @@ pub mod plan_captions;
 
 - [ ] **Step 2: Write the failing test**
 
-Create `crates/core/src/awidat_mcp/tools/plan_captions.rs` with the test module first (mirrors the sidecar-writing test pattern from `plan_scene_aware_short_form.rs`):
+Create `crates/core/src/montage_mcp/tools/plan_captions.rs` with the test module first (mirrors the sidecar-writing test pattern from `plan_scene_aware_short_form.rs`):
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::awidat_mcp::context::McpToolCtx;
+    use crate::montage_mcp::context::McpToolCtx;
 
     fn write_whisper(root: &std::path::Path, asset: &str, data: serde_json::Value) {
         let path = root.join("index").join("whisper").join(format!("{asset}.json"));
@@ -1167,11 +1167,11 @@ mod tests {
 }
 ```
 
-NOTE (resolved): `McpToolCtx` has a single public field `project_root: PathBuf`. Build it in tests with the direct struct literal `McpToolCtx { project_root: dir.path().to_path_buf() }` (this is the pattern used by `crates/core/src/awidat_mcp/tools/apply_episode_spans.rs`). No `for_test` helper exists or is needed.
+NOTE (resolved): `McpToolCtx` has a single public field `project_root: PathBuf`. Build it in tests with the direct struct literal `McpToolCtx { project_root: dir.path().to_path_buf() }` (this is the pattern used by `crates/core/src/montage_mcp/tools/apply_episode_spans.rs`). No `for_test` helper exists or is needed.
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cargo test -p awidat-core plan_captions -- --nocapture`
+Run: `cargo test -p montage-core plan_captions -- --nocapture`
 Expected: FAIL — `run`, `PlanCaptionsArgs` not found.
 
 - [ ] **Step 4: Implement `run()`**
@@ -1185,12 +1185,12 @@ Add above the test module in `plan_captions.rs`:
 //! plus a reviewable `*** Insert Caption` EDL fragment. Read-only; apply with
 //! apply_edl after inspection. Never burns captions into the picture.
 
-use awidat_index::{read_sidecar, SidecarError};
-use awidat_proto::index::AssetId;
+use montage_index::{read_sidecar, SidecarError};
+use montage_proto::index::AssetId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::awidat_mcp::context::McpToolCtx;
+use crate::montage_mcp::context::McpToolCtx;
 use crate::caption::edl::build_caption_edl_lines;
 use crate::caption::planner::{plan, LowerSafeZoneStrategy};
 use crate::caption::readability::{lint, segment, CaptionFormatProfile, InputWord};
@@ -1323,13 +1323,13 @@ into the picture.";
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p awidat-core plan_captions -- --nocapture`
+Run: `cargo test -p montage-core plan_captions -- --nocapture`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/core/src/awidat_mcp/tools/plan_captions.rs crates/core/src/awidat_mcp/tools/mod.rs
+git add crates/core/src/montage_mcp/tools/plan_captions.rs crates/core/src/montage_mcp/tools/mod.rs
 git commit -m "feat(caption): add plan_captions MCP tool run() (format-aware caption planner)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1340,14 +1340,14 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 9: Expose `plan_captions` on the MCP server
 
 **Files:**
-- Modify: `crates/core/src/awidat_mcp/mod.rs`
+- Modify: `crates/core/src/montage_mcp/mod.rs`
 
 - [ ] **Step 1: Add the import**
 
 Near the other tool imports (after the `plan_scene_aware_short_form` import at line ~108):
 
 ```rust
-use crate::awidat_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
+use crate::montage_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
 ```
 
 - [ ] **Step 2: Add the `#[tool]` method**
@@ -1377,18 +1377,18 @@ pub async fn plan_captions(
 
 - [ ] **Step 3: Build and verify the tool is exposed**
 
-Run: `cargo build -p awidat-core`
+Run: `cargo build -p montage-core`
 Expected: builds clean.
 
 - [ ] **Step 4: Verify the capability/catalog tests still pass (and include the new tool if they enumerate tools)**
 
-Run: `cargo test -p awidat-core capability_manifest skill_catalog -- --nocapture`
+Run: `cargo test -p montage-core capability_manifest skill_catalog -- --nocapture`
 Expected: PASS. If a test asserts an exact set/count of MCP tools, add `plan_captions` to its expected list (this is the intended addition). If it asserts the catalog is internally consistent (every allowlisted tool exists), it should pass once Task 10 adds the allowlist entry — run it again after Task 10.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/core/src/awidat_mcp/mod.rs
+git add crates/core/src/montage_mcp/mod.rs
 git commit -m "feat(caption): expose plan_captions on the in-process MCP server
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1464,7 +1464,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 12: Proof renders (manual, human-in-the-loop)
 
-**Files:** none (operating awidat against real footage). This is the close-the-loop step; it is interactive and depends on the local environment + the external drive. Do NOT mark the feature done until the user signs off.
+**Files:** none (operating montage against real footage). This is the close-the-loop step; it is interactive and depends on the local environment + the external drive. Do NOT mark the feature done until the user signs off.
 
 Test footage: `/Volumes/Explicit's Hard Drive/` — `Short6_VCTake.mp4` (36s vertical) and an Episode clip (use the first ~60s of `Episode1...`).
 
@@ -1475,11 +1475,11 @@ If the API key is unset, stop and ask the user to provide it (the agent loop nee
 
 - [ ] **Step 2: Short-form regression render (existing path)**
 
-Drive awidat to produce the short-form caption render for `Short6_VCTake.mp4` using `plan_scene_aware_short_form` → `apply_edl` → `start_render` → `poll_render`, exactly as the existing short-form flow does. Capture the output path. This proves the rewire didn't break short-form.
+Drive montage to produce the short-form caption render for `Short6_VCTake.mp4` using `plan_scene_aware_short_form` → `apply_edl` → `start_render` → `poll_render`, exactly as the existing short-form flow does. Capture the output path. This proves the rewire didn't break short-form.
 
 - [ ] **Step 3: Resolve the long-form transcript dependency**
 
-The Episode needs a whisper transcript sidecar. Try awidat's local indexing on a ~60s Episode slice. Verify a sidecar appears at `index/whisper/<asset>.json`.
+The Episode needs a whisper transcript sidecar. Try montage's local indexing on a ~60s Episode slice. Verify a sidecar appears at `index/whisper/<asset>.json`.
 **Fallback if local Whisper indexing is not runnable:** import an `.srt`/`.vtt` for the slice via the existing import path, OR hand-write a minimal whisper sidecar JSON (`{"segments":[{"start_s","end_s","text","words":[...]}]}`) from a transcript you produce, so `plan_captions` has word timings. Report which path you used.
 
 - [ ] **Step 4: Long-form render — both moods**

@@ -7,11 +7,11 @@ implementation state.
 
 ### Closed or narrowed
 
-- **Masked look-LUT render path:** `awidat.color_pipeline.mask_source` now has
+- **Masked look-LUT render path:** `montage.color_pipeline.mask_source` now has
   a renderable v1 path for a single `look_lut` plus static image mask. The
   render graph inserts the mask input, scales it to the clip, alphamerges it
   into the LUT branch, and overlays the masked grade over the original clip.
-- **Effect metadata:** `awidat.color_pipeline` is marked
+- **Effect metadata:** `montage.color_pipeline` is marked
   `FfmpegNative` because the FFmpeg render path supports the color-management
   chain and the v1 masked look-LUT subset. Unsupported mask combinations still
   surface explicit limitations.
