@@ -2106,6 +2106,8 @@ function App() {
           if (!isTauri()) return;
           invoke("cancel_turn").catch((e) => console.warn("cancel_turn failed", e));
         }}
+        mediaSuggestions={mediaSuggestions}
+        onPickMedia={attachMediaPick}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject

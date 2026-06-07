@@ -3,10 +3,12 @@ import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposal
 import { usePendingProposals } from "../timeline/pendingProposals";
 import { ProposalCard } from "./brief/ProposalCard";
 import { useTimelineStore } from "../timeline/store";
+import { useTimelineSelectionStore } from "../properties/store";
 import type { Stage } from "../state/stages";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
 import { ConversationPanel } from "./StageConversation";
+import type { MediaSuggestion } from "./CommandRail";
 import mark from "../brand/awidat-mark.svg";
 
 /**
@@ -51,9 +53,9 @@ const TL_BASE = 48; // header/padding chrome
 const TL_ROW = 58; // per-track lane height
 const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
 
-const SIDE_PANE_W = 320;
+const SIDE_PANE_W = 360;
 const SIDE_PANE_MIN_W = 260;
-const SIDE_PANE_MAX_W = 460;
+const SIDE_PANE_MAX_W = 520;
 const SIDE_PANE_GUTTER = 12;
 type LeftPaneKey = "transcript" | "media" | "index";
 type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit" | "history";
@@ -101,6 +103,8 @@ export type StageShellProps = {
   onCommand: (text: string) => void;
   running: boolean;
   onCancel: () => void;
+  mediaSuggestions?: MediaSuggestion[];
+  onPickMedia?: (suggestion: MediaSuggestion) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -114,7 +118,7 @@ export function StageShell(props: StageShellProps) {
   const {
     hasProject, landing, preview, timeline, trackCount = 0, tools, autoInspect,
     deliver, schedule, skills, history,
-    stage, onStage, onCommand, running, onCancel,
+    stage, onStage, onCommand, running, onCancel, mediaSuggestions = [], onPickMedia,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -163,9 +167,14 @@ export function StageShell(props: StageShellProps) {
   const [leftPaneWidth, setLeftPaneWidth] = useState(SIDE_PANE_W);
   const [rightPaneWidth, setRightPaneWidth] = useState(SIDE_PANE_W);
   const paneResize = useRef<PaneResize | null>(null);
+  const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
   useEffect(() => {
     if (running) setRightPane("chat");
   }, [running]);
+
+  useEffect(() => {
+    if (selectedClipKey && onStage_) setRightPane("inspector");
+  }, [onStage_, selectedClipKey]);
 
   // Auto-open the Inspector on the rising edge of a selection — never fight
   // the user (don't reopen if they've closed it while the selection holds).
@@ -352,6 +361,8 @@ export function StageShell(props: StageShellProps) {
                 onDraft={setDraft}
                 onSubmit={submit}
                 onCancel={onCancel}
+                mediaSuggestions={mediaSuggestions}
+                onPickMedia={onPickMedia}
               />
             ) : rightNode}
           </div>
