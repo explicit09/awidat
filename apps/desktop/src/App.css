@@ -2678,19 +2678,26 @@ button {
 }
 
 .media-asset-select {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 3px 6px;
+  background: rgba(10, 10, 18, 0.86);
+  color: var(--color-text-primary);
+  border: 1px solid rgba(251, 113, 133, 0.32);
+  border-radius: 8px;
+  padding: 4px 8px;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   max-width: 60%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .media-asset-select:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: rgba(251, 113, 133, 0.56);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.media-asset-select option {
+  background: #0D0D12;
+  color: var(--color-text-primary);
 }
 
 .media-stage {
@@ -5174,7 +5181,6 @@ button {
 
 .permission-mode select,
 .properties-select,
-.media-asset-select,
 .field input[type="text"],
 .project-form input,
 .input-form input,

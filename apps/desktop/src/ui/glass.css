@@ -676,6 +676,39 @@ html, body, #root { background: #0a0a12; }
   opacity: 0.46;
   cursor: not-allowed;
 }
+.stage-tool-body .stage-media-item {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(10, 10, 18, 0.52);
+}
+.stage-tool-body .stage-media-item:hover {
+  border-color: rgba(251, 113, 133, 0.28);
+  background: rgba(255, 255, 255, 0.07);
+}
+.stage-tool-body .stage-media-item[data-selected="true"] {
+  border-color: rgba(251, 113, 133, 0.48);
+  background: rgba(239,68,68,0.22);
+  box-shadow: inset 3px 0 0 #EF4444, 0 12px 28px rgba(0, 0, 0, 0.26);
+}
+.stage-tool-body .transcript-action-button,
+.stage-tool-body .properties-apply,
+.stage-tool-body .properties-secondary,
+.stage-tool-body .properties-danger-pro,
+.stage-tool-body .vedit-restore-button {
+  border-radius: 7px !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: none !important;
+}
+.stage-tool-body .transcript-action-button:hover,
+.stage-tool-body .properties-apply:hover:not(:disabled),
+.stage-tool-body .properties-secondary:hover:not(:disabled),
+.stage-tool-body .properties-danger-pro:hover:not(:disabled),
+.stage-tool-body .vedit-restore-button:hover:not(:disabled) {
+  border-color: rgba(251, 113, 133, 0.30) !important;
+  background: rgba(239, 68, 68, 0.12) !important;
+  color: var(--color-text-primary) !important;
+}
 
 /* =====================================================================
    GLASS CONTROL KIT — one canonical vocabulary for every surface so the

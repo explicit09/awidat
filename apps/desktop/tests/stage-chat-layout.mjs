@@ -4,8 +4,12 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const shell = readFileSync(resolve(root, "src/shell/StageShell.tsx"), "utf8");
 const conversation = readFileSync(resolve(root, "src/shell/StageConversation.tsx"), "utf8");
+const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
+const inspector = readFileSync(resolve(root, "src/inspector/ClipInspector.tsx"), "utf8");
 const glass = readFileSync(resolve(root, "src/ui/glass.css"), "utf8");
-const source = `${shell}\n${conversation}\n${glass}`;
+const appCss = readFileSync(resolve(root, "src/App.css"), "utf8");
+const source = `${shell}\n${conversation}\n${app}\n${inspector}\n${glass}\n${appCss}`;
+const stageSource = `${shell}\n${conversation}`;
 const rightPanesBlock = shell.match(/const RIGHT_PANES:[\s\S]+?\];/)?.[0] ?? "";
 
 const checks = [
@@ -24,8 +28,8 @@ const checks = [
   ["right pane width is stateful and resizable", /rightPaneWidth[\s\S]+setRightPaneWidth[\s\S]+beginPaneResize\("right"/],
   ["timeline selection switches the stage to inspector", /useTimelineSelectionStore[\s\S]+selectedClipKey[\s\S]+setRightPane\("inspector"\)/],
   ["removes the vertical right tool dock", /group\/tools/.test(source) === false],
-  ["removes slash destination chips from composer", /\/deliver/.test(source) === false],
-  ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(source) === false],
+  ["removes slash destination chips from composer", /\/deliver/.test(stageSource) === false],
+  ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(stageSource) === false],
   ["keeps composer inside conversation panel", /stage-chat-composer/],
   ["stage composer wraps text in a textarea", /<textarea[\s\S]+className="[^"]*stage-chat-input/],
   ["stage composer accepts media suggestions", /mediaSuggestions\?:\s*MediaSuggestion\[\]/],
@@ -36,6 +40,11 @@ const checks = [
   ["does not offer a left dock control", /Dock conversation left/.test(source) === false],
   ["uses tab buttons for right-pane selection", /className="stage-right-tab"/],
   ["uses tab buttons for left-pane selection", /className="stage-left-tab"/],
+  ["inspector does not show the publish bridge", /EditorPublishBridge/.test(inspector) === false],
+  ["stage media rows know the selected media", /const selectedMediaStem = useMediaStore\(\(s\) => s\.selectedStem\)/],
+  ["stage media rows expose selected state", /data-selected=\{item\.stem === selectedMediaStem \? "true" : "false"\}/],
+  ["stage media selected state uses visible contrast", /\.stage-media-item\[data-selected="true"\][\s\S]+rgba\(239,68,68,0\.22\)/],
+  ["source preview selector has liquid-visible contrast", /\.media-asset-select[\s\S]+rgba\(10,\s*10,\s*18,\s*0\.86\)/],
 ];
 
 for (const [label, pattern] of checks) {

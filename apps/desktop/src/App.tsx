@@ -11,7 +11,6 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
-import { summarizeEditorPublishing } from "./editor/publishingBridge";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
@@ -1630,8 +1629,6 @@ function App() {
   );
 
   const selectedDeliveryTargets = useDeliveryTargetsStore((s) => s.selected);
-  const selectedUploadTargets = useUploadPrefs((s) => s.enabled);
-  const selectedUploadAccounts = useUploadAccountSelections((s) => s.byProvider);
   const effectiveDeliveryTargets: DeliveryTarget[] = useMemo(
     () =>
       realDeliveryTargets.map((target) => ({
@@ -1640,16 +1637,6 @@ function App() {
       })),
     [selectedDeliveryTargets, realDeliveryTargets],
   );
-  const editorPublishingSummary = useMemo(
-    () =>
-      summarizeEditorPublishing({
-        selectedTargets: selectedDeliveryTargets,
-        uploadTargets: selectedUploadTargets,
-        accountSelections: selectedUploadAccounts,
-      }),
-    [selectedDeliveryTargets, selectedUploadTargets, selectedUploadAccounts],
-  );
-
   const realPreflightFindings: PreflightFinding[] = useMemo(() => {
     if (timelineSnapshot.preview_limitations.length > 0) {
       return timelineSnapshot.preview_limitations.map((limitation, index) => ({
@@ -2051,10 +2038,7 @@ function App() {
         />
       </div>
     ) : (
-      <ClipInspector
-        publishing={editorPublishingSummary}
-        onOpenDelivery={() => setStage("deliver")}
-      />
+      <ClipInspector />
     );
   const stageIndex = (
     <IndexRail
@@ -2718,6 +2702,7 @@ function ProjectMediaPanel({
   onRefreshGeneratedMedia: () => void;
   onPlaceGeneratedMedia: (entry: GeneratedMediaEntry) => void;
 }) {
+  const selectedMediaStem = useMediaStore((s) => s.selectedStem);
   const indexedCount = media.filter((item) => item.status === "indexed").length;
   const activeCount = media.filter((item) => item.status === "indexing" || item.status === "processing" || item.status === "partial").length;
   const mediaState = sourceCount === 0
@@ -2834,7 +2819,8 @@ function ProjectMediaPanel({
               event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
-            className="glass-content cursor-pointer px-3 py-2 text-left"
+            className="stage-media-item glass-content cursor-pointer px-3 py-2 text-left"
+            data-selected={item.stem === selectedMediaStem ? "true" : "false"}
             title={item.title}
             draggable={item.assetId !== undefined}
             onDragStart={(event) => {
