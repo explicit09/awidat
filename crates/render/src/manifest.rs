@@ -6,7 +6,7 @@
 //! agent tools so CLI, TUI, desktop, eval, and future remux paths can
 //! share the same evidence format.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -521,6 +521,62 @@ pub fn fingerprint_file_sampled(
         required,
         fingerprint_kind: RenderInputFingerprintKind::SampledSha256,
     })
+}
+
+/// Fingerprint render manifest inputs while caching repeated paths.
+///
+/// Timeline render specs can reference the same source asset once per
+/// timeline segment. The manifest still records every input slot in order,
+/// but hashing each unique resolved file once keeps render startup bounded.
+pub fn fingerprint_manifest_inputs_sampled(
+    project_root: &Path,
+    input_paths: &[PathBuf],
+) -> Result<Vec<RenderInputFingerprint>, RenderManifestError> {
+    fingerprint_manifest_inputs_sampled_with(project_root, input_paths, |path| {
+        fingerprint_file_sampled(path, true)
+    })
+}
+
+fn fingerprint_manifest_inputs_sampled_with<F>(
+    project_root: &Path,
+    input_paths: &[PathBuf],
+    mut fingerprint: F,
+) -> Result<Vec<RenderInputFingerprint>, RenderManifestError>
+where
+    F: FnMut(&Path) -> Result<RenderInputFingerprint, RenderManifestError>,
+{
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    let mut order = Vec::with_capacity(input_paths.len());
+    for path in input_paths {
+        let resolved = if path.is_absolute() {
+            path.clone()
+        } else {
+            project_root.join(path)
+        };
+        order.push(resolved.clone());
+        if seen.insert(resolved.clone()) {
+            unique.push(resolved);
+        }
+    }
+
+    let mut by_path = HashMap::new();
+    for path in unique {
+        let fingerprint = fingerprint(&path)?;
+        by_path.insert(path, fingerprint);
+    }
+
+    order
+        .into_iter()
+        .map(|path| {
+            by_path.get(&path).cloned().ok_or_else(|| {
+                RenderManifestError::Json(serde_json::Error::io(io::Error::other(format!(
+                    "missing cached render input fingerprint for {}",
+                    path.display()
+                ))))
+            })
+        })
+        .collect()
 }
 
 /// Fingerprint ASS/subtitle sidecars referenced by FFmpeg `subtitles=` filters.
@@ -1059,6 +1115,39 @@ mod tests {
             fingerprint.fingerprint_kind,
             RenderInputFingerprintKind::SampledSha256
         );
+    }
+
+    #[test]
+    fn manifest_input_fingerprints_cache_duplicate_paths() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let media = project_root.join("raw/source.mp4");
+        std::fs::create_dir_all(media.parent().unwrap()).unwrap();
+        std::fs::write(&media, b"source").unwrap();
+        let input_paths = vec![
+            PathBuf::from("raw/source.mp4"),
+            PathBuf::from("raw/source.mp4"),
+            media,
+        ];
+        let mut calls = 0usize;
+
+        let fingerprints =
+            fingerprint_manifest_inputs_sampled_with(project_root, &input_paths, |path| {
+                calls += 1;
+                Ok(RenderInputFingerprint {
+                    path: path.to_string_lossy().into_owned(),
+                    sha256: format!("hash-{calls}"),
+                    size_bytes: 6,
+                    required: true,
+                    fingerprint_kind: RenderInputFingerprintKind::SampledSha256,
+                })
+            })
+            .unwrap();
+
+        assert_eq!(calls, 1);
+        assert_eq!(fingerprints.len(), 3);
+        assert_eq!(fingerprints[0], fingerprints[1]);
+        assert_eq!(fingerprints[0], fingerprints[2]);
     }
 
     #[test]
