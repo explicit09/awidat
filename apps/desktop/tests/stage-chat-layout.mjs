@@ -36,6 +36,8 @@ const checks = [
   ["timeline toolbar exposes playback speed presets", /setPreviewRate[\s\S]+1\.5[\s\S]+2/],
   ["pane heights stop above timeline", /const paneBottom = `calc\(36px \+ \$\{timelineHeight\}\)`[\s\S]+bottom:\s*paneBottom/],
   ["stage timeline height is user resizable", /timelineHeightPx[\s\S]+setTimelineHeightPx[\s\S]+beginTimelineResize/],
+  ["stage timeline defaults to at least two visible tracks", /const TL_MIN_VISIBLE_TRACKS = 2[\s\S]+Math\.max\(TL_MIN_VISIBLE_TRACKS, tracks\)/],
+  ["stage timeline sizing includes real header ruler and lane heights", /const TL_HEADER_PX = 40[\s\S]+const TL_RULER_PX = 22[\s\S]+const TL_ROW = 62/],
   ["stage timeline resize handle stays on the top edge", /stage-timeline-resize-handle/],
   ["left pane width is stateful and resizable", /leftPaneWidth[\s\S]+setLeftPaneWidth[\s\S]+beginPaneResize\("left"/],
   ["right pane width is stateful and resizable", /rightPaneWidth[\s\S]+setRightPaneWidth[\s\S]+beginPaneResize\("right"/],

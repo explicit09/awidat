@@ -48,10 +48,12 @@ function mediumColor(m: BriefMedium): string {
 // Side-pane tools: source/context tools on the left, output/session tools on the right.
 type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
 
-// Timeline strip sizing — fits ALL tracks without vertical scroll.
-const TL_BASE = 48; // header/padding chrome
-const TL_ROW = 58; // per-track lane height
-const TL_MIN_PX = 120;
+// Timeline strip sizing — fits the common V1 + A1 layout without vertical scroll.
+const TL_HEADER_PX = 40;
+const TL_RULER_PX = 22;
+const TL_ROW = 62;
+const TL_MIN_VISIBLE_TRACKS = 2;
+const TL_MIN_PX = TL_HEADER_PX + TL_RULER_PX + TL_MIN_VISIBLE_TRACKS * TL_ROW;
 const TL_MAX_VH = 0.58; // soft cap; beyond this the strip scrolls (never clips)
 
 const SIDE_PANE_W = 360;
@@ -167,7 +169,7 @@ export function StageShell(props: StageShellProps) {
   );
   const [leftPaneWidth, setLeftPaneWidth] = useState(SIDE_PANE_W);
   const [rightPaneWidth, setRightPaneWidth] = useState(SIDE_PANE_W);
-  const [timelineHeightPx, setTimelineHeightPx] = useState(TL_BASE + TL_ROW);
+  const [timelineHeightPx, setTimelineHeightPx] = useState(TL_MIN_PX);
   const [timelineHeightManual, setTimelineHeightManual] = useState(false);
   const paneResize = useRef<PaneResize | null>(null);
   const timelineResize = useRef<TimelineResize | null>(null);
@@ -192,7 +194,9 @@ export function StageShell(props: StageShellProps) {
   // Falls back to the live store count if App didn't pass one.
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
   const tracks = trackCount || storeTrackCount;
-  const autoTimelineHeightPx = clampTimelineHeight(TL_BASE + Math.max(1, tracks) * TL_ROW);
+  const autoTimelineHeightPx = clampTimelineHeight(
+    TL_HEADER_PX + TL_RULER_PX + Math.max(TL_MIN_VISIBLE_TRACKS, tracks) * TL_ROW,
+  );
   useEffect(() => {
     if (!timelineHeightManual) setTimelineHeightPx(autoTimelineHeightPx);
   }, [autoTimelineHeightPx, timelineHeightManual]);
