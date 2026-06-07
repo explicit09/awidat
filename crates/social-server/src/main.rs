@@ -1043,6 +1043,9 @@ async fn internal_tick_handler(
                 Provider::YouTube => {
                     if youtube_used >= youtube_quota_remaining {
                         tracing::warn!(job_id = %job.id, "YouTube daily quota reached, leaving job Scheduled");
+                        if let Err(e) = restore_youtube_quota_blocked_job(&mut store, job, now) {
+                            tracing::warn!("failed to restore quota-blocked YouTube job: {e}");
+                        }
                         continue;
                     }
                     let resolver = ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
@@ -1315,7 +1318,7 @@ fn claim_direct_fire_job(
     job_id: &str,
     now: i64,
 ) -> Result<Option<PublishJob>, String> {
-    let Some(mut job) = store
+    let Some(job) = store
         .claim_due_publish_job(job_id, now)
         .map_err(|e| format!("claim due job: {e}"))?
     else {
@@ -1327,17 +1330,25 @@ fn claim_direct_fire_job(
             .youtube_upload_quota_today(now)
             .map_err(|e| format!("quota check: {e}"))?;
         if today_count >= YOUTUBE_DAILY_QUOTA {
-            job.status = PublishJobStatus::Scheduled;
-            job.attempt_count = job.attempt_count.saturating_sub(1);
-            job.updated_at = now;
-            store
-                .save_publish_job(job)
-                .map_err(|e| format!("restore quota-blocked job: {e}"))?;
+            restore_youtube_quota_blocked_job(store, job, now)?;
             return Err("youtube daily upload quota reached".into());
         }
     }
 
     Ok(Some(job))
+}
+
+fn restore_youtube_quota_blocked_job(
+    store: &mut impl SocialStore,
+    mut job: PublishJob,
+    now: i64,
+) -> Result<(), String> {
+    job.status = PublishJobStatus::Scheduled;
+    job.attempt_count = job.attempt_count.saturating_sub(1);
+    job.updated_at = now;
+    store
+        .save_publish_job(job)
+        .map_err(|e| format!("restore quota-blocked job: {e}"))
 }
 
 pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> Result<(), String> {
@@ -2438,6 +2449,38 @@ mod tests {
         let err = claim_direct_fire_job(&mut store, "job_due", now).unwrap_err();
 
         assert_eq!(err, "youtube daily upload quota reached");
+        let persisted = store.publish_job("job_due").unwrap();
+        assert_eq!(persisted.status, PublishJobStatus::Scheduled);
+        assert_eq!(persisted.attempt_count, 0);
+    }
+
+    #[test]
+    fn bulk_tick_restores_due_youtube_job_when_quota_is_exhausted_after_claim() {
+        use montage_social::{
+            model::PublishJob,
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let now = 1_000;
+        let mut store = InMemorySocialStore::default();
+        let job = PublishJob::new(
+            "job_due",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "file:///tmp/render.mp4",
+            now,
+            "desktop",
+        )
+        .schedule(now);
+        store.save_publish_job(job).unwrap();
+
+        let claimed = store.claim_due_publish_jobs(now, 10).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let claimed_job = claimed.into_iter().next().unwrap();
+        restore_youtube_quota_blocked_job(&mut store, claimed_job, now).unwrap();
+
         let persisted = store.publish_job("job_due").unwrap();
         assert_eq!(persisted.status, PublishJobStatus::Scheduled);
         assert_eq!(persisted.attempt_count, 0);
