@@ -294,10 +294,37 @@ pub async fn run(
     max_concurrent: usize,
     progress: Option<ProgressCallback>,
 ) -> Result<IndexReport, IndexError> {
+    run_with_index_dir(
+        project_root,
+        &project_root.join(files::INDEX_DIR),
+        servers,
+        assets,
+        client_info,
+        max_concurrent,
+        progress,
+    )
+    .await
+}
+
+/// Run indexers using a caller-provided index directory.
+///
+/// Normal project indexing should use [`run`]. This variant exists for
+/// performance review/reporting flows that need to avoid the normal
+/// idempotency path against `<project>/index` and measure fresh pair runs in
+/// an isolated report directory.
+pub async fn run_with_index_dir(
+    project_root: &Path,
+    index_dir: &Path,
+    servers: &[McpServer],
+    assets: &[AssetInput],
+    client_info: ClientInfo,
+    max_concurrent: usize,
+    progress: Option<ProgressCallback>,
+) -> Result<IndexReport, IndexError> {
     if !project_root.is_dir() {
         return Err(IndexError::BadRoot(project_root.display().to_string()));
     }
-    let index_dir = project_root.join(files::INDEX_DIR);
+    let index_dir = index_dir.to_path_buf();
     tokio::fs::create_dir_all(&index_dir)
         .await
         .map_err(|e| IndexError::SidecarIo {
@@ -447,7 +474,9 @@ pub async fn run(
             if *st != ItemState::Pending {
                 continue;
             }
-            let server = server_by_name.get(&key.0).expect("server registered");
+            let Some(server) = server_by_name.get(&key.0) else {
+                continue;
+            };
             let mut all_deps_done = true;
             let mut failed_deps: Vec<String> = Vec::new();
             for dep_name in &server.depends_on {
@@ -517,10 +546,10 @@ pub async fn run(
             if launched >= slots {
                 break;
             }
-            let class = server_by_name
-                .get(&key.0)
-                .expect("server present")
-                .resource_class;
+            let Some(server_ref) = server_by_name.get(&key.0) else {
+                continue;
+            };
+            let class = server_ref.resource_class;
             if !resources.can_launch(class) {
                 continue;
             }
@@ -530,11 +559,10 @@ pub async fn run(
             // was operating on a `&&McpServer` (returned by `.get()`),
             // producing another reference rather than a deep clone.
             // `(*..).clone()` is the explicit form.
-            let server = (*server_by_name.get(&key.0).expect("server present")).clone();
-            let (asset_path, asset_sha) = asset_index
-                .get(&key.1)
-                .cloned()
-                .expect("asset present in index");
+            let server = (*server_ref).clone();
+            let Some((asset_path, asset_sha)) = asset_index.get(&key.1).cloned() else {
+                continue;
+            };
             // Flip to Running so the next ready-scan doesn't re-pick
             // this same item; the spawned task overwrites with the
             // final state on completion. Without this we'd double-
@@ -798,7 +826,7 @@ async fn run_pair(
     }
     launch_init = launch_started.elapsed();
 
-    let args = index_asset_args(project_root, &item);
+    let args = index_asset_args(project_root, item);
     // Generous timeout for indexer runs; whisper on a long episode is the
     // worst case.
     let tool_started = Instant::now();

@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use awidat_config::{Config, McpServer};
@@ -56,8 +58,9 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
 
     let config = Config::load(Some(&args.project_root))
         .with_context(|| "failed to load awidat config (global and/or project)")?;
+    let configured_servers = config.indexers().cloned().collect::<Vec<_>>();
     let servers = select_indexers(
-        config.indexers().cloned().collect(),
+        configured_servers.clone(),
         &args.indexers,
         &args.exclude_indexers,
         args.include_whisper,
@@ -76,6 +79,7 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
         .unwrap_or_else(|| args.project_root.join("reports/indexing-performance"));
     std::fs::create_dir_all(&output_dir)
         .with_context(|| format!("create output dir '{}'", output_dir.display()))?;
+    let measurement_index_dir = measurement_index_dir(&output_dir);
 
     let client_info = ClientInfo {
         name: "awidat-index-perf".into(),
@@ -86,8 +90,9 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
     let index_report = runtime
-        .block_on(awidat_index::run(
+        .block_on(awidat_index::run_with_index_dir(
             &args.project_root,
+            &measurement_index_dir,
             &servers,
             &assets,
             client_info,
@@ -102,7 +107,10 @@ pub fn run(args: IndexPerfArgs) -> Result<()> {
             output_dir: output_dir.display().to_string(),
             concurrency: args.concurrency,
             requested_indexers: args.indexers.clone(),
-            excluded_indexers: default_exclusions(&args.exclude_indexers, args.include_whisper),
+            excluded_indexers: expanded_exclusions(
+                &configured_servers,
+                &default_exclusions(&args.exclude_indexers, args.include_whisper),
+            ),
             included_indexers: servers.iter().map(|server| server.name.clone()).collect(),
             assets: assets.iter().map(|asset| asset.id.to_string()).collect(),
         },
@@ -144,7 +152,7 @@ fn select_indexers(
     if !requested.is_empty() {
         servers.retain(|server| requested.iter().any(|name| name == &server.name));
     }
-    let exclusions = default_exclusions(excluded, include_whisper);
+    let exclusions = expanded_exclusions(&servers, &default_exclusions(excluded, include_whisper));
     servers.retain(|server| !exclusions.iter().any(|name| name == &server.name));
     if servers.is_empty() {
         return Err(anyhow!(
@@ -215,9 +223,47 @@ fn default_exclusions(excluded: &[String], include_whisper: bool) -> Vec<String>
     out
 }
 
+fn expanded_exclusions(servers: &[McpServer], base: &[String]) -> Vec<String> {
+    let mut excluded = base.to_vec();
+    loop {
+        let mut changed = false;
+        for server in servers {
+            if excluded.iter().any(|name| name == &server.name) {
+                continue;
+            }
+            if server
+                .depends_on
+                .iter()
+                .any(|dep| excluded.iter().any(|name| name == dep))
+            {
+                excluded.push(server.name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    excluded.sort();
+    excluded.dedup();
+    excluded
+}
+
+static MEASUREMENT_INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn measurement_index_dir(output_dir: &Path) -> PathBuf {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let seq = MEASUREMENT_INDEX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    output_dir.join(format!("index-run-{ts}-{pid}-{seq}"))
+}
+
 fn machine_metadata() -> MachineMetadata {
     let parallelism = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(1);
     let profile = if parallelism >= 8 {
         "powerful"
@@ -290,6 +336,10 @@ mod tests {
     use super::*;
 
     fn server(name: &str) -> McpServer {
+        server_with_deps(name, &[])
+    }
+
+    fn server_with_deps(name: &str, depends_on: &[&str]) -> McpServer {
         McpServer {
             name: name.into(),
             command: "false".into(),
@@ -298,7 +348,7 @@ mod tests {
             cwd: None,
             kind: McpServerKind::Indexer,
             enabled: true,
-            depends_on: Vec::new(),
+            depends_on: depends_on.iter().map(|name| (*name).into()).collect(),
             resource_class: IndexerResourceClass::Light,
             indexer_group: Some(IndexerGroup::Navigation),
         }
@@ -309,6 +359,8 @@ mod tests {
         let selected = select_indexers(
             vec![
                 server("whisper"),
+                server_with_deps("topic", &["whisper"]),
+                server_with_deps("editorial-moments", &["whisper", "topic"]),
                 server("audio-energy"),
                 server("scenedetect"),
             ],
@@ -323,6 +375,28 @@ mod tests {
             .map(|server| server.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["audio-energy", "scenedetect"]);
+    }
+
+    #[test]
+    fn explicit_whisper_exclusion_removes_transitive_dependents() {
+        let selected = select_indexers(
+            vec![
+                server("whisper"),
+                server_with_deps("topic", &["whisper"]),
+                server_with_deps("editorial-moments", &["whisper", "topic"]),
+                server("scenedetect"),
+            ],
+            &[],
+            &["whisper".into()],
+            true,
+        )
+        .unwrap();
+
+        let names = selected
+            .iter()
+            .map(|server| server.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["scenedetect"]);
     }
 
     #[test]
@@ -386,5 +460,19 @@ mod tests {
 
         assert_eq!(assets[0].id.as_str(), "external/0001-My_Clip__Final_.mp4");
         assert!(assets[0].id.sidecar_relative_path().is_some());
+    }
+
+    #[test]
+    fn measurement_index_dir_is_unique_and_report_scoped() {
+        let project = tempfile::tempdir().unwrap();
+        let output = project.path().join("reports/indexing-performance");
+
+        let first = measurement_index_dir(&output);
+        let second = measurement_index_dir(&output);
+
+        assert!(first.starts_with(&output));
+        assert!(second.starts_with(&output));
+        assert_ne!(first, project.path().join("index"));
+        assert_ne!(first, second);
     }
 }
