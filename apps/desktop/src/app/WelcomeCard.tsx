@@ -10,7 +10,7 @@
 // so first launch feels like the rest of the Montage desktop surface.
 
 import { useEffect } from "react";
-import mark from "../brand/montage-mark.svg";
+import mark from "../brand/montage-icon.png";
 import { useWelcome } from "../state/welcome";
 
 const CORE_IDEAS: ReadonlyArray<{ step: string; title: string; body: string }> = [

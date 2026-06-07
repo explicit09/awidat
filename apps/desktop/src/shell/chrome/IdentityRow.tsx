@@ -1,5 +1,5 @@
 import { Share2, Settings } from "lucide-react";
-import mark from "../../brand/montage-mark.svg";
+import mark from "../../brand/montage-icon.png";
 import { useMode } from "../../state/mode";
 import { useProjectStore } from "../../app/state";
 import { useSettings } from "../../state/settings";

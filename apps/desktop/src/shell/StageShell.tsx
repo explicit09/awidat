@@ -9,7 +9,7 @@ import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
 import { ConversationPanel } from "./StageConversation";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
-import mark from "../brand/montage-mark.svg";
+import mark from "../brand/montage-icon.png";
 
 /**
  * StageShell — the 2026 "Stage" application shell (replaces the

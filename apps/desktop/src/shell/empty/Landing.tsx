@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { Clock3, FolderOpen, Import, MoreVertical, Plus, Search } from "lucide-react";
-import mark from "../../brand/montage-mark.svg";
+import mark from "../../brand/montage-icon.png";
 import { useProjectStore } from "../../app/state";
 import { MENU_COMMANDS, emitMenuCommand } from "../../app/menuCommands";
 
