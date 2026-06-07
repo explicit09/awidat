@@ -1,5 +1,9 @@
 use awidat_social::{
-    oauth_exchange::{GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthExchangeError},
+    model::Provider,
+    oauth_exchange::{
+        GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthExchangeError, PlatformOAuthExchange,
+        PlatformOAuthExchangeConfig, RefreshedTokens,
+    },
     token::{Aead256Key, TokenSecret},
     token_refresh::{TokenRefreshError, TokenRefresher},
 };
@@ -13,17 +17,45 @@ use awidat_social::{
 /// server: the refresh token is decrypted here, exchanged, and the new access
 /// token re-encrypted, all server-side.
 pub struct ServerTokenRefresher {
-    exchange: GoogleOAuthExchange,
+    exchange: RefreshExchange,
     key: Aead256Key,
+}
+
+enum RefreshExchange {
+    Google(GoogleOAuthExchange),
+    Platform(PlatformOAuthExchange),
 }
 
 impl ServerTokenRefresher {
     pub fn new(client_id: String, client_secret: String, key: Aead256Key) -> Self {
         Self {
-            exchange: GoogleOAuthExchange::new(GoogleOAuthExchangeConfig {
-                client_id,
-                client_secret,
-            }),
+            exchange: RefreshExchange::Google(GoogleOAuthExchange::new(
+                GoogleOAuthExchangeConfig {
+                    client_id,
+                    client_secret,
+                },
+            )),
+            key,
+        }
+    }
+
+    pub fn new_platform(
+        provider: Provider,
+        client_id: String,
+        client_secret: String,
+        token_endpoint: String,
+        key: Aead256Key,
+    ) -> Self {
+        Self {
+            exchange: RefreshExchange::Platform(PlatformOAuthExchange::new(
+                PlatformOAuthExchangeConfig {
+                    provider,
+                    client_id,
+                    client_secret,
+                    token_endpoint,
+                    profile_endpoint: None,
+                },
+            )),
             key,
         }
     }
@@ -45,12 +77,7 @@ impl TokenRefresher for ServerTokenRefresher {
             })?;
 
         // Bridge sync → async: exchange the refresh token for a new access token.
-        let refreshed = tokio::runtime::Handle::current()
-            .block_on(self.exchange.refresh_access_token(&refresh_token))
-            .map_err(|e| match e {
-                OAuthExchangeError::InvalidGrant(msg) => TokenRefreshError::InvalidGrant(msg),
-                other => TokenRefreshError::Transient(other.to_string()),
-            })?;
+        let refreshed = self.refresh_token(&refresh_token)?;
 
         // Keep the existing refresh token unless Google rotated it.
         let new_refresh = refreshed.refresh_token.as_deref();
@@ -69,8 +96,37 @@ impl TokenRefresher for ServerTokenRefresher {
         updated.access_token_expires_at = Some(now.saturating_add(refreshed.expires_in));
         // Preserve the refresh-token expiry; a rotated refresh token from Google
         // does not re-advertise its lifetime here, so keep the prior value.
-        updated.refresh_token_expires_at = secret.refresh_token_expires_at;
+        updated.refresh_token_expires_at = refreshed
+            .refresh_expires_in
+            .map(|expires_in| now.saturating_add(expires_in))
+            .or(secret.refresh_token_expires_at);
         Ok(updated)
+    }
+}
+
+impl ServerTokenRefresher {
+    fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedTokens, TokenRefreshError> {
+        tokio::runtime::Handle::current()
+            .block_on(async {
+                match &self.exchange {
+                    RefreshExchange::Google(exchange) => {
+                        exchange.refresh_access_token(refresh_token).await
+                    }
+                    RefreshExchange::Platform(exchange) => {
+                        exchange.refresh_access_token(refresh_token).await
+                    }
+                }
+            })
+            .map_err(|e| match e {
+                OAuthExchangeError::InvalidGrant(msg) => TokenRefreshError::InvalidGrant(msg),
+                OAuthExchangeError::InvalidResponse(msg)
+                    if msg.contains("not configured")
+                        || msg.contains("use GoogleOAuthExchange for YouTube") =>
+                {
+                    TokenRefreshError::Unavailable(msg)
+                }
+                other => TokenRefreshError::Transient(other.to_string()),
+            })
     }
 }
 
@@ -98,5 +154,61 @@ mod tests {
         let refresher = ServerTokenRefresher::new("cid".into(), "csecret".into(), aead);
         let err = refresher.refresh("acct1", &secret, 1_000).unwrap_err();
         assert!(matches!(err, TokenRefreshError::InvalidGrant(_)));
+    }
+
+    #[tokio::test]
+    async fn platform_refresher_rotates_tiktok_tokens() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let key = TestKeyProvider::new("k1", "server-refresher-key");
+        let mut secret =
+            TokenSecret::encrypt("acct1", "old-access", Some("old-refresh"), &key, 0).unwrap();
+        secret.access_token_expires_at = Some(900);
+        secret.refresh_token_expires_at = Some(30_000);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("client_key=tt-client"))
+            .and(body_string_contains("client_secret=tt-secret"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains("refresh_token=old-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 3600,
+                "refresh_expires_in": 31_536_000
+            })))
+            .mount(&server)
+            .await;
+
+        let aead = Aead256Key::from_bytes("k1", {
+            let mut b = [0u8; 32];
+            let src = b"server-refresher-key";
+            b[..src.len()].copy_from_slice(src);
+            b
+        });
+        let refresher = ServerTokenRefresher::new_platform(
+            Provider::TikTok,
+            "tt-client".into(),
+            "tt-secret".into(),
+            format!("{}/oauth/token", server.uri()),
+            aead,
+        );
+
+        let updated =
+            tokio::task::spawn_blocking(move || refresher.refresh("acct1", &secret, 1_000))
+                .await
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(updated.decrypt_access_token(&key).unwrap(), "new-access");
+        assert_eq!(
+            updated.decrypt_refresh_token(&key).unwrap().as_deref(),
+            Some("new-refresh")
+        );
+        assert_eq!(updated.access_token_expires_at, Some(4_600));
+        assert_eq!(updated.refresh_token_expires_at, Some(31_537_000));
     }
 }

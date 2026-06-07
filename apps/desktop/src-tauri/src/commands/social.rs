@@ -15,7 +15,8 @@
 use awidat_social::api::{AccountSummary, OAuthStartResponse};
 use awidat_social::api::{
     BindTargetRequest, ProviderSummary, PublishJobResponse, RescheduleJobRequest,
-    ScheduleTargetRequest, SocialApi, ValidateTargetRequest, ValidateTargetResponse,
+    ScheduleTargetRequest, SocialApi, UpdateTargetRequest, ValidateTargetRequest,
+    ValidateTargetResponse,
 };
 use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use awidat_social::provider::ProviderRegistry;
@@ -103,6 +104,31 @@ pub async fn social_bind_target(
             campaign_id: args.campaign_id,
             variant_id: args.variant_id,
             connected_account_id: args.connected_account_id,
+            platform_fields: args.platform_fields,
+            scheduled_for: args.scheduled_for,
+            now: args.now,
+        })
+        .await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTargetArgs {
+    pub target_id: String,
+    pub platform_fields: serde_json::Value,
+    pub scheduled_for: i64,
+    pub now: i64,
+}
+
+#[tauri::command]
+pub async fn social_update_target(
+    state: State<'_, AwidatState>,
+    args: UpdateTargetArgs,
+) -> Result<CampaignVariantTarget, String> {
+    client(&state)
+        .await?
+        .update_target(&UpdateTargetRequest {
+            target_id: args.target_id,
             platform_fields: args.platform_fields,
             scheduled_for: args.scheduled_for,
             now: args.now,

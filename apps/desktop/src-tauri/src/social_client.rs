@@ -19,7 +19,8 @@
 
 use awidat_social::api::{
     AccountSummary, BindTargetRequest, OAuthStartResponse, PublishJobResponse,
-    RescheduleJobRequest, ScheduleTargetRequest, ValidateTargetRequest, ValidateTargetResponse,
+    RescheduleJobRequest, ScheduleTargetRequest, UpdateTargetRequest, ValidateTargetRequest,
+    ValidateTargetResponse,
 };
 use awidat_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use serde::{Deserialize, Serialize};
@@ -146,6 +147,14 @@ impl SocialClient {
         request: &BindTargetRequest,
     ) -> Result<CampaignVariantTarget, String> {
         self.post_json("/social/targets/bind", request).await
+    }
+
+    /// `POST /social/targets/update`
+    pub async fn update_target(
+        &self,
+        request: &UpdateTargetRequest,
+    ) -> Result<CampaignVariantTarget, String> {
+        self.post_json("/social/targets/update", request).await
     }
 
     /// `POST /social/targets/validate`

@@ -1,4 +1,4 @@
-import type { RenderUploadState } from "./renderQueue";
+import type { RenderUploadEvent, RenderUploadState } from "./renderQueue";
 import type { UploadMetadata } from "../state/uploadMetadata";
 import { reasonCopy } from "./social/socialModel.ts";
 
@@ -18,6 +18,7 @@ type PublishJob = {
   providerPostUrl?: string | null;
   normalizedError?: string | null;
   requiresActionReason?: string | null;
+  events?: RenderUploadEvent[];
 };
 
 const JOB_POLL_INTERVAL_MS = 2_000;
@@ -88,11 +89,13 @@ function failed(reason: string, jobId?: string): RenderUploadState {
 }
 
 function stateFromServerJob(job: PublishJob): RenderUploadState {
+  const events = job.events && job.events.length > 0 ? job.events : undefined;
   if (job.status === "published") {
     return {
       state: "published",
       remote_id: job.providerPostId ?? job.id,
       ...(job.providerPostUrl ? { remote_url: job.providerPostUrl } : {}),
+      ...(events ? { events } : {}),
     };
   }
   if (
@@ -104,15 +107,24 @@ function stateFromServerJob(job: PublishJob): RenderUploadState {
       job.normalizedError ??
       job.requiresActionReason ??
       `server publish ${job.status}`;
-    return failed(
-      reasonCopy(reason),
-      job.id,
-    );
+    return {
+      ...failed(reasonCopy(reason), job.id),
+      ...(events ? { events } : {}),
+    };
   }
   if (job.status === "processing" || job.status === "uploading") {
-    return { state: "processing", job_id: job.id };
+    return {
+      state: "processing",
+      job_id: job.id,
+      ...(events ? { events } : {}),
+    };
   }
-  return { state: "scheduled", job_id: job.id, scheduled_for: job.scheduledFor };
+  return {
+    state: "scheduled",
+    job_id: job.id,
+    ...(job.scheduledFor !== undefined ? { scheduled_for: job.scheduledFor } : {}),
+    ...(events ? { events } : {}),
+  };
 }
 
 function validationState(target: ValidatedTarget): string | undefined {

@@ -278,6 +278,7 @@ pub fn run() {
             commands::social::social_oauth_start,
             commands::social::social_disconnect_account,
             commands::social::social_bind_target,
+            commands::social::social_update_target,
             commands::social::social_validate_target,
             commands::social::social_schedule_target,
             commands::social::social_publish_job,
