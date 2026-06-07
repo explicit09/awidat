@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
 import { usePendingProposals } from "../timeline/pendingProposals";
 import { ProposalCard } from "./brief/ProposalCard";
@@ -17,9 +17,9 @@ import mark from "../brand/awidat-mark.svg";
  *   • The agent's proposals ride alongside as a swipeable glass deck,
  *     wired to the real useBriefProposalsStore (accept / reject).
  *   • A persistent command bar drives edits AND navigation.
- *   • Deliver / Schedule / Skills / History are summoned via the thin left dock
- *     (or command routes) and slide in as glass sheets over the dimmed
- *     stage — the command bar + dock persist, so context is never lost.
+ *   • Source tools live in a left pane; chat and output tools live in a
+ *     right pane. Larger destinations such as Schedule and Skills stay as
+ *     full-page surfaces.
  *
  * This component is pure layout: every real surface (preview, timeline,
  * delivery/skills/history) is passed in as a node by App.tsx, which owns
@@ -43,7 +43,7 @@ function mediumColor(m: BriefMedium): string {
   return MEDIUM_COLOR[m] ?? "#94A3B8";
 }
 
-// Side-pane tools. Transcript leads: it's the click-a-word→seek surface.
+// Side-pane tools: source/context tools on the left, output/session tools on the right.
 type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
 
 // Timeline strip sizing — fits ALL tracks without vertical scroll.
@@ -51,25 +51,26 @@ const TL_BASE = 48; // header/padding chrome
 const TL_ROW = 58; // per-track lane height
 const TL_MAX_VH = 52; // soft cap; beyond this the strip scrolls (never clips)
 
-const SIDE_PANE_W = 388;
+const SIDE_PANE_W = 320;
+const SIDE_PANE_MIN_W = 260;
+const SIDE_PANE_MAX_W = 460;
 const SIDE_PANE_GUTTER = 12;
-const LEFT_PANE_RESERVE = SIDE_PANE_W + SIDE_PANE_GUTTER + 12;
-const RIGHT_PANE_RESERVE = SIDE_PANE_W + SIDE_PANE_GUTTER + 12;
 type LeftPaneKey = "transcript" | "media" | "index";
-type RightPaneKey = "chat" | "deliver" | "schedule" | "inspector" | "vedit" | "history";
+type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit" | "history";
 const LEFT_PANES: { id: LeftPaneKey; label: string }[] = [
-  { id: "transcript", label: "Transcript" },
   { id: "media", label: "Media" },
+  { id: "transcript", label: "Transcript" },
   { id: "index", label: "Index" },
 ];
 const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "deliver", label: "Deliver" },
-  { id: "schedule", label: "Schedule" },
   { id: "inspector", label: "Inspector" },
   { id: "vedit", label: "Vedit" },
   { id: "history", label: "History" },
 ];
+type PaneSide = "left" | "right";
+type PaneResize = { side: PaneSide; startX: number; startWidth: number };
 
 export type StageShellProps = {
   hasProject: boolean;
@@ -80,7 +81,7 @@ export type StageShellProps = {
   timeline: ReactNode;
   /** Track count drives the timeline strip height (fit all, no scroll). */
   trackCount?: number;
-  /** Summonable cockpit tools, opened from the right-edge dock. */
+  /** Summonable cockpit tools, opened in the stage side panes. */
   tools?: {
     media: ReactNode;
     inspector: ReactNode;
@@ -159,6 +160,9 @@ export function StageShell(props: StageShellProps) {
   const [rightPane, setRightPane] = useState<RightPaneKey>(
     devTool === "inspector" || devTool === "vedit" ? devTool : "chat",
   );
+  const [leftPaneWidth, setLeftPaneWidth] = useState(SIDE_PANE_W);
+  const [rightPaneWidth, setRightPaneWidth] = useState(SIDE_PANE_W);
+  const paneResize = useRef<PaneResize | null>(null);
   useEffect(() => {
     if (running) setRightPane("chat");
   }, [running]);
@@ -176,6 +180,38 @@ export function StageShell(props: StageShellProps) {
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
   const tracks = trackCount || storeTrackCount;
   const timelineHeight = `min(${TL_MAX_VH}vh, ${TL_BASE + Math.max(1, tracks) * TL_ROW}px)`;
+  const LEFT_PANE_RESERVE = leftPaneWidth + SIDE_PANE_GUTTER + 12;
+  const RIGHT_PANE_RESERVE = rightPaneWidth + SIDE_PANE_GUTTER + 12;
+  const paneBottom = `calc(36px + ${timelineHeight})`;
+
+  const beginPaneResize = (side: PaneSide, event: ReactPointerEvent<HTMLDivElement>) => {
+    paneResize.current = {
+      side,
+      startX: event.clientX,
+      startWidth: side === "left" ? leftPaneWidth : rightPaneWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const movePaneResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = paneResize.current;
+    if (!resize) return;
+    const delta = event.clientX - resize.startX;
+    const nextWidth = resize.side === "left"
+      ? resize.startWidth + delta
+      : resize.startWidth - delta;
+    const clamped = clamp(nextWidth, SIDE_PANE_MIN_W, SIDE_PANE_MAX_W);
+    if (resize.side === "left") {
+      setLeftPaneWidth(clamped);
+    } else {
+      setRightPaneWidth(clamped);
+    }
+  };
+  const endPaneResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    paneResize.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
 
   // Empty stage: a project is loaded but there's NO footage on the timeline
   // yet (no tracks) AND nothing proposed. "No proposals" alone is not empty —
@@ -183,7 +219,7 @@ export function StageShell(props: StageShellProps) {
   const stageEmpty = pending.length === 0 && tracks === 0;
   const leftNode = toolNode(leftPane, tools);
   const rightNode = rightPane === "chat" ? null : rightPaneNode(rightPane, {
-    deliver, schedule, history, tools,
+    deliver, history, tools,
   });
 
   const submit = () => {
@@ -198,10 +234,10 @@ export function StageShell(props: StageShellProps) {
     } else if (lower === "inspector" || lower === "vedit") {
       onStage("edit");
       setRightPane(lower as RightPaneKey);
-    } else if (lower === "deliver" || lower === "schedule" || lower === "history") {
+    } else if (lower === "deliver" || lower === "history") {
       onStage("edit");
       setRightPane(lower as RightPaneKey);
-    } else if (lower === "skills" || lower === "stage" || lower === "edit") {
+    } else if (lower === "schedule" || lower === "skills" || lower === "stage" || lower === "edit") {
       onStage(lower === "stage" ? "edit" : (lower as Stage));
     } else {
       onCommand(text);
@@ -246,10 +282,10 @@ export function StageShell(props: StageShellProps) {
           style={{
             position: "absolute",
             top: 64,
-            bottom: 88,
+            bottom: paneBottom,
             left: SIDE_PANE_GUTTER,
             right: "auto",
-            width: SIDE_PANE_W,
+            width: leftPaneWidth,
             maxWidth: "calc(100vw - 24px)",
             borderRadius: 10,
           }}>
@@ -268,6 +304,15 @@ export function StageShell(props: StageShellProps) {
           <div className="stage-tool-body flex min-h-0 flex-1 flex-col overflow-auto">
             {leftNode}
           </div>
+          <div
+            className="stage-pane-resize stage-pane-resize-left"
+            onPointerDown={(event) => beginPaneResize("left", event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            role="separator"
+            aria-orientation="vertical"
+          />
         </div>
       ) : null}
 
@@ -279,10 +324,10 @@ export function StageShell(props: StageShellProps) {
           style={{
             position: "absolute",
             top: 64,
-            bottom: 88,
+            bottom: paneBottom,
             right: SIDE_PANE_GUTTER,
             left: "auto",
-            width: SIDE_PANE_W,
+            width: rightPaneWidth,
             maxWidth: "calc(100vw - 24px)",
             borderRadius: 10,
           }}>
@@ -310,12 +355,20 @@ export function StageShell(props: StageShellProps) {
               />
             ) : rightNode}
           </div>
+          <div
+            className="stage-pane-resize stage-pane-resize-right"
+            onPointerDown={(event) => beginPaneResize("right", event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            role="separator"
+            aria-orientation="vertical"
+          />
         </div>
       ) : null}
 
-      {/* STAGE LAYER — preview hero + proposal deck (dims when a destination
-          opens). Bottom padding tracks the (track-sized) timeline height so
-          the hero flexes; right padding makes room for open right panes. */}
+      {/* STAGE LAYER — preview hero + proposal deck. Bottom padding tracks the
+          timeline height; side padding makes room for open side panes. */}
       <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
@@ -384,7 +437,7 @@ export function StageShell(props: StageShellProps) {
           is visible at once; past the soft cap it scrolls (never clips a
           track). Chat lives on the right, so the bottom timeline remains
           available while the conversation is open. */}
-      <div className="absolute bottom-6 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", left: LEFT_PANE_RESERVE, right: RIGHT_PANE_RESERVE }}>
+      <div className="absolute bottom-6 z-20" style={{ opacity: onStage_ ? 1 : 0.25, pointerEvents: onStage_ ? "auto" : "none", left: 0, right: 0 }}>
         <div className="glass glass-soft overflow-y-auto" style={{ borderRadius: 14, height: timelineHeight }}>
           {timeline}
         </div>
@@ -422,11 +475,14 @@ function toolNode(key: ToolKey, tools: StageShellProps["tools"]): ReactNode {
 
 function rightPaneNode(
   key: RightPaneKey,
-  nodes: Pick<StageShellProps, "deliver" | "schedule" | "history" | "tools">,
+  nodes: Pick<StageShellProps, "deliver" | "history" | "tools">,
 ): ReactNode {
   if (key === "deliver") return nodes.deliver;
-  if (key === "schedule") return nodes.schedule;
   if (key === "history") return nodes.history;
   if (key === "inspector" || key === "vedit") return toolNode(key, nodes.tools);
   return null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
