@@ -1,6 +1,8 @@
 use crate::model::{OwnerRef, Provider};
 use crate::oauth::OAuthConnection;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthProviderConfig {
@@ -81,31 +83,37 @@ fn authorization_url(
     };
 
     let mut params = vec![
-        (client_key, config.client_id.as_str()),
-        ("redirect_uri", config.redirect_uri.as_str()),
-        ("response_type", "code"),
-        ("scope", scope.as_str()),
-        ("state", raw_state),
+        (client_key.to_string(), config.client_id.clone()),
+        ("redirect_uri".to_string(), config.redirect_uri.clone()),
+        ("response_type".to_string(), "code".to_string()),
+        ("scope".to_string(), scope),
+        ("state".to_string(), raw_state.to_string()),
     ];
     if provider == &Provider::YouTube {
-        params.push(("access_type", "offline"));
-        params.push(("prompt", "consent"));
+        params.push(("access_type".to_string(), "offline".to_string()));
+        params.push(("prompt".to_string(), "consent".to_string()));
     }
     if provider == &Provider::TwitterX {
-        params.push(("code_challenge", raw_state));
-        params.push(("code_challenge_method", "plain"));
+        let code_challenge = pkce_s256_challenge(raw_state);
+        params.push(("code_challenge".to_string(), code_challenge));
+        params.push(("code_challenge_method".to_string(), "S256".to_string()));
     }
     if provider == &Provider::Instagram {
-        params.push(("force_reauth", "true"));
+        params.push(("force_reauth".to_string(), "true".to_string()));
     }
 
     let query = params
         .into_iter()
-        .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(value)))
+        .map(|(key, value)| format!("{}={}", percent_encode(&key), percent_encode(&value)))
         .collect::<Vec<_>>()
         .join("&");
 
     format!("{base_url}?{query}")
+}
+
+fn pkce_s256_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 fn percent_encode(value: &str) -> String {
@@ -267,12 +275,17 @@ mod tests {
         assert!(
             request
                 .authorization_url
-                .contains("code_challenge=state-secret")
+                .contains("code_challenge=GgsJFfpcaJK8VKK4W_HOym7EIymQim3GnS6vhWsz-fg")
         );
         assert!(
             request
                 .authorization_url
-                .contains("code_challenge_method=plain")
+                .contains("code_challenge_method=S256")
+        );
+        assert!(
+            !request
+                .authorization_url
+                .contains("code_challenge=state-secret")
         );
     }
 }
