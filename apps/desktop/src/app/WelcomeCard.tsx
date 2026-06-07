@@ -9,24 +9,24 @@
 // Storage lives in `useWelcome`. The shell uses the shared glass system
 // so first launch feels like the rest of the Montage desktop surface.
 
-import { BookOpen, Sparkles, GitBranch } from "lucide-react";
+import { CircleCheck, FileSearch, Scissors } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import mark from "../brand/montage-mark.svg";
 import { useWelcome } from "../state/welcome";
 
 const CORE_IDEAS: ReadonlyArray<{ icon: ReactNode; title: string; body: string }> = [
   {
-    icon: <BookOpen size={16} />,
+    icon: <FileSearch size={14} strokeWidth={1.9} />,
     title: "An agent reads your media.",
     body: "Drop a file and Montage indexes transcript, scenes, speakers, and silences. Your editorial brief lives in AGENTS.md.",
   },
   {
-    icon: <Sparkles size={16} />,
+    icon: <Scissors size={14} strokeWidth={1.9} />,
     title: "It proposes editorial cuts with rationale.",
     body: "The agent suggests trims, B-roll, color, and captions, each with a one-sentence reason. You see them in the Brief and on the timeline as ghost overlays.",
   },
   {
-    icon: <GitBranch size={16} />,
+    icon: <CircleCheck size={14} strokeWidth={1.9} />,
     title: "You accept, reject, or revise inline.",
     body: "Every decision becomes part of the History. Nothing happens without your call.",
   },
@@ -125,7 +125,7 @@ function IdeaCard({ icon, title, body }: { icon: ReactNode; title: string; body:
   return (
     <div className="glass-content flex items-start gap-3 rounded-lg p-3">
       <div
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[rgba(239,68,68,0.34)] bg-[rgba(239,68,68,0.13)] text-[var(--color-brand)] shadow-[0_0_18px_rgba(239,68,68,0.16)]"
+        className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md border border-[rgba(239,68,68,0.28)] bg-[rgba(239,68,68,0.10)] text-[var(--color-brand)] shadow-[0_0_14px_rgba(239,68,68,0.12)]"
         aria-hidden
       >
         {icon}
