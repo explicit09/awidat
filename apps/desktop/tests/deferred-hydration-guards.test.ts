@@ -49,7 +49,8 @@ assert.equal(
     mediaSourceCount: 1,
     mediaProxyCount: 0,
   }),
-  true,
+  false,
+  "opening a media project must not start a hidden chat turn",
 );
 
 assert.equal(

@@ -30,7 +30,7 @@ use crate::state::MontageState;
 pub struct ChatSessionSummary {
     /// Codex `thread_id`. Stable across resume — `id == thread_id`.
     pub id: String,
-    /// Human-friendly chat title (first user message, truncated).
+    /// Human-friendly chat title generated from the first real user message.
     pub title: String,
     /// Project the rollout was recorded against. Always the current
     /// project for entries returned here (we filter by cwd).
@@ -369,8 +369,8 @@ fn summarize_rollout(
     })
 }
 
-/// Walk a rollout once, returning the first user-message text
-/// (truncated) and the total count of `payload.type == "message"`
+/// Walk a rollout once, returning a generated title from the first real
+/// user-message text and the total count of `payload.type == "message"`
 /// entries. Robust to malformed lines — they are skipped.
 fn title_and_count(path: &Path) -> (String, usize) {
     use std::io::{BufRead, BufReader};
@@ -398,7 +398,7 @@ fn title_and_count(path: &Path) -> (String, usize) {
             && payload.get("role").and_then(|r| r.as_str()) == Some("user")
             && let Some(text) = extract_message_text(payload)
         {
-            title = Some(truncate_title(&clean_user_message_text(&text)));
+            title = generated_chat_title(&clean_user_message_text(&text));
         }
     }
     (
@@ -429,27 +429,82 @@ fn extract_message_text(payload: &serde_json::Value) -> Option<String> {
     if buf.is_empty() { None } else { Some(buf) }
 }
 
-fn truncate_title(text: &str) -> String {
-    let trimmed = text.trim();
-    let one_line: String = trimmed.lines().next().unwrap_or("").to_string();
-    if one_line.chars().count() <= 60 {
-        one_line
-    } else {
-        let mut out: String = one_line.chars().take(57).collect();
-        out.push_str("...");
-        out
-    }
-}
-
 fn clean_user_message_text(text: &str) -> String {
     let without_skills = strip_marker_block(
         text.trim_start(),
         "<skills_instructions>",
         "</skills_instructions>",
     );
-    strip_visible_context_prefix(without_skills.trim_start())
+    let without_visible_context = strip_visible_context_prefix(without_skills.trim_start());
+    strip_bootstrap_context(without_visible_context.trim_start())
         .trim()
         .to_string()
+}
+
+fn generated_chat_title(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if is_internal_user_message(trimmed) {
+        return None;
+    }
+
+    let first_line = trimmed.lines().find(|line| !line.trim().is_empty())?.trim();
+    let mut words = Vec::new();
+    for raw in first_line.split_whitespace() {
+        let word = raw.trim_matches(|c: char| !c.is_alphanumeric());
+        if word.is_empty() || is_title_stop_word(word) {
+            continue;
+        }
+        words.push(title_case_word(word));
+        if words.len() >= 4 {
+            break;
+        }
+    }
+    if words.is_empty() {
+        None
+    } else {
+        Some(words.join(" "))
+    }
+}
+
+fn is_title_stop_word(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "a" | "an"
+            | "and"
+            | "are"
+            | "can"
+            | "could"
+            | "for"
+            | "i"
+            | "it"
+            | "just"
+            | "let"
+            | "me"
+            | "my"
+            | "need"
+            | "of"
+            | "on"
+            | "please"
+            | "should"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "we"
+            | "with"
+            | "would"
+            | "you"
+    )
+}
+
+fn title_case_word(word: &str) -> String {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut out = first.to_uppercase().collect::<String>();
+    out.push_str(&chars.as_str().to_ascii_lowercase());
+    out
 }
 
 fn strip_marker_block<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
@@ -460,6 +515,33 @@ fn strip_marker_block<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
         return text;
     };
     &rest[end_idx + end.len()..]
+}
+
+fn strip_bootstrap_context(mut text: &str) -> &str {
+    loop {
+        let trimmed = text.trim_start();
+        if let Some(rest) =
+            strip_prefixed_block(trimmed, "# AGENTS.md instructions for", "</INSTRUCTIONS>")
+        {
+            text = rest;
+            continue;
+        }
+        if let Some(rest) =
+            strip_prefixed_block(trimmed, "<environment_context>", "</environment_context>")
+        {
+            text = rest;
+            continue;
+        }
+        return trimmed;
+    }
+}
+
+fn strip_prefixed_block<'a>(text: &'a str, prefix: &str, end: &str) -> Option<&'a str> {
+    if !text.starts_with(prefix) {
+        return None;
+    }
+    let end_idx = text.find(end)?;
+    Some(&text[end_idx + end.len()..])
 }
 
 fn strip_visible_context_prefix(text: &str) -> &str {
@@ -490,6 +572,19 @@ fn strip_visible_context_prefix(text: &str) -> &str {
     remaining.get(byte_offset..).unwrap_or("").trim_start()
 }
 
+fn is_internal_user_message(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.is_empty()
+        || is_intro_synthetic_input(trimmed)
+        || trimmed.starts_with("[montage:prepare]")
+        || trimmed.starts_with("[awidat:prepare]")
+}
+
+fn is_intro_synthetic_input(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("[montage:intro]") || trimmed.starts_with("[awidat:intro]")
+}
+
 /// Read a rollout end-to-end and map replay-safe `response_item`s to
 /// desktop-protocol `Item`s. User/assistant messages are restored as
 /// conversation text. Function calls are restored as inert completed
@@ -504,6 +599,7 @@ fn read_rollout_items(path: &Path) -> Vec<Item> {
     let mut items = Vec::new();
     let mut counter: u64 = 0;
     let mut function_call_items: HashMap<String, usize> = HashMap::new();
+    let mut hide_next_intro_reply = false;
     for line in reader.lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -520,17 +616,31 @@ fn read_rollout_items(path: &Path) -> Vec<Item> {
                 let Some(text) = extract_message_text(payload) else {
                     continue;
                 };
-                counter += 1;
                 match role {
-                    "user" => items.push(Item::UserInput {
-                        id: Id::new(format!("hist-user-{counter}")),
-                        text: clean_user_message_text(&text),
-                    }),
-                    "assistant" => items.push(Item::Text {
-                        id: Id::new(format!("hist-asst-{counter}")),
-                        phase: ItemLifecycle::Completed,
-                        text,
-                    }),
+                    "user" => {
+                        let clean = clean_user_message_text(&text);
+                        hide_next_intro_reply = is_intro_synthetic_input(&clean);
+                        if is_internal_user_message(&clean) {
+                            continue;
+                        }
+                        counter += 1;
+                        items.push(Item::UserInput {
+                            id: Id::new(format!("hist-user-{counter}")),
+                            text: clean,
+                        });
+                    }
+                    "assistant" => {
+                        if hide_next_intro_reply {
+                            hide_next_intro_reply = false;
+                            continue;
+                        }
+                        counter += 1;
+                        items.push(Item::Text {
+                            id: Id::new(format!("hist-asst-{counter}")),
+                            phase: ItemLifecycle::Completed,
+                            text,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -653,5 +763,89 @@ mod tests {
             clean_user_message_text(text),
             "What should I cut first?\nKeep the hook."
         );
+    }
+
+    #[test]
+    fn read_rollout_items_hides_internal_prompts_and_intro_reply() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(err) => panic!("tempdir: {err}"),
+        };
+        let path = dir.path().join("rollout-internal.jsonl");
+        let mut file = match fs::File::create(&path) {
+            Ok(file) => file,
+            Err(err) => panic!("create rollout: {err}"),
+        };
+        if let Err(err) = writeln!(
+            file,
+            r##"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"# AGENTS.md instructions for /tmp/demo\n\n<INSTRUCTIONS>\nNever expose this.\n</INSTRUCTIONS>\n\n<environment_context>\n  <cwd>/tmp/demo</cwd>\n</environment_context>"}}]}}}}"##
+        ) {
+            panic!("write agents message: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<skills_instructions>\nskill catalog\n</skills_instructions>\n\n[user is viewing demo]\n\n[awidat:intro]\nYou've just been opened on a project."}}]}}}}"#
+        ) {
+            panic!("write intro message: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"I've read AGENTS.md and the available skills."}}]}}}}"#
+        ) {
+            panic!("write intro reply: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"And delete half of the video. I just need the first half."}}]}}}}"#
+        ) {
+            panic!("write real user: {err}");
+        }
+
+        let items = read_rollout_items(&path);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            Item::UserInput { text, .. } => {
+                assert_eq!(
+                    text,
+                    "And delete half of the video. I just need the first half."
+                );
+            }
+            other => panic!("expected visible user item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn title_and_count_skips_internal_prompts_and_generates_short_title() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(err) => panic!("tempdir: {err}"),
+        };
+        let path = dir.path().join("rollout-title.jsonl");
+        let mut file = match fs::File::create(&path) {
+            Ok(file) => file,
+            Err(err) => panic!("create rollout: {err}"),
+        };
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<skills_instructions>\nskill catalog\n</skills_instructions>\n\n[user is viewing demo]\n\n[awidat:intro]\nYou've just been opened on a project."}}]}}}}"#
+        ) {
+            panic!("write intro: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Ready."}}]}}}}"#
+        ) {
+            panic!("write assistant: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"And delete half of the video. I just need the first half."}}]}}}}"#
+        ) {
+            panic!("write real user: {err}");
+        }
+
+        let (title, count) = title_and_count(&path);
+        assert_eq!(title, "Delete Half Video First");
+        assert_eq!(count, 3);
     }
 }

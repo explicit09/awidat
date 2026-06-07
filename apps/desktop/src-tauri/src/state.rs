@@ -38,6 +38,11 @@ pub struct MontageState {
     /// Active turn, if any. Set by `start_turn`, cleared on
     /// TurnEnd / Error / cancel.
     pub turn: Mutex<Option<TurnHandle>>,
+    /// Guards the start_turn cold-launch window before Codex has
+    /// returned a concrete turn id. Without this, two UI sends can
+    /// both pass the "no active turn" check while the bridge is still
+    /// launching.
+    pub turn_start_gate: Mutex<()>,
     /// Project root the codex subprocess will be invoked against.
     /// Set by `set_project_root` (or its callers like `init_project`).
     /// Defaulted from `MONTAGE_DESKTOP_PROJECT` env var on startup so
@@ -226,4 +231,17 @@ pub struct TurnHandle {
 pub struct JobHandle {
     /// Token the job watches; flipped by `cancel_job`.
     pub cancel: CancellationToken,
+}
+
+impl MontageState {
+    pub async fn reserve_turn_start(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        let guard = self
+            .turn_start_gate
+            .try_lock()
+            .map_err(|_| "a turn is already running - cancel it first".to_string())?;
+        if self.turn.lock().await.is_some() {
+            return Err("a turn is already running - cancel it first".to_string());
+        }
+        Ok(guard)
+    }
 }
