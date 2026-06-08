@@ -10,9 +10,10 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
-use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
 use codex_login::ServerOptions;
+use codex_login::configured_montage_oauth_client_id;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
@@ -113,6 +114,41 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
     );
 }
 
+fn configured_chatgpt_client_id() -> std::io::Result<String> {
+    configured_montage_oauth_client_id().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "ChatGPT OAuth login is not configured. Set {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} to the sanctioned client id used for login."
+            ),
+        )
+    })
+}
+
+fn resolve_chatgpt_client_id(client_id: Option<String>) -> std::io::Result<String> {
+    let configured_client_id = configured_chatgpt_client_id()?;
+    match client_id {
+        Some(client_id) if client_id == configured_client_id => Ok(client_id),
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "--experimental_client-id must match {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} so refreshed tokens use the same sanctioned client id."
+            ),
+        )),
+        None => Ok(configured_client_id),
+    }
+}
+
+fn chatgpt_client_id_or_exit(client_id: Option<String>) -> String {
+    match resolve_chatgpt_client_id(client_id) {
+        Ok(client_id) => client_id,
+        Err(err) => {
+            eprintln!("Error logging in: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
@@ -120,7 +156,7 @@ pub async fn login_with_chatgpt(
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(
         codex_home,
-        CLIENT_ID.to_string(),
+        configured_chatgpt_client_id()?,
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
@@ -279,7 +315,7 @@ pub async fn run_login_with_device_code(
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
-        client_id.unwrap_or(CLIENT_ID.to_string()),
+        chatgpt_client_id_or_exit(client_id),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     );
@@ -318,7 +354,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
-        client_id.unwrap_or(CLIENT_ID.to_string()),
+        chatgpt_client_id_or_exit(client_id),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     );

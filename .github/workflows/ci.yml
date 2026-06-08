@@ -7,6 +7,26 @@ on:
       - main
 
 jobs:
+  security:
+    name: Security hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: License and advisory check
+        run: cargo deny check
+      - name: Secret scan
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.24.3 \
+            dir /repo --config /repo/.gitleaks.toml --redact --exit-code=2 --no-banner --verbose
+
   rust:
     name: Rust (${{ matrix.os }})
     strategy:
@@ -43,6 +63,8 @@ jobs:
         run: brew install ffmpeg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch desktop sidecars
+        env:
+          YT_DLP_ALLOW_PLACEHOLDER: "1"
         run: make desktop-yt-dlp desktop-codex-check-stub
       - name: Format
         run: cargo fmt --all -- --check

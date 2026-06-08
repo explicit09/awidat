@@ -2,13 +2,54 @@ use super::sanitize_user_agent;
 use super::*;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::env;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 #[test]
+#[serial_test::serial(codex_auth_env)]
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;
     let prefix = format!("{originator}/");
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+#[serial_test::serial(codex_auth_env)]
+fn codex_user_agent_uses_configured_codex_cli_version() {
+    let _guard = EnvVarGuard::set(MONTAGE_CODEX_CLI_VERSION_ENV_VAR, "1.2.3");
+    let user_agent = get_codex_user_agent();
+    let originator = originator().value;
+    let prefix = format!("{originator}/1.2.3 ");
+    assert!(
+        user_agent.starts_with(&prefix),
+        "user agent should start with {prefix:?}, got {user_agent:?}"
+    );
 }
 
 #[test]
@@ -33,6 +74,7 @@ fn is_first_party_chat_originator_matches_known_values() {
 }
 
 #[tokio::test]
+#[serial_test::serial(codex_auth_env)]
 async fn test_create_client_sets_default_headers() {
     skip_if_no_network!();
 
@@ -113,6 +155,7 @@ fn test_invalid_suffix_is_sanitized2() {
 
 #[test]
 #[cfg(target_os = "macos")]
+#[serial_test::serial(codex_auth_env)]
 fn test_macos() {
     use regex_lite::Regex;
     let user_agent = get_codex_user_agent();

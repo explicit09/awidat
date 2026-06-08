@@ -817,8 +817,13 @@ async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
+    let client_id = configured_montage_oauth_client_id().ok_or_else(|| {
+        RefreshTokenError::Transient(std::io::Error::other(format!(
+            "ChatGPT OAuth refresh is not configured. Set {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} to the sanctioned client id used for login."
+        )))
+    })?;
     let refresh_request = RefreshRequest {
-        client_id: CLIENT_ID,
+        client_id,
         grant_type: "refresh_token",
         refresh_token,
     };
@@ -913,7 +918,7 @@ fn extract_refresh_token_error_code(body: &str) -> Option<String> {
 
 #[derive(Serialize)]
 struct RefreshRequest {
-    client_id: &'static str,
+    client_id: String,
     grant_type: &'static str,
     refresh_token: String,
 }
@@ -925,8 +930,13 @@ struct RefreshResponse {
     refresh_token: Option<String>,
 }
 
-// Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const MONTAGE_OAUTH_CLIENT_ID_ENV_VAR: &str = "MONTAGE_OAUTH_CLIENT_ID";
+
+pub fn configured_montage_oauth_client_id() -> Option<String> {
+    std::env::var(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
 
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)

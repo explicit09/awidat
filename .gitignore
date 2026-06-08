@@ -3,6 +3,12 @@ target/
 .DS_Store
 .claude/
 
+# Local document artifacts.
+*.pptx
+*.docx
+*.xlsx
+*.pyc
+
 # Local secrets and credentials.
 .env
 .env.*
