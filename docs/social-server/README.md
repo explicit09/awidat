@@ -245,6 +245,25 @@ each person's own Supabase access token as `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN
 Keep everyone else without a role. `Viewer` can read but cannot schedule,
 cancel, retry, connect, or disconnect publishing accounts.
 
+Example allowlist seed:
+
+```sql
+INSERT INTO workspace_member_roles (workspace_id, user_id, payload_json)
+VALUES
+  (
+    'workspace_short_form',
+    '<your-supabase-user-id>',
+    '{"workspace_id":"workspace_short_form","user_id":"<your-supabase-user-id>","role":"owner"}'
+  ),
+  (
+    'workspace_short_form',
+    '<cohost-supabase-user-id>',
+    '{"workspace_id":"workspace_short_form","user_id":"<cohost-supabase-user-id>","role":"publisher"}'
+  )
+ON CONFLICT (workspace_id, user_id) DO UPDATE SET
+  payload_json = EXCLUDED.payload_json;
+```
+
 ---
 
 ## Railway alternative

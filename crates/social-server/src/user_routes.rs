@@ -1,11 +1,11 @@
 //! Phase 5 user-facing routes — the API surface the desktop client calls.
 //!
-//! These mirror the `SocialApi` facade methods one-for-one. They are authed by
-//! a single-user **desktop dev bearer** (`DESKTOP_AUTH_TOKEN`) that maps to a
-//! fixed `ApiActor`/`ApiOwner` (`DESKTOP_USER_ID`). Phase 7 replaces this with
-//! real Supabase Auth; until then the bearer is a static dev token the server
-//! also accepts. No secret (client_secret / refresh token / access token) is
-//! ever returned — the `SocialApi` DTOs are already redaction-tested.
+//! These mirror the `SocialApi` facade methods one-for-one. In multi-user
+//! deployments, they authenticate the desktop-forwarded Supabase bearer and
+//! load workspace roles from `workspace_member_roles`. In local single-user
+//! development, they can fall back to the static desktop dev bearer. No secret
+//! (client_secret / refresh token / access token) is ever returned — the
+//! `SocialApi` DTOs are already redaction-tested.
 //!
 //! The sync `SocialApi` runs on the blocking pool via `spawn_blocking`, exactly
 //! like the internal routes.
