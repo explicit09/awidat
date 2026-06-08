@@ -5,6 +5,17 @@ Status: pending.
 Record dated evidence here before marking YouTube verified in
 `docs/social-server/live-evidence-manifest.json`.
 
+Evidence file naming:
+- Store dated artifacts in this folder with a `YYYY-MM-DD-` prefix.
+- Keep screenshots, logs, JSON excerpts, and cleanup notes grouped by the same
+  date prefix so the manifest update is auditable.
+
+Redaction:
+- Do not commit tokens, refresh tokens, client secrets, service keys, bearer
+  headers, cookies, or private OAuth callback query values.
+- Redact account emails and non-test personal identifiers unless they are
+  already public provider handles needed to prove the selected account.
+
 Required evidence:
 - OAuth sign-in: screenshot or JSON showing `social_accounts` returns the connected YouTube test channel without tokens.
 - Selected account: screenshot or JSON showing the chosen YouTube account id in the product surface.

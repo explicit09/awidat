@@ -79,6 +79,9 @@ for (const entry of manifest.providers) {
   assert.match(evidenceIndex, /social_retry_job/);
   assert.match(evidenceIndex, /social_cancel_job/);
   assert.match(evidenceIndex, /provider URL/i);
+  assert.match(evidenceIndex, /Redaction/i);
+  assert.match(evidenceIndex, /Do not commit tokens/i);
+  assert.match(evidenceIndex, /YYYY-MM-DD/i);
   for (const check of requiredChecks) {
     assert.equal(
       typeof entry.checks[check],
