@@ -1033,6 +1033,18 @@ mod compose_tests {
     }
 
     #[test]
+    fn simple_chat_turn_stays_plain_user_input() {
+        let out = compose_turn_input(None, "how are you");
+        assert_eq!(out, "how are you");
+        assert!(
+            !out.contains("AGENTS.md")
+                && !out.contains("<skills_catalog>")
+                && !out.contains("Project conventions"),
+            "plain chat turns must not replay session context in the user input: {out}"
+        );
+    }
+
+    #[test]
     fn no_fragments_returns_input_only() {
         let out = compose_turn_input(None, "hello");
         assert_eq!(out, "hello");

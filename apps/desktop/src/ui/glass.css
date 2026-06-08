@@ -507,13 +507,6 @@ html, body, #root { background: #0a0a12; }
 .stage-convo .markdown table {
   width: 100%;
 }
-.stage-convo .sticky-user-prompt {
-  background: rgba(255,255,255,0.04);
-  border-color: rgba(255,255,255,0.10);
-  border-radius: 8px;
-  box-shadow: none;
-}
-
 .stage-chat-icon {
   display: grid;
   width: 26px;

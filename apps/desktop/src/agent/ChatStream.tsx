@@ -10,7 +10,6 @@ import type { Item } from "../protocol";
 import { useAgentStore } from "./store";
 import { ApprovalCard } from "./ApprovalCard";
 import { UserInputCard } from "./UserInputCard";
-import { JobCard } from "./JobCard";
 import { useProjectStore } from "../app/state";
 import { EmptyState } from "../app/EmptyState";
 import { EmptyConversation } from "./EmptyConversation";
@@ -19,11 +18,20 @@ import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { isMontageSentinel } from "../state/introState";
 import { RationaleHint } from "../ui/components/RationaleHint";
+import {
+  activityGroupLabel,
+  activityStatus,
+  groupActivityItems,
+  jobLabel,
+  jobResultText,
+  type ActivityItem,
+} from "./chatActivity";
 import { visibleChatItems } from "./chatDisplay";
 
 export function ChatStream() {
   const rawItems = useAgentStore((s) => s.items);
   const items = useMemo(() => visibleChatItems(rawItems), [rawItems]);
+  const displayItems = useMemo(() => groupActivityItems(items), [items]);
   const running = useAgentStore((s) => s.running);
   const turnError = useAgentStore((s) => s.turnError);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -35,7 +43,6 @@ export function ChatStream() {
     s.snapshot.tracks.some((track) => track.items.length > 0),
   );
   const timelineRefreshing = useTimelineStore((s) => s.refreshing);
-  const activePrompt = useMemo(() => latestUserPrompt(items), [items]);
 
   useEffect(() => {
     if (!shouldFollowRef.current) return;
@@ -59,12 +66,6 @@ export function ChatStream() {
       className="chat-items"
       aria-live="polite"
     >
-      {activePrompt && (
-        <div className="sticky-user-prompt">
-          <span>Replying to</span>
-          <p>{activePrompt}</p>
-        </div>
-      )}
       {items.length === 0 &&
         !running &&
         !turnError &&
@@ -80,8 +81,12 @@ export function ChatStream() {
       {items.length === 0 && !running && !turnError && !projectReady && (
         <EmptyConversation />
       )}
-      {items.map((item) => (
-        <ItemView key={item.id} item={item} />
+      {displayItems.map((entry) => (
+        entry.kind === "activity_group" ? (
+          <ActivityGroupView key={entry.id} items={entry.items} />
+        ) : (
+          <ItemView key={entry.item.id} item={entry.item} />
+        )
       ))}
       {turnError && (
         <article className="item item-error">
@@ -92,22 +97,6 @@ export function ChatStream() {
       <div ref={bottomRef} aria-hidden="true" />
     </div>
   );
-}
-
-function latestUserPrompt(items: Item[]): string | null {
-  for (let i = items.length - 1; i >= 0; i -= 1) {
-    const item = items[i];
-    if (
-      item.kind === "user_input" &&
-      item.text.trim() &&
-      !isMontageSentinel(item.text)
-    ) {
-      const hasReplyAfter = items.slice(i + 1).some((next) => next.kind !== "user_input");
-      if (!hasReplyAfter) return null;
-      return summarizeText(item.text, 160);
-    }
-  }
-  return null;
 }
 
 function ItemView({ item }: { item: Item }) {
@@ -138,7 +127,7 @@ function ItemView({ item }: { item: Item }) {
         </article>
       );
     case "tool_call":
-      return <ToolCallItem item={item} />;
+      return <ActivityGroupView items={[item]} />;
     case "plan":
       return (
         <article className="item item-plan">
@@ -161,7 +150,7 @@ function ItemView({ item }: { item: Item }) {
     case "approval_request":
       return <ApprovalCard item={item} />;
     case "job":
-      return <JobCard item={item} />;
+      return <ActivityGroupView items={[item]} />;
     case "proposed_edit": {
       // Compact reference card. The actual ghost overlay lives on
       // the timeline canvas; this card just acknowledges in chat
@@ -200,6 +189,73 @@ function ItemView({ item }: { item: Item }) {
         </article>
       );
   }
+}
+
+function ActivityGroupView({ items }: { items: ActivityItem[] }) {
+  const runningCount = items.filter((item) => activityStatus(item) === "running").length;
+  const failedCount = items.filter((item) => activityStatus(item) === "failed").length;
+  const openByDefault = runningCount > 0 || failedCount > 0;
+  const label = activityGroupLabel(items);
+  const status = failedCount > 0 ? "failed" : runningCount > 0 ? "running" : "done";
+
+  return (
+    <article className={`item item-activity item-activity-${status}`}>
+      <details className="activity-details" open={openByDefault}>
+        <summary className="activity-summary-row">
+          <span className="activity-kind">activity</span>
+          <span className={`activity-dot activity-dot-${status}`} aria-hidden />
+          <span className="activity-summary-text">{label}</span>
+          <span className={`activity-status activity-status-${status}`}>{status}</span>
+        </summary>
+        <div className="activity-detail-body">
+          {items.map((item) =>
+            item.kind === "tool_call" ? (
+              <ToolCallItem key={item.id} item={item} />
+            ) : (
+              <JobActivityRow key={item.id} item={item} />
+            ),
+          )}
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function JobActivityRow({ item }: { item: Extract<Item, { kind: "job" }> }) {
+  const status = activityStatus(item);
+  const resultSummary =
+    item.result && typeof item.result === "object"
+      ? "ok" in item.result
+        ? item.result.ok.summary
+        : item.result.err.message
+      : null;
+  return (
+    <details className="activity-row">
+      <summary className="activity-row-summary">
+        <span className={`activity-dot activity-dot-${status}`} aria-hidden />
+        <span className="activity-row-kind">job</span>
+        <code>{jobLabel(item.job_kind)}</code>
+        <span className="activity-row-text">
+          {item.status}
+          {resultSummary ? ` · ${summarizeText(resultSummary, 96)}` : ""}
+        </span>
+      </summary>
+      <div className="activity-row-detail">
+        <dl>
+          <dt>Status</dt>
+          <dd>{item.status}</dd>
+          <dt>Result</dt>
+          <dd>{jobResultText(item)}</dd>
+          {item.output_path && (
+            <>
+              <dt>Output</dt>
+              <dd>{item.output_path}</dd>
+            </>
+          )}
+        </dl>
+      </div>
+    </details>
+  );
 }
 
 function ToolCallItem({

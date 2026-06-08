@@ -221,40 +221,6 @@ button {
     var(--bg);
 }
 
-.sticky-user-prompt {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(239, 68, 68, 0.11), rgba(239, 68, 68, 0.035)),
-    rgba(12, 17, 24, 0.96);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
-  padding: 7px 10px;
-  backdrop-filter: blur(10px);
-}
-
-.sticky-user-prompt span {
-  color: var(--accent);
-  display: block;
-  font-size: 9px;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  margin-bottom: 3px;
-}
-
-.sticky-user-prompt p {
-  margin: 0;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 .chat-empty {
   color: var(--text-muted);
   text-align: center;
@@ -686,6 +652,183 @@ button {
 
 .item-error .item-meta {
   color: var(--err);
+}
+
+.item-activity {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.activity-details {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  background: rgba(18, 18, 18, 0.42);
+  overflow: hidden;
+}
+
+.activity-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--color-text-muted);
+}
+
+.activity-summary-row::-webkit-details-marker,
+.activity-row-summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-summary-row::before,
+.activity-row-summary::before {
+  content: "›";
+  color: var(--color-text-muted);
+  transition: transform 120ms ease;
+}
+
+.activity-details[open] > .activity-summary-row::before,
+.activity-row[open] > .activity-row-summary::before {
+  transform: rotate(90deg);
+}
+
+.activity-kind,
+.activity-row-kind {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.activity-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: var(--color-text-muted);
+}
+
+.activity-dot-running {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(111, 183, 255, 0.45);
+}
+
+.activity-dot-done {
+  background: var(--ok);
+}
+
+.activity-dot-failed {
+  background: var(--err);
+}
+
+.activity-dot-cancelled {
+  background: var(--color-text-muted);
+}
+
+.activity-summary-text,
+.activity-row-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.activity-status {
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.activity-status-done {
+  background: rgba(95, 207, 114, 0.12);
+  color: var(--ok);
+}
+
+.activity-status-running {
+  background: rgba(111, 183, 255, 0.13);
+  color: var(--accent);
+}
+
+.activity-status-failed {
+  background: rgba(255, 107, 97, 0.12);
+  color: var(--err);
+}
+
+.activity-detail-body {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px;
+}
+
+.activity-detail-body .item-tool {
+  margin: 0;
+  border-radius: 8px;
+  background: rgba(12, 12, 14, 0.52);
+}
+
+.activity-row {
+  min-width: 0;
+  border-radius: 8px;
+  background: rgba(12, 12, 14, 0.52);
+}
+
+.activity-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.activity-row-summary code {
+  background: var(--bg-elev2);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+
+.activity-row-detail {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 8px 10px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.activity-row-detail dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.activity-row-detail dt {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.activity-row-detail dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
 }
 
 /* Tool calls are activity-log rows by default. Completed tool output
@@ -5484,14 +5627,6 @@ button {
 .item-tool-error {
   border-color: rgba(239, 113, 104, 0.65);
   background: rgba(60, 18, 16, 0.24);
-}
-
-.sticky-user-prompt {
-  border-color: rgba(91, 211, 217, 0.45);
-  background:
-    linear-gradient(180deg, rgba(91, 211, 217, 0.14), rgba(91, 211, 217, 0.04)),
-    rgba(8, 10, 8, 0.96);
-  border-radius: var(--radius-md);
 }
 
 .composer {
