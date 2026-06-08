@@ -14,6 +14,11 @@ sidecar is absent. Build the active-target sidecar with:
 make desktop-codex
 ```
 
+CI compile checks use `make desktop-codex-check-stub` to satisfy
+Tauri's externalBin path validation without rebuilding the full Codex
+CLI for every Rust check. Do not use that stub for a runnable desktop
+app or release package.
+
 Files this dir should contain (per platform target):
 
 | Triple                         | Filename                              |

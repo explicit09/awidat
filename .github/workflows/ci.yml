@@ -43,7 +43,7 @@ jobs:
         run: brew install ffmpeg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch desktop sidecars
-        run: make desktop-yt-dlp
+        run: make desktop-yt-dlp desktop-codex-check-stub
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
