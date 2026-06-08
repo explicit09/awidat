@@ -51,12 +51,20 @@ impl XClient {
     }
 
     pub fn from_env_or_keychain(config: XClientConfig) -> Result<Option<Self>, XTrendError> {
-        let Some(token) = montage_secrets::get(
-            montage_secrets::env_vars::X_BEARER_TOKEN,
-            montage_secrets::accounts::X_BEARER_TOKEN,
+        Self::from_token_lookup(
+            montage_secrets::get(
+                montage_secrets::env_vars::X_BEARER_TOKEN,
+                montage_secrets::accounts::X_BEARER_TOKEN,
+            ),
+            config,
         )
-        .map_err(|error| XTrendError::Secret(error.to_string()))?
-        else {
+    }
+
+    fn from_token_lookup(
+        lookup: Result<Option<String>, impl std::fmt::Display>,
+        config: XClientConfig,
+    ) -> Result<Option<Self>, XTrendError> {
+        let Ok(Some(token)) = lookup else {
             return Ok(None);
         };
         Self::new(token, config).map(Some)
@@ -301,7 +309,7 @@ fn keywords_for_query(query: &str) -> Vec<String> {
         query
             .split(|ch: char| !ch.is_alphanumeric())
             .map(str::trim)
-            .filter(|word| word.len() >= 3)
+            .filter(|word| word.len() >= 4)
             .map(str::to_string),
     );
     keywords.sort();
@@ -329,6 +337,17 @@ fn truncate(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct TestError;
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("test keychain unavailable")
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
     #[test]
     fn missing_credentials_reports_read_setup_and_publish_handoff() {
         let context = missing_credentials_context(vec!["AI agents".to_string()]);
@@ -343,6 +362,15 @@ mod tests {
             "plan_short_form_review.trend_context"
         );
         assert!(context.usage.note.contains("X_BEARER_TOKEN"));
+    }
+
+    #[test]
+    fn backend_secret_errors_are_treated_as_missing_credentials() {
+        let lookup: Result<Option<String>, TestError> = Err(TestError);
+
+        let client = XClient::from_token_lookup(lookup, XClientConfig::default());
+
+        assert!(matches!(client, Ok(None)));
     }
 
     #[test]
@@ -381,5 +409,14 @@ mod tests {
         assert!(signal.keywords.contains(&"coding".to_string()));
         assert_eq!(signal.weight, 0.9);
         assert_eq!(signal.evidence[0].post_id, "1");
+    }
+
+    #[test]
+    fn query_keywords_keep_phrase_but_skip_broad_short_tokens() {
+        let keywords = keywords_for_query("app store policy");
+
+        assert!(keywords.contains(&"app store policy".to_string()));
+        assert!(keywords.contains(&"store".to_string()));
+        assert!(!keywords.contains(&"app".to_string()));
     }
 }

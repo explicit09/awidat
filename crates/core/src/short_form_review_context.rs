@@ -69,7 +69,10 @@ pub(crate) fn trend_alignment(
         };
     }
 
-    let haystack = format!("{} {} {}", moment.kind, moment.text, moment.reason).to_lowercase();
+    let haystack = normalized_terms(&format!(
+        "{} {} {}",
+        moment.kind, moment.text, moment.reason
+    ));
     let mut matches: Vec<MatchedTrendSignal> = signals
         .into_iter()
         .filter_map(|signal| {
@@ -212,19 +215,34 @@ fn trend_signals(context: &serde_json::Value) -> Vec<TrendSignal> {
         .collect()
 }
 
-fn trend_signal_score(haystack: &str, signal: &TrendSignal) -> f64 {
+fn trend_signal_score(haystack: &[String], signal: &TrendSignal) -> f64 {
     let mut hits = 0.0;
     for keyword in &signal.keywords {
-        let keyword = keyword.trim().to_lowercase();
-        if keyword.len() >= 3 && haystack.contains(&keyword) {
-            hits += if keyword.split_whitespace().count() > 1 {
-                0.65
-            } else {
-                0.35
-            };
+        let keyword_terms = normalized_terms(keyword);
+        if keyword_terms.is_empty() {
+            continue;
+        }
+        if terms_contain_phrase(haystack, &keyword_terms) {
+            hits += if keyword_terms.len() > 1 { 0.65 } else { 0.35 };
         }
     }
     round2((hits * signal.weight).clamp(0.0, 1.0))
+}
+
+fn normalized_terms(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn terms_contain_phrase(haystack: &[String], phrase: &[String]) -> bool {
+    !phrase.is_empty()
+        && phrase.len() <= haystack.len()
+        && haystack
+            .windows(phrase.len())
+            .any(|window| window.iter().zip(phrase).all(|(left, right)| left == right))
 }
 
 fn visual_moment_kind(kind: &str, text: &str) -> String {
@@ -282,4 +300,33 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trend_alignment_does_not_match_keyword_inside_unrelated_word() {
+        let context = serde_json::json!({
+            "signals": [{
+                "source": "x",
+                "label": "app store policy",
+                "keywords": ["app"],
+                "weight": 0.9,
+                "reason": "recent X search"
+            }]
+        });
+
+        let alignment = trend_alignment(
+            &context,
+            TrendMoment {
+                kind: "thesis",
+                text: "That happened because review work moved upstream.",
+                reason: "standalone explanation",
+            },
+        );
+
+        assert!(!alignment.matched);
+    }
 }
