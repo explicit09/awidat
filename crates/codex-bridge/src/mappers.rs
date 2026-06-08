@@ -72,7 +72,7 @@ pub fn map_notification(
                 .flatten()
                 .map(|step| PlanStep {
                     step: string_at(step, "step"),
-                    status: string_at(step, "status"),
+                    status: plan_status(&string_at(step, "status")).to_string(),
                 })
                 .collect::<Vec<_>>();
             vec![Item::Plan {
@@ -335,6 +335,14 @@ fn i64_at(value: &serde_json::Value, key: &str) -> i64 {
     value[key].as_i64().unwrap_or_default()
 }
 
+fn plan_status(status: &str) -> &str {
+    match status {
+        "inProgress" | "in_progress" => "in_progress",
+        "completed" => "completed",
+        _ => "pending",
+    }
+}
+
 fn reasoning_buffer_key(item_id: &str, content_index: i64) -> String {
     format!("{REASONING_PREFIX}-{item_id}-{content_index}")
 }
@@ -418,6 +426,35 @@ mod tests {
                 assert_eq!(*phase, ItemLifecycle::Completed);
             }
             other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn turn_plan_updated_normalizes_wire_statuses() {
+        let mut buffers = HashMap::new();
+        let items = map_notification(
+            &notification(
+                "turn/plan/updated",
+                json!({
+                    "plan": [
+                        {"step": "queued", "status": "pending"},
+                        {"step": "running", "status": "inProgress"},
+                        {"step": "done", "status": "completed"}
+                    ],
+                    "explanation": "working"
+                }),
+            ),
+            &mut buffers,
+        );
+
+        match &items[0] {
+            Item::Plan { items, note, .. } => {
+                assert_eq!(items[0].status, "pending");
+                assert_eq!(items[1].status, "in_progress");
+                assert_eq!(items[2].status, "completed");
+                assert_eq!(note.as_deref(), Some("working"));
+            }
+            other => panic!("expected Plan, got {other:?}"),
         }
     }
 

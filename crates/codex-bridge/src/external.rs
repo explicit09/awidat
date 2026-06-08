@@ -52,8 +52,7 @@ impl ExternalAppServerClient {
         project_root: &Path,
         mcp_server_path: Option<PathBuf>,
     ) -> Result<(Self, mpsc::Receiver<ExternalServerEvent>), BridgeError> {
-        let codex_bin =
-            std::env::var("MONTAGE_CODEX_BIN").unwrap_or_else(|_| DEFAULT_CODEX_BIN.to_string());
+        let codex_bin = resolve_codex_bin();
         let args = app_server_args(mcp_server_path.as_deref(), project_root);
         let mut command = Command::new(codex_bin);
         command
@@ -190,6 +189,38 @@ pub fn app_server_args(mcp_server_path: Option<&Path>, project_root: &Path) -> V
 fn format_toml_string_override(key: &str, path: &Path) -> String {
     let value = toml::Value::String(path.display().to_string()).to_string();
     format!("{key}={value}")
+}
+
+fn resolve_codex_bin() -> PathBuf {
+    if let Some(path) = std::env::var_os("MONTAGE_CODEX_BIN").map(PathBuf::from) {
+        return path;
+    }
+    if let Some(path) = bundled_codex_bin() {
+        return path;
+    }
+    PathBuf::from(DEFAULT_CODEX_BIN)
+}
+
+fn bundled_codex_bin() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+    for name in bundled_codex_binary_names() {
+        let candidate = parent.join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn bundled_codex_binary_names() -> [&'static str; 2] {
+    ["codex.exe", "codex"]
+}
+
+#[cfg(not(windows))]
+fn bundled_codex_binary_names() -> [&'static str; 1] {
+    ["codex"]
 }
 
 async fn read_stdout(
