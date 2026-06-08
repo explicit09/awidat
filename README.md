@@ -105,6 +105,14 @@ Montage resolves the Python workspace from `MONTAGE_PYTHON_ROOT`, by walking up 
 
 Some indexers download large model weights on first use. See `python/SMOKE.md` for low-cost smoke testing and notes on model/API-key requirements.
 
+## Privacy and data egress
+
+Montage is local-first, but configured model providers, transcription services,
+generated-media providers, and publishing integrations can receive prompts,
+transcripts, audio, media-derived metadata, rendered files, or account metadata.
+Review `PRIVACY.md` before importing sensitive media or connecting external
+accounts.
+
 ## Development Checks
 
 For compile, lint, and formatting coverage:
