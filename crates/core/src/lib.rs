@@ -92,6 +92,7 @@ pub mod understanding;
 pub mod vc;
 pub mod verify;
 pub mod visual_signals;
+pub mod x_trends;
 
 pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;

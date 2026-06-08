@@ -2,7 +2,10 @@
 
 Montage is a terminal-first, agent-native video editing harness. It combines a Rust CLI/TUI, a Tauri desktop app, Python MCP indexers, and bundled editorial skills so an agent can inspect footage, reason about edits, propose timeline changes, and render previews.
 
-The project is early-stage and optimized for local development on macOS and Linux.
+This repository is a developer-preview source release. It is intended for
+contributors who can build and run the project from source. The consumer installers
+are not ready yet; release packaging, signing, notarization, auto-update, and
+bundled runtime polish are deferred to the consumer-release track.
 
 ## What is in this repo
 
@@ -11,6 +14,16 @@ The project is early-stage and optimized for local development on macOS and Linu
 - `python/` - `uv` workspace for MCP indexers such as Whisper transcription, scene detection, audio energy, face/gaze detection, CLIP frame search, shot classification, and color analysis.
 - `skills/` - bundled editorial workflows exposed through `montage skills`.
 - `docs/` - design notes and research.
+
+## Project Documents
+
+- `CONTRIBUTING.md` - contribution setup, checks, and pull request guidance.
+- `CODE_OF_CONDUCT.md` - expected community behavior.
+- `SECURITY.md` - private vulnerability reporting process.
+- `PRIVACY.md` - local-first scope and data-egress disclosure.
+- `THIRD_PARTY_NOTICES.md` - third-party license and provenance notes.
+- `ARCHITECTURE.md` - high-level source layout and data flow.
+- `CHANGELOG.md` - release notes and unreleased changes.
 
 ## Prerequisites
 
@@ -105,6 +118,14 @@ Montage resolves the Python workspace from `MONTAGE_PYTHON_ROOT`, by walking up 
 
 Some indexers download large model weights on first use. See `python/SMOKE.md` for low-cost smoke testing and notes on model/API-key requirements.
 
+## Privacy and data egress
+
+Montage is local-first, but configured model providers, transcription services,
+generated-media providers, and publishing integrations can receive prompts,
+transcripts, audio, media-derived metadata, rendered files, or account metadata.
+Review `PRIVACY.md` before importing sensitive media or connecting external
+accounts.
+
 ## Development Checks
 
 For normal app/core iteration, use the Montage-only Rust lane:
@@ -127,6 +148,12 @@ vendored Codex workspace:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace --all-targets
+```
+
+For targeted Rust tests, prefer the touched crate first:
+
+```bash
+cargo test -p <crate>
 ```
 
 For the desktop frontend:

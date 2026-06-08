@@ -106,10 +106,10 @@ Find it in Supabase → Settings → Database → Connection string → Session 
 
 ### Multi-tenant: the `montage_social` schema (IMPORTANT)
 
-Montage shares a single Supabase project (`technologia-builder-network`) with other
-products to keep costs down (one DB / auth / compute). Montage's tables live in a
-dedicated **`montage_social` Postgres schema**, isolated from the host app's
-`public` tables. Because `PgSocialStore` issues unqualified table names, the
+Montage can share a Supabase project with other products to keep costs down
+(one DB / auth / compute). Montage's tables live in a dedicated
+**`montage_social` Postgres schema**, isolated from the host app's `public`
+tables. Because `PgSocialStore` issues unqualified table names, the
 `DATABASE_URL` **must** pin the connection's search_path to that schema:
 
 ```
@@ -120,10 +120,9 @@ dedicated **`montage_social` Postgres schema**, isolated from the host app's
 `postgres`/service role is shared with the host app, which needs `public`. The
 per-connection `options` param scopes the search_path to the Montage server only.
 
-For the **current shared project** (`technologia-builder-network`,
-ref `vgkocfbtkzmpklruqmsx`, region `us-east-1`):
-- `SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co`
-- Schema `montage_social` + all 9 tables + `pg_cron`/`pg_net` are already applied.
+For your Supabase project:
+- `SUPABASE_URL=https://<project-ref>.supabase.co`
+- Schema `montage_social` + all required tables + `pg_cron`/`pg_net` must be applied.
 - RLS is enabled deny-all on every `montage_social` table; the service-role
   connection bypasses it (the server is the trusted authorization point).
 - `SUPABASE_JWT_SECRET`: Supabase → Settings → API → JWT Settings → JWT Secret

@@ -35,6 +35,7 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const OPENAI_PROVIDER_VERSION: &str = "0.128.0";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_4_MODEL_ID: &str = "openai.gpt-5.4";
@@ -327,7 +328,7 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [("version".to_string(), "0.128.0".to_string())]
+                [("version".to_string(), OPENAI_PROVIDER_VERSION.to_string())]
                     .into_iter()
                     .collect(),
             ),

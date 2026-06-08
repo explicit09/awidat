@@ -83,6 +83,18 @@ export function AuthChooser() {
 
             {error ? <ErrorBox message={error} /> : null}
 
+            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)" }}>
+              Review the{" "}
+              <a
+                href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+                target="_blank"
+                rel="noreferrer"
+              >
+                privacy policy
+              </a>{" "}
+              before connecting accounts or sending media-derived context to model providers.
+            </span>
+
             <OptionCard
               title="Sign in with ChatGPT"
               wallet="Uses your ChatGPT plan"

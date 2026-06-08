@@ -35,6 +35,7 @@ use std::sync::RwLock;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+pub const MONTAGE_CODEX_CLI_VERSION_ENV_VAR: &str = "MONTAGE_CODEX_CLI_VERSION";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
 pub use codex_config::ResidencyRequirement;
@@ -131,15 +132,10 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    // Montage fork edit: OpenAI's gateway checks the codex CLI version
-    // in the User-Agent before letting gpt-5.5 through. The vendored
-    // codex login crate inherits Montage's workspace package version
-    // (0.1.0), which the server reads as ancient. Stamp the current
-    // installed @openai/codex CLI version here so the request passes
-    // policy. Bump when refreshing the fork.
-    // See vendor/codex-rs/SOURCE for context.
-    let build_version = "0.128.0";
-    let _suppress_unused_pkg_version: &str = env!("CARGO_PKG_VERSION");
+    let build_version = std::env::var(MONTAGE_CODEX_CLI_VERSION_ENV_VAR)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
