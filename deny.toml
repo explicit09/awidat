@@ -1,0 +1,66 @@
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2024-0320", reason = "Transitive via syntect/two-face in vendored Codex TUI; replace when upstream Codex moves off yaml-rust." },
+  { id = "RUSTSEC-2024-0370", reason = "Transitive unmaintained proc-macro-error in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2024-0388", reason = "Transitive unmaintained derivative in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2024-0411", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0412", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0413", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0414", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0415", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0416", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0417", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0418", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0419", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0420", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
+  { id = "RUSTSEC-2024-0436", reason = "Transitive unmaintained paste in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2025-0057", reason = "Transitive unmaintained fxhash in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2025-0075", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
+  { id = "RUSTSEC-2025-0080", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
+  { id = "RUSTSEC-2025-0081", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
+  { id = "RUSTSEC-2025-0098", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
+  { id = "RUSTSEC-2025-0100", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
+  { id = "RUSTSEC-2025-0141", reason = "Transitive bincode advisory in vendored/current dependency graph; tracked for upstream dependency update." },
+  { id = "RUSTSEC-2026-0097", reason = "Current rand advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
+  { id = "RUSTSEC-2026-0118", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
+  { id = "RUSTSEC-2026-0119", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
+  { id = "RUSTSEC-2026-0173", reason = "Transitive unmaintained proc-macro-error2 in current dependency graph; tracked as follow-up dependency cleanup." },
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+  "https://github.com/dzbarsky/rules_rust",
+  "https://github.com/explicit09/vedit.git",
+  "https://github.com/helix-editor/nucleo.git",
+  "https://github.com/juberti-oai/rust-sdks.git",
+  "https://github.com/nornagon/crossterm",
+  "https://github.com/nornagon/ratatui",
+  "https://github.com/openai-oss-forks/tokio-tungstenite",
+  "https://github.com/openai-oss-forks/tungstenite-rs",
+]
+
+[bans]
+# This task establishes license/advisory/source gates. Duplicate dependency
+# cleanup is noisy in the vendored Codex/Tauri graph and should be handled as a
+# separate dependency-consolidation effort.
+multiple-versions = "allow"
