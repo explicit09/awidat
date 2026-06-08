@@ -38,6 +38,7 @@
 //!   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
 //!   DESKTOP_USER_ID         — (Phase 5) fixed user id the dev bearer maps to (default "desktop-user")
 //!   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs; server-only
+//!   SOCIAL_ALLOWED_USER_IDS — optional comma-separated Supabase user ids allowed to use /social/*
 
 mod artifact_source;
 mod supabase_jwt;
@@ -143,6 +144,10 @@ pub(crate) struct ServerConfig {
     // roles. When empty, the routes fall back to the single-user dev bearer
     // above. Server-only; never shipped to the desktop.
     pub(crate) supabase_jwt_secret: String,
+    // Optional product-level gate for limited-access social publishing.
+    // Empty means auth + workspace roles decide access. When populated, /social/*
+    // rejects authenticated users whose id is not listed here.
+    pub(crate) social_allowed_user_ids: Vec<String>,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -221,6 +226,7 @@ async fn main() {
     let desktop_user_id =
         std::env::var("DESKTOP_USER_ID").unwrap_or_else(|_| "desktop-user".into());
     let supabase_jwt_secret = std::env::var("SUPABASE_JWT_SECRET").unwrap_or_default();
+    let social_allowed_user_ids = social_allowed_user_ids();
 
     info!(
         social_firing_enabled,
@@ -296,6 +302,7 @@ async fn main() {
             desktop_auth_token,
             desktop_user_id,
             supabase_jwt_secret,
+            social_allowed_user_ids,
         },
     });
 
@@ -402,6 +409,16 @@ fn db_pool_max_size() -> u32 {
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(4)
+}
+
+fn social_allowed_user_ids() -> Vec<String> {
+    std::env::var("SOCIAL_ALLOWED_USER_IDS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Maximum YouTube Data API uploads per day per project (hard Google quota).
@@ -2284,6 +2301,7 @@ mod tests {
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
             supabase_jwt_secret: String::new(),
+            social_allowed_user_ids: Vec::new(),
         };
         assert_eq!(
             redirect_uri(&config, &Provider::YouTube),
@@ -2316,6 +2334,7 @@ mod tests {
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
             supabase_jwt_secret: String::new(),
+            social_allowed_user_ids: Vec::new(),
         };
 
         assert_eq!(

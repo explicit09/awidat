@@ -35,6 +35,7 @@ for (const envName of [
   "INSTAGRAM_CLIENT_SECRET",
   "TWITTER_X_CLIENT_ID",
   "TWITTER_X_CLIENT_SECRET",
+  "SOCIAL_ALLOWED_USER_IDS",
 ]) {
   assert.match(
     readme,

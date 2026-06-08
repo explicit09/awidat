@@ -55,6 +55,9 @@ async fn desktop_auth(
     headers: &HeaderMap,
 ) -> Result<(ApiActor, ApiOwner), HttpError> {
     let user_id = authenticated_user_id(state, headers)?;
+    if !social_user_allowed(&user_id, &state.config.social_allowed_user_ids) {
+        return Err(forbidden());
+    }
     let owner = target_owner_from_headers(&user_id, headers);
     let roles = if !state.config.supabase_jwt_secret.is_empty() {
         workspace_roles_for_user(state, &user_id).await?
@@ -93,6 +96,13 @@ fn unauthorized() -> HttpError {
     )
 }
 
+fn forbidden() -> HttpError {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error": "forbidden"})),
+    )
+}
+
 /// Extract the raw bearer value from the `Authorization` header, if present.
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
     headers
@@ -106,6 +116,10 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 /// token so a misconfigured deployment never accepts an empty bearer.
 fn desktop_token_ok(configured: &str, headers: &HeaderMap) -> bool {
     !configured.is_empty() && bearer_auth(headers, configured)
+}
+
+fn social_user_allowed(user_id: &str, allowed_user_ids: &[String]) -> bool {
+    allowed_user_ids.is_empty() || allowed_user_ids.iter().any(|allowed| allowed == user_id)
 }
 
 fn target_owner_from_headers(user_id: &str, headers: &HeaderMap) -> ApiOwner {
@@ -755,6 +769,25 @@ mod tests {
         // Empty configured token must never accept any bearer, even empty.
         assert!(!desktop_token_ok("", &headers_with_auth("Bearer ")));
         assert!(!desktop_token_ok("", &HeaderMap::new()));
+    }
+
+    #[test]
+    fn social_user_allowlist_allows_everyone_when_empty() {
+        assert!(social_user_allowed("user_1", &[]));
+    }
+
+    #[test]
+    fn social_user_allowlist_accepts_configured_user() {
+        let allowed = vec!["user_1".to_string(), "cohost_1".to_string()];
+
+        assert!(social_user_allowed("cohost_1", &allowed));
+    }
+
+    #[test]
+    fn social_user_allowlist_rejects_unlisted_user() {
+        let allowed = vec!["user_1".to_string(), "cohost_1".to_string()];
+
+        assert!(!social_user_allowed("random_user", &allowed));
     }
 
     #[test]

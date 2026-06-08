@@ -45,6 +45,7 @@ fi
 # set SUPABASE_JWT_SECRET here and use MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN on
 # each desktop instead.
 export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
+export SOCIAL_ALLOWED_USER_IDS="${SOCIAL_ALLOWED_USER_IDS:-}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
 export SERVICE_SHARED_SECRET="${SERVICE_SHARED_SECRET:-local-internal-token}"

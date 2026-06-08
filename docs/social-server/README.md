@@ -239,17 +239,26 @@ the current machine-readable evidence status in
 | `SOCIAL_TOKEN_KEY_ID` | Phase 2 | 2 | Key identifier stored alongside every token (e.g. "k1") |
 | `OAUTH_REDIRECT_BASE` | Phase 2 | 2 | Base URL for OAuth redirect URIs |
 | `SUPABASE_JWT_SECRET` | Yes for multi-user | 7 | Verifies desktop-forwarded Supabase Auth bearer tokens |
+| `SOCIAL_ALLOWED_USER_IDS` | No | 7 | Optional comma-separated Supabase user ids allowed to use `/social/*`; empty keeps current auth + workspace-role behavior |
 | `MONTAGE_SOCIAL_SERVER_URL` | Desktop only | 5 | Server base URL used by the desktop social client |
 | `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` | Desktop multi-user | 7 | Signed-in user's Supabase access token; preferred bearer for limited-access workspaces |
 | `MONTAGE_SOCIAL_AUTH_TOKEN` | Desktop dev only | 5 | Dev bearer for single-user fallback when `SUPABASE_JWT_SECRET` is unset |
 | `MONTAGE_SOCIAL_WORKSPACE_ID` | Desktop optional | 7 | Sends `x-montage-workspace-id`; use for shared limited-access publishing workspaces |
 
-For limited-access publishing, seed `workspace_member_roles` with only the
-allowed users. Give you and the co-host `Owner`, `Admin`, or `Publisher` roles
-for the workspace, set `MONTAGE_SOCIAL_WORKSPACE_ID` on each desktop, and pass
-each person's own Supabase access token as `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN`.
-Keep everyone else without a role. `Viewer` can read but cannot schedule,
-cancel, retry, connect, or disconnect publishing accounts.
+For limited-access publishing, set `SOCIAL_ALLOWED_USER_IDS` to the comma-
+separated Supabase user ids that may access `/social/*`, then seed
+`workspace_member_roles` with only those users. Give you and the co-host
+`Owner`, `Admin`, or `Publisher` roles for the workspace, set
+`MONTAGE_SOCIAL_WORKSPACE_ID` on each desktop, and pass each person's own
+Supabase access token as `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN`. Keep everyone
+else out of `SOCIAL_ALLOWED_USER_IDS` and without a workspace role. `Viewer` can
+read but cannot schedule, cancel, retry, connect, or disconnect publishing
+accounts.
+
+```bash
+fly secrets set --app montage-social \
+  SOCIAL_ALLOWED_USER_IDS="<your-supabase-user-id>,<cohost-supabase-user-id>"
+```
 
 Example allowlist seed:
 
