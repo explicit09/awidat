@@ -1,4 +1,4 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-codex desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
 MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
@@ -117,7 +117,36 @@ desktop-yt-dlp:
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 
-desktop: desktop-deps desktop-yt-dlp
+desktop-codex:
+	@target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest="apps/desktop/src-tauri/binaries/codex-$$target_triple"; \
+	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
+	    dest="$$dest.exe"; \
+	fi; \
+	cargo build -p codex-cli --bin codex --target "$$target_triple"; \
+	mkdir -p "$$(dirname "$$dest")"; \
+	cp "target/$$target_triple/debug/codex$$(if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then echo .exe; fi)" "$$dest"; \
+	chmod +x "$$dest"; \
+	echo "wrote $$dest"
+
+desktop-codex-check-stub:
+	@target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest="apps/desktop/src-tauri/binaries/codex-$$target_triple"; \
+	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
+	    dest="$$dest.exe"; \
+	fi; \
+	mkdir -p "$$(dirname "$$dest")"; \
+	printf '%s\n' '#!/bin/sh' 'echo "codex sidecar check stub; run make desktop-codex for a runnable sidecar" >&2' 'exit 127' > "$$dest"; \
+	chmod +x "$$dest"; \
+	echo "wrote check stub $$dest"
+
+desktop: desktop-deps desktop-yt-dlp desktop-codex
 	cd apps/desktop && pnpm tauri dev
 
 # Stop stale dev processes that can keep Vite's fixed Tauri port busy.

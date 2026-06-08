@@ -3,10 +3,10 @@
 //!
 //! # What this crate owns
 //!
-//! * [`CodexAppServer`] — per-project lifecycle around a single
-//!   [`codex_app_server_client::InProcessAppServerClient`] and one
-//!   `thread_id`. Spawns an internal event-pump task that owns the
-//!   `&mut self`-requiring `next_event` loop.
+//! * [`CodexAppServer`] — per-project lifecycle around a Codex
+//!   app-server backend and one `thread_id`. The default backend is an
+//!   external `codex app-server` process; the historical in-process
+//!   backend is available behind the `in-process-codex` feature.
 //! * The mappers (see [`mappers`]) that translate codex
 //!   `ServerNotification` / `ServerRequest` / `v2::ThreadItem` payloads
 //!   into [`montage_desktop_protocol::Item`] values the React renderer
@@ -28,49 +28,32 @@
 
 mod external;
 pub mod mappers;
+mod wire;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_app_server_client::AppServerRequestHandle;
-use codex_app_server_client::EnvironmentManager;
-use codex_app_server_client::ExecServerRuntimePaths;
-use codex_app_server_client::InProcessAppServerClient;
-use codex_app_server_client::InProcessClientStartArgs;
-use codex_app_server_client::InProcessServerEvent;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
-use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::GrantedPermissionProfile;
-use codex_app_server_protocol::InitializeCapabilities;
-use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::PermissionGrantScope;
-use codex_app_server_protocol::PermissionsRequestApprovalResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::RequestPermissionProfile;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ToolRequestUserInputAnswer;
-use codex_app_server_protocol::ToolRequestUserInputResponse;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::UserInput;
+#[cfg(feature = "in-process-codex")]
+use codex_app_server_client::{
+    AppServerRequestHandle, EnvironmentManager, ExecServerRuntimePaths, InProcessAppServerClient,
+    InProcessClientStartArgs, InProcessServerEvent,
+};
+#[cfg(feature = "in-process-codex")]
+use codex_app_server_protocol::{
+    ClientRequest, JSONRPCErrorError, RequestId as CodexRequestId, ThreadResumeParams,
+    ThreadResumeResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnStartParams, TurnStartResponse, UserInput,
+};
+#[cfg(feature = "in-process-codex")]
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
-use codex_config::LoaderOverrides;
+#[cfg(feature = "in-process-codex")]
+use codex_config::{CloudRequirementsLoader, LoaderOverrides};
+#[cfg(feature = "in-process-codex")]
 use codex_core::config::ConfigBuilder;
+#[cfg(feature = "in-process-codex")]
 use codex_feedback::CodexFeedback;
+#[cfg(feature = "in-process-codex")]
 use codex_protocol::protocol::SessionSource;
 use montage_desktop_protocol::Item;
 use tokio::sync::Mutex;
@@ -81,6 +64,9 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::mappers::map_notification;
+use crate::wire::RequestId;
+use crate::wire::ServerNotification;
+use crate::wire::ServerRequest;
 
 /// Sink for emitted [`Item`]s plus the explicit turn-end signal. The
 /// desktop implementation wraps a `tauri::AppHandle` and forwards each
@@ -133,7 +119,7 @@ pub struct PendingServerRequest {
     /// For [`PendingKind::PermissionApproval`]: the permissions the
     /// agent asked for. We grant exactly these on Allow/Session;
     /// Deny drops them so the response carries an empty profile.
-    pub requested_permissions: Option<RequestPermissionProfile>,
+    pub requested_permissions: Option<serde_json::Value>,
 }
 
 /// User-facing decision for an approval prompt.
@@ -150,7 +136,7 @@ pub enum ApprovalDecision {
 /// Error surface for the public bridge API.
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
-    /// Failed to construct the codex Config or start the in-process server.
+    /// Failed to construct or start the codex app-server backend.
     #[error("codex startup failed: {0}")]
     Startup(String),
     /// A `ClientRequest` round-trip failed.
@@ -172,15 +158,16 @@ pub enum BridgeError {
 /// surfaces Allow/Deny which both round-trip through `Resolve`) but
 /// the pump wires it up so a future integration step that adds a
 /// "force-cancel approval" affordance has the plumbing ready.
+#[cfg(feature = "in-process-codex")]
 #[allow(dead_code)]
 enum ResolveCommand {
     Resolve {
-        request_id: RequestId,
+        request_id: CodexRequestId,
         result: serde_json::Value,
         ack: oneshot::Sender<Result<(), String>>,
     },
     Reject {
-        request_id: RequestId,
+        request_id: CodexRequestId,
         error: JSONRPCErrorError,
         ack: oneshot::Sender<Result<(), String>>,
     },
@@ -209,6 +196,7 @@ pub struct CodexAppServer {
 }
 
 enum CodexBackend {
+    #[cfg(feature = "in-process-codex")]
     InProcess {
         request_handle: AppServerRequestHandle,
         resolve_tx: mpsc::Sender<ResolveCommand>,
@@ -235,8 +223,9 @@ impl CodexAppServer {
         recent_feedback: Option<String>,
         resume_thread_id: Option<String>,
     ) -> Result<Self, BridgeError> {
-        if should_use_external_runtime() {
-            return Self::launch_external(
+        #[cfg(feature = "in-process-codex")]
+        if should_use_in_process_runtime() {
+            return Self::launch_in_process(
                 emit,
                 project_root,
                 mcp_server_path,
@@ -247,7 +236,8 @@ impl CodexAppServer {
             )
             .await;
         }
-        Self::launch_in_process(
+
+        Self::launch_external(
             emit,
             project_root,
             mcp_server_path,
@@ -276,20 +266,10 @@ impl CodexAppServer {
         let (client, mut event_rx) =
             external::ExternalAppServerClient::start(&project_root, mcp_server_path).await?;
         let initialize_response: serde_json::Value = client
-            .request(ClientRequest::Initialize {
-                request_id: RequestId::Integer(client.next_request_id()),
-                params: InitializeParams {
-                    client_info: ClientInfo {
-                        name: "montage-desktop".to_string(),
-                        title: Some("Montage Desktop".to_string()),
-                        version: env!("CARGO_PKG_VERSION").to_string(),
-                    },
-                    capabilities: Some(InitializeCapabilities {
-                        experimental_api: true,
-                        ..InitializeCapabilities::default()
-                    }),
-                },
-            })
+            .request(wire::initialize_request(
+                client.next_request_id(),
+                env!("CARGO_PKG_VERSION"),
+            ))
             .await
             .map_err(|e| BridgeError::Startup(format!("initialize: {e}")))?;
         let _ = initialize_response;
@@ -301,29 +281,23 @@ impl CodexAppServer {
         let developer_instructions =
             compose_session_instructions(developer_instructions, skills_catalog);
         let thread_id = if let Some(resume_id) = resume_thread_id {
-            let resume_response: ThreadResumeResponse = client
-                .request(ClientRequest::ThreadResume {
-                    request_id: RequestId::Integer(client.next_request_id()),
-                    params: ThreadResumeParams {
-                        thread_id: resume_id.clone(),
-                        cwd: Some(project_root.display().to_string()),
-                        developer_instructions,
-                        ..ThreadResumeParams::default()
-                    },
-                })
+            let resume_response: wire::ThreadResponse = client
+                .request(wire::thread_resume_request(
+                    client.next_request_id(),
+                    resume_id.clone(),
+                    &project_root,
+                    developer_instructions,
+                ))
                 .await
                 .map_err(|e| BridgeError::Startup(format!("thread/resume: {e}")))?;
             resume_response.thread.id
         } else {
-            let thread_response: ThreadStartResponse = client
-                .request(ClientRequest::ThreadStart {
-                    request_id: RequestId::Integer(client.next_request_id()),
-                    params: ThreadStartParams {
-                        cwd: Some(project_root.display().to_string()),
-                        developer_instructions,
-                        ..ThreadStartParams::default()
-                    },
-                })
+            let thread_response: wire::ThreadResponse = client
+                .request(wire::thread_start_request(
+                    client.next_request_id(),
+                    &project_root,
+                    developer_instructions,
+                ))
                 .await
                 .map_err(|e| BridgeError::Startup(format!("thread/start: {e}")))?;
             thread_response.thread.id
@@ -348,6 +322,7 @@ impl CodexAppServer {
         })
     }
 
+    #[cfg(feature = "in-process-codex")]
     async fn launch_in_process(
         emit: Arc<dyn ItemEmitter>,
         project_root: PathBuf,
@@ -476,7 +451,7 @@ impl CodexAppServer {
         let thread_id = if let Some(resume_id) = resume_thread_id {
             let resume_response: ThreadResumeResponse = request_handle
                 .request_typed(ClientRequest::ThreadResume {
-                    request_id: RequestId::Integer(1),
+                    request_id: CodexRequestId::Integer(1),
                     params: ThreadResumeParams {
                         thread_id: resume_id.clone(),
                         cwd: Some(project_root.display().to_string()),
@@ -490,7 +465,7 @@ impl CodexAppServer {
         } else {
             let thread_response: ThreadStartResponse = request_handle
                 .request_typed(ClientRequest::ThreadStart {
-                    request_id: RequestId::Integer(1),
+                    request_id: CodexRequestId::Integer(1),
                     params: ThreadStartParams {
                         cwd: Some(project_root.display().to_string()),
                         developer_instructions,
@@ -541,35 +516,69 @@ impl CodexAppServer {
         model: Option<String>,
     ) -> Result<String, BridgeError> {
         let text = compose_turn_input(self.recent_feedback.as_deref(), &input);
-        let request = ClientRequest::TurnStart {
-            request_id: RequestId::Integer(next_request_id()),
-            params: TurnStartParams {
-                thread_id: self.thread_id.clone(),
-                input: vec![UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
-                }],
-                model,
-                ..TurnStartParams::default()
-            },
+        let turn_id = match &self.backend {
+            CodexBackend::External { client } => {
+                let response: wire::TurnStartResponse = client
+                    .request(wire::turn_start_request(
+                        next_request_id(),
+                        &self.thread_id,
+                        text,
+                        model,
+                    ))
+                    .await?;
+                response.turn.id
+            }
+            #[cfg(feature = "in-process-codex")]
+            CodexBackend::InProcess { request_handle, .. } => {
+                request_handle
+                    .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {
+                        request_id: CodexRequestId::Integer(next_request_id()),
+                        params: TurnStartParams {
+                            thread_id: self.thread_id.clone(),
+                            input: vec![UserInput::Text {
+                                text,
+                                text_elements: Vec::new(),
+                            }],
+                            model,
+                            ..TurnStartParams::default()
+                        },
+                    })
+                    .await
+                    .map_err(|e| BridgeError::Request(format!("turn/start: {e}")))?
+                    .turn
+                    .id
+            }
         };
-        let response: TurnStartResponse = self.request(request, "turn/start").await?;
-        Ok(response.turn.id)
+        Ok(turn_id)
     }
 
     /// Interrupt the given turn. Best-effort; an already-finished turn
     /// yields an error from codex which we swallow because the
     /// user-facing action ("cancel") is idempotent.
     pub async fn interrupt(&self, turn_id: &str) -> Result<(), BridgeError> {
-        let request = ClientRequest::TurnInterrupt {
-            request_id: RequestId::Integer(next_request_id()),
-            params: TurnInterruptParams {
-                thread_id: self.thread_id.clone(),
-                turn_id: turn_id.to_string(),
-            },
+        let result: Result<serde_json::Value, BridgeError> = match &self.backend {
+            CodexBackend::External { client } => {
+                client
+                    .request(wire::turn_interrupt_request(
+                        next_request_id(),
+                        &self.thread_id,
+                        turn_id,
+                    ))
+                    .await
+            }
+            #[cfg(feature = "in-process-codex")]
+            CodexBackend::InProcess { request_handle, .. } => request_handle
+                .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+                    request_id: CodexRequestId::Integer(next_request_id()),
+                    params: TurnInterruptParams {
+                        thread_id: self.thread_id.clone(),
+                        turn_id: turn_id.to_string(),
+                    },
+                })
+                .await
+                .map(|response| serde_json::to_value(response).unwrap_or_default())
+                .map_err(|e| BridgeError::Request(format!("turn/interrupt: {e}"))),
         };
-        let result: Result<TurnInterruptResponse, _> =
-            self.request(request, "turn/interrupt").await;
         if let Err(e) = result {
             debug!(
                 error = %e,
@@ -599,46 +608,38 @@ impl CodexAppServer {
         let result_value = match pending.kind {
             PendingKind::ExecApproval => {
                 let decision = match decision {
-                    ApprovalDecision::Allow => CommandExecutionApprovalDecision::Accept,
-                    ApprovalDecision::AllowForSession => {
-                        CommandExecutionApprovalDecision::AcceptForSession
-                    }
-                    ApprovalDecision::Deny => CommandExecutionApprovalDecision::Decline,
+                    ApprovalDecision::Allow => "accept",
+                    ApprovalDecision::AllowForSession => "acceptForSession",
+                    ApprovalDecision::Deny => "decline",
                 };
-                serde_json::to_value(CommandExecutionRequestApprovalResponse { decision })
-                    .map_err(|e| BridgeError::Resolve(format!("serialize exec response: {e}")))?
+                serde_json::json!({ "decision": decision })
             }
             PendingKind::FileChangeApproval => {
                 let decision = match decision {
-                    ApprovalDecision::Allow => FileChangeApprovalDecision::Accept,
-                    ApprovalDecision::AllowForSession => {
-                        FileChangeApprovalDecision::AcceptForSession
-                    }
-                    ApprovalDecision::Deny => FileChangeApprovalDecision::Decline,
+                    ApprovalDecision::Allow => "accept",
+                    ApprovalDecision::AllowForSession => "acceptForSession",
+                    ApprovalDecision::Deny => "decline",
                 };
-                serde_json::to_value(FileChangeRequestApprovalResponse { decision })
-                    .map_err(|e| BridgeError::Resolve(format!("serialize file response: {e}")))?
+                serde_json::json!({ "decision": decision })
             }
             PendingKind::PermissionApproval => {
                 let scope = match decision {
-                    ApprovalDecision::Allow => PermissionGrantScope::Turn,
-                    ApprovalDecision::AllowForSession => PermissionGrantScope::Session,
-                    ApprovalDecision::Deny => PermissionGrantScope::Turn,
+                    ApprovalDecision::Allow => "turn",
+                    ApprovalDecision::AllowForSession => "session",
+                    ApprovalDecision::Deny => "turn",
                 };
                 let permissions = match decision {
                     ApprovalDecision::Allow | ApprovalDecision::AllowForSession => pending
                         .requested_permissions
-                        .as_ref()
-                        .map(granted_from_requested)
-                        .unwrap_or_default(),
-                    ApprovalDecision::Deny => GrantedPermissionProfile::default(),
+                        .clone()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                    ApprovalDecision::Deny => serde_json::json!({}),
                 };
-                serde_json::to_value(PermissionsRequestApprovalResponse {
-                    permissions,
-                    scope,
-                    strict_auto_review: None,
+                serde_json::json!({
+                    "permissions": permissions,
+                    "scope": scope,
+                    "strictAutoReview": null,
                 })
-                .map_err(|e| BridgeError::Resolve(format!("serialize perm response: {e}")))?
             }
             PendingKind::UserInput => {
                 return Err(BridgeError::UnknownApproval {
@@ -674,16 +675,13 @@ impl CodexAppServer {
             .user_input_question_id
             .clone()
             .unwrap_or_else(|| "answer".to_string());
-        let mut answers = HashMap::new();
-        answers.insert(
-            question_id,
-            ToolRequestUserInputAnswer {
-                answers: vec![reply],
-            },
-        );
-        let response = ToolRequestUserInputResponse { answers };
-        let result_value = serde_json::to_value(response)
-            .map_err(|e| BridgeError::Resolve(format!("serialize input response: {e}")))?;
+        let result_value = serde_json::json!({
+            "answers": {
+                question_id: {
+                    "answers": [reply],
+                }
+            }
+        });
         self.send_resolve(pending.jsonrpc_request_id, result_value)
             .await
     }
@@ -698,8 +696,10 @@ impl CodexAppServer {
         {
             warn!(error = ?e, "codex-bridge pump task join error");
         }
-        if let CodexBackend::External { client } = &self.backend {
-            client.shutdown().await;
+        match &self.backend {
+            CodexBackend::External { client } => client.shutdown().await,
+            #[cfg(feature = "in-process-codex")]
+            CodexBackend::InProcess { .. } => {}
         }
         Ok(())
     }
@@ -716,8 +716,11 @@ impl CodexAppServer {
         result: serde_json::Value,
     ) -> Result<(), BridgeError> {
         match &self.backend {
+            #[cfg(feature = "in-process-codex")]
             CodexBackend::InProcess { resolve_tx, .. } => {
                 let (ack_tx, ack_rx) = oneshot::channel();
+                let request_id: CodexRequestId = serde_json::from_value(request_id)
+                    .map_err(|e| BridgeError::Resolve(format!("deserialize request id: {e}")))?;
                 resolve_tx
                     .send(ResolveCommand::Resolve {
                         request_id,
@@ -732,20 +735,6 @@ impl CodexAppServer {
                     .map_err(BridgeError::Resolve)
             }
             CodexBackend::External { client } => client.resolve(request_id, result).await,
-        }
-    }
-
-    async fn request<T: serde::de::DeserializeOwned>(
-        &self,
-        request: ClientRequest,
-        label: &str,
-    ) -> Result<T, BridgeError> {
-        match &self.backend {
-            CodexBackend::InProcess { request_handle, .. } => request_handle
-                .request_typed(request)
-                .await
-                .map_err(|e| BridgeError::Request(format!("{label}: {e}"))),
-            CodexBackend::External { client } => client.request(request).await,
         }
     }
 }
@@ -763,6 +752,7 @@ impl Drop for CodexAppServer {
 /// handle to the in-process client, and is also the only path that
 /// owns `&InProcessAppServerClient` for `resolve_server_request` —
 /// we route resolves through this task via `resolve_rx`.
+#[cfg(feature = "in-process-codex")]
 async fn run_event_pump(
     client: &mut InProcessAppServerClient,
     pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
@@ -843,6 +833,7 @@ async fn run_external_event_pump(
 }
 
 /// Dispatch one [`InProcessServerEvent`].
+#[cfg(feature = "in-process-codex")]
 async fn handle_pump_event(
     event: InProcessServerEvent,
     pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
@@ -854,10 +845,24 @@ async fn handle_pump_event(
             warn!(skipped, "codex-bridge pump lagged");
         }
         InProcessServerEvent::ServerNotification(notification) => {
-            handle_notification(notification, pending, emit, text_buffers).await;
+            match serde_json::to_value(notification)
+                .ok()
+                .and_then(|value| serde_json::from_value::<ServerNotification>(value).ok())
+            {
+                Some(notification) => {
+                    handle_notification(notification, pending, emit, text_buffers).await;
+                }
+                None => warn!("codex-bridge: failed to convert in-process notification"),
+            }
         }
         InProcessServerEvent::ServerRequest(request) => {
-            handle_server_request(request, pending, emit).await;
+            match serde_json::to_value(request)
+                .ok()
+                .and_then(|value| serde_json::from_value::<ServerRequest>(value).ok())
+            {
+                Some(request) => handle_server_request(request, pending, emit).await,
+                None => warn!("codex-bridge: failed to convert in-process server request"),
+            }
         }
     }
 }
@@ -886,9 +891,10 @@ async fn handle_notification(
     }
 }
 
-fn should_use_external_runtime() -> bool {
+#[cfg(feature = "in-process-codex")]
+fn should_use_in_process_runtime() -> bool {
     std::env::var("MONTAGE_CODEX_APP_SERVER_RUNTIME")
-        .map(|value| value.eq_ignore_ascii_case("external"))
+        .map(|value| value.eq_ignore_ascii_case("in-process"))
         .unwrap_or(false)
 }
 
@@ -903,14 +909,27 @@ struct TurnEnd {
 }
 
 fn turn_end_from_notification(notification: &ServerNotification) -> Option<TurnEnd> {
-    match notification {
-        ServerNotification::TurnCompleted(n) => Some(TurnEnd {
-            turn_id: n.turn.id.clone(),
-            error: n.turn.error.as_ref().map(|e| e.message.clone()),
+    match notification.method.as_str() {
+        "turn/completed" => Some(TurnEnd {
+            turn_id: notification.params["turn"]["id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            error: notification.params["turn"]["error"]["message"]
+                .as_str()
+                .map(ToString::to_string),
         }),
-        ServerNotification::Error(n) => Some(TurnEnd {
-            turn_id: n.turn_id.clone(),
-            error: Some(n.error.message.clone()),
+        "error" => Some(TurnEnd {
+            turn_id: notification.params["turnId"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            error: Some(
+                notification.params["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
         }),
         _ => None,
     }
@@ -933,21 +952,21 @@ async fn handle_server_request(
     pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
     emit: &Arc<dyn ItemEmitter>,
 ) {
-    match request {
-        ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
-            let item_id = params.item_id.clone();
-            let summary = params
-                .command
-                .clone()
-                .unwrap_or_else(|| "(unspecified command)".into());
+    match request.method.as_str() {
+        "item/commandExecution/requestApproval" => {
+            let item_id = string_param(&request.params, "itemId");
+            let summary = request.params["command"]
+                .as_str()
+                .unwrap_or("(unspecified command)")
+                .to_string();
             let metadata = mappers::build_capability_metadata_for_exec(&summary);
             pending.lock().await.insert(
                 item_id.clone(),
                 PendingServerRequest {
-                    jsonrpc_request_id: request_id,
+                    jsonrpc_request_id: request.id,
                     kind: PendingKind::ExecApproval,
-                    thread_id: params.thread_id.clone(),
-                    turn_id: params.turn_id.clone(),
+                    thread_id: string_param(&request.params, "threadId"),
+                    turn_id: string_param(&request.params, "turnId"),
                     user_input_question_id: None,
                     requested_permissions: None,
                 },
@@ -964,21 +983,18 @@ async fn handle_server_request(
                 rationale: None,
             });
         }
-        ServerRequest::FileChangeRequestApproval { request_id, params } => {
-            let item_id = params.item_id.clone();
-            let metadata =
-                mappers::build_capability_metadata_for_file_change(params.reason.as_deref());
-            let summary = params
-                .reason
-                .clone()
-                .unwrap_or_else(|| "apply file changes".into());
+        "item/fileChange/requestApproval" => {
+            let item_id = string_param(&request.params, "itemId");
+            let reason = request.params["reason"].as_str();
+            let metadata = mappers::build_capability_metadata_for_file_change(reason);
+            let summary = reason.unwrap_or("apply file changes").to_string();
             pending.lock().await.insert(
                 item_id.clone(),
                 PendingServerRequest {
-                    jsonrpc_request_id: request_id,
+                    jsonrpc_request_id: request.id,
                     kind: PendingKind::FileChangeApproval,
-                    thread_id: params.thread_id.clone(),
-                    turn_id: params.turn_id.clone(),
+                    thread_id: string_param(&request.params, "threadId"),
+                    turn_id: string_param(&request.params, "turnId"),
                     user_input_question_id: None,
                     requested_permissions: None,
                 },
@@ -995,23 +1011,22 @@ async fn handle_server_request(
                 rationale: None,
             });
         }
-        ServerRequest::PermissionsRequestApproval { request_id, params } => {
-            let item_id = params.item_id.clone();
-            let summary = params
-                .reason
-                .clone()
-                .unwrap_or_else(|| "request additional permissions".into());
-            let metadata =
-                mappers::build_capability_metadata_for_file_change(params.reason.as_deref());
+        "item/permissions/requestApproval" => {
+            let item_id = string_param(&request.params, "itemId");
+            let reason = request.params["reason"].as_str();
+            let summary = reason
+                .unwrap_or("request additional permissions")
+                .to_string();
+            let metadata = mappers::build_capability_metadata_for_file_change(reason);
             pending.lock().await.insert(
                 item_id.clone(),
                 PendingServerRequest {
-                    jsonrpc_request_id: request_id,
+                    jsonrpc_request_id: request.id,
                     kind: PendingKind::PermissionApproval,
-                    thread_id: params.thread_id.clone(),
-                    turn_id: params.turn_id.clone(),
+                    thread_id: string_param(&request.params, "threadId"),
+                    turn_id: string_param(&request.params, "turnId"),
                     user_input_question_id: None,
-                    requested_permissions: Some(params.permissions.clone()),
+                    requested_permissions: Some(request.params["permissions"].clone()),
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
@@ -1026,30 +1041,38 @@ async fn handle_server_request(
                 rationale: None,
             });
         }
-        ServerRequest::ToolRequestUserInput { request_id, params } => {
-            let item_id = params.item_id.clone();
-            let first = params.questions.first();
-            if params.questions.len() > 1 {
+        "item/tool/requestUserInput" => {
+            let item_id = string_param(&request.params, "itemId");
+            let questions = request.params["questions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let first = questions.first();
+            if questions.len() > 1 {
                 warn!(
                     item_id = %item_id,
-                    extra = params.questions.len() - 1,
+                    extra = questions.len() - 1,
                     "request_user_input with >1 questions; only the first is rendered in v1"
                 );
             }
-            let question_text = first.map(|q| q.question.clone()).unwrap_or_default();
-            let question_id = first.map(|q| q.id.clone());
+            let question_text = first
+                .map(|q| string_param(q, "question"))
+                .unwrap_or_default();
+            let question_id = first.map(|q| string_param(q, "id"));
             let options = first.and_then(|q| {
-                q.options
-                    .as_ref()
-                    .map(|opts| opts.iter().map(|o| o.label.clone()).collect())
+                q["options"].as_array().map(|opts| {
+                    opts.iter()
+                        .map(|option| string_param(option, "label"))
+                        .collect()
+                })
             });
             pending.lock().await.insert(
                 item_id.clone(),
                 PendingServerRequest {
-                    jsonrpc_request_id: request_id,
+                    jsonrpc_request_id: request.id,
                     kind: PendingKind::UserInput,
-                    thread_id: params.thread_id.clone(),
-                    turn_id: params.turn_id.clone(),
+                    thread_id: string_param(&request.params, "threadId"),
+                    turn_id: string_param(&request.params, "turnId"),
                     user_input_question_id: question_id,
                     requested_permissions: None,
                 },
@@ -1061,20 +1084,14 @@ async fn handle_server_request(
                 options,
             });
         }
-        other => {
-            debug!(id = ?other.id(), "codex-bridge: unhandled ServerRequest variant");
+        _ => {
+            debug!(id = ?request.id, method = %request.method, "codex-bridge: unhandled ServerRequest variant");
         }
     }
 }
 
-/// Promote a requested permission profile to the granted shape we
-/// hand back on Allow/Session. We grant exactly what was asked for —
-/// scope (Turn vs Session) lives on the response, not the profile.
-fn granted_from_requested(requested: &RequestPermissionProfile) -> GrantedPermissionProfile {
-    GrantedPermissionProfile {
-        network: requested.network.clone(),
-        file_system: requested.file_system.clone(),
-    }
+fn string_param(value: &serde_json::Value, key: &str) -> String {
+    value[key].as_str().unwrap_or_default().to_string()
 }
 
 /// Monotonic client-side request id counter. App-server only needs
@@ -1122,25 +1139,20 @@ fn compose_turn_input(recent_feedback: Option<&str>, input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_protocol::{
-        ErrorNotification, Turn, TurnCompletedNotification, TurnError, TurnItemsView, TurnStatus,
-    };
+    use serde_json::json;
 
     #[test]
     fn turn_end_from_notification_includes_turn_id() {
-        let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: Turn {
-                id: "turn-1".to_string(),
-                items: Vec::new(),
-                items_view: TurnItemsView::Full,
-                status: TurnStatus::Completed,
-                error: None,
-                started_at: None,
-                completed_at: None,
-                duration_ms: None,
-            },
-        });
+        let notification = ServerNotification {
+            method: "turn/completed".to_string(),
+            params: json!({
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1",
+                    "error": null
+                }
+            }),
+        };
 
         assert_eq!(
             turn_end_from_notification(&notification),
@@ -1153,16 +1165,17 @@ mod tests {
 
     #[test]
     fn turn_end_from_error_includes_turn_id() {
-        let notification = ServerNotification::Error(ErrorNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-err".to_string(),
-            will_retry: false,
-            error: TurnError {
-                message: "failed".to_string(),
-                codex_error_info: None,
-                additional_details: None,
-            },
-        });
+        let notification = ServerNotification {
+            method: "error".to_string(),
+            params: json!({
+                "threadId": "thread-1",
+                "turnId": "turn-err",
+                "willRetry": false,
+                "error": {
+                    "message": "failed"
+                }
+            }),
+        };
 
         assert_eq!(
             turn_end_from_notification(&notification),
@@ -1179,7 +1192,7 @@ mod tests {
             (
                 "call-1".to_string(),
                 PendingServerRequest {
-                    jsonrpc_request_id: RequestId::Integer(1),
+                    jsonrpc_request_id: json!(1),
                     kind: PendingKind::ExecApproval,
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
@@ -1190,7 +1203,7 @@ mod tests {
             (
                 "call-2".to_string(),
                 PendingServerRequest {
-                    jsonrpc_request_id: RequestId::Integer(2),
+                    jsonrpc_request_id: json!(2),
                     kind: PendingKind::UserInput,
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-2".to_string(),

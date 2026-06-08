@@ -5,10 +5,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
@@ -23,12 +19,21 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::BridgeError;
+use crate::wire;
+use crate::wire::ServerNotification;
+use crate::wire::ServerRequest;
 
 const DEFAULT_CODEX_BIN: &str = "codex";
 const METHOD_NOT_FOUND: i64 = -32601;
 const SERVER_ERROR: i64 = -32000;
 const AUTH_REFRESH_UNSUPPORTED: &str =
     "chatgpt auth token refresh is not supported for external app-server runtime";
+const SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+];
 
 type PendingResponse = oneshot::Sender<Result<serde_json::Value, String>>;
 type PendingResponses = Arc<Mutex<HashMap<i64, PendingResponse>>>;
@@ -36,8 +41,8 @@ type SharedStdin = Arc<Mutex<ChildStdin>>;
 
 #[derive(Debug)]
 pub enum ExternalServerEvent {
-    Notification(ServerNotification),
-    Request(ServerRequest),
+    Notification(wire::ServerNotification),
+    Request(wire::ServerRequest),
 }
 
 pub struct ExternalAppServerClient {
@@ -53,8 +58,7 @@ impl ExternalAppServerClient {
         project_root: &Path,
         mcp_server_path: Option<PathBuf>,
     ) -> Result<(Self, mpsc::Receiver<ExternalServerEvent>), BridgeError> {
-        let codex_bin =
-            std::env::var("MONTAGE_CODEX_BIN").unwrap_or_else(|_| DEFAULT_CODEX_BIN.to_string());
+        let codex_bin = resolve_codex_bin();
         let args = app_server_args(mcp_server_path.as_deref(), project_root);
         let mut command = Command::new(codex_bin);
         command
@@ -104,10 +108,8 @@ impl ExternalAppServerClient {
 
     pub async fn request<T: DeserializeOwned>(
         &self,
-        request: ClientRequest,
+        value: serde_json::Value,
     ) -> Result<T, BridgeError> {
-        let value = serde_json::to_value(&request)
-            .map_err(|e| BridgeError::Request(format!("serialize request: {e}")))?;
         let id = value
             .get("id")
             .and_then(|id| id.as_i64())
@@ -131,12 +133,11 @@ impl ExternalAppServerClient {
 
     pub async fn resolve(
         &self,
-        request_id: RequestId,
+        request_id: wire::RequestId,
         result: serde_json::Value,
     ) -> Result<(), BridgeError> {
-        let id = serde_json::to_value(request_id)
-            .map_err(|e| BridgeError::Resolve(format!("serialize request id: {e}")))?;
-        self.write_json(json!({ "id": id, "result": result })).await
+        self.write_json(json!({ "id": request_id, "result": result }))
+            .await
     }
 
     pub async fn shutdown(&self) {
@@ -194,6 +195,54 @@ pub fn app_server_args(mcp_server_path: Option<&Path>, project_root: &Path) -> V
 fn format_toml_string_override(key: &str, path: &Path) -> String {
     let value = toml::Value::String(path.display().to_string()).to_string();
     format!("{key}={value}")
+}
+
+fn resolve_codex_bin() -> PathBuf {
+    if let Some(path) = std::env::var_os("MONTAGE_CODEX_BIN").map(PathBuf::from) {
+        return path;
+    }
+    if let Some(path) = bundled_codex_bin() {
+        return path;
+    }
+    PathBuf::from(DEFAULT_CODEX_BIN)
+}
+
+fn bundled_codex_bin() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+    for name in bundled_codex_binary_names() {
+        let candidate = parent.join(&name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn bundled_codex_binary_names() -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(triple) = current_target_triple() {
+        names.push(format!("codex-{triple}"));
+        if cfg!(windows) {
+            names.push(format!("codex-{triple}.exe"));
+        }
+    }
+    if cfg!(windows) {
+        names.push("codex.exe".to_string());
+    }
+    names.push("codex".to_string());
+    names
+}
+
+fn current_target_triple() -> Option<&'static str> {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => Some("aarch64-apple-darwin"),
+        ("x86_64", "macos") => Some("x86_64-apple-darwin"),
+        ("aarch64", "linux") => Some("aarch64-unknown-linux-gnu"),
+        ("x86_64", "linux") => Some("x86_64-unknown-linux-gnu"),
+        ("x86_64", "windows") => Some("x86_64-pc-windows-msvc"),
+        _ => None,
+    }
 }
 
 async fn read_stdout(
@@ -275,14 +324,19 @@ async fn handle_server_request_message(
         .to_string();
 
     match serde_json::from_value::<ServerRequest>(value) {
-        Ok(ServerRequest::ChatgptAuthTokensRefresh { request_id, .. }) => {
-            let id = serde_json::to_value(request_id).unwrap_or_else(|_| {
-                raw_id.unwrap_or_else(|| serde_json::Value::String("unknown".to_string()))
-            });
-            let _ = write_error_response(stdin, id, SERVER_ERROR, AUTH_REFRESH_UNSUPPORTED).await;
+        Ok(request) if request.method == "account/chatgptAuthTokens/refresh" => {
+            let _ = write_error_response(stdin, request.id, SERVER_ERROR, AUTH_REFRESH_UNSUPPORTED)
+                .await;
+        }
+        Ok(request) if is_supported_server_request_method(&request.method) => {
+            let _ = event_tx.send(ExternalServerEvent::Request(request)).await;
         }
         Ok(request) => {
-            let _ = event_tx.send(ExternalServerEvent::Request(request)).await;
+            let message = format!(
+                "unsupported external app-server request `{}`",
+                request.method
+            );
+            let _ = write_error_response(stdin, request.id, METHOD_NOT_FOUND, &message).await;
         }
         Err(_) => {
             if let Some(id) = raw_id {
@@ -291,6 +345,10 @@ async fn handle_server_request_message(
             }
         }
     }
+}
+
+fn is_supported_server_request_method(method: &str) -> bool {
+    SUPPORTED_SERVER_REQUEST_METHODS.contains(&method)
 }
 
 async fn fail_pending(pending: &PendingResponses, message: impl Into<String>) {
@@ -394,6 +452,44 @@ mod tests {
         assert_eq!(response_id(&response), Some(2));
     }
 
+    #[test]
+    fn codex_crates_are_not_required_default_dependencies() {
+        let manifest =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+                .expect("read manifest");
+        let parsed: toml::Value = toml::from_str(&manifest).expect("parse manifest");
+        let dependencies = parsed
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .expect("dependencies table");
+
+        for name in [
+            "codex-app-server-client",
+            "codex-app-server-protocol",
+            "codex-config",
+            "codex-core",
+            "codex-protocol",
+            "codex-arg0",
+            "codex-feedback",
+        ] {
+            let dependency = dependencies.get(name).expect("codex dependency exists");
+            let optional = dependency
+                .get("optional")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            assert!(optional, "{name} must be optional");
+        }
+
+        let features = parsed
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .expect("features table");
+        assert!(
+            features.contains_key("in-process-codex"),
+            "in-process-codex feature must own vendored Codex dependencies"
+        );
+    }
+
     #[tokio::test]
     async fn fail_pending_wakes_waiters_with_error() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
@@ -426,5 +522,28 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn bundled_codex_binary_names_include_tauri_sidecar_name() {
+        let names = bundled_codex_binary_names();
+        if let Some(triple) = current_target_triple() {
+            assert!(
+                names.contains(&format!("codex-{triple}")),
+                "expected suffixed Tauri sidecar name in {names:?}"
+            );
+        }
+        assert!(names.contains(&DEFAULT_CODEX_BIN.to_string()));
+    }
+
+    #[test]
+    fn supported_server_request_policy_rejects_unknown_methods() {
+        assert!(is_supported_server_request_method(
+            "item/commandExecution/requestApproval"
+        ));
+        assert!(is_supported_server_request_method(
+            "item/tool/requestUserInput"
+        ));
+        assert!(!is_supported_server_request_method("future/server/request"));
     }
 }
