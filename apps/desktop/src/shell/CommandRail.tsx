@@ -798,13 +798,11 @@ export function CommandRail({
               ))}
             </div>
           ) : null}
-          <Inline justify="between" align="center" gap="2" className="px-2 py-1">
-            <Inline gap="2" align="center" className="min-w-0">
-              <PermissionModeMenu
-                mode={effectivePermissionMode}
-                onChange={onSetPermissionMode}
-              />
-            </Inline>
+          <div className="montage-composer-actions">
+            <PermissionModeMenu
+              mode={effectivePermissionMode}
+              onChange={onSetPermissionMode}
+            />
             {running ? (
               <Button
                 variant="secondary"
@@ -827,7 +825,7 @@ export function CommandRail({
                 Send
               </Button>
             )}
-          </Inline>
+          </div>
         </div>
         {(() => {
           // Filter out the Project chip — the chat is already scoped to

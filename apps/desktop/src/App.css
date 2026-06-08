@@ -7352,6 +7352,8 @@ button {
    ⌘↩ hint, and the Send/Stop button. Focus state thickens the
    border without changing color (keeps the rail calm). */
 .montage-chat-rail .montage-composer-card {
+  display: flex;
+  flex-direction: column;
   background: var(--color-surface-card);
   border: 1px solid transparent;
   border-radius: 12px;
@@ -7377,9 +7379,19 @@ button {
   border: none !important;
 }
 .montage-chat-rail .montage-composer-card textarea {
+  display: block;
+  min-height: 31px;
   font-size: 14px;
   line-height: 1.45;
-  padding: 8px 12px 2px;
+  padding: 8px 12px 1px;
+}
+.montage-chat-rail .montage-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 31px;
+  padding: 0 8px 7px;
 }
 
 /* Send button override — strip the brand-green primary look and use
@@ -7438,7 +7450,9 @@ button {
 
 .montage-chat-rail .montage-permission-menu {
   position: relative;
+  z-index: 1;
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   height: 24px;
