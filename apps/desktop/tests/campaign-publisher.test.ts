@@ -195,6 +195,15 @@ const publishedSnapshot = {
   published_urls: { youtube: "u" },
 };
 
+const requiresActionSnapshot = {
+  job_id: "job-youtube",
+  upload_targets: ["youtube"],
+  upload_states: {
+    youtube: { state: "requires_action", reason: "missing_scope" },
+  },
+  published_urls: {},
+};
+
 // Server-backed campaign publishing forwards full platform metadata.
 {
   const serverCampaign = createCampaignManifest({
@@ -531,6 +540,22 @@ const publishedSnapshot = {
     (c) => c.command === "poll_upload_states",
   ).length;
   assert.ok(pollCount >= 2, "polled until terminal state");
+}
+
+// Action-needed upload states are terminal for polling; user recovery happens
+// through reconnect/retry controls rather than continued background polling.
+{
+  const { invoke, calls } = recordingInvoke({
+    poll_upload_states: [requiresActionSnapshot],
+  });
+  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
+    sleep: noSleep,
+    maxPollTicks: 10,
+  });
+  const pollCount = calls.filter(
+    (c) => c.command === "poll_upload_states",
+  ).length;
+  assert.equal(pollCount, 1, "requires_action stops campaign upload polling");
 }
 
 // onStarted fires before any polling so the caller can map variant->job early.
