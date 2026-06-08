@@ -40,8 +40,10 @@ fi
 # All values below use ${VAR:-default} so anything exported in .env.local wins
 # (put the Google OAuth secrets there — never in this committed file).
 
-# Bearer the desktop sends to /social/* (dev single-user mode). Must match the
-# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
+# Bearer the desktop sends to /social/* in dev single-user mode. Must match the
+# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. For limited-access multi-user workspaces,
+# set SUPABASE_JWT_SECRET here and use MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN on
+# each desktop instead.
 export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
