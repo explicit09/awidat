@@ -1,36 +1,34 @@
 /**
- * useIntroState — tracks which projects have already received their
- * one-shot synthetic editorial intro turn (Wave 3 task F3).
+ * useIntroState — legacy storage for the former one-shot synthetic
+ * editorial intro turn (Wave 3 task F3).
  *
  * Why a separate store: the project lifecycle effect in `appGlue.ts`
  * fires every time `current` changes (project open, close, switch).
- * We want to inject a synthetic `start_turn` exactly once per project
- * per persisted-state-clear, even across reloads of the same session.
+ * The app no longer injects that hidden `start_turn` automatically, but
+ * old persisted state and rollouts still need the same sentinel contract.
  *
  * Persistence: project paths are kept in localStorage under
- * `STORAGE_KEY`. The Settings modal's "Re-introduce on project open"
- * action calls `reset()` to wipe the set; the next open of any
- * project will then fire the intro again.
+ * `STORAGE_KEY` for compatibility with existing installs.
  *
- * The synthetic-prompt body itself lives in `INTRO_PROMPT` so callers
- * (the dispatcher in appGlue) and any UI that needs to hide it
- * (ChatStream, App.tsx) share the same sentinel prefix.
+ * The synthetic-prompt body remains in `INTRO_PROMPT` so old chat
+ * history and any explicit test fixtures share the same sentinel prefix.
  */
 
 import { create } from "zustand";
 
-/** Sentinel prefix the synthetic intro turn carries. Anything starting
+/** Sentinel prefix the former synthetic intro turn carries. Anything starting
  *  with this string is hidden from the conversation transcript — it is
  *  an editorial instruction, not a user message. Keep this constant
- *  load-bearing: it is the contract between the dispatcher (appGlue),
- *  the chat renderer (ChatStream.tsx), and the turn grouping in App.tsx. */
+ *  load-bearing for replaying old sessions. */
 export const INTRO_PROMPT_PREFIX = "[montage:intro]";
+export const LEGACY_AWIDAT_INTRO_PROMPT_PREFIX = "[awidat:intro]";
 
 /** Sentinel prefix the explicit "Prepare a starting cut" action carries
  *  (Wave 3 B4). Same filtering contract as the intro prefix — the
  *  message is an editorial instruction to the model, not a user
  *  question, so the chat transcript hides it. Keep this load-bearing. */
 export const PREPARE_PROMPT_PREFIX = "[montage:prepare]";
+export const LEGACY_AWIDAT_PREPARE_PROMPT_PREFIX = "[awidat:prepare]";
 
 /** The body fired by the Brief surface's "Prepare a starting cut"
  *  button (B4). Asks the agent for an editorial first pass grounded in
@@ -51,7 +49,9 @@ See the Rationale contract in your skills catalog for the exact format.`;
  *  Add new prefixes here and every renderer / turn-grouper picks them up. */
 export const MONTAGE_SENTINEL_PREFIXES: readonly string[] = [
   INTRO_PROMPT_PREFIX,
+  LEGACY_AWIDAT_INTRO_PROMPT_PREFIX,
   PREPARE_PROMPT_PREFIX,
+  LEGACY_AWIDAT_PREPARE_PROMPT_PREFIX,
 ];
 
 /** True if `text` carries any registered montage sentinel. The canonical
@@ -63,7 +63,7 @@ export function isMontageSentinel(text: string): boolean {
   return false;
 }
 
-/** The editorial-system body the synthetic turn carries. Written as a
+/** The editorial-system body the former synthetic turn carried. Written as a
  *  meta-instruction so the model treats it as guidance rather than a
  *  user request. Voice: terse, evidence-grounded, no hand-holding. */
 export const INTRO_PROMPT = `${INTRO_PROMPT_PREFIX}
@@ -81,7 +81,7 @@ export const STORAGE_KEY = "montage:intro:introduced";
 
 /** True if the message text is a synthetic intro turn. */
 export function isIntroSyntheticInput(text: string): boolean {
-  return text.startsWith(INTRO_PROMPT_PREFIX);
+  return text.startsWith(INTRO_PROMPT_PREFIX) || text.startsWith(LEGACY_AWIDAT_INTRO_PROMPT_PREFIX);
 }
 
 interface StorageAdapter {

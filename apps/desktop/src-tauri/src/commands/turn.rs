@@ -36,9 +36,7 @@ pub async fn start_turn(
     if input.trim().is_empty() {
         return Err("empty input".into());
     }
-    if state.turn.lock().await.is_some() {
-        return Err("a turn is already running — cancel it first".into());
-    }
+    let _turn_start_guard = state.reserve_turn_start().await?;
 
     let project_root = state
         .project_root
@@ -262,6 +260,19 @@ mod tests {
         assert_eq!(
             format_model_input("What is happening here?", Some(&view), &context),
             "[user is viewing intro at 0:12]\n[visible context]\n- project: Episode 12\n- media: Clip: intro\n\nWhat is happening here?"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_start_gate_rejects_overlap_before_turn_id_exists() {
+        let state = MontageState::default();
+        let first = state.reserve_turn_start().await;
+        assert!(first.is_ok());
+
+        let second = state.reserve_turn_start().await;
+        assert_eq!(
+            second.unwrap_err(),
+            "a turn is already running - cancel it first"
         );
     }
 }

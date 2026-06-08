@@ -245,6 +245,7 @@ export function CommandRail({
   const conversationScrollerRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowConversationRef = useRef(true);
+  const effectivePermissionMode = permissionMode ?? "manual";
 
   // Compute the visible mention suggestions on every keystroke. Cheap
   // (small lists), no debounce needed.
@@ -797,15 +798,11 @@ export function CommandRail({
               ))}
             </div>
           ) : null}
-          <Inline justify="between" align="center" gap="2" className="px-2 py-1">
-            <Inline gap="2" align="center" className="min-w-0">
-              {permissionMode && onSetPermissionMode ? (
-                <PermissionModeChip
-                  mode={permissionMode}
-                  onChange={onSetPermissionMode}
-                />
-              ) : null}
-            </Inline>
+          <div className="montage-composer-actions">
+            <PermissionModeMenu
+              mode={effectivePermissionMode}
+              onChange={onSetPermissionMode}
+            />
             {running ? (
               <Button
                 variant="secondary"
@@ -828,7 +825,7 @@ export function CommandRail({
                 Send
               </Button>
             )}
-          </Inline>
+          </div>
         </div>
         {(() => {
           // Filter out the Project chip — the chat is already scoped to
@@ -1455,39 +1452,41 @@ function EmptyState({
  * the agent attaches today, and the goal is human-readable shorthand
  * the user can scan in 100ms instead of decoding a UUID.
  */
-/** Composer-footer pill that exposes the agent's permission mode.
- *  Labels chosen for compactness — the tooltip carries the full
- *  meaning so the user gets a one-glance read of the chip and a
- *  full sentence on hover. */
-function PermissionModeChip({
+function PermissionModeMenu({
   mode,
   onChange,
 }: {
   mode: PermissionMode;
-  onChange: (next: PermissionMode) => void;
+  onChange?: (next: PermissionMode) => void;
 }) {
   const labels: Record<PermissionMode, string> = {
     manual: "Manual",
     copilot: "Copilot",
     autopilot: "Auto",
   };
-  const titles: Record<PermissionMode, string> = {
-    manual: "Manual — every proposal needs explicit Accept.",
-    copilot: "Copilot — agent surfaces notes; you ask it to act.",
-    autopilot: "Auto — agent applies edits without approval cards.",
-  };
+  const options: Array<{ mode: PermissionMode; label: string }> = [
+    { mode: "manual", label: "Manual" },
+    { mode: "copilot", label: "Copilot" },
+    { mode: "autopilot", label: "Auto" },
+  ];
   return (
-    <label className="montage-mode-chip" title={titles[mode]}>
-      <span className="montage-mode-chip-dot" data-mode={mode} aria-hidden />
-      <span className="montage-mode-chip-label">{labels[mode]}</span>
+    <label className="montage-permission-menu" title="Agent permission mode">
+      <span className="montage-permission-glyph" aria-hidden>
+        ∞
+      </span>
+      <span>{labels[mode]}</span>
+      <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
       <select
         value={mode}
-        onChange={(e) => onChange(e.target.value as PermissionMode)}
+        disabled={!onChange}
+        onChange={(e) => onChange?.(e.target.value as PermissionMode)}
         aria-label="Agent permission mode"
       >
-        <option value="manual">Manual</option>
-        <option value="copilot">Copilot</option>
-        <option value="autopilot">Auto</option>
+        {options.map((option) => (
+          <option key={option.mode} value={option.mode}>
+            {option.label}
+          </option>
+        ))}
       </select>
     </label>
   );

@@ -116,8 +116,8 @@ impl CodexSession {
             &project_root,
         ));
         // Progressive-disclosure skills catalog. L1 (name + description)
-        // lands in every turn input as a contextual fragment; the agent
-        // calls `load_skill(name='...')` for the L2 body. User-installed
+        // rides on session developer instructions; the agent calls
+        // `load_skill(name='...')` for the L2 body. User-installed
         // skills under ~/Library/Application Support/montage/skills and
         // ~/.config/montage/skills override bundled. See
         // crates/core/src/skills.rs for the discovery rules.

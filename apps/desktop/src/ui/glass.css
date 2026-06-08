@@ -507,13 +507,6 @@ html, body, #root { background: #0a0a12; }
 .stage-convo .markdown table {
   width: 100%;
 }
-.stage-convo .sticky-user-prompt {
-  background: rgba(255,255,255,0.04);
-  border-color: rgba(255,255,255,0.10);
-  border-radius: 8px;
-  box-shadow: none;
-}
-
 .stage-chat-icon {
   display: grid;
   width: 26px;
@@ -534,6 +527,16 @@ html, body, #root { background: #0a0a12; }
   border-color: rgba(251,113,133,0.42);
   background: rgba(239,68,68,0.18);
   color: #FCA5A5;
+}
+.stage-chat-session-trigger {
+  min-height: 30px;
+}
+.stage-chat-icon-button {
+  flex: 0 0 auto;
+  padding: 0;
+}
+.stage-chat-icon-button svg {
+  pointer-events: none;
 }
 
 .stage-left-tabs,
@@ -616,14 +619,51 @@ html, body, #root { background: #0a0a12; }
 }
 .stage-chat-input {
   border: 0;
-  min-height: 38px;
+  min-height: 34px;
   max-height: 132px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  padding-block: 7px;
 }
 .stage-chat-input:focus {
   outline: none;
   box-shadow: none;
+}
+.stage-chat-action-well {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+}
+.stage-chat-history-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: var(--color-text-secondary);
+  text-align: left;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+.stage-chat-history-row:hover:not(:disabled),
+.stage-chat-history-row[data-active="true"] {
+  border-color: rgba(251, 113, 133, 0.24);
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--color-text-primary);
+}
+.stage-chat-history-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+.auth-option-grid .glass-cta:disabled {
+  border-color: rgba(255, 255, 255, 0.10) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: var(--color-text-muted) !important;
+  box-shadow: none !important;
 }
 .stage-chat-composer .awidat-mention-picker {
   position: absolute;
@@ -728,6 +768,40 @@ html, body, #root { background: #0a0a12; }
   border-color: rgba(251, 113, 133, 0.48);
   background: rgba(239,68,68,0.22);
   box-shadow: inset 3px 0 0 #EF4444, 0 12px 28px rgba(0, 0, 0, 0.26);
+}
+.stage-media-grid {
+  align-items: start;
+}
+.stage-media-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at 30% 18%, rgba(239, 68, 68, 0.24), transparent 40%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+.stage-media-thumb img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+.stage-media-thumb-fallback {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.72);
+}
+.stage-media-thumb-fallback span {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.stage-media-empty {
+  grid-column: 1 / -1;
 }
 .stage-tool-body .transcript-action-button,
 .stage-tool-body .properties-apply,

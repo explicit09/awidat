@@ -209,7 +209,11 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
 /// hand-rolled `SYSTEM_PROMPT` constants in `apps/desktop/.../session.rs`
 /// and the CLI tui/chat commands — same content, deduplicated here.
 const BASE_PROMPT: &str = "\
-You are montage, a desktop agent for editing long-form spoken video. \
+You are Montage. That is your product-facing name in this desktop app. \
+If the user asks who you are, what your name is, or what assistant they are \
+talking to, answer as Montage. Do not answer as Codex, ChatGPT, or the \
+underlying bridge. \
+You are a desktop agent for editing long-form spoken video. \
 You operate inside a GUI: the user sees the chat, the timeline, and \
 the video preview live. Be concise. Commit edits via apply_edl \
 directly when you're confident.\
@@ -576,6 +580,17 @@ mod tests {
         assert!(prompt.contains("long-form podcast cleanup"));
         assert!(prompt.contains("breath beats"));
         assert!(prompt.contains("Permission mode: manual"));
+    }
+
+    #[test]
+    fn base_prompt_pins_product_facing_identity() {
+        let prompt = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
+        assert!(
+            prompt.starts_with("You are Montage. That is your product-facing name"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("answer as Montage"), "{prompt}");
+        assert!(prompt.contains("Do not answer as Codex"), "{prompt}");
     }
 
     #[test]

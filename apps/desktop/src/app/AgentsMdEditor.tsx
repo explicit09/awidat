@@ -1,9 +1,9 @@
-// AgentsMdEditor — modal mono-text editor for the project's
+// AgentsMdEditor: modal mono-text editor for the project's
 // AGENTS.md (Wave 3 T2).
 //
 // AGENTS.md is the editorial brief the agent reads every turn. Round-
 // tripping changes through an external editor is slow; this modal
-// closes the loop — edit, save, agent picks up changes on the next
+// closes the loop: edit, save, agent picks up changes on the next
 // turn.
 //
 // Reachable from:
@@ -14,7 +14,7 @@
 //
 // Scope discipline:
 //   - No markdown rendering. Plain `<textarea>` with mono font is
-//     deliberate — a real markdown editor is a follow-up.
+//     deliberate. A real markdown editor is a follow-up.
 //   - No new npm deps.
 //   - Tokens-only styling. Modal chrome reuses `.modal-*`; the
 //     editor-specific bits are scoped under `.agents-md-editor` so
@@ -29,11 +29,11 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "./state";
 import { useAgentsMdEditor } from "../state/agentsMdEditor";
-import { Button, Inline } from "../ui";
+import { useSettings } from "../state/settings";
 
 /** Starter template shown when the project has no AGENTS.md yet.
  *  Saving writes this (or whatever the user edits it into) to disk.
- *  Kept minimal so the user isn't overwhelmed — the existing project
+ *  Kept minimal so the user isn't overwhelmed. The existing project
  *  starter template lives in `commands/project.rs` and is what
  *  `init_project` writes; this in-product template is for the
  *  AGENTS.md-deleted case. */
@@ -62,6 +62,7 @@ export function AgentsMdEditor() {
   const markDirty = useAgentsMdEditor((s) => s.markDirty);
   const markClean = useAgentsMdEditor((s) => s.markClean);
   const projectPath = useProjectStore((s) => s.current);
+  const settingsOpen = useSettings((s) => s.isOpen);
 
   const [content, setContent] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -69,7 +70,7 @@ export function AgentsMdEditor() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Load the file when the modal opens. If the backend returns null
-  // (file missing), seed the textarea with the starter template — the
+  // (file missing), seed the textarea with the starter template. The
   // first Save then creates the file.
   useEffect(() => {
     if (!isOpen || !projectPath) {
@@ -80,7 +81,7 @@ export function AgentsMdEditor() {
     setSaveStatus({ kind: "idle" });
 
     if (!isTauri()) {
-      // Storybook / vite-preview mode — start with the template so
+      // Storybook / vite-preview mode: start with the template so
       // the editor remains usable for design review.
       setContent(STARTER_TEMPLATE);
       setLoaded(true);
@@ -106,7 +107,7 @@ export function AgentsMdEditor() {
     };
   }, [isOpen, projectPath]);
 
-  // Cancel handler — confirms before discarding unsaved edits.
+  // Cancel handler: confirms before discarding unsaved edits.
   const cancel = useCallback(() => {
     if (
       isDirty &&
@@ -117,12 +118,12 @@ export function AgentsMdEditor() {
     close();
   }, [isDirty, close]);
 
-  // Save handler — shared between the button, ⌘S, and ⌘Enter.
+  // Save handler: shared between the button, ⌘S, and ⌘Enter.
   const save = useCallback(async () => {
     if (!projectPath) return;
     if (!isDirty) return;
     if (!isTauri()) {
-      // No backend in design review — pretend it succeeded so the
+      // No backend in design review. Pretend it succeeded so the
       // UX still demos.
       markClean();
       setSaveStatus({ kind: "saved", at: Date.now() });
@@ -141,7 +142,7 @@ export function AgentsMdEditor() {
     }
   }, [projectPath, isDirty, content, markClean]);
 
-  // Esc / ⌘S / ⌘Enter handlers — registered at document level so
+  // Esc / ⌘S / ⌘Enter handlers: registered at document level so
   // they win regardless of which child has focus.
   useEffect(() => {
     if (!isOpen) return;
@@ -153,13 +154,13 @@ export function AgentsMdEditor() {
       }
       const meta = event.metaKey || event.ctrlKey;
       if (!meta) return;
-      // ⌘S — save
+      // ⌘S: save
       if (event.key === "s" || event.key === "S") {
         event.preventDefault();
         void save();
         return;
       }
-      // ⌘Enter — save (parity with composer convention)
+      // ⌘Enter: save (parity with composer convention)
       if (event.key === "Enter") {
         event.preventDefault();
         void save();
@@ -189,43 +190,57 @@ export function AgentsMdEditor() {
       role="presentation"
     >
       <div
-        className="modal agents-md-editor"
+        className="agents-md-editor glass glass-strong flex flex-col overflow-hidden text-[var(--color-text-primary)]"
         onClick={(event) => event.stopPropagation()}
         style={{
-          width: "min(720px, calc(100vw - 48px))",
-          height: "min(520px, calc(100vh - 48px))",
+          width: "min(780px, calc(100vw - 48px))",
+          height: "min(580px, calc(100vh - 48px))",
+          borderRadius: 16,
+          boxShadow: "0 28px 90px rgba(0,0,0,0.62), 0 0 0 1px rgba(239,68,68,0.12)",
         }}
         role="dialog"
         aria-modal="true"
         aria-label="Edit AGENTS.md"
       >
-        <header className="modal-header">
-          <Inline gap="2" align="center">
-            <h2>AGENTS.md</h2>
+        <header className="flex items-center justify-between border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-5 py-4">
+          <div className="min-w-0">
+            <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-brand)]">
+              Editorial brief
+            </p>
+            <h2 className="m-0 mt-1 text-[20px] font-bold tracking-normal">AGENTS.md</h2>
             {projectPath ? (
-              <span className="ame-path" title={projectPath}>
+              <span className="mt-1 block truncate font-mono text-[11px] text-[var(--color-text-muted)]" title={projectPath}>
                 {projectPath}
               </span>
             ) : null}
-          </Inline>
+          </div>
           <button
             type="button"
-            className="modal-close"
+            className="glass-content grid h-8 w-8 place-items-center rounded-lg text-[18px] leading-none text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
             onClick={cancel}
             aria-label="Close AGENTS.md editor"
           >
             ×
           </button>
         </header>
-        <div className="modal-body ame-body">
+        <div className="ame-body flex min-h-0 flex-1 flex-col bg-[rgba(10,10,14,0.24)] p-5">
+          {settingsOpen ? (
+            <button
+              type="button"
+              className="glass-ghost mb-3 w-fit rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+              onClick={cancel}
+            >
+              Back to settings
+            </button>
+          ) : null}
           <textarea
             ref={textareaRef}
-            className="ame-textarea"
+            className="ame-textarea min-h-0 flex-1 resize-none rounded-xl border border-[var(--glass-border)] bg-[rgba(8,9,12,0.66)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-text-primary)] outline-none focus:border-[rgba(239,68,68,0.45)]"
             value={content}
             onChange={(event) => {
               setContent(event.target.value);
               markDirty();
-              // A fresh edit invalidates the "Saved" chip — without
+              // A fresh edit invalidates the "Saved" chip. Without
               // this the user sees "Saved 2s ago" while typing into
               // a now-dirty buffer.
               if (saveStatus.kind === "saved" || saveStatus.kind === "error") {
@@ -238,20 +253,20 @@ export function AgentsMdEditor() {
             disabled={!loaded || !projectPath}
           />
         </div>
-        <footer className="modal-footer ame-footer">
-          <Inline gap="3" align="center" className="ame-meta">
+        <footer className="ame-footer flex items-center justify-between gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-5 py-3">
+          <div className="ame-meta flex items-center gap-3">
             <span className="ame-wordcount">
               {wordCount} word{wordCount === 1 ? "" : "s"}
             </span>
             <SaveChip status={saveStatus} savedLabel={savedLabel} />
-          </Inline>
-          <Inline gap="2" align="center">
-            <Button variant="ghost" size="sm" onClick={cancel}>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="glass-ghost rounded-lg px-3 py-1.5 text-[12px] font-semibold" onClick={cancel}>
               Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
+            </button>
+            <button
+              type="button"
+              className="glass-cta rounded-lg px-3 py-1.5 text-[12px] font-semibold disabled:pointer-events-none disabled:opacity-45"
               onClick={() => void save()}
               disabled={
                 !isDirty ||
@@ -267,8 +282,8 @@ export function AgentsMdEditor() {
               }
             >
               {saveStatus.kind === "saving" ? "Saving…" : "Save"}
-            </Button>
-          </Inline>
+            </button>
+          </div>
         </footer>
       </div>
     </div>

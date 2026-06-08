@@ -20,7 +20,6 @@ import { SocialAccounts } from "./social/SocialAccounts";
 import { PROVIDERS } from "./publishingSettingsModel";
 import { useAiDisclosure } from "../state/aiDisclosure";
 import { useUploadPrefs } from "../state/uploadPrefs";
-import { Inline, Stack } from "../ui";
 
 export function PublishingSettings() {
   const autoDisclose = useAiDisclosure((s) => s.autoDiscloseEnabled);
@@ -32,22 +31,27 @@ export function PublishingSettings() {
   // the server-backed <SocialAccounts /> surface owns connect/list/disconnect.
 
   return (
-    <Stack gap="3">
-      {/* ---- Connected accounts (server-backed) ---- */}
-      <SocialAccounts />
+    <div className="grid gap-3">
+      <div className="rounded-xl border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] p-3">
+        <SocialAccounts />
+      </div>
 
-      {/* ---- Global preferences ---- */}
-      <Stack gap="2" className="pt-3 border-t border-[var(--color-border-subtle)]">
-        <h4 className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)] m-0">
-          Preferences
-        </h4>
+      <div className="grid gap-3 rounded-xl border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] p-3">
+        <div>
+          <h4 className="m-0 text-[13px] font-bold tracking-normal text-[var(--color-text-primary)]">
+            Preferences
+          </h4>
+          <p className="m-0 mt-1 text-[11px] text-[var(--color-text-muted)]">
+            Defaults for queued renders and platform disclosure.
+          </p>
+        </div>
         <PreferenceToggle
           label="Auto-disclose AI content"
           note="AI labels are required by YouTube, TikTok, and Meta for synthetic content."
           checked={autoDisclose}
           onChange={setAutoDisclose}
         />
-        <Stack gap="1">
+        <div className="grid gap-1">
           <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
             Default upload targets
           </span>
@@ -55,7 +59,7 @@ export function PublishingSettings() {
             Providers below get the Upload pip toggled on by default when
             you queue a new render.
           </span>
-          <Inline gap="2" align="center" className="flex-wrap">
+          <div className="flex flex-wrap items-center gap-2">
             {PROVIDERS.map((p) => (
               <DefaultTargetCheckbox
                 key={p.key}
@@ -64,18 +68,18 @@ export function PublishingSettings() {
                 onChange={() => void toggleUploadDefault(p.key)}
               />
             ))}
-          </Inline>
-        </Stack>
-      </Stack>
+          </div>
+        </div>
+      </div>
 
       {/* BYO-credentials UI removed: the desktop is a thin client of the
           montage-social server, which holds the OAuth app server-side. Users
           connect via the server-backed <SocialAccounts /> surface above
-          ("just sign in") — they no longer paste per-platform client_id/secret.
+          ("just sign in"). They no longer paste per-platform client_id/secret.
           The legacy local-publishing path still exists behind the
           `legacy_local_publishing` build flag (render-queue auto-upload); this
           panel intentionally no longer surfaces it. */}
-    </Stack>
+    </div>
   );
 }
 
@@ -93,8 +97,8 @@ function PreferenceToggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <Stack gap="1">
-      <Inline justify="between" align="center" gap="2">
+    <div className="grid gap-1 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
           {label}
         </span>
@@ -109,11 +113,11 @@ function PreferenceToggle({
             {checked ? "On" : "Off"}
           </span>
         </label>
-      </Inline>
+      </div>
       <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
         {note}
       </span>
-    </Stack>
+    </div>
   );
 }
 
@@ -127,7 +131,7 @@ function DefaultTargetCheckbox({
   onChange: () => void;
 }) {
   return (
-    <label className="inline-flex items-center gap-1.5 cursor-pointer px-2 py-1 rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]">
+    <label className="glass-ghost inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5">
       <input
         type="checkbox"
         checked={checked}

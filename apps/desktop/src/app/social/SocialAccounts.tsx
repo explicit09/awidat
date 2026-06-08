@@ -3,8 +3,7 @@
 // eligibility, and disconnect. Talks to the `social_*` Tauri commands; all
 // derivation lives in `socialModel.ts`.
 //
-// House style: muted surfaces, hairline borders, dot + label for status (no
-// colored pills), using the shared `ui` primitives + Tailwind tokens.
+// House style: muted glass surfaces, hairline borders, dot + label for status.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,7 +20,6 @@ import {
 import { startConnect } from "./socialActions";
 import { SocialAudit } from "./SocialAudit";
 import { PROVIDERS, providerDisplayName } from "../publishingSettingsModel";
-import { Button, Inline, Stack } from "../../ui";
 
 const SOCIAL_PROVIDERS = PROVIDERS.map((provider) => provider.key);
 
@@ -120,31 +118,34 @@ export function SocialAccounts() {
   );
 
   return (
-    <Stack gap="2">
-      <Inline justify="between" align="center" gap="2">
+    <div className="grid gap-3">
+      <div className="flex items-start justify-between gap-3">
         <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
           Connect an account to publish on your behalf. You sign in once; the
           server keeps it connected.
         </span>
-        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+        <button
+          type="button"
+          className="glass-ghost rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+          onClick={() => void refresh()}
+        >
           Refresh
-        </Button>
-      </Inline>
+        </button>
+      </div>
 
-      {/* Connect buttons */}
-      <Inline gap="2" align="center" className="flex-wrap">
+      <div className="flex flex-wrap items-center gap-2">
         {SOCIAL_PROVIDERS.map((p) => (
-          <Button
+          <button
             key={p}
-            variant="secondary"
-            size="sm"
+            type="button"
+            className="glass-cta rounded-lg px-3 py-1.5 text-[12px] font-semibold disabled:pointer-events-none disabled:opacity-45"
             disabled={busy !== null}
             onClick={() => void connect(p)}
           >
             {busy === p ? "Opening…" : `Connect ${providerDisplayName(p)}`}
-          </Button>
+          </button>
         ))}
-      </Inline>
+      </div>
 
       {error && (
         <span
@@ -162,23 +163,22 @@ export function SocialAccounts() {
       )}
 
       {/* Account list */}
-      <Stack gap="1">
+      <div className="grid gap-2">
         {accounts.map((a) => {
           const auditOpen = auditAccountId === a.id;
           return (
-            <Stack
+            <div
               key={a.id}
-              gap="2"
-              className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
+              className="glass-content grid gap-2 rounded-xl px-3 py-2"
             >
-              <Inline justify="between" align="center" gap="2">
-                <Inline gap="2" align="center" className="min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
                   <span
                     aria-hidden="true"
                     className="inline-block h-2 w-2 rounded-full shrink-0"
                     style={{ backgroundColor: statusDotColor(a.status) }}
                   />
-                  <Stack gap="0" className="min-w-0">
+                  <div className="min-w-0">
                     <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)] truncate">
                       {a.displayName || a.providerAccountId}
                     </span>
@@ -188,13 +188,13 @@ export function SocialAccounts() {
                         ? ` · ${eligibilitySummary(a.eligibility)}`
                         : ""}
                     </span>
-                  </Stack>
-                </Inline>
-                <Inline gap="1" align="center">
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
                   {canViewAccountAudit(a.status) && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    <button
+                      type="button"
+                      className="glass-ghost rounded-lg px-2.5 py-1 text-[11px] font-semibold"
                       onClick={() =>
                         setAuditAccountId((current) =>
                           current === a.id ? null : a.id,
@@ -202,29 +202,29 @@ export function SocialAccounts() {
                       }
                     >
                       {auditOpen ? "Hide audit" : "View audit"}
-                    </Button>
+                    </button>
                   )}
                   {canReconnect(a.status) && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
+                    <button
+                      type="button"
+                      className="glass-cta rounded-lg px-2.5 py-1 text-[11px] font-semibold disabled:pointer-events-none disabled:opacity-45"
                       disabled={busy !== null}
                       onClick={() => void connect(a.provider)}
                     >
                       {busy === a.provider ? "Opening…" : "Reconnect"}
-                    </Button>
+                    </button>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <button
+                    type="button"
+                    className="glass-ghost rounded-lg px-2.5 py-1 text-[11px] font-semibold"
                     onClick={() => void disconnect(a.id)}
                   >
                     Disconnect
-                  </Button>
-                </Inline>
-              </Inline>
+                  </button>
+                </div>
+              </div>
               {auditOpen && <SocialAudit accountId={a.id} />}
-            </Stack>
+            </div>
           );
         })}
         {accounts.length === 0 && !error && !polling && (
@@ -232,7 +232,7 @@ export function SocialAccounts() {
             No accounts connected yet.
           </span>
         )}
-      </Stack>
-    </Stack>
+      </div>
+    </div>
   );
 }

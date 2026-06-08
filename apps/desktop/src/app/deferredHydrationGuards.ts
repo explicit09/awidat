@@ -21,11 +21,6 @@ export function shouldStartDeferredIntro(args: {
   mediaSourceCount: number;
   mediaProxyCount: number;
 }): boolean {
-  return (
-    args.scheduledProject === args.currentProject &&
-    !args.introduced &&
-    !args.running &&
-    args.itemCount === 0 &&
-    (args.mediaSourceCount > 0 || args.mediaProxyCount > 0)
-  );
+  void args;
+  return false;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { History, Plus } from "lucide-react";
 import { ChatStream } from "../agent/ChatStream";
-import type { MediaSuggestion } from "./CommandRail";
+import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
 type ConversationPanelProps = {
   agentRead?: string;
@@ -11,6 +12,12 @@ type ConversationPanelProps = {
   onCancel: () => void;
   mediaSuggestions?: MediaSuggestion[];
   onPickMedia?: (suggestion: MediaSuggestion) => void;
+  chatSessions?: ChatSessionSummary[];
+  activeChatSession?: ChatSessionSummary | null;
+  chatLoading?: boolean;
+  onOpenHistory?: () => void;
+  onSelectChatSession?: (session: ChatSessionSummary) => void;
+  onNewChat?: () => void;
 };
 
 export function ConversationPanel({
@@ -22,10 +29,17 @@ export function ConversationPanel({
   onCancel,
   mediaSuggestions = [],
   onPickMedia,
+  chatSessions = [],
+  activeChatSession = null,
+  chatLoading = false,
+  onOpenHistory,
+  onSelectChatSession,
+  onNewChat,
 }: ConversationPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const filteredMedia = useMemo(() => {
     if (mention === null) return [];
@@ -53,6 +67,14 @@ export function ConversationPanel({
     input.style.height = `${nextHeight}px`;
     input.style.overflowY = input.scrollHeight > 132 ? "auto" : "hidden";
   }, [draft]);
+
+  function toggleHistory() {
+    setHistoryOpen((open) => {
+      const next = !open;
+      if (next) onOpenHistory?.();
+      return next;
+    });
+  }
 
   function syncMentionFromCaret() {
     const input = inputRef.current;
@@ -99,6 +121,86 @@ export function ConversationPanel({
       data-stage-chat-panel
       className="stage-convo flex min-h-0 flex-1 flex-col overflow-hidden"
     >
+      <div className="stage-chat-session-header border-b border-[var(--glass-border)] px-3 py-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="stage-chat-session-trigger glass-ghost min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-semibold"
+            onClick={toggleHistory}
+            disabled={chatLoading}
+            aria-expanded={historyOpen}
+            title="Chat history"
+          >
+            <span className="block truncate">
+              {chatLoading ? "Loading chats..." : activeChatSession?.title ?? "New chat"}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="stage-chat-icon-button stage-chat-icon"
+            onClick={toggleHistory}
+            disabled={chatLoading}
+            aria-label="Chat history"
+            title="Chat history"
+            aria-expanded={historyOpen}
+            data-active={historyOpen ? "true" : "false"}
+          >
+            <History className="h-3.5 w-3.5 stroke-[1.75]" />
+          </button>
+          <button
+            type="button"
+            className="stage-chat-icon-button stage-chat-icon"
+            onClick={() => {
+              onNewChat?.();
+              setHistoryOpen(false);
+            }}
+            disabled={running || chatLoading}
+            aria-label="New chat"
+            title="New chat"
+          >
+            <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
+          </button>
+        </div>
+        {historyOpen ? (
+          <div className="stage-chat-history mt-2 max-h-48 overflow-auto rounded-lg border border-[var(--glass-border)] bg-[rgba(10,10,18,0.86)] p-1">
+            <button
+              type="button"
+              className="stage-chat-history-row"
+              onClick={() => {
+                onNewChat?.();
+                setHistoryOpen(false);
+              }}
+              disabled={running || chatLoading}
+            >
+              <span className="truncate">New chat</span>
+              <span className="font-mono text-[10px] text-[var(--color-text-muted)]">fresh</span>
+            </button>
+            {chatSessions.map((session) => (
+              <button
+                key={session.logPath}
+                type="button"
+                className="stage-chat-history-row"
+                data-active={activeChatSession?.logPath === session.logPath ? "true" : "false"}
+                onClick={() => {
+                  onSelectChatSession?.(session);
+                  setHistoryOpen(false);
+                }}
+                disabled={running || chatLoading}
+              >
+                <span className="min-w-0 truncate">{session.title}</span>
+                <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+                  {session.messageCount}
+                </span>
+              </button>
+            ))}
+            {!chatLoading && chatSessions.length === 0 ? (
+              <p className="m-0 px-2 py-2 text-[11px] text-[var(--color-text-muted)]">
+                No saved chats yet.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
       {agentRead ? (
         <div className="border-b border-[var(--glass-border)] px-3 py-2">
           <span className="text-[10px] text-[var(--color-text-muted)]">{agentRead}</span>
@@ -108,7 +210,7 @@ export function ConversationPanel({
         <ChatStream />
       </div>
       <div className="stage-chat-composer border-t border-[var(--glass-border)] p-2">
-        <div className="stage-chat-card glass glass-reactive relative flex items-end gap-2 rounded-lg px-3 py-2">
+        <div className="stage-chat-card glass glass-reactive relative grid grid-cols-[minmax(0,1fr)_32px] items-center gap-2 rounded-lg px-3 py-2">
           <textarea
             ref={inputRef}
             value={draft}
@@ -175,9 +277,13 @@ export function ConversationPanel({
             </div>
           ) : null}
           {running ? (
-            <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-lg text-[13px]">■</button>
+            <div className="stage-chat-action-well">
+              <button onClick={onCancel} className="glass-ghost grid h-8 w-8 place-items-center rounded-lg text-[13px]">■</button>
+            </div>
           ) : (
-            <button onClick={onSubmit} className="glass-cta grid h-8 w-8 place-items-center rounded-lg text-[13px]">▸</button>
+            <div className="stage-chat-action-well">
+              <button onClick={onSubmit} className="glass-cta grid h-8 w-8 place-items-center rounded-lg text-[13px]">▸</button>
+            </div>
           )}
         </div>
       </div>

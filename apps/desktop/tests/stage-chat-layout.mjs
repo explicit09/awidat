@@ -7,9 +7,11 @@ const conversation = readFileSync(resolve(root, "src/shell/StageConversation.tsx
 const timelinePane = readFileSync(resolve(root, "src/timeline/TimelinePane.tsx"), "utf8");
 const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const inspector = readFileSync(resolve(root, "src/inspector/ClipInspector.tsx"), "utf8");
+const emptyConversation = readFileSync(resolve(root, "src/agent/EmptyConversation.tsx"), "utf8");
+const agentStore = readFileSync(resolve(root, "src/agent/store.ts"), "utf8");
 const glass = readFileSync(resolve(root, "src/ui/glass.css"), "utf8");
 const appCss = readFileSync(resolve(root, "src/App.css"), "utf8");
-const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${glass}\n${appCss}`;
+const source = `${shell}\n${conversation}\n${timelinePane}\n${app}\n${inspector}\n${emptyConversation}\n${agentStore}\n${glass}\n${appCss}`;
 const stageSource = `${shell}\n${conversation}`;
 const rightPanesBlock = shell.match(/const RIGHT_PANES:[\s\S]+?\];/)?.[0] ?? "";
 
@@ -31,6 +33,9 @@ const checks = [
   ["timeline toolbar has an explicit fit button", />\s*Fit\s*</],
   ["timeline header separates left transport and zoom regions", /timeline-header-left[\s\S]+timeline-header-center[\s\S]+timeline-header-right/],
   ["timeline transport is centered by CSS grid", /\.timeline-header[\s\S]+grid-template-columns:\s*minmax\(0,\s*1fr\) auto minmax\(0,\s*1fr\)/],
+  ["timeline header layers above the timeline stage", /\.timeline-header[\s\S]+position:\s*relative[\s\S]+z-index:\s*40/],
+  ["track add menu layers above timeline content", /\.timeline-add-track[\s\S]+z-index:\s*45[\s\S]+\.timeline-add-track-menu[\s\S]+z-index:\s*60/],
+  ["timeline stage stays below toolbar menus", /\.timeline-stage[\s\S]+position:\s*relative[\s\S]+z-index:\s*0/],
   ["timeline toolbar exposes playback controls", /TimelineTransportControls[\s\S]+aria-label=\{isPlaying \? "Pause timeline" : "Play timeline"\}/],
   ["timeline toolbar exposes jump controls", /aria-label="Jump to start"[\s\S]+aria-label="Jump to end"/],
   ["timeline toolbar exposes playback speed presets", /setPreviewRate[\s\S]+1\.5[\s\S]+2/],
@@ -46,7 +51,16 @@ const checks = [
   ["removes slash destination chips from composer", /\/deliver/.test(stageSource) === false],
   ["removes bottom composer wrapper", /absolute inset-x-0 bottom-0/.test(stageSource) === false],
   ["keeps composer inside conversation panel", /stage-chat-composer/],
+  ["stage chat exposes visible session controls", /stage-chat-session-header[\s\S]+Chat history[\s\S]+New chat/],
+  ["stage chat uses compact icon controls", /stage-chat-icon-button[\s\S]+aria-label="Chat history"[\s\S]+<History[\s\S]+aria-label="New chat"[\s\S]+<Plus/],
+  ["app adds optimistic user input before backend history catches up", /createOptimisticUserInput[\s\S]+kind:\s*"user_input"[\s\S]+optimistic-user[\s\S]+upsertAgentItem\(createOptimisticUserInput\(input\)\)/],
+  ["agent store dedupes optimistic user input when backend item arrives", /isOptimisticUserInput[\s\S]+existing\.text === item\.text/],
+  ["stage chat lists saved sessions", /chatSessions\.map\(\(session\)[\s\S]+onSelectChatSession\?\.\(session\)/],
+  ["stage shell passes chat sessions into stage chat", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{onSelectChatSession\}/],
+  ["app wires stage chat session handlers", /chatSessions=\{chatSessions\}[\s\S]+onSelectChatSession=\{\(session\) => void selectChatSession\(session\)\}[\s\S]+onNewChat=\{\(\) => void startNewChat\(\)\}/],
   ["stage composer wraps text in a textarea", /<textarea[\s\S]+className="[^"]*stage-chat-input/],
+  ["stage composer uses a fixed action well", /stage-chat-action-well[\s\S]+onSubmit/],
+  ["stage composer aligns the send control", /\.stage-chat-action-well[\s\S]+align-items:\s*center/],
   ["stage composer accepts media suggestions", /mediaSuggestions\?:\s*MediaSuggestion\[\]/],
   ["stage composer renders the mention picker", /awidat-mention-picker/],
   ["stage composer registers picked media", /onPickMedia\?\.\(suggestion\)/],
@@ -59,10 +73,16 @@ const checks = [
   ["uses tab buttons for right-pane selection", /className="stage-right-tab"/],
   ["uses tab buttons for left-pane selection", /className="stage-left-tab"/],
   ["inspector does not show the publish bridge", /EditorPublishBridge/.test(inspector) === false],
-  ["stage media rows know the selected media", /const selectedMediaStem = useMediaStore\(\(s\) => s\.selectedStem\)/],
-  ["stage media rows expose selected state", /data-selected=\{item\.stem === selectedMediaStem \? "true" : "false"\}/],
+  ["stage media grid shows source media visually", /stage-media-grid grid grid-cols-2/],
+  ["stage media cards render thumbnails when available", /item\.thumbnail[\s\S]+<img[\s\S]+src=\{item\.thumbnail\}/],
+  ["stage media cards include thumbnail fallbacks", /mediaInitials\(item\.title\)/],
+  ["stage media cards know the selected media", /const selectedMediaStem = useMediaStore\(\(s\) => s\.selectedStem\)/],
+  ["stage media cards expose selected state", /data-selected=\{item\.stem === selectedMediaStem \? "true" : "false"\}/],
   ["stage media selected state uses visible contrast", /\.stage-media-item\[data-selected="true"\][\s\S]+rgba\(239,68,68,0\.22\)/],
+  ["stage media thumbnails use dedicated glass styling", /\.stage-media-thumb[\s\S]+aspect-ratio:\s*16 \/ 9/],
+  ["stage media empty state spans the grid", /\.stage-media-empty[\s\S]+grid-column:\s*1 \/ -1/],
   ["source preview selector has liquid-visible contrast", /\.media-asset-select[\s\S]+rgba\(10,\s*10,\s*18,\s*0\.86\)/],
+  ["empty conversation does not promise to work only after indexing", /I'll work on it once indexing finishes/.test(emptyConversation) === false],
 ];
 
 for (const [label, pattern] of checks) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { Item } from "../protocol";
-import { INTRO_PROMPT, PREPARE_PROMPT } from "../state/introState.ts";
+import { INTRO_PROMPT, PREPARE_PROMPT, LEGACY_AWIDAT_INTRO_PROMPT_PREFIX } from "../state/introState.ts";
 import { visibleChatItems } from "./chatDisplay.ts";
 
 const introItems: Item[] = [
@@ -24,6 +24,27 @@ assert.deepEqual(
   visibleChatItems(introItems).map((item) => item.id),
   ["real-user", "real-answer"],
   "synthetic intro prompt and intro answer should be hidden",
+);
+
+const legacyIntroItems: Item[] = [
+  {
+    kind: "user_input",
+    id: "legacy-intro-user",
+    text: `${LEGACY_AWIDAT_INTRO_PROMPT_PREFIX}\nYou've just been opened on a project.`,
+  },
+  {
+    kind: "text",
+    id: "legacy-intro-answer",
+    phase: "completed",
+    text: "I've read AGENTS.md.",
+  },
+  { kind: "user_input", id: "real-after-legacy", text: "hello" },
+];
+
+assert.deepEqual(
+  visibleChatItems(legacyIntroItems).map((item) => item.id),
+  ["real-after-legacy"],
+  "legacy awidat intro prompt and intro answer should be hidden",
 );
 
 const prepareItems: Item[] = [

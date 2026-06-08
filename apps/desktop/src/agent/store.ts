@@ -42,6 +42,12 @@ function itemId(item: Item): string {
   return item.id;
 }
 
+function isOptimisticUserInput(
+  item: Item,
+): item is Extract<Item, { kind: "user_input" }> {
+  return item.kind === "user_input" && item.id.startsWith("optimistic-user-");
+}
+
 export const useAgentStore = create<AgentState>((set) => ({
   items: [],
   running: false,
@@ -52,6 +58,16 @@ export const useAgentStore = create<AgentState>((set) => ({
       const id = itemId(item);
       const idx = state.items.findIndex((i) => itemId(i) === id);
       if (idx === -1) {
+        if (item.kind === "user_input") {
+          const optimisticIdx = state.items.findIndex(
+            (existing) => isOptimisticUserInput(existing) && existing.text === item.text,
+          );
+          if (optimisticIdx !== -1) {
+            const next = state.items.slice();
+            next[optimisticIdx] = item;
+            return { items: next };
+          }
+        }
         return { items: [...state.items, item] };
       }
       const next = state.items.slice();

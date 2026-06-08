@@ -1,17 +1,16 @@
-// AuthChooser — pick how the agent is powered: your ChatGPT plan or an API key.
+// AuthChooser - pick how the agent is powered: your ChatGPT plan or an API key.
 //
 // The whole point of this surface is transparency about *which wallet gets
 // charged*. Each option names its wallet explicitly, and the persistent banner
-// shows the active one. Follows the modal pattern used elsewhere
-// (SettingsModal, NewProjectForm): `.modal-backdrop` ▸ `.modal` ▸ header/body.
+// shows the active one. Uses the same glass modal language as Settings.
 //
-// All real work lives in the `auth_*` Tauri commands → `montage-auth` crate →
+// All real work lives in the `auth_*` Tauri commands -> `montage-auth` crate ->
 // codex-login. This component only renders state and calls those actions.
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useAuth, type AuthStatus } from "../../state/auth";
-import { Button, Stack } from "../../ui";
+import { useSettings } from "../../state/settings";
 
 export function AuthChooser() {
   const isOpen = useAuth((s) => s.isOpen);
@@ -22,11 +21,12 @@ export function AuthChooser() {
   const signInWithChatgpt = useAuth((s) => s.signInWithChatgpt);
   const setApiKey = useAuth((s) => s.setApiKey);
   const logout = useAuth((s) => s.logout);
+  const settingsOpen = useSettings((s) => s.isOpen);
 
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
-  // Esc closes — same convention as SettingsModal.
+  // Esc closes the same way SettingsModal does.
   useEffect(() => {
     if (!isOpen) return;
     function onKeyDown(event: KeyboardEvent) {
@@ -58,100 +58,107 @@ export function AuthChooser() {
     }
   }
 
-  const signedIn = status && status.mode !== "none";
-
   return (
     <div className="modal-backdrop" onClick={close} role="presentation">
       <div
-        className="modal"
+        className="glass glass-strong flex flex-col overflow-hidden text-[var(--color-text-primary)]"
         onClick={(event) => event.stopPropagation()}
-        style={{ width: "min(620px, calc(100vw - 48px))", maxHeight: "min(620px, calc(100vh - 48px))" }}
+        style={{
+          width: "min(660px, calc(100vw - 48px))",
+          maxHeight: "min(620px, calc(100vh - 48px))",
+          borderRadius: 16,
+          boxShadow: "0 28px 90px rgba(0,0,0,0.62), 0 0 0 1px rgba(239,68,68,0.12)",
+        }}
         role="dialog"
         aria-modal="true"
         aria-label="Sign in to OpenAI"
       >
-        <header className="modal-header">
-          <h2>How should the agent be powered?</h2>
-          <button type="button" className="modal-close" onClick={close} aria-label="Close">
+        <header className="flex items-center justify-between border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-5 py-4">
+          <div className="min-w-0">
+            <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-brand)]">
+              OpenAI account
+            </p>
+            <h2 className="m-0 mt-1 truncate text-[20px] font-bold tracking-normal">
+              How should the agent be powered?
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="glass-content grid h-8 w-8 place-items-center rounded-lg text-[18px] leading-none text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+            onClick={close}
+            aria-label="Close"
+          >
             ×
           </button>
         </header>
 
-        <div className="modal-body">
-          <Stack gap="3">
+        <div className="min-h-0 flex-1 overflow-auto bg-[rgba(10,10,14,0.24)] p-5">
+          <div className="grid gap-4">
+            {settingsOpen ? (
+              <button
+                type="button"
+                className="glass-ghost w-fit rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+                onClick={close}
+              >
+                Back to settings
+              </button>
+            ) : null}
             <ActiveWalletBanner status={status} onLogout={() => void logout()} loading={loading} />
 
             {error ? <ErrorBox message={error} /> : null}
 
-            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)" }}>
-              Review the{" "}
-              <a
-                href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
-                target="_blank"
-                rel="noreferrer"
-              >
-                privacy policy
-              </a>{" "}
-              before connecting accounts or sending media-derived context to model providers.
-            </span>
-
-            <OptionCard
-              title="Sign in with ChatGPT"
-              wallet="Uses your ChatGPT plan"
-              recommended
-              detail="Spends your ChatGPT Plus / Pro / Business plan's Codex allowance — no per-token API charges, subject to your plan's usage limits."
-              footnote="After signing in, an auto-generated API key may appear in your OpenAI dashboard; that's expected and isn't what's billed here."
-              active={status?.mode === "chatgpt"}
-            >
-              <Button variant="primary" size="sm" onClick={() => void onSignInChatgpt()} disabled={loading}>
-                {loading ? "Working…" : "Continue with ChatGPT"}
-              </Button>
-            </OptionCard>
-
-            <OptionCard
-              title="Use an API key"
-              wallet="Billed to your OpenAI API account"
-              detail="Billed per-token to your OpenAI Platform account at standard API rates. Best for automation / CI. This is the mode OpenAI officially supports for third-party apps."
-              active={status?.mode === "api_key"}
-            >
-              <Stack gap="2">
-                <input
-                  type="password"
-                  className="auth-input"
-                  placeholder="sk-…"
-                  value={apiKeyInput}
-                  spellCheck={false}
-                  autoComplete="off"
-                  onChange={(e) => setApiKeyInput(e.target.value)}
-                  style={{
-                    width: "100%",
-                    fontFamily: "var(--font-mono, monospace)",
-                    fontSize: "var(--text-caption)",
-                    padding: "6px 8px",
-                    borderRadius: "var(--radius-sm)",
-                    border: "1px solid var(--color-border-subtle)",
-                    background: "var(--color-surface-input)",
-                    color: "var(--color-text-primary)",
-                  }}
-                />
-                {apiKeyError ? <ErrorBox message={apiKeyError} /> : null}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void onSaveApiKey()}
-                  disabled={loading || apiKeyInput.trim().length === 0}
+            <div className="auth-options grid gap-3">
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                Review the{" "}
+                <a
+                  href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+                  target="_blank"
+                  rel="noreferrer"
                 >
-                  Save API key
-                </Button>
-              </Stack>
-            </OptionCard>
+                  privacy policy
+                </a>{" "}
+                before connecting accounts or sending media-derived context to model providers.
+              </span>
+              <OptionCard
+                title="Sign in with ChatGPT"
+                wallet="Uses your ChatGPT plan"
+                recommended
+                detail="Best for a personal desktop setup. Uses your ChatGPT plan allowance and avoids per-token API billing."
+                footnote="An auto-generated API key may appear in your OpenAI dashboard after sign-in. That is expected."
+                active={status?.mode === "chatgpt"}
+              >
+                <GlassButton onClick={() => void onSignInChatgpt()} disabled={loading}>
+                  {loading ? "Working..." : status?.mode === "chatgpt" ? "Change account" : "Continue with ChatGPT"}
+                </GlassButton>
+              </OptionCard>
 
-            {signedIn ? (
-              <Button variant="ghost" size="sm" onClick={() => void logout()} disabled={loading}>
-                Sign out
-              </Button>
-            ) : null}
-          </Stack>
+              <OptionCard
+                title="API key"
+                wallet="Billed to your OpenAI API account"
+                detail="Use this for automation, CI, or a shared production billing setup."
+                active={status?.mode === "api_key"}
+              >
+                <div className="auth-option-grid grid gap-2">
+                  <input
+                    type="password"
+                    className="auth-input rounded-lg border border-[var(--glass-border)] bg-[rgba(8,9,12,0.62)] px-3 py-2 font-mono text-[12px] text-[var(--color-text-primary)] outline-none focus:border-[rgba(239,68,68,0.45)]"
+                    placeholder="sk-..."
+                    value={apiKeyInput}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                  />
+                  {apiKeyError ? <ErrorBox message={apiKeyError} /> : null}
+                  <GlassButton
+                    onClick={() => void onSaveApiKey()}
+                    disabled={loading || apiKeyInput.trim().length === 0}
+                  >
+                    Save API key
+                  </GlassButton>
+                </div>
+              </OptionCard>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -169,39 +176,29 @@ function ActiveWalletBanner({
   loading: boolean;
 }) {
   const title = status?.walletTitle ?? "Not signed in";
-  const detail = status?.walletDetail ?? "No OpenAI credentials found yet.";
+  const detail = normalizeAccountCopy(status?.walletDetail ?? "No OpenAI credentials found yet.");
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: "12px",
-        padding: "10px 12px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--color-border-subtle)",
-        background: "var(--color-surface-card)",
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: "var(--color-text-primary)", fontSize: "var(--text-body-sm)" }}>
-          Powered by: {title}
+    <div className="auth-current-wallet glass-content flex items-center justify-between gap-3 rounded-xl p-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-[14px] font-semibold leading-snug text-[var(--color-text-primary)]">
+          <span className="h-2 w-2 rounded-full bg-[var(--color-brand)] shadow-[0_0_14px_rgba(239,68,68,0.52)]" />
+          <span className="truncate">Powered by: {title}</span>
           {status?.accountHint ? (
-            <span style={{ color: "var(--color-text-muted)", fontWeight: 400 }}> · {status.accountHint}</span>
+            <span className="shrink-0 font-normal text-[var(--color-text-muted)]">{status.accountHint}</span>
           ) : null}
         </div>
-        <div style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-caption)" }}>{detail}</div>
+        <div className="mt-1 text-[13px] leading-snug text-[var(--color-text-secondary)]">{detail}</div>
         {status?.viaEnv ? (
-          <div style={{ color: "var(--color-text-warning, #c90)", fontSize: "var(--text-caption)" }}>
+          <div className="mt-1 text-[12px] leading-snug text-[var(--color-text-warning,#fbbf24)]">
             A {status.envVar ?? "credential"} in your environment is overriding this; unset it to
             use the wallet you choose here.
           </div>
         ) : null}
       </div>
       {status && status.mode !== "none" ? (
-        <Button variant="ghost" size="sm" onClick={onLogout} disabled={loading}>
-          Sign out
-        </Button>
+        <GlassButton variant="ghost" onClick={onLogout} disabled={loading}>
+          Disconnect
+        </GlassButton>
       ) : null}
     </div>
   );
@@ -226,46 +223,47 @@ function OptionCard({
 }) {
   return (
     <div
-      style={{
-        padding: "12px",
-        borderRadius: "var(--radius-sm)",
-        border: active ? "1px solid var(--color-border)" : "1px solid var(--color-border-subtle)",
-        background: active ? "var(--color-surface-selected)" : "var(--color-surface-panel)",
-      }}
+      className={
+        active
+          ? "auth-option-card glass-content rounded-xl border-[rgba(239,68,68,0.42)] p-3"
+          : "auth-option-card glass-content rounded-xl p-3"
+      }
     >
-      <Stack gap="2">
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontWeight: 600, color: "var(--color-text-primary)" }}>{title}</span>
-          {recommended ? <Tag label="Recommended" /> : null}
-          {active ? <Tag label="Active" tone="active" /> : null}
+      <div className="grid gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="grid gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[15px] font-semibold leading-snug text-[var(--color-text-primary)]">{title}</span>
+              {recommended ? <Tag label="Recommended" /> : null}
+              {active ? <Tag label="Active" tone="active" /> : null}
+            </div>
+            <span className="text-[13px] leading-snug text-[var(--color-text-secondary)]">{wallet}</span>
+          </div>
         </div>
-        <span style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-body-sm)" }}>{wallet}</span>
-        <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)" }}>{detail}</span>
+        <span className="text-[13px] leading-snug text-[var(--color-text-muted)]">{detail}</span>
         {footnote ? (
-          <span style={{ color: "var(--color-text-muted)", fontSize: "var(--text-caption)", fontStyle: "italic" }}>
+          <span className="text-[12px] leading-snug text-[var(--color-text-muted)]">
             {footnote}
           </span>
         ) : null}
-        <div>{children}</div>
-      </Stack>
+        <div className="auth-option-action">{children}</div>
+      </div>
     </div>
   );
+}
+
+function normalizeAccountCopy(value: string): string {
+  return value.replace(/\s+—\s+/g, ". ");
 }
 
 function Tag({ label, tone }: { label: string; tone?: "active" }) {
   return (
     <span
-      style={{
-        fontSize: "10px",
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
-        fontWeight: 700,
-        padding: "1px 6px",
-        borderRadius: "999px",
-        color: tone === "active" ? "var(--color-text-primary)" : "var(--color-text-muted)",
-        border: "1px solid var(--color-border-subtle)",
-        background: "var(--color-surface-card)",
-      }}
+      className={
+        tone === "active"
+          ? "rounded-full border border-[rgba(239,68,68,0.34)] bg-[rgba(239,68,68,0.12)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-primary)]"
+          : "rounded-full border border-[var(--glass-border)] bg-[rgba(255,255,255,0.05)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]"
+      }
     >
       {label}
     </span>
@@ -276,16 +274,36 @@ function ErrorBox({ message }: { message: string }) {
   return (
     <div
       role="alert"
-      style={{
-        padding: "8px 10px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--color-border-danger, #b44)",
-        background: "var(--color-surface-danger, rgba(180,68,68,0.1))",
-        color: "var(--color-text-danger, #d66)",
-        fontSize: "var(--text-caption)",
-      }}
+      className="rounded-lg border border-[rgba(239,68,68,0.34)] bg-[rgba(239,68,68,0.10)] px-3 py-2 text-[12px] text-[var(--color-text-danger,#f87171)]"
     >
       {message}
     </div>
+  );
+}
+
+function GlassButton({
+  children,
+  onClick,
+  disabled,
+  variant = "primary",
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  variant?: "primary" | "ghost";
+}) {
+  return (
+    <button
+      type="button"
+      className={
+        variant === "primary"
+          ? "glass-cta rounded-lg px-3 py-1.5 text-[12px] font-semibold disabled:pointer-events-none disabled:opacity-45"
+          : "glass-ghost rounded-lg px-3 py-1.5 text-[12px] font-semibold disabled:pointer-events-none disabled:opacity-45"
+      }
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
   );
 }

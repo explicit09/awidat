@@ -1,34 +1,31 @@
-// WelcomeCard — one-screen first-launch welcome (Wave 3 W1).
+// WelcomeCard - one-screen first-launch welcome.
 //
 // Montage is structurally unusual: a local-first AI editorial NLE where
 // the agent has READ your media and AGENTS.md, proposes editorial
 // work, and the human reviews/accepts/rejects. New users don't have a
 // mental model for this. The welcome explains the three core ideas in
-// one screen — read once, dismiss, done.
+// one screen: read once, dismiss, done.
 //
-// Storage lives in `useWelcome`. Composition follows the modal pattern
-// used by SettingsModal / AgentsMdEditor: `.modal-backdrop` ▸ `.modal`
-// ▸ header/body/footer. Tokens-only styling; no new CSS file.
+// Storage lives in `useWelcome`. The shell uses the shared glass system
+// so first launch feels like the rest of the Montage desktop surface.
 
-import { BookOpen, Sparkles, GitBranch } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
-import mark from "../brand/montage-mark.svg";
+import { useEffect } from "react";
+import { BrandMark } from "../brand/BrandMark";
 import { useWelcome } from "../state/welcome";
-import { Button, Inline, Stack } from "../ui";
 
-const CORE_IDEAS: ReadonlyArray<{ icon: ReactNode; title: string; body: string }> = [
+const CORE_IDEAS: ReadonlyArray<{ step: string; title: string; body: string }> = [
   {
-    icon: <BookOpen size={16} />,
+    step: "01",
     title: "An agent reads your media.",
-    body: "Drop a file, and Montage indexes it — transcript, scenes, speakers, silences. Your editorial brief lives in AGENTS.md.",
+    body: "Drop a file and Montage indexes transcript, scenes, speakers, and silences. Your editorial brief lives in AGENTS.md.",
   },
   {
-    icon: <Sparkles size={16} />,
+    step: "02",
     title: "It proposes editorial cuts with rationale.",
-    body: "The agent suggests trims, B-roll, color, captions — each with a one-sentence reason. You see them in the Brief and on the timeline as ghost overlays.",
+    body: "The agent suggests trims, B-roll, color, and captions, each with a one-sentence reason. You see them in the Brief and on the timeline as ghost overlays.",
   },
   {
-    icon: <GitBranch size={16} />,
+    step: "03",
     title: "You accept, reject, or revise inline.",
     body: "Every decision becomes part of the History. Nothing happens without your call.",
   },
@@ -38,7 +35,7 @@ export function WelcomeCard() {
   const isOpen = useWelcome((s) => s.isOpen);
   const dismiss = useWelcome((s) => s.dismiss);
 
-  // ⌘W / Esc dismisses. Registered at the document level so they win
+  // Cmd+W / Esc dismisses. Registered at the document level so they win
   // regardless of focus; only mounts while the modal is open.
   useEffect(() => {
     if (!isOpen) return;
@@ -63,78 +60,88 @@ export function WelcomeCard() {
   return (
     <div className="modal-backdrop" onClick={dismiss} role="presentation">
       <div
-        className="modal"
+        className="glass glass-strong flex flex-col overflow-hidden text-[var(--color-text-primary)]"
         onClick={(event) => event.stopPropagation()}
         style={{
           width: "min(640px, calc(100vw - 48px))",
           maxHeight: "min(520px, calc(100vh - 48px))",
+          borderRadius: 14,
+          boxShadow: "0 24px 80px rgba(0,0,0,0.58), 0 0 0 1px rgba(239,68,68,0.14)",
         }}
         role="dialog"
         aria-modal="true"
         aria-label="Welcome to Montage"
       >
-        <header className="modal-header">
-          <Inline gap="2" align="center">
-            <img src={mark} alt="" width={20} height={20} />
-            <h2>Welcome to Montage</h2>
-          </Inline>
-          <button type="button" className="modal-close" onClick={dismiss} aria-label="Dismiss welcome">
+        <header className="flex items-center justify-between border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <BrandMark size={20} className="drop-shadow-[0_0_14px_rgba(239,68,68,0.38)]" />
+            <h2 className="truncate text-[17px] font-bold tracking-normal text-[var(--color-text-primary)]">
+              Welcome to Montage
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="glass-content grid h-8 w-8 place-items-center rounded-lg text-[18px] leading-none text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
+            onClick={dismiss}
+            aria-label="Dismiss welcome"
+          >
             ×
           </button>
         </header>
-        <div className="modal-body">
-          <Stack gap="2">
-            {CORE_IDEAS.map((idea, index) => (
-              <IdeaCard key={index} icon={idea.icon} title={idea.title} body={idea.body} />
-            ))}
-            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              Review the{" "}
-              <a
-                href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
-                target="_blank"
-                rel="noreferrer"
-              >
-                privacy policy
-              </a>{" "}
-              before connecting accounts or sending media-derived context to model providers.
-            </span>
-          </Stack>
+        <div className="flex flex-col gap-2.5 bg-[rgba(8,9,12,0.26)] p-4">
+          {CORE_IDEAS.map((idea, index) => (
+            <IdeaCard key={index} step={idea.step} title={idea.title} body={idea.body} />
+          ))}
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            Review the{" "}
+            <a
+              href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              privacy policy
+            </a>{" "}
+            before connecting accounts or sending media-derived context to model providers.
+          </span>
         </div>
-        <footer className="modal-footer">
-          <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]" title="Dismiss">
+        <footer className="flex items-center justify-end gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-4 py-3">
+          <span
+            className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]"
+            title="Dismiss"
+          >
             ⌘W or Esc
           </span>
-          <Inline gap="2" align="center">
-            <Button variant="primary" size="sm" onClick={dismiss}>
-              Get started
-            </Button>
-          </Inline>
+          <button
+            type="button"
+            className="glass-cta rounded-lg px-4 py-2 text-[12px] font-semibold tracking-normal"
+            onClick={dismiss}
+          >
+            Get started
+          </button>
         </footer>
       </div>
     </div>
   );
 }
 
-/** One of the three core-idea cards. Orange icon chip on the left,
- *  two-line copy on the right. Built from tokens so visual weight
- *  tracks the rest of the app. */
-function IdeaCard({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+/** One of the three core-idea cards. */
+function IdeaCard({ step, title, body }: { step: string; title: string; body: string }) {
   return (
-    <div className="flex items-start gap-3 p-3 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]">
-      <div
-        className="grid place-items-center w-7 h-7 shrink-0 rounded-[var(--radius-xs)] text-[var(--color-brand)] bg-[color-mix(in_srgb,var(--color-brand)_14%,transparent)] border border-[color-mix(in_srgb,var(--color-brand)_28%,transparent)]"
+    <div className="glass-content flex items-start gap-3 rounded-lg border-l border-[rgba(239,68,68,0.42)] p-3 pl-3.5">
+      <span
+        className="mt-0.5 w-6 shrink-0 font-mono text-[10px] font-semibold leading-4 text-[var(--color-brand)]"
         aria-hidden
       >
-        {icon}
-      </div>
-      <Stack gap="0" className="min-w-0 flex-1">
+        {step}
+      </span>
+      <div className="min-w-0 flex-1">
         <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
           {title}
         </span>
-        <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+        <span className="mt-0.5 block text-[var(--text-body-sm)] leading-snug text-[var(--color-text-secondary)]">
           {body}
         </span>
-      </Stack>
+      </div>
     </div>
   );
 }
