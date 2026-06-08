@@ -13,11 +13,9 @@
 //!
 //! ## The one policy-sensitive knob
 //!
-//! ChatGPT sign-in reuses codex's first-party OAuth client id. OpenAI has
-//! neither sanctioned nor prohibited third-party reuse, so we keep that id in a
-//! single env-overridable place ([`oauth_client_id`]) — if the policy changes we
-//! swap one constant, not a flow. The API-key path is the only mode OpenAI
-//! officially supports for third-party apps, so it is kept first-class.
+//! ChatGPT sign-in requires an explicitly configured OAuth client id. The API-key
+//! path is the only mode OpenAI officially supports for third-party apps, so it
+//! is kept first-class and remains available without OAuth configuration.
 
 mod env;
 mod login;
@@ -34,36 +32,33 @@ pub use validate::validate_api_key;
 /// codex crates directly.
 pub use codex_login::{AuthCredentialsStoreMode, ShutdownHandle};
 
-/// Environment variable that overrides which OAuth client id ChatGPT sign-in
-/// uses. Empty/unset falls back to codex's first-party client.
+/// Environment variable that configures which OAuth client id ChatGPT sign-in
+/// uses. Empty/unset disables ChatGPT OAuth for public source builds.
 pub const OAUTH_CLIENT_ID_ENV: &str = "MONTAGE_OAUTH_CLIENT_ID";
 
 /// The OAuth client id used for "Sign in with ChatGPT".
 ///
-/// Defaults to codex's first-party client id (the only client that bills a
-/// user's ChatGPT subscription for inference). Override via
-/// [`OAUTH_CLIENT_ID_ENV`] to point at a different registered client.
+/// Public source builds do not fall back to a bundled ChatGPT OAuth client id.
+/// Configure [`OAUTH_CLIENT_ID_ENV`] with a sanctioned client id to enable this
+/// flow, or use API-key auth.
 ///
-/// **Partial escape hatch.** This only changes the client used for the initial
-/// browser *authorize*. Codex's vendored token *refresh* and *revoke* paths still
-/// submit the built-in [`codex_login::CLIENT_ID`], so an override alone will
-/// authorize successfully and then fail once the access token must be refreshed.
-/// A genuine pivot to a different client also requires codex-side changes — until
-/// then this knob is only safe for clients that share codex's token endpoints. We
-/// log a warning when an override is active so the limitation isn't silent.
-pub fn oauth_client_id() -> String {
+/// This only changes the client used for the initial browser *authorize*.
+/// Vendored codex refresh/revoke paths must also be configured before ChatGPT
+/// OAuth is considered production-ready. API-key auth remains the supported
+/// public default.
+pub fn oauth_client_id() -> Result<String, AuthError> {
     match std::env::var(OAUTH_CLIENT_ID_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
     {
         Some(override_id) => {
             tracing::warn!(
-                "{OAUTH_CLIENT_ID_ENV} overrides the authorize client only; codex still refreshes \
-                 and revokes with its built-in client, so token refresh may fail"
+                "{OAUTH_CLIENT_ID_ENV} configures the authorize client only; codex refresh/revoke \
+                 paths also need sanctioned OAuth configuration before production use"
             );
-            override_id
+            Ok(override_id)
         }
-        None => codex_login::CLIENT_ID.to_string(),
+        None => Err(AuthError::ChatGptOAuthNotConfigured),
     }
 }
 
@@ -83,6 +78,12 @@ pub enum AuthError {
     #[error("{0}")]
     ForbiddenByPolicy(String),
 
+    /// ChatGPT OAuth is unavailable because no sanctioned client id was supplied.
+    #[error(
+        "ChatGPT OAuth is not configured for this build. Set MONTAGE_OAUTH_CLIENT_ID to a sanctioned client id or use API-key auth."
+    )]
+    ChatGptOAuthNotConfigured,
+
     /// A filesystem / codex-login operation failed.
     #[error(transparent)]
     Io(std::io::Error),
@@ -101,24 +102,22 @@ mod tests {
         // restores the var before returning, so no other test observes the
         // mutation.
         unsafe { std::env::remove_var(OAUTH_CLIENT_ID_ENV) };
-        assert_eq!(
-            oauth_client_id(),
-            codex_login::CLIENT_ID,
-            "unset must fall back to codex first-party client"
+        assert!(
+            matches!(oauth_client_id(), Err(AuthError::ChatGptOAuthNotConfigured)),
+            "unset must not fall back to codex first-party client"
         );
 
         unsafe { std::env::set_var(OAUTH_CLIENT_ID_ENV, "app_custom_test_client") };
         assert_eq!(
-            oauth_client_id(),
+            oauth_client_id().unwrap(),
             "app_custom_test_client",
             "non-empty override must win"
         );
 
         unsafe { std::env::set_var(OAUTH_CLIENT_ID_ENV, "   ") };
-        assert_eq!(
-            oauth_client_id(),
-            codex_login::CLIENT_ID,
-            "blank override must be ignored"
+        assert!(
+            matches!(oauth_client_id(), Err(AuthError::ChatGptOAuthNotConfigured)),
+            "blank override must not fall back to codex first-party client"
         );
 
         unsafe { std::env::remove_var(OAUTH_CLIENT_ID_ENV) };

@@ -926,7 +926,7 @@ struct RefreshResponse {
 }
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const CLIENT_ID: &str = "MONTAGE_OAUTH_CLIENT_ID_REQUIRED";
 
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)

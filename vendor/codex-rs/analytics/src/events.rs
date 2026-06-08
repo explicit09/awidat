@@ -1014,7 +1014,7 @@ fn analytics_hook_source(source: HookSource) -> &'static str {
 pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
     let os_info = os_info::get();
     CodexRuntimeMetadata {
-        codex_rs_version: "0.128.0".to_string(),
+        codex_rs_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_os: std::env::consts::OS.to_string(),
         runtime_os_version: os_info.version().to_string(),
         runtime_arch: std::env::consts::ARCH.to_string(),

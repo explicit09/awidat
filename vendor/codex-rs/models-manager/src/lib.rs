@@ -17,5 +17,5 @@ pub fn bundled_models_response()
 
 /// Convert the client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3").
 pub fn client_version_to_whole() -> String {
-    "0.128.0".to_string()
+    env!("CARGO_PKG_VERSION").to_string()
 }
