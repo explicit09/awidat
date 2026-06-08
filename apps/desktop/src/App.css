@@ -7436,56 +7436,48 @@ button {
   background: var(--color-surface-hover);
 }
 
-/* Permission-mode chip — sits where the "⌘↩ to send" hint used to.
-   A native <select> wrapped in a label so the OS-native dropdown
-   menu opens on click, but the label provides the calm visual chrome
-   so the chip blends with the composer footer instead of looking
-   like a form field. Mode dot color encodes intent: blue=manual
-   (you drive), amber=copilot (it nudges), green=autopilot (it
-   drives). */
-.montage-chat-rail .montage-mode-chip {
-  position: relative;
-  display: inline-flex;
+/* Permission mode is a first-class chat control, not hidden composer
+   metadata. Keep all three levels readable in the rail header. */
+.montage-chat-rail .montage-permission-segment {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
   align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  background: rgba(12, 12, 14, 0.46);
+}
+.montage-chat-rail .montage-permission-segment button {
+  min-width: 44px;
+  height: 23px;
+  padding: 0 7px;
+  border: 0;
   border-radius: 6px;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition: background-color 100ms ease, color 100ms ease;
-}
-.montage-chat-rail .montage-mode-chip:hover {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
-}
-.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot {
-  height: 6px;
-  width: 6px;
-  border-radius: 999px;
-  background: var(--color-text-muted);
-}
-.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="manual"] {
-  background: #ef4444;
-}
-.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="copilot"] {
-  background: #fbbf24;
-}
-.montage-chat-rail .montage-mode-chip .montage-mode-chip-dot[data-mode="autopilot"] {
-  background: #5bd3d9;
-}
-.montage-chat-rail .montage-mode-chip select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  appearance: none;
   background: transparent;
-  border: none;
-  color: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+}
+.montage-chat-rail .montage-permission-segment button:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+.montage-chat-rail .montage-permission-segment button[data-active="true"] {
+  color: var(--color-text-primary);
+  background: rgba(239, 68, 68, 0.20);
+  box-shadow: inset 0 0 0 1px rgba(251, 113, 133, 0.28);
+}
+.montage-chat-rail .montage-permission-segment button[data-mode="copilot"][data-active="true"] {
+  background: rgba(251, 191, 36, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.24);
+}
+.montage-chat-rail .montage-permission-segment button[data-mode="autopilot"][data-active="true"] {
+  background: rgba(91, 211, 217, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(91, 211, 217, 0.26);
 }
 
 /* ─── Focused / full-chat mode sidebar ─────────────────────────────
