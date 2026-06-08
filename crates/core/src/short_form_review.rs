@@ -8,6 +8,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::short_form_review_context::{
+    TrendAlignment, TrendMoment, VisualDecisionInput, VisualDecisionPlan, trend_alignment,
+    trend_alignment_score, visual_decision_plan,
+};
+
 const DEFAULT_MAX_CANDIDATES: usize = 15;
 const DEFAULT_MAX_DURATION_S: f64 = 300.0;
 
@@ -27,6 +32,7 @@ pub struct ShortFormReviewInput {
     pub frame_quality: serde_json::Value,
     pub composition: serde_json::Value,
     pub broll_assets: serde_json::Value,
+    pub trend_context: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -83,8 +89,10 @@ pub struct ShortFormCandidate {
     pub story_arc: StoryArc,
     pub short_form_qualification: String,
     pub score: ScoreBreakdown,
+    pub trend_alignment: TrendAlignment,
     pub why_ai_picked_it: Vec<String>,
     pub evidence: Vec<String>,
+    pub visual_decision_plan: VisualDecisionPlan,
     pub profile_plan: ProfilePlan,
     pub broll_plan: BrollPlan,
     pub vertical_layout: VerticalLayoutPlan,
@@ -171,6 +179,7 @@ pub struct ScoreBreakdown {
     pub educational_value: f64,
     pub completeness: f64,
     pub visual_potential: f64,
+    pub trend_relevance: f64,
     pub retention_prediction: f64,
     pub context_dependency_penalty: f64,
     pub rambling_penalty: f64,
@@ -202,10 +211,38 @@ pub struct BrollAssetCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerticalLayoutPlan {
     pub target_aspect_ratio: String,
+    pub composition_mode: ShortFormCompositionMode,
     pub strategy: String,
     pub speaker_strategy: String,
+    pub segments: Vec<ShortFormLayoutSegment>,
     pub notes: Vec<String>,
     pub edl_operations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortFormCompositionMode {
+    NativeVertical,
+    ActiveSpeakerFill,
+    SplitStacked,
+    DynamicSwitching,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShortFormLayoutSegment {
+    pub start_s: f64,
+    pub end_s: f64,
+    pub layout: ShortFormLayoutMode,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortFormLayoutMode {
+    NativeVertical,
+    ActiveSpeakerCenter,
+    SplitStacked,
+    FillSpeaker { speaker_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,12 +392,28 @@ fn build_candidate(
         duration_s: round2(moment.end_s - moment.start_s),
     };
     let duration_class = duration_class(range.duration_s);
-    let score = score_moment(&moment, profile);
     let hook = hook_from_text(&moment.text);
     let topic = topic_for_range(&input.topics, range.start_s, range.end_s);
+    let trend_alignment = trend_alignment(
+        &input.trend_context,
+        TrendMoment {
+            kind: &moment.kind,
+            text: &moment.text,
+            reason: &moment.reason,
+        },
+    );
+    let score = score_moment(&moment, profile, trend_alignment_score(&trend_alignment));
     let clip_type = clip_type(&moment);
     let broll_plan = plan_broll(input, &moment, topic.as_deref());
     let vertical_layout = plan_vertical_layout(input, &moment, broll_plan.needed, profile);
+    let visual_decision_plan = visual_decision_plan(VisualDecisionInput {
+        moment_kind: &moment.kind,
+        moment_text: &moment.text,
+        broll_needed: broll_plan.needed,
+        broll_rationale: &broll_plan.rationale,
+        speaker_strategy: &vertical_layout.speaker_strategy,
+        topic_present: topic.is_some(),
+    });
     let highlight_terms = highlight_terms(&moment.text, topic.as_deref());
     let profile_plan = profile_plan(profile, &moment);
     let group_words_max = if matches!(profile, ShortFormProfile::ViralSocial) {
@@ -394,7 +447,7 @@ fn build_candidate(
         "short_{:06}_{:06}",
         range.start_s as u32, range.end_s as u32
     );
-    let why_ai_picked_it = why_picked(&score, &clip_type, broll_plan.needed);
+    let why_ai_picked_it = why_picked(&score, &clip_type, broll_plan.needed, &trend_alignment);
     let evidence = evidence(&moment, topic.as_deref(), input);
     let confidence = round2((score.total / 7.0).clamp(0.2, 0.98));
     let draft_edl = draft_edl(
@@ -425,8 +478,10 @@ fn build_candidate(
         short_form_qualification:
             "Complete, standalone moment suitable for a reviewable short-form draft.".to_string(),
         score,
+        trend_alignment,
         why_ai_picked_it,
         evidence,
+        visual_decision_plan,
         profile_plan,
         broll_plan,
         vertical_layout,
@@ -555,7 +610,11 @@ fn common_speaker(segments: &[&Moment]) -> Option<String> {
     }
 }
 
-fn score_moment(moment: &Moment, profile: ShortFormProfile) -> ScoreBreakdown {
+fn score_moment(
+    moment: &Moment,
+    profile: ShortFormProfile,
+    trend_relevance: f64,
+) -> ScoreBreakdown {
     let text = moment.text.to_lowercase();
     let mut hook_strength =
         bounded(0.35 + moment.model_score * 0.35 + keyword_score(&text, HOOK_KEYWORDS) * 0.3);
@@ -584,6 +643,7 @@ fn score_moment(moment: &Moment, profile: ShortFormProfile) -> ScoreBreakdown {
             + educational_value
             + completeness
             + visual_potential
+            + trend_relevance * 2.0
             + retention_prediction
             - context_dependency_penalty
             - rambling_penalty,
@@ -596,6 +656,7 @@ fn score_moment(moment: &Moment, profile: ShortFormProfile) -> ScoreBreakdown {
         educational_value: round2(educational_value),
         completeness: round2(completeness),
         visual_potential: round2(visual_potential),
+        trend_relevance: round2(trend_relevance),
         retention_prediction: round2(retention_prediction),
         context_dependency_penalty: round2(context_dependency_penalty),
         rambling_penalty: round2(rambling_penalty),
@@ -884,7 +945,10 @@ fn plan_vertical_layout(
     let face_count = max_face_count(&input.face);
     let scene_count = overlapping_scene_count(&input.scenes, moment.start_s, moment.end_s);
     let shot_hint = shot_hint(&input.shot, moment.start_s, moment.end_s);
-    let strategy = if speakers > 1 || face_count > 1 {
+    let multi_speaker = speakers > 1 || face_count > 1;
+    let composition_mode = composition_mode(input, moment, multi_speaker, wide_source);
+    let segments = layout_segments(input, moment, composition_mode);
+    let strategy = if multi_speaker {
         "dynamic speaker-aware 9:16 focus with split/stacked fallback"
     } else if broll_needed {
         "speaker crop with B-roll-first support windows"
@@ -896,15 +960,144 @@ fn plan_vertical_layout(
 
     VerticalLayoutPlan {
         target_aspect_ratio: "9:16".to_string(),
+        composition_mode,
         strategy: strategy.to_string(),
-        speaker_strategy: if speakers > 1 || face_count > 1 {
+        speaker_strategy: if multi_speaker {
             "Track the active speaker; use stacked/split layout when both speakers matter, then punch in on the current speaker during monologue stretches.".to_string()
         } else {
             "Keep the visible speaker in the safe center crop.".to_string()
         },
+        segments,
         notes: layout_notes(scene_count, shot_hint.as_deref()),
-        edl_operations: reframe_edl_operations(moment, face_count, profile),
+        edl_operations: reframe_edl_operations(moment, face_count, profile, composition_mode),
     }
+}
+
+fn composition_mode(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    multi_speaker: bool,
+    wide_source: bool,
+) -> ShortFormCompositionMode {
+    if !wide_source {
+        return ShortFormCompositionMode::NativeVertical;
+    }
+    if !multi_speaker {
+        return ShortFormCompositionMode::ActiveSpeakerFill;
+    }
+    if active_speakers_for_range(input, moment.start_s, moment.end_s).len() > 1 {
+        ShortFormCompositionMode::DynamicSwitching
+    } else {
+        ShortFormCompositionMode::SplitStacked
+    }
+}
+
+fn layout_segments(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    composition_mode: ShortFormCompositionMode,
+) -> Vec<ShortFormLayoutSegment> {
+    match composition_mode {
+        ShortFormCompositionMode::NativeVertical => vec![ShortFormLayoutSegment {
+            start_s: moment.start_s,
+            end_s: moment.end_s,
+            layout: ShortFormLayoutMode::NativeVertical,
+            reason: "source is already vertical; preserve native framing".to_string(),
+        }],
+        ShortFormCompositionMode::ActiveSpeakerFill => {
+            vec![fill_segment(
+                moment.start_s,
+                moment.end_s,
+                moment.speaker_id.as_deref(),
+            )]
+        }
+        ShortFormCompositionMode::SplitStacked => vec![ShortFormLayoutSegment {
+            start_s: moment.start_s,
+            end_s: moment.end_s,
+            layout: ShortFormLayoutMode::SplitStacked,
+            reason: "multiple speakers/faces stay valuable throughout the clip".to_string(),
+        }],
+        ShortFormCompositionMode::DynamicSwitching => dynamic_layout_segments(input, moment),
+    }
+}
+
+fn dynamic_layout_segments(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+) -> Vec<ShortFormLayoutSegment> {
+    let mut segments = vec![ShortFormLayoutSegment {
+        start_s: moment.start_s,
+        end_s: (moment.start_s + 3.0).min(moment.end_s),
+        layout: ShortFormLayoutMode::SplitStacked,
+        reason: "open in split/stacked view so the viewer understands the speaker relationship"
+            .to_string(),
+    }];
+
+    for segment in transcript_segments_for_range(input, moment.start_s, moment.end_s) {
+        let start_s = number_field(segment, &["start_s", "start"]).unwrap_or(moment.start_s);
+        let end_s = number_field(segment, &["end_s", "end"]).unwrap_or(start_s + 2.0);
+        let speaker = string_field(segment, &["speaker_id", "speaker"]);
+        segments.push(fill_segment(
+            start_s.max(moment.start_s),
+            end_s.min(moment.end_s),
+            speaker.as_deref(),
+        ));
+    }
+
+    if segments.len() == 1 {
+        segments.push(ShortFormLayoutSegment {
+            start_s: (moment.start_s + 3.0).min(moment.end_s),
+            end_s: moment.end_s,
+            layout: ShortFormLayoutMode::SplitStacked,
+            reason: "speaker timing unavailable; keep both speakers visible".to_string(),
+        });
+    }
+    segments
+}
+
+fn fill_segment(start_s: f64, end_s: f64, speaker_id: Option<&str>) -> ShortFormLayoutSegment {
+    ShortFormLayoutSegment {
+        start_s: round2(start_s),
+        end_s: round2(end_s),
+        layout: speaker_id
+            .filter(|speaker| !speaker.trim().is_empty())
+            .map(|speaker| ShortFormLayoutMode::FillSpeaker {
+                speaker_id: speaker.to_string(),
+            })
+            .unwrap_or(ShortFormLayoutMode::ActiveSpeakerCenter),
+        reason: "one speaker carries this beat; fill the vertical frame with that speaker"
+            .to_string(),
+    }
+}
+
+fn active_speakers_for_range(
+    input: &ShortFormReviewInput,
+    start_s: f64,
+    end_s: f64,
+) -> Vec<String> {
+    let mut speakers: Vec<String> = transcript_segments_for_range(input, start_s, end_s)
+        .into_iter()
+        .filter_map(|segment| string_field(segment, &["speaker_id", "speaker"]))
+        .filter(|speaker| !speaker.trim().is_empty())
+        .collect();
+    speakers.sort();
+    speakers.dedup();
+    speakers
+}
+
+fn transcript_segments_for_range(
+    input: &ShortFormReviewInput,
+    start_s: f64,
+    end_s: f64,
+) -> Vec<&serde_json::Value> {
+    array_at(&input.transcript, "/segments")
+        .into_iter()
+        .filter(|segment| {
+            let segment_start = number_field(segment, &["start_s", "start"]).unwrap_or(f64::MAX);
+            let segment_end = number_field(segment, &["end_s", "end"]).unwrap_or(f64::MIN);
+            segment_start < end_s && segment_end > start_s
+        })
+        .collect()
 }
 
 fn layout_notes(scene_count: usize, shot_hint: Option<&str>) -> Vec<String> {
@@ -928,12 +1121,14 @@ fn reframe_edl_operations(
     moment: &Moment,
     face_count: usize,
     profile: ShortFormProfile,
+    composition_mode: ShortFormCompositionMode,
 ) -> Vec<String> {
     let zoom = if face_count > 1 { 1.28 } else { 1.18 };
     let x = if face_count > 1 { 0.0 } else { -0.04 };
     let params = serde_json::json!({
         "aspect_ratio": "9:16",
-        "mode": if face_count > 1 { "dynamic_speaker_focus" } else { "active_speaker_center" },
+        "mode": composition_mode,
+        "legacy_mode": if face_count > 1 { "dynamic_speaker_focus" } else { "active_speaker_center" },
         "zoom": zoom,
         "x": x,
         "y": 0.0,
@@ -1419,7 +1614,12 @@ fn build_ranked_sets(candidates: &[ShortFormCandidate]) -> RankedSets {
     }
 }
 
-fn why_picked(score: &ScoreBreakdown, clip_type: &str, broll_needed: bool) -> Vec<String> {
+fn why_picked(
+    score: &ScoreBreakdown,
+    clip_type: &str,
+    broll_needed: bool,
+    trend_alignment: &TrendAlignment,
+) -> Vec<String> {
     let mut reasons = Vec::new();
     if score.hook_strength > 0.5 {
         reasons.push("strong hook or claim in the opening language".to_string());
@@ -1432,6 +1632,9 @@ fn why_picked(score: &ScoreBreakdown, clip_type: &str, broll_needed: bool) -> Ve
     }
     if broll_needed {
         reasons.push("clear B-roll or graphic support opportunities".to_string());
+    }
+    if trend_alignment.matched {
+        reasons.push("matches supplied trend context for this episode topic".to_string());
     }
     reasons.push(format!("classified as {clip_type}"));
     reasons
@@ -1883,3 +2086,272 @@ const VISUAL_KEYWORDS: &[&str] = &[
     "dashboard",
     "ai",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input_with_moments(
+        moments: serde_json::Value,
+        trend_context: serde_json::Value,
+    ) -> ShortFormReviewInput {
+        ShortFormReviewInput {
+            asset_id: "raw/technologia.mp4".into(),
+            source_width: 1920,
+            source_height: 1080,
+            transcript: serde_json::json!({"segments": []}),
+            editorial_moments: serde_json::json!({"clip_candidates": moments}),
+            audio_energy: serde_json::Value::Null,
+            topics: serde_json::json!({
+                "topics": [
+                    {"start_s": 0.0, "end_s": 120.0, "label": "AI coding agents"}
+                ]
+            }),
+            scenes: serde_json::Value::Null,
+            shot: serde_json::Value::Null,
+            face: serde_json::json!({"per_frame": [{"faces": [{}, {}]}]}),
+            gaze: serde_json::Value::Null,
+            frame_quality: serde_json::Value::Null,
+            composition: serde_json::Value::Null,
+            broll_assets: serde_json::Value::Null,
+            trend_context,
+        }
+    }
+
+    #[test]
+    fn trend_context_boosts_matching_clip_and_records_reason() {
+        let input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "generic-story",
+                    "start_s": 0.0,
+                    "end_s": 35.0,
+                    "kind": "story",
+                    "text": "We learned a lesson about how student founders should talk to customers because it changed the product.",
+                    "score": 0.75
+                },
+                {
+                    "id": "trend-match",
+                    "start_s": 50.0,
+                    "end_s": 85.0,
+                    "kind": "hot_take",
+                    "text": "AI coding agents are changing how founders ship prototypes, and people are wrong about how fast this gets adopted.",
+                    "score": 0.68
+                }
+            ]),
+            serde_json::json!({
+                "signals": [
+                    {
+                        "source": "x",
+                        "label": "AI coding agents",
+                        "keywords": ["AI coding agents", "prototypes"],
+                        "weight": 0.9,
+                        "reason": "X discussion is focused on AI coding agents and founder prototypes"
+                    }
+                ]
+            }),
+        );
+
+        let review = build_short_form_review(
+            input,
+            ShortFormReviewOptions {
+                profile: ShortFormProfile::ViralSocial,
+                ..Default::default()
+            },
+        );
+
+        let top = review
+            .candidates
+            .first()
+            .expect("expected ranked candidate");
+        assert_eq!(top.candidate_id, "short_000050_000085");
+        assert!(top.score.trend_relevance > 0.0);
+        assert!(top.trend_alignment.matched);
+        assert_eq!(top.trend_alignment.signals[0].source, "x");
+        assert!(
+            top.why_ai_picked_it
+                .iter()
+                .any(|reason| reason.contains("trend context"))
+        );
+    }
+
+    #[test]
+    fn missing_trend_context_keeps_episode_evidence_ranking_available() {
+        let input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "strong",
+                    "start_s": 10.0,
+                    "end_s": 50.0,
+                    "kind": "lesson",
+                    "text": "Here is why this product lesson matters because it explains how teams make faster decisions.",
+                    "score": 0.8
+                }
+            ]),
+            serde_json::Value::Null,
+        );
+
+        let review = build_short_form_review(input, ShortFormReviewOptions::default());
+
+        let candidate = review.candidates.first().expect("expected candidate");
+        assert!(!candidate.trend_alignment.matched);
+        assert_eq!(candidate.score.trend_relevance, 0.0);
+        assert!(
+            candidate
+                .trend_alignment
+                .fallback_reason
+                .contains("trend context unavailable")
+        );
+    }
+
+    #[test]
+    fn visual_decision_plan_maps_moments_to_existing_tools() {
+        let input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "analogy",
+                    "start_s": 5.0,
+                    "end_s": 42.0,
+                    "kind": "analogy",
+                    "text": "Think about AI agents like junior teammates. The analogy is useful because the product needs review, not blind trust.",
+                    "score": 0.72
+                }
+            ]),
+            serde_json::Value::Null,
+        );
+
+        let review = build_short_form_review(input, ShortFormReviewOptions::default());
+
+        let candidate = review.candidates.first().expect("expected candidate");
+        assert_eq!(candidate.visual_decision_plan.moment_kind, "analogy");
+        assert!(
+            candidate
+                .visual_decision_plan
+                .decisions
+                .iter()
+                .any(|decision| decision.tool == "plan_visual_support_proposals"
+                    && decision.action.contains("MotionScene"))
+        );
+        assert!(
+            candidate
+                .visual_decision_plan
+                .decisions
+                .iter()
+                .any(|decision| decision.tool == "plan_reframe")
+                || candidate
+                    .visual_decision_plan
+                    .decisions
+                    .iter()
+                    .any(|decision| decision.tool == "plan_multicam")
+        );
+    }
+
+    #[test]
+    fn multi_speaker_layout_contract_uses_dynamic_split_and_fill_segments() {
+        let mut input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "founder-debate",
+                    "start_s": 12.0,
+                    "end_s": 52.0,
+                    "kind": "debate",
+                    "text": "The first founder disagrees with the product thesis. The second founder reacts and explains why the market signal changes the decision.",
+                    "score": 0.82
+                }
+            ]),
+            serde_json::Value::Null,
+        );
+        input.transcript = serde_json::json!({
+            "speakers": ["founder_a", "founder_b"],
+            "segments": [
+                {"start_s": 12.0, "end_s": 20.0, "speaker_id": "founder_a"},
+                {"start_s": 20.0, "end_s": 31.0, "speaker_id": "founder_b"},
+                {"start_s": 31.0, "end_s": 52.0, "speaker_id": "founder_a"}
+            ]
+        });
+        input.face = serde_json::json!({
+            "per_frame": [
+                {"t_s": 12.0, "faces": [{"speaker_id": "founder_a"}, {"speaker_id": "founder_b"}]},
+                {"t_s": 25.0, "faces": [{"speaker_id": "founder_a"}, {"speaker_id": "founder_b"}]}
+            ]
+        });
+
+        let review = build_short_form_review(
+            input,
+            ShortFormReviewOptions {
+                profile: ShortFormProfile::ViralSocial,
+                ..Default::default()
+            },
+        );
+
+        let candidate = review.candidates.first().expect("expected candidate");
+        assert_eq!(
+            candidate.vertical_layout.composition_mode,
+            ShortFormCompositionMode::DynamicSwitching
+        );
+        assert!(
+            candidate
+                .vertical_layout
+                .segments
+                .iter()
+                .any(|segment| segment.layout == ShortFormLayoutMode::SplitStacked)
+        );
+        assert!(
+            candidate
+                .vertical_layout
+                .segments
+                .iter()
+                .any(|segment| matches!(segment.layout, ShortFormLayoutMode::FillSpeaker { .. }))
+        );
+        assert!(
+            candidate
+                .vertical_layout
+                .edl_operations
+                .iter()
+                .any(|op| op.contains("\"mode\":\"dynamic_switching\""))
+        );
+    }
+
+    #[test]
+    fn single_speaker_layout_contract_avoids_split() {
+        let mut input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "solo-explainer",
+                    "start_s": 8.0,
+                    "end_s": 34.0,
+                    "kind": "explainer",
+                    "text": "Here is why the product decision matters because one founder explains the full market signal.",
+                    "score": 0.78
+                }
+            ]),
+            serde_json::Value::Null,
+        );
+        input.transcript = serde_json::json!({
+            "speakers": ["founder_a"],
+            "segments": [
+                {"start_s": 8.0, "end_s": 34.0, "speaker_id": "founder_a"}
+            ]
+        });
+        input.face = serde_json::json!({
+            "per_frame": [
+                {"t_s": 8.0, "faces": [{"speaker_id": "founder_a"}]}
+            ]
+        });
+
+        let review = build_short_form_review(input, ShortFormReviewOptions::default());
+
+        let candidate = review.candidates.first().expect("expected candidate");
+        assert_eq!(
+            candidate.vertical_layout.composition_mode,
+            ShortFormCompositionMode::ActiveSpeakerFill
+        );
+        assert!(
+            candidate
+                .vertical_layout
+                .segments
+                .iter()
+                .all(|segment| !matches!(segment.layout, ShortFormLayoutMode::SplitStacked))
+        );
+    }
+}

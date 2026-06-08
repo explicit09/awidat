@@ -25,6 +25,7 @@ pub struct StartGeneratedMediaJobArgs {
     pub prompt: String,
     #[serde(default)]
     pub model: Option<String>,
+    /// Seedance 2.0 generated video duration in seconds. Use 4-15 for generated B-roll.
     #[serde(default)]
     pub duration: Option<u32>,
     #[serde(default)]
@@ -43,6 +44,13 @@ pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<St
         return Err(
             "start_generated_media_job: this foundation currently supports artifact_kind=video and workflow_purpose=broll.".into(),
         );
+    }
+    if let Some(duration) = args.duration
+        && !(4..=15).contains(&duration)
+    {
+        return Err(format!(
+            "start_generated_media_job: duration={duration} out of range. Use 4-15 seconds for Seedance 2.0 generated B-roll."
+        ));
     }
 
     if args.provider == "seedance" {

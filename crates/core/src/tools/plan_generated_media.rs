@@ -78,6 +78,10 @@ impl ToolHandler for PlanGeneratedMediaTool {
                 "options": {
                     "providers": ["openrouter", "mock"],
                     "default_model": crate::generated_media::openrouter::DEFAULT_VIDEO_MODEL,
+                    "duration_seconds": {
+                        "range": [4, 15],
+                        "guidance": "Choose on demand: 4s for quick cutaways, 6-8s for readable explanations, 9-12s for process or environment shots, and 13-15s only when the shot needs room to establish context. Pass it as duration to start_generated_media_job and as duration_s to use_generated_media."
+                    },
                     "generation_modes": ["text_to_video"],
                     "note": "Use openrouter for US-accessible video generation. Use mock for offline tests."
                 },
