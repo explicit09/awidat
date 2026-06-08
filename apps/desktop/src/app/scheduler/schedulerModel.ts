@@ -146,7 +146,9 @@ function deriveSchedulerPost(
       ? uploadState.remote_url
       : entry.publishedUrls?.[provider];
   const failureReason =
-    uploadState?.state === "failed" ? uploadState.reason : entry.error;
+    uploadState?.state === "failed" || uploadState?.state === "requires_action"
+      ? uploadState.reason
+      : entry.error;
 
   return {
     id: `${entry.id}:${provider}`,
@@ -213,6 +215,8 @@ function schedulerStatusFromUploadState(
       return "processing";
     case "published":
       return "published";
+    case "requires_action":
+      return "requires_action";
     case "failed":
       return isRequiresActionReason(uploadState.reason)
         ? "requires_action"
@@ -251,7 +255,8 @@ function uploadJobId(
   if (
     uploadState?.state === "scheduled" ||
     uploadState?.state === "processing" ||
-    uploadState?.state === "failed"
+    uploadState?.state === "failed" ||
+    uploadState?.state === "requires_action"
   ) {
     return uploadState.job_id;
   }
@@ -264,7 +269,8 @@ function uploadTargetId(
   if (
     uploadState?.state === "scheduled" ||
     uploadState?.state === "processing" ||
-    uploadState?.state === "failed"
+    uploadState?.state === "failed" ||
+    uploadState?.state === "requires_action"
   ) {
     return uploadState.target_id;
   }

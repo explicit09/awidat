@@ -54,6 +54,7 @@ export type RenderUploadEvent = {
  *   - `pending`    — render done, upload not started yet
  *   - `uploading`  — in flight; `progress` is 0..1 (or NaN unknown)
  *   - `published`  — provider accepted; `remote_url` appears when shareable
+ *   - `requires_action` — user must reconnect or fix provider permissions
  *   - `failed`     — terminal failure; `reason` is shown verbatim
  */
 export type RenderUploadState = (
@@ -62,6 +63,7 @@ export type RenderUploadState = (
   | { state: "scheduled"; job_id: string; target_id?: string; scheduled_for?: number }
   | { state: "processing"; job_id: string; target_id?: string }
   | { state: "published"; remote_url?: string; remote_id: string }
+  | { state: "requires_action"; reason: string; job_id?: string; target_id?: string }
   | { state: "failed"; reason: string; job_id?: string; target_id?: string }
 ) & { events?: RenderUploadEvent[] };
 
@@ -104,6 +106,7 @@ export function deriveUploadTargetActions(
         canOpenProviderUrl: Boolean(state.remote_url),
       };
     case "failed":
+    case "requires_action":
       return {
         canRefresh: Boolean(state.job_id),
         canRetry: true,
@@ -127,7 +130,7 @@ export function deriveUploadTargetRetryMode(
   state: RenderUploadState,
   hasRenderOutput: boolean,
 ): UploadTargetRetryMode | null {
-  if (state.state !== "failed") return null;
+  if (state.state !== "failed" && state.state !== "requires_action") return null;
   if (state.job_id) return "server_job";
   return hasRenderOutput ? "republish" : null;
 }
@@ -147,7 +150,9 @@ function hasActiveUpload(states?: Record<string, RenderUploadState>): boolean {
 }
 
 function hasFailedUpload(states?: Record<string, RenderUploadState>): boolean {
-  return Object.values(states ?? {}).some((state) => state.state === "failed");
+  return Object.values(states ?? {}).some((state) =>
+    ["failed", "requires_action"].includes(state.state),
+  );
 }
 
 export type RenderQueueEntry = {

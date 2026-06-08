@@ -580,6 +580,20 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
       canOpenProviderUrl: false,
     },
   );
+  assert.deepEqual(
+    deriveUploadTargetActions({
+      state: "requires_action",
+      reason: "missing scope",
+      job_id: "job_4",
+    }),
+    {
+      canRefresh: true,
+      canRetry: true,
+      canCancel: false,
+      canReschedule: false,
+      canOpenProviderUrl: false,
+    },
+  );
 }
 
 // ---- server-backed refresh advances processing jobs through provider polling ----
@@ -594,7 +608,7 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   );
   assert.equal(
     serverUploadRefreshCommand({
-      state: "failed",
+      state: "requires_action",
       reason: "missing scope",
       job_id: "job_action",
     }),
@@ -607,6 +621,13 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   assert.equal(
     deriveUploadTargetRetryMode(
       { state: "failed", reason: "rate_limited", job_id: "job_social_1" },
+      true,
+    ),
+    "server_job",
+  );
+  assert.equal(
+    deriveUploadTargetRetryMode(
+      { state: "requires_action", reason: "missing_scope", job_id: "job_social_2" },
       true,
     ),
     "server_job",

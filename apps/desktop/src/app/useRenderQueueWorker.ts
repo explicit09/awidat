@@ -109,11 +109,19 @@ function uploadStateFromSocialJob(job: SocialPublishJob): RenderUploadState {
       ...(events ? { events } : {}),
     };
   }
-  if (
-    job.status === "failed" ||
-    job.status === "requires_action" ||
-    job.status === "cancelled"
-  ) {
+  if (job.status === "requires_action") {
+    const reason =
+      job.requiresActionReason ??
+      job.normalizedError ??
+      "server publish requires_action";
+    return {
+      state: "requires_action",
+      reason: reasonCopy(reason),
+      job_id: job.id,
+      ...(events ? { events } : {}),
+    };
+  }
+  if (job.status === "failed" || job.status === "cancelled") {
     const reason =
       job.normalizedError ??
       job.requiresActionReason ??
@@ -150,7 +158,8 @@ export async function refreshServerUploadState(
   if (
     current?.state !== "scheduled" &&
     current?.state !== "processing" &&
-    !(current?.state === "failed" && current.job_id)
+    !(current?.state === "failed" && current.job_id) &&
+    !(current?.state === "requires_action" && current.job_id)
   ) {
     return;
   }

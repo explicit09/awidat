@@ -227,6 +227,56 @@ calls.length = 0;
 calls.length = 0;
 
 {
+  async function requiresActionInvoke<T>(command: string): Promise<T> {
+    calls.push(command);
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct_yt",
+          provider: "youtube",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") return { id: "target_1" } as T;
+    if (command === "social_validate_target") {
+      return { id: "target_1", validation_state: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job_action", status: "scheduled" } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return {
+        id: "job_action",
+        status: "requires_action",
+        requiresActionReason: "missing_scope",
+      } as T;
+    }
+    throw new Error(`unexpected command: ${command}`);
+  }
+
+  const result = await publishRenderTargetsViaServer({
+    renderQueueId: "queue_1",
+    renderJobId: "render_1",
+    outputPath: "/tmp/render.mp4",
+    title: "YouTube 1080p",
+    targets: ["youtube"],
+    metadataByProvider: {},
+    invoke: requiresActionInvoke,
+    idFactory: (prefix) => `${prefix}_1`,
+    nowSeconds: () => 1_000,
+  });
+
+  assert.deepEqual(result.states.youtube, {
+    state: "requires_action",
+    reason: "missing scope",
+    job_id: "job_action",
+  });
+}
+
+calls.length = 0;
+
+{
   let boundAccountId: string | undefined;
   async function selectedAccountInvoke<T>(
     command: string,
