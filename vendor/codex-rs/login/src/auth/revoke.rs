@@ -11,10 +11,11 @@ use std::time::Duration;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_client::CodexHttpClient;
 
-use super::manager::CLIENT_ID;
+use super::manager::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::manager::REVOKE_TOKEN_URL;
 use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::manager::configured_montage_oauth_client_id;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
 use crate::default_client::create_client;
@@ -35,21 +36,14 @@ impl RevokeTokenKind {
             Self::Refresh => "refresh_token",
         }
     }
-
-    fn client_id(self) -> Option<&'static str> {
-        match self {
-            Self::Access => None,
-            Self::Refresh => Some(CLIENT_ID),
-        }
-    }
 }
 
 #[derive(Serialize)]
-struct RevokeTokenRequest<'a> {
-    token: &'a str,
+struct RevokeTokenRequest {
+    token: String,
     token_type_hint: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    client_id: Option<&'static str>,
+    client_id: Option<String>,
 }
 
 pub(crate) async fn revoke_auth_tokens(
@@ -117,10 +111,18 @@ async fn revoke_oauth_token(
     kind: RevokeTokenKind,
     timeout: Duration,
 ) -> Result<(), std::io::Error> {
+    let client_id = match kind {
+        RevokeTokenKind::Access => None,
+        RevokeTokenKind::Refresh => Some(configured_montage_oauth_client_id().ok_or_else(|| {
+            std::io::Error::other(format!(
+                "ChatGPT OAuth revoke is not configured. Set {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} to the sanctioned client id used for login."
+            ))
+        })?),
+    };
     let request = RevokeTokenRequest {
-        token,
+        token: token.to_string(),
         token_type_hint: kind.as_str(),
-        client_id: kind.client_id(),
+        client_id,
     };
 
     let response = client
@@ -172,11 +174,38 @@ fn derive_revoke_token_endpoint(refresh_endpoint: &str) -> Option<String> {
 mod tests {
     use super::*;
     use core_test_support::skip_if_no_network;
+    use std::env;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var_os(key);
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => env::set_var(self.key, value),
+                    None => env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn derives_revoke_url_from_refresh_token_override() {
@@ -191,6 +220,7 @@ mod tests {
         skip_if_no_network!();
 
         let server = MockServer::start().await;
+        let _client_id_guard = EnvVarGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, "app_sanctioned");
         Mock::given(method("POST"))
             .and(path("/oauth/revoke"))
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))

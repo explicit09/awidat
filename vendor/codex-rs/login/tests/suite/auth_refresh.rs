@@ -7,6 +7,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
+use codex_login::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
@@ -30,7 +31,7 @@ use wiremock::matchers::path;
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -94,7 +95,7 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -158,7 +159,7 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -214,7 +215,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -284,7 +285,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn returns_fresh_tokens_as_is() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -331,7 +332,7 @@ async fn returns_fresh_tokens_as_is() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refreshes_token_when_access_token_is_expired() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -391,7 +392,7 @@ async fn refreshes_token_when_access_token_is_expired() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn auth_reloads_disk_auth_when_cached_auth_is_stale() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -444,7 +445,7 @@ async fn auth_reloads_disk_auth_when_cached_auth_is_stale() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -505,7 +506,7 @@ async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Resul
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -558,7 +559,7 @@ async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Re
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -625,7 +626,7 @@ async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -708,7 +709,7 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn refresh_token_returns_transient_error_on_server_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -760,7 +761,7 @@ async fn refresh_token_returns_transient_error_on_server_failure() -> Result<()>
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -854,7 +855,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -935,7 +936,7 @@ async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(codex_auth_env)]
 #[tokio::test]
 async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -970,7 +971,8 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
 struct RefreshTokenTestContext {
     codex_home: TempDir,
     auth_manager: Arc<AuthManager>,
-    _env_guard: EnvGuard,
+    _refresh_endpoint_guard: EnvGuard,
+    _client_id_guard: EnvGuard,
 }
 
 impl RefreshTokenTestContext {
@@ -978,7 +980,11 @@ impl RefreshTokenTestContext {
         let codex_home = TempDir::new()?;
 
         let endpoint = format!("{}/oauth/token", server.uri());
-        let env_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
+        let refresh_endpoint_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
+        let client_id_guard = EnvGuard::set(
+            MONTAGE_OAUTH_CLIENT_ID_ENV_VAR,
+            "app_sanctioned".to_string(),
+        );
 
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -991,7 +997,8 @@ impl RefreshTokenTestContext {
         Ok(Self {
             codex_home,
             auth_manager,
-            _env_guard: env_guard,
+            _refresh_endpoint_guard: refresh_endpoint_guard,
+            _client_id_guard: client_id_guard,
         })
     }
 

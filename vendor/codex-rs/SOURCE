@@ -26,8 +26,9 @@ Our edits (re-apply after every refresh):
   hardcoded an installed Codex CLI version to bypass model-access gates; that
   behavior was removed for open-source publication. Model availability now
   depends on sanctioned API/OAuth access rather than mimicking another client.
-  The vendored ChatGPT OAuth client id is also replaced with a nonfunctional
-  placeholder so public source does not embed another client's first-party id.
+  ChatGPT OAuth refresh/revoke read `MONTAGE_OAUTH_CLIENT_ID`, the same
+  sanctioned client id used by Montage's initial browser login flow, so public
+  source does not embed another client's first-party id.
 - vendor/codex-rs/core/src/client.rs and vendor/codex-rs/core/src/turn_metadata.rs:
   keep Montage's current websocket metadata shape. Revisit this area when
   refreshing the fork against a sanctioned upstream client contract.
