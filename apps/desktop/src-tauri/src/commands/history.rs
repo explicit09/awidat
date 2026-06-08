@@ -216,7 +216,17 @@ pub async fn resume_chat_session(
         ));
     }
 
-    // Drop the current bridge so we can replace it with a resumed one.
+    let resume_thread_id = if rollout_has_legacy_turn_payload(&path) {
+        tracing::warn!(
+            thread_id = %meta.thread_id,
+            "starting a clean codex thread instead of resuming legacy prompt-polluted history"
+        );
+        None
+    } else {
+        Some(meta.thread_id.clone())
+    };
+
+    // Drop the current bridge so we can replace it with a resumed or clean one.
     if let Some(session) = state.codex.lock().await.take() {
         if let Err(e) = session.bridge.shutdown().await {
             tracing::warn!(error = %e, "codex bridge shutdown during resume");
@@ -226,13 +236,13 @@ pub async fn resume_chat_session(
     let session = crate::codex_session::CodexSession::launch(
         app,
         project_root.clone(),
-        Some(meta.thread_id.clone()),
+        resume_thread_id.clone(),
     )
     .await
     .map_err(|e| format!("resume codex bridge: {e}"))?;
     *state.codex.lock().await = Some(session);
 
-    let summary = summarize_rollout(&path, &project_root, Some(&meta.thread_id));
+    let summary = summarize_rollout(&path, &project_root, resume_thread_id.as_deref());
     let items = read_rollout_items(&path);
     Ok(ChatHistory {
         session: summary,
@@ -405,6 +415,37 @@ fn title_and_count(path: &Path) -> (String, usize) {
         title.unwrap_or_else(|| "(empty session)".to_string()),
         count,
     )
+}
+
+fn rollout_has_legacy_turn_payload(path: &Path) -> bool {
+    use std::io::{BufRead, BufReader};
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = v.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(|t| t.as_str()) != Some("message")
+            || payload.get("role").and_then(|r| r.as_str()) != Some("user")
+        {
+            continue;
+        }
+        let Some(text) = extract_message_text(payload) else {
+            continue;
+        };
+        if text.trim_start().starts_with("<skills_instructions>") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Concatenate all text-bearing content items in a message payload.
@@ -763,6 +804,48 @@ mod tests {
             clean_user_message_text(text),
             "What should I cut first?\nKeep the hook."
         );
+    }
+
+    #[test]
+    fn legacy_prompt_payload_marks_rollout_contaminated() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(err) => panic!("tempdir: {err}"),
+        };
+        let path = dir.path().join("rollout-legacy.jsonl");
+        let mut file = match fs::File::create(&path) {
+            Ok(file) => file,
+            Err(err) => panic!("create rollout: {err}"),
+        };
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<skills_instructions>\nskill catalog\n</skills_instructions>\n\nhello"}}]}}}}"#
+        ) {
+            panic!("write legacy payload: {err}");
+        }
+
+        assert!(rollout_has_legacy_turn_payload(&path));
+    }
+
+    #[test]
+    fn clean_user_payload_does_not_mark_rollout_contaminated() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(err) => panic!("tempdir: {err}"),
+        };
+        let path = dir.path().join("rollout-clean.jsonl");
+        let mut file = match fs::File::create(&path) {
+            Ok(file) => file,
+            Err(err) => panic!("create rollout: {err}"),
+        };
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"hello"}}]}}}}"#
+        ) {
+            panic!("write clean payload: {err}");
+        }
+
+        assert!(!rollout_has_legacy_turn_payload(&path));
     }
 
     #[test]
