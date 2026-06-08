@@ -33,6 +33,10 @@ export const MENU_COMMANDS = {
   NAV_REVIEW: "nav:review",
   NAV_DELIVER: "nav:deliver",
   NAV_SETTINGS: "nav:settings",
+  HELP_DOCS: "help:docs",
+  HELP_SHORTCUTS: "help:shortcuts",
+  HELP_LOGS: "help:logs",
+  HELP_REPORT_ISSUE: "help:report_issue",
 } as const;
 
 export type MenuCommandId =

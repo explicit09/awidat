@@ -189,6 +189,7 @@ pub fn run() {
             commands::preview_cache::preview_cache_summary,
             commands::preview_cache::preview_cache_refresh,
             commands::generated_media::list_generated_media,
+            commands::help::reveal_app_log_dir,
             commands::media::list_source_media,
             commands::media::list_proxies,
             commands::media::read_media_readiness,
