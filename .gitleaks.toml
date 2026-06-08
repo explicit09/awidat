@@ -1,0 +1,14 @@
+[allowlist]
+description = "Repository-known false positives for current-tree secret scans"
+regexes = [
+  '''montage\.campaigns\.v1''',
+  '''sk-proj-1234567890ABCDE''',
+  '''sk-proj-12345''',
+  '''0123456789abcdef0123456789abcdef''',
+  '''MC4CAQAwBQYDK2VwBCIEIDQg14jybCLydjHQwXeBzsDM7oB6BSAenodx6oCovQ/D''',
+]
+paths = [
+  '''Cargo\.lock''',
+  '''vendor/codex-rs/agent-identity/src/lib\.rs''',
+  '''vendor/codex-rs/login/src/auth/auth_tests\.rs''',
+]
