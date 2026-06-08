@@ -28,6 +28,12 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const SERVER_ERROR: i64 = -32000;
 const AUTH_REFRESH_UNSUPPORTED: &str =
     "chatgpt auth token refresh is not supported for external app-server runtime";
+const SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+];
 
 type PendingResponse = oneshot::Sender<Result<serde_json::Value, String>>;
 type PendingResponses = Arc<Mutex<HashMap<i64, PendingResponse>>>;
@@ -205,7 +211,7 @@ fn bundled_codex_bin() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let parent = exe.parent()?;
     for name in bundled_codex_binary_names() {
-        let candidate = parent.join(name);
+        let candidate = parent.join(&name);
         if candidate.exists() {
             return Some(candidate);
         }
@@ -213,14 +219,30 @@ fn bundled_codex_bin() -> Option<PathBuf> {
     None
 }
 
-#[cfg(windows)]
-fn bundled_codex_binary_names() -> [&'static str; 2] {
-    ["codex.exe", "codex"]
+fn bundled_codex_binary_names() -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(triple) = current_target_triple() {
+        names.push(format!("codex-{triple}"));
+        if cfg!(windows) {
+            names.push(format!("codex-{triple}.exe"));
+        }
+    }
+    if cfg!(windows) {
+        names.push("codex.exe".to_string());
+    }
+    names.push("codex".to_string());
+    names
 }
 
-#[cfg(not(windows))]
-fn bundled_codex_binary_names() -> [&'static str; 1] {
-    ["codex"]
+fn current_target_triple() -> Option<&'static str> {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => Some("aarch64-apple-darwin"),
+        ("x86_64", "macos") => Some("x86_64-apple-darwin"),
+        ("aarch64", "linux") => Some("aarch64-unknown-linux-gnu"),
+        ("x86_64", "linux") => Some("x86_64-unknown-linux-gnu"),
+        ("x86_64", "windows") => Some("x86_64-pc-windows-msvc"),
+        _ => None,
+    }
 }
 
 async fn read_stdout(
@@ -306,8 +328,15 @@ async fn handle_server_request_message(
             let _ = write_error_response(stdin, request.id, SERVER_ERROR, AUTH_REFRESH_UNSUPPORTED)
                 .await;
         }
-        Ok(request) => {
+        Ok(request) if is_supported_server_request_method(&request.method) => {
             let _ = event_tx.send(ExternalServerEvent::Request(request)).await;
+        }
+        Ok(request) => {
+            let message = format!(
+                "unsupported external app-server request `{}`",
+                request.method
+            );
+            let _ = write_error_response(stdin, request.id, METHOD_NOT_FOUND, &message).await;
         }
         Err(_) => {
             if let Some(id) = raw_id {
@@ -316,6 +345,10 @@ async fn handle_server_request_message(
             }
         }
     }
+}
+
+fn is_supported_server_request_method(method: &str) -> bool {
+    SUPPORTED_SERVER_REQUEST_METHODS.contains(&method)
 }
 
 async fn fail_pending(pending: &PendingResponses, message: impl Into<String>) {
@@ -489,5 +522,28 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn bundled_codex_binary_names_include_tauri_sidecar_name() {
+        let names = bundled_codex_binary_names();
+        if let Some(triple) = current_target_triple() {
+            assert!(
+                names.contains(&format!("codex-{triple}")),
+                "expected suffixed Tauri sidecar name in {names:?}"
+            );
+        }
+        assert!(names.contains(&DEFAULT_CODEX_BIN.to_string()));
+    }
+
+    #[test]
+    fn supported_server_request_policy_rejects_unknown_methods() {
+        assert!(is_supported_server_request_method(
+            "item/commandExecution/requestApproval"
+        ));
+        assert!(is_supported_server_request_method(
+            "item/tool/requestUserInput"
+        ));
+        assert!(!is_supported_server_request_method("future/server/request"));
     }
 }
