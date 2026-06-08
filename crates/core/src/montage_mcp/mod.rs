@@ -1228,7 +1228,7 @@ X_BEARER_TOKEN or keychain account x_bearer_token for read access. If \
 credentials are missing, returns a setup/status payload instead of failing. \
 Publishing is not performed here; Twitter/X posting remains handled by the \
 social publishing provider.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn fetch_x_trend_context(
         &self,

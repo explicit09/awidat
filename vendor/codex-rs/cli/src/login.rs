@@ -125,16 +125,27 @@ fn configured_chatgpt_client_id() -> std::io::Result<String> {
     })
 }
 
-fn chatgpt_client_id_or_exit(client_id: Option<String>) -> String {
+fn resolve_chatgpt_client_id(client_id: Option<String>) -> std::io::Result<String> {
+    let configured_client_id = configured_chatgpt_client_id()?;
     match client_id {
-        Some(client_id) => client_id,
-        None => match configured_chatgpt_client_id() {
-            Ok(client_id) => client_id,
-            Err(err) => {
-                eprintln!("Error logging in: {err}");
-                std::process::exit(1);
-            }
-        },
+        Some(client_id) if client_id == configured_client_id => Ok(client_id),
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "--experimental_client-id must match {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} so refreshed tokens use the same sanctioned client id."
+            ),
+        )),
+        None => Ok(configured_client_id),
+    }
+}
+
+fn chatgpt_client_id_or_exit(client_id: Option<String>) -> String {
+    match resolve_chatgpt_client_id(client_id) {
+        Ok(client_id) => client_id,
+        Err(err) => {
+            eprintln!("Error logging in: {err}");
+            std::process::exit(1);
+        }
     }
 }
 

@@ -16,7 +16,6 @@ Our edits (re-apply after every refresh):
   so montage-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.
 - vendor/codex-rs/login/src/auth/default_client.rs,
   vendor/codex-rs/login/src/auth/manager.rs,
-  vendor/codex-rs/models-manager/src/lib.rs,
   vendor/codex-rs/exec/src/lib.rs,
   vendor/codex-rs/exec/src/event_processor_with_human_output.rs,
   vendor/codex-rs/analytics/src/events.rs, and
@@ -31,6 +30,9 @@ Our edits (re-apply after every refresh):
   ChatGPT OAuth refresh/revoke read `MONTAGE_OAUTH_CLIENT_ID`, the same
   sanctioned client id used by Montage's initial browser login flow, so public
   source does not embed another client's first-party id.
+- vendor/codex-rs/models-manager/src/lib.rs: keep the Codex protocol/model
+  discovery client version separate from Montage's workspace package version
+  so `/models` filtering remains compatible with the vendored Codex engine.
 - vendor/codex-rs/core/src/client.rs and vendor/codex-rs/core/src/turn_metadata.rs:
   keep Montage's current websocket metadata shape. Revisit this area when
   refreshing the fork against a sanctioned upstream client contract.
