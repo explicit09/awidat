@@ -4,7 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "In-process codex app-server bridge for Montage surfaces"
+description = "Codex app-server bridge for Montage surfaces"
+
+[features]
+default = []
+in-process-codex = [
+    "dep:codex-app-server-client",
+    "dep:codex-app-server-protocol",
+    "dep:codex-config",
+    "dep:codex-core",
+    "dep:codex-protocol",
+    "dep:codex-arg0",
+    "dep:codex-feedback",
+]
 
 [lib]
 name = "montage_codex_bridge"
@@ -14,13 +26,15 @@ name = "montage_codex_bridge"
 montage-desktop-protocol = { workspace = true }
 
 # Codex app-server in-process client + protocol types.
-codex-app-server-client = { workspace = true }
-codex-app-server-protocol = { workspace = true }
-codex-config = { workspace = true }
-codex-core = { workspace = true }
-codex-protocol = { workspace = true }
-codex-arg0 = { workspace = true }
-codex-feedback = { workspace = true }
+# These stay optional so default desktop builds use the external app-server
+# binary and do not compile the vendored Codex Rust graph.
+codex-app-server-client = { workspace = true, optional = true }
+codex-app-server-protocol = { workspace = true, optional = true }
+codex-config = { workspace = true, optional = true }
+codex-core = { workspace = true, optional = true }
+codex-protocol = { workspace = true, optional = true }
+codex-arg0 = { workspace = true, optional = true }
+codex-feedback = { workspace = true, optional = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,4 +45,3 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-codex-utils-absolute-path = { workspace = true }

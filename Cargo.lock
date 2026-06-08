@@ -9964,7 +9964,6 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-protocol",
- "codex-utils-absolute-path",
  "montage-desktop-protocol",
  "pretty_assertions",
  "serde",

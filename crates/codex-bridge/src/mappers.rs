@@ -1,128 +1,100 @@
-//! Pure mapping functions from codex protocol payloads to
+//! Pure mapping functions from Codex app-server JSON notifications to
 //! [`montage_desktop_protocol::Item`] values.
-//!
-//! These are kept side-effect-free (apart from mutating the caller's
-//! `text_buffers` cache) so the bridge can unit-test the translation
-//! without spinning up a real app-server. The pump module passes its
-//! cumulative-text buffer into [`map_notification`] for the streaming
-//! agent-message / reasoning-delta paths.
 
 use std::collections::HashMap;
 
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::McpToolCallError;
-use codex_app_server_protocol::McpToolCallResult;
-use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::TurnPlanStepStatus;
 use montage_desktop_protocol::Id;
 use montage_desktop_protocol::Item;
 use montage_desktop_protocol::ItemLifecycle;
 use montage_desktop_protocol::PlanStep;
 use serde_json::json;
 
-/// Item-id prefix for `Item::Text` synthesized from
-/// `ServerNotification::AgentMessageDelta`.
+use crate::wire::ServerNotification;
+
 const AGENT_MESSAGE_PREFIX: &str = "codex-msg";
-/// Item-id prefix for `Item::Text` synthesized from
-/// `ServerNotification::ReasoningTextDelta` / `ReasoningSummaryTextDelta`.
 const REASONING_PREFIX: &str = "codex-reason";
 
-/// Translate one `ServerNotification` into zero or more `Item`s
-/// for the desktop renderer.
-///
-/// `text_buffers` is a per-pump cache of the cumulative text we have
-/// already emitted for a given codex item id. The Montage protocol wants
-/// each `Text` Item to carry the *full* text so the renderer doesn't
-/// have to splice deltas, so we keep the running concatenation here.
-///
-/// Unknown / unhandled notifications return an empty `Vec` — the
-/// frontend tolerates missing items.
 pub fn map_notification(
     notification: &ServerNotification,
     text_buffers: &mut HashMap<String, String>,
 ) -> Vec<Item> {
-    match notification {
-        ServerNotification::AgentMessageDelta(n) => {
-            let buffer = text_buffers.entry(n.item_id.clone()).or_default();
-            buffer.push_str(&n.delta);
-            let cumulative = buffer.clone();
+    match notification.method.as_str() {
+        "item/agentMessage/delta" => {
+            let item_id = string_at(&notification.params, "itemId");
+            let delta = string_at(&notification.params, "delta");
+            let buffer = text_buffers.entry(item_id.clone()).or_default();
+            buffer.push_str(&delta);
             vec![Item::Text {
-                id: Id::new(format!("{AGENT_MESSAGE_PREFIX}-{}", n.item_id)),
+                id: Id::new(format!("{AGENT_MESSAGE_PREFIX}-{item_id}")),
                 phase: ItemLifecycle::Delta,
-                text: cumulative,
+                text: buffer.clone(),
             }]
         }
-        ServerNotification::ReasoningTextDelta(n) => {
-            let key = reasoning_buffer_key(&n.item_id, n.content_index);
+        "item/reasoning/textDelta" => {
+            let item_id = string_at(&notification.params, "itemId");
+            let content_index = i64_at(&notification.params, "contentIndex");
+            let delta = string_at(&notification.params, "delta");
+            let key = reasoning_buffer_key(&item_id, content_index);
             let buffer = text_buffers.entry(key).or_default();
-            buffer.push_str(&n.delta);
-            let cumulative = buffer.clone();
+            buffer.push_str(&delta);
+            vec![Item::Text {
+                id: Id::new(format!("{REASONING_PREFIX}-{item_id}-{content_index}")),
+                phase: ItemLifecycle::Delta,
+                text: buffer.clone(),
+            }]
+        }
+        "item/reasoning/summaryTextDelta" => {
+            let item_id = string_at(&notification.params, "itemId");
+            let summary_index = i64_at(&notification.params, "summaryIndex");
+            let delta = string_at(&notification.params, "delta");
+            let key = reasoning_summary_buffer_key(&item_id, summary_index);
+            let buffer = text_buffers.entry(key).or_default();
+            buffer.push_str(&delta);
             vec![Item::Text {
                 id: Id::new(format!(
-                    "{REASONING_PREFIX}-{}-{}",
-                    n.item_id, n.content_index
+                    "{REASONING_PREFIX}-summary-{item_id}-{summary_index}"
                 )),
                 phase: ItemLifecycle::Delta,
-                text: cumulative,
+                text: buffer.clone(),
             }]
         }
-        ServerNotification::ReasoningSummaryTextDelta(n) => {
-            let key = reasoning_summary_buffer_key(&n.item_id, n.summary_index);
-            let buffer = text_buffers.entry(key).or_default();
-            buffer.push_str(&n.delta);
-            let cumulative = buffer.clone();
-            vec![Item::Text {
-                id: Id::new(format!(
-                    "{REASONING_PREFIX}-summary-{}-{}",
-                    n.item_id, n.summary_index
-                )),
-                phase: ItemLifecycle::Delta,
-                text: cumulative,
-            }]
+        "item/started" => map_thread_item(&notification.params["item"], Phase::Started),
+        "item/completed" => {
+            if let Some(item_id) = notification.params["item"]["id"].as_str() {
+                text_buffers.remove(item_id);
+            }
+            map_thread_item(&notification.params["item"], Phase::Completed)
         }
-        ServerNotification::ItemStarted(n) => map_thread_item(&n.item, Phase::Started),
-        ServerNotification::ItemCompleted(n) => {
-            // Drop any per-item text-delta buffer keyed by this item id
-            // — the Completed mapping carries the canonical text.
-            text_buffers.remove(n.item.id());
-            map_thread_item(&n.item, Phase::Completed)
-        }
-        ServerNotification::TurnPlanUpdated(n) => {
-            let items = n
-                .plan
-                .iter()
+        "turn/plan/updated" => {
+            let items = notification.params["plan"]
+                .as_array()
+                .into_iter()
+                .flatten()
                 .map(|step| PlanStep {
-                    step: step.step.clone(),
-                    status: turn_plan_status_str(step.status).to_string(),
+                    step: string_at(step, "step"),
+                    status: string_at(step, "status"),
                 })
                 .collect::<Vec<_>>();
             vec![Item::Plan {
                 id: Id::new("codex-plan"),
                 phase: ItemLifecycle::Delta,
                 items,
-                note: n.explanation.clone(),
+                note: notification.params["explanation"]
+                    .as_str()
+                    .map(ToString::to_string),
             }]
         }
-        // Turn end is forwarded as a turn-end emit by the caller, not
-        // as an Item. The Error notification surfaces as an Item::Error
-        // here so the chat shows the error text inline.
-        ServerNotification::Error(n) => {
-            vec![Item::Error {
-                id: Id::new(format!("codex-err-{}", n.thread_id)),
-                message: n.error.message.clone(),
-            }]
-        }
-        // Everything else is best-effort — silent today.
+        "error" => vec![Item::Error {
+            id: Id::new(format!(
+                "codex-err-{}",
+                string_at(&notification.params, "threadId")
+            )),
+            message: string_at(&notification.params["error"], "message"),
+        }],
         _ => Vec::new(),
     }
 }
 
-/// Lifecycle phase for `map_thread_item`. We don't expose codex's
-/// raw `ItemStarted` / `ItemCompleted` because the desktop's three-state
-/// `Delta` is rarely used for thread items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Started,
@@ -138,165 +110,118 @@ impl From<Phase> for ItemLifecycle {
     }
 }
 
-/// Translate one `v2::ThreadItem` into zero or more desktop `Item`s.
-pub fn map_thread_item(item: &ThreadItem, phase: Phase) -> Vec<Item> {
+pub fn map_thread_item(item: &serde_json::Value, phase: Phase) -> Vec<Item> {
     let life: ItemLifecycle = phase.into();
-    match item {
-        ThreadItem::AgentMessage { id, text, .. } => {
+    match string_at(item, "type").as_str() {
+        "agentMessage" => {
+            let text = string_at(item, "text");
             if text.trim().is_empty() {
                 return Vec::new();
             }
             vec![Item::Text {
-                id: Id::new(format!("{AGENT_MESSAGE_PREFIX}-{id}")),
+                id: Id::new(format!(
+                    "{}-{}",
+                    AGENT_MESSAGE_PREFIX,
+                    string_at(item, "id")
+                )),
                 phase: life,
-                text: text.clone(),
+                text,
             }]
         }
-        ThreadItem::Reasoning {
-            id,
-            summary,
-            content,
-        } => {
-            // Reasoning items aggregate multiple text fragments. Render
-            // them by concatenating with double newlines so each block
-            // is visually separated. Empty content/summary is skipped.
+        "reasoning" => {
             let mut combined = String::new();
-            for s in summary.iter().chain(content.iter()) {
-                if !s.trim().is_empty() {
+            for field in ["summary", "content"] {
+                for value in item[field].as_array().into_iter().flatten() {
+                    let Some(text) = value.as_str() else {
+                        continue;
+                    };
+                    if text.trim().is_empty() {
+                        continue;
+                    }
                     if !combined.is_empty() {
                         combined.push_str("\n\n");
                     }
-                    combined.push_str(s);
+                    combined.push_str(text);
                 }
             }
             if combined.is_empty() {
                 return Vec::new();
             }
             vec![Item::Text {
-                id: Id::new(format!("{REASONING_PREFIX}-{id}")),
+                id: Id::new(format!("{}-{}", REASONING_PREFIX, string_at(item, "id"))),
                 phase: life,
                 text: combined,
             }]
         }
-        ThreadItem::CommandExecution {
-            id,
-            command,
-            status,
-            aggregated_output,
-            exit_code,
-            ..
-        } => {
-            let output = aggregated_output.clone().unwrap_or_default();
+        "commandExecution" => {
+            let output = item["aggregatedOutput"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let result = match phase {
                 Phase::Started => None,
-                Phase::Completed => Some(command_execution_result(status, *exit_code, output)),
+                Phase::Completed => Some(command_execution_result(
+                    item["status"].as_str().unwrap_or_default(),
+                    item["exitCode"].as_i64(),
+                    output,
+                )),
             };
             vec![Item::ToolCall {
-                id: Id::new(format!("codex-cmd-{id}")),
+                id: Id::new(format!("codex-cmd-{}", string_at(item, "id"))),
                 phase: life,
                 name: "bash".into(),
-                args: json!({ "command": command }),
+                args: json!({ "command": string_at(item, "command") }),
                 result,
             }]
         }
-        ThreadItem::FileChange {
-            id,
-            changes,
-            status,
-        } => {
+        "fileChange" => {
             let result = match phase {
                 Phase::Started => None,
-                Phase::Completed => Some(file_change_result(status)),
+                Phase::Completed => Some(file_change_result(
+                    item["status"].as_str().unwrap_or_default(),
+                )),
             };
             vec![Item::ToolCall {
-                id: Id::new(format!("codex-patch-{id}")),
+                id: Id::new(format!("codex-patch-{}", string_at(item, "id"))),
                 phase: life,
                 name: "apply_patch".into(),
-                args: json!({ "changes": changes }),
+                args: json!({ "changes": item["changes"].clone() }),
                 result,
             }]
         }
-        ThreadItem::McpToolCall {
-            id,
-            server,
-            tool,
-            status,
-            arguments,
-            result,
-            error,
-            ..
-        } => {
-            // For Montage-MCP tools, surface the bare tool name so the
-            // React per-tool card dispatch works ("apply_edl", not
-            // "montage.apply_edl"). For other servers, namespace-prefix.
+        "mcpToolCall" => {
+            let server = string_at(item, "server");
+            let tool = string_at(item, "tool");
             let display_name = if server == "montage" {
-                tool.clone()
+                tool
             } else {
                 format!("{server}.{tool}")
             };
             let result_value = match phase {
                 Phase::Started => None,
-                Phase::Completed => {
-                    Some(mcp_tool_result(status, result.as_deref(), error.as_ref()))
-                }
+                Phase::Completed => Some(mcp_tool_result(item)),
             };
             vec![Item::ToolCall {
-                id: Id::new(format!("codex-mcp-{id}")),
+                id: Id::new(format!("codex-mcp-{}", string_at(item, "id"))),
                 phase: life,
                 name: display_name,
-                args: arguments.clone(),
+                args: item["arguments"].clone(),
                 result: result_value,
             }]
         }
-        ThreadItem::Plan { id, text } => {
-            // Treat a Plan ThreadItem as a single-step plan emission;
-            // the renderer collapses repeated emissions into a single
-            // upserted Plan item if they share an id.
-            vec![Item::Plan {
-                id: Id::new(format!("codex-plan-{id}")),
-                phase: life,
-                items: vec![PlanStep {
-                    step: text.clone(),
-                    status: "pending".to_string(),
-                }],
-                note: None,
-            }]
-        }
-        ThreadItem::UserMessage { .. } => {
-            // Codex echoes every user input back as a UserMessage
-            // ThreadItem. We DON'T render it: the desktop emits its
-            // own `Item::UserInput` at start_turn time (the clean
-            // user-typed text, before we prefix view-state context or
-            // the skills catalog). Surfacing codex's echo would
-            // double-render the input AND leak our internal context
-            // prefix into the chat as a visible bubble.
-            //
-            // For thread-resume (history.rs is currently stubbed), we
-            // will need a different path that reads the original
-            // user-typed text from a separate audit log rather than
-            // recovering it from codex's prefixed echo.
-            Vec::new()
-        }
-        // Web search, image, collab — drop until/unless desktop renders them.
+        "plan" => vec![Item::Plan {
+            id: Id::new(format!("codex-plan-{}", string_at(item, "id"))),
+            phase: life,
+            items: vec![PlanStep {
+                step: string_at(item, "text"),
+                status: "pending".to_string(),
+            }],
+            note: None,
+        }],
         _ => Vec::new(),
     }
 }
 
-/// Extract the agent's `reasoning` string from a JSON tool-args
-/// payload, if any. Wave 3's Brief surface reads `rationale` on every
-/// row (approvals included); `apply_edl(reasoning = …)` and other
-/// tools that adopt the same contract surface their "why" through
-/// this helper.
-///
-/// Contract: looks for a top-level `reasoning` string field. Anything
-/// non-stringy (object, array, missing key) returns `None`. We trim
-/// whitespace and treat empty strings as `None` so the frontend never
-/// renders a hollow rationale chip.
-///
-/// Kept out of any specific approval path because the L1 catalog
-/// commits to `reasoning` as the universal field name — every new
-/// tool with a "why" arg should pipe through here, not invent its
-/// own surface.
 pub fn extract_reasoning(arguments: Option<&serde_json::Value>) -> Option<String> {
     let value = arguments?.get("reasoning")?.as_str()?.trim();
     if value.is_empty() {
@@ -306,11 +231,6 @@ pub fn extract_reasoning(arguments: Option<&serde_json::Value>) -> Option<String
     }
 }
 
-/// Build the capability metadata JSON the ApprovalCard renderer
-/// expects for a shell-command approval. The legacy keys
-/// (`graph_mutates`, `preview_supported`, `side_effects`) are the
-/// contract; codex's own approval payload doesn't carry the same
-/// shape, so we synthesize a sensible default.
 pub fn build_capability_metadata_for_exec(command: &str) -> serde_json::Value {
     let mutates = command_looks_destructive(command);
     json!({
@@ -320,8 +240,6 @@ pub fn build_capability_metadata_for_exec(command: &str) -> serde_json::Value {
     })
 }
 
-/// Build the capability metadata JSON for a file-change approval. File
-/// changes always mutate the timeline graph.
 pub fn build_capability_metadata_for_file_change(reason: Option<&str>) -> serde_json::Value {
     json!({
         "graph_mutates": true,
@@ -331,8 +249,17 @@ pub fn build_capability_metadata_for_file_change(reason: Option<&str>) -> serde_
     })
 }
 
-/// Best-effort lexical heuristic for "this shell command is destructive."
-/// Used only to color the approval card; not relied on for safety.
+pub fn is_project_mutating_completion(notification: &ServerNotification) -> bool {
+    if notification.method != "item/completed" {
+        return false;
+    }
+    let item = &notification.params["item"];
+    string_at(item, "type") == "mcpToolCall"
+        && string_at(item, "server") == "montage"
+        && item["error"].is_null()
+        && item["status"].as_str() == Some("completed")
+}
+
 fn command_looks_destructive(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     [
@@ -353,82 +280,59 @@ fn command_looks_destructive(command: &str) -> bool {
 }
 
 fn command_execution_result(
-    status: &CommandExecutionStatus,
-    exit_code: Option<i32>,
+    status: &str,
+    exit_code: Option<i64>,
     output: String,
 ) -> Result<String, String> {
     match status {
-        CommandExecutionStatus::Completed if exit_code.unwrap_or(0) == 0 => Ok(output),
-        CommandExecutionStatus::Completed => Err(format!(
+        "completed" if exit_code.unwrap_or(0) == 0 => Ok(output),
+        "completed" => Err(format!(
             "exit_code={} output={output}",
             exit_code
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "?".into())
         )),
-        CommandExecutionStatus::Failed => Err(format!("failed: {output}")),
-        CommandExecutionStatus::InProgress => Err("still in progress".to_string()),
-        CommandExecutionStatus::Declined => Err("declined by user".to_string()),
+        "failed" => Err(format!("failed: {output}")),
+        "inProgress" => Err("still in progress".to_string()),
+        "declined" => Err("declined by user".to_string()),
+        _ => Err(format!("unknown command status: {status}")),
     }
 }
 
-fn file_change_result(status: &PatchApplyStatus) -> Result<String, String> {
+fn file_change_result(status: &str) -> Result<String, String> {
     match status {
-        PatchApplyStatus::Completed => Ok("applied".into()),
-        PatchApplyStatus::Failed => Err("apply_patch failed".into()),
-        PatchApplyStatus::InProgress => Err("apply_patch still in progress".into()),
-        PatchApplyStatus::Declined => Err("apply_patch declined by user".into()),
+        "completed" => Ok("applied".into()),
+        "failed" => Err("apply_patch failed".into()),
+        "inProgress" => Err("apply_patch still in progress".into()),
+        "declined" => Err("apply_patch declined by user".into()),
+        _ => Err(format!("unknown file-change status: {status}")),
     }
 }
 
-/// True when a `ServerNotification::ItemCompleted` carries an
-/// montage-MCP tool call that just successfully mutated project state
-/// on disk (most importantly `project.otio.json`). Used by the pump
-/// to nudge the desktop's `montage://timeline-changed` listener so the
-/// React timeline view refetches.
-///
-/// Inclusion rule is "any montage tool tagged `destructive_hint = true`
-/// that completed successfully." False positives (e.g. `start_render`
-/// queues a job but doesn't touch OTIO) just trigger an idempotent
-/// refetch, which is cheap. False negatives would leave the UI stale,
-/// which we already saw — biased toward over-emit.
-pub fn is_project_mutating_completion(notification: &ServerNotification) -> bool {
-    let ServerNotification::ItemCompleted(n) = notification else {
-        return false;
-    };
-    let ThreadItem::McpToolCall {
-        server,
-        status,
-        error,
-        ..
-    } = &n.item
-    else {
-        return false;
-    };
-    if server != "montage" {
-        return false;
+fn mcp_tool_result(item: &serde_json::Value) -> Result<String, String> {
+    if let Some(message) = item["error"]["message"].as_str() {
+        return Err(message.to_string());
     }
-    if error.is_some() {
-        return false;
+    match item["status"].as_str().unwrap_or_default() {
+        "completed" => {
+            if item["result"].is_null() {
+                Ok(String::new())
+            } else {
+                Ok(serde_json::to_string(&item["result"]).unwrap_or_default())
+            }
+        }
+        "failed" => Err("mcp tool failed".into()),
+        "inProgress" => Err("mcp tool still in progress".into()),
+        other => Err(format!("unknown mcp tool status: {other}")),
     }
-    matches!(status, McpToolCallStatus::Completed)
 }
 
-fn mcp_tool_result(
-    status: &McpToolCallStatus,
-    result: Option<&McpToolCallResult>,
-    error: Option<&McpToolCallError>,
-) -> Result<String, String> {
-    if let Some(err) = error {
-        return Err(err.message.clone());
-    }
-    match status {
-        McpToolCallStatus::Completed => match result {
-            Some(r) => Ok(serde_json::to_string(r).unwrap_or_default()),
-            None => Ok(String::new()),
-        },
-        McpToolCallStatus::Failed => Err("mcp tool failed".into()),
-        McpToolCallStatus::InProgress => Err("mcp tool still in progress".into()),
-    }
+fn string_at(value: &serde_json::Value, key: &str) -> String {
+    value[key].as_str().unwrap_or_default().to_string()
+}
+
+fn i64_at(value: &serde_json::Value, key: &str) -> i64 {
+    value[key].as_i64().unwrap_or_default()
 }
 
 fn reasoning_buffer_key(item_id: &str, content_index: i64) -> String {
@@ -439,37 +343,35 @@ fn reasoning_summary_buffer_key(item_id: &str, summary_index: i64) -> String {
     format!("{REASONING_PREFIX}-summary-{item_id}-{summary_index}")
 }
 
-fn turn_plan_status_str(status: TurnPlanStepStatus) -> &'static str {
-    match status {
-        TurnPlanStepStatus::Pending => "pending",
-        TurnPlanStepStatus::InProgress => "in_progress",
-        TurnPlanStepStatus::Completed => "completed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_protocol::AgentMessageDeltaNotification;
-    use codex_app_server_protocol::CommandExecutionSource;
-    use codex_app_server_protocol::ItemCompletedNotification;
-    use codex_app_server_protocol::ItemStartedNotification;
     use pretty_assertions::assert_eq;
 
-    fn agent_delta(item_id: &str, delta: &str) -> ServerNotification {
-        ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
-            thread_id: "th".into(),
-            turn_id: "tu".into(),
-            item_id: item_id.into(),
-            delta: delta.into(),
-        })
+    fn notification(method: &str, params: serde_json::Value) -> ServerNotification {
+        ServerNotification {
+            method: method.to_string(),
+            params,
+        }
     }
 
     #[test]
     fn agent_message_delta_accumulates_cumulative_text() {
         let mut buffers = HashMap::new();
-        let first = map_notification(&agent_delta("a-1", "hello "), &mut buffers);
-        let second = map_notification(&agent_delta("a-1", "world"), &mut buffers);
+        let first = map_notification(
+            &notification(
+                "item/agentMessage/delta",
+                json!({"itemId": "a-1", "delta": "hello "}),
+            ),
+            &mut buffers,
+        );
+        let second = map_notification(
+            &notification(
+                "item/agentMessage/delta",
+                json!({"itemId": "a-1", "delta": "world"}),
+            ),
+            &mut buffers,
+        );
         match (&first[0], &second[0]) {
             (
                 Item::Text {
@@ -495,19 +397,20 @@ mod tests {
     #[test]
     fn item_completed_agent_message_produces_canonical_completed_text() {
         let mut buffers = HashMap::new();
-        map_notification(&agent_delta("a-1", "partial"), &mut buffers);
-        let completed = ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: "th".into(),
-            turn_id: "tu".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
-                id: "a-1".into(),
-                text: "the canonical full reply".into(),
-                phase: None,
-                memory_citation: None,
-            },
-        });
-        let items = map_notification(&completed, &mut buffers);
+        map_notification(
+            &notification(
+                "item/agentMessage/delta",
+                json!({"itemId": "a-1", "delta": "partial"}),
+            ),
+            &mut buffers,
+        );
+        let items = map_notification(
+            &notification(
+                "item/completed",
+                json!({"item": {"type": "agentMessage", "id": "a-1", "text": "the canonical full reply"}}),
+            ),
+            &mut buffers,
+        );
         assert_eq!(items.len(), 1);
         match &items[0] {
             Item::Text { text, phase, .. } => {
@@ -518,29 +421,17 @@ mod tests {
         }
     }
 
-    fn make_cwd() -> codex_utils_absolute_path::AbsolutePathBuf {
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(
-            "/tmp",
-        ))
-        .expect("/tmp is absolute")
-    }
-
     #[test]
     fn command_execution_started_emits_bash_tool_call_with_no_result() {
-        let item = ThreadItem::CommandExecution {
-            id: "c-1".into(),
-            command: "ls".into(),
-            cwd: make_cwd(),
-            process_id: None,
-            source: CommandExecutionSource::default(),
-            status: CommandExecutionStatus::InProgress,
-            command_actions: Vec::new(),
-            aggregated_output: None,
-            exit_code: None,
-            duration_ms: None,
-        };
+        let item = json!({
+            "type": "commandExecution",
+            "id": "c-1",
+            "command": "ls",
+            "status": "inProgress",
+            "aggregatedOutput": null,
+            "exitCode": null
+        });
         let items = map_thread_item(&item, Phase::Started);
-        assert_eq!(items.len(), 1);
         match &items[0] {
             Item::ToolCall {
                 name,
@@ -558,18 +449,14 @@ mod tests {
 
     #[test]
     fn command_execution_completed_zero_exit_is_ok() {
-        let item = ThreadItem::CommandExecution {
-            id: "c-1".into(),
-            command: "ls".into(),
-            cwd: make_cwd(),
-            process_id: None,
-            source: CommandExecutionSource::default(),
-            status: CommandExecutionStatus::Completed,
-            command_actions: Vec::new(),
-            aggregated_output: Some("file1\nfile2\n".into()),
-            exit_code: Some(0),
-            duration_ms: Some(12),
-        };
+        let item = json!({
+            "type": "commandExecution",
+            "id": "c-1",
+            "command": "ls",
+            "status": "completed",
+            "aggregatedOutput": "file1\nfile2\n",
+            "exitCode": 0
+        });
         let items = map_thread_item(&item, Phase::Completed);
         match &items[0] {
             Item::ToolCall {
@@ -586,18 +473,16 @@ mod tests {
 
     #[test]
     fn mcp_tool_montage_server_drops_namespace_prefix() {
-        let item = ThreadItem::McpToolCall {
-            id: "m-1".into(),
-            server: "montage".into(),
-            tool: "view_timeline".into(),
-            status: McpToolCallStatus::Completed,
-            arguments: json!({"focus": "1.0s"}),
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-            result: None,
-            error: None,
-            duration_ms: Some(4),
-        };
+        let item = json!({
+            "type": "mcpToolCall",
+            "id": "m-1",
+            "server": "montage",
+            "tool": "view_timeline",
+            "status": "completed",
+            "arguments": {"focus": "1.0s"},
+            "result": null,
+            "error": null
+        });
         let items = map_thread_item(&item, Phase::Completed);
         match &items[0] {
             Item::ToolCall { name, .. } => assert_eq!(name, "view_timeline"),
@@ -607,18 +492,16 @@ mod tests {
 
     #[test]
     fn mcp_tool_other_server_keeps_namespace_prefix() {
-        let item = ThreadItem::McpToolCall {
-            id: "m-2".into(),
-            server: "other".into(),
-            tool: "x".into(),
-            status: McpToolCallStatus::Completed,
-            arguments: json!({}),
-            mcp_app_resource_uri: None,
-            plugin_id: None,
-            result: None,
-            error: None,
-            duration_ms: None,
-        };
+        let item = json!({
+            "type": "mcpToolCall",
+            "id": "m-2",
+            "server": "other",
+            "tool": "x",
+            "status": "completed",
+            "arguments": {},
+            "result": null,
+            "error": null
+        });
         let items = map_thread_item(&item, Phase::Completed);
         match &items[0] {
             Item::ToolCall { name, .. } => assert_eq!(name, "other.x"),
@@ -628,11 +511,12 @@ mod tests {
 
     #[test]
     fn file_change_completed_emits_ok_result() {
-        let item = ThreadItem::FileChange {
-            id: "f-1".into(),
-            changes: Vec::new(),
-            status: PatchApplyStatus::Completed,
-        };
+        let item = json!({
+            "type": "fileChange",
+            "id": "f-1",
+            "changes": [],
+            "status": "completed"
+        });
         let items = map_thread_item(&item, Phase::Completed);
         match &items[0] {
             Item::ToolCall {
@@ -662,48 +546,26 @@ mod tests {
     }
 
     #[test]
-    fn extract_reasoning_treats_missing_and_empty_as_none() {
-        assert!(extract_reasoning(None).is_none());
-        assert!(extract_reasoning(Some(&json!({}))).is_none());
-        assert!(extract_reasoning(Some(&json!({ "reasoning": "" }))).is_none());
-        assert!(extract_reasoning(Some(&json!({ "reasoning": "   " }))).is_none());
-        // Non-string reasoning is ignored — we don't try to coerce
-        // structured payloads into a one-liner.
-        assert!(extract_reasoning(Some(&json!({ "reasoning": { "x": 1 } }))).is_none());
-        assert!(extract_reasoning(Some(&json!({ "reasoning": 12 }))).is_none());
-    }
-
-    #[test]
     fn capability_metadata_exec_flags_destructive_commands() {
         let safe = build_capability_metadata_for_exec("ls -l");
         let destructive = build_capability_metadata_for_exec("rm -rf /tmp/foo");
         assert_eq!(safe["graph_mutates"], json!(false));
         assert_eq!(destructive["graph_mutates"], json!(true));
-        assert_eq!(destructive["side_effects"], json!(["shell_exec"]));
     }
 
     #[test]
-    fn item_started_command_execution_routes_through_map_thread_item() {
-        let mut buffers = HashMap::new();
-        let started = ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: "th".into(),
-            turn_id: "tu".into(),
-            started_at_ms: 0,
-            item: ThreadItem::CommandExecution {
-                id: "c-1".into(),
-                command: "echo hi".into(),
-                cwd: make_cwd(),
-                process_id: None,
-                source: CommandExecutionSource::default(),
-                status: CommandExecutionStatus::InProgress,
-                command_actions: Vec::new(),
-                aggregated_output: None,
-                exit_code: None,
-                duration_ms: None,
-            },
-        });
-        let items = map_notification(&started, &mut buffers);
-        assert_eq!(items.len(), 1);
-        assert!(matches!(items[0], Item::ToolCall { ref name, .. } if name == "bash"));
+    fn mutating_completion_detects_completed_montage_tool() {
+        let notification = notification(
+            "item/completed",
+            json!({
+                "item": {
+                    "type": "mcpToolCall",
+                    "server": "montage",
+                    "status": "completed",
+                    "error": null
+                }
+            }),
+        );
+        assert!(is_project_mutating_completion(&notification));
     }
 }

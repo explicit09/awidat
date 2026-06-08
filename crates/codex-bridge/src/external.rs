@@ -5,10 +5,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
@@ -23,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::BridgeError;
+use crate::wire;
 
 const DEFAULT_CODEX_BIN: &str = "codex";
 
@@ -31,8 +28,8 @@ type PendingResponses = Arc<Mutex<HashMap<i64, PendingResponse>>>;
 
 #[derive(Debug)]
 pub enum ExternalServerEvent {
-    Notification(ServerNotification),
-    Request(ServerRequest),
+    Notification(wire::ServerNotification),
+    Request(wire::ServerRequest),
 }
 
 pub struct ExternalAppServerClient {
@@ -97,10 +94,8 @@ impl ExternalAppServerClient {
 
     pub async fn request<T: DeserializeOwned>(
         &self,
-        request: ClientRequest,
+        value: serde_json::Value,
     ) -> Result<T, BridgeError> {
-        let value = serde_json::to_value(&request)
-            .map_err(|e| BridgeError::Request(format!("serialize request: {e}")))?;
         let id = value
             .get("id")
             .and_then(|id| id.as_i64())
@@ -124,12 +119,11 @@ impl ExternalAppServerClient {
 
     pub async fn resolve(
         &self,
-        request_id: RequestId,
+        request_id: wire::RequestId,
         result: serde_json::Value,
     ) -> Result<(), BridgeError> {
-        let id = serde_json::to_value(request_id)
-            .map_err(|e| BridgeError::Resolve(format!("serialize request id: {e}")))?;
-        self.write_json(json!({ "id": id, "result": result })).await
+        self.write_json(json!({ "id": request_id, "result": result }))
+            .await
     }
 
     pub async fn shutdown(&self) {
@@ -231,9 +225,9 @@ async fn read_stdout(
             continue;
         }
         let event = if value.get("id").is_some() {
-            serde_json::from_value::<ServerRequest>(value).map(ExternalServerEvent::Request)
+            serde_json::from_value::<wire::ServerRequest>(value).map(ExternalServerEvent::Request)
         } else {
-            serde_json::from_value::<ServerNotification>(value)
+            serde_json::from_value::<wire::ServerNotification>(value)
                 .map(ExternalServerEvent::Notification)
         };
         if let Ok(event) = event {
@@ -291,5 +285,43 @@ mod tests {
         assert_eq!(response_id(&request), None);
         let response = json!({"id": 2, "result": {}});
         assert_eq!(response_id(&response), Some(2));
+    }
+
+    #[test]
+    fn codex_crates_are_not_required_default_dependencies() {
+        let manifest =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+                .expect("read manifest");
+        let parsed: toml::Value = toml::from_str(&manifest).expect("parse manifest");
+        let dependencies = parsed
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .expect("dependencies table");
+
+        for name in [
+            "codex-app-server-client",
+            "codex-app-server-protocol",
+            "codex-config",
+            "codex-core",
+            "codex-protocol",
+            "codex-arg0",
+            "codex-feedback",
+        ] {
+            let dependency = dependencies.get(name).expect("codex dependency exists");
+            let optional = dependency
+                .get("optional")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            assert!(optional, "{name} must be optional");
+        }
+
+        let features = parsed
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .expect("features table");
+        assert!(
+            features.contains_key("in-process-codex"),
+            "in-process-codex feature must own vendored Codex dependencies"
+        );
     }
 }
