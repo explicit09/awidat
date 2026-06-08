@@ -34,6 +34,7 @@ export function ChatStream() {
   const displayItems = useMemo(() => groupActivityItems(items), [items]);
   const running = useAgentStore((s) => s.running);
   const turnError = useAgentStore((s) => s.turnError);
+  const showThinking = running && !turnError && lastVisibleItemIsUserInput(items);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowRef = useRef(true);
@@ -88,6 +89,7 @@ export function ChatStream() {
           <ItemView key={entry.item.id} item={entry.item} />
         )
       ))}
+      {showThinking && <ThinkingItem />}
       {turnError && (
         <article className="item item-error">
           <div className="item-meta">turn error</div>
@@ -96,6 +98,24 @@ export function ChatStream() {
       )}
       <div ref={bottomRef} aria-hidden="true" />
     </div>
+  );
+}
+
+function lastVisibleItemIsUserInput(items: Item[]): boolean {
+  const last = items[items.length - 1];
+  return last?.kind === "user_input" && !isMontageSentinel(last.text);
+}
+
+function ThinkingItem() {
+  return (
+    <article className="item item-thinking" aria-label="Montage is thinking">
+      <div className="thinking-pulse" aria-hidden>
+        <span />
+        <span />
+        <span />
+      </div>
+      <span>Thinking</span>
+    </article>
   );
 }
 
