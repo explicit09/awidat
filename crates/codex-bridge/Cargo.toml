@@ -25,7 +25,7 @@ codex-feedback = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
