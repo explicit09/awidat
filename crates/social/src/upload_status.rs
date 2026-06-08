@@ -142,6 +142,7 @@ impl UploadStatusService {
         let result = match adapter.poll_status(&request) {
             Ok(result) => result,
             Err(UploadStatusAdapterError::RequiresAction { reason }) => {
+                persist_account_requires_action(store, &account.id, &reason, input.now)?;
                 return persist_requires_action(
                     store,
                     job,
@@ -236,6 +237,29 @@ fn persist_requires_action(
     store.save_publish_job(next.clone())?;
     append_requires_action_event(store, &next, &reason, actor_type, now)?;
     Ok(next)
+}
+
+fn persist_account_requires_action(
+    store: &mut impl SocialStore,
+    account_id: &str,
+    reason: &str,
+    now: i64,
+) -> Result<(), UploadStatusServiceError> {
+    let mut account = store.connected_account(account_id)?;
+    match reason {
+        "missing_scope" => account.status = ConnectedAccountStatus::MissingScope,
+        "account_needs_reauth" => account.status = ConnectedAccountStatus::NeedsReauth,
+        "account_disabled" => account.status = ConnectedAccountStatus::Disabled,
+        "account_revoked" => account.status = ConnectedAccountStatus::Revoked,
+        "missing_publish_capability" => account.capabilities.upload_video = false,
+        _ => {
+            account.status = ConnectedAccountStatus::Ineligible;
+            account.eligibility = crate::model::AccountEligibility::blocked(reason);
+        }
+    }
+    account.updated_at = now;
+    store.save_connected_account(account)?;
+    Ok(())
 }
 
 fn append_requires_action_event(
@@ -588,6 +612,11 @@ mod tests {
         assert_eq!(events[0].event_type, PublishJobEventType::RequiresAction);
         assert_eq!(events[0].actor_type, PublishJobActorType::Provider);
         assert_eq!(events[0].metadata["reason"], "missing_scope");
+        let account = store
+            .connected_account("acct_1")
+            .unwrap_or_else(|err| panic!("account: {err}"));
+        assert_eq!(account.status, ConnectedAccountStatus::MissingScope);
+        assert_eq!(account.updated_at, 2_500);
     }
 
     #[test]

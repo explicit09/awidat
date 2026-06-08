@@ -25,12 +25,14 @@ use montage_social::api::{
 };
 use montage_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::io::ReaderStream;
 
 const SOCIAL_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const WORKSPACE_ID_HEADER: &str = "x-montage-workspace-id";
+type AuthTokenSource = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// Authenticated HTTPS client for the social-publishing server.
 ///
@@ -40,7 +42,7 @@ const WORKSPACE_ID_HEADER: &str = "x-montage-workspace-id";
 #[derive(Clone)]
 pub struct SocialClient {
     base_url: String,
-    auth_token: String,
+    auth_token: AuthTokenSource,
     workspace_id: Option<String>,
     http: reqwest::Client,
 }
@@ -75,10 +77,12 @@ struct OAuthStartBody {
 impl SocialClient {
     /// Build a client from a base URL + dev bearer token. Trailing slashes on
     /// `base_url` are trimmed so route joins never double-slash.
+    #[cfg(test)]
     pub fn new(base_url: impl Into<String>, auth_token: impl Into<String>) -> Self {
         Self::new_with_timeout(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT)
     }
 
+    #[cfg(test)]
     pub fn new_for_workspace(
         base_url: impl Into<String>,
         auth_token: impl Into<String>,
@@ -89,9 +93,18 @@ impl SocialClient {
         client
     }
 
+    #[cfg(test)]
     fn new_with_timeout(
         base_url: impl Into<String>,
         auth_token: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
+        Self::new_with_token_source(base_url, fixed_auth_token(auth_token.into()), timeout)
+    }
+
+    fn new_with_token_source(
+        base_url: impl Into<String>,
+        auth_token: AuthTokenSource,
         timeout: Duration,
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
@@ -101,10 +114,18 @@ impl SocialClient {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             base_url,
-            auth_token: auth_token.into(),
+            auth_token,
             workspace_id: None,
             http,
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_auth_token_fn(
+        base_url: impl Into<String>,
+        auth_token: impl Fn() -> String + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_with_token_source(base_url, Arc::new(auth_token), SOCIAL_CLIENT_TIMEOUT)
     }
 
     /// Resolve the client from the environment.
@@ -123,13 +144,22 @@ impl SocialClient {
         if base_url.trim().is_empty() {
             return None;
         }
-        let auth_token = social_auth_token_from_env();
+        let auth_token = social_auth_token_source_from_env();
         match std::env::var("MONTAGE_SOCIAL_WORKSPACE_ID")
             .ok()
             .and_then(non_empty_string)
         {
-            Some(workspace_id) => Some(Self::new_for_workspace(base_url, auth_token, workspace_id)),
-            None => Some(Self::new(base_url, auth_token)),
+            Some(workspace_id) => {
+                let mut client =
+                    Self::new_with_token_source(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT);
+                client.workspace_id = Some(workspace_id);
+                Some(client)
+            }
+            None => Some(Self::new_with_token_source(
+                base_url,
+                auth_token,
+                SOCIAL_CLIENT_TIMEOUT,
+            )),
         }
     }
 
@@ -322,7 +352,7 @@ impl SocialClient {
     }
 
     fn authenticated(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let request = request.bearer_auth(&self.auth_token);
+        let request = request.bearer_auth((self.auth_token)());
         match &self.workspace_id {
             Some(workspace_id) => request.header(WORKSPACE_ID_HEADER, workspace_id),
             None => request,
@@ -342,6 +372,11 @@ impl SocialClient {
             .await
             .map_err(|e| format!("decode response: {e}"))
     }
+}
+
+#[cfg(test)]
+fn fixed_auth_token(auth_token: String) -> AuthTokenSource {
+    Arc::new(move || auth_token.clone())
 }
 
 /// Map an HTTP status to a stable, token-safe error string. `401` collapses to
@@ -379,6 +414,10 @@ fn social_auth_token_from_env() -> String {
         std::env::var("MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN").ok(),
         std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").ok(),
     )
+}
+
+fn social_auth_token_source_from_env() -> AuthTokenSource {
+    Arc::new(social_auth_token_from_env)
 }
 
 #[cfg(test)]
@@ -458,6 +497,29 @@ mod tests {
             .await;
 
         let client = SocialClient::new_for_workspace(server.uri(), "dev-token", "workspace_1");
+        let accounts = client.accounts().await.expect("accounts ok");
+        assert_eq!(accounts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn accounts_reads_auth_token_for_each_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(match_path("/social/accounts"))
+            .and(header("authorization", "Bearer refreshed-token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([account_json()])),
+            )
+            .mount(&server)
+            .await;
+
+        let token = std::sync::Arc::new(std::sync::Mutex::new("initial-token".to_string()));
+        let token_source = std::sync::Arc::clone(&token);
+        let client = SocialClient::new_with_auth_token_fn(server.uri(), move || {
+            token_source.lock().expect("token lock").clone()
+        });
+        *token.lock().expect("token lock") = "refreshed-token".to_string();
+
         let accounts = client.accounts().await.expect("accounts ok");
         assert_eq!(accounts.len(), 1);
     }
