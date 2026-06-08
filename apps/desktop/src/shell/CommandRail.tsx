@@ -245,6 +245,7 @@ export function CommandRail({
   const conversationScrollerRef = useRef<HTMLDivElement | null>(null);
   const conversationBottomRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowConversationRef = useRef(true);
+  const effectivePermissionMode = permissionMode ?? "manual";
 
   // Compute the visible mention suggestions on every keystroke. Cheap
   // (small lists), no debounce needed.
@@ -641,15 +642,6 @@ export function CommandRail({
           ) : null}
         </Inline>
       </Inline>
-      {permissionMode && onSetPermissionMode ? (
-        <div className="montage-permission-row">
-          <span>Agent mode</span>
-          <PermissionModeSegmented
-            mode={permissionMode}
-            onChange={onSetPermissionMode}
-          />
-        </div>
-      ) : null}
       {historyOpen ? (
         <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
           <button
@@ -806,7 +798,13 @@ export function CommandRail({
               ))}
             </div>
           ) : null}
-          <Inline justify="end" align="center" gap="2" className="px-2 py-1">
+          <Inline justify="between" align="center" gap="2" className="px-2 py-1">
+            <Inline gap="2" align="center" className="min-w-0">
+              <PermissionModeMenu
+                mode={effectivePermissionMode}
+                onChange={onSetPermissionMode}
+              />
+            </Inline>
             {running ? (
               <Button
                 variant="secondary"
@@ -1456,17 +1454,17 @@ function EmptyState({
  * the agent attaches today, and the goal is human-readable shorthand
  * the user can scan in 100ms instead of decoding a UUID.
  */
-function PermissionModeSegmented({
+function PermissionModeMenu({
   mode,
   onChange,
 }: {
   mode: PermissionMode;
-  onChange: (next: PermissionMode) => void;
+  onChange?: (next: PermissionMode) => void;
 }) {
-  const titles: Record<PermissionMode, string> = {
-    manual: "Manual: every proposal needs explicit Accept.",
-    copilot: "Copilot: agent surfaces notes; you ask it to act.",
-    autopilot: "Auto: agent applies edits without approval cards.",
+  const labels: Record<PermissionMode, string> = {
+    manual: "Manual",
+    copilot: "Copilot",
+    autopilot: "Auto",
   };
   const options: Array<{ mode: PermissionMode; label: string }> = [
     { mode: "manual", label: "Manual" },
@@ -1474,29 +1472,25 @@ function PermissionModeSegmented({
     { mode: "autopilot", label: "Auto" },
   ];
   return (
-    <div
-      className="montage-permission-segment"
-      role="radiogroup"
-      aria-label="Agent permission mode"
-      title={titles[mode]}
-    >
-      {options.map((option) => (
-        <button
-          key={option.mode}
-          type="button"
-          role="radio"
-          aria-checked={mode === option.mode}
-          data-active={mode === option.mode}
-          data-mode={option.mode}
-          title={titles[option.mode]}
-          onClick={() => {
-            if (mode !== option.mode) onChange(option.mode);
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <label className="montage-permission-menu" title="Agent permission mode">
+      <span className="montage-permission-glyph" aria-hidden>
+        ∞
+      </span>
+      <span>{labels[mode]}</span>
+      <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
+      <select
+        value={mode}
+        disabled={!onChange}
+        onChange={(e) => onChange?.(e.target.value as PermissionMode)}
+        aria-label="Agent permission mode"
+      >
+        {options.map((option) => (
+          <option key={option.mode} value={option.mode}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
