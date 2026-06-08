@@ -412,9 +412,11 @@ fn db_pool_max_size() -> u32 {
 }
 
 fn social_allowed_user_ids() -> Vec<String> {
-    std::env::var("SOCIAL_ALLOWED_USER_IDS")
-        .unwrap_or_default()
-        .split(',')
+    parse_social_allowed_user_ids(&std::env::var("SOCIAL_ALLOWED_USER_IDS").unwrap_or_default())
+}
+
+fn parse_social_allowed_user_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
@@ -2274,6 +2276,14 @@ mod tests {
         assert_eq!(provider_slug(&Provider::TwitterX), "twitter_x");
         assert_eq!(parse_provider("x").unwrap(), Provider::TwitterX);
         assert_eq!(parse_provider("twitter").unwrap(), Provider::TwitterX);
+    }
+
+    #[test]
+    fn social_allowed_user_ids_parser_trims_and_ignores_empty_segments() {
+        assert_eq!(
+            parse_social_allowed_user_ids(" user_1, ,cohost_1,, "),
+            vec!["user_1".to_string(), "cohost_1".to_string()]
+        );
     }
 
     #[test]
