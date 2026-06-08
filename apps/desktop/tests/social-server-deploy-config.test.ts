@@ -1,8 +1,13 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const flyToml = readFileSync("crates/social-server/fly.toml", "utf8");
-const readme = readFileSync("docs/social-server/README.md", "utf8");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const readRepoFile = (path: string) => readFileSync(resolve(repoRoot, path), "utf8");
+
+const flyToml = readRepoFile("crates/social-server/fly.toml");
+const readme = readRepoFile("docs/social-server/README.md");
 
 assert.match(
   flyToml,
@@ -19,5 +24,22 @@ assert.match(
   /montage-publish-tick/,
   "Deployment docs must include the pg_cron publish tick schedule.",
 );
+
+for (const envName of [
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "TIKTOK_CLIENT_KEY",
+  "TIKTOK_CLIENT_SECRET",
+  "INSTAGRAM_CLIENT_ID",
+  "INSTAGRAM_CLIENT_SECRET",
+  "TWITTER_X_CLIENT_ID",
+  "TWITTER_X_CLIENT_SECRET",
+]) {
+  assert.match(
+    readme,
+    new RegExp(`\\| \`${envName}\` \\|`),
+    `Deployment docs must document ${envName}.`,
+  );
+}
 
 console.log("social-server-deploy-config: OK");

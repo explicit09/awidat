@@ -22,6 +22,12 @@
 //!   STORAGE_BUCKET          — name of the Supabase Storage bucket for artifacts
 //!   GOOGLE_CLIENT_ID        — Google OAuth client ID (Phase 2)
 //!   GOOGLE_CLIENT_SECRET    — Google OAuth client secret (Phase 2; server-only, never in desktop)
+//!   TIKTOK_CLIENT_KEY       — TikTok OAuth client key (server-only)
+//!   TIKTOK_CLIENT_SECRET    — TikTok OAuth client secret (server-only)
+//!   INSTAGRAM_CLIENT_ID     — Instagram OAuth app client ID (server-only)
+//!   INSTAGRAM_CLIENT_SECRET — Instagram OAuth app secret (server-only)
+//!   TWITTER_X_CLIENT_ID     — Twitter/X OAuth client ID (server-only)
+//!   TWITTER_X_CLIENT_SECRET — Twitter/X OAuth client secret (server-only)
 //!   SOCIAL_TOKEN_AEAD_KEY   — 64 hex chars = 32-byte ChaCha20-Poly1305 key (Phase 2)
 //!   SOCIAL_TOKEN_KEY_ID     — key identifier stored alongside every token (Phase 2)
 //!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://montage-social.fly.dev"

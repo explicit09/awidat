@@ -229,6 +229,12 @@ the current machine-readable evidence status in
 | `STORAGE_BUCKET` | No | 1 | Default `artifacts` |
 | `GOOGLE_CLIENT_ID` | Phase 2 | 2 | Google OAuth app client ID |
 | `GOOGLE_CLIENT_SECRET` | Phase 2 | 2 | Google OAuth client secret (server-only, never in desktop) |
+| `TIKTOK_CLIENT_KEY` | Phase 6 | 6 | TikTok OAuth client key |
+| `TIKTOK_CLIENT_SECRET` | Phase 6 | 6 | TikTok OAuth client secret (server-only, never in desktop) |
+| `INSTAGRAM_CLIENT_ID` | Phase 6 | 6 | Instagram OAuth app client ID |
+| `INSTAGRAM_CLIENT_SECRET` | Phase 6 | 6 | Instagram OAuth app secret (server-only, never in desktop) |
+| `TWITTER_X_CLIENT_ID` | Phase 6 | 6 | Twitter/X OAuth client ID |
+| `TWITTER_X_CLIENT_SECRET` | Phase 6 | 6 | Twitter/X OAuth client secret (server-only, never in desktop) |
 | `SOCIAL_TOKEN_AEAD_KEY` | Phase 2 | 2 | 64 hex chars = 32-byte ChaCha20-Poly1305 key |
 | `SOCIAL_TOKEN_KEY_ID` | Phase 2 | 2 | Key identifier stored alongside every token (e.g. "k1") |
 | `OAUTH_REDIRECT_BASE` | Phase 2 | 2 | Base URL for OAuth redirect URIs |
@@ -311,12 +317,18 @@ Store the output as `SOCIAL_TOKEN_AEAD_KEY`.  Pick a short key ID, e.g. `"k1"`.
 fly secrets set --app montage-social \
   GOOGLE_CLIENT_ID="<client_id_from_google_console>" \
   GOOGLE_CLIENT_SECRET="<client_secret_from_google_console>" \
+  TIKTOK_CLIENT_KEY="<client_key_from_tiktok_developer_portal>" \
+  TIKTOK_CLIENT_SECRET="<client_secret_from_tiktok_developer_portal>" \
+  INSTAGRAM_CLIENT_ID="<app_id_from_meta_developer_portal>" \
+  INSTAGRAM_CLIENT_SECRET="<app_secret_from_meta_developer_portal>" \
+  TWITTER_X_CLIENT_ID="<client_id_from_x_developer_portal>" \
+  TWITTER_X_CLIENT_SECRET="<client_secret_from_x_developer_portal>" \
   SOCIAL_TOKEN_AEAD_KEY="<64_hex_chars_from_step_1>" \
   SOCIAL_TOKEN_KEY_ID="k1" \
   OAUTH_REDIRECT_BASE="https://montage-social.fly.dev"
 ```
 
-`GOOGLE_CLIENT_SECRET` stays on the server.  The desktop app never sees it.
+OAuth client secrets stay on the server. The desktop app never sees them.
 
 ### 3. Configure the Google Cloud OAuth consent screen
 
@@ -348,6 +360,9 @@ GET /oauth/callback/youtube  ◄──                              ◄──  r
 
 - [ ] `SOCIAL_TOKEN_AEAD_KEY` generated and set as Fly secret
 - [ ] `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` set as Fly secrets
+- [ ] `TIKTOK_CLIENT_KEY` + `TIKTOK_CLIENT_SECRET` set as Fly secrets
+- [ ] `INSTAGRAM_CLIENT_ID` + `INSTAGRAM_CLIENT_SECRET` set as Fly secrets
+- [ ] `TWITTER_X_CLIENT_ID` + `TWITTER_X_CLIENT_SECRET` set as Fly secrets
 - [ ] `OAUTH_REDIRECT_BASE` set as Fly secret
 - [ ] Redirect URI registered in Google Cloud Console
 - [ ] YouTube Data API v3 enabled
