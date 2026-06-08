@@ -404,6 +404,7 @@ pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
     pub install_shutdown_signal_handler: bool,
+    pub enable_codex_api_key_env: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -412,6 +413,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
             install_shutdown_signal_handler: true,
+            enable_codex_api_key_env: false,
         }
     }
 }
@@ -472,7 +474,8 @@ pub async fn run_main_with_transport_options(
             config_manager
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
             let auth_manager =
-                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+                AuthManager::shared_from_config(&config, runtime_options.enable_codex_api_key_env)
+                    .await;
             config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
         }
         Err(err) => {
@@ -697,7 +700,7 @@ pub async fn run_main_with_transport_options(
     drop(unix_socket_startup_lock);
 
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(&config, runtime_options.enable_codex_api_key_env).await;
 
     let remote_control_requested = runtime_options.remote_control_enabled;
     let remote_control_enabled = remote_control_requested && state_db.is_some();

@@ -456,6 +456,10 @@ struct AppServerCommand {
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
 
+    /// Honor CODEX_API_KEY when loading app-server auth.
+    #[arg(long = "enable-codex-api-key-env", hide = true)]
+    enable_codex_api_key_env: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -966,6 +970,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 strict_config: app_server_strict_config,
                 listen,
                 remote_control,
+                enable_codex_api_key_env,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -982,6 +987,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         remote_control_enabled: remote_control,
+                        enable_codex_api_key_env,
                         ..Default::default()
                     };
                     codex_app_server::run_main_with_transport_options(
@@ -2850,6 +2856,7 @@ mod tests {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
         assert!(!app_server.remote_control);
+        assert!(!app_server.enable_codex_api_key_env);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -2861,6 +2868,13 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_can_enable_codex_api_key_env_auth() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--enable-codex-api-key-env"].as_ref());
+        assert!(app_server.enable_codex_api_key_env);
     }
 
     #[test]
