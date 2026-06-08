@@ -932,7 +932,7 @@ struct RefreshResponse {
 
 pub const MONTAGE_OAUTH_CLIENT_ID_ENV_VAR: &str = "MONTAGE_OAUTH_CLIENT_ID";
 
-pub(super) fn configured_montage_oauth_client_id() -> Option<String> {
+pub fn configured_montage_oauth_client_id() -> Option<String> {
     std::env::var(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty())
