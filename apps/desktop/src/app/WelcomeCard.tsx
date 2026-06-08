@@ -10,7 +10,7 @@
 // so first launch feels like the rest of the Montage desktop surface.
 
 import { useEffect } from "react";
-import mark from "../brand/montage-icon.png";
+import { BrandMark } from "../brand/BrandMark";
 import { useWelcome } from "../state/welcome";
 
 const CORE_IDEAS: ReadonlyArray<{ step: string; title: string; body: string }> = [
@@ -74,13 +74,7 @@ export function WelcomeCard() {
       >
         <header className="flex items-center justify-between border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img
-              src={mark}
-              alt=""
-              width={20}
-              height={20}
-              className="drop-shadow-[0_0_14px_rgba(239,68,68,0.38)]"
-            />
+            <BrandMark size={20} className="drop-shadow-[0_0_14px_rgba(239,68,68,0.38)]" />
             <h2 className="truncate text-[17px] font-bold tracking-normal text-[var(--color-text-primary)]">
               Welcome to Montage
             </h2>

@@ -7,9 +7,9 @@ import { useTimelineSelectionStore } from "../properties/store";
 import type { Stage } from "../state/stages";
 import { useSettings } from "../state/settings";
 import { Settings as SettingsIcon } from "lucide-react";
+import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
-import mark from "../brand/montage-icon.png";
 
 /**
  * StageShell — the 2026 "Stage" application shell (replaces the
@@ -304,7 +304,7 @@ export function StageShell(props: StageShellProps) {
     <div className="relative z-10 h-full w-full overflow-hidden font-sans text-[var(--color-text-primary)]">
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3" data-tauri-drag-region>
-        <img src={mark} width={26} height={26} alt="" className="rounded-xl" style={{ boxShadow: "0 0 0 1px rgba(239,68,68,0.30), 0 4px 16px rgba(239,68,68,0.34)" }} />
+        <BrandMark size={26} className="rounded-[8px]" />
         <span className="font-mono text-[12px] tracking-[0.18em] text-[var(--color-text-secondary)]">MONTAGE</span>
         {projectLabel ? (
           <span className="glass-ghost rounded-lg px-2.5 py-1 font-mono text-[11px] text-[var(--color-text-muted)]">
