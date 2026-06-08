@@ -110,7 +110,7 @@ fn review_input() -> ShortFormReviewInput {
                 "score": 0.91
             }]
         }),
-        trend_context: serde_json::Value::Null,
+        trend_context: serde_json::json!({}),
     }
 }
 
@@ -173,7 +173,7 @@ fn transcript_only_input() -> ShortFormReviewInput {
                 "score": 0.88
             }]
         }),
-        trend_context: serde_json::Value::Null,
+        trend_context: serde_json::json!({}),
     }
 }
 
