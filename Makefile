@@ -55,7 +55,13 @@ desktop-yt-dlp:
 	    echo "refreshing yt-dlp at $$dest from $${existing_version:-unknown} to $(YT_DLP_VERSION)"; \
 	fi; \
 	echo "fetching $$url"; \
-	curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL -o "$$dest" "$$url"; \
+	if ! curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL -o "$$dest" "$$url"; then \
+	    if [ "$${YT_DLP_ALLOW_PLACEHOLDER:-0}" != "1" ]; then \
+	        exit 1; \
+	    fi; \
+	    echo "yt-dlp download failed; writing CI compile-check placeholder at $$dest" >&2; \
+	    printf '%s\n' '#!/usr/bin/env sh' 'echo "yt-dlp sidecar unavailable in CI compile check" >&2' 'exit 127' > "$$dest"; \
+	fi; \
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 
