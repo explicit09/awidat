@@ -4,6 +4,13 @@
 
 - @explicit09
 
+## Contact
+
+Use GitHub Issues for public bug reports, feature proposals, and maintainer
+questions. Use GitHub Discussions if they are enabled for broader design or
+usage conversations. Do not rely on private personal contact channels for
+project support.
+
 ## Responsibilities
 
 Maintainers are responsible for reviewing and merging pull requests, responding
