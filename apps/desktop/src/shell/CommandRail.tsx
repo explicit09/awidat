@@ -596,14 +596,7 @@ export function CommandRail({
             />
           </Inline>
         </button>
-        <Inline gap="2" align="center" className="shrink-0">
-          {permissionMode && onSetPermissionMode ? (
-            <PermissionModeSegmented
-              mode={permissionMode}
-              onChange={onSetPermissionMode}
-            />
-          ) : null}
-          <Inline gap="0" align="center">
+        <Inline gap="0" align="center" className="shrink-0">
           <button
             type="button"
             onClick={onNewChat}
@@ -646,9 +639,17 @@ export function CommandRail({
               )}
             </button>
           ) : null}
-          </Inline>
         </Inline>
       </Inline>
+      {permissionMode && onSetPermissionMode ? (
+        <div className="montage-permission-row">
+          <span>Agent mode</span>
+          <PermissionModeSegmented
+            mode={permissionMode}
+            onChange={onSetPermissionMode}
+          />
+        </div>
+      ) : null}
       {historyOpen ? (
         <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
           <button

@@ -7438,6 +7438,22 @@ button {
 
 /* Permission mode is a first-class chat control, not hidden composer
    metadata. Keep all three levels readable in the rail header. */
+.montage-chat-rail .montage-permission-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.montage-chat-rail .montage-permission-row > span {
+  color: var(--color-text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 .montage-chat-rail .montage-permission-segment {
   display: inline-grid;
   grid-template-columns: repeat(3, minmax(0, auto));
