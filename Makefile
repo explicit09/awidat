@@ -1,17 +1,69 @@
-.PHONY: check fmt clippy test python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp
 
 YT_DLP_VERSION ?= 2026.03.17
+MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
+
+MONTAGE_APP_PACKAGES := \
+	-p montage-proto \
+	-p montage-core \
+	-p montage-tools \
+	-p montage-mcp \
+	-p montage-sandboxing \
+	-p montage-cli \
+	-p montage-render \
+	-p montage-render-gpu \
+	-p montage-effects \
+	-p montage-lut \
+	-p montage-test-support \
+	-p montage-config \
+	-p montage-secrets \
+	-p montage-social \
+	-p montage-social-server \
+	-p montage-index \
+	-p montage-desktop-protocol
+
+MONTAGE_AGENT_PACKAGES := \
+	-p montage-auth \
+	-p montage-codex-bridge \
+	-p montage-agent-cli
 
 check: fmt clippy test
+
+check-app: fmt-app clippy-app test-app
+
+check-agent: fmt-agent clippy-agent test-agent
+
+check-desktop-rust:
+	cargo fmt -p montage-desktop -- --check
+	cargo clippy -p montage-desktop --all-targets -- -D warnings
+	cargo test -p montage-desktop
 
 fmt:
 	cargo fmt --all -- --check
 
+fmt-app:
+	cargo fmt $(MONTAGE_APP_PACKAGES) -- --check
+
+fmt-agent:
+	cargo fmt $(MONTAGE_AGENT_PACKAGES) -- --check
+
 clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
 
+clippy-app:
+	cargo clippy $(MONTAGE_APP_PACKAGES) --all-targets -- -D warnings
+
+clippy-agent:
+	cargo clippy $(MONTAGE_AGENT_PACKAGES) --all-targets -- -D warnings
+
 test:
 	cargo test --workspace
+
+test-app:
+	MONTAGE_SKILLS_ROOT="$(MONTAGE_SKILLS_ROOT)" RUST_TEST_THREADS=1 cargo test $(MONTAGE_APP_PACKAGES)
+
+test-agent:
+	cargo test $(MONTAGE_AGENT_PACKAGES)
 
 python-smoke:
 	python3 python/scripts/smoke_indexers.py --safe

@@ -107,7 +107,21 @@ Some indexers download large model weights on first use. See `python/SMOKE.md` f
 
 ## Development Checks
 
-For compile, lint, and formatting coverage:
+For normal app/core iteration, use the Montage-only Rust lane:
+
+```bash
+make check-app
+```
+
+Use the heavier lanes only when you touch the corresponding surface:
+
+```bash
+make check-agent        # Codex auth / bridge / agent runner
+make check-desktop-rust # Tauri backend
+```
+
+For full workspace compile, lint, and formatting coverage, including the
+vendored Codex workspace:
 
 ```bash
 cargo fmt --all -- --check
@@ -132,8 +146,9 @@ uv run python -c "import montage_mcp"
 
 `make check` still runs the historical full Rust gate
 (`cargo test --workspace`). In this checkout that includes vendored Codex
-tests, so use it when you are intentionally validating the vendored harness;
-otherwise run the narrower command that matches the changed subsystem.
+tests, so use it when you are intentionally validating the vendored harness
+or preparing a broad integration/release change; otherwise run the narrower
+Makefile lane that matches the changed subsystem.
 
 ## Packaging
 
