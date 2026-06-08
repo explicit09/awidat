@@ -78,6 +78,7 @@ pub mod review;
 pub mod scene_aware_short_form;
 pub mod short_form_intelligence;
 pub mod short_form_review;
+pub mod short_form_review_context;
 pub mod skills;
 pub mod subagent;
 pub mod system_prompt;
@@ -91,6 +92,7 @@ pub mod understanding;
 pub mod vc;
 pub mod verify;
 pub mod visual_signals;
+pub mod x_trends;
 
 pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;

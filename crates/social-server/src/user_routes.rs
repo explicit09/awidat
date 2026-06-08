@@ -1,11 +1,11 @@
 //! Phase 5 user-facing routes — the API surface the desktop client calls.
 //!
-//! These mirror the `SocialApi` facade methods one-for-one. They are authed by
-//! a single-user **desktop dev bearer** (`DESKTOP_AUTH_TOKEN`) that maps to a
-//! fixed `ApiActor`/`ApiOwner` (`DESKTOP_USER_ID`). Phase 7 replaces this with
-//! real Supabase Auth; until then the bearer is a static dev token the server
-//! also accepts. No secret (client_secret / refresh token / access token) is
-//! ever returned — the `SocialApi` DTOs are already redaction-tested.
+//! These mirror the `SocialApi` facade methods one-for-one. In multi-user
+//! deployments, they authenticate the desktop-forwarded Supabase bearer and
+//! load workspace roles from `workspace_member_roles`. In local single-user
+//! development, they can fall back to the static desktop dev bearer. No secret
+//! (client_secret / refresh token / access token) is ever returned — the
+//! `SocialApi` DTOs are already redaction-tested.
 //!
 //! The sync `SocialApi` runs on the blocking pool via `spawn_blocking`, exactly
 //! like the internal routes.
@@ -24,7 +24,7 @@ use montage_social::{
         ValidateTargetResponse,
     },
     auth_context::JwtVerifier,
-    model::AccountUsageAudit,
+    model::{AccountUsageAudit, TeamAction, WorkspaceMemberRole},
     oauth_url::OAuthProviderConfig,
     pg_store::PgSocialStore,
     store::SocialStore,
@@ -36,7 +36,9 @@ type HttpResult<T> = Result<Json<T>, HttpError>;
 
 // ── Auth + error mapping ────────────────────────────────────────────────────
 
-/// Authenticate a request and return its per-user actor + self-owner.
+const WORKSPACE_ID_HEADER: &str = "x-montage-workspace-id";
+
+/// Authenticate a request and return its per-user actor + targeted owner.
 ///
 /// Two modes (Phase 7):
 /// - **Supabase Auth (when `SUPABASE_JWT_SECRET` is set):** verify the bearer as
@@ -44,19 +46,25 @@ type HttpResult<T> = Result<Json<T>, HttpError>;
 /// - **Dev bearer (fallback):** compare the bearer to `DESKTOP_AUTH_TOKEN` →
 ///   the single fixed `DESKTOP_USER_ID`. Pre-Supabase single-user dev.
 ///
-/// Workspace roles are left empty: the desktop only targets the caller's own
-/// resources (`OwnerRef::User`), and `TeamPolicy` grants the owner self-access
-/// without any workspace role. A future workspace-admin surface would load roles
-/// via `workspace_member_roles_for_user` and pass an `OwnerRef::Workspace`.
-fn desktop_auth(
+/// By default the desktop targets the caller's own resources
+/// (`OwnerRef::User`). When `x-montage-workspace-id` is present, the request
+/// targets that workspace; the actor carries roles loaded from the authoritative
+/// social store so `TeamPolicy` can enforce Owner/Admin/Publisher/Viewer access.
+async fn desktop_auth(
     state: &SharedState,
     headers: &HeaderMap,
 ) -> Result<(ApiActor, ApiOwner), HttpError> {
     let user_id = authenticated_user_id(state, headers)?;
-    Ok((
-        ApiActor::new(user_id.clone(), Vec::new()),
-        ApiOwner::user(user_id),
-    ))
+    if !social_user_allowed(&user_id, &state.config.social_allowed_user_ids) {
+        return Err(forbidden());
+    }
+    let owner = target_owner_from_headers(&user_id, headers);
+    let roles = if !state.config.supabase_jwt_secret.is_empty() {
+        workspace_roles_for_user(state, &user_id).await?
+    } else {
+        Vec::new()
+    };
+    Ok((ApiActor::new(user_id, roles), owner))
 }
 
 /// Resolve the authenticated user id from the request, or `Unauthorized`.
@@ -88,6 +96,13 @@ fn unauthorized() -> HttpError {
     )
 }
 
+fn forbidden() -> HttpError {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error": "forbidden"})),
+    )
+}
+
 /// Extract the raw bearer value from the `Authorization` header, if present.
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
     headers
@@ -101,6 +116,45 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 /// token so a misconfigured deployment never accepts an empty bearer.
 fn desktop_token_ok(configured: &str, headers: &HeaderMap) -> bool {
     !configured.is_empty() && bearer_auth(headers, configured)
+}
+
+fn social_user_allowed(user_id: &str, allowed_user_ids: &[String]) -> bool {
+    allowed_user_ids.is_empty() || allowed_user_ids.iter().any(|allowed| allowed == user_id)
+}
+
+fn target_owner_from_headers(user_id: &str, headers: &HeaderMap) -> ApiOwner {
+    workspace_id_from_headers(headers)
+        .map(ApiOwner::workspace)
+        .unwrap_or_else(|| ApiOwner::user(user_id))
+}
+
+fn workspace_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(WORKSPACE_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+async fn workspace_roles_for_user(
+    state: &SharedState,
+    user_id: &str,
+) -> Result<Vec<WorkspaceMemberRole>, HttpError> {
+    let pool = state.pool.clone();
+    let user_id = user_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let store = PgSocialStore::new(pool);
+        store.workspace_member_roles_for_user(&user_id)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("load workspace roles: {e}")})),
+        )
+    })
 }
 
 /// Map a domain `SocialApiError` to an HTTP status + JSON body. Never leaks
@@ -134,7 +188,7 @@ pub(crate) async fn accounts_handler(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> HttpResult<Vec<AccountSummary>> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let accounts = tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
@@ -160,7 +214,7 @@ pub(crate) async fn oauth_start_handler(
     Path(provider_str): Path<String>,
     body: Option<Json<OAuthStartBody>>,
 ) -> HttpResult<OAuthStartResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let provider = parse_provider(&provider_str)?;
     let client_id = provider_client_id(&state.config, &provider)?;
     let redirect_uri = redirect_uri(&state.config, &provider);
@@ -177,8 +231,9 @@ pub(crate) async fn oauth_start_handler(
     // suffix keeps `state` unguessable; complete_oauth still validates the full
     // `state` against the stored hash.
     let now = now_secs();
-    let connection_id = format!("oauthconn-{provider_str}-{}", random_token());
-    let raw_state = format!("{connection_id}~{}", random_token());
+    let handles = oauth_handles(&provider_str);
+    let connection_id = handles.connection_id;
+    let raw_state = handles.raw_state;
     let config = OAuthProviderConfig {
         client_id,
         redirect_uri,
@@ -216,7 +271,7 @@ pub(crate) async fn disconnect_handler(
     headers: HeaderMap,
     Path(account_id): Path<String>,
 ) -> HttpResult<AccountSummary> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let now = now_secs();
     let account = tokio::task::spawn_blocking(move || {
@@ -236,7 +291,7 @@ pub(crate) async fn account_audit_handler(
     headers: HeaderMap,
     Path(account_id): Path<String>,
 ) -> HttpResult<AccountUsageAudit> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let audit = tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
@@ -255,7 +310,7 @@ pub(crate) async fn bind_target_handler(
     headers: HeaderMap,
     Json(req): Json<BindTargetRequest>,
 ) -> HttpResult<montage_social::model::CampaignVariantTarget> {
-    let (actor, _owner) = desktop_auth(&state, &headers)?;
+    let (actor, _owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -274,7 +329,7 @@ pub(crate) async fn update_target_handler(
     headers: HeaderMap,
     Json(req): Json<UpdateTargetRequest>,
 ) -> HttpResult<montage_social::model::CampaignVariantTarget> {
-    let (actor, _owner) = desktop_auth(&state, &headers)?;
+    let (actor, _owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -293,7 +348,7 @@ pub(crate) async fn validate_target_handler(
     headers: HeaderMap,
     Json(req): Json<ValidateTargetRequest>,
 ) -> HttpResult<ValidateTargetResponse> {
-    let (actor, _owner) = desktop_auth(&state, &headers)?;
+    let (actor, _owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let target = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -312,7 +367,7 @@ pub(crate) async fn schedule_target_handler(
     headers: HeaderMap,
     Json(req): Json<ScheduleTargetRequest>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, _owner) = desktop_auth(&state, &headers)?;
+    let (actor, _owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
@@ -331,7 +386,7 @@ pub(crate) async fn job_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job = tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
@@ -350,7 +405,7 @@ pub(crate) async fn cancel_job_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
@@ -370,7 +425,7 @@ pub(crate) async fn retry_job_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
@@ -390,12 +445,18 @@ pub(crate) async fn fire_due_job_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -410,7 +471,7 @@ pub(crate) async fn fire_due_job_handler(
             )
         })?;
 
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job = tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
@@ -429,12 +490,18 @@ pub(crate) async fn poll_processing_job_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -449,7 +516,7 @@ pub(crate) async fn poll_processing_job_handler(
             )
         })?;
 
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let job = tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
@@ -469,7 +536,7 @@ pub(crate) async fn reschedule_job_handler(
     Path(job_id): Path<String>,
     Json(mut req): Json<RescheduleJobRequest>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     req.now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
@@ -504,14 +571,20 @@ pub(crate) async fn upload_url_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<UploadUrlResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
 
-    // Authorize: the caller must be able to read the job (owner match).
+    // Authorize: staging rendered bytes is part of the publish workflow.
     let pool = state.pool.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
         let store = PgSocialStore::new(pool);
-        SocialApi::publish_job(&store, &actor, &owner, &job_id_for_check)
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id_for_check,
+            TeamAction::SchedulePublish,
+        )
     })
     .await
     .map_err(join_error)?
@@ -585,14 +658,19 @@ pub(crate) async fn upload_complete_handler(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
-    let (actor, owner) = desktop_auth(&state, &headers)?;
+    let (actor, owner) = desktop_auth(&state, &headers).await?;
     let pool = state.pool.clone();
     let bucket = state.config.storage_bucket.clone();
 
     let job = tokio::task::spawn_blocking(move || {
         let mut store = PgSocialStore::new(pool);
-        // Authorize via the read path before mutating anything.
-        SocialApi::publish_job(&store, &actor, &owner, &job_id)?;
+        SocialApi::authorize_publish_job_action(
+            &store,
+            &actor,
+            &owner,
+            &job_id,
+            TeamAction::SchedulePublish,
+        )?;
         let mut job = store.publish_job(&job_id)?;
         // Regenerated server-side — the client cannot influence this path.
         job.artifact_ref = artifact_storage_ref(&bucket, &job_id);
@@ -613,13 +691,22 @@ fn state_registry() -> montage_social::provider::ProviderRegistry {
     montage_social::provider::ProviderRegistry::default_multi_platform()
 }
 
-/// 32 bytes (256 bits) of CSPRNG entropy, hex-encoded. Used for the OAuth CSRF
-/// `state` and the connection handle so neither is guessable.
-fn random_token() -> String {
+struct OAuthHandles {
+    connection_id: String,
+    raw_state: String,
+}
+
+fn oauth_handles(provider_str: &str) -> OAuthHandles {
+    let connection_id = format!("oauthconn-{provider_str}-{}", random_token_128());
+    OAuthHandles {
+        raw_state: format!("{connection_id}~{}", random_token_128()),
+        connection_id,
+    }
+}
+
+fn random_token_128() -> String {
     use rand::TryRngCore;
-    let mut buf = [0u8; 32];
-    // OsRng pulls directly from the OS CSPRNG. try_fill_bytes only errors if the
-    // OS entropy source is unavailable, which is fatal — fail loudly.
+    let mut buf = [0u8; 16];
     rand::rngs::OsRng
         .try_fill_bytes(&mut buf)
         .unwrap_or_else(|e| panic!("OS CSPRNG unavailable: {e}"));
@@ -647,6 +734,7 @@ fn artifact_storage_ref(bucket: &str, job_id: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use montage_social::model::OwnerRef;
     use montage_social::store::SocialStoreError;
 
     fn headers_with_auth(value: &str) -> HeaderMap {
@@ -684,12 +772,67 @@ mod tests {
     }
 
     #[test]
-    fn random_token_is_long_and_unique() {
-        let a = random_token();
-        let b = random_token();
-        assert_eq!(a.len(), 64, "32 bytes hex-encoded");
+    fn social_user_allowlist_allows_everyone_when_empty() {
+        assert!(social_user_allowed("user_1", &[]));
+    }
+
+    #[test]
+    fn social_user_allowlist_accepts_configured_user() {
+        let allowed = vec!["user_1".to_string(), "cohost_1".to_string()];
+
+        assert!(social_user_allowed("cohost_1", &allowed));
+    }
+
+    #[test]
+    fn social_user_allowlist_rejects_unlisted_user() {
+        let allowed = vec!["user_1".to_string(), "cohost_1".to_string()];
+
+        assert!(!social_user_allowed("random_user", &allowed));
+    }
+
+    #[test]
+    fn target_owner_defaults_to_authenticated_user() {
+        assert_eq!(
+            target_owner_from_headers("user_1", &HeaderMap::new()).owner,
+            OwnerRef::User("user_1".into())
+        );
+    }
+
+    #[test]
+    fn target_owner_uses_workspace_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-montage-workspace-id", "workspace_1".parse().unwrap());
+
+        assert_eq!(
+            target_owner_from_headers("user_1", &headers).owner,
+            OwnerRef::Workspace("workspace_1".into())
+        );
+    }
+
+    #[test]
+    fn random_token_128_is_long_and_unique() {
+        let a = random_token_128();
+        let b = random_token_128();
+        assert_eq!(a.len(), 32, "16 bytes hex-encoded");
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b, "two draws must differ (CSPRNG)");
+    }
+
+    #[test]
+    fn oauth_handles_keep_twitter_x_state_within_pkce_verifier_limit() {
+        let handles = oauth_handles("twitter_x");
+
+        assert!(handles.connection_id.starts_with("oauthconn-twitter_x-"));
+        assert!(
+            handles
+                .raw_state
+                .starts_with(&format!("{}~", handles.connection_id))
+        );
+        assert!(
+            (43..=128).contains(&handles.raw_state.len()),
+            "Twitter/X reuses raw OAuth state as PKCE verifier, got {} chars",
+            handles.raw_state.len()
+        );
     }
 
     #[test]

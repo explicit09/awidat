@@ -991,7 +991,18 @@ impl ParamDefault {
 
 /// Find a registered effect by id.
 pub fn lookup(id: &str) -> Option<&'static EffectDef> {
-    EFFECTS.iter().find(|e| e.id == id)
+    EFFECTS
+        .iter()
+        .find(|e| e.id == id || legacy_awidat_id_matches(id, e.id))
+}
+
+fn legacy_awidat_id_matches(candidate: &str, montage_id: &str) -> bool {
+    let Some(legacy_suffix) = candidate.strip_prefix("awidat.") else {
+        return false;
+    };
+    montage_id
+        .strip_prefix("montage.")
+        .is_some_and(|montage_suffix| legacy_suffix == montage_suffix)
 }
 
 /// Validate and normalize parameters for `effect_id`.
@@ -1191,6 +1202,23 @@ mod tests {
         let volume = must_lookup(VOLUME);
         assert_eq!(volume.display_name, "Volume");
         assert_eq!(volume.stack_policy, StackPolicy::ReplaceSameId);
+    }
+
+    #[test]
+    fn lookup_accepts_legacy_awidat_effect_ids() {
+        let effect = must_lookup("awidat.color_correction");
+        assert_eq!(effect.id, COLOR_CORRECTION);
+    }
+
+    #[test]
+    fn normalize_accepts_legacy_awidat_effect_ids() {
+        let mut params = Map::new();
+        params.insert("value".into(), Value::from(0.5));
+
+        let (effect, normalized) = must_normalize("awidat.volume", &params);
+
+        assert_eq!(effect.id, VOLUME);
+        assert_eq!(normalized.get("value"), Some(&Value::from(0.5)));
     }
 
     #[test]

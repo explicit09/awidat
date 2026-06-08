@@ -1,4 +1,4 @@
-//! In-process bridge between the codex app-server and the desktop's
+//! Bridge between the codex app-server and the desktop's
 //! [`montage_desktop_protocol::Item`] event stream.
 //!
 //! # What this crate owns
@@ -26,6 +26,7 @@
 //!   `Option<PathBuf>`. The desktop knows how to find it on macOS
 //!   bundle layouts; the bridge does not.
 
+mod external;
 pub mod mappers;
 
 use std::collections::HashMap;
@@ -38,12 +39,15 @@ use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GrantedPermissionProfile;
+use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
@@ -185,8 +189,8 @@ enum ResolveCommand {
 /// Top-level handle to one project's codex session. Rebuild when the
 /// desktop switches projects.
 pub struct CodexAppServer {
-    /// Cloneable handle for typed requests (`turn/start`, `turn/interrupt`).
-    request_handle: AppServerRequestHandle,
+    /// Runtime backend for typed requests and approval resolution.
+    backend: CodexBackend,
     /// Stable codex thread id (one per project lifecycle).
     thread_id: String,
     /// Pre-rendered L1 recent-feedback fragment (Wave 5 C3). Lists the
@@ -198,14 +202,20 @@ pub struct CodexAppServer {
     /// Pending server-requests waiting for a desktop reply, keyed by
     /// the codex `item_id` we emitted to the renderer.
     pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
-    /// Channel used by `respond_*` to ask the pump task to call
-    /// `resolve_server_request` (which needs `&InProcessAppServerClient`,
-    /// not `&AppServerRequestHandle`).
-    resolve_tx: mpsc::Sender<ResolveCommand>,
     /// Drop the bridge → drop this → pump exits.
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Joined by [`Self::shutdown`].
     pump_task: Option<JoinHandle<()>>,
+}
+
+enum CodexBackend {
+    InProcess {
+        request_handle: AppServerRequestHandle,
+        resolve_tx: mpsc::Sender<ResolveCommand>,
+    },
+    External {
+        client: external::ExternalAppServerClient,
+    },
 }
 
 impl CodexAppServer {
@@ -217,6 +227,127 @@ impl CodexAppServer {
     /// rollout's history is re-loaded and the same `thread_id` is
     /// retained. Otherwise a fresh thread is created.
     pub async fn launch(
+        emit: Arc<dyn ItemEmitter>,
+        project_root: PathBuf,
+        mcp_server_path: Option<PathBuf>,
+        developer_instructions: Option<String>,
+        skills_catalog: Option<String>,
+        recent_feedback: Option<String>,
+        resume_thread_id: Option<String>,
+    ) -> Result<Self, BridgeError> {
+        if should_use_external_runtime() {
+            return Self::launch_external(
+                emit,
+                project_root,
+                mcp_server_path,
+                developer_instructions,
+                skills_catalog,
+                recent_feedback,
+                resume_thread_id,
+            )
+            .await;
+        }
+        Self::launch_in_process(
+            emit,
+            project_root,
+            mcp_server_path,
+            developer_instructions,
+            skills_catalog,
+            recent_feedback,
+            resume_thread_id,
+        )
+        .await
+    }
+
+    async fn launch_external(
+        emit: Arc<dyn ItemEmitter>,
+        project_root: PathBuf,
+        mcp_server_path: Option<PathBuf>,
+        developer_instructions: Option<String>,
+        skills_catalog: Option<String>,
+        recent_feedback: Option<String>,
+        resume_thread_id: Option<String>,
+    ) -> Result<Self, BridgeError> {
+        if mcp_server_path.is_none() {
+            warn!(
+                "montage-mcp-server path not provided; external codex will run without Montage tools"
+            );
+        }
+        let (client, mut event_rx) =
+            external::ExternalAppServerClient::start(&project_root, mcp_server_path).await?;
+        let initialize_response: serde_json::Value = client
+            .request(ClientRequest::Initialize {
+                request_id: RequestId::Integer(client.next_request_id()),
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "montage-desktop".to_string(),
+                        title: Some("Montage Desktop".to_string()),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: true,
+                        ..InitializeCapabilities::default()
+                    }),
+                },
+            })
+            .await
+            .map_err(|e| BridgeError::Startup(format!("initialize: {e}")))?;
+        let _ = initialize_response;
+        client
+            .send_notification("initialized", None)
+            .await
+            .map_err(|e| BridgeError::Startup(format!("initialized: {e}")))?;
+
+        let thread_id = if let Some(resume_id) = resume_thread_id {
+            let resume_response: ThreadResumeResponse = client
+                .request(ClientRequest::ThreadResume {
+                    request_id: RequestId::Integer(client.next_request_id()),
+                    params: ThreadResumeParams {
+                        thread_id: resume_id.clone(),
+                        cwd: Some(project_root.display().to_string()),
+                        developer_instructions,
+                        ..ThreadResumeParams::default()
+                    },
+                })
+                .await
+                .map_err(|e| BridgeError::Startup(format!("thread/resume: {e}")))?;
+            resume_response.thread.id
+        } else {
+            let thread_response: ThreadStartResponse = client
+                .request(ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(client.next_request_id()),
+                    params: ThreadStartParams {
+                        cwd: Some(project_root.display().to_string()),
+                        developer_instructions,
+                        ..ThreadStartParams::default()
+                    },
+                })
+                .await
+                .map_err(|e| BridgeError::Startup(format!("thread/start: {e}")))?;
+            thread_response.thread.id
+        };
+
+        let pending: Arc<Mutex<HashMap<String, PendingServerRequest>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let pump_pending = Arc::clone(&pending);
+        let pump_emit = Arc::clone(&emit);
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+        let pump_task = tokio::spawn(async move {
+            run_external_event_pump(&mut event_rx, pump_pending, pump_emit, &mut shutdown_rx).await;
+        });
+
+        Ok(Self {
+            backend: CodexBackend::External { client },
+            thread_id,
+            skills_catalog,
+            recent_feedback,
+            pending,
+            shutdown_tx: Some(shutdown_tx),
+            pump_task: Some(pump_task),
+        })
+    }
+
+    async fn launch_in_process(
         emit: Arc<dyn ItemEmitter>,
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
@@ -389,11 +520,13 @@ impl CodexAppServer {
         });
 
         Ok(Self {
-            request_handle,
+            backend: CodexBackend::InProcess {
+                request_handle,
+                resolve_tx,
+            },
             thread_id,
             recent_feedback,
             pending,
-            resolve_tx,
             shutdown_tx: Some(shutdown_tx),
             pump_task: Some(pump_task),
         })
@@ -407,22 +540,19 @@ impl CodexAppServer {
         model: Option<String>,
     ) -> Result<String, BridgeError> {
         let text = compose_turn_input(self.recent_feedback.as_deref(), &input);
-        let response: TurnStartResponse = self
-            .request_handle
-            .request_typed(ClientRequest::TurnStart {
-                request_id: RequestId::Integer(next_request_id()),
-                params: TurnStartParams {
-                    thread_id: self.thread_id.clone(),
-                    input: vec![UserInput::Text {
-                        text,
-                        text_elements: Vec::new(),
-                    }],
-                    model,
-                    ..TurnStartParams::default()
-                },
-            })
-            .await
-            .map_err(|e| BridgeError::Request(format!("turn/start: {e}")))?;
+        let request = ClientRequest::TurnStart {
+            request_id: RequestId::Integer(next_request_id()),
+            params: TurnStartParams {
+                thread_id: self.thread_id.clone(),
+                input: vec![UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                }],
+                model,
+                ..TurnStartParams::default()
+            },
+        };
+        let response: TurnStartResponse = self.request(request, "turn/start").await?;
         Ok(response.turn.id)
     }
 
@@ -430,16 +560,15 @@ impl CodexAppServer {
     /// yields an error from codex which we swallow because the
     /// user-facing action ("cancel") is idempotent.
     pub async fn interrupt(&self, turn_id: &str) -> Result<(), BridgeError> {
-        let result: Result<TurnInterruptResponse, _> = self
-            .request_handle
-            .request_typed(ClientRequest::TurnInterrupt {
-                request_id: RequestId::Integer(next_request_id()),
-                params: TurnInterruptParams {
-                    thread_id: self.thread_id.clone(),
-                    turn_id: turn_id.to_string(),
-                },
-            })
-            .await;
+        let request = ClientRequest::TurnInterrupt {
+            request_id: RequestId::Integer(next_request_id()),
+            params: TurnInterruptParams {
+                thread_id: self.thread_id.clone(),
+                turn_id: turn_id.to_string(),
+            },
+        };
+        let result: Result<TurnInterruptResponse, _> =
+            self.request(request, "turn/interrupt").await;
         if let Err(e) = result {
             debug!(
                 error = %e,
@@ -568,6 +697,9 @@ impl CodexAppServer {
         {
             warn!(error = ?e, "codex-bridge pump task join error");
         }
+        if let CodexBackend::External { client } = &self.backend {
+            client.shutdown().await;
+        }
         Ok(())
     }
 
@@ -582,19 +714,38 @@ impl CodexAppServer {
         request_id: RequestId,
         result: serde_json::Value,
     ) -> Result<(), BridgeError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.resolve_tx
-            .send(ResolveCommand::Resolve {
-                request_id,
-                result,
-                ack: ack_tx,
-            })
-            .await
-            .map_err(|_| BridgeError::Resolve("resolve channel closed".to_string()))?;
-        ack_rx
-            .await
-            .map_err(|_| BridgeError::Resolve("resolve ack channel dropped".to_string()))?
-            .map_err(BridgeError::Resolve)
+        match &self.backend {
+            CodexBackend::InProcess { resolve_tx, .. } => {
+                let (ack_tx, ack_rx) = oneshot::channel();
+                resolve_tx
+                    .send(ResolveCommand::Resolve {
+                        request_id,
+                        result,
+                        ack: ack_tx,
+                    })
+                    .await
+                    .map_err(|_| BridgeError::Resolve("resolve channel closed".to_string()))?;
+                ack_rx
+                    .await
+                    .map_err(|_| BridgeError::Resolve("resolve ack channel dropped".to_string()))?
+                    .map_err(BridgeError::Resolve)
+            }
+            CodexBackend::External { client } => client.resolve(request_id, result).await,
+        }
+    }
+
+    async fn request<T: serde::de::DeserializeOwned>(
+        &self,
+        request: ClientRequest,
+        label: &str,
+    ) -> Result<T, BridgeError> {
+        match &self.backend {
+            CodexBackend::InProcess { request_handle, .. } => request_handle
+                .request_typed(request)
+                .await
+                .map_err(|e| BridgeError::Request(format!("{label}: {e}"))),
+            CodexBackend::External { client } => client.request(request).await,
+        }
     }
 }
 
@@ -659,6 +810,37 @@ async fn run_event_pump(
     let _ = client;
 }
 
+async fn run_external_event_pump(
+    event_rx: &mut mpsc::Receiver<external::ExternalServerEvent>,
+    pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
+    emit: Arc<dyn ItemEmitter>,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) {
+    let mut text_buffers: HashMap<String, String> = HashMap::new();
+    loop {
+        tokio::select! {
+            _ = &mut *shutdown_rx => {
+                debug!("codex-bridge external pump received shutdown signal");
+                break;
+            }
+            event = event_rx.recv() => {
+                let Some(event) = event else {
+                    debug!("codex-bridge external pump: event stream closed");
+                    break;
+                };
+                match event {
+                    external::ExternalServerEvent::Notification(notification) => {
+                        handle_notification(notification, &pending, &emit, &mut text_buffers).await;
+                    }
+                    external::ExternalServerEvent::Request(request) => {
+                        handle_server_request(request, &pending, &emit).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Dispatch one [`InProcessServerEvent`].
 async fn handle_pump_event(
     event: InProcessServerEvent,
@@ -671,28 +853,42 @@ async fn handle_pump_event(
             warn!(skipped, "codex-bridge pump lagged");
         }
         InProcessServerEvent::ServerNotification(notification) => {
-            let turn_end = turn_end_from_notification(&notification);
-            let nudge_timeline = mappers::is_project_mutating_completion(&notification);
-            for item in map_notification(&notification, text_buffers) {
-                emit.emit_item(item);
-            }
-            // Nudge the desktop to refetch project.otio.json after any
-            // mutating montage-MCP tool completes. The MCP server lives
-            // in a subprocess and can't talk to Tauri's event bus
-            // itself, so the bridge is the only hop that knows when
-            // OTIO has just been rewritten under the React view.
-            if nudge_timeline {
-                emit.emit_timeline_changed();
-            }
-            if let Some(turn_end) = turn_end {
-                clear_pending_for_turn(pending, &turn_end.turn_id).await;
-                emit.emit_turn_end(turn_end.turn_id, turn_end.error);
-            }
+            handle_notification(notification, pending, emit, text_buffers).await;
         }
         InProcessServerEvent::ServerRequest(request) => {
             handle_server_request(request, pending, emit).await;
         }
     }
+}
+
+async fn handle_notification(
+    notification: ServerNotification,
+    pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
+    emit: &Arc<dyn ItemEmitter>,
+    text_buffers: &mut HashMap<String, String>,
+) {
+    let turn_end = turn_end_from_notification(&notification);
+    let nudge_timeline = mappers::is_project_mutating_completion(&notification);
+    for item in map_notification(&notification, text_buffers) {
+        emit.emit_item(item);
+    }
+    // Nudge the desktop to refetch project.otio.json after any mutating
+    // montage-MCP tool completes. The MCP server lives in a subprocess and
+    // can't talk to Tauri's event bus itself, so the bridge is the only hop
+    // that knows when OTIO has just been rewritten under the React view.
+    if nudge_timeline {
+        emit.emit_timeline_changed();
+    }
+    if let Some(turn_end) = turn_end {
+        clear_pending_for_turn(pending, &turn_end.turn_id).await;
+        emit.emit_turn_end(turn_end.turn_id, turn_end.error);
+    }
+}
+
+fn should_use_external_runtime() -> bool {
+    std::env::var("MONTAGE_CODEX_APP_SERVER_RUNTIME")
+        .map(|value| value.eq_ignore_ascii_case("external"))
+        .unwrap_or(false)
 }
 
 /// If this notification marks the end of a turn, return the per-turn

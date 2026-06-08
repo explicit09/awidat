@@ -121,18 +121,21 @@ function resetStore(): void {
   );
 }
 
-// ---- TikTok limits: title <= 150, description <= 4000 ----
+// ---- TikTok limits: title <= 150; description is not sent by Direct Post ----
 {
   const tooLongTitle = validateMetadata("tiktok", {
     ...defaultMetadata(""),
     title: "x".repeat(151),
   });
   assert.ok(tooLongTitle.find((e) => e.code === "title.too_long"));
-  const tooLongDesc = validateMetadata("tiktok", {
+  const unusedDescription = validateMetadata("tiktok", {
     ...defaultMetadata("ok"),
     description: "x".repeat(4001),
   });
-  assert.ok(tooLongDesc.find((e) => e.code === "description.too_long"));
+  assert.equal(
+    unusedDescription.find((e) => e.code === "description.too_long"),
+    undefined,
+  );
 }
 
 // ---- X limits the post text field only; description is not published ----
@@ -222,7 +225,7 @@ function resetStore(): void {
   assert.equal(PLATFORM_LIMITS.youtube.descriptionMax, 5000);
   assert.equal(PLATFORM_LIMITS.youtube.tagsTotalCharsMax, 500);
   assert.equal(PLATFORM_LIMITS.tiktok.titleMax, 150);
-  assert.equal(PLATFORM_LIMITS.tiktok.descriptionMax, 4000);
+  assert.equal(PLATFORM_LIMITS.tiktok.descriptionMax, undefined);
   assert.equal(PLATFORM_LIMITS.instagram.captionMax, 2200);
   assert.equal(PLATFORM_LIMITS.twitter_x.titleMax, 280);
   assert.equal(PLATFORM_LIMITS.twitter_x.descriptionMax, undefined);

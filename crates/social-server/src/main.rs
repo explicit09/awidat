@@ -22,6 +22,12 @@
 //!   STORAGE_BUCKET          — name of the Supabase Storage bucket for artifacts
 //!   GOOGLE_CLIENT_ID        — Google OAuth client ID (Phase 2)
 //!   GOOGLE_CLIENT_SECRET    — Google OAuth client secret (Phase 2; server-only, never in desktop)
+//!   TIKTOK_CLIENT_KEY       — TikTok OAuth client key (server-only)
+//!   TIKTOK_CLIENT_SECRET    — TikTok OAuth client secret (server-only)
+//!   INSTAGRAM_CLIENT_ID     — Instagram OAuth app client ID (server-only)
+//!   INSTAGRAM_CLIENT_SECRET — Instagram OAuth app secret (server-only)
+//!   TWITTER_X_CLIENT_ID     — Twitter/X OAuth client ID (server-only)
+//!   TWITTER_X_CLIENT_SECRET — Twitter/X OAuth client secret (server-only)
 //!   SOCIAL_TOKEN_AEAD_KEY   — 64 hex chars = 32-byte ChaCha20-Poly1305 key (Phase 2)
 //!   SOCIAL_TOKEN_KEY_ID     — key identifier stored alongside every token (Phase 2)
 //!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://montage-social.fly.dev"
@@ -32,6 +38,7 @@
 //!   DESKTOP_AUTH_TOKEN      — (Phase 5) dev bearer for /social/* (fallback when no Supabase JWT)
 //!   DESKTOP_USER_ID         — (Phase 5) fixed user id the dev bearer maps to (default "desktop-user")
 //!   SUPABASE_JWT_SECRET     — (Phase 7) HS256 secret to verify Supabase Auth JWTs; server-only
+//!   SOCIAL_ALLOWED_USER_IDS — optional comma-separated Supabase user ids allowed to use /social/*
 
 mod artifact_source;
 mod supabase_jwt;
@@ -137,6 +144,10 @@ pub(crate) struct ServerConfig {
     // roles. When empty, the routes fall back to the single-user dev bearer
     // above. Server-only; never shipped to the desktop.
     pub(crate) supabase_jwt_secret: String,
+    // Optional product-level gate for limited-access social publishing.
+    // Empty means auth + workspace roles decide access. When populated, /social/*
+    // rejects authenticated users whose id is not listed here.
+    pub(crate) social_allowed_user_ids: Vec<String>,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -215,6 +226,7 @@ async fn main() {
     let desktop_user_id =
         std::env::var("DESKTOP_USER_ID").unwrap_or_else(|_| "desktop-user".into());
     let supabase_jwt_secret = std::env::var("SUPABASE_JWT_SECRET").unwrap_or_default();
+    let social_allowed_user_ids = social_allowed_user_ids();
 
     info!(
         social_firing_enabled,
@@ -290,6 +302,7 @@ async fn main() {
             desktop_auth_token,
             desktop_user_id,
             supabase_jwt_secret,
+            social_allowed_user_ids,
         },
     });
 
@@ -396,6 +409,18 @@ fn db_pool_max_size() -> u32 {
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(4)
+}
+
+fn social_allowed_user_ids() -> Vec<String> {
+    parse_social_allowed_user_ids(&std::env::var("SOCIAL_ALLOWED_USER_IDS").unwrap_or_default())
+}
+
+fn parse_social_allowed_user_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Maximum YouTube Data API uploads per day per project (hard Google quota).
@@ -1043,6 +1068,9 @@ async fn internal_tick_handler(
                 Provider::YouTube => {
                     if youtube_used >= youtube_quota_remaining {
                         tracing::warn!(job_id = %job.id, "YouTube daily quota reached, leaving job Scheduled");
+                        if let Err(e) = restore_youtube_quota_blocked_job(&mut store, job, now) {
+                            tracing::warn!("failed to restore quota-blocked YouTube job: {e}");
+                        }
                         continue;
                     }
                     let resolver = ServerAccessTokenResolver::new(pool.clone(), aead_key_clone(&aead_key), now);
@@ -1284,17 +1312,17 @@ fn upload_request_for_job(
     ExecuteUploadRequest {
         job_id: job.id.clone(),
         title,
-        description: if job.provider == Provider::TwitterX {
+        description: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             None
         } else {
             description
         },
-        tags: if job.provider == Provider::TwitterX {
+        tags: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             Vec::new()
         } else {
             string_array_field(&fields, "tags")
         },
-        thumbnail_ref: if job.provider == Provider::TwitterX {
+        thumbnail_ref: if matches!(job.provider, Provider::TikTok | Provider::TwitterX) {
             None
         } else {
             string_field(&fields, "thumbnailRef").or_else(|| string_field(&fields, "thumbnail_ref"))
@@ -1315,7 +1343,7 @@ fn claim_direct_fire_job(
     job_id: &str,
     now: i64,
 ) -> Result<Option<PublishJob>, String> {
-    let Some(mut job) = store
+    let Some(job) = store
         .claim_due_publish_job(job_id, now)
         .map_err(|e| format!("claim due job: {e}"))?
     else {
@@ -1327,17 +1355,25 @@ fn claim_direct_fire_job(
             .youtube_upload_quota_today(now)
             .map_err(|e| format!("quota check: {e}"))?;
         if today_count >= YOUTUBE_DAILY_QUOTA {
-            job.status = PublishJobStatus::Scheduled;
-            job.attempt_count = job.attempt_count.saturating_sub(1);
-            job.updated_at = now;
-            store
-                .save_publish_job(job)
-                .map_err(|e| format!("restore quota-blocked job: {e}"))?;
+            restore_youtube_quota_blocked_job(store, job, now)?;
             return Err("youtube daily upload quota reached".into());
         }
     }
 
     Ok(Some(job))
+}
+
+fn restore_youtube_quota_blocked_job(
+    store: &mut impl SocialStore,
+    mut job: PublishJob,
+    now: i64,
+) -> Result<(), String> {
+    job.status = PublishJobStatus::Scheduled;
+    job.attempt_count = job.attempt_count.saturating_sub(1);
+    job.updated_at = now;
+    store
+        .save_publish_job(job)
+        .map_err(|e| format!("restore quota-blocked job: {e}"))
 }
 
 pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> Result<(), String> {
@@ -2243,6 +2279,14 @@ mod tests {
     }
 
     #[test]
+    fn social_allowed_user_ids_parser_trims_and_ignores_empty_segments() {
+        assert_eq!(
+            parse_social_allowed_user_ids(" user_1, ,cohost_1,, "),
+            vec!["user_1".to_string(), "cohost_1".to_string()]
+        );
+    }
+
+    #[test]
     fn redirect_uri_is_built_from_base_and_slug() {
         let config = ServerConfig {
             service_shared_secret: String::new(),
@@ -2267,6 +2311,7 @@ mod tests {
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
             supabase_jwt_secret: String::new(),
+            social_allowed_user_ids: Vec::new(),
         };
         assert_eq!(
             redirect_uri(&config, &Provider::YouTube),
@@ -2299,6 +2344,7 @@ mod tests {
             desktop_auth_token: String::new(),
             desktop_user_id: "desktop-user".into(),
             supabase_jwt_secret: String::new(),
+            social_allowed_user_ids: Vec::new(),
         };
 
         assert_eq!(
@@ -2444,6 +2490,38 @@ mod tests {
     }
 
     #[test]
+    fn bulk_tick_restores_due_youtube_job_when_quota_is_exhausted_after_claim() {
+        use montage_social::{
+            model::PublishJob,
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let now = 1_000;
+        let mut store = InMemorySocialStore::default();
+        let job = PublishJob::new(
+            "job_due",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::YouTube,
+            "file:///tmp/render.mp4",
+            now,
+            "desktop",
+        )
+        .schedule(now);
+        store.save_publish_job(job).unwrap();
+
+        let claimed = store.claim_due_publish_jobs(now, 10).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let claimed_job = claimed.into_iter().next().unwrap();
+        restore_youtube_quota_blocked_job(&mut store, claimed_job, now).unwrap();
+
+        let persisted = store.publish_job("job_due").unwrap();
+        assert_eq!(persisted.status, PublishJobStatus::Scheduled);
+        assert_eq!(persisted.attempt_count, 0);
+    }
+
+    #[test]
     fn upload_request_for_job_uses_target_platform_fields() {
         use montage_social::{
             model::{
@@ -2564,6 +2642,67 @@ mod tests {
         assert!(request.tags.is_empty());
         assert_eq!(request.thumbnail_ref, None);
         assert_eq!(request.privacy, None);
+    }
+
+    #[test]
+    fn upload_request_for_job_drops_stale_tiktok_unused_fields() {
+        use montage_social::{
+            model::{
+                CampaignVariantTarget, PublishJob, PublishJobActorType, PublishJobEvent,
+                PublishJobEventType,
+            },
+            store::{InMemorySocialStore, SocialStore},
+        };
+
+        let mut store = InMemorySocialStore::default();
+        let target = CampaignVariantTarget::new(
+            "target_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            serde_json::json!({
+                "title": "Launch TikTok caption",
+                "description": "stale generic description",
+                "tags": ["stale", "ignored"],
+                "thumbnailRef": "render://thumb_1",
+                "privacy": "private"
+            }),
+            2_000,
+            1_000,
+        );
+        store.save_campaign_variant_target(target).unwrap();
+
+        let job = PublishJob::new(
+            "job_1",
+            "campaign_1",
+            "variant_1",
+            "acct_1",
+            Provider::TikTok,
+            "file:///tmp/render.mp4",
+            2_000,
+            "desktop",
+        )
+        .schedule(1_000);
+        store.save_publish_job(job.clone()).unwrap();
+        store
+            .append_publish_job_event(PublishJobEvent::new(
+                "event_job_1_scheduled",
+                "job_1",
+                PublishJobEventType::Scheduled,
+                PublishJobActorType::User,
+                "publish job scheduled",
+                serde_json::json!({"target_id": "target_1"}),
+                1_000,
+            ))
+            .unwrap();
+
+        let request = upload_request_for_job(&store, &job, 1_001);
+        assert_eq!(request.title, "Launch TikTok caption");
+        assert_eq!(request.description, None);
+        assert!(request.tags.is_empty());
+        assert_eq!(request.thumbnail_ref, None);
+        assert_eq!(request.privacy, Some(UploadPrivacy::Private));
     }
 
     #[test]

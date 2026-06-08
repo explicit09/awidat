@@ -51,11 +51,8 @@ import {
 import type { CommandRailProps } from "./CommandRail";
 import { DeliverySurface, type DeliveryRenderSummary, type DeliveryTarget, type PreflightFinding } from "./DeliverySurface";
 import { IndexingDashboard, type IndexingMediaItem, type IndexingTask } from "./IndexingDashboard";
+import { MediaFramePlaceholder } from "./MediaFramePlaceholder";
 import { ProposalInspector, type ProposalInspectorData } from "./ProposalInspector";
-import podcastThumb01 from "./assets/podcast-thumb-01.jpg";
-import podcastThumb02 from "./assets/podcast-thumb-02.jpg";
-import podcastThumb04 from "./assets/podcast-thumb-04.jpg";
-import podcastWide from "./assets/podcast-wide.jpg";
 
 export const DEMO_SCREEN_IDS = ["screen1", "screen2", "screen4", "screen5", "screen6", "screen7", "screen8", "screen9"] as const;
 export type DemoScreenId = (typeof DEMO_SCREEN_IDS)[number];
@@ -246,7 +243,6 @@ const indexingMedia: IndexingMediaItem[] = [
     detail: "4.2 GB · 00:42:11 · 4K",
     status: "indexing",
     progress: 67,
-    thumbnail: podcastThumb01,
   },
   {
     id: "m2",
@@ -254,7 +250,6 @@ const indexingMedia: IndexingMediaItem[] = [
     detail: "3.9 GB · 00:42:10 · 4K",
     status: "indexed",
     progress: 100,
-    thumbnail: podcastThumb02,
   },
   {
     id: "m3",
@@ -262,7 +257,6 @@ const indexingMedia: IndexingMediaItem[] = [
     detail: "1.1 GB · 48 kHz · 24-bit",
     status: "processing",
     progress: 42,
-    thumbnail: podcastThumb04,
   },
   {
     id: "m4",
@@ -270,7 +264,6 @@ const indexingMedia: IndexingMediaItem[] = [
     detail: "1.8 GB · 00:42:11 · 4K",
     status: "indexed",
     progress: 100,
-    thumbnail: podcastWide,
   },
   {
     id: "m5",
@@ -1073,7 +1066,7 @@ function ComponentSystemBoard() {
 
           <ComponentPanel title="Media / indexing status" eyebrow="Import pipeline">
             <Stack gap="2">
-              <MediaStatusRow thumbnail={podcastThumb01} title="A_CAM_Main.mp4" detail="Imported · 4.2 GB · 00:42:11" status="imported" />
+              <MediaStatusRow icon={<Film />} title="A_CAM_Main.mp4" detail="Imported · 4.2 GB · 00:42:11" status="imported" />
               <MediaStatusRow icon={<AudioWaveform />} title="Podcast_Master.wav" detail="Processing loudness and silence" status="processing" progress={42} />
               <MediaStatusRow icon={<Database />} title="Color analysis" detail="Failed · retry required" status="failed" />
               <MediaStatusRow icon={<Captions />} title="Questions.xlsx" detail="Missing from source folder" status="missing" />
@@ -1378,7 +1371,7 @@ function SemanticTimelineWorkspace() {
 
       <main className="grid min-h-0 grid-rows-[200px_minmax(0,1fr)_168px]">
         <section className="relative border-b border-[var(--color-border-subtle)] bg-black">
-          <DemoImage src={podcastWide} label="Selected segment · 03:41:12 — 03:46:08 (4.9s)" />
+          <DemoImage label="Selected segment · 03:41:12 — 03:46:08 (4.9s)" />
           <div className="absolute inset-y-0 left-[42%] w-[18%] border-x-2 border-[var(--color-brand-secondary)] bg-[rgba(239,68,68,0.08)]" />
         </section>
         <SemanticTranscriptPanel segments={reviewSegments} />
@@ -1605,7 +1598,7 @@ function CutInspectorWorkspace() {
     <div className="grid h-full grid-cols-[minmax(0,1fr)_420px] bg-[var(--color-surface-app)] min-h-0">
       <main className="grid min-h-0 grid-rows-[minmax(360px,1fr)_220px]">
         <section className="relative border-b border-[var(--color-border-subtle)] bg-black">
-          <img src={podcastWide} alt="" className="h-full w-full object-cover opacity-90" />
+          <MediaFramePlaceholder tone="wide" className="h-full w-full opacity-90" />
           <div className="absolute inset-y-[12%] left-[46%] w-[14%] rounded-[var(--radius-sm)] border-2 border-[var(--color-brand-purple)] bg-[rgba(168,85,247,0.16)] shadow-[0_0_24px_rgba(168,85,247,0.24)]" />
           <div className="absolute inset-y-[8%] left-[53%] w-0.5 bg-[var(--color-viz-playhead)] shadow-[0_0_12px_var(--color-viz-playhead)]" />
           <div className="absolute left-[46%] top-[12%] -translate-y-full rounded-t-[var(--radius-xs)] border border-[rgba(168,85,247,0.6)] bg-[rgba(30,15,50,0.85)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-proposal-proposed-text)]">
@@ -1714,10 +1707,10 @@ function KVLine({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DemoImage({ src, label }: { src: string; label: string }) {
+function DemoImage({ label }: { label: string }) {
   return (
     <figure className="relative h-full w-full">
-      <img src={src} alt="" className="h-full w-full object-cover" />
+      <MediaFramePlaceholder tone="wide" />
       <figcaption className="absolute bottom-2 left-2 rounded-[var(--radius-xs)] border border-black/40 bg-black/60 px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-white/80">
         {label}
       </figcaption>
@@ -1749,4 +1742,3 @@ function demoProposalState(value: string): ProposalPillState {
 // Keep these imports active for planned screen variants.
 void Sparkles;
 void RotateCw;
-void podcastWide;

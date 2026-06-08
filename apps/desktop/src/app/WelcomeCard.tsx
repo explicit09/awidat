@@ -92,6 +92,17 @@ export function WelcomeCard() {
           {CORE_IDEAS.map((idea, index) => (
             <IdeaCard key={index} step={idea.step} title={idea.title} body={idea.body} />
           ))}
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            Review the{" "}
+            <a
+              href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              privacy policy
+            </a>{" "}
+            before connecting accounts or sending media-derived context to model providers.
+          </span>
         </div>
         <footer className="flex items-center justify-end gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-4 py-3">
           <span

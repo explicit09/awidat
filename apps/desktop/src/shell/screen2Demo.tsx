@@ -1,7 +1,4 @@
 import { CheckCircle2, Circle, Scissors, ShieldCheck, Sparkles } from "lucide-react";
-import beforeFrame from "./assets/podcast-before.jpg";
-import afterFrame from "./assets/podcast-after.jpg";
-import wideFrame from "./assets/podcast-wide.jpg";
 import type {
   ActivityEntry,
   ContextChip,
@@ -9,6 +6,7 @@ import type {
   PreviewChange,
   SuggestedAction,
 } from ".";
+import { MediaFramePlaceholder } from "./MediaFramePlaceholder";
 import type { ProposalInspectorData } from "./ProposalInspector";
 
 export const SCREEN2_DURATION_S = 492;
@@ -103,11 +101,11 @@ export const screen2Inspector: ProposalInspectorData = {
 export function Screen2MediaSlot() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      <img src={wideFrame} alt="" className="absolute inset-0 h-full w-full object-cover opacity-30 blur-[2px] scale-105" />
+      <MediaFramePlaceholder tone="wide" className="absolute inset-0 opacity-30 blur-[2px] scale-105" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.32)_68%,rgba(0,0,0,0.76)_100%)]" />
       <div className="absolute inset-5 grid grid-cols-2 gap-1 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-black shadow-[0_22px_70px_rgba(0,0,0,0.55)]">
-        <Frame label="Before" src={beforeFrame} muted />
-        <Frame label="After proposal" src={afterFrame} />
+        <Frame label="Before" tone="before" muted />
+        <Frame label="After proposal" tone="after" />
       </div>
       <div className="absolute left-1/2 top-5 bottom-5 w-px -translate-x-1/2 bg-[var(--color-border-focus)] shadow-[0_0_18px_rgba(239,68,68,0.7)]" />
       <div className="absolute left-1/2 top-1/2 grid h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--color-border-focus)] bg-[rgba(8,13,20,0.92)] text-[var(--color-brand-secondary)] shadow-[0_0_24px_rgba(239,68,68,0.3)]">
@@ -133,10 +131,10 @@ export function Screen2MediaSlot() {
   );
 }
 
-function Frame({ label, src, muted = false }: { label: string; src: string; muted?: boolean }) {
+function Frame({ label, tone, muted = false }: { label: string; tone: "before" | "after"; muted?: boolean }) {
   return (
     <div className="relative min-w-0 overflow-hidden">
-      <img src={src} alt="" className="h-full w-full object-cover" />
+      <MediaFramePlaceholder tone={tone} muted={muted} />
       {muted ? <div className="absolute inset-0 bg-[rgba(0,0,0,0.22)]" /> : null}
       <div className="absolute left-3 top-3 rounded-[var(--radius-xs)] border border-white/10 bg-black/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/82">
         {label}

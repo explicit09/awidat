@@ -37,29 +37,51 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   exit 1
 fi
 
-# All values below use ${VAR:-default} so anything exported in .env.local wins
-# (put the Google OAuth secrets there — never in this committed file).
+# Put all local-only tokens and OAuth secrets in .env.local — never in this
+# committed file.
 
 # Bearer the desktop sends to /social/* (dev single-user mode). Must match the
-# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
-export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
+# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. For limited-access multi-user workspaces,
+# set SUPABASE_JWT_SECRET here and use MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN on
+# each desktop instead.
+if [[ -z "${DESKTOP_AUTH_TOKEN:-}" ]]; then
+  echo "DESKTOP_AUTH_TOKEN is unset. Put a random local value in crates/social-server/.env.local." >&2
+  exit 1
+fi
+export DESKTOP_AUTH_TOKEN
+export SOCIAL_ALLOWED_USER_IDS="${SOCIAL_ALLOWED_USER_IDS:-}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
-export SERVICE_SHARED_SECRET="${SERVICE_SHARED_SECRET:-local-internal-token}"
+if [[ -z "${SERVICE_SHARED_SECRET:-}" ]]; then
+  echo "SERVICE_SHARED_SECRET is unset. Put a random local value in crates/social-server/.env.local." >&2
+  exit 1
+fi
+export SERVICE_SHARED_SECRET
 
 # AEAD key for token-at-rest encryption (64 hex chars = 32 bytes). Generated for
 # local use; rotate for any real environment. Generate a fresh one with:
 #   openssl rand -hex 32
-export SOCIAL_TOKEN_AEAD_KEY="${SOCIAL_TOKEN_AEAD_KEY:-c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd}"
+if [[ -z "${SOCIAL_TOKEN_AEAD_KEY:-}" ]]; then
+  echo "SOCIAL_TOKEN_AEAD_KEY is unset. Generate one with: openssl rand -hex 32" >&2
+  exit 1
+fi
+export SOCIAL_TOKEN_AEAD_KEY
 export SOCIAL_TOKEN_KEY_ID="${SOCIAL_TOKEN_KEY_ID:-local-k1}"
 
-# ── Google/YouTube OAuth (from .env.local; required for the Connect flow) ─────
+# ── Provider OAuth (from .env.local; required for each Connect flow) ──────────
 # Create a Google Cloud OAuth client (Web application) with redirect URI
 # http://127.0.0.1:3000/oauth/callback/youtube and put the id/secret in
-# .env.local as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Until set, Connect
-# returns 503 "Google OAuth not configured".
+# .env.local as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Add equivalent TikTok,
+# Instagram, and Twitter/X app credentials for their Connect flows. Until set,
+# Connect returns a provider-specific 503 "OAuth not configured" response.
 export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
 export GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
+export TIKTOK_CLIENT_KEY="${TIKTOK_CLIENT_KEY:-}"
+export TIKTOK_CLIENT_SECRET="${TIKTOK_CLIENT_SECRET:-}"
+export INSTAGRAM_CLIENT_ID="${INSTAGRAM_CLIENT_ID:-}"
+export INSTAGRAM_CLIENT_SECRET="${INSTAGRAM_CLIENT_SECRET:-}"
+export TWITTER_X_CLIENT_ID="${TWITTER_X_CLIENT_ID:-}"
+export TWITTER_X_CLIENT_SECRET="${TWITTER_X_CLIENT_SECRET:-}"
 export OAUTH_REDIRECT_BASE="${OAUTH_REDIRECT_BASE:-http://127.0.0.1:3000}"
 
 # ── Local-test posture ──────────────────────────────────────────────────────
@@ -73,7 +95,7 @@ export ARTIFACT_BASE_DIR="${ARTIFACT_BASE_DIR:-$PWD/.artifacts-local}"
 mkdir -p "$ARTIFACT_BASE_DIR"
 
 # ── Optional (for Storage uploads / Phase 7 auth; leave empty for now) ───────
-# SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co  — for Storage signed URLs
+# SUPABASE_URL=https://<project-ref>.supabase.co          — for Storage signed URLs
 # SUPABASE_SERVICE_KEY=...                               — for Storage signed URLs
 # SUPABASE_JWT_SECRET=...                                — Phase 7 per-user auth
 
@@ -125,6 +147,6 @@ wait "$server_pid"
 #   curl -s http://127.0.0.1:3000/health
 #   curl -s http://127.0.0.1:3000/providers
 #   # user route (dev bearer):
-#   curl -s -H "Authorization: Bearer local-dev-token" http://127.0.0.1:3000/social/accounts
+#   curl -s -H "Authorization: Bearer $DESKTOP_AUTH_TOKEN" http://127.0.0.1:3000/social/accounts
 #   # manual worker tick (internal bearer):
-#   curl -s -X POST -H "Authorization: Bearer local-internal-token" http://127.0.0.1:3000/internal/tick
+#   curl -s -X POST -H "Authorization: Bearer $SERVICE_SHARED_SECRET" http://127.0.0.1:3000/internal/tick

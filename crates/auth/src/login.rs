@@ -76,8 +76,8 @@ impl LoginHandle {
 ///
 /// Must be called from within a tokio runtime — the callback server runs as a
 /// tokio task. Await [`LoginHandle::wait`] to learn the outcome. The OAuth client
-/// id comes from [`oauth_client_id`], so the policy-sensitive reuse of codex's
-/// first-party client stays centralized and env-overridable.
+/// id comes from [`oauth_client_id`], so public builds fail clearly unless a
+/// sanctioned OAuth client id is explicitly configured.
 ///
 /// Rejected on a managed install that forces API-key login, and any configured
 /// `forced_chatgpt_workspace_id` allow-list is passed to the callback so
@@ -91,7 +91,7 @@ pub fn begin_chatgpt_login(env: &AuthEnv) -> Result<LoginHandle, AuthError> {
     ensure_home(&env.codex_home)?;
     let options = ServerOptions::new(
         env.codex_home.clone(),
-        oauth_client_id(),
+        oauth_client_id()?,
         env.forced_workspace_ids.clone(),
         env.store_mode,
     );

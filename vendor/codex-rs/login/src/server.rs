@@ -1171,6 +1171,7 @@ mod tests {
     use wiremock::matchers::path;
 
     use crate::auth::AuthDotJson;
+    use crate::auth::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
     use crate::auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
     use crate::auth::load_auth_dot_json;
     use crate::auth::save_auth;
@@ -1191,7 +1192,7 @@ mod tests {
     use super::render_login_error_page;
     use super::sanitize_url_for_logging;
 
-    #[serial_test::serial(logout_revoke)]
+    #[serial_test::serial(codex_auth_env)]
     #[tokio::test]
     async fn persist_tokens_async_revokes_previous_auth_without_failing_login() -> anyhow::Result<()>
     {
@@ -1211,6 +1212,10 @@ mod tests {
         let _env_guard = EnvGuard::set(
             REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
             format!("{}/oauth/revoke", server.uri()),
+        );
+        let _client_id_guard = EnvGuard::set(
+            MONTAGE_OAUTH_CLIENT_ID_ENV_VAR,
+            "app_sanctioned".to_string(),
         );
 
         let codex_home = tempdir()?;
@@ -1255,14 +1260,14 @@ mod tests {
             json!({
                 "token": "old-refresh",
                 "token_type_hint": "refresh_token",
-                "client_id": crate::auth::CLIENT_ID,
+                "client_id": "app_sanctioned",
             })
         );
         server.verify().await;
         Ok(())
     }
 
-    #[serial_test::serial(logout_revoke)]
+    #[serial_test::serial(codex_auth_env)]
     #[tokio::test]
     async fn persist_tokens_async_does_not_revoke_reused_refresh_token() -> anyhow::Result<()> {
         skip_if_no_network!(Ok(()));

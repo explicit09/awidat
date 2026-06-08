@@ -317,12 +317,17 @@ impl AccountRequestProcessor {
             ));
         }
 
+        let client_id = configured_montage_oauth_client_id().ok_or_else(|| {
+            invalid_request(format!(
+                "ChatGPT OAuth login is not configured. Set {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} to the sanctioned client id used for login."
+            ))
+        })?;
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                CLIENT_ID.to_string(),
+                client_id,
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
             )

@@ -66,6 +66,7 @@ use crate::montage_mcp::tools::create_stringout::{self, CreateStringoutArgs};
 use crate::montage_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
 use crate::montage_mcp::tools::download_yt_clip::{self, DownloadYtClipArgs};
 use crate::montage_mcp::tools::export_package::{self, ExportPackageArgs};
+use crate::montage_mcp::tools::fetch_x_trend_context::{self, FetchXTrendContextArgs};
 use crate::montage_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::montage_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::montage_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
@@ -1217,6 +1218,27 @@ Never burns captions into the picture.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
+    /// `fetch_x_trend_context` — read-only X trend context for short-form
+    /// planning.
+    #[tool(
+        description = "\
+Fetch current X trend signals for one or more episode-topic queries and return \
+a trend_context payload suitable for `plan_short_form_review`. Uses \
+X_BEARER_TOKEN or keychain account x_bearer_token for read access. If \
+credentials are missing, returns a setup/status payload instead of failing. \
+Publishing is not performed here; Twitter/X posting remains handled by the \
+social publishing provider.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn fetch_x_trend_context(
+        &self,
+        args: Parameters<FetchXTrendContextArgs>,
+    ) -> Result<String, ErrorData> {
+        fetch_x_trend_context::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     /// `plan_short_form_review` — read-only long-form to short-form
     /// review planner.
     #[tool(
@@ -1224,11 +1246,14 @@ Never burns captions into the picture.",
 Build a read-only long-form to short-form review plan for one asset. \
 The tool ranks complete standalone candidate moments, allows extended \
 short-form up to five minutes when the idea earns it, recommends B-roll \
-by default when support visuals clarify the idea, plans speaker-aware \
-9:16 layouts for wide long-form sources, and returns reviewable draft EDL \
-packages plus title, caption, platform, confidence, and human review \
-actions. It does not apply edits; use apply_edl separately after review so \
-autopilot/co-pilot/manual approval behavior remains in control.",
+by default when support visuals clarify the idea, returns a speaker-aware \
+9:16 composition contract with split/fill/dynamic layout segments, \
+optionally boosts candidates from \
+supplied X/web/news trend_context, and returns reviewable draft EDL packages \
+plus title, caption, platform, confidence, trend alignment, visual decision \
+plans, and human review actions. It does not apply edits; use apply_edl \
+separately after review so autopilot/co-pilot/manual approval behavior remains \
+in control.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_short_form_review(

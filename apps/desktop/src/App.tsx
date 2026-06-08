@@ -12,7 +12,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
@@ -144,6 +144,9 @@ function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_in
     text,
   };
 }
+
+const HELP_DOCS_URL = "https://github.com/explicit09/awidat#readme";
+const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
 
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
@@ -966,6 +969,32 @@ function App() {
         setShowNewProject(true);
       } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
         useSettings.getState().open();
+      } else if (id === MENU_COMMANDS.NAV_PROJECT) {
+        setStage("edit");
+        setCenterMode("brief");
+      } else if (id === MENU_COMMANDS.NAV_WORKSPACE) {
+        setStage("edit");
+        setCenterMode("source");
+      } else if (id === MENU_COMMANDS.NAV_MEDIA || id === MENU_COMMANDS.VIEW_MEDIA) {
+        setStage("edit");
+        setLeftPanel("media");
+        setCenterMode("source");
+      } else if (id === MENU_COMMANDS.NAV_REVIEW || id === MENU_COMMANDS.VIEW_TIMELINE) {
+        setStage("edit");
+        setCenterMode("timeline");
+      } else if (id === MENU_COMMANDS.VIEW_TRANSCRIPT) {
+        setStage("edit");
+        setRightPanel("transcript");
+      } else if (id === MENU_COMMANDS.NAV_DELIVER) {
+        setStage(current ? "deliver" : "edit");
+      } else if (id === MENU_COMMANDS.HELP_DOCS) {
+        openUrl(HELP_DOCS_URL).catch((e) => setCommandError(String(e)));
+      } else if (id === MENU_COMMANDS.HELP_SHORTCUTS) {
+        useSettings.getState().open();
+      } else if (id === MENU_COMMANDS.HELP_LOGS) {
+        invoke("reveal_app_log_dir").catch((e) => setCommandError(String(e)));
+      } else if (id === MENU_COMMANDS.HELP_REPORT_ISSUE) {
+        openUrl(HELP_REPORT_ISSUE_URL).catch((e) => setCommandError(String(e)));
       }
     });
   });

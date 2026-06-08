@@ -108,8 +108,19 @@ export function AuthChooser() {
             {error ? <ErrorBox message={error} /> : null}
 
             <div className="auth-options grid gap-3">
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                Review the{" "}
+                <a
+                  href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  privacy policy
+                </a>{" "}
+                before connecting accounts or sending media-derived context to model providers.
+              </span>
               <OptionCard
-                title="ChatGPT"
+                title="Sign in with ChatGPT"
                 wallet="Uses your ChatGPT plan"
                 recommended
                 detail="Best for a personal desktop setup. Uses your ChatGPT plan allowance and avoids per-token API billing."

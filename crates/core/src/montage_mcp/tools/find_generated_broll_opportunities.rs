@@ -15,7 +15,9 @@ use crate::montage_mcp::context::McpToolCtx;
 
 const DEFAULT_MAX_RESULTS: usize = 12;
 const HARD_MAX_RESULTS: usize = 40;
-const DEFAULT_BROLL_DURATION_S: f64 = 4.0;
+const DEFAULT_BROLL_DURATION_S: f64 = 6.0;
+const MIN_BROLL_DURATION_S: f64 = 4.0;
+const MAX_BROLL_DURATION_S: f64 = 15.0;
 const SCORE_THRESHOLD: f64 = 0.45;
 
 const VISUAL_TERMS: &[&str] = &[
@@ -205,7 +207,7 @@ pub struct FindGeneratedBrollOpportunitiesArgs {
     /// Restrict to one asset's whisper sidecar.
     #[serde(default)]
     pub asset_id: Option<String>,
-    /// Default generated B-roll length in seconds. Default 4.0.
+    /// Agent-selected Seedance 2.0 B-roll length in seconds. Default 6.0.
     #[serde(default)]
     pub duration_s: Option<f64>,
     /// Cap on returned results. Default 12, hard cap 40.
@@ -224,7 +226,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let duration_s = args
         .duration_s
         .unwrap_or(DEFAULT_BROLL_DURATION_S)
-        .clamp(1.0, 8.0);
+        .clamp(MIN_BROLL_DURATION_S, MAX_BROLL_DURATION_S);
     let project = Project::read(&ctx.project_root)
         .map_err(|e| format!("find_generated_broll_opportunities: failed to read project: {e}"))?;
 
@@ -238,7 +240,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let body = serde_json::json!({
         "findings": findings,
         "more_available": findings.len() == max_results,
-        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, and duration."
+        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, and duration set to round(duration_s). After the job succeeds, call use_generated_media with the same duration_s."
     });
     Ok(body.to_string())
 }
@@ -312,6 +314,7 @@ pub fn scan_generated_broll_opportunities(
                                     .min(clip_source_end),
                                 timeline_start_s: timeline_start,
                                 timeline_end_s: timeline_end,
+                                duration_s: output_duration_s,
                                 category: signal.category,
                                 score: signal.score,
                                 reason: signal.reason,
@@ -375,6 +378,8 @@ pub struct GeneratedBrollFinding {
     pub timeline_start_s: f64,
     /// Timeline-time end for the generated B-roll.
     pub timeline_end_s: f64,
+    /// Suggested generated-video and timeline-insertion duration.
+    pub duration_s: f64,
     /// Heuristic class that caused this finding.
     pub category: GeneratedBrollCategory,
     /// Normalized heuristic confidence, from 0.0 to 1.0.
@@ -513,17 +518,25 @@ fn reason_for(category: GeneratedBrollCategory, subject: &str) -> String {
 }
 
 fn build_prompt(subject: &str, duration_s: f64) -> String {
+    let duration_s = prompt_duration_s(duration_s);
     format!(
-        "Realistic documentary B-roll of {subject}; unidentifiable people if present, no famous likeness, no logos, no readable text overlays, natural light, smooth camera movement, modern tech podcast style, 16:9, {:.0} seconds.",
-        duration_s.clamp(1.0, 8.0).round()
+        "Editorial documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that visually explains the spoken idea without adding new claims. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion, no whip pans. Lighting: natural soft light, grounded documentary color, not glossy advertising. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: unidentifiable people if present, no famous likeness, no logos, no readable text, no brand UI unless explicitly supplied as an approved reference.",
+        duration_s,
     )
 }
 
 fn build_fallback_prompt(subject: &str, duration_s: f64) -> String {
+    let duration_s = prompt_duration_s(duration_s);
     format!(
-        "Generic unbranded documentary B-roll of {subject}; avoid real logos, avoid readable UI text, use fictional interface details if needed, unidentifiable people if present, 16:9, {:.0} seconds.",
-        duration_s.clamp(1.0, 8.0).round()
+        "Generic unbranded documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that supports the moment without implying a specific real company or product. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion. Lighting: natural soft light, grounded documentary color. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: use fictional interface details if needed, unidentifiable people if present, no famous likeness, no logos, no readable text.",
+        duration_s,
     )
+}
+
+fn prompt_duration_s(duration_s: f64) -> f64 {
+    duration_s
+        .clamp(MIN_BROLL_DURATION_S, MAX_BROLL_DURATION_S)
+        .round()
 }
 
 /// Return reference-asset/context requests implied by a planned generated B-roll moment.

@@ -21,6 +21,8 @@ use tracing::trace;
 
 /// Service name we register all entries under in the OS keychain.
 pub const SERVICE: &str = "montage";
+/// Legacy service name used before the Montage rename.
+pub const LEGACY_SERVICE: &str = "awidat";
 
 /// Errors talking to the keychain. Missing-secret is *not* an error — see
 /// [`get`] which returns `Ok(None)`.
@@ -39,7 +41,8 @@ pub enum SecretError {
 }
 
 /// Fetch a secret. Tries `env_var_name` first, then the OS keychain entry
-/// `(SERVICE, account)`. Returns `Ok(None)` if neither is set —
+/// `(SERVICE, account)`, then the legacy `(LEGACY_SERVICE, account)`.
+/// Returns `Ok(None)` if none are set —
 /// callers decide whether absence is fatal.
 pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
     if let Ok(value) = std::env::var(env_var_name)
@@ -49,21 +52,30 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
         return Ok(Some(value));
     }
 
-    let entry = keyring::Entry::new(SERVICE, account).map_err(|e| SecretError::Backend {
-        account: account.into(),
-        source: e,
-    })?;
-    match entry.get_password() {
-        Ok(value) => {
-            trace!(account, "secret resolved from keychain");
-            Ok(Some(value))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(SecretError::Backend {
+    for service in secret_read_services() {
+        let entry = keyring::Entry::new(service, account).map_err(|e| SecretError::Backend {
             account: account.into(),
             source: e,
-        }),
+        })?;
+        match entry.get_password() {
+            Ok(value) => {
+                trace!(account, service, "secret resolved from keychain");
+                return Ok(Some(value));
+            }
+            Err(keyring::Error::NoEntry) => {}
+            Err(e) => {
+                return Err(SecretError::Backend {
+                    account: account.into(),
+                    source: e,
+                });
+            }
+        }
     }
+    Ok(None)
+}
+
+fn secret_read_services() -> [&'static str; 2] {
+    [SERVICE, LEGACY_SERVICE]
 }
 
 /// Store a secret in the keychain under `(SERVICE, account)`. Overwrites
@@ -106,6 +118,8 @@ pub mod accounts {
     pub const PEXELS_API_KEY: &str = "pexels_api_key";
     /// OpenRouter API key — used by generated-media video providers.
     pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
+    /// X API bearer token — used for trend/context reads.
+    pub const X_BEARER_TOKEN: &str = "x_bearer_token";
 }
 
 /// Env-var names corresponding to [`accounts`]. Kept in lockstep.
@@ -118,6 +132,8 @@ pub mod env_vars {
     pub const PEXELS_API_KEY: &str = "PEXELS_API_KEY";
     /// Override for [`super::accounts::OPENROUTER_API_KEY`].
     pub const OPENROUTER_API_KEY: &str = "OPENROUTER_API_KEY";
+    /// Override for [`super::accounts::X_BEARER_TOKEN`].
+    pub const X_BEARER_TOKEN: &str = "X_BEARER_TOKEN";
 }
 
 #[cfg(test)]
@@ -134,6 +150,7 @@ mod tests {
         assert_ne!(accounts::ANTHROPIC_API_KEY, env_vars::ANTHROPIC_API_KEY);
         assert_ne!(accounts::PEXELS_API_KEY, env_vars::PEXELS_API_KEY);
         assert_ne!(accounts::OPENROUTER_API_KEY, env_vars::OPENROUTER_API_KEY);
+        assert_ne!(accounts::X_BEARER_TOKEN, env_vars::X_BEARER_TOKEN);
     }
 
     #[test]
@@ -141,5 +158,11 @@ mod tests {
         // If anyone changes this, they need to migrate users. Loud test
         // catches it in review.
         assert_eq!(SERVICE, "montage");
+    }
+
+    #[test]
+    fn legacy_service_name_is_read_fallback() {
+        assert_eq!(LEGACY_SERVICE, "awidat");
+        assert_eq!(secret_read_services(), ["montage", "awidat"]);
     }
 }

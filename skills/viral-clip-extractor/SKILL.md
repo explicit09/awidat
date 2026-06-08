@@ -11,6 +11,8 @@ tools_allowlist:
   - find_filler_words
   - find_broll_opportunities
   - find_speaker_oncam
+  - fetch_x_trend_context
+  - plan_short_form_review
   - read_index
   - view_timeline
   - apply_edl
@@ -56,6 +58,56 @@ won. Reject candidates whose total score is propped up by text alone
 when the energy, visual, duration, or topic-boundary evidence is weak.
 This is an montage advantage over workflows that only score transcript
 and energy.
+
+When current X context would help choose clips, call
+`fetch_x_trend_context` with 1-5 specific episode-topic queries, then pass
+the returned payload to `plan_short_form_review` as `trend_context`.
+When web/news context comes from another source, shape it the same way:
+
+```json
+{
+  "asset_id": "raw/<asset>",
+  "profile": "viral_social",
+  "trend_context": {
+    "signals": [
+      {
+        "source": "x",
+        "label": "AI coding agents",
+        "keywords": ["AI coding agents", "prototypes"],
+        "weight": 0.9,
+        "reason": "current discourse maps to the episode topic"
+      }
+    ]
+  }
+}
+```
+
+Treat `trend_alignment.matched` as a boost, not a replacement for the
+standalone/hook/payoff checks. If trend context is unavailable or does
+not match a candidate, continue from episode evidence.
+
+Read each returned candidate's `visual_decision_plan` before building
+the spine. It names existing Montage tools such as `plan_reframe`,
+`plan_multicam`, `plan_visual_support_proposals`, `plan_emphasis`, and
+`find_generated_broll_opportunities`; use those recommendations instead
+of inventing new visual primitives.
+
+Read `vertical_layout.composition_mode` and `vertical_layout.segments`
+as the short-form composition contract:
+
+- `active_speaker_fill` means one speaker carries the clip; avoid split
+  layouts and fill/punch in on that speaker.
+- `split_stacked` means both speakers/faces matter throughout; preserve
+  both in a stacked/split vertical view.
+- `dynamic_switching` means open or reset with split/stacked context, then
+  follow each timed segment's `fill_speaker` recommendation when one
+  speaker owns the beat.
+- `native_vertical` means the source is already vertical; keep the native
+  composition unless visual evidence says otherwise.
+
+Do not apply a two-person split just because the source is a podcast. Let
+the contract decide from speaker and face evidence, then use `plan_reframe`
+or `plan_multicam` only for the selected segment layout.
 
 Use `--max-overlap-ratio` when selecting several clips from one source so a
 lower-scored near-duplicate does not crowd out a separate payoff.

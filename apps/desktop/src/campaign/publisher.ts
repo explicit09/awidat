@@ -1,5 +1,8 @@
 import type { RenderQueueEntry } from "../app/renderQueue.ts";
-import { reasonCopy } from "../app/social/socialModel.ts";
+import {
+  buildPlatformFieldsForPublish,
+  reasonCopy,
+} from "../app/social/socialModel.ts";
 import type {
   UploadMetadata,
   UploadVisibility,
@@ -186,28 +189,20 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-function localArtifactRef(path: string): string {
-  return `file://${path}`;
-}
-
 function platformFieldsFromMetadata(
   provider: CampaignPlatform,
   metadata: UploadMetadata,
   fallbackTitle: string,
 ): Record<string, unknown> {
-  const fields: Record<string, unknown> = {
+  return buildPlatformFieldsForPublish({
+    provider,
     privacy: metadata.visibility ?? "private",
     title: metadata.title || fallbackTitle,
     description: metadata.description ?? "",
-    tags: metadata.tags,
-  };
-  if (metadata.thumbnailPath) {
-    fields.thumbnailRef = localArtifactRef(metadata.thumbnailPath);
-  }
-  if (provider === "instagram") {
-    delete fields.title;
-  }
-  return fields;
+    tagsInput: metadata.tags.join(","),
+    thumbnailPath: metadata.thumbnailPath ?? "",
+    tiktokInteractions: metadata.tiktokInteractions,
+  });
 }
 
 /**
@@ -398,7 +393,7 @@ export async function startCampaignUploads(
 }
 
 /** Polls `poll_upload_states` for one job until every target is terminal
- *  (`published`/`failed`) or the tick budget is exhausted. */
+ *  (`published`/`failed`/`requires_action`) or the tick budget is exhausted. */
 async function pollCampaignUploadStates(
   jobId: string,
   invoke: InvokeFn,
@@ -423,7 +418,12 @@ async function pollCampaignUploadStates(
     const states = Object.values(snapshot.upload_states);
     const allTerminal =
       states.length > 0 &&
-      states.every((s) => s.state === "published" || s.state === "failed");
+      states.every(
+        (s) =>
+          s.state === "published" ||
+          s.state === "failed" ||
+          s.state === "requires_action",
+      );
     if (allTerminal) return;
   }
 }

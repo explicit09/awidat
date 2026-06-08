@@ -29,6 +29,24 @@ touches shared behavior.
 well as Montage crates. Prefer targeted `cargo test -p <crate>` runs unless
 the change is meant to validate the whole vendored workspace.
 
+## Where to start
+
+Read `ARCHITECTURE.md` for the source layout, then inspect focused docs under
+`docs/` for the subsystem you want to change. Issues labeled `good first issue`
+should stay small, have clear reproduction or acceptance criteria, and avoid
+cross-cutting architecture changes.
+
+Before opening a pull request, run the checks that match your change. For most
+Rust changes that means:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace --all-targets
+```
+
+Add a targeted `cargo test -p <crate>` run when you touch behavior in a crate.
+
 ## Pull Requests
 
 - Keep changes scoped to one behavior or cleanup.

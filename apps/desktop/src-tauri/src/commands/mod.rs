@@ -11,6 +11,7 @@ pub mod config;
 pub mod dismissal;
 pub mod feedback;
 pub mod generated_media;
+pub mod help;
 pub mod history;
 pub mod import;
 pub mod index;

@@ -446,6 +446,7 @@ function UploadTargetRow({
   const jobId =
     state.state === "scheduled" ||
     state.state === "processing" ||
+    state.state === "requires_action" ||
     state.state === "failed"
       ? state.job_id
       : undefined;
@@ -493,7 +494,11 @@ function UploadTargetRow({
       provider={provider}
       accounts={accounts}
       error={accountError}
-      editable={state.state === "pending" || state.state === "failed"}
+      editable={
+        state.state === "pending" ||
+        state.state === "failed" ||
+        state.state === "requires_action"
+      }
     />
   );
   if (state.state === "pending") {
@@ -618,16 +623,19 @@ function UploadTargetRow({
       </li>
     );
   }
-  // Failed — show the reason + recovery actions. A server-backed
-  // failure can still refresh if the backend job later recovers.
+  // Failed/action-needed — show the reason + recovery actions. A server-backed
+  // job can still refresh if the backend job later recovers.
   const retryMode = deriveUploadTargetRetryMode(state, Boolean(entry.jobId && entry.outputPath));
   const canRefresh = actions.canRefresh;
+  const isActionNeeded = state.state === "requires_action";
   return (
     <li className="flex items-start gap-1 text-[var(--color-job-failed-text)]">
       <span aria-hidden>→</span>
       <div className="min-w-0 flex-1">
         <span className="truncate" title={state.reason}>
-          {label} upload failed: {state.reason}
+          {isActionNeeded
+            ? `${label} action needed: ${state.reason}`
+            : `${label} upload failed: ${state.reason}`}
         </span>
         {canRefresh ? (
           <button

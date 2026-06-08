@@ -9,7 +9,7 @@ use crate::generated_media::registry::{
 };
 
 /// Default OpenRouter video model used when the caller does not provide one.
-pub const DEFAULT_VIDEO_MODEL: &str = "bytedance/seedance-1-5-pro";
+pub const DEFAULT_VIDEO_MODEL: &str = "bytedance/seedance-2.0";
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 /// OpenRouter video-generation request settings.
@@ -295,6 +295,11 @@ pub enum OpenRouterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_video_model_is_seedance_2() {
+        assert_eq!(DEFAULT_VIDEO_MODEL, "bytedance/seedance-2.0");
+    }
 
     #[test]
     fn submit_response_builds_queued_record_without_output() {

@@ -18,6 +18,7 @@ use url::Url;
 
 const DEFAULT_LOGIN_PORT: u16 = 1455;
 const FALLBACK_LOGIN_PORT: u16 = 1457;
+const TEST_CLIENT_ID: &str = "app_sanctioned";
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
@@ -121,7 +122,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let opts = ServerOptions {
         codex_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -183,7 +184,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
     let opts = ServerOptions {
         codex_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -223,7 +224,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
     let opts = ServerOptions {
         codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -264,7 +265,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -324,7 +325,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -392,7 +393,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -496,7 +497,7 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
 
     let mut opts = ServerOptions::new(
         tmp.path().to_path_buf(),
-        codex_login::CLIENT_ID.to_string(),
+        TEST_CLIENT_ID.to_string(),
         /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
     );
@@ -537,7 +538,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let first_opts = ServerOptions {
         codex_home: first_codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer: issuer.clone(),
         port: 0,
         open_browser: false,
@@ -558,7 +559,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let second_opts = ServerOptions {
         codex_home: second_codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: TEST_CLIENT_ID.to_string(),
         issuer,
         port: login_port,
         open_browser: false,

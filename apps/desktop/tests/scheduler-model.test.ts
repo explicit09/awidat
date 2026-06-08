@@ -285,7 +285,7 @@ const actionNeededEntry: RenderQueueEntry = {
       job_id: "job_reauth_action",
     },
     text: {
-      state: "failed",
+      state: "requires_action",
       reason: "token refresh failed; account needs reauth",
       job_id: "job_text_action",
     },

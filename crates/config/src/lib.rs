@@ -3,6 +3,7 @@
 //! - **Global**: `~/.config/montage/config.toml` (XDG; on macOS the same path
 //!   under `~/.config/` is used by convention even though XDG isn't native).
 //! - **Project**: `<project>/.montage/config.toml` (per-project overrides).
+//!   Existing `<project>/.awidat/config.toml` files are read as a fallback.
 //!
 //! The merge rule is "project entirely replaces global per top-level key."
 //! For `[[mcp.servers]]` (the only collection in v1), entries with matching
@@ -220,11 +221,10 @@ impl Config {
         {
             merged = merged.overlay(Self::load_file(&p)?);
         }
-        if let Some(root) = project_root {
-            let project_path = project_config_path(root);
-            if project_path.exists() {
-                merged = merged.overlay(Self::load_file(&project_path)?);
-            }
+        if let Some(root) = project_root
+            && let Some(project_path) = existing_project_config_path(root)
+        {
+            merged = merged.overlay(Self::load_file(&project_path)?);
         }
         Ok(merged)
     }
@@ -237,11 +237,10 @@ impl Config {
             Some(p) if p.exists() => Self::load_file(&p)?,
             _ => Self::default(),
         };
-        if let Some(root) = project_root {
-            let project_path = project_config_path(root);
-            if project_path.exists() {
-                merged = merged.overlay(Self::load_file(&project_path)?);
-            }
+        if let Some(root) = project_root
+            && let Some(project_path) = existing_project_config_path(root)
+        {
+            merged = merged.overlay(Self::load_file(&project_path)?);
         }
         Ok(merged)
     }
@@ -313,6 +312,21 @@ pub fn global_config_path() -> Result<Option<PathBuf>, ConfigError> {
 #[must_use]
 pub fn project_config_path(project_root: &Path) -> PathBuf {
     project_root.join(".montage").join("config.toml")
+}
+
+/// Legacy project-local config path used before the Montage rename.
+#[must_use]
+pub fn legacy_project_config_path(project_root: &Path) -> PathBuf {
+    project_root.join(".awidat").join("config.toml")
+}
+
+fn existing_project_config_path(project_root: &Path) -> Option<PathBuf> {
+    let current = project_config_path(project_root);
+    if current.exists() {
+        return Some(current);
+    }
+    let legacy = legacy_project_config_path(project_root);
+    if legacy.exists() { Some(legacy) } else { None }
 }
 
 #[cfg(test)]
@@ -503,6 +517,52 @@ args = ["run", "custom-mcp"]
         assert_eq!(whisper.resource_class, IndexerResourceClass::Exclusive);
         assert_eq!(whisper.indexer_group, Some(IndexerGroup::Navigation));
         assert!(c.find_server("my-custom-tool").is_some());
+    }
+
+    #[test]
+    fn load_project_overrides_from_legacy_awidat_config_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = legacy_project_config_path(dir.path());
+        write(
+            &cfg,
+            r#"
+[[mcp.servers]]
+name = "whisper"
+command = "/legacy/uv"
+args = ["run", "legacy-whisper"]
+"#,
+        );
+
+        let c = Config::load(Some(dir.path())).unwrap();
+
+        let whisper = c.find_server("whisper").unwrap();
+        assert_eq!(whisper.command, "/legacy/uv");
+        assert_eq!(whisper.args, vec!["run", "legacy-whisper"]);
+    }
+
+    #[test]
+    fn current_project_config_path_wins_over_legacy_awidat_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &legacy_project_config_path(dir.path()),
+            r#"
+[[mcp.servers]]
+name = "whisper"
+command = "/legacy/uv"
+"#,
+        );
+        write(
+            &project_config_path(dir.path()),
+            r#"
+[[mcp.servers]]
+name = "whisper"
+command = "/current/uv"
+"#,
+        );
+
+        let c = Config::load(Some(dir.path())).unwrap();
+
+        assert_eq!(c.find_server("whisper").unwrap().command, "/current/uv");
     }
 
     #[test]
