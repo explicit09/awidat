@@ -30,7 +30,8 @@ desktop-deps:
 # names the file with the rust target triple as a suffix. Local dev
 # defaults to the host triple; release jobs can pass TARGET_TRIPLE.
 desktop-yt-dlp:
-	@target_triple="$(TARGET_TRIPLE)"; \
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
 	if [ -z "$$target_triple" ]; then \
 	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
 	fi; \
@@ -54,7 +55,8 @@ desktop-yt-dlp:
 	    echo "refreshing yt-dlp at $$dest from $${existing_version:-unknown} to $(YT_DLP_VERSION)"; \
 	fi; \
 	echo "fetching $$url"; \
-	curl -fsSL -o "$$dest" "$$url" && chmod +x "$$dest"; \
+	curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL -o "$$dest" "$$url"; \
+	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 
 desktop: desktop-deps desktop-yt-dlp
