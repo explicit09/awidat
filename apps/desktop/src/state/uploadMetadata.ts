@@ -98,7 +98,7 @@ export const PLATFORM_LIMITS = {
   },
   tiktok: {
     titleMax: 150,
-    descriptionMax: 4000,
+    descriptionMax: undefined as number | undefined,
     tagsTotalCharsMax: undefined as number | undefined,
     captionMax: undefined as number | undefined,
   },

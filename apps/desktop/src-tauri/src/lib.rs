@@ -114,14 +114,15 @@ pub fn run() {
 
             // Build the server-backed social publishing client from the
             // environment and park it in MontageState for the `social_*`
-            // commands (Phase 5). Per RECONCILIATION G6 there is no per-field
-            // desktop config struct, so the server URL + dev bearer come from
-            // `MONTAGE_SOCIAL_SERVER_URL` / `MONTAGE_SOCIAL_AUTH_TOKEN` (mirroring
-            // how `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). When
-            // the URL is unset the client stays `None` and the commands surface
-            // a clear "not initialized" error rather than hanging. The desktop
-            // no longer opens a local `social.sqlite` — all publishing state
-            // lives server-side.
+            // commands (Phase 5/7). Per RECONCILIATION G6 there is no per-field
+            // desktop config struct, so the server URL + bearer come from env:
+            // `MONTAGE_SOCIAL_SERVER_URL` plus either
+            // `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` for multi-user workspaces
+            // or `MONTAGE_SOCIAL_AUTH_TOKEN` for local dev. When the URL is
+            // unset the client stays `None` and the commands surface a clear
+            // "not initialized" error rather than hanging. The desktop no
+            // longer opens a local `social.sqlite` — all publishing state lives
+            // server-side.
             if let Some(social_client) = social_client::SocialClient::from_env() {
                 *app.state::<MontageState>().social_client.blocking_lock() = Some(social_client);
             } else {

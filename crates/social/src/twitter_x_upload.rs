@@ -10,6 +10,7 @@ pub const TWITTER_X_API_BASE: &str = "https://api.x.com";
 pub const TWITTER_X_VIDEO_MEDIA_TYPE: &str = "video/mp4";
 pub const TWITTER_X_VIDEO_MEDIA_CATEGORY: &str = "tweet_video";
 pub const TWITTER_X_VIDEO_MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub const TWITTER_X_TEXT_MAX_CHARS: usize = 280;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TwitterXUploadRequest {
@@ -82,6 +83,7 @@ pub enum TwitterXMediaState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TwitterXStatusClientError {
+    MissingScope,
     RateLimited,
     NetworkOrServer(String),
 }
@@ -120,6 +122,11 @@ impl<C: TwitterXUploadClient> UploadAdapter for TwitterXUploadAdapter<C> {
         if text.is_empty() {
             return Err(UploadAdapterError::MediaConstraintFailed {
                 reason: "twitter_x_text_required".into(),
+            });
+        }
+        if text.chars().count() > TWITTER_X_TEXT_MAX_CHARS {
+            return Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "twitter_x_text_too_long".into(),
             });
         }
         let response = self
@@ -233,6 +240,9 @@ impl<C: TwitterXStatusClient> UploadStatusAdapter for TwitterXStatusAdapter<C> {
 
 fn twitter_x_status_client_error(error: TwitterXStatusClientError) -> UploadStatusAdapterError {
     match error {
+        TwitterXStatusClientError::MissingScope => UploadStatusAdapterError::RequiresAction {
+            reason: "missing_scope".into(),
+        },
         TwitterXStatusClientError::RateLimited => UploadStatusAdapterError::NetworkOrServer {
             message: "rate_limited".into(),
         },
@@ -335,10 +345,8 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXStatusClient<R> 
         if status == 429 {
             return Err(TwitterXStatusClientError::RateLimited);
         }
-        if !http_success(status) {
-            return Err(TwitterXStatusClientError::NetworkOrServer(format!(
-                "twitter_x status {status}: {json}"
-            )));
+        if let Some(error) = twitter_x_error(status, &json) {
+            return Err(twitter_x_upload_to_status_error(error));
         }
         let state = json["data"]["processing_info"]["state"]
             .as_str()
@@ -520,6 +528,12 @@ impl<R: crate::youtube_upload::AccessTokenResolver> LiveTwitterXUploadClient<R> 
         let state = json["data"]["processing_info"]["state"]
             .as_str()
             .unwrap_or("succeeded");
+        if state == "failed" {
+            return Err(TwitterXUploadClientError::NetworkOrServer(format!(
+                "twitter_x media processing failed: {}",
+                twitter_x_processing_error_reason(&json)
+            )));
+        }
         Ok(matches!(state, "pending" | "in_progress"))
     }
 
@@ -590,6 +604,14 @@ fn declared_content_length(resp: &reqwest::Response) -> Option<u64> {
         .or_else(|| resp.content_length())
 }
 
+fn twitter_x_processing_error_reason(json: &serde_json::Value) -> String {
+    json["data"]["processing_info"]["error"]["name"]
+        .as_str()
+        .or_else(|| json["data"]["processing_info"]["error"]["code"].as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 async fn create_tweet(
     http: &reqwest::Client,
     api_base: &str,
@@ -631,9 +653,7 @@ async fn create_tweet(
 fn twitter_x_upload_to_status_error(error: TwitterXUploadClientError) -> TwitterXStatusClientError {
     match error {
         TwitterXUploadClientError::RateLimited => TwitterXStatusClientError::RateLimited,
-        TwitterXUploadClientError::MissingScope => {
-            TwitterXStatusClientError::NetworkOrServer("missing_scope".into())
-        }
+        TwitterXUploadClientError::MissingScope => TwitterXStatusClientError::MissingScope,
         TwitterXUploadClientError::NetworkOrServer(message) => {
             TwitterXStatusClientError::NetworkOrServer(message)
         }
@@ -746,6 +766,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_twitter_x_upload_client_rejects_failed_media_processing_before_tweet() {
+        let media = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/render.mp4"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1, 2, 3, 4]))
+            .mount(&media)
+            .await;
+
+        let api = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/initialize"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "media_123", "media_key": "13_media_123" }
+            })))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/media_123/append"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/media/upload/media_123/finalize"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "media_123",
+                    "processing_info": {
+                        "state": "failed",
+                        "error": { "code": "InvalidMedia", "name": "invalid_media" }
+                    }
+                }
+            })))
+            .mount(&api)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/2/tweets"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": { "id": "tweet_123", "text": "Launch clip" }
+            })))
+            .expect(0)
+            .mount(&api)
+            .await;
+
+        let client =
+            LiveTwitterXUploadClient::with_base(FixedTokenResolver("x-access".into()), api.uri());
+        let response = tokio::task::spawn_blocking(move || {
+            client.create_post_with_media(&TwitterXUploadRequest {
+                media_url: format!("{}/render.mp4", media.uri()),
+                text: "Launch clip".into(),
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            Err(TwitterXUploadClientError::NetworkOrServer(
+                "twitter_x media processing failed: invalid_media".into()
+            ))
+        );
+    }
+
+    #[tokio::test]
     async fn live_twitter_x_upload_client_rejects_oversized_media_before_init() {
         let media = MockServer::start().await;
         Mock::given(method("GET"))
@@ -832,6 +919,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn adapter_rejects_text_over_twitter_x_limit() {
+        let adapter = TwitterXUploadAdapter::new(StubTwitterXUploadClient {
+            response: TwitterXUploadResponse {
+                media_id: "media_123".into(),
+                post_id: Some("tweet_123".into()),
+                post_url: Some("https://x.com/i/web/status/tweet_123".into()),
+                processing: false,
+            },
+        });
+        let mut req = request();
+        req.title = "x".repeat(281);
+
+        assert_eq!(
+            adapter.upload(&req),
+            Err(UploadAdapterError::MediaConstraintFailed {
+                reason: "twitter_x_text_too_long".into()
+            })
+        );
+    }
+
     #[tokio::test]
     async fn live_twitter_x_status_client_creates_post_after_media_succeeds() {
         let api = MockServer::start().await;
@@ -881,6 +989,36 @@ mod tests {
             response.post_url.as_deref(),
             Some("https://x.com/i/web/status/tweet_123")
         );
+    }
+
+    #[tokio::test]
+    async fn live_twitter_x_status_client_maps_missing_scope_to_requires_action() {
+        let api = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/2/media/upload"))
+            .and(query_param("media_id", "media_123"))
+            .and(bearer_token("x-access"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": [{ "title": "Forbidden" }]
+            })))
+            .mount(&api)
+            .await;
+
+        let client =
+            LiveTwitterXStatusClient::with_base(FixedTokenResolver("x-access".into()), api.uri());
+        let response = tokio::task::spawn_blocking(move || {
+            client.publish_if_ready(&TwitterXStatusRequest {
+                processing_ref: TwitterXProcessingRef {
+                    media_id: "media_123".into(),
+                    text: "Launch clip".into(),
+                },
+                access_token_ref: "token_secret:acct_1".into(),
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(response, Err(TwitterXStatusClientError::MissingScope));
     }
 
     #[test]

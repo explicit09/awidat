@@ -703,6 +703,17 @@ impl SocialApi {
         Ok(PublishJobResponse::from_job(job, events))
     }
 
+    /// Authorize a job-scoped publish action without changing job state.
+    pub fn authorize_publish_job_action(
+        store: &impl SocialStore,
+        actor: &ApiActor,
+        owner: &ApiOwner,
+        job_id: &str,
+        action: TeamAction,
+    ) -> Result<(), SocialApiError> {
+        authorize_job_owner(store, actor, owner, job_id, action)
+    }
+
     /// `POST /publish-jobs/:id/cancel`: cancel a publish job.
     pub fn cancel_job(
         store: &mut impl SocialStore,
@@ -1655,6 +1666,83 @@ mod tests {
                 2_300,
             ),
             Err(SocialApiError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn publish_api_workspace_viewer_can_read_but_not_authorize_job_mutation() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        let publisher = ApiActor::new(
+            "publisher_user",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "publisher_user",
+                TeamRole::Publisher,
+            )],
+        );
+        schedule_job(&mut store, &registry, &publisher, workspace_owner.clone());
+        let viewer = ApiActor::new(
+            "viewer_user",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "viewer_user",
+                TeamRole::Viewer,
+            )],
+        );
+
+        let job = SocialApi::publish_job(
+            &store,
+            &viewer,
+            &ApiOwner {
+                owner: workspace_owner.clone(),
+            },
+            "job_1",
+        )
+        .unwrap_or_else(|err| panic!("viewer read: {err}"));
+        assert_eq!(job.id, "job_1");
+
+        assert_eq!(
+            SocialApi::authorize_publish_job_action(
+                &store,
+                &viewer,
+                &ApiOwner {
+                    owner: workspace_owner,
+                },
+                "job_1",
+                TeamAction::SchedulePublish,
+            ),
+            Err(SocialApiError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn publish_api_workspace_publisher_can_authorize_job_mutation() {
+        let mut store = InMemorySocialStore::default();
+        let registry = ProviderRegistry::default_multi_platform();
+        let workspace_owner = OwnerRef::Workspace("workspace_1".into());
+        let publisher = ApiActor::new(
+            "publisher_user",
+            vec![WorkspaceMemberRole::new(
+                "workspace_1",
+                "publisher_user",
+                TeamRole::Publisher,
+            )],
+        );
+        schedule_job(&mut store, &registry, &publisher, workspace_owner.clone());
+
+        assert_eq!(
+            SocialApi::authorize_publish_job_action(
+                &store,
+                &publisher,
+                &ApiOwner {
+                    owner: workspace_owner,
+                },
+                "job_1",
+                TeamAction::SchedulePublish,
+            ),
+            Ok(())
         );
     }
 

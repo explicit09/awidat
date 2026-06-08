@@ -17,6 +17,7 @@ import {
   renderQueueProgressCopy,
   renderQueueStatusLabel,
   renderQueueVisibleEntries,
+  serverUploadRefreshCommand,
   sourceDependencyFailure,
   useRenderQueueStore,
   type RenderQueueEntry,
@@ -579,6 +580,40 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
       canOpenProviderUrl: false,
     },
   );
+  assert.deepEqual(
+    deriveUploadTargetActions({
+      state: "requires_action",
+      reason: "missing scope",
+      job_id: "job_4",
+    }),
+    {
+      canRefresh: true,
+      canRetry: true,
+      canCancel: false,
+      canReschedule: false,
+      canOpenProviderUrl: false,
+    },
+  );
+}
+
+// ---- server-backed refresh advances processing jobs through provider polling ----
+{
+  assert.equal(
+    serverUploadRefreshCommand({ state: "scheduled", job_id: "job_sched" }),
+    "social_publish_job",
+  );
+  assert.equal(
+    serverUploadRefreshCommand({ state: "processing", job_id: "job_processing" }),
+    "social_poll_publish_job",
+  );
+  assert.equal(
+    serverUploadRefreshCommand({
+      state: "requires_action",
+      reason: "missing scope",
+      job_id: "job_action",
+    }),
+    "social_publish_job",
+  );
 }
 
 // ---- failed upload retry mode preserves server job ownership when possible ----
@@ -586,6 +621,13 @@ function sampleEntry(overrides: Partial<RenderQueueEntry> = {}): RenderQueueEntr
   assert.equal(
     deriveUploadTargetRetryMode(
       { state: "failed", reason: "rate_limited", job_id: "job_social_1" },
+      true,
+    ),
+    "server_job",
+  );
+  assert.equal(
+    deriveUploadTargetRetryMode(
+      { state: "requires_action", reason: "missing_scope", job_id: "job_social_2" },
       true,
     ),
     "server_job",

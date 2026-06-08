@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 type ProviderEvidence = {
   provider: string;
@@ -17,17 +19,20 @@ type EvidenceManifest = {
   providers: ProviderEvidence[];
 };
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const readRepoFile = (path: string) => readFileSync(resolve(repoRoot, path), "utf8");
+
 const manifest = JSON.parse(
-  readFileSync("docs/social-server/live-evidence-manifest.json", "utf8"),
+  readRepoFile("docs/social-server/live-evidence-manifest.json"),
 ) as EvidenceManifest;
-const readme = readFileSync("docs/social-server/README.md", "utf8");
-const contract = readFileSync("docs/social-server/live-verification.html", "utf8");
+const readme = readRepoFile("docs/social-server/README.md");
+const contract = readRepoFile("docs/social-server/live-verification.html");
 
 assert.equal(manifest.version, 1);
 assert.match(manifest.updatedAt, /^\d{4}-\d{2}-\d{2}$/);
 assert.ok(
-  manifest.updatedAt >= "2026-06-07",
-  "manifest updatedAt must cover the metadataEdit evidence schema update",
+  manifest.updatedAt >= "2026-06-08",
+  "manifest updatedAt must cover the fire/poll/recovery evidence schema update",
 );
 assert.equal(
   manifest.allProvidersVerified,
@@ -62,12 +67,21 @@ for (const entry of manifest.providers) {
     new RegExp(`^${entry.evidenceFolder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}README\\.md$`),
     `${entry.provider} evidence must point at a concrete README index`,
   );
-  const evidenceIndex = readFileSync(entry.evidenceIndex, "utf8");
+  const evidenceIndex = readRepoFile(entry.evidenceIndex);
   assert.match(evidenceIndex, new RegExp(entry.provider));
   assert.match(evidenceIndex, /OAuth sign-in/i);
   assert.match(evidenceIndex, /metadata edit/i);
   assert.match(evidenceIndex, /scheduled app-closed firing/i);
+  assert.match(evidenceIndex, /social_fire_due_job/);
+  assert.match(evidenceIndex, /social_publish_job/);
+  assert.match(evidenceIndex, /social_poll_publish_job/);
+  assert.match(evidenceIndex, /social_reschedule_job/);
+  assert.match(evidenceIndex, /social_retry_job/);
+  assert.match(evidenceIndex, /social_cancel_job/);
   assert.match(evidenceIndex, /provider URL/i);
+  assert.match(evidenceIndex, /Redaction/i);
+  assert.match(evidenceIndex, /Do not commit tokens/i);
+  assert.match(evidenceIndex, /YYYY-MM-DD/i);
   for (const check of requiredChecks) {
     assert.equal(
       typeof entry.checks[check],

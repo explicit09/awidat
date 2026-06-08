@@ -40,9 +40,12 @@ fi
 # All values below use ${VAR:-default} so anything exported in .env.local wins
 # (put the Google OAuth secrets there — never in this committed file).
 
-# Bearer the desktop sends to /social/* (dev single-user mode). Must match the
-# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. Any non-empty value works for local dev.
+# Bearer the desktop sends to /social/* in dev single-user mode. Must match the
+# desktop's MONTAGE_SOCIAL_AUTH_TOKEN. For limited-access multi-user workspaces,
+# set SUPABASE_JWT_SECRET here and use MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN on
+# each desktop instead.
 export DESKTOP_AUTH_TOKEN="${DESKTOP_AUTH_TOKEN:-local-dev-token}"
+export SOCIAL_ALLOWED_USER_IDS="${SOCIAL_ALLOWED_USER_IDS:-}"
 
 # Bearer for the /internal/* worker routes (only needed if you curl them).
 export SERVICE_SHARED_SECRET="${SERVICE_SHARED_SECRET:-local-internal-token}"
@@ -53,13 +56,20 @@ export SERVICE_SHARED_SECRET="${SERVICE_SHARED_SECRET:-local-internal-token}"
 export SOCIAL_TOKEN_AEAD_KEY="${SOCIAL_TOKEN_AEAD_KEY:-c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd}"
 export SOCIAL_TOKEN_KEY_ID="${SOCIAL_TOKEN_KEY_ID:-local-k1}"
 
-# ── Google/YouTube OAuth (from .env.local; required for the Connect flow) ─────
+# ── Provider OAuth (from .env.local; required for each Connect flow) ──────────
 # Create a Google Cloud OAuth client (Web application) with redirect URI
 # http://127.0.0.1:3000/oauth/callback/youtube and put the id/secret in
-# .env.local as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Until set, Connect
-# returns 503 "Google OAuth not configured".
+# .env.local as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Add equivalent TikTok,
+# Instagram, and Twitter/X app credentials for their Connect flows. Until set,
+# Connect returns a provider-specific 503 "OAuth not configured" response.
 export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
 export GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
+export TIKTOK_CLIENT_KEY="${TIKTOK_CLIENT_KEY:-}"
+export TIKTOK_CLIENT_SECRET="${TIKTOK_CLIENT_SECRET:-}"
+export INSTAGRAM_CLIENT_ID="${INSTAGRAM_CLIENT_ID:-}"
+export INSTAGRAM_CLIENT_SECRET="${INSTAGRAM_CLIENT_SECRET:-}"
+export TWITTER_X_CLIENT_ID="${TWITTER_X_CLIENT_ID:-}"
+export TWITTER_X_CLIENT_SECRET="${TWITTER_X_CLIENT_SECRET:-}"
 export OAUTH_REDIRECT_BASE="${OAUTH_REDIRECT_BASE:-http://127.0.0.1:3000}"
 
 # ── Local-test posture ──────────────────────────────────────────────────────

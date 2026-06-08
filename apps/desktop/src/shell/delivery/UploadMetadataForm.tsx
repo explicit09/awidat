@@ -377,6 +377,7 @@ function MetadataFields({
   onUpdate: (next: Partial<UploadMetadata>) => void;
 }) {
   const isInstagram = target === "instagram";
+  const isTikTok = target === "tiktok";
   const limits = PLATFORM_LIMITS[target as ProviderKey];
   const visOpts = visibilityOptionsFor(target);
   const errFor = (field: MetadataValidationError["field"]) =>
@@ -406,20 +407,22 @@ function MetadataFields({
           />
         </Field>
       ) : null}
-      <Field
-        label={isInstagram ? "Caption" : "Description"}
-        counterCurrent={metadata.description.length}
-        counterMax={isInstagram ? limits?.captionMax : limits?.descriptionMax}
-        error={(isInstagram ? errFor("caption") : errFor("description"))?.message}
-      >
-        <textarea
-          value={metadata.description}
-          onChange={(e) => onUpdate({ description: e.target.value })}
-          rows={3}
-          placeholder={isInstagram ? "Caption shown under the post" : "Long-form description"}
-          className={fieldTextareaClass}
-        />
-      </Field>
+      {!isTikTok ? (
+        <Field
+          label={isInstagram ? "Caption" : "Description"}
+          counterCurrent={metadata.description.length}
+          counterMax={isInstagram ? limits?.captionMax : limits?.descriptionMax}
+          error={(isInstagram ? errFor("caption") : errFor("description"))?.message}
+        >
+          <textarea
+            value={metadata.description}
+            onChange={(e) => onUpdate({ description: e.target.value })}
+            rows={3}
+            placeholder={isInstagram ? "Caption shown under the post" : "Long-form description"}
+            className={fieldTextareaClass}
+          />
+        </Field>
+      ) : null}
       <Field
         label="Tags"
         counterCurrent={metadata.tags.reduce((acc, t) => acc + t.length, 0)}

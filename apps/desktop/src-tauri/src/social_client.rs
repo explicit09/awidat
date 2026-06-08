@@ -6,7 +6,8 @@
 //! over the user-facing routes in `crates/social-server/src/user_routes.rs`.
 //!
 //! Every method:
-//! - attaches `Authorization: Bearer <auth_token>` (the pre-Phase-7 dev token),
+//! - attaches `Authorization: Bearer <auth_token>` (a Supabase user access token
+//!   for multi-user workspaces, or the pre-Phase-7 dev token),
 //! - sends/receives the **re-exported `montage_social::api` DTOs** so client and
 //!   server agree on exactly one serde shape (the big reuse win), and
 //! - maps a non-2xx response to a stable error string (`401` → `"unauthorized"`)
@@ -24,11 +25,14 @@ use montage_social::api::{
 };
 use montage_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::io::ReaderStream;
 
 const SOCIAL_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const WORKSPACE_ID_HEADER: &str = "x-montage-workspace-id";
+type AuthTokenSource = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// Authenticated HTTPS client for the social-publishing server.
 ///
@@ -38,7 +42,8 @@ const SOCIAL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 #[derive(Clone)]
 pub struct SocialClient {
     base_url: String,
-    auth_token: String,
+    auth_token: AuthTokenSource,
+    workspace_id: Option<String>,
     http: reqwest::Client,
 }
 
@@ -72,13 +77,34 @@ struct OAuthStartBody {
 impl SocialClient {
     /// Build a client from a base URL + dev bearer token. Trailing slashes on
     /// `base_url` are trimmed so route joins never double-slash.
+    #[cfg(test)]
     pub fn new(base_url: impl Into<String>, auth_token: impl Into<String>) -> Self {
         Self::new_with_timeout(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT)
     }
 
+    #[cfg(test)]
+    pub fn new_for_workspace(
+        base_url: impl Into<String>,
+        auth_token: impl Into<String>,
+        workspace_id: impl Into<String>,
+    ) -> Self {
+        let mut client = Self::new(base_url, auth_token);
+        client.workspace_id = non_empty_string(workspace_id.into());
+        client
+    }
+
+    #[cfg(test)]
     fn new_with_timeout(
         base_url: impl Into<String>,
         auth_token: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
+        Self::new_with_token_source(base_url, fixed_auth_token(auth_token.into()), timeout)
+    }
+
+    fn new_with_token_source(
+        base_url: impl Into<String>,
+        auth_token: AuthTokenSource,
         timeout: Duration,
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
@@ -88,26 +114,53 @@ impl SocialClient {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             base_url,
-            auth_token: auth_token.into(),
+            auth_token,
+            workspace_id: None,
             http,
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_auth_token_fn(
+        base_url: impl Into<String>,
+        auth_token: impl Fn() -> String + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_with_token_source(base_url, Arc::new(auth_token), SOCIAL_CLIENT_TIMEOUT)
     }
 
     /// Resolve the client from the environment.
     ///
     /// Per RECONCILIATION G6 there is no per-field desktop config struct, so the
-    /// server URL + dev token are read from env at setup time (mirroring how
-    /// `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). Returns `None`
-    /// when `MONTAGE_SOCIAL_SERVER_URL` is unset, so the desktop boots fine
-    /// without the server configured — the `social_*` commands then surface a
-    /// clear "social client not initialized" error if used.
+    /// server URL + bearer are read from env at setup time (mirroring how
+    /// `project_root` defaults from `MONTAGE_DESKTOP_PROJECT`). For real
+    /// limited-access workspaces, `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` carries
+    /// the signed-in user's Supabase bearer. `MONTAGE_SOCIAL_AUTH_TOKEN` remains
+    /// the single-user dev-token fallback. Returns `None` when
+    /// `MONTAGE_SOCIAL_SERVER_URL` is unset, so the desktop boots fine without
+    /// the server configured — the `social_*` commands then surface a clear
+    /// "social client not initialized" error if used.
     pub fn from_env() -> Option<Self> {
         let base_url = std::env::var("MONTAGE_SOCIAL_SERVER_URL").ok()?;
         if base_url.trim().is_empty() {
             return None;
         }
-        let auth_token = std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").unwrap_or_default();
-        Some(Self::new(base_url, auth_token))
+        let auth_token = social_auth_token_source_from_env();
+        match std::env::var("MONTAGE_SOCIAL_WORKSPACE_ID")
+            .ok()
+            .and_then(non_empty_string)
+        {
+            Some(workspace_id) => {
+                let mut client =
+                    Self::new_with_token_source(base_url, auth_token, SOCIAL_CLIENT_TIMEOUT);
+                client.workspace_id = Some(workspace_id);
+                Some(client)
+            }
+            None => Some(Self::new_with_token_source(
+                base_url,
+                auth_token,
+                SOCIAL_CLIENT_TIMEOUT,
+            )),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -268,9 +321,7 @@ impl SocialClient {
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
-            .http
-            .get(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.get(self.url(path)))
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -283,9 +334,7 @@ impl SocialClient {
         body: &B,
     ) -> Result<T, String> {
         let resp = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.post(self.url(path)))
             .json(body)
             .send()
             .await
@@ -295,13 +344,19 @@ impl SocialClient {
 
     async fn post_empty<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(&self.auth_token)
+            .authenticated(self.http.post(self.url(path)))
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
         Self::decode(resp).await
+    }
+
+    fn authenticated(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = request.bearer_auth((self.auth_token)());
+        match &self.workspace_id {
+            Some(workspace_id) => request.header(WORKSPACE_ID_HEADER, workspace_id),
+            None => request,
+        }
     }
 
     /// Map a response into the typed DTO, or a stable error string. A non-2xx
@@ -319,6 +374,11 @@ impl SocialClient {
     }
 }
 
+#[cfg(test)]
+fn fixed_auth_token(auth_token: String) -> AuthTokenSource {
+    Arc::new(move || auth_token.clone())
+}
+
 /// Map an HTTP status to a stable, token-safe error string. `401` collapses to
 /// `"unauthorized"` (matching the prior `social.rs` convention); everything else
 /// carries just the status code.
@@ -330,6 +390,36 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn choose_social_auth_token(
+    supabase_access_token: Option<String>,
+    dev_token: Option<String>,
+) -> String {
+    supabase_access_token
+        .and_then(non_empty_string)
+        .or_else(|| dev_token.and_then(non_empty_string))
+        .unwrap_or_default()
+}
+
+fn social_auth_token_from_env() -> String {
+    choose_social_auth_token(
+        std::env::var("MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN").ok(),
+        std::env::var("MONTAGE_SOCIAL_AUTH_TOKEN").ok(),
+    )
+}
+
+fn social_auth_token_source_from_env() -> AuthTokenSource {
+    Arc::new(social_auth_token_from_env)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -337,7 +427,7 @@ mod tests {
     use montage_social::model::{
         AccountEligibility, AccountKind, ConnectedAccountStatus, OwnerRef,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use wiremock::matchers::{header, method, path as match_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -391,6 +481,59 @@ mod tests {
         assert_eq!(accounts[0].status, ConnectedAccountStatus::Connected);
         assert_eq!(accounts[0].account_kind, AccountKind::Channel);
         assert_eq!(accounts[0].owner, OwnerRef::User("local-user".into()));
+    }
+
+    #[tokio::test]
+    async fn accounts_sends_workspace_header_when_configured() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(match_path("/social/accounts"))
+            .and(header("authorization", "Bearer dev-token"))
+            .and(header("x-montage-workspace-id", "workspace_1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([account_json()])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = SocialClient::new_for_workspace(server.uri(), "dev-token", "workspace_1");
+        let accounts = client.accounts().await.expect("accounts ok");
+        assert_eq!(accounts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn accounts_reads_auth_token_for_each_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(match_path("/social/accounts"))
+            .and(header("authorization", "Bearer refreshed-token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([account_json()])),
+            )
+            .mount(&server)
+            .await;
+
+        let token = std::sync::Arc::new(std::sync::Mutex::new("initial-token".to_string()));
+        let token_source = std::sync::Arc::clone(&token);
+        let client = SocialClient::new_with_auth_token_fn(server.uri(), move || {
+            token_source.lock().expect("token lock").clone()
+        });
+        *token.lock().expect("token lock") = "refreshed-token".to_string();
+
+        let accounts = client.accounts().await.expect("accounts ok");
+        assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn supabase_access_token_takes_precedence_over_dev_token() {
+        let token = choose_social_auth_token(Some(" user-jwt ".into()), Some("dev-token".into()));
+        assert_eq!(token, "user-jwt");
+    }
+
+    #[test]
+    fn social_auth_token_falls_back_to_dev_token() {
+        let token = choose_social_auth_token(Some(" ".into()), Some(" dev-token ".into()));
+        assert_eq!(token, "dev-token");
     }
 
     #[tokio::test]
@@ -491,13 +634,18 @@ mod tests {
 
         let client =
             SocialClient::new_with_timeout(server.uri(), "dev-token", Duration::from_millis(20));
+        let started = Instant::now();
         let err = client
             .publish_job("job_1")
             .await
             .expect_err("must time out");
         assert!(
-            err.contains("timed out") || err.contains("timeout"),
-            "unexpected timeout error: {err}"
+            started.elapsed() < Duration::from_millis(200),
+            "request did not respect the client timeout"
+        );
+        assert!(
+            err.starts_with("request failed:"),
+            "unexpected request error: {err}"
         );
     }
 

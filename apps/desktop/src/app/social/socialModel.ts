@@ -116,6 +116,9 @@ export function buildPlatformFieldsForPublish(
     delete fields.thumbnailRef;
   }
   if (input.provider === "tiktok") {
+    delete fields.description;
+    delete fields.tags;
+    delete fields.thumbnailRef;
     fields.disableDuet = input.tiktokInteractions?.disableDuet ?? false;
     fields.disableComment = input.tiktokInteractions?.disableComment ?? false;
     fields.disableStitch = input.tiktokInteractions?.disableStitch ?? false;
@@ -224,7 +227,12 @@ export function canReschedule(status: PublishJobStatus): boolean {
 /** A job is still "in flight" (server will advance it) until it reaches a
  * terminal state. The UI polls while any job is non-terminal. */
 export function isTerminal(status: PublishJobStatus): boolean {
-  return status === "published" || status === "failed" || status === "cancelled";
+  return (
+    status === "published" ||
+    status === "failed" ||
+    status === "requires_action" ||
+    status === "cancelled"
+  );
 }
 
 export type PublishJobStatusCounts = {
