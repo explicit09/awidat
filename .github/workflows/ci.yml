@@ -20,10 +20,16 @@ jobs:
         run: cargo install cargo-deny --locked
       - name: License and advisory check
         run: cargo deny check
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=8.24.3
+          curl --retry 5 --retry-all-errors --retry-delay 2 -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gitleaks dir --redact --exit-code=2 --no-banner --verbose .
 
   rust:
     name: Rust (${{ matrix.os }})
