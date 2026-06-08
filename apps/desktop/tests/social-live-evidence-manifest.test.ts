@@ -31,8 +31,8 @@ const contract = readRepoFile("docs/social-server/live-verification.html");
 assert.equal(manifest.version, 1);
 assert.match(manifest.updatedAt, /^\d{4}-\d{2}-\d{2}$/);
 assert.ok(
-  manifest.updatedAt >= "2026-06-07",
-  "manifest updatedAt must cover the metadataEdit evidence schema update",
+  manifest.updatedAt >= "2026-06-08",
+  "manifest updatedAt must cover the fire/poll/recovery evidence schema update",
 );
 assert.equal(
   manifest.allProvidersVerified,
