@@ -30,6 +30,7 @@ use wiremock::matchers::path;
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
+const TEST_CLIENT_ID: &str = "app_sanctioned";
 
 #[serial_test::serial(codex_auth_env)]
 #[tokio::test]
@@ -981,10 +982,8 @@ impl RefreshTokenTestContext {
 
         let endpoint = format!("{}/oauth/token", server.uri());
         let refresh_endpoint_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
-        let client_id_guard = EnvGuard::set(
-            MONTAGE_OAUTH_CLIENT_ID_ENV_VAR,
-            "app_sanctioned".to_string(),
-        );
+        let client_id_guard =
+            EnvGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, TEST_CLIENT_ID.to_string());
 
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),

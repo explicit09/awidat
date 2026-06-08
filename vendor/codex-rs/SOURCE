@@ -21,11 +21,13 @@ Our edits (re-apply after every refresh):
   vendor/codex-rs/exec/src/event_processor_with_human_output.rs,
   vendor/codex-rs/analytics/src/events.rs, and
   vendor/codex-rs/model-provider-info/src/lib.rs:
-  use each vendored crate's package version for User-Agent, model-manager,
-  telemetry, display, and provider-version metadata. Earlier Montage revisions
-  hardcoded an installed Codex CLI version to bypass model-access gates; that
-  behavior was removed for open-source publication. Model availability now
-  depends on sanctioned API/OAuth access rather than mimicking another client.
+  use each vendored crate's package version for model-manager, telemetry,
+  display, and provider-version metadata. The login User-Agent may use
+  `MONTAGE_CODEX_CLI_VERSION` when a deployment has sanctioned Codex backend
+  access and must preserve the compatible Codex client version expected by the
+  backend. Earlier Montage revisions hardcoded an installed Codex CLI version
+  to bypass model-access gates; public source now requires explicit deployment
+  configuration instead of silently mimicking another client.
   ChatGPT OAuth refresh/revoke read `MONTAGE_OAUTH_CLIENT_ID`, the same
   sanctioned client id used by Montage's initial browser login flow, so public
   source does not embed another client's first-party id.

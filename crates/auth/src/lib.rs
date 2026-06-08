@@ -42,22 +42,14 @@ pub const OAUTH_CLIENT_ID_ENV: &str = "MONTAGE_OAUTH_CLIENT_ID";
 /// Configure [`OAUTH_CLIENT_ID_ENV`] with a sanctioned client id to enable this
 /// flow, or use API-key auth.
 ///
-/// This only changes the client used for the initial browser *authorize*.
-/// Vendored codex refresh/revoke paths must also be configured before ChatGPT
-/// OAuth is considered production-ready. API-key auth remains the supported
-/// public default.
+/// The vendored codex refresh/revoke paths read the same variable so a
+/// sanctioned client id stays consistent across the full OAuth lifecycle.
 pub fn oauth_client_id() -> Result<String, AuthError> {
     match std::env::var(OAUTH_CLIENT_ID_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
     {
-        Some(override_id) => {
-            tracing::warn!(
-                "{OAUTH_CLIENT_ID_ENV} configures the authorize client only; codex refresh/revoke \
-                 paths also need sanctioned OAuth configuration before production use"
-            );
-            Ok(override_id)
-        }
+        Some(override_id) => Ok(override_id),
         None => Err(AuthError::ChatGptOAuthNotConfigured),
     }
 }

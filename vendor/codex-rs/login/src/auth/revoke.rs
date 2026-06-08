@@ -245,4 +245,40 @@ mod tests {
             .expect("timeout error should preserve reqwest error");
         assert!(reqwest_error.is_timeout());
     }
+
+    #[tokio::test]
+    #[serial_test::serial(codex_auth_env)]
+    async fn revoke_refresh_request_uses_configured_montage_oauth_client_id() {
+        let server = MockServer::start().await;
+        let _client_id_guard = EnvVarGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, "app_sanctioned");
+
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = CodexHttpClient::new(reqwest::Client::new());
+        let endpoint = format!("{}/oauth/revoke", server.uri());
+        revoke_oauth_token(
+            &client,
+            endpoint.as_str(),
+            "refresh-token",
+            RevokeTokenKind::Refresh,
+            REVOKE_HTTP_TIMEOUT,
+        )
+        .await
+        .expect("configured OAuth client id should allow revoke");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("received requests should be available");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+        assert_eq!(body["client_id"], "app_sanctioned");
+        assert_eq!(body["token"], "refresh-token");
+        assert_eq!(body["token_type_hint"], "refresh_token");
+    }
 }

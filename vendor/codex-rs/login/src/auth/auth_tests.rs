@@ -65,7 +65,7 @@ async fn refresh_request_uses_configured_montage_oauth_client_id() {
         REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
         &format!("{}/oauth/token", server.uri()),
     );
-    let _client_id_guard = EnvVarGuard::set("MONTAGE_OAUTH_CLIENT_ID", "app_sanctioned");
+    let _client_id_guard = EnvVarGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, "app_sanctioned");
 
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
