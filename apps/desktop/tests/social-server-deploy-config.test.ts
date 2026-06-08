@@ -42,4 +42,13 @@ for (const envName of [
   );
 }
 
+const envRows = Array.from(readme.matchAll(/^\| `([A-Z0-9_]+)` \|/gm)).map(
+  (match) => match[1],
+);
+assert.deepEqual(
+  envRows,
+  [...new Set(envRows)],
+  "Deployment docs must not duplicate environment variable rows.",
+);
+
 console.log("social-server-deploy-config: OK");
