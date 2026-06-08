@@ -66,6 +66,7 @@ use crate::montage_mcp::tools::create_stringout::{self, CreateStringoutArgs};
 use crate::montage_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
 use crate::montage_mcp::tools::download_yt_clip::{self, DownloadYtClipArgs};
 use crate::montage_mcp::tools::export_package::{self, ExportPackageArgs};
+use crate::montage_mcp::tools::fetch_x_trend_context::{self, FetchXTrendContextArgs};
 use crate::montage_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::montage_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::montage_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
@@ -1214,6 +1215,27 @@ Never burns captions into the picture.",
         args: Parameters<PlanCaptionsArgs>,
     ) -> Result<String, ErrorData> {
         plan_captions::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `fetch_x_trend_context` — read-only X trend context for short-form
+    /// planning.
+    #[tool(
+        description = "\
+Fetch current X trend signals for one or more episode-topic queries and return \
+a trend_context payload suitable for `plan_short_form_review`. Uses \
+X_BEARER_TOKEN or keychain account x_bearer_token for read access. If \
+credentials are missing, returns a setup/status payload instead of failing. \
+Publishing is not performed here; Twitter/X posting remains handled by the \
+social publishing provider.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn fetch_x_trend_context(
+        &self,
+        args: Parameters<FetchXTrendContextArgs>,
+    ) -> Result<String, ErrorData> {
+        fetch_x_trend_context::run(args.0, McpToolCtx::resolve())
+            .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 

@@ -30,6 +30,7 @@ pub mod create_stringout;
 pub mod diagnose_project_media;
 pub mod download_yt_clip;
 pub mod export_package;
+pub mod fetch_x_trend_context;
 pub mod find_audio_asset;
 pub mod find_beat;
 pub mod find_black_frames;

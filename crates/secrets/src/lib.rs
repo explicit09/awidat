@@ -118,6 +118,8 @@ pub mod accounts {
     pub const PEXELS_API_KEY: &str = "pexels_api_key";
     /// OpenRouter API key — used by generated-media video providers.
     pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
+    /// X API bearer token — used for trend/context reads.
+    pub const X_BEARER_TOKEN: &str = "x_bearer_token";
 }
 
 /// Env-var names corresponding to [`accounts`]. Kept in lockstep.
@@ -130,6 +132,8 @@ pub mod env_vars {
     pub const PEXELS_API_KEY: &str = "PEXELS_API_KEY";
     /// Override for [`super::accounts::OPENROUTER_API_KEY`].
     pub const OPENROUTER_API_KEY: &str = "OPENROUTER_API_KEY";
+    /// Override for [`super::accounts::X_BEARER_TOKEN`].
+    pub const X_BEARER_TOKEN: &str = "X_BEARER_TOKEN";
 }
 
 #[cfg(test)]
@@ -146,6 +150,7 @@ mod tests {
         assert_ne!(accounts::ANTHROPIC_API_KEY, env_vars::ANTHROPIC_API_KEY);
         assert_ne!(accounts::PEXELS_API_KEY, env_vars::PEXELS_API_KEY);
         assert_ne!(accounts::OPENROUTER_API_KEY, env_vars::OPENROUTER_API_KEY);
+        assert_ne!(accounts::X_BEARER_TOKEN, env_vars::X_BEARER_TOKEN);
     }
 
     #[test]
