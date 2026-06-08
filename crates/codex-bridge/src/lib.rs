@@ -298,6 +298,8 @@ impl CodexAppServer {
             .await
             .map_err(|e| BridgeError::Startup(format!("initialized: {e}")))?;
 
+        let developer_instructions =
+            compose_session_instructions(developer_instructions, skills_catalog);
         let thread_id = if let Some(resume_id) = resume_thread_id {
             let resume_response: ThreadResumeResponse = client
                 .request(ClientRequest::ThreadResume {
@@ -339,7 +341,6 @@ impl CodexAppServer {
         Ok(Self {
             backend: CodexBackend::External { client },
             thread_id,
-            skills_catalog,
             recent_feedback,
             pending,
             shutdown_tx: Some(shutdown_tx),
