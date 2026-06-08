@@ -40,6 +40,11 @@ for (const command of [
   "social_schedule_target",
   "social_upload_artifact",
   "social_publish_job",
+  "social_fire_due_job",
+  "social_poll_publish_job",
+  "social_reschedule_job",
+  "social_retry_job",
+  "social_cancel_job",
 ]) {
   assert.match(
     contract,
