@@ -65,7 +65,7 @@ jobs:
       - name: Fetch desktop sidecars
         env:
           YT_DLP_ALLOW_PLACEHOLDER: "1"
-        run: make desktop-yt-dlp
+        run: make desktop-yt-dlp desktop-codex-check-stub
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
