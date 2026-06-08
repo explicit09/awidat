@@ -72,6 +72,12 @@ for (const entry of manifest.providers) {
   assert.match(evidenceIndex, /OAuth sign-in/i);
   assert.match(evidenceIndex, /metadata edit/i);
   assert.match(evidenceIndex, /scheduled app-closed firing/i);
+  assert.match(evidenceIndex, /social_fire_due_job/);
+  assert.match(evidenceIndex, /social_publish_job/);
+  assert.match(evidenceIndex, /social_poll_publish_job/);
+  assert.match(evidenceIndex, /social_reschedule_job/);
+  assert.match(evidenceIndex, /social_retry_job/);
+  assert.match(evidenceIndex, /social_cancel_job/);
   assert.match(evidenceIndex, /provider URL/i);
   for (const check of requiredChecks) {
     assert.equal(
