@@ -7,6 +7,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readRepoFile = (path: string) => readFileSync(resolve(repoRoot, path), "utf8");
 
 const flyToml = readRepoFile("crates/social-server/fly.toml");
+const runLocal = readRepoFile("crates/social-server/run-local.sh");
 const readme = readRepoFile("docs/social-server/README.md");
 
 assert.match(
@@ -39,6 +40,11 @@ for (const envName of [
     readme,
     new RegExp(`\\| \`${envName}\` \\|`),
     `Deployment docs must document ${envName}.`,
+  );
+  assert.match(
+    runLocal,
+    new RegExp(`export ${envName}=`),
+    `Local social-server runner must pass through ${envName}.`,
   );
 }
 
