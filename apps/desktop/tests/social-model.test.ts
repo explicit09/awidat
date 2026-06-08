@@ -154,6 +154,6 @@ assert.equal(isTerminal("cancelled"), true);
 assert.equal(isTerminal("scheduled"), false);
 assert.equal(isTerminal("uploading"), false);
 assert.equal(isTerminal("processing"), false);
-assert.equal(isTerminal("requires_action"), false);
+assert.equal(isTerminal("requires_action"), true);
 
 console.log("social-model.test.ts: ok");
