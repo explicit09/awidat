@@ -7,6 +7,7 @@ regexes = [
   '''montage\.campaigns\.v1''',
   '''sk-proj-1234567890ABCDE''',
   '''sk-proj-12345''',
+  '''sk-abcdefghijklmnopqrstuvwxyz123456''',
   '''0123456789abcdef0123456789abcdef''',
   '''MC4CAQAwBQYDK2VwBCIEIDQg14jybCLydjHQwXeBzsDM7oB6BSAenodx6oCovQ/D''',
 ]
