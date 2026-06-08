@@ -43,19 +43,14 @@ pub mod id {
     pub const NAV_REVIEW: &str = "nav:review";
     pub const NAV_DELIVER: &str = "nav:deliver";
     pub const NAV_SETTINGS: &str = "nav:settings";
+    pub const HELP_DOCS: &str = "help:docs";
+    pub const HELP_SHORTCUTS: &str = "help:shortcuts";
+    pub const HELP_LOGS: &str = "help:logs";
+    pub const HELP_REPORT_ISSUE: &str = "help:report_issue";
 }
 
 const DISABLED_SETTINGS: &str = "app:settings";
 const DISABLED_UPDATES: &str = "app:check_updates";
-const DISABLED_HELP: &str = "help:docs";
-const DISABLED_SHORTCUTS: &str = "help:shortcuts";
-const DISABLED_LOGS: &str = "help:logs";
-const DISABLED_REPORT: &str = "help:report_issue";
-const DISABLED_UNDO: &str = "edit:undo";
-const DISABLED_REDO: &str = "edit:redo";
-const DISABLED_SPLIT_CLIP: &str = "edit:split_clip";
-const DISABLED_TRIM_START: &str = "edit:trim_start_to_playhead";
-const DISABLED_TRIM_END: &str = "edit:trim_end_to_playhead";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MenuCommandPayload {
@@ -270,9 +265,6 @@ fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
         false,
         Some("Delete"),
     )?;
-    let split_clip = disabled(app, DISABLED_SPLIT_CLIP, "Split Clip at Playhead")?;
-    let trim_start = disabled(app, DISABLED_TRIM_START, "Trim Start to Playhead")?;
-    let trim_end = disabled(app, DISABLED_TRIM_END, "Trim End to Playhead")?;
     let accept = item(
         app,
         id::ACCEPT_PROPOSAL,
@@ -289,18 +281,12 @@ fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     )?;
 
     SubmenuBuilder::new(app, "Edit")
-        .item(&disabled(app, DISABLED_UNDO, "Undo")?)
-        .item(&disabled(app, DISABLED_REDO, "Redo")?)
-        .separator()
         .cut()
         .copy()
         .paste()
         .select_all()
         .separator()
         .item(&delete_clip)
-        .item(&split_clip)
-        .item(&trim_start)
-        .item(&trim_end)
         .separator()
         .item(&accept)
         .item(&reject)
@@ -310,21 +296,13 @@ fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
 fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     let nav_project = item(app, id::NAV_PROJECT, "Project Overview", true, None)?;
     let nav_workspace = item(app, id::NAV_WORKSPACE, "Workspace", true, None)?;
-    let nav_agent = item(app, id::NAV_AGENT, "Agent Rail", true, None)?;
     let nav_media = item(app, id::NAV_MEDIA, "Media / Import", true, None)?;
     let nav_review = item(app, id::NAV_REVIEW, "Review", true, None)?;
     let nav_deliver = item(app, id::NAV_DELIVER, "Delivery", true, None)?;
     let nav_settings = item(app, id::NAV_SETTINGS, "Settings", true, None)?;
 
-    let media = item(app, id::VIEW_MEDIA, "Media Viewer", false, None)?;
     let timeline = item(app, id::VIEW_TIMELINE, "Timeline", false, None)?;
-    let properties = item(app, id::VIEW_PROPERTIES, "Properties", false, None)?;
-    let notes = item(app, id::VIEW_NOTES, "Notes", false, None)?;
-    let scopes = item(app, id::VIEW_SCOPES, "Color Scopes", false, None)?;
-    let sidebar = item(app, id::VIEW_SIDEBAR, "Sidebar", false, None)?;
-    let chat = item(app, id::VIEW_CHAT, "Chat", false, None)?;
     let transcript = item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?;
-    let edits = item(app, id::VIEW_EDITS, "Edit History", false, None)?;
     let run_indexers = item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?;
     let zoom_in = item(
         app,
@@ -358,22 +336,13 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     SubmenuBuilder::new(app, "View")
         .item(&nav_project)
         .item(&nav_workspace)
-        .item(&nav_agent)
         .item(&nav_media)
         .item(&nav_review)
         .item(&nav_deliver)
         .item(&nav_settings)
         .separator()
-        .item(&media)
         .item(&timeline)
-        .item(&properties)
-        .item(&notes)
-        .item(&scopes)
-        .separator()
-        .item(&sidebar)
-        .item(&chat)
         .item(&transcript)
-        .item(&edits)
         .separator()
         .item(&run_indexers)
         .separator()
@@ -399,18 +368,32 @@ fn help_menu(
     include_about: bool,
 ) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     let mut builder = SubmenuBuilder::new(app, "Help")
-        .item(&disabled(
+        .item(&item(
             app,
-            DISABLED_HELP,
+            id::HELP_DOCS,
             if include_about {
                 "Documentation"
             } else {
                 "Montage Help"
             },
+            true,
+            None,
         )?)
-        .item(&disabled(app, DISABLED_SHORTCUTS, "Keyboard Shortcuts")?)
-        .item(&disabled(app, DISABLED_LOGS, "Open Logs")?)
-        .item(&disabled(app, DISABLED_REPORT, "Report Issue")?);
+        .item(&item(
+            app,
+            id::HELP_SHORTCUTS,
+            "Keyboard Shortcuts",
+            true,
+            None,
+        )?)
+        .item(&item(app, id::HELP_LOGS, "Open Logs", true, None)?)
+        .item(&item(
+            app,
+            id::HELP_REPORT_ISSUE,
+            "Report Issue",
+            true,
+            None,
+        )?);
 
     if include_about {
         builder = builder
@@ -461,6 +444,7 @@ fn frontend_command_ids() -> &'static [&'static str] {
         id::RUN_INDEXERS,
         id::EXPORT_TIMELINE,
         id::REVEAL_PROJECT,
+        id::DELETE_CLIP,
         id::ACCEPT_PROPOSAL,
         id::REJECT_PROPOSAL,
         id::VIEW_MEDIA,
@@ -483,6 +467,10 @@ fn frontend_command_ids() -> &'static [&'static str] {
         id::NAV_REVIEW,
         id::NAV_DELIVER,
         id::NAV_SETTINGS,
+        id::HELP_DOCS,
+        id::HELP_SHORTCUTS,
+        id::HELP_LOGS,
+        id::HELP_REPORT_ISSUE,
     ]
 }
 
@@ -492,6 +480,38 @@ fn top_level_menu_labels(platform: MenuPlatform) -> Vec<&'static str> {
         MenuPlatform::Macos => vec!["Montage", "File", "Edit", "View", "Window", "Help"],
         MenuPlatform::Windows => vec!["File", "Edit", "View", "Help"],
     }
+}
+
+#[cfg(test)]
+fn edit_menu_labels() -> Vec<&'static str> {
+    vec![
+        "Cut",
+        "Copy",
+        "Paste",
+        "Select All",
+        "Delete Selected Clip",
+        "Accept Proposal",
+        "Reject Proposal",
+    ]
+}
+
+#[cfg(test)]
+fn view_menu_labels() -> Vec<&'static str> {
+    vec![
+        "Project Overview",
+        "Workspace",
+        "Media / Import",
+        "Review",
+        "Delivery",
+        "Settings",
+        "Timeline",
+        "Transcript",
+        "Run Indexers",
+        "Zoom Timeline In",
+        "Zoom Timeline Out",
+        "Fit Timeline",
+        "Toggle Full Screen",
+    ]
 }
 
 #[cfg(test)]
@@ -527,6 +547,7 @@ mod tests {
             id::IMPORT_URL,
             id::RUN_INDEXERS,
             id::EXPORT_TIMELINE,
+            id::DELETE_CLIP,
             id::ACCEPT_PROPOSAL,
             id::REJECT_PROPOSAL,
             id::TIMELINE_ZOOM_IN,
@@ -538,6 +559,77 @@ mod tests {
             id::NAV_REVIEW,
             id::NAV_DELIVER,
             id::NAV_SETTINGS,
+        ] {
+            assert!(ids.contains(&required), "missing {required}");
+        }
+    }
+
+    #[test]
+    fn edit_menu_contains_only_functional_items() {
+        let labels = edit_menu_labels();
+        for removed in [
+            "Undo",
+            "Redo",
+            "Split Clip at Playhead",
+            "Trim Start to Playhead",
+            "Trim End to Playhead",
+        ] {
+            assert!(!labels.contains(&removed), "{removed} should not be shown");
+        }
+        for kept in [
+            "Cut",
+            "Copy",
+            "Paste",
+            "Select All",
+            "Delete Selected Clip",
+            "Accept Proposal",
+            "Reject Proposal",
+        ] {
+            assert!(labels.contains(&kept), "{kept} should stay visible");
+        }
+    }
+
+    #[test]
+    fn view_menu_omits_legacy_noop_panes() {
+        let labels = view_menu_labels();
+        for removed in [
+            "Agent Rail",
+            "Media Viewer",
+            "Properties",
+            "Notes",
+            "Color Scopes",
+            "Sidebar",
+            "Chat",
+            "Edit History",
+        ] {
+            assert!(!labels.contains(&removed), "{removed} should not be shown");
+        }
+        for kept in [
+            "Project Overview",
+            "Workspace",
+            "Media / Import",
+            "Review",
+            "Delivery",
+            "Settings",
+            "Transcript",
+            "Run Indexers",
+            "Zoom Timeline In",
+            "Zoom Timeline Out",
+            "Fit Timeline",
+            "Toggle Full Screen",
+        ] {
+            assert!(labels.contains(&kept), "{kept} should stay visible");
+        }
+    }
+
+    #[test]
+    fn help_menu_commands_are_frontend_routed() {
+        let ids = frontend_command_ids();
+        for required in [
+            id::HELP_DOCS,
+            id::HELP_SHORTCUTS,
+            id::HELP_LOGS,
+            id::HELP_REPORT_ISSUE,
         ] {
             assert!(ids.contains(&required), "missing {required}");
         }

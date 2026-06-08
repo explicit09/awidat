@@ -59,7 +59,7 @@ Verify:
 ```sql
 -- Run in Supabase SQL editor.
 SELECT table_name FROM information_schema.tables
-WHERE table_schema = 'public'
+WHERE table_schema = 'montage_social'
 ORDER BY table_name;
 -- Expected: account_publish_defaults, campaign_variant_targets,
 --           connected_accounts, oauth_connections, oauth_token_secrets,
@@ -228,9 +228,55 @@ the current machine-readable evidence status in
 | `STORAGE_BUCKET` | No | 1 | Default `artifacts` |
 | `GOOGLE_CLIENT_ID` | Phase 2 | 2 | Google OAuth app client ID |
 | `GOOGLE_CLIENT_SECRET` | Phase 2 | 2 | Google OAuth client secret (server-only, never in desktop) |
+| `TIKTOK_CLIENT_KEY` | Phase 6 | 6 | TikTok OAuth client key |
+| `TIKTOK_CLIENT_SECRET` | Phase 6 | 6 | TikTok OAuth client secret (server-only, never in desktop) |
+| `INSTAGRAM_CLIENT_ID` | Phase 6 | 6 | Instagram OAuth app client ID |
+| `INSTAGRAM_CLIENT_SECRET` | Phase 6 | 6 | Instagram OAuth app secret (server-only, never in desktop) |
+| `TWITTER_X_CLIENT_ID` | Phase 6 | 6 | Twitter/X OAuth client ID |
+| `TWITTER_X_CLIENT_SECRET` | Phase 6 | 6 | Twitter/X OAuth client secret (server-only, never in desktop) |
 | `SOCIAL_TOKEN_AEAD_KEY` | Phase 2 | 2 | 64 hex chars = 32-byte ChaCha20-Poly1305 key |
 | `SOCIAL_TOKEN_KEY_ID` | Phase 2 | 2 | Key identifier stored alongside every token (e.g. "k1") |
 | `OAUTH_REDIRECT_BASE` | Phase 2 | 2 | Base URL for OAuth redirect URIs |
+| `SUPABASE_JWT_SECRET` | Yes for multi-user | 7 | Verifies desktop-forwarded Supabase Auth bearer tokens |
+| `SOCIAL_ALLOWED_USER_IDS` | No | 7 | Optional comma-separated Supabase user ids allowed to use `/social/*`; empty keeps current auth + workspace-role behavior |
+| `MONTAGE_SOCIAL_SERVER_URL` | Desktop only | 5 | Server base URL used by the desktop social client |
+| `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` | Desktop multi-user | 7 | Signed-in user's Supabase access token; preferred bearer for limited-access workspaces |
+| `MONTAGE_SOCIAL_AUTH_TOKEN` | Desktop dev only | 5 | Dev bearer for single-user fallback when `SUPABASE_JWT_SECRET` is unset |
+| `MONTAGE_SOCIAL_WORKSPACE_ID` | Desktop optional | 7 | Sends `x-montage-workspace-id`; use for shared limited-access publishing workspaces |
+
+For limited-access publishing, set `SOCIAL_ALLOWED_USER_IDS` to the comma-
+separated Supabase user ids that may access `/social/*`, then seed
+`workspace_member_roles` with only those users. Give you and the co-host
+`Owner`, `Admin`, or `Publisher` roles for the workspace, set
+`MONTAGE_SOCIAL_WORKSPACE_ID` on each desktop, and pass each person's own
+Supabase access token as `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN`. Keep everyone
+else out of `SOCIAL_ALLOWED_USER_IDS` and without a workspace role. `Viewer` can
+read but cannot schedule, cancel, retry, connect, or disconnect publishing
+accounts.
+
+```bash
+fly secrets set --app montage-social \
+  SOCIAL_ALLOWED_USER_IDS="<your-supabase-user-id>,<cohost-supabase-user-id>"
+```
+
+Example allowlist seed:
+
+```sql
+INSERT INTO workspace_member_roles (workspace_id, user_id, payload_json)
+VALUES
+  (
+    'workspace_short_form',
+    '<your-supabase-user-id>',
+    '{"workspace_id":"workspace_short_form","user_id":"<your-supabase-user-id>","role":"owner"}'
+  ),
+  (
+    'workspace_short_form',
+    '<cohost-supabase-user-id>',
+    '{"workspace_id":"workspace_short_form","user_id":"<cohost-supabase-user-id>","role":"publisher"}'
+  )
+ON CONFLICT (workspace_id, user_id) DO UPDATE SET
+  payload_json = EXCLUDED.payload_json;
+```
 
 ---
 
@@ -279,12 +325,18 @@ Store the output as `SOCIAL_TOKEN_AEAD_KEY`.  Pick a short key ID, e.g. `"k1"`.
 fly secrets set --app montage-social \
   GOOGLE_CLIENT_ID="<client_id_from_google_console>" \
   GOOGLE_CLIENT_SECRET="<client_secret_from_google_console>" \
+  TIKTOK_CLIENT_KEY="<client_key_from_tiktok_developer_portal>" \
+  TIKTOK_CLIENT_SECRET="<client_secret_from_tiktok_developer_portal>" \
+  INSTAGRAM_CLIENT_ID="<app_id_from_meta_developer_portal>" \
+  INSTAGRAM_CLIENT_SECRET="<app_secret_from_meta_developer_portal>" \
+  TWITTER_X_CLIENT_ID="<client_id_from_x_developer_portal>" \
+  TWITTER_X_CLIENT_SECRET="<client_secret_from_x_developer_portal>" \
   SOCIAL_TOKEN_AEAD_KEY="<64_hex_chars_from_step_1>" \
   SOCIAL_TOKEN_KEY_ID="k1" \
   OAUTH_REDIRECT_BASE="https://montage-social.fly.dev"
 ```
 
-`GOOGLE_CLIENT_SECRET` stays on the server.  The desktop app never sees it.
+OAuth client secrets stay on the server. The desktop app never sees them.
 
 ### 3. Configure the Google Cloud OAuth consent screen
 
@@ -316,6 +368,9 @@ GET /oauth/callback/youtube  ◄──                              ◄──  r
 
 - [ ] `SOCIAL_TOKEN_AEAD_KEY` generated and set as Fly secret
 - [ ] `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` set as Fly secrets
+- [ ] `TIKTOK_CLIENT_KEY` + `TIKTOK_CLIENT_SECRET` set as Fly secrets
+- [ ] `INSTAGRAM_CLIENT_ID` + `INSTAGRAM_CLIENT_SECRET` set as Fly secrets
+- [ ] `TWITTER_X_CLIENT_ID` + `TWITTER_X_CLIENT_SECRET` set as Fly secrets
 - [ ] `OAUTH_REDIRECT_BASE` set as Fly secret
 - [ ] Redirect URI registered in Google Cloud Console
 - [ ] YouTube Data API v3 enabled

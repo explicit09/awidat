@@ -195,6 +195,15 @@ const publishedSnapshot = {
   published_urls: { youtube: "u" },
 };
 
+const requiresActionSnapshot = {
+  job_id: "job-youtube",
+  upload_targets: ["youtube"],
+  upload_states: {
+    youtube: { state: "requires_action", reason: "missing_scope" },
+  },
+  published_urls: {},
+};
+
 // Server-backed campaign publishing forwards full platform metadata.
 {
   const serverCampaign = createCampaignManifest({
@@ -282,6 +291,107 @@ const publishedSnapshot = {
       "social_upload_artifact",
     ],
   );
+}
+
+// Server-backed campaign publishing strips fields that TikTok/X do not use.
+{
+  const shortEntry: RenderQueueEntry = {
+    id: "render-short",
+    targetId: "short",
+    label: "Short",
+    kind: "video_reframe",
+    status: "done",
+    outputPath: "/tmp/short.mp4",
+    jobId: "job-short",
+    enqueuedAt: 2,
+  };
+  const shortCampaign = createCampaignManifest({
+    campaignId: "campaign-server-short",
+    sourceAssetId: "/tmp/project",
+    campaignType: "shorts",
+    title: "Server shorts",
+    items: [
+      createPublishableItem({
+        itemId: "item-render-short",
+        kind: "short",
+        title: "Short clip",
+        description: "Ignored description",
+        hashtags: ["ignored"],
+        thumbnailPath: "/tmp/ignored-thumb.jpg",
+        artifactPath: "/tmp/short.mp4",
+        approvalState: "approved",
+      }),
+    ],
+    platformVariants: [
+      createPlatformVariant({
+        variantId: "variant-tiktok",
+        itemId: "item-render-short",
+        platform: "tiktok",
+        status: "approved",
+        platformFields: { visibility: "private" },
+      }),
+      createPlatformVariant({
+        variantId: "variant-x",
+        itemId: "item-render-short",
+        platform: "twitter_x",
+        status: "approved",
+        platformFields: { visibility: "private" },
+      }),
+    ],
+  });
+  const platformFields: Record<string, Record<string, unknown>> = {};
+  const invoke = async <T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    if (command === "social_accounts") {
+      return [
+        {
+          id: "acct-tiktok",
+          provider: "tiktok",
+          capabilities: { uploadVideo: true },
+        },
+        {
+          id: "acct-x",
+          provider: "twitter_x",
+          capabilities: { uploadVideo: true },
+        },
+      ] as T;
+    }
+    if (command === "social_bind_target") {
+      const bindArgs = args?.args as {
+        variantId: string;
+        platformFields?: Record<string, unknown>;
+      };
+      platformFields[bindArgs.variantId] = bindArgs.platformFields ?? {};
+      return { id: `target-${bindArgs.variantId}` } as T;
+    }
+    if (command === "social_validate_target") {
+      return { validationState: "valid" } as T;
+    }
+    if (command === "social_schedule_target") {
+      return { id: "job-server" } as T;
+    }
+    if (command === "social_upload_artifact") {
+      return undefined as T;
+    }
+    throw new Error(`unexpected command ${command}`);
+  };
+
+  await publishCampaignViaServer(shortCampaign, [shortEntry], invoke, {
+    scheduledFor: 1_800,
+  });
+
+  assert.deepEqual(platformFields["variant-tiktok"], {
+    privacy: "private",
+    title: "Short clip",
+    disableDuet: false,
+    disableComment: false,
+    disableStitch: false,
+  });
+  assert.deepEqual(platformFields["variant-x"], {
+    title: "Short clip",
+  });
 }
 
 // Server-backed campaign publishing binds the account selected on the render.
@@ -430,6 +540,22 @@ const publishedSnapshot = {
     (c) => c.command === "poll_upload_states",
   ).length;
   assert.ok(pollCount >= 2, "polled until terminal state");
+}
+
+// Action-needed upload states are terminal for polling; user recovery happens
+// through reconnect/retry controls rather than continued background polling.
+{
+  const { invoke, calls } = recordingInvoke({
+    poll_upload_states: [requiresActionSnapshot],
+  });
+  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
+    sleep: noSleep,
+    maxPollTicks: 10,
+  });
+  const pollCount = calls.filter(
+    (c) => c.command === "poll_upload_states",
+  ).length;
+  assert.equal(pollCount, 1, "requires_action stops campaign upload polling");
 }
 
 // onStarted fires before any polling so the caller can map variant->job early.

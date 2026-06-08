@@ -124,6 +124,28 @@ assert.deepEqual(
     title: "Post text",
   },
 );
+assert.deepEqual(
+  buildPlatformFieldsForPublish({
+    provider: "tiktok",
+    privacy: "private",
+    title: "TikTok caption",
+    description: "Ignored unused description",
+    tagsInput: "ignored",
+    thumbnailPath: "/tmp/ignored-thumb.jpg",
+    tiktokInteractions: {
+      disableDuet: true,
+      disableComment: false,
+      disableStitch: true,
+    },
+  }),
+  {
+    privacy: "private",
+    title: "TikTok caption",
+    disableDuet: true,
+    disableComment: false,
+    disableStitch: true,
+  },
+);
 
 // Terminal-state detection (drives passive polling — firing is server-side now).
 assert.equal(isTerminal("published"), true);
@@ -132,6 +154,6 @@ assert.equal(isTerminal("cancelled"), true);
 assert.equal(isTerminal("scheduled"), false);
 assert.equal(isTerminal("uploading"), false);
 assert.equal(isTerminal("processing"), false);
-assert.equal(isTerminal("requires_action"), false);
+assert.equal(isTerminal("requires_action"), true);
 
 console.log("social-model.test.ts: ok");

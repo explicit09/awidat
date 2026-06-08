@@ -281,10 +281,11 @@ export function schedulerMetadataFieldConfig(
 ): SchedulerMetadataFieldConfig {
   const isInstagram = provider === "instagram";
   const isTwitterX = provider === "twitter_x";
+  const isTikTok = provider === "tiktok";
   return {
     showTitle: !isInstagram,
     titleLabel: isTwitterX ? "Post text" : "Title",
-    showDescription: !isTwitterX,
+    showDescription: !isTwitterX && !isTikTok,
     descriptionLabel: isInstagram ? "Caption" : "Description",
     descriptionPlaceholder: isInstagram
       ? "Caption shown under the post"

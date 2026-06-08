@@ -45,10 +45,12 @@ pub struct MontageState {
     pub project_root: Mutex<Option<PathBuf>>,
     /// Thin authenticated HTTPS client of the `montage-social-server` (Phase 5).
     /// `None` until initialized in the Tauri `.setup()` hook from
-    /// `MONTAGE_SOCIAL_SERVER_URL` (+ `MONTAGE_SOCIAL_AUTH_TOKEN`); stays `None`
-    /// when the server URL is unconfigured, and the `social_*` commands then
-    /// surface a clear "social client not initialized" error. The desktop holds
-    /// no secrets — all token material lives server-side.
+    /// `MONTAGE_SOCIAL_SERVER_URL` plus either
+    /// `MONTAGE_SOCIAL_SUPABASE_ACCESS_TOKEN` (multi-user) or
+    /// `MONTAGE_SOCIAL_AUTH_TOKEN` (local dev); stays `None` when the server URL
+    /// is unconfigured, and the `social_*` commands then surface a clear
+    /// "social client not initialized" error. Provider token material still
+    /// lives server-side.
     pub social_client: Mutex<Option<crate::social_client::SocialClient>>,
     /// In-flight long jobs (yt-dlp / indexing) keyed by job-item id,
     /// so a `cancel_job` command can find them. Tracking by id rather
