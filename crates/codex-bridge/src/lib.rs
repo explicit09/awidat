@@ -189,18 +189,11 @@ pub struct CodexAppServer {
     request_handle: AppServerRequestHandle,
     /// Stable codex thread id (one per project lifecycle).
     thread_id: String,
-    /// Pre-rendered L1 skills catalog. Prepended to every `start_turn`
-    /// input so the agent sees the catalog per-turn (matching the
-    /// progressive-disclosure design in crates/core/src/skills.rs).
-    /// `None` when no skills are installed.
-    skills_catalog: Option<String>,
     /// Pre-rendered L1 recent-feedback fragment (Wave 5 C3). Lists the
-    /// user's most recent proposal rejections so the agent doesn't
-    /// repeat patterns the user just turned down. Prepended to every
-    /// `start_turn` input AHEAD of the skills catalog because feedback
-    /// is higher-priority behavioural context — "don't repeat these
-    /// rejections" comes before "here are your tools". `None` when the
-    /// rejection log is missing or empty.
+    /// user's most recent proposal rejections so the agent doesn't repeat
+    /// patterns the user just turned down. Prepended to each turn because it
+    /// is small behavioural context. `None` when the rejection log is missing
+    /// or empty.
     recent_feedback: Option<String>,
     /// Pending server-requests waiting for a desktop reply, keyed by
     /// the codex `item_id` we emitted to the renderer.
@@ -336,9 +329,9 @@ impl CodexAppServer {
         let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
 
         // 6. Start (or resume) the thread. The Montage per-format addendum
-        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides
-        //    on `developer_instructions` so codex's base prompt stays
-        //    intact while the editorial playbook layers on top.
+        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) and skills
+        //    catalog ride on `developer_instructions` so editorial context is
+        //    not resent or persisted as user text on every turn.
         //
         //    Resume path: when the desktop asks to continue an existing
         //    chat we call `thread/resume` against the stored thread_id.
@@ -346,6 +339,8 @@ impl CodexAppServer {
         //    (vendor/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
         //    and the resulting thread keeps the same id, so subsequent
         //    `turn/start` calls thread off the persisted history.
+        let developer_instructions =
+            compose_session_instructions(developer_instructions, skills_catalog);
         let thread_id = if let Some(resume_id) = resume_thread_id {
             let resume_response: ThreadResumeResponse = request_handle
                 .request_typed(ClientRequest::ThreadResume {
@@ -396,7 +391,6 @@ impl CodexAppServer {
         Ok(Self {
             request_handle,
             thread_id,
-            skills_catalog,
             recent_feedback,
             pending,
             resolve_tx,
@@ -412,24 +406,7 @@ impl CodexAppServer {
         input: String,
         model: Option<String>,
     ) -> Result<String, BridgeError> {
-        // Per-turn L1 fragments, prepended ahead of the user input so
-        // the agent sees them on every turn. Two fragments today:
-        //
-        //   1. Recent feedback (Wave 5 C3) — the user's most recent
-        //      rejections. Goes FIRST because it's behavioural
-        //      ("don't repeat these patterns") and the model reads
-        //      earlier context as higher priority.
-        //   2. Skills catalog (progressive disclosure, see
-        //      crates/core/src/skills.rs) — what tools / playbooks the
-        //      agent can call `load_skill(name=...)` for.
-        //
-        // Either may be `None`; when both are present the order on the
-        // wire is `<recent_feedback>…</recent_feedback>\n\n<skills_instructions>…</skills_instructions>\n\n<input>`.
-        let text = compose_turn_input(
-            self.recent_feedback.as_deref(),
-            self.skills_catalog.as_deref(),
-            &input,
-        );
+        let text = compose_turn_input(self.recent_feedback.as_deref(), &input);
         let response: TurnStartResponse = self
             .request_handle
             .request_typed(ClientRequest::TurnStart {
@@ -911,28 +888,35 @@ fn next_request_id() -> i64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Compose the per-turn text the agent sees: optional L1 fragments
+/// Compose the session instructions the agent sees once at thread
+/// start/resume. The skills catalog belongs here, not inside every user
+/// turn, otherwise simple prompts become large internal prompts and get
+/// persisted as user text in Codex rollouts.
+fn compose_session_instructions(
+    developer_instructions: Option<String>,
+    skills_catalog: Option<String>,
+) -> Option<String> {
+    match (developer_instructions, skills_catalog) {
+        (Some(dev), Some(skills)) => Some(format!("{}\n\n{}", dev.trim_end(), skills.trim())),
+        (Some(dev), None) => Some(dev),
+        (None, Some(skills)) => Some(skills),
+        (None, None) => None,
+    }
+}
+
+/// Compose the per-turn text the agent sees: optional recent feedback
 /// followed by the user input.
 ///
-/// Order on the wire — feedback FIRST, then skills, then input. Feedback
-/// is behavioural ("don't repeat these rejections"), and earlier prompt
-/// text is treated as higher priority by the model, so it leads. Skills
-/// are the catalog of available playbooks. Both fragments may be absent;
-/// when only one is set we drop the other entirely (no blank section).
+/// Recent feedback is behavioural ("don't repeat these rejections"), and
+/// earlier prompt text is treated as higher priority by the model, so it
+/// leads. When absent, we send the user's input as-is.
 ///
 /// Extracted from `CodexAppServer::start_turn` so the unit test can pin
 /// the exact composition without standing up the in-process app-server.
-fn compose_turn_input(
-    recent_feedback: Option<&str>,
-    skills_catalog: Option<&str>,
-    input: &str,
-) -> String {
-    let mut parts: Vec<&str> = Vec::with_capacity(3);
+fn compose_turn_input(recent_feedback: Option<&str>, input: &str) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(2);
     if let Some(fb) = recent_feedback {
         parts.push(fb);
-    }
-    if let Some(sk) = skills_catalog {
-        parts.push(sk);
     }
     parts.push(input);
     parts.join("\n\n")
@@ -1029,34 +1013,34 @@ mod tests {
 
 #[cfg(test)]
 mod compose_tests {
-    use super::compose_turn_input;
+    use super::{compose_session_instructions, compose_turn_input};
 
     #[test]
-    fn feedback_then_skills_then_input_in_order() {
-        let out = compose_turn_input(Some("<FB>"), Some("<SK>"), "hello");
-        // Feedback wins the lead; skills follow; input lands last.
-        let fb_at = out.find("<FB>").expect("feedback present");
-        let sk_at = out.find("<SK>").expect("skills present");
-        let input_at = out.find("hello").expect("input present");
-        assert!(fb_at < sk_at, "feedback must precede skills: {out}");
-        assert!(sk_at < input_at, "skills must precede input: {out}");
+    fn session_instructions_include_skills_once() {
+        let out = compose_session_instructions(Some("<DEV>".to_string()), Some("<SK>".to_string()))
+            .expect("instructions");
+        assert_eq!(out, "<DEV>\n\n<SK>");
     }
 
     #[test]
-    fn no_fragments_returns_input_only() {
-        let out = compose_turn_input(None, None, "hello");
-        assert_eq!(out, "hello");
-    }
-
-    #[test]
-    fn feedback_only_skips_skills_section() {
-        let out = compose_turn_input(Some("<FB>"), None, "hello");
+    fn turn_input_does_not_include_skills_catalog() {
+        let out = compose_turn_input(Some("<FB>"), "hello");
+        assert!(
+            !out.contains("<SK>"),
+            "skills must not ride per-turn: {out}"
+        );
         assert_eq!(out, "<FB>\n\nhello");
     }
 
     #[test]
-    fn skills_only_skips_feedback_section() {
-        let out = compose_turn_input(None, Some("<SK>"), "hello");
-        assert_eq!(out, "<SK>\n\nhello");
+    fn no_fragments_returns_input_only() {
+        let out = compose_turn_input(None, "hello");
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn feedback_only_prefixes_input() {
+        let out = compose_turn_input(Some("<FB>"), "hello");
+        assert_eq!(out, "<FB>\n\nhello");
     }
 }
