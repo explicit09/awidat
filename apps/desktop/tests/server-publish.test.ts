@@ -115,7 +115,6 @@ async function invoke<T>(
     "youtube:uploading",
     "youtube:processing",
     "youtube:published",
-    "youtube:published",
   ]);
   assert.deepEqual(result.states.youtube, {
     state: "published",
@@ -214,7 +213,6 @@ calls.length = 0;
     "youtube:uploading",
     "youtube:scheduled",
     "youtube:processing",
-    "youtube:published",
     "youtube:published",
   ]);
   assert.deepEqual(result.states.youtube, {
@@ -417,7 +415,6 @@ calls.length = 0;
   assert.deepEqual(updates, [
     "tiktok:uploading",
     "tiktok:processing",
-    "tiktok:published",
     "tiktok:published",
   ]);
   assert.deepEqual(result.states.tiktok, {

@@ -346,7 +346,6 @@ export async function publishRenderTargetsViaServer({
       ) {
         publishedUrls[provider] = states[provider].remote_url;
       }
-      onState?.(provider, states[provider]);
     } catch (error) {
       states[provider] = failed(error instanceof Error ? error.message : String(error));
       onState?.(provider, states[provider]);
