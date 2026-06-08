@@ -213,7 +213,7 @@ Expected:
 Run:
 
 ```bash
-rg -n "local-dev-token|local-internal-token|c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
+rg -n "local-dev-token|local-internal-token|<legacy-social-token-aead-key>|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
   crates/social-server/run-local.sh docs/social-server/README.md
 ```
 
@@ -247,7 +247,7 @@ Run:
 
 ```bash
 bash -n crates/social-server/run-local.sh
-rg -n "local-dev-token|local-internal-token|c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
+rg -n "local-dev-token|local-internal-token|<legacy-social-token-aead-key>|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
   crates/social-server/run-local.sh docs/social-server/README.md || true
 ```
 
@@ -271,7 +271,7 @@ Run:
 
 ```bash
 bash -n crates/social-server/run-local.sh
-rg -n "local-dev-token|local-internal-token|c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
+rg -n "local-dev-token|local-internal-token|<legacy-social-token-aead-key>|vgkocfbtkzmpklruqmsx|technologia-builder-network" \
   crates/social-server/run-local.sh docs/social-server/README.md || true
 git status --short
 ```
@@ -691,7 +691,7 @@ Run:
   echo
   echo "## Forbidden Public Defaults Scan"
   echo '```text'
-  rg -n "local-dev-token|local-internal-token|c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd|vgkocfbtkzmpklruqmsx|technologia-builder-network|app_EMoamEEZ73f0CkXaXp7hrann|installed Codex 0\\.128\\.0|requires a newer version" \
+  rg -n "local-dev-token|local-internal-token|<legacy-social-token-aead-key>|vgkocfbtkzmpklruqmsx|technologia-builder-network|app_EMoamEEZ73f0CkXaXp7hrann|installed Codex 0\\.128\\.0|requires a newer version" \
     crates/auth vendor/codex-rs/SOURCE vendor/codex-rs/login/src/auth vendor/codex-rs/models-manager/src vendor/codex-rs/exec/src vendor/codex-rs/analytics/src vendor/codex-rs/model-provider-info/src vendor/codex-rs/codex-api/src crates/social-server docs/social-server || true
   echo '```'
   echo

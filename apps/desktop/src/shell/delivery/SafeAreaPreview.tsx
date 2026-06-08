@@ -1,5 +1,5 @@
 import { Inline } from "../../ui";
-import podcastWide from "../assets/podcast-wide.jpg";
+import { MediaFramePlaceholder } from "../MediaFramePlaceholder";
 
 /**
  * Center column bottom — Safe-area preview rectangle with the
@@ -19,7 +19,7 @@ export function SafeAreaPreview() {
     <section className="border-t border-[var(--color-border-subtle)] p-2">
       <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] overflow-hidden">
         <div className="relative aspect-[16/6] w-full overflow-hidden bg-black">
-          <img src={podcastWide} alt="" className="absolute inset-0 h-full w-full object-cover opacity-55" />
+          <MediaFramePlaceholder tone="wide" className="absolute inset-0 opacity-55" />
           <div className="absolute inset-0 bg-black/30" />
           {/* YouTube 16:9 safe area */}
           <div className="absolute inset-[10%] border border-[rgba(239,68,68,0.55)]" />

@@ -1,3 +1,6 @@
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Repository-known false positives for current-tree secret scans"
 regexes = [
