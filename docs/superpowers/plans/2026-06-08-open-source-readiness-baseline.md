@@ -18,7 +18,7 @@ docs/social-server/README.md:232:| `SOCIAL_TOKEN_AEAD_KEY` | Phase 2 | 2 | 64 he
 docs/social-server/README.md:275:Store the output as `SOCIAL_TOKEN_AEAD_KEY`.  Pick a short key ID, e.g. `"k1"`.
 docs/social-server/README.md:283:  SOCIAL_TOKEN_AEAD_KEY="<64_hex_chars_from_step_1>" \
 docs/social-server/README.md:318:- [ ] `SOCIAL_TOKEN_AEAD_KEY` generated and set as Fly secret
-crates/social-server/run-local.sh:53:export SOCIAL_TOKEN_AEAD_KEY="${SOCIAL_TOKEN_AEAD_KEY:-c2e3e7c14a025d829f0411ce456f1ca01b3f546218bf21892b3dd7cc0d9efedd}"
+crates/social-server/run-local.sh:53:export SOCIAL_TOKEN_AEAD_KEY="${SOCIAL_TOKEN_AEAD_KEY:-<redacted-legacy-local-dev-key>}"
 crates/social-server/run-local.sh:76:# SUPABASE_URL=https://vgkocfbtkzmpklruqmsx.supabase.co  — for Storage signed URLs
 crates/auth/src/lib.rs:16://! ChatGPT sign-in reuses codex's first-party OAuth client id. OpenAI has
 vendor/codex-rs/login/src/auth/default_client.rs:141:    let build_version = "0.128.0";
