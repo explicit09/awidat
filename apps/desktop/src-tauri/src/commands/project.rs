@@ -467,15 +467,11 @@ pub(super) async fn tear_down_generated_media_watcher(state: &State<'_, MontageS
 /// out so the UI never offers a path that won't open.
 #[tauri::command]
 pub async fn recent_projects() -> Result<Vec<String>, String> {
-    let path = match recents_path() {
+    let paths = match recents_paths() {
         Some(p) => p,
         None => return Ok(Vec::new()),
     };
-    let bytes = match fs::read(&path).await {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("read recents: {e}")),
-    };
+    let bytes = read_first_existing_recents(&paths).await?;
     let raw: Vec<String> =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse recents: {e}"))?;
     let mut out = Vec::with_capacity(raw.len());
@@ -486,6 +482,17 @@ pub async fn recent_projects() -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+async fn read_first_existing_recents(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
+    for path in paths {
+        match fs::read(path).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("read recents: {e}")),
+        }
+    }
+    Ok(Vec::from(b"[]"))
 }
 
 /// Return one representative thumbnail frame for a project-manager tile.
@@ -809,7 +816,16 @@ pub async fn running_job_ids(state: State<'_, MontageState>) -> Result<Vec<Strin
 /// Returns `None` if the OS doesn't expose a config dir (we silently
 /// drop recents in that case rather than failing).
 fn recents_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("montage-desktop").join("recents.json"))
+    recents_paths().and_then(|paths| paths.into_iter().next())
+}
+
+fn recents_paths() -> Option<Vec<PathBuf>> {
+    dirs::config_dir().map(|d| {
+        vec![
+            d.join("montage-desktop").join("recents.json"),
+            d.join("awidat-desktop").join("recents.json"),
+        ]
+    })
 }
 
 /// Starter AGENTS.md identical to the CLI's. Kept inline rather than
@@ -936,6 +952,21 @@ mod tests {
             .await
             .unwrap();
         assert!(!recents.exists());
+    }
+
+    #[tokio::test]
+    async fn read_first_existing_recents_falls_back_to_legacy_awidat_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let montage = tmp.path().join("montage-desktop").join("recents.json");
+        let awidat = tmp.path().join("awidat-desktop").join("recents.json");
+        fs::create_dir_all(awidat.parent().unwrap()).await.unwrap();
+        fs::write(&awidat, br#"["/legacy/project"]"#).await.unwrap();
+
+        let bytes = read_first_existing_recents(&[montage, awidat])
+            .await
+            .unwrap();
+
+        assert_eq!(bytes, br#"["/legacy/project"]"#);
     }
 
     #[tokio::test]
