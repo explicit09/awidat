@@ -119,9 +119,8 @@ pub async fn run(args: SearchBrollArgs, _ctx: McpToolCtx) -> Result<String, Stri
 fn map_pexels_err(err: pexels::PexelsError) -> String {
     match err {
         pexels::PexelsError::MissingApiKey => {
-            "search_broll: PEXELS_API_KEY not set. Tell the user: \
-             store the key with `montage config set pexels` or export PEXELS_API_KEY \
-             then retry."
+            "search_broll: Pexels is needed for stock b-roll. Add your Pexels key \
+             in Settings -> Advanced -> Provider Keys, then retry."
                 .into()
         }
         pexels::PexelsError::Api { status: 429, .. } => {
@@ -146,6 +145,6 @@ b-roll). Tell the user the previews; they pick. Then call \
 \"loneliness\". Pexels' relevance ranker is concrete-noun friendly. \
 Default per_page=5; cap 30 — top-3 is usually all the user wants \
 to see.\
-\n\nRequires PEXELS_API_KEY in env or the OS keychain. Calling \
-without a key surfaces a setup prompt rather than crashing.\
+\n\nRequires a Pexels key. Calling without one surfaces a setup prompt \
+for Settings -> Advanced -> Provider Keys rather than crashing.\
 ";

@@ -50,6 +50,6 @@ pub async fn run(args: FetchXTrendContextArgs, _ctx: McpToolCtx) -> Result<Strin
 
 pub const DESCRIPTION: &str = "\
 Fetch current X trend signals for one or more episode-topic queries and return \
-a trend_context payload suitable for plan_short_form_review. Uses X_BEARER_TOKEN \
-or keychain account x_bearer_token for read access. Publishing is not performed \
+a trend_context payload suitable for plan_short_form_review. Uses the configured \
+X bearer token for read access. Publishing is not performed \
 here; Twitter/X posting remains handled by the social publishing provider.";

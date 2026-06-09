@@ -300,7 +300,9 @@ async fn fetch_video_by_id(
     })?
     .ok_or_else(|| {
         FunctionCallError::RespondToModel(
-            "use_broll: PEXELS_API_KEY not set in env or keychain.".into(),
+            "use_broll: Pexels is needed for stock b-roll. Add your Pexels key \
+             in Settings -> Advanced -> Provider Keys."
+                .into(),
         )
     })?;
 
@@ -384,8 +386,8 @@ fn build_edl_fragment(
 fn map_pexels_err(err: pexels::PexelsError) -> FunctionCallError {
     match err {
         pexels::PexelsError::MissingApiKey => FunctionCallError::RespondToModel(
-            "use_broll: PEXELS_API_KEY not set. Set the env var or store via OS keychain \
-             (service 'montage', account 'pexels_api_key')."
+            "use_broll: Pexels is needed for stock b-roll. Add your Pexels key \
+             in Settings -> Advanced -> Provider Keys, then retry."
                 .into(),
         ),
         pexels::PexelsError::Api { status: 404, .. } => FunctionCallError::RespondToModel(

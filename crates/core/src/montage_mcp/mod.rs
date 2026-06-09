@@ -1223,9 +1223,9 @@ Never burns captions into the picture.",
     #[tool(
         description = "\
 Fetch current X trend signals for one or more episode-topic queries and return \
-a trend_context payload suitable for `plan_short_form_review`. Uses \
-X_BEARER_TOKEN or keychain account x_bearer_token for read access. If \
-credentials are missing, returns a setup/status payload instead of failing. \
+a trend_context payload suitable for `plan_short_form_review`. Uses the \
+configured X bearer token for read access. If credentials are missing, \
+returns a setup/status payload instead of failing. \
 Publishing is not performed here; Twitter/X posting remains handled by the \
 social publishing provider.",
         annotations(destructive_hint = true, read_only_hint = false)
@@ -1756,7 +1756,7 @@ surfaced by `find_broll_opportunities` (or any other moment you think \
 wants b-roll). Tell the user the previews; they pick. Then call \
 `use_broll(pexels_id, ...)` to download + place. Be specific in your \
 query: \"empty city street at dawn\" beats \"loneliness\". Default \
-per_page=5; cap 30. Requires PEXELS_API_KEY in env or the OS keychain.",
+per_page=5; cap 30. Requires a Pexels key in Provider Keys.",
         annotations(read_only_hint = true)
     )]
     pub async fn search_broll(
@@ -2476,7 +2476,7 @@ view_episode shows they're missing.",
 Start a generated-media job and write the local generated-media \
 registry. Provider 'mock' creates an offline completed placeholder \
 record suitable for tests. Provider 'openrouter' submits an \
-asynchronous OpenRouter video generation job using OPENROUTER_API_KEY. \
+asynchronous OpenRouter video generation job using the configured OpenRouter key. \
 Provider 'seedance' is not direct; use OpenRouter or a future \
 dedicated adapter.",
         annotations(destructive_hint = true, read_only_hint = false)
