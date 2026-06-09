@@ -30,6 +30,8 @@ trap cleanup EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$cert_path"
 
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+security default-keychain -s "$keychain_path"
+security list-keychains -d user -s "$keychain_path"
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
 security import "$cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain_path"
