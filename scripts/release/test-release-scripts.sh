@@ -110,6 +110,24 @@ test_checksums_writes_sha256_files() {
   pass "checksums are written"
 }
 
+test_import_certificate_requires_env() {
+  local output
+  if output="$(env -i bash "$SCRIPT_DIR/import-apple-certificate.sh" 2>&1)"; then
+    fail "certificate import should require env"
+  fi
+  assert_contains "$output" "missing required environment variable: APPLE_CERTIFICATE" "certificate import requires env"
+  pass "certificate import requires env"
+}
+
+test_notarize_requires_dmg_path() {
+  local output
+  if output="$(bash "$SCRIPT_DIR/notarize-dmg.sh" 2>&1)"; then
+    fail "notarize usage should fail without path"
+  fi
+  assert_contains "$output" "usage:" "notarize script prints usage"
+  pass "notarize script prints usage"
+}
+
 test_required_env_reports_missing_name
 test_required_env_accepts_present_values
 test_verify_sidecars_rejects_missing_files
@@ -117,3 +135,5 @@ test_verify_sidecars_rejects_stub
 test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
 test_checksums_writes_sha256_files
+test_import_certificate_requires_env
+test_notarize_requires_dmg_path
