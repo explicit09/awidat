@@ -83,6 +83,7 @@ jobs:
         run: scripts/release/import-apple-certificate.sh
 
       - name: Build signed DMG
+        timeout-minutes: 60
         run: pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles dmg
 
       - name: Stage DMG
