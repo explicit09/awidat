@@ -12,11 +12,18 @@
 //!
 //! # Order of resolution
 //!
-//! [`get`] tries env var first, then keychain. Env-first because:
+//! [`get`] tries env var first, then the cached provider vault. Env-first because:
 //! 1. CI and ephemeral runners only have env vars; keychain calls error out.
 //! 2. Override-by-env is the universal "set this for this one run" idiom.
+//!
+//! Legacy per-key keychain reads are available only through
+//! [`get_legacy_keychain`] for explicit import flows.
 
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{OnceLock, RwLock},
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -28,6 +35,10 @@ pub const SERVICE: &str = "montage";
 pub const LEGACY_SERVICE: &str = "awidat";
 /// Account name used to store the serialized provider secret vault.
 pub const VAULT_ACCOUNT: &str = "secrets_vault";
+
+type VaultCache = OnceLock<RwLock<Option<SecretVault>>>;
+
+static CACHED_VAULT: VaultCache = OnceLock::new();
 
 /// Versioned provider secret vault.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -139,6 +150,9 @@ pub enum SecretError {
     /// Serialized provider vault data could not be decoded.
     #[error("provider key vault is corrupt: {message}")]
     CorruptVault { message: String },
+    /// In-process provider vault cache could not be read or updated.
+    #[error("provider key vault cache error: {message}")]
+    Cache { message: String },
 }
 
 trait SecretBackend {
@@ -164,11 +178,89 @@ impl SecretBackend for KeychainSecretBackend {
     }
 }
 
-/// Fetch a secret. Tries `env_var_name` first, then the OS keychain entry
-/// `(SERVICE, account)`, then the legacy `(LEGACY_SERVICE, account)`.
+/// Fetch a secret. Tries `env_var_name` first, then the cached provider vault.
 /// Returns `Ok(None)` if none are set —
 /// callers decide whether absence is fatal.
 pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
+    if let Ok(value) = std::env::var(env_var_name)
+        && !value.is_empty()
+    {
+        trace!(env_var = env_var_name, "secret resolved from env var");
+        return Ok(Some(value));
+    }
+
+    if let Some(value) = cached_vault_value(account)? {
+        trace!(account, "secret resolved from provider vault");
+        return Ok(Some(value));
+    }
+
+    Ok(None)
+}
+
+fn cached_vault_value(account: &str) -> Result<Option<String>, SecretError> {
+    cached_vault_value_with_backend(&CACHED_VAULT, &KeychainSecretBackend, account)
+}
+
+fn cached_vault_value_with_backend(
+    cache: &VaultCache,
+    backend: &impl SecretBackend,
+    account: &str,
+) -> Result<Option<String>, SecretError> {
+    let cached = cache.get_or_init(|| RwLock::new(None));
+    {
+        let vault = cached.read().map_err(|_| SecretError::Cache {
+            message: "provider vault cache poisoned".to_string(),
+        })?;
+        if let Some(vault) = vault.as_ref() {
+            return Ok(vault.get(account).map(str::to_string));
+        }
+    }
+
+    let mut cached = cached.write().map_err(|_| SecretError::Cache {
+        message: "provider vault cache poisoned".to_string(),
+    })?;
+    if let Some(vault) = cached.as_ref() {
+        return Ok(vault.get(account).map(str::to_string));
+    }
+    let vault = load_vault_with_backend(backend)?;
+    *cached = Some(vault);
+    let vault = cached.as_ref().ok_or_else(|| SecretError::Cache {
+        message: "provider vault cache was not initialized after load".to_string(),
+    })?;
+    Ok(vault.get(account).map(str::to_string))
+}
+
+#[cfg(test)]
+fn get_with_backend_and_vault(
+    backend: &impl SecretBackend,
+    env_value: Option<&str>,
+    env_var_name: &str,
+    account: &str,
+) -> Result<Option<String>, SecretError> {
+    if let Some(value) = env_value.filter(|value| !value.is_empty()) {
+        trace!(env_var = env_var_name, "secret resolved from env var");
+        return Ok(Some(value.to_string()));
+    }
+
+    let vault = load_vault_with_backend(backend)?;
+    if let Some(value) = vault.get(account) {
+        trace!(account, "secret resolved from provider vault");
+        return Ok(Some(value.to_string()));
+    }
+
+    Ok(None)
+}
+
+/// Fetch a secret using the legacy per-key keychain layout. Tries
+/// `env_var_name` first, then `(SERVICE, account)`, then
+/// `(LEGACY_SERVICE, account)`.
+///
+/// This exists for explicit import flows only. General provider resolution
+/// should use [`get`], which reads env vars and the provider vault.
+pub fn get_legacy_keychain(
+    env_var_name: &str,
+    account: &str,
+) -> Result<Option<String>, SecretError> {
     if let Ok(value) = std::env::var(env_var_name)
         && !value.is_empty()
     {
@@ -235,6 +327,14 @@ fn save_vault_with_backend(
     backend: &impl SecretBackend,
     vault: &SecretVault,
 ) -> Result<(), SecretError> {
+    save_vault_with_backend_and_cache(backend, vault, &CACHED_VAULT)
+}
+
+fn save_vault_with_backend_and_cache(
+    backend: &impl SecretBackend,
+    vault: &SecretVault,
+    cache: &VaultCache,
+) -> Result<(), SecretError> {
     let json = vault.to_json().map_err(|e| SecretError::CorruptVault {
         message: e.to_string(),
     })?;
@@ -243,7 +343,17 @@ fn save_vault_with_backend(
         .map_err(|e| SecretError::Backend {
             account: VAULT_ACCOUNT.to_string(),
             source: e,
-        })
+        })?;
+    update_cached_vault(cache, vault)?;
+    Ok(())
+}
+
+fn update_cached_vault(cache: &VaultCache, vault: &SecretVault) -> Result<(), SecretError> {
+    let cached = cache.get_or_init(|| RwLock::new(None));
+    *cached.write().map_err(|_| SecretError::Cache {
+        message: "provider vault cache poisoned".to_string(),
+    })? = Some(vault.clone());
+    Ok(())
 }
 
 /// Store a secret in the keychain under `(SERVICE, account)`. Overwrites
@@ -316,6 +426,7 @@ mod tests {
     #[derive(Default)]
     struct MemorySecretBackend {
         entries: RefCell<BTreeMap<String, String>>,
+        get_calls: RefCell<Vec<String>>,
         fail_get: bool,
         fail_set: bool,
     }
@@ -339,6 +450,14 @@ mod tests {
             self.entries.borrow().keys().cloned().collect()
         }
 
+        fn get_calls(&self) -> Vec<String> {
+            self.get_calls.borrow().clone()
+        }
+
+        fn clear_get_calls(&self) {
+            self.get_calls.borrow_mut().clear();
+        }
+
         fn insert(&self, account: &str, value: &str) {
             self.entries
                 .borrow_mut()
@@ -352,6 +471,7 @@ mod tests {
 
     impl SecretBackend for MemorySecretBackend {
         fn get_password(&self, account: &str) -> Result<Option<String>, keyring::Error> {
+            self.get_calls.borrow_mut().push(account.to_string());
             if self.fail_get {
                 return Err(synthetic_keyring_error("get"));
             }
@@ -486,6 +606,125 @@ mod tests {
         vault.set(accounts::HF_TOKEN, "vault-hf");
         let resolved = resolve_from_env_or_vault(Some(""), &vault, accounts::HF_TOKEN);
         assert_eq!(resolved.as_deref(), Some("vault-hf"));
+    }
+
+    #[test]
+    fn get_with_loaded_vault_does_not_read_legacy_keychain() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let mut vault = SecretVault::default();
+        vault.set(accounts::PEXELS_API_KEY, "vault-pexels");
+        let vault_json = vault.to_json().map_err(|e| SecretError::CorruptVault {
+            message: e.to_string(),
+        })?;
+        backend.insert(VAULT_ACCOUNT, &vault_json);
+        backend.insert(accounts::PEXELS_API_KEY, "legacy-pexels");
+
+        let resolved = get_with_backend_and_vault(
+            &backend,
+            None,
+            env_vars::PEXELS_API_KEY,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        assert_eq!(resolved.as_deref(), Some("vault-pexels"));
+        let get_calls = backend.get_calls();
+        assert!(get_calls.contains(&VAULT_ACCOUNT.to_string()));
+        assert!(!get_calls.contains(&accounts::PEXELS_API_KEY.to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn save_vault_updates_initialized_cache() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let cache = OnceLock::new();
+        let mut old_vault = SecretVault::default();
+        old_vault.set(accounts::PEXELS_API_KEY, "old-pexels");
+        update_cached_vault(&cache, &old_vault)?;
+
+        let mut new_vault = SecretVault::default();
+        new_vault.set(accounts::PEXELS_API_KEY, "new-pexels");
+        save_vault_with_backend_and_cache(&backend, &new_vault, &cache)?;
+
+        let resolved = cached_vault_value_with_backend(
+            &cache,
+            &backend,
+            accounts::PEXELS_API_KEY,
+        )?;
+        assert_eq!(resolved.as_deref(), Some("new-pexels"));
+        Ok(())
+    }
+
+    #[test]
+    fn save_vault_initializes_absent_cache_for_subsequent_lookup() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let cache = OnceLock::new();
+        let mut new_vault = SecretVault::default();
+        new_vault.set(accounts::PEXELS_API_KEY, "new-pexels");
+        save_vault_with_backend_and_cache(&backend, &new_vault, &cache)?;
+
+        let mut old_vault = SecretVault::default();
+        old_vault.set(accounts::PEXELS_API_KEY, "old-pexels");
+        let old_json = old_vault.to_json().map_err(|e| SecretError::CorruptVault {
+            message: e.to_string(),
+        })?;
+        backend.insert(VAULT_ACCOUNT, &old_json);
+        backend.clear_get_calls();
+
+        let resolved = cached_vault_value_with_backend(
+            &cache,
+            &backend,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        assert_eq!(resolved.as_deref(), Some("new-pexels"));
+        assert!(!backend.get_calls().contains(&VAULT_ACCOUNT.to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn first_lookup_uses_cache_on_subsequent_calls() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let cache = OnceLock::new();
+        let mut first_vault = SecretVault::default();
+        first_vault.set(accounts::PEXELS_API_KEY, "first-pexels");
+        let first_json = first_vault
+            .to_json()
+            .map_err(|e| SecretError::CorruptVault {
+                message: e.to_string(),
+            })?;
+        backend.insert(VAULT_ACCOUNT, &first_json);
+
+        let first = cached_vault_value_with_backend(
+            &cache,
+            &backend,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        let mut second_vault = SecretVault::default();
+        second_vault.set(accounts::PEXELS_API_KEY, "second-pexels");
+        let second_json = second_vault
+            .to_json()
+            .map_err(|e| SecretError::CorruptVault {
+                message: e.to_string(),
+            })?;
+        backend.insert(VAULT_ACCOUNT, &second_json);
+        let second = cached_vault_value_with_backend(
+            &cache,
+            &backend,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        assert_eq!(first.as_deref(), Some("first-pexels"));
+        assert_eq!(second.as_deref(), Some("first-pexels"));
+        assert_eq!(
+            backend
+                .get_calls()
+                .into_iter()
+                .filter(|account| account == VAULT_ACCOUNT)
+                .count(),
+            1
+        );
+        Ok(())
     }
 
     #[test]
