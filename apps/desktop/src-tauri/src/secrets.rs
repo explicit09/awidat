@@ -25,16 +25,13 @@
 //! that changes across rebuilds, so macOS prompts on every launch
 //! once the user clicks "Always Allow" for a given codesign.
 //!
-//! We default to prefetching in both release AND debug builds. The
-//! previous opt-in default left dev users running with keychain
-//! secrets that never reached subprocesses, so features that
-//! depended on them (e.g. whisper-mcp's pyannote diarization gated
-//! on HF_TOKEN) silently skipped — and the symptom was a "Speaker
-//! diarization: Missing" row in the UI with no clue why.
+//! Release builds prefetch by default so subprocesses inherit secrets
+//! without extra setup. Debug builds do not: a `cargo run` / `tauri
+//! dev` binary's ad-hoc signature changes often enough that eager
+//! startup reads can produce a burst of macOS Keychain prompts.
 //!
-//! Opt out via `MONTAGE_PREFETCH_KEYCHAIN=0` if the prompt-per-launch
-//! is genuinely worse than losing the secrets. Setting the key in
-//! shell env (e.g. `export HF_TOKEN=...`) also avoids both the
+//! Override via `MONTAGE_PREFETCH_KEYCHAIN=1` or `0`. Setting the key
+//! in shell env (e.g. `export HF_TOKEN=...`) also avoids both the
 //! prompt and the keychain hit entirely.
 
 use std::sync::OnceLock;
@@ -105,13 +102,39 @@ pub fn resolve_at_startup() {
 }
 
 fn prefetch_enabled() -> bool {
-    // Opt out via env var. Empty string is treated as "not set" so
-    // shell defaults that pass through empty values don't disable.
-    matches!(
-        std::env::var("MONTAGE_PREFETCH_KEYCHAIN")
-            .ok()
-            .as_deref()
-            .filter(|s| !s.is_empty()),
-        None | Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
-    )
+    prefetch_enabled_for(std::env::var("MONTAGE_PREFETCH_KEYCHAIN").ok().as_deref())
+}
+
+fn prefetch_enabled_for(value: Option<&str>) -> bool {
+    // Empty string is treated as "not set" so shell defaults that pass
+    // through empty values don't force a choice.
+    match value.filter(|s| !s.is_empty()) {
+        None => default_prefetch_enabled(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
+        Some(_) => false,
+    }
+}
+
+fn default_prefetch_enabled() -> bool {
+    !cfg!(debug_assertions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefetch_enabled_for;
+
+    #[test]
+    fn debug_builds_do_not_prefetch_keychain_by_default() {
+        if cfg!(debug_assertions) {
+            assert!(!prefetch_enabled_for(None));
+        }
+    }
+
+    #[test]
+    fn explicit_prefetch_env_overrides_debug_default() {
+        assert!(prefetch_enabled_for(Some("1")));
+        assert!(prefetch_enabled_for(Some("yes")));
+        assert!(!prefetch_enabled_for(Some("0")));
+        assert!(!prefetch_enabled_for(Some("false")));
+    }
 }
