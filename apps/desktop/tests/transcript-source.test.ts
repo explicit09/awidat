@@ -177,7 +177,7 @@ function snapshotWithClips(
   );
 }
 
-// Fully-inside-one-clip range → Split + Split + Delete.
+// Fully-inside-one-clip range → Split + Split + Ripple Delete.
 {
   const snap = snapshotWithClips([
     makeClipItem({
@@ -193,10 +193,10 @@ function snapshotWithClips(
     sourceStart: 10,
     sourceEnd: 20,
   });
-  assert.equal(ops.length, 3, "expect 3 ops (split, split, delete)");
+  assert.equal(ops.length, 3, "expect 3 ops (split, split, ripple delete)");
   assert.equal(ops[0].kind, "split_clip");
   assert.equal(ops[1].kind, "split_clip");
-  assert.equal(ops[2].kind, "delete_clip");
+  assert.equal(ops[2].kind, "ripple_delete");
   // First split anchors the parent clip at the range start.
   assert.deepEqual(
     ops[0],
@@ -216,12 +216,13 @@ function snapshotWithClips(
       atS: 20,
     },
   );
-  // Delete drops the middle piece (`<parent>-b` after the second
-  // split's left-half names it).
+  // Ripple delete drops the middle piece (`<parent>-b` after the
+  // second split's left-half names it), closes the timeline gap, and
+  // lets the backend remove linked A/V siblings.
   assert.deepEqual(
     ops[2],
     {
-      kind: "delete_clip",
+      kind: "ripple_delete",
       anchor: { kind: "clip_uuid", uuid: "clip-a-b" },
     },
   );
