@@ -28,9 +28,6 @@ jobs:
             artifact_name: Montage-x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: "-C debuginfo=0"
@@ -58,6 +55,9 @@ jobs:
 
       - name: Refuse missing release secrets
         env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
@@ -104,6 +104,10 @@ jobs:
           cp "$dmg" "$artifact_dir/${{ matrix.artifact_name }}.dmg"
 
       - name: Notarize and staple DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: scripts/release/notarize-dmg.sh "release-artifacts/${{ matrix.artifact_name }}.dmg"
 
       - name: Compute checksums
