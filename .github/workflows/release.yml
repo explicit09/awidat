@@ -1,0 +1,156 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS DMG (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+            artifact_name: Montage-aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            artifact_name: Montage-x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Refuse missing release secrets
+        run: |
+          scripts/release/check-required-env.sh \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            KEYCHAIN_PASSWORD
+
+      - name: Install desktop dependencies
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+
+      - name: Fetch desktop sidecars
+        run: |
+          make desktop-yt-dlp TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-codex TARGET_TRIPLE=${{ matrix.target }}
+
+      - name: Verify desktop sidecars
+        run: scripts/release/verify-sidecars.sh ${{ matrix.target }}
+
+      - name: Import Apple certificate
+        run: scripts/release/import-apple-certificate.sh
+
+      - name: Build signed DMG
+        run: pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Stage DMG
+        run: |
+          set -euo pipefail
+          artifact_dir="release-artifacts"
+          bundle_dir="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          mkdir -p "$artifact_dir"
+          dmg="$(find "$bundle_dir" -maxdepth 1 -type f -name '*.dmg' | sort | head -n 1)"
+          if [[ -z "$dmg" ]]; then
+            echo "no DMG found in $bundle_dir" >&2
+            exit 1
+          fi
+          cp "$dmg" "$artifact_dir/${{ matrix.artifact_name }}.dmg"
+
+      - name: Notarize and staple DMG
+        run: scripts/release/notarize-dmg.sh "release-artifacts/${{ matrix.artifact_name }}.dmg"
+
+      - name: Compute checksums
+        run: scripts/release/checksums.sh release-artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-artifacts/*
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    needs: build-macos
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.dmg' -o -name '*.sha256' \) -exec cp {} release-assets/ \;
+          required_assets=(
+            Montage-aarch64-apple-darwin.dmg
+            Montage-aarch64-apple-darwin.dmg.sha256
+            Montage-x86_64-apple-darwin.dmg
+            Montage-x86_64-apple-darwin.dmg.sha256
+          )
+          for asset in "${required_assets[@]}"; do
+            if [[ ! -f "release-assets/$asset" ]]; then
+              echo "missing required release asset: $asset" >&2
+              exit 1
+            fi
+          done
+          asset_list="$(mktemp)"
+          find release-assets -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.sha256' \) \
+            | sort > "$asset_list"
+          diff -u <(printf '%s\n' "${required_assets[@]}" | sed 's#^#release-assets/#' | sort) "$asset_list"
+          cat \
+            release-assets/Montage-aarch64-apple-darwin.dmg.sha256 \
+            release-assets/Montage-x86_64-apple-darwin.dmg.sha256 \
+            > release-assets/checksums.txt
+          ls -la release-assets
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
