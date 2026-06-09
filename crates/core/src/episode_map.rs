@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use montage_proto::otio::{StackChild, TrackChild};
+use montage_proto::otio::{Stack, StackChild, Track, TrackChild};
 use montage_proto::project::Project;
 
 /// Render the project into a compact textual map.
@@ -235,25 +235,57 @@ fn timeline_summary(project: &Project) -> (usize, f64, usize) {
         let StackChild::Track(track) = sc else {
             continue;
         };
+        total_dur = total_dur.max(track_duration_s(track));
         for tc in &track.children {
             if let TrackChild::Clip(clip) = tc {
                 clip_count += 1;
-                if let Some(r) = &clip.source_range {
-                    total_dur += r.duration.to_seconds();
-                    if let MediaReference::External(ExternalReference {
+                if let Some(r) = &clip.source_range
+                    && let MediaReference::External(ExternalReference {
                         available_range: Some(avail),
                         ..
                     }) = &clip.media_reference
-                    {
-                        if r.duration.to_seconds() + 1e-3 < avail.duration.to_seconds() {
-                            trimmed += 1;
-                        }
-                    }
+                    && r.duration.to_seconds() + 1e-3 < avail.duration.to_seconds()
+                {
+                    trimmed += 1;
                 }
             }
         }
     }
     (clip_count, total_dur, trimmed)
+}
+
+fn stack_duration_s(stack: &Stack) -> f64 {
+    stack
+        .children
+        .iter()
+        .map(|child| match child {
+            StackChild::Track(track) => track_duration_s(track),
+            StackChild::Stack(stack) => stack_duration_s(stack),
+            StackChild::Clip(clip) => clip
+                .source_range
+                .as_ref()
+                .map(|range| range.duration.to_seconds())
+                .unwrap_or(0.0),
+            StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+        })
+        .fold(0.0, f64::max)
+}
+
+fn track_duration_s(track: &Track) -> f64 {
+    track.children.iter().map(track_child_duration_s).sum()
+}
+
+fn track_child_duration_s(child: &TrackChild) -> f64 {
+    match child {
+        TrackChild::Clip(clip) => clip
+            .source_range
+            .as_ref()
+            .map(|range| range.duration.to_seconds())
+            .unwrap_or(0.0),
+        TrackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+        TrackChild::Transition(_) => 0.0,
+        TrackChild::Stack(stack) => stack_duration_s(stack),
+    }
 }
 
 /// Recursively walk `dir` collecting `*.json` files. Tiny — we don't
@@ -312,6 +344,42 @@ mod tests {
         // No whisper / topic sidecars — those rows must be absent.
         assert!(!map.contains("Speakers:"));
         assert!(!map.contains("Topics:"));
+    }
+
+    #[test]
+    fn render_counts_episode_duration_as_longest_track_not_sum_of_linked_av() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut timeline = Timeline::empty("linked-av");
+
+        let mut video = Track::empty("V1", TrackKind::Video);
+        let mut video_clip = Clip::empty("video".to_string());
+        video_clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/interview.mp4"));
+        video_clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(180.0 * 24.0, 24.0),
+        ));
+        video.children.push(TrackChild::Clip(video_clip));
+
+        let mut audio = Track::empty("A1", TrackKind::Audio);
+        let mut audio_clip = Clip::empty("audio".to_string());
+        audio_clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/interview.mp4"));
+        audio_clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(48_000.0),
+            RationalTime::new(120.0 * 48_000.0, 48_000.0),
+        ));
+        audio.children.push(TrackChild::Clip(audio_clip));
+
+        timeline.tracks.children.push(StackChild::Track(video));
+        timeline.tracks.children.push(StackChild::Track(audio));
+        project.timeline = timeline;
+
+        let map = render(&project, dir.path());
+        assert!(map.contains("2 clip(s)"));
+        assert!(map.contains("180.00s total"), "{map}");
+        assert!(!map.contains("300.00s total"), "{map}");
     }
 
     #[test]
