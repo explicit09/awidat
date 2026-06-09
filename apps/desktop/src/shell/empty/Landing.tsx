@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { Clock3, FolderOpen, Import, MoreVertical, Plus, Search } from "lucide-react";
 import { BrandMark } from "../../brand/BrandMark";
 import { useProjectStore } from "../../app/state";
@@ -37,9 +37,16 @@ export function Landing() {
             const preview = await invoke<ProjectPreviewResponse | null>("project_preview_media", {
               path: project.path,
             });
-            return preview
-              ? [project.path, { kind: preview.kind, src: convertFileSrc(preview.path) }] as const
-              : null;
+            if (!preview) return null;
+            // Serve via the local media stream server, validated against the
+            // tile's OWN project (not the loaded one — Landing has none). The
+            // asset:// protocol used previously isn't wired into this window's
+            // capabilities, so convertFileSrc URLs silently failed to load.
+            const src = await invoke<string>("project_preview_url", {
+              projectPath: project.path,
+              mediaPath: preview.path,
+            });
+            return [project.path, { kind: preview.kind, src }] as const;
           } catch (err) {
             console.warn("project_preview_media failed", err);
             return null;
