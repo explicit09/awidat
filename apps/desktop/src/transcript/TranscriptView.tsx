@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Sparkles, Trash2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
 import { mediaStreamUrl } from "../media/mediaStreamUrl";
@@ -30,8 +31,8 @@ import {
   timelineTimeForSource,
   usePlaySegments,
 } from "../timeline/usePlaySegments";
-import { type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
+import { buildDeleteRangeOpsForStem } from "../shell/source/transcriptSourceLogic";
 import type {
   Transcript,
   TranscriptSegment,
@@ -90,6 +91,9 @@ type ComposedPlayback = { rowIdx: number; sourceTime: number | null };
 type ComposedSelection = {
   text: string;
   timelineStartS: number | undefined;
+  stem: string | undefined;
+  sourceStartS: number | undefined;
+  sourceEndS: number | undefined;
 };
 
 /** Read the browser's current selection inside the composed transcript
@@ -98,38 +102,77 @@ type ComposedSelection = {
  *  the `data-word-start` source time of the word the selection starts
  *  in, mapped through that row's clip placement; `undefined` when the
  *  start node isn't a resolvable word (the proposal still works, just
- *  unanchored). */
-function readComposedSelection(rows: ComposedRow[]): ComposedSelection | null {
+ *  unanchored). When word spans are available, also returns a source-time
+ *  range so the same selection can propose a timeline delete. */
+function readComposedSelection(
+  rows: ComposedRow[],
+  root: HTMLElement | null,
+): ComposedSelection | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed) return null;
   const text = selection.toString().replace(/\s+/g, " ").trim();
   if (!text) return null;
 
-  let node: Node | null = selection.anchorNode;
-  let wordEl: HTMLElement | null = null;
-  while (node) {
-    if (node instanceof HTMLElement) {
-      wordEl = node.closest("[data-word-start]") as HTMLElement | null;
-      if (wordEl) break;
-      const rowEl = node.closest("[data-row-idx]");
-      if (rowEl) break;
-    }
-    node = node.parentNode;
+  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  const selectedWords =
+    root && range
+      ? Array.from(
+          root.querySelectorAll<HTMLElement>("[data-composed-word-key]"),
+        ).filter((el) => range.intersectsNode(el))
+      : [];
+
+  if (selectedWords.length === 0) {
+    return {
+      text,
+      timelineStartS: undefined,
+      stem: undefined,
+      sourceStartS: undefined,
+      sourceEndS: undefined,
+    };
   }
 
-  let timelineStartS: number | undefined;
-  if (wordEl) {
-    const rowEl = wordEl.closest("[data-row-idx]");
-    const rowIdx = rowEl ? Number(rowEl.getAttribute("data-row-idx")) : NaN;
-    const sourceStart = Number(wordEl.getAttribute("data-word-start"));
-    const row = rows[rowIdx];
-    if (row && Number.isFinite(sourceStart)) {
-      timelineStartS =
-        row.playSegment.timelineStart +
-        (sourceStart - row.playSegment.sourceStart);
-    }
+  const first = selectedWords[0];
+  const last = selectedWords[selectedWords.length - 1];
+  const firstRow = rowForComposedWord(rows, first);
+  const lastRow = rowForComposedWord(rows, last);
+  const firstStart = Number(first.getAttribute("data-word-start"));
+  const lastEnd = Number(last.getAttribute("data-word-end"));
+  if (
+    !firstRow ||
+    !lastRow ||
+    firstRow.playSegment.proxyStem !== lastRow.playSegment.proxyStem ||
+    !Number.isFinite(firstStart) ||
+    !Number.isFinite(lastEnd)
+  ) {
+    return {
+      text,
+      timelineStartS: undefined,
+      stem: undefined,
+      sourceStartS: undefined,
+      sourceEndS: undefined,
+    };
   }
-  return { text, timelineStartS };
+
+  const sourceStartS = Math.min(firstStart, lastEnd);
+  const sourceEndS = Math.max(firstStart, lastEnd);
+  return {
+    text,
+    timelineStartS:
+      firstRow.playSegment.timelineStart +
+      (sourceStartS - firstRow.playSegment.sourceStart),
+    stem: firstRow.playSegment.proxyStem,
+    sourceStartS,
+    sourceEndS,
+  };
+}
+
+function rowForComposedWord(
+  rows: ComposedRow[],
+  wordEl: HTMLElement,
+): ComposedRow | null {
+  const key = wordEl.getAttribute("data-composed-word-key") ?? "";
+  const rowIdx = Number(key.split(":")[0]);
+  return Number.isFinite(rowIdx) ? rows[rowIdx] ?? null : null;
 }
 
 function TimelineComposedTranscript({
@@ -147,6 +190,9 @@ function TimelineComposedTranscript({
   // the selection starts in. `null` hides the action button.
   const [composedSelection, setComposedSelection] =
     useState<ComposedSelection | null>(null);
+  const [composedSelectionError, setComposedSelectionError] = useState<
+    string | null
+  >(null);
 
   // Ensure every stem on the timeline is loaded into the transcript
   // store. The store already de-dupes in-flight loads and caches
@@ -280,10 +326,43 @@ function TimelineComposedTranscript({
         </span>
         <span className="transcript-meta-right">
           {composedSelection ? (
-            <button
-              type="button"
-              className="transcript-action-button"
-              onClick={() => {
+            <TranscriptSelectionActions
+              error={composedSelectionError}
+              onDelete={() => {
+                if (
+                  !composedSelection.stem ||
+                  composedSelection.sourceStartS === undefined ||
+                  composedSelection.sourceEndS === undefined
+                ) {
+                  setComposedSelectionError(
+                    "Select aligned words from one timeline source.",
+                  );
+                  return;
+                }
+                const ops = buildDeleteRangeOpsForStem({
+                  snapshot: useTimelineStore.getState().snapshot,
+                  stem: composedSelection.stem,
+                  sourceStart: composedSelection.sourceStartS,
+                  sourceEnd: composedSelection.sourceEndS,
+                });
+                if (ops.length === 0) {
+                  setComposedSelectionError(
+                    "Selection must sit inside one timeline clip.",
+                  );
+                  return;
+                }
+                editorDispatch
+                  .proposeUserEdit(ops)
+                  .then(() => {
+                    window.getSelection()?.removeAllRanges();
+                    setComposedSelection(null);
+                    setComposedSelectionError(null);
+                  })
+                  .catch((err: unknown) => {
+                    setComposedSelectionError(String(err));
+                  });
+              }}
+              onVisualSupport={() => {
                 editorDispatch
                   .proposeVisualSupport({
                     selectionText: composedSelection.text,
@@ -300,10 +379,9 @@ function TimelineComposedTranscript({
                   });
                 window.getSelection()?.removeAllRanges();
                 setComposedSelection(null);
+                setComposedSelectionError(null);
               }}
-            >
-              Visual support
-            </button>
+            />
           ) : null}
           <span className="transcript-meta-counts">
             {pendingStems.length > 0
@@ -317,7 +395,10 @@ function TimelineComposedTranscript({
       <div
         ref={scrollRef}
         className="transcript-scroll"
-        onMouseUp={() => setComposedSelection(readComposedSelection(rows))}
+        onMouseUp={() => {
+          setComposedSelection(readComposedSelection(rows, scrollRef.current));
+          setComposedSelectionError(null);
+        }}
         onClick={(e) => {
           // Click on a word or segment: seek the timeline playhead to
           // the corresponding timeline-time.
@@ -420,6 +501,38 @@ function ComposedSegmentBody({
         </span>
       ))}
     </div>
+  );
+}
+
+function TranscriptSelectionActions({
+  error,
+  onDelete,
+  onVisualSupport,
+}: {
+  error?: string | null;
+  onDelete: () => void;
+  onVisualSupport: () => void;
+}) {
+  return (
+    <span className="transcript-selection-actions" role="toolbar">
+      <button
+        type="button"
+        className="transcript-action-button transcript-action-danger"
+        onClick={onDelete}
+      >
+        <Trash2 aria-hidden="true" size={13} strokeWidth={2} />
+        <span>Delete from timeline</span>
+      </button>
+      <button
+        type="button"
+        className="transcript-action-button"
+        onClick={onVisualSupport}
+      >
+        <Sparkles aria-hidden="true" size={13} strokeWidth={2} />
+        <span>Visual support</span>
+      </button>
+      {error ? <span className="transcript-action-error">{error}</span> : null}
+    </span>
   );
 }
 
@@ -834,7 +947,7 @@ function LoadedTranscript({
       const startWord = t.words[selectionStart];
       const endWord = t.words[selectionEnd];
       if (!startWord || !endWord) return;
-      const ops = buildDeleteRangeOps({
+      const ops = buildDeleteRangeOpsForStem({
         snapshot,
         stem,
         sourceStart: startWord.start_s,
@@ -857,6 +970,31 @@ function LoadedTranscript({
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionStart, selectionEnd, snapshot, stem, t.words]);
+
+  function requestDeleteSelection() {
+    if (selectionStart < 0 || selectionEnd < 0) return;
+    const startWord = t.words[selectionStart];
+    const endWord = t.words[selectionEnd];
+    if (!startWord || !endWord) return;
+    const ops = buildDeleteRangeOpsForStem({
+      snapshot,
+      stem,
+      sourceStart: startWord.start_s,
+      sourceEnd: endWord.end_s,
+    });
+    if (ops.length === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "transcript delete: selected range doesn't intersect one timeline clip; nothing to do",
+      );
+      return;
+    }
+    editorDispatch.proposeUserEdit(ops).catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (transcript delete) failed", err);
+    });
+    setSelection(null);
+  }
 
   function requestVisualSupportForSelection() {
     if (!selectedTranscriptText) return;
@@ -887,13 +1025,10 @@ function LoadedTranscript({
         </span>
         <span className="transcript-meta-right">
           {selectedTranscriptText ? (
-            <button
-              type="button"
-              className="transcript-action-button"
-              onClick={requestVisualSupportForSelection}
-            >
-              Visual support
-            </button>
+            <TranscriptSelectionActions
+              onDelete={requestDeleteSelection}
+              onVisualSupport={requestVisualSupportForSelection}
+            />
           ) : null}
           <span className="transcript-meta-counts">
             {t.segments.length} segments · {t.words.length} words
@@ -1211,90 +1346,6 @@ function sourceTimeToTimeline(
     }
   }
   return undefined;
-}
-
-function buildDeleteRangeOps(args: {
-  snapshot: TimelineSnapshot;
-  stem: string;
-  sourceStart: number;
-  sourceEnd: number;
-}): EdlOp[] {
-  const { snapshot, stem, sourceStart, sourceEnd } = args;
-  if (!(sourceEnd > sourceStart + 0.05)) return []; // empty / inverted
-
-  // Find every clip on a video track that references this asset and
-  // contains the range. The proxy stem maps to a clip via the clip
-  // item's proxy_path (which the backend resolves the same way the
-  // transcript pane does).
-  const candidates: {
-    clipUuid: string;
-    clipSourceStart: number;
-    clipSourceEnd: number;
-  }[] = [];
-  for (const track of snapshot.tracks) {
-    if (track.kind !== "video") continue;
-    for (const item of track.items) {
-      if (item.kind !== "clip") continue;
-      if (item.proxy_path === null) continue;
-      const itemStem = stemOf(item.proxy_path);
-      if (itemStem !== stem) continue;
-      const clipStart = item.source_start_s ?? 0;
-      const clipEnd = clipStart + item.duration_s;
-      candidates.push({
-        clipUuid: item.clip_uuid,
-        clipSourceStart: clipStart,
-        clipSourceEnd: clipEnd,
-      });
-    }
-  }
-  if (candidates.length === 0) return [];
-
-  // v1: pick the first clip that fully contains [sourceStart,
-  // sourceEnd]. Multi-clip spans are deferred (return empty so the
-  // caller surfaces a warning rather than emitting a broken EDL).
-  const fullyInside = candidates.find(
-    (c) =>
-      c.clipSourceStart <= sourceStart + 0.01 &&
-      c.clipSourceEnd >= sourceEnd - 0.01,
-  );
-  if (!fullyInside) return [];
-
-  return [
-    {
-      kind: "split_clip",
-      anchor: { kind: "clip_uuid", uuid: fullyInside.clipUuid },
-      atS: sourceStart,
-    },
-    // After the first split, the right piece carries source range
-    // [sourceStart, clipSourceEnd]. Anchor the second split against
-    // its uuid — but the right piece's uuid is freshly stamped by
-    // apply_split, so we can't know it ahead of time. The
-    // anchor-by-clip-name path the resolver uses ("name = original-
-    // b") works since the parent's name is known. The resolver
-    // also matches against montage.clip_uuid, so giving it the
-    // synthesized name as a clip_uuid value invokes the name-
-    // match fallback branch on resolve_by_uuid. (Step 5's resolver
-    // hardening + the clip-name fallback path covers this round-
-    // trip.)
-    {
-      kind: "split_clip",
-      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
-      atS: sourceEnd,
-    },
-    {
-      kind: "delete_clip",
-      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
-    },
-  ];
-}
-
-/** After Split, the right piece's *name* is `<parent>-b`. The
- *  parent's display name is what came in (Step 8.1 stamps a fresh
- *  montage.clip_uuid on the right piece, but the name-match
- *  fallback in the anchor resolver matches against this synthesized
- *  string). */
-function nameAfterSplit(parent: string): string {
-  return `${parent}-b`;
 }
 
 function stemOf(path: string): string {

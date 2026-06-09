@@ -8249,6 +8249,8 @@ button {
   border-bottom-color: var(--glass-border, rgba(255, 255, 255, 0.14));
   color: var(--text-muted);
   font-family: var(--mono);
+  min-height: 44px;
+  gap: 12px;
 }
 
 /* meta header counts → mono muted */
@@ -8258,8 +8260,62 @@ button {
   font-family: var(--mono);
 }
 
+.transcript-selection-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transcript-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.transcript-action-button:hover {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: #eafff9;
+  background: rgba(94, 234, 212, 0.10);
+}
+
+.transcript-action-danger {
+  border-color: rgba(248, 113, 113, 0.42);
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.24);
+}
+
+.transcript-action-danger:hover {
+  border-color: rgba(248, 113, 113, 0.78);
+  color: #fff1f2;
+  background: rgba(185, 28, 28, 0.30);
+}
+
+.transcript-action-error {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #fecaca;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .transcript-segment {
   border-top-color: rgba(255, 255, 255, 0.05);
+  max-width: none;
+  grid-template-columns: 48px minmax(0, 1fr);
+  column-gap: 14px;
+  padding-top: 9px;
+  padding-bottom: 11px;
 }
 
 .transcript-segment:hover {
@@ -8272,6 +8328,16 @@ button {
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.05);
   border-color: var(--glass-border, rgba(255, 255, 255, 0.14));
+  margin-bottom: 4px;
+}
+
+.transcript-segment .transcript-text {
+  font-size: 13.5px;
+  line-height: 1.48;
+}
+
+.transcript-segment .transcript-time {
+  font-size: 10px;
 }
 
 /* Active / seek word highlight → soft cyan glow (kept, retinted from
@@ -8290,8 +8356,9 @@ button {
 }
 
 .transcript-word.transcript-word-selected {
-  background: rgba(94, 234, 212, 0.22);
-  color: #eafff9;
+  background: rgba(94, 234, 212, 0.30);
+  color: #f0fdfa;
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.32);
 }
 
 /* Whole-segment active cue → soft cyan ribbon + wash */

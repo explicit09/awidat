@@ -51,7 +51,7 @@ interface BuildDeleteArgs {
  *   - Range must fully sit inside a single video-track clip. Multi-
  *     clip spans return `[]` (caller surfaces a warning).
  *   - Empty / inverted ranges return `[]`.
- *   - Returns: `Split @ start; Split @ end; Delete (middle piece)`.
+ *   - Returns: `Split @ start; Split @ end; Ripple Delete (middle piece)`.
  */
 export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
   const { snapshot, stem, sourceStart, sourceEnd } = args;
@@ -98,7 +98,7 @@ export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
       atS: sourceEnd,
     },
     {
-      kind: "delete_clip",
+      kind: "ripple_delete",
       anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
     },
   ];
