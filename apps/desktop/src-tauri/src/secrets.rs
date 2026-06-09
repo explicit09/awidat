@@ -118,7 +118,7 @@ fn prefetch_enabled() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod startup_resolution_tests {
     use super::*;
 
     #[test]
