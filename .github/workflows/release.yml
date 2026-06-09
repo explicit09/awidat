@@ -91,7 +91,10 @@ jobs:
         run: |
           set -euo pipefail
           artifact_dir="release-artifacts"
-          bundle_dir="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          # montage-desktop (src-tauri) is a workspace member, so cargo
+          # writes its bundle to the workspace-root target dir, not a
+          # per-crate `apps/desktop/src-tauri/target/`.
+          bundle_dir="target/${{ matrix.target }}/release/bundle/dmg"
           mkdir -p "$artifact_dir"
           dmg="$(find "$bundle_dir" -maxdepth 1 -type f -name '*.dmg' | sort | head -n 1)"
           if [[ -z "$dmg" ]]; then
