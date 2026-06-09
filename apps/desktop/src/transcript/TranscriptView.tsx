@@ -143,6 +143,11 @@ function readComposedSelection(
     !firstRow ||
     !lastRow ||
     firstRow.playSegment.proxyStem !== lastRow.playSegment.proxyStem ||
+    // Require the selection to stay within a single timeline clip
+    // occurrence. The same source can appear more than once on the
+    // timeline; spanning two occurrences would otherwise collapse to a
+    // single range on the first clip and delete unselected media.
+    firstRow.playSegment.clipUuid !== lastRow.playSegment.clipUuid ||
     !Number.isFinite(firstStart) ||
     !Number.isFinite(lastEnd)
   ) {
