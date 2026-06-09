@@ -195,6 +195,7 @@ pub fn run() {
             commands::media::list_proxies,
             commands::media::read_media_readiness,
             commands::media::media_url_for_path,
+            commands::media::project_preview_url,
             commands::media::proxy_path_for_stem,
             commands::media::relink_missing_asset,
             commands::preview::render_transition_preview_frame,

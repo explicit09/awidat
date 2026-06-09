@@ -503,7 +503,7 @@ pub async fn project_thumbnail(app: AppHandle, path: String) -> Result<Option<St
         return Ok(None);
     }
 
-    let thumbnails = root.join(".awidat").join("thumbnails");
+    let thumbnails = root.join(".montage").join("thumbnails");
     let Some(frame) = first_project_thumbnail(&thumbnails).await? else {
         return Ok(None);
     };
@@ -533,7 +533,7 @@ pub async fn project_preview_media(
         return Ok(None);
     }
 
-    let proxies = root.join(".awidat").join("proxies");
+    let proxies = root.join(".montage").join("proxies");
     if let Some(proxy) = first_project_proxy(&proxies).await? {
         if let Err(e) = app.asset_protocol_scope().allow_directory(&proxies, true) {
             tracing::warn!(
