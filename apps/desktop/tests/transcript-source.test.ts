@@ -58,6 +58,7 @@ function makeClipItem(opts: {
     transition_id: null,
     transition_family: null,
     sync_group_id: null,
+    link_group_id: null,
     sync_offset_s: null,
     sync_speed_factor: null,
     sync_confidence: null,
@@ -226,6 +227,38 @@ function snapshotWithClips(
       anchor: { kind: "clip_uuid", uuid: "clip-a-b" },
     },
   );
+}
+
+// Optional clipUuid anchors duplicate source occurrences to the
+// selected timeline clip instead of the first matching source range.
+{
+  const snap = snapshotWithClips([
+    makeClipItem({
+      clipUuid: "clip-earlier",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+    makeClipItem({
+      clipUuid: "clip-selected",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+  ]);
+  const ops = buildDeleteRangeOpsForStem({
+    snapshot: snap,
+    stem: "foo",
+    clipUuid: "clip-selected",
+    sourceStart: 10,
+    sourceEnd: 20,
+  });
+  assert.equal(ops.length, 3, "expect anchored duplicate delete ops");
+  assert.deepEqual(ops[0], {
+    kind: "split_clip",
+    anchor: { kind: "clip_uuid", uuid: "clip-selected" },
+    atS: 10,
+  });
 }
 
 // proxy_path=null clip is skipped.

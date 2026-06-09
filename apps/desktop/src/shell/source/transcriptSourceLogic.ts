@@ -41,6 +41,7 @@ interface BuildDeleteArgs {
   stem: string;
   sourceStart: number;
   sourceEnd: number;
+  clipUuid?: string;
 }
 
 /**
@@ -51,10 +52,12 @@ interface BuildDeleteArgs {
  *   - Range must fully sit inside a single video-track clip. Multi-
  *     clip spans return `[]` (caller surfaces a warning).
  *   - Empty / inverted ranges return `[]`.
+ *   - `clipUuid`, when provided, constrains the cut to the selected
+ *     timeline occurrence rather than the first matching source range.
  *   - Returns: `Split @ start; Split @ end; Ripple Delete (middle piece)`.
  */
 export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
-  const { snapshot, stem, sourceStart, sourceEnd } = args;
+  const { snapshot, stem, sourceStart, sourceEnd, clipUuid } = args;
   if (!(sourceEnd > sourceStart + 0.05)) return [];
 
   const candidates: {
@@ -67,6 +70,7 @@ export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
     for (const item of track.items) {
       if (item.kind !== "clip") continue;
       if (item.proxy_path === null) continue;
+      if (clipUuid !== undefined && item.clip_uuid !== clipUuid) continue;
       if (stemOf(item.proxy_path) !== stem) continue;
       const clipStart = item.source_start_s ?? 0;
       const clipEnd = clipStart + item.duration_s;

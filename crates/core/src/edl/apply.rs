@@ -5216,25 +5216,26 @@ fn apply_ripple_delete(
             ),
         });
     }
-    let (link_group_id, removed_name, removed_duration) = match &track.children[locator.child_index]
-    {
-        TrackChild::Clip(c) => (
-            c.metadata
-                .montage
-                .as_ref()
-                .and_then(|m| m.extra.get("link_group_id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            c.name.clone(),
-            child_duration(&track.children[locator.child_index]),
-        ),
-        _ => {
-            return Err(ApplyError::Invalid {
-                index,
-                message: "ripple_delete: source is not a clip".into(),
-            });
-        }
-    };
+    let (link_group_id, removed_name, removed_duration, removed_source_range) =
+        match &track.children[locator.child_index] {
+            TrackChild::Clip(c) => (
+                c.metadata
+                    .montage
+                    .as_ref()
+                    .and_then(|m| m.extra.get("link_group_id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                c.name.clone(),
+                child_duration(&track.children[locator.child_index]),
+                clip_source_range_s(c),
+            ),
+            _ => {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "ripple_delete: source is not a clip".into(),
+                });
+            }
+        };
     if removed_duration <= 0.0 {
         return Err(ApplyError::Invalid {
             index,
@@ -5252,9 +5253,17 @@ fn apply_ripple_delete(
             if track_index == source_track_index {
                 continue;
             }
-            let Some(sibling_child_index) =
+            let sibling_child_index = if let Some((start_s, end_s)) = removed_source_range {
+                clip_with_link_group_covering_range(
+                    &working.tracks.children[track_index],
+                    group_id,
+                    start_s,
+                    end_s,
+                )
+            } else {
                 first_clip_with_link_group(&working.tracks.children[track_index], group_id)
-            else {
+            };
+            let Some(sibling_child_index) = sibling_child_index else {
                 continue;
             };
             let StackChild::Track(sibling_track) = &mut working.tracks.children[track_index] else {
@@ -12578,6 +12587,83 @@ mod tests {
         assert_eq!(t.children.len(), 2);
         assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
         assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_ripple_delete_removes_matching_split_linked_sibling() {
+        use montage_proto::montage_meta::MontageClipMetadata;
+        use montage_proto::otio::{
+            Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
+            TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+
+        let mut tl = Tl::empty("test");
+        let mut montage_meta = MontageClipMetadata::default();
+        montage_meta
+            .extra
+            .insert("link_group_id".into(), serde_json::json!("g0"));
+
+        let build_clip = |name: &str| {
+            let mut c = Clip::empty(name.to_string());
+            c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(60.0 * 24.0, 24.0),
+            ));
+            c.metadata = ClipMetadata {
+                montage: Some(montage_meta.clone()),
+                ..ClipMetadata::default()
+            };
+            c
+        };
+
+        let mut video = Track::empty("V1", TrackKind::Video);
+        video.children.push(TrackChild::Clip(build_clip("v0")));
+        let mut audio = Track::empty("A1", TrackKind::Audio);
+        audio.children.push(TrackChild::Clip(build_clip("a0")));
+        tl.tracks.children.push(StackChild::Track(video));
+        tl.tracks.children.push(StackChild::Track(audio));
+
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid { uuid: "v0".into() },
+                    at_s: 10.0,
+                    snap: None,
+                },
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "v0-b".into(),
+                    },
+                    at_s: 20.0,
+                    snap: None,
+                },
+                EdlOp::RippleDelete {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "v0-b".into(),
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(v) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let StackChild::Track(a) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert!(matches!(&v.children[0], TrackChild::Clip(c) if c.name == "v0"));
+        assert!(matches!(&v.children[1], TrackChild::Clip(c) if c.name == "v0-b-b"));
+        assert!(matches!(&a.children[0], TrackChild::Clip(c) if c.name == "a0"));
+        assert!(matches!(&a.children[1], TrackChild::Clip(c) if c.name == "a0-b-b"));
+        assert!(
+            a.children.iter().all(|child| !matches!(
+                child,
+                TrackChild::Clip(c) if c.name == "a0-b"
+            )),
+            "ripple delete should remove the linked audio split matching source[10..20]"
+        );
     }
 
     #[test]

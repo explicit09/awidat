@@ -92,6 +92,7 @@ type ComposedSelection = {
   text: string;
   timelineStartS: number | undefined;
   stem: string | undefined;
+  clipUuid: string | undefined;
   sourceStartS: number | undefined;
   sourceEndS: number | undefined;
 };
@@ -126,6 +127,7 @@ function readComposedSelection(
       text,
       timelineStartS: undefined,
       stem: undefined,
+      clipUuid: undefined,
       sourceStartS: undefined,
       sourceEndS: undefined,
     };
@@ -148,6 +150,7 @@ function readComposedSelection(
       text,
       timelineStartS: undefined,
       stem: undefined,
+      clipUuid: undefined,
       sourceStartS: undefined,
       sourceEndS: undefined,
     };
@@ -161,6 +164,7 @@ function readComposedSelection(
       firstRow.playSegment.timelineStart +
       (sourceStartS - firstRow.playSegment.sourceStart),
     stem: firstRow.playSegment.proxyStem,
+    clipUuid: firstRow.playSegment.clipUuid,
     sourceStartS,
     sourceEndS,
   };
@@ -342,6 +346,7 @@ function TimelineComposedTranscript({
                 const ops = buildDeleteRangeOpsForStem({
                   snapshot: useTimelineStore.getState().snapshot,
                   stem: composedSelection.stem,
+                  clipUuid: composedSelection.clipUuid,
                   sourceStart: composedSelection.sourceStartS,
                   sourceEnd: composedSelection.sourceEndS,
                 });
