@@ -7,16 +7,33 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   APPLE_CERTIFICATE_PASSWORD \
   KEYCHAIN_PASSWORD
 
-work_dir="${RUNNER_TEMP:-$(mktemp -d)}"
+cleanup_work_dir=0
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+  work_dir="$(mktemp -d "${RUNNER_TEMP%/}/montage-release.XXXXXX")"
+  keychain_path="$work_dir/montage-release.keychain-db"
+else
+  work_dir="$(mktemp -d)"
+  keychain_dir="$(mktemp -d "${TMPDIR:-/tmp}/montage-release-keychain.XXXXXX")"
+  keychain_path="$keychain_dir/montage-release.keychain-db"
+  cleanup_work_dir=1
+fi
 cert_path="$work_dir/montage-release-certificate.p12"
-keychain_path="$work_dir/montage-release.keychain-db"
+
+cleanup() {
+  rm -f "$cert_path"
+  if [[ "$cleanup_work_dir" -eq 1 ]]; then
+    rm -rf "$work_dir"
+  fi
+}
+trap cleanup EXIT
 
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$cert_path"
 
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-security import "$cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+security import "$cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain_path"
+rm -f "$cert_path"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
 
 identity="$(
@@ -29,6 +46,11 @@ if [[ -z "$identity" ]]; then
   exit 1
 fi
 
-echo "APPLE_SIGNING_IDENTITY=$identity" >> "${GITHUB_ENV:-/dev/null}"
-echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "${GITHUB_ENV:-/dev/null}"
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+  echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+else
+  printf 'export APPLE_SIGNING_IDENTITY=%q\n' "$identity"
+  printf 'export APPLE_KEYCHAIN_PATH=%q\n' "$keychain_path"
+fi
 echo "Developer ID Application signing identity imported"

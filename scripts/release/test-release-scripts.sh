@@ -25,6 +25,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local label="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    printf 'expected output not to contain %q\nactual output:\n%s\n' "$needle" "$haystack" >&2
+    fail "$label"
+  fi
+}
+
 assert_equals() {
   local actual="$1"
   local expected="$2"
@@ -128,6 +138,108 @@ test_notarize_requires_dmg_path() {
   pass "notarize script prints usage"
 }
 
+test_import_certificate_imports_identity_with_fake_security() {
+  local fake_bin="$TMP_DIR/fake-security-bin"
+  local runner_temp="$TMP_DIR/runner-temp"
+  local github_env="$TMP_DIR/github-env"
+  local security_log="$TMP_DIR/security.log"
+  mkdir -p "$fake_bin" "$runner_temp"
+
+  cat > "$fake_bin/security" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$security_log"
+if [[ "\$1" == "find-identity" ]]; then
+  printf '  1) ABCDEF1234567890 "Developer ID Application: Montage Test (TEAMID)"\\n'
+fi
+EOF
+  chmod +x "$fake_bin/security"
+
+  APPLE_CERTIFICATE="$(printf 'fake certificate content' | base64)" \
+    APPLE_CERTIFICATE_PASSWORD="cert-password" \
+    KEYCHAIN_PASSWORD="keychain-password" \
+    RUNNER_TEMP="$runner_temp" \
+    GITHUB_ENV="$github_env" \
+    PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$SCRIPT_DIR/import-apple-certificate.sh"
+
+  assert_contains "$(cat "$github_env")" "APPLE_SIGNING_IDENTITY=Developer ID Application: Montage Test (TEAMID)" "certificate import writes signing identity"
+  assert_contains "$(cat "$github_env")" "APPLE_KEYCHAIN_PATH=" "certificate import writes keychain path"
+  assert_contains "$(cat "$github_env")" "APPLE_KEYCHAIN_PATH=$runner_temp/montage-release." "certificate import uses unique runner temp subdirectory"
+  assert_contains "$(cat "$security_log")" "create-keychain" "certificate import creates keychain"
+  assert_contains "$(cat "$security_log")" "import" "certificate import imports certificate"
+  assert_contains "$(cat "$security_log")" "find-identity" "certificate import finds identity"
+  assert_not_contains "$(cat "$security_log")" " -A " "certificate import avoids broad key access"
+  if find "$runner_temp" -name '*.p12' -print -quit | grep -q .; then
+    fail "certificate import removes decoded certificate"
+  fi
+  pass "certificate import succeeds with fake security"
+}
+
+test_import_certificate_prints_local_exports_without_github_env() {
+  local fake_bin="$TMP_DIR/fake-local-security-bin"
+  local runner_temp="$TMP_DIR/local-runner-temp"
+  local security_log="$TMP_DIR/local-security.log"
+  local output
+  mkdir -p "$fake_bin" "$runner_temp"
+
+  cat > "$fake_bin/security" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$security_log"
+if [[ "\$1" == "find-identity" ]]; then
+  printf '  1) ABCDEF1234567890 "Developer ID Application: Montage Test (TEAMID)"\\n'
+fi
+EOF
+  chmod +x "$fake_bin/security"
+
+  output="$(
+    APPLE_CERTIFICATE="$(printf 'fake certificate content' | base64)" \
+      APPLE_CERTIFICATE_PASSWORD="cert-password" \
+      KEYCHAIN_PASSWORD="keychain-password" \
+      RUNNER_TEMP="$runner_temp" \
+      PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      bash "$SCRIPT_DIR/import-apple-certificate.sh"
+  )"
+
+  assert_contains "$output" "export APPLE_SIGNING_IDENTITY=Developer\\ ID\\ Application:\\ Montage\\ Test\\ \\(TEAMID\\)" "certificate import prints local signing identity export"
+  assert_contains "$output" "export APPLE_KEYCHAIN_PATH=" "certificate import prints local keychain export"
+  assert_contains "$output" "Developer ID Application signing identity imported" "certificate import still prints status"
+  pass "certificate import prints local exports"
+}
+
+test_notarize_runs_apple_tools_with_fake_commands() {
+  local fake_bin="$TMP_DIR/fake-notary-bin"
+  local notary_log="$TMP_DIR/notary.log"
+  local dmg_path="$TMP_DIR/Montage-test.dmg"
+  mkdir -p "$fake_bin"
+  printf 'fake dmg' > "$dmg_path"
+
+  cat > "$fake_bin/xcrun" <<EOF
+#!/usr/bin/env bash
+printf 'xcrun %s\\n' "\$*" >> "$notary_log"
+EOF
+  cat > "$fake_bin/spctl" <<EOF
+#!/usr/bin/env bash
+printf 'spctl %s\\n' "\$*" >> "$notary_log"
+EOF
+  chmod +x "$fake_bin/xcrun" "$fake_bin/spctl"
+
+  APPLE_ID="dev@example.com" \
+    APPLE_PASSWORD="app-password" \
+    APPLE_TEAM_ID="TEAMID" \
+    PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$SCRIPT_DIR/notarize-dmg.sh" "$dmg_path"
+
+  assert_contains "$(cat "$notary_log")" "xcrun notarytool submit" "notarize submits dmg"
+  assert_contains "$(cat "$notary_log")" "xcrun stapler staple" "notarize staples dmg"
+  assert_contains "$(cat "$notary_log")" "xcrun stapler validate" "notarize validates staple"
+  assert_contains "$(cat "$notary_log")" "spctl --assess" "notarize assesses dmg"
+  assert_equals "$(sed -n '1p' "$notary_log")" "xcrun notarytool submit $dmg_path --apple-id dev@example.com --password app-password --team-id TEAMID --wait" "notarize submits before stapling"
+  assert_equals "$(sed -n '2p' "$notary_log")" "xcrun stapler staple $dmg_path" "notarize staples before validate"
+  assert_equals "$(sed -n '3p' "$notary_log")" "xcrun stapler validate $dmg_path" "notarize validates before assess"
+  assert_contains "$(sed -n '4p' "$notary_log")" "spctl --assess --type open --context context:primary-signature -v $dmg_path" "notarize assesses last"
+  pass "notarize runs Apple tools with fake commands"
+}
+
 test_required_env_reports_missing_name
 test_required_env_accepts_present_values
 test_verify_sidecars_rejects_missing_files
@@ -137,3 +249,6 @@ test_verify_sidecars_accepts_executable_non_stub_files
 test_checksums_writes_sha256_files
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
+test_import_certificate_imports_identity_with_fake_security
+test_import_certificate_prints_local_exports_without_github_env
+test_notarize_runs_apple_tools_with_fake_commands
