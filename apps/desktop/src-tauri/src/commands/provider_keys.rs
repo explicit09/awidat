@@ -94,6 +94,13 @@ pub struct ProviderKeyImportSummary {
     pub rows: Vec<ProviderKeyRow>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderKeyUpdate {
+    env_var: &'static str,
+    env_value: Option<String>,
+    rows: Vec<ProviderKeyRow>,
+}
+
 #[tauri::command]
 pub async fn list_provider_keys() -> Result<Vec<ProviderKeyRow>, String> {
     let vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
@@ -105,48 +112,30 @@ pub async fn save_provider_key(
     provider: String,
     value: String,
 ) -> Result<Vec<ProviderKeyRow>, String> {
-    let definition = provider_definition(&provider)?;
-    let value = validate_provider_value(definition, &value)?;
     let mut vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
-    vault.set(definition.account, value);
+    let update = save_provider_key_update(&mut vault, &provider, &value)?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    Ok(provider_rows(&vault))
+    apply_provider_env_update(&update);
+    Ok(update.rows)
 }
 
 #[tauri::command]
 pub async fn remove_provider_key(provider: String) -> Result<Vec<ProviderKeyRow>, String> {
-    let definition = provider_definition(&provider)?;
     let mut vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
-    vault.remove(definition.account);
+    let update = remove_provider_key_update(&mut vault, &provider)?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    Ok(provider_rows(&vault))
+    apply_provider_env_update(&update);
+    Ok(update.rows)
 }
 
 #[tauri::command]
 pub async fn import_legacy_provider_keys() -> Result<ProviderKeyImportSummary, String> {
     let mut vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
-    let mut imported = Vec::new();
-
-    for definition in PROVIDERS {
-        let Some(value) =
-            montage_secrets::get_legacy_keychain(definition.env_var, definition.account)
-                .map_err(|e| e.to_string())?
-        else {
-            continue;
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        vault.set(definition.account, value);
-        imported.push(definition.key.to_string());
-    }
-
+    let summary = import_legacy_provider_values(&mut vault, |definition| {
+        montage_secrets::get_legacy_keychain(definition.account).map_err(|e| e.to_string())
+    })?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    Ok(ProviderKeyImportSummary {
-        imported,
-        rows: provider_rows(&vault),
-    })
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -183,6 +172,82 @@ fn provider_rows(vault: &SecretVault) -> Vec<ProviderKeyRow> {
             }
         })
         .collect()
+}
+
+fn save_provider_key_update(
+    vault: &mut SecretVault,
+    provider: &str,
+    value: &str,
+) -> Result<ProviderKeyUpdate, String> {
+    let definition = provider_definition(provider)?;
+    let value = validate_provider_value(definition, value)?;
+    vault.set(definition.account, value);
+    Ok(ProviderKeyUpdate {
+        env_var: definition.env_var,
+        env_value: Some(value.to_string()),
+        rows: provider_rows(vault),
+    })
+}
+
+fn remove_provider_key_update(
+    vault: &mut SecretVault,
+    provider: &str,
+) -> Result<ProviderKeyUpdate, String> {
+    let definition = provider_definition(provider)?;
+    vault.remove(definition.account);
+    Ok(ProviderKeyUpdate {
+        env_var: definition.env_var,
+        env_value: None,
+        rows: provider_rows(vault),
+    })
+}
+
+fn import_legacy_provider_values(
+    vault: &mut SecretVault,
+    mut legacy_value: impl FnMut(&ProviderDefinition) -> Result<Option<String>, String>,
+) -> Result<ProviderKeyImportSummary, String> {
+    let mut imported = Vec::new();
+
+    for definition in PROVIDERS {
+        if vault.get(definition.account).is_some() {
+            continue;
+        }
+        let Some(value) = legacy_value(definition)? else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        vault.set(definition.account, value);
+        imported.push(definition.key.to_string());
+    }
+
+    Ok(ProviderKeyImportSummary {
+        imported,
+        rows: provider_rows(vault),
+    })
+}
+
+fn apply_provider_env_update(update: &ProviderKeyUpdate) {
+    match update.env_value.as_deref() {
+        Some(value) => {
+            // SAFETY: This mirrors the desktop startup hydrator so child
+            // indexer processes inherit keys added during the current session.
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var(update.env_var, value);
+            }
+        }
+        None => {
+            // SAFETY: Removing a provider key must also revoke the hydrated
+            // value for current-session Rust callers and subprocesses.
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::remove_var(update.env_var);
+            }
+        }
+    }
 }
 
 fn provider_definition(provider: &str) -> Result<&'static ProviderDefinition, String> {
@@ -318,6 +383,85 @@ mod tests {
         );
         assert!(validate_provider_value(definition, "   ").is_err());
         assert!(validate_provider_value(definition, "dg invalid").is_err());
+    }
+
+    #[test]
+    fn save_provider_key_update_exports_trimmed_value_for_current_session() {
+        let mut vault = SecretVault::default();
+        let update = save_provider_key_update(&mut vault, "deepgram", "  dg-valid-token  ")
+            .expect("save update");
+
+        assert_eq!(
+            vault.get(accounts::DEEPGRAM_API_KEY),
+            Some("dg-valid-token")
+        );
+        assert_eq!(update.env_var, env_vars::DEEPGRAM_API_KEY);
+        assert_eq!(update.env_value.as_deref(), Some("dg-valid-token"));
+        assert!(
+            update
+                .rows
+                .iter()
+                .any(|row| row.key == "deepgram" && row.status == ProviderKeyStatus::Configured)
+        );
+    }
+
+    #[test]
+    fn remove_provider_key_update_clears_current_session_env() {
+        let mut vault = SecretVault::default();
+        vault.set(accounts::DEEPGRAM_API_KEY, "dg-valid-token");
+
+        let update = remove_provider_key_update(&mut vault, "deepgram").expect("remove update");
+
+        assert_eq!(vault.get(accounts::DEEPGRAM_API_KEY), None);
+        assert_eq!(update.env_var, env_vars::DEEPGRAM_API_KEY);
+        assert_eq!(update.env_value, None);
+        assert!(
+            update
+                .rows
+                .iter()
+                .any(|row| row.key == "deepgram" && row.status == ProviderKeyStatus::NotSet)
+        );
+    }
+
+    #[test]
+    fn import_legacy_provider_values_skips_configured_providers() {
+        let mut vault = SecretVault::default();
+        vault.set(accounts::OPENROUTER_API_KEY, "new-openrouter");
+
+        let summary = import_legacy_provider_values(&mut vault, |definition| {
+            Ok(match definition.key {
+                "openrouter" => Some("old-openrouter".to_string()),
+                "deepgram" => Some("dg-legacy-token".to_string()),
+                _ => None,
+            })
+        })
+        .expect("import summary");
+
+        assert_eq!(
+            vault.get(accounts::OPENROUTER_API_KEY),
+            Some("new-openrouter")
+        );
+        assert_eq!(
+            vault.get(accounts::DEEPGRAM_API_KEY),
+            Some("dg-legacy-token")
+        );
+        assert_eq!(summary.imported, vec!["deepgram"]);
+    }
+
+    #[test]
+    fn import_legacy_provider_values_ignores_empty_legacy_values() {
+        let mut vault = SecretVault::default();
+
+        let summary = import_legacy_provider_values(&mut vault, |definition| {
+            Ok(match definition.key {
+                "deepgram" => Some("  ".to_string()),
+                _ => None,
+            })
+        })
+        .expect("import summary");
+
+        assert!(summary.imported.is_empty());
+        assert_eq!(vault.get(accounts::DEEPGRAM_API_KEY), None);
     }
 
     #[test]

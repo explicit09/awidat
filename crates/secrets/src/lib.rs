@@ -12,12 +12,14 @@
 //!
 //! # Order of resolution
 //!
-//! [`get`] tries env var first, then the cached provider vault. Env-first because:
+//! [`get`] tries env var first, then the cached provider vault, then the
+//! legacy per-key keychain entry. Env-first because:
 //! 1. CI and ephemeral runners only have env vars; keychain calls error out.
 //! 2. Override-by-env is the universal "set this for this one run" idiom.
 //!
-//! Legacy per-key keychain reads are available only through
-//! [`get_legacy_keychain`] for explicit import flows.
+//! Legacy per-key keychain reads also remain available through
+//! [`get_legacy_keychain`] for explicit import flows that need to inspect old
+//! entries without env-var overrides.
 
 use std::{
     collections::BTreeMap,
@@ -178,8 +180,8 @@ impl SecretBackend for KeychainSecretBackend {
     }
 }
 
-/// Fetch a secret. Tries `env_var_name` first, then the cached provider vault.
-/// Returns `Ok(None)` if none are set —
+/// Fetch a secret. Tries `env_var_name` first, then the cached provider vault,
+/// then the legacy per-key keychain entry. Returns `Ok(None)` if none are set —
 /// callers decide whether absence is fatal.
 pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
     if let Ok(value) = std::env::var(env_var_name)
@@ -191,6 +193,11 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
 
     if let Some(value) = cached_vault_value(account)? {
         trace!(account, "secret resolved from provider vault");
+        return Ok(Some(value));
+    }
+
+    if let Some(value) = per_key_keychain_value(account)? {
+        trace!(account, "secret resolved from legacy keychain entry");
         return Ok(Some(value));
     }
 
@@ -248,26 +255,28 @@ fn get_with_backend_and_vault(
         return Ok(Some(value.to_string()));
     }
 
-    Ok(None)
-}
-
-/// Fetch a secret using the legacy per-key keychain layout. Tries
-/// `env_var_name` first, then `(SERVICE, account)`, then
-/// `(LEGACY_SERVICE, account)`.
-///
-/// This exists for explicit import flows only. General provider resolution
-/// should use [`get`], which reads env vars and the provider vault.
-pub fn get_legacy_keychain(
-    env_var_name: &str,
-    account: &str,
-) -> Result<Option<String>, SecretError> {
-    if let Ok(value) = std::env::var(env_var_name)
-        && !value.is_empty()
-    {
-        trace!(env_var = env_var_name, "secret resolved from env var");
+    if let Some(value) = per_key_keychain_value_with_backend(backend, account)? {
+        trace!(account, "secret resolved from legacy keychain entry");
         return Ok(Some(value));
     }
 
+    Ok(None)
+}
+
+#[cfg(test)]
+fn per_key_keychain_value_with_backend(
+    backend: &impl SecretBackend,
+    account: &str,
+) -> Result<Option<String>, SecretError> {
+    backend
+        .get_password(account)
+        .map_err(|e| SecretError::Backend {
+            account: account.into(),
+            source: e,
+        })
+}
+
+fn per_key_keychain_value(account: &str) -> Result<Option<String>, SecretError> {
     for service in secret_read_services() {
         let entry = keyring::Entry::new(service, account).map_err(|e| SecretError::Backend {
             account: account.into(),
@@ -288,6 +297,16 @@ pub fn get_legacy_keychain(
         }
     }
     Ok(None)
+}
+
+/// Fetch a secret using the legacy per-key keychain layout. Tries
+/// `(SERVICE, account)`, then `(LEGACY_SERVICE, account)`.
+///
+/// This exists for explicit import flows only. General provider resolution
+/// should use [`get`], which reads env vars, the provider vault, and the
+/// current-service per-key fallback.
+pub fn get_legacy_keychain(account: &str) -> Result<Option<String>, SecretError> {
+    per_key_keychain_value(account)
 }
 
 fn secret_read_services() -> [&'static str; 2] {
@@ -630,6 +649,29 @@ mod tests {
         let get_calls = backend.get_calls();
         assert!(get_calls.contains(&VAULT_ACCOUNT.to_string()));
         assert!(!get_calls.contains(&accounts::PEXELS_API_KEY.to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn get_with_empty_vault_falls_back_to_per_key_keychain() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        backend.insert(accounts::PEXELS_API_KEY, "legacy-pexels");
+
+        let resolved = get_with_backend_and_vault(
+            &backend,
+            None,
+            env_vars::PEXELS_API_KEY,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        assert_eq!(resolved.as_deref(), Some("legacy-pexels"));
+        assert_eq!(
+            backend.get_calls(),
+            vec![
+                VAULT_ACCOUNT.to_string(),
+                accounts::PEXELS_API_KEY.to_string()
+            ]
+        );
         Ok(())
     }
 
