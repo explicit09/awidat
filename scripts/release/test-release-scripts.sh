@@ -87,8 +87,12 @@ test_verify_sidecars_rejects_yt_dlp_ci_placeholder() {
   local dir="$TMP_DIR/yt-dlp-placeholder"
   mkdir -p "$dir"
   printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo uv-real' > "$dir/uv-aarch64-apple-darwin"
   printf '%s\n' '#!/bin/sh' 'echo "yt-dlp sidecar unavailable in CI compile check" >&2' 'exit 127' > "$dir/yt-dlp-aarch64-apple-darwin"
-  chmod +x "$dir/codex-aarch64-apple-darwin" "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
   local output
   if output="$(RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin 2>&1)"; then
     fail "yt-dlp CI placeholder should fail"
@@ -101,10 +105,33 @@ test_verify_sidecars_accepts_executable_non_stub_files() {
   local dir="$TMP_DIR/real"
   mkdir -p "$dir"
   printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo uv-real' > "$dir/uv-aarch64-apple-darwin"
   printf '%s\n' '#!/bin/sh' 'echo 2026.03.17' > "$dir/yt-dlp-aarch64-apple-darwin"
-  chmod +x "$dir/codex-aarch64-apple-darwin" "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
   RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin
   pass "executable non-stub sidecars are accepted"
+}
+
+test_verify_sidecars_rejects_missing_required_uv() {
+  local dir="$TMP_DIR/missing-uv"
+  mkdir -p "$dir"
+  printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo 2026.03.17' > "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
+
+  local output
+  if output="$(RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin 2>&1)"; then
+    fail "missing uv sidecar should fail"
+  fi
+  assert_contains "$output" "missing sidecar" "missing uv sidecar is reported"
+  assert_contains "$output" "uv-aarch64-apple-darwin" "missing uv path is named"
+  pass "missing uv sidecar is rejected"
 }
 
 test_checksums_writes_sha256_files() {
@@ -246,6 +273,7 @@ test_verify_sidecars_rejects_missing_files
 test_verify_sidecars_rejects_stub
 test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
+test_verify_sidecars_rejects_missing_required_uv
 test_checksums_writes_sha256_files
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path

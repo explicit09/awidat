@@ -3,8 +3,8 @@
 //!
 //! Discovery order (matches what every Rust ffmpeg wrapper does in
 //! 2026): the `MONTAGE_FFMPEG` / `MONTAGE_FFPROBE` env overrides first,
-//! then `which ffmpeg` / `which ffprobe`. We do not bundle a static
-//! ffmpeg binary — that's a v2 packaging concern.
+//! then packaged sidecars beside the current executable, then `which
+//! ffmpeg` / `which ffprobe`.
 //!
 //! Frame extraction uses `-ss` before `-i` for fast keyframe seek; for
 //! sub-frame accuracy `-ss` lands after `-i` (slower). We choose the
@@ -104,26 +104,65 @@ pub fn ffprobe_path() -> Result<PathBuf, FfmpegError> {
 }
 
 fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
-    if let Ok(p) = std::env::var(env_var)
-        && !p.is_empty()
+    let env_path = std::env::var(env_var)
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    let current_exe = std::env::current_exe().ok();
+    let path_dirs = std::env::var_os("PATH")
+        .map(|path_env| std::env::split_paths(&path_env).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    resolve_binary_candidate(
+        name,
+        env_path.as_deref(),
+        current_exe.as_deref(),
+        &path_dirs,
+    )
+    .ok_or(())
+}
+
+fn resolve_binary_candidate(
+    name: &str,
+    env_path: Option<&Path>,
+    current_exe: Option<&Path>,
+    path_dirs: &[PathBuf],
+) -> Option<PathBuf> {
+    if let Some(pb) = env_path
+        && pb.exists()
     {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Ok(pb);
+        return Some(pb.to_path_buf());
+    }
+
+    if let Some(exe) = current_exe
+        && let Some(dir) = exe.parent()
+    {
+        for file_name in binary_file_names(name) {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
-    // Walk PATH ourselves so we don't pull in `which`.
-    let path_env = std::env::var_os("PATH").ok_or(())?;
-    for dir in std::env::split_paths(&path_env) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
+
+    for dir in path_dirs {
+        for file_name in binary_file_names(name) {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
-        // On macOS ffmpeg often lives in /opt/homebrew/bin/ even when
-        // PATH wasn't propagated (e.g. non-login shells); the env-var
-        // override is the documented escape hatch in that case.
     }
-    Err(())
+
+    None
+}
+
+fn binary_file_names(name: &str) -> [String; 2] {
+    if name.ends_with(".exe") {
+        [name.to_string(), name.to_string()]
+    } else {
+        [name.to_string(), format!("{name}.exe")]
+    }
 }
 
 /// Extract a single frame at time `t_s` from `asset_path`. Returns the
@@ -1911,6 +1950,56 @@ mod tests {
         let s = tail_string(&bytes, 10);
         assert_eq!(s.len(), 10);
         assert!(s.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_prefers_env_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_bin = dir.path().join("custom-ffmpeg");
+        let sidecar_bin = dir.path().join("ffmpeg");
+        std::fs::write(&env_bin, b"").unwrap();
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_candidate(
+            "ffmpeg",
+            Some(&env_bin),
+            Some(&dir.path().join("montage-desktop")),
+            &[],
+        );
+
+        assert_eq!(resolved.as_deref(), Some(env_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_falls_back_to_exe_sibling_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffprobe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_candidate(
+            "ffprobe",
+            None,
+            Some(&dir.path().join("montage-desktop")),
+            &[],
+        );
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_accepts_windows_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffmpeg.exe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_candidate(
+            "ffmpeg",
+            None,
+            Some(&dir.path().join("montage-desktop.exe")),
+            &[],
+        );
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
     }
 
     #[test]

@@ -35,7 +35,14 @@
     "targets": "all",
     "externalBin": [
       "binaries/codex",
+      "binaries/ffmpeg",
+      "binaries/ffprobe",
+      "binaries/montage-mcp-server",
+      "binaries/uv",
       "binaries/yt-dlp"
+    ],
+    "resources": [
+      "../../../python"
     ],
     "icon": [
       "icons/32x32.png",

@@ -72,6 +72,9 @@ jobs:
       - name: Fetch desktop sidecars
         run: |
           make desktop-yt-dlp TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-ffmpeg TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-uv TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-mcp-server TARGET_TRIPLE=${{ matrix.target }}
           make desktop-codex TARGET_TRIPLE=${{ matrix.target }}
 
       - name: Verify desktop sidecars

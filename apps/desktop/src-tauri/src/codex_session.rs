@@ -96,8 +96,7 @@ impl CodexSession {
         if mcp_server_path.is_none() {
             let warning = "montage-mcp-server binary missing next to montage-desktop. \
                 The agent will fall back to shell-only and won't use Montage tools \
-                (view_timeline, apply_edl, etc.). Build it with \
-                `cargo build -p montage-cli --bin montage-mcp-server`.";
+                (view_timeline, apply_edl, etc.). Reinstall Montage or report this issue.";
             tracing::error!("{warning}");
             crate::events::emit_item(
                 &app,
