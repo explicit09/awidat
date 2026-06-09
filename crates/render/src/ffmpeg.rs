@@ -113,18 +113,39 @@ fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
         }
     }
     // Walk PATH ourselves so we don't pull in `which`.
-    let path_env = std::env::var_os("PATH").ok_or(())?;
-    for dir in std::env::split_paths(&path_env) {
-        let candidate = dir.join(name);
+    if let Some(path_env) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    // PATH miss. A macOS .app launched from Finder/Dock (or any GUI
+    // launch) inherits a minimal PATH that excludes the usual package
+    // manager bin dirs, so a Homebrew/MacPorts ffmpeg is invisible even
+    // though it works from the user's shell. Fall back to the common
+    // install locations before giving up — the env-var override stays
+    // as the escape hatch for non-standard installs.
+    for dir in COMMON_BIN_DIRS {
+        let candidate = Path::new(dir).join(name);
         if candidate.is_file() {
             return Ok(candidate);
         }
-        // On macOS ffmpeg often lives in /opt/homebrew/bin/ even when
-        // PATH wasn't propagated (e.g. non-login shells); the env-var
-        // override is the documented escape hatch in that case.
     }
     Err(())
 }
+
+/// Well-known package-manager bin dirs to probe when `PATH` doesn't
+/// carry them (the GUI-launch case). Homebrew on Apple Silicon
+/// (`/opt/homebrew`) and Intel (`/usr/local`), MacPorts (`/opt/local`),
+/// and the standard system dirs.
+const COMMON_BIN_DIRS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/local/bin",
+    "/usr/bin",
+];
 
 /// Extract a single frame at time `t_s` from `asset_path`. Returns the
 /// raw image bytes in the requested format (`png` or `jpeg`).
@@ -1931,6 +1952,33 @@ mod tests {
         let samples = [3.5_f32, -2.7, 1.001];
         let buckets = bucket_peaks(&samples, 1);
         assert_eq!(buckets, vec![1.0]);
+    }
+
+    #[test]
+    fn resolve_binary_honors_env_override() {
+        // An existing absolute path in the override env var wins over
+        // any PATH/common-dir lookup. Use a binary that always exists.
+        let env_var = "MONTAGE_TEST_FFPROBE_OVERRIDE";
+        // SAFETY: single-threaded test; no other thread reads this var.
+        unsafe {
+            std::env::set_var(env_var, "/bin/sh");
+        }
+        let resolved = resolve_binary("definitely-not-a-real-binary-xyz", env_var);
+        unsafe {
+            std::env::remove_var(env_var);
+        }
+        assert_eq!(resolved, Ok(PathBuf::from("/bin/sh")));
+    }
+
+    #[test]
+    fn common_bin_dirs_cover_homebrew_and_system() {
+        // The GUI-launch fallback must include the package-manager dirs
+        // a Finder-launched .app won't have on PATH.
+        assert!(COMMON_BIN_DIRS.contains(&"/opt/homebrew/bin"));
+        assert!(COMMON_BIN_DIRS.contains(&"/usr/local/bin"));
+        // And every entry should be absolute so the join is unambiguous
+        // regardless of cwd.
+        assert!(COMMON_BIN_DIRS.iter().all(|d| d.starts_with('/')));
     }
 
     #[test]
