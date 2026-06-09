@@ -96,9 +96,7 @@ pub struct ProviderKeyImportSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProviderKeyUpdate {
-    env_var: &'static str,
-    env_value: Option<String>,
-    removed_value: Option<String>,
+    account: &'static str,
     rows: Vec<ProviderKeyRow>,
 }
 
@@ -116,7 +114,6 @@ pub async fn save_provider_key(
     let mut vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
     let update = save_provider_key_update(&mut vault, &provider, &value)?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    apply_provider_env_update(&update);
     Ok(update.rows)
 }
 
@@ -125,7 +122,7 @@ pub async fn remove_provider_key(provider: String) -> Result<Vec<ProviderKeyRow>
     let mut vault = montage_secrets::load_vault().map_err(|e| e.to_string())?;
     let update = remove_provider_key_update(&mut vault, &provider)?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    apply_provider_env_update(&update);
+    montage_secrets::delete_legacy_keychain(update.account).map_err(|e| e.to_string())?;
     Ok(update.rows)
 }
 
@@ -136,7 +133,6 @@ pub async fn import_legacy_provider_keys() -> Result<ProviderKeyImportSummary, S
         montage_secrets::get_legacy_keychain(definition.account).map_err(|e| e.to_string())
     })?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
-    export_imported_provider_env(&vault, &summary.imported);
     Ok(summary)
 }
 
@@ -185,9 +181,7 @@ fn save_provider_key_update(
     let value = validate_provider_value(definition, value)?;
     vault.set(definition.account, value);
     Ok(ProviderKeyUpdate {
-        env_var: definition.env_var,
-        env_value: Some(value.to_string()),
-        removed_value: None,
+        account: definition.account,
         rows: provider_rows(vault),
     })
 }
@@ -197,12 +191,9 @@ fn remove_provider_key_update(
     provider: &str,
 ) -> Result<ProviderKeyUpdate, String> {
     let definition = provider_definition(provider)?;
-    let removed_value = vault.get(definition.account).map(str::to_string);
     vault.remove(definition.account);
     Ok(ProviderKeyUpdate {
-        env_var: definition.env_var,
-        env_value: None,
-        removed_value,
+        account: definition.account,
         rows: provider_rows(vault),
     })
 }
@@ -232,56 +223,6 @@ fn import_legacy_provider_values(
         imported,
         rows: provider_rows(vault),
     })
-}
-
-fn apply_provider_env_update(update: &ProviderKeyUpdate) {
-    match update.env_value.as_deref() {
-        Some(value) => {
-            // SAFETY: This mirrors the desktop startup hydrator so child
-            // indexer processes inherit keys added during the current session.
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::set_var(update.env_var, value);
-            }
-        }
-        None => {
-            let Some(removed_value) = update.removed_value.as_deref() else {
-                return;
-            };
-            let Ok(current_value) = std::env::var(update.env_var) else {
-                return;
-            };
-            if current_value != removed_value {
-                return;
-            }
-
-            // SAFETY: Removing a provider key must also revoke the hydrated
-            // value for current-session Rust callers and subprocesses. We only
-            // clear the exact value removed from the vault so a distinct
-            // launch-time env override remains intact.
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::remove_var(update.env_var);
-            }
-        }
-    }
-}
-
-fn export_imported_provider_env(vault: &SecretVault, imported: &[String]) {
-    for provider in imported {
-        let Ok(definition) = provider_definition(provider) else {
-            continue;
-        };
-        let Some(value) = vault.get(definition.account) else {
-            continue;
-        };
-        apply_provider_env_update(&ProviderKeyUpdate {
-            env_var: definition.env_var,
-            env_value: Some(value.to_string()),
-            removed_value: None,
-            rows: Vec::new(),
-        });
-    }
 }
 
 fn provider_definition(provider: &str) -> Result<&'static ProviderDefinition, String> {
@@ -420,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn save_provider_key_update_exports_trimmed_value_for_current_session() {
+    fn save_provider_key_update_stores_trimmed_value() {
         let mut vault = SecretVault::default();
         let update = save_provider_key_update(&mut vault, "deepgram", "  dg-valid-token  ")
             .expect("save update");
@@ -429,8 +370,7 @@ mod tests {
             vault.get(accounts::DEEPGRAM_API_KEY),
             Some("dg-valid-token")
         );
-        assert_eq!(update.env_var, env_vars::DEEPGRAM_API_KEY);
-        assert_eq!(update.env_value.as_deref(), Some("dg-valid-token"));
+        assert_eq!(update.account, accounts::DEEPGRAM_API_KEY);
         assert!(
             update
                 .rows
@@ -440,16 +380,14 @@ mod tests {
     }
 
     #[test]
-    fn remove_provider_key_update_clears_current_session_env() {
+    fn remove_provider_key_update_removes_vault_value() {
         let mut vault = SecretVault::default();
         vault.set(accounts::DEEPGRAM_API_KEY, "dg-valid-token");
 
         let update = remove_provider_key_update(&mut vault, "deepgram").expect("remove update");
 
         assert_eq!(vault.get(accounts::DEEPGRAM_API_KEY), None);
-        assert_eq!(update.env_var, env_vars::DEEPGRAM_API_KEY);
-        assert_eq!(update.env_value, None);
-        assert_eq!(update.removed_value.as_deref(), Some("dg-valid-token"));
+        assert_eq!(update.account, accounts::DEEPGRAM_API_KEY);
         assert!(
             update
                 .rows

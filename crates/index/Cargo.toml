@@ -17,6 +17,7 @@ path = "src/bin/montage-index-perf.rs"
 montage-proto = { workspace = true }
 montage-mcp = { workspace = true }
 montage-config = { workspace = true }
+montage-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

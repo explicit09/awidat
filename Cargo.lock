@@ -10093,6 +10093,7 @@ dependencies = [
  "montage-config",
  "montage-mcp",
  "montage-proto",
+ "montage-secrets",
  "montage-test-support",
  "serde",
  "serde_json",

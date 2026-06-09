@@ -204,6 +204,25 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
     Ok(None)
 }
 
+/// Fetch a secret from env or the shared provider vault only. This intentionally
+/// skips legacy per-key keychain entries so startup/background paths do not
+/// prompt for old entries outside explicit import or compatibility flows.
+pub fn get_env_or_vault(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
+    if let Ok(value) = std::env::var(env_var_name)
+        && !value.is_empty()
+    {
+        trace!(env_var = env_var_name, "secret resolved from env var");
+        return Ok(Some(value));
+    }
+
+    if let Some(value) = cached_vault_value(account)? {
+        trace!(account, "secret resolved from provider vault");
+        return Ok(Some(value));
+    }
+
+    Ok(None)
+}
+
 fn cached_vault_value(account: &str) -> Result<Option<String>, SecretError> {
     cached_vault_value_with_backend(&CACHED_VAULT, &KeychainSecretBackend, account)
 }
@@ -409,6 +428,27 @@ pub fn delete(account: &str) -> Result<(), SecretError> {
             source: e,
         }),
     }
+}
+
+/// Delete legacy per-key entries from both the current and pre-rename services.
+/// No-op for services where the entry is already absent.
+pub fn delete_legacy_keychain(account: &str) -> Result<(), SecretError> {
+    for service in secret_read_services() {
+        let entry = keyring::Entry::new(service, account).map_err(|e| SecretError::Backend {
+            account: account.into(),
+            source: e,
+        })?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => {
+                return Err(SecretError::Backend {
+                    account: account.into(),
+                    source: e,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Account names we use across the codebase. Defining them as constants
