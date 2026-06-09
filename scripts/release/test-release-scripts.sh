@@ -25,6 +25,16 @@ assert_contains() {
   fi
 }
 
+assert_equals() {
+  local actual="$1"
+  local expected="$2"
+  local label="$3"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'expected: %s\nactual:   %s\n' "$expected" "$actual" >&2
+    fail "$label"
+  fi
+}
+
 test_required_env_reports_missing_name() {
   local output
   if output="$(env -i bash "$SCRIPT_DIR/check-required-env.sh" APPLE_ID APPLE_PASSWORD 2>&1)"; then
@@ -63,6 +73,20 @@ test_verify_sidecars_rejects_stub() {
   pass "stub sidecar is rejected"
 }
 
+test_verify_sidecars_rejects_yt_dlp_ci_placeholder() {
+  local dir="$TMP_DIR/yt-dlp-placeholder"
+  mkdir -p "$dir"
+  printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo "yt-dlp sidecar unavailable in CI compile check" >&2' 'exit 127' > "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir/codex-aarch64-apple-darwin" "$dir/yt-dlp-aarch64-apple-darwin"
+  local output
+  if output="$(RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin 2>&1)"; then
+    fail "yt-dlp CI placeholder should fail"
+  fi
+  assert_contains "$output" "sidecar is a CI check stub" "yt-dlp CI placeholder is rejected"
+  pass "yt-dlp CI placeholder is rejected"
+}
+
 test_verify_sidecars_accepts_executable_non_stub_files() {
   local dir="$TMP_DIR/real"
   mkdir -p "$dir"
@@ -81,8 +105,8 @@ test_checksums_writes_sha256_files() {
   bash "$SCRIPT_DIR/checksums.sh" "$dir"
   [[ -s "$dir/Montage_aarch64.dmg.sha256" ]] || fail "missing aarch64 checksum"
   [[ -s "$dir/Montage_x64.dmg.sha256" ]] || fail "missing x64 checksum"
-  assert_contains "$(cat "$dir/Montage_aarch64.dmg.sha256")" "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8" "aarch64 checksum matches fixture digest"
-  assert_contains "$(cat "$dir/Montage_x64.dmg.sha256")" "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753" "x64 checksum matches fixture digest"
+  assert_equals "$(cat "$dir/Montage_aarch64.dmg.sha256")" "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8  Montage_aarch64.dmg" "aarch64 checksum line matches fixture digest"
+  assert_equals "$(cat "$dir/Montage_x64.dmg.sha256")" "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753  Montage_x64.dmg" "x64 checksum line matches fixture digest"
   pass "checksums are written"
 }
 
@@ -90,5 +114,6 @@ test_required_env_reports_missing_name
 test_required_env_accepts_present_values
 test_verify_sidecars_rejects_missing_files
 test_verify_sidecars_rejects_stub
+test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
 test_checksums_writes_sha256_files

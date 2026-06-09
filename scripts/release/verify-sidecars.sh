@@ -35,7 +35,7 @@ check_sidecar() {
     echo "sidecar is not executable: $path" >&2
     exit 1
   fi
-  if grep -aq "sidecar check stub" "$path"; then
+  if grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$path"; then
     echo "sidecar is a CI check stub, not a release binary: $path" >&2
     exit 1
   fi
