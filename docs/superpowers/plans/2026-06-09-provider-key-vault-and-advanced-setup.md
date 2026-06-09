@@ -384,7 +384,7 @@ In `provider_keys.rs`, add tests with a mock backend or temp in-memory vault:
 #[test]
 fn provider_rows_redact_configured_keys() {
     let mut vault = montage_secrets::SecretVault::default();
-    vault.set(montage_secrets::accounts::OPENROUTER_API_KEY, "sk-1234567890");
+    vault.set(montage_secrets::accounts::OPENROUTER_API_KEY, "test-openrouter-token");
     let rows = provider_rows_from_vault(&vault);
     let row = rows.iter().find(|row| row.key == "openrouter").unwrap();
     assert_eq!(row.status, ProviderKeyStatus::Configured);

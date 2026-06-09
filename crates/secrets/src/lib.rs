@@ -645,11 +645,7 @@ mod tests {
         new_vault.set(accounts::PEXELS_API_KEY, "new-pexels");
         save_vault_with_backend_and_cache(&backend, &new_vault, &cache)?;
 
-        let resolved = cached_vault_value_with_backend(
-            &cache,
-            &backend,
-            accounts::PEXELS_API_KEY,
-        )?;
+        let resolved = cached_vault_value_with_backend(&cache, &backend, accounts::PEXELS_API_KEY)?;
         assert_eq!(resolved.as_deref(), Some("new-pexels"));
         Ok(())
     }
@@ -670,11 +666,7 @@ mod tests {
         backend.insert(VAULT_ACCOUNT, &old_json);
         backend.clear_get_calls();
 
-        let resolved = cached_vault_value_with_backend(
-            &cache,
-            &backend,
-            accounts::PEXELS_API_KEY,
-        )?;
+        let resolved = cached_vault_value_with_backend(&cache, &backend, accounts::PEXELS_API_KEY)?;
 
         assert_eq!(resolved.as_deref(), Some("new-pexels"));
         assert!(!backend.get_calls().contains(&VAULT_ACCOUNT.to_string()));
@@ -694,11 +686,7 @@ mod tests {
             })?;
         backend.insert(VAULT_ACCOUNT, &first_json);
 
-        let first = cached_vault_value_with_backend(
-            &cache,
-            &backend,
-            accounts::PEXELS_API_KEY,
-        )?;
+        let first = cached_vault_value_with_backend(&cache, &backend, accounts::PEXELS_API_KEY)?;
 
         let mut second_vault = SecretVault::default();
         second_vault.set(accounts::PEXELS_API_KEY, "second-pexels");
@@ -708,11 +696,7 @@ mod tests {
                 message: e.to_string(),
             })?;
         backend.insert(VAULT_ACCOUNT, &second_json);
-        let second = cached_vault_value_with_backend(
-            &cache,
-            &backend,
-            accounts::PEXELS_API_KEY,
-        )?;
+        let second = cached_vault_value_with_backend(&cache, &backend, accounts::PEXELS_API_KEY)?;
 
         assert_eq!(first.as_deref(), Some("first-pexels"));
         assert_eq!(second.as_deref(), Some("first-pexels"));

@@ -286,9 +286,10 @@ mod tests {
                 "x"
             ]
         );
-        assert!(rows
-            .iter()
-            .all(|row| row.status == ProviderKeyStatus::NotSet));
+        assert!(
+            rows.iter()
+                .all(|row| row.status == ProviderKeyStatus::NotSet)
+        );
         assert!(rows.iter().all(|row| row.redacted.is_none()));
         assert!(
             rows.iter()
