@@ -248,8 +248,8 @@ mod tests {
     #[test]
     fn provider_rows_redact_configured_keys() {
         let mut vault = SecretVault::default();
-        vault.set(accounts::HF_TOKEN, "hf_secret_token_123456");
-        vault.set(accounts::OPENROUTER_API_KEY, "sk-or-v1-secret");
+        vault.set(accounts::HF_TOKEN, "hf-placeholder-value-123456");
+        vault.set(accounts::OPENROUTER_API_KEY, "or-placeholder-value");
 
         let rows = provider_rows(&vault);
         let hf = rows
@@ -262,12 +262,12 @@ mod tests {
             .expect("openrouter row");
 
         assert_eq!(hf.status, ProviderKeyStatus::Configured);
-        assert_eq!(hf.redacted.as_deref(), Some("hf_s...3456"));
+        assert_eq!(hf.redacted.as_deref(), Some("hf-p...3456"));
         assert_eq!(openrouter.status, ProviderKeyStatus::Configured);
-        assert_eq!(openrouter.redacted.as_deref(), Some("sk-o...cret"));
-        assert_ne!(hf.redacted.as_deref(), Some("hf_secret_token_123456"));
-        assert!(!format!("{rows:?}").contains("hf_secret_token_123456"));
-        assert!(!format!("{rows:?}").contains("sk-or-v1-secret"));
+        assert_eq!(openrouter.redacted.as_deref(), Some("or-p...alue"));
+        assert_ne!(hf.redacted.as_deref(), Some("hf-placeholder-value-123456"));
+        assert!(!format!("{rows:?}").contains("hf-placeholder-value-123456"));
+        assert!(!format!("{rows:?}").contains("or-placeholder-value"));
     }
 
     #[test]
