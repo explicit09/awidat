@@ -41,6 +41,7 @@ interface BuildDeleteArgs {
   stem: string;
   sourceStart: number;
   sourceEnd: number;
+  clipUuid?: string;
 }
 
 /**
@@ -51,14 +52,17 @@ interface BuildDeleteArgs {
  *   - Range must fully sit inside a single video-track clip. Multi-
  *     clip spans return `[]` (caller surfaces a warning).
  *   - Empty / inverted ranges return `[]`.
- *   - Returns: `Split @ start; Split @ end; Delete (middle piece)`.
+ *   - `clipUuid`, when provided, constrains the cut to the selected
+ *     timeline occurrence rather than the first matching source range.
+ *   - Returns: `Split @ start; Split @ end; Ripple Delete (middle piece)`.
  */
 export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
-  const { snapshot, stem, sourceStart, sourceEnd } = args;
+  const { snapshot, stem, sourceStart, sourceEnd, clipUuid } = args;
   if (!(sourceEnd > sourceStart + 0.05)) return [];
 
   const candidates: {
     clipUuid: string;
+    clipName: string;
     clipSourceStart: number;
     clipSourceEnd: number;
   }[] = [];
@@ -66,12 +70,20 @@ export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
     if (track.kind !== "video") continue;
     for (const item of track.items) {
       if (item.kind !== "clip") continue;
-      if (item.proxy_path === null) continue;
-      if (stemOf(item.proxy_path) !== stem) continue;
+      // When the caller knows the selected timeline clip, match on its
+      // stable id alone — the clip may be source-playable while its
+      // proxy is still generating (`proxy_path === null`), in which
+      // case the stem check below would wrongly skip it.
+      if (clipUuid !== undefined) {
+        if (item.clip_uuid !== clipUuid) continue;
+      } else if (clipPlayableStem(item) !== stem) {
+        continue;
+      }
       const clipStart = item.source_start_s ?? 0;
       const clipEnd = clipStart + item.duration_s;
       candidates.push({
         clipUuid: item.clip_uuid,
+        clipName: item.name,
         clipSourceStart: clipStart,
         clipSourceEnd: clipEnd,
       });
@@ -86,6 +98,13 @@ export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
   );
   if (!fullyInside) return [];
 
+  // `apply_split` names the right piece `${name}-b` and stamps it with
+  // a *fresh* clip_uuid. So the follow-up ops must anchor on the
+  // name-derived value, not `${clip_uuid}-b` — the resolver matches a
+  // ClipUuid anchor against `name` as well as `clip_uuid`, so this is
+  // correct for both stamped (clip_uuid != name) and un-stamped clips.
+  const rightPiece = nameAfterSplit(fullyInside.clipName);
+
   return [
     {
       kind: "split_clip",
@@ -94,12 +113,12 @@ export function buildDeleteRangeOpsForStem(args: BuildDeleteArgs): EdlOp[] {
     },
     {
       kind: "split_clip",
-      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
+      anchor: { kind: "clip_uuid", uuid: rightPiece },
       atS: sourceEnd,
     },
     {
-      kind: "delete_clip",
-      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
+      kind: "ripple_delete",
+      anchor: { kind: "clip_uuid", uuid: rightPiece },
     },
   ];
 }
@@ -153,6 +172,22 @@ export function isRangeCutFromTimeline(
 
 function nameAfterSplit(parent: string): string {
   return `${parent}-b`;
+}
+
+/**
+ * The proxy/source stem backing a clip, matching the `proxyStem` that
+ * `usePlaySegments` derives. Prefers `proxy_path`, but falls back to
+ * `playable_path` so a clip playing from its original source (proxy
+ * still generating, `proxy_path === null`) still resolves to the same
+ * stem the composed transcript selected it by. Returns null when the
+ * clip has no playable media at all.
+ */
+function clipPlayableStem(item: {
+  proxy_path: string | null;
+  playable_path?: string;
+}): string | null {
+  const path = item.proxy_path ?? item.playable_path ?? null;
+  return path === null ? null : stemOf(path);
 }
 
 function stemOf(path: string): string {

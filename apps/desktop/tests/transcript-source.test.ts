@@ -27,11 +27,17 @@ function makeClipItem(opts: {
   proxyPath: string | null;
   sourceStartS: number;
   durationS: number;
+  /** Defaults to clipUuid (the un-stamped case). Set distinctly to
+   *  exercise stamped clips where clip_uuid !== name. */
+  name?: string;
+  /** Path the clip plays from when proxy_path is null (source-playable
+   *  while the proxy is still generating). */
+  playablePath?: string;
 }) {
   return {
     kind: "clip" as const,
     clip_uuid: opts.clipUuid,
-    name: opts.clipUuid,
+    name: opts.name ?? opts.clipUuid,
     enabled: true,
     duration_s: opts.durationS,
     media_reference: null,
@@ -39,6 +45,7 @@ function makeClipItem(opts: {
     source_start_s: opts.sourceStartS,
     source_end_s: opts.sourceStartS + opts.durationS,
     proxy_path: opts.proxyPath,
+    playable_path: opts.playablePath,
     playable_kind: { kind: "available" } as unknown,
     source_path: null,
     color_correction: null,
@@ -58,6 +65,7 @@ function makeClipItem(opts: {
     transition_id: null,
     transition_family: null,
     sync_group_id: null,
+    link_group_id: null,
     sync_offset_s: null,
     sync_speed_factor: null,
     sync_confidence: null,
@@ -177,7 +185,7 @@ function snapshotWithClips(
   );
 }
 
-// Fully-inside-one-clip range → Split + Split + Delete.
+// Fully-inside-one-clip range → Split + Split + Ripple Delete.
 {
   const snap = snapshotWithClips([
     makeClipItem({
@@ -193,10 +201,10 @@ function snapshotWithClips(
     sourceStart: 10,
     sourceEnd: 20,
   });
-  assert.equal(ops.length, 3, "expect 3 ops (split, split, delete)");
+  assert.equal(ops.length, 3, "expect 3 ops (split, split, ripple delete)");
   assert.equal(ops[0].kind, "split_clip");
   assert.equal(ops[1].kind, "split_clip");
-  assert.equal(ops[2].kind, "delete_clip");
+  assert.equal(ops[2].kind, "ripple_delete");
   // First split anchors the parent clip at the range start.
   assert.deepEqual(
     ops[0],
@@ -216,18 +224,52 @@ function snapshotWithClips(
       atS: 20,
     },
   );
-  // Delete drops the middle piece (`<parent>-b` after the second
-  // split's left-half names it).
+  // Ripple delete drops the middle piece (`<parent>-b` after the
+  // second split's left-half names it), closes the timeline gap, and
+  // lets the backend remove linked A/V siblings.
   assert.deepEqual(
     ops[2],
     {
-      kind: "delete_clip",
+      kind: "ripple_delete",
       anchor: { kind: "clip_uuid", uuid: "clip-a-b" },
     },
   );
 }
 
-// proxy_path=null clip is skipped.
+// Optional clipUuid anchors duplicate source occurrences to the
+// selected timeline clip instead of the first matching source range.
+{
+  const snap = snapshotWithClips([
+    makeClipItem({
+      clipUuid: "clip-earlier",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+    makeClipItem({
+      clipUuid: "clip-selected",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+  ]);
+  const ops = buildDeleteRangeOpsForStem({
+    snapshot: snap,
+    stem: "foo",
+    clipUuid: "clip-selected",
+    sourceStart: 10,
+    sourceEnd: 20,
+  });
+  assert.equal(ops.length, 3, "expect anchored duplicate delete ops");
+  assert.deepEqual(ops[0], {
+    kind: "split_clip",
+    anchor: { kind: "clip_uuid", uuid: "clip-selected" },
+    atS: 10,
+  });
+}
+
+// proxy_path=null clip with no playable_path is skipped (genuinely no
+// media to cut from).
 {
   const snap = snapshotWithClips([
     makeClipItem({
@@ -245,7 +287,99 @@ function snapshotWithClips(
       sourceEnd: 10,
     }),
     [],
-    "clips without proxy_path are ignored",
+    "clips without any playable media are ignored",
+  );
+}
+
+// Regression for finding #1 (P1): a stamped clip whose clip_uuid !=
+// name must anchor the follow-up split + ripple_delete on the
+// name-derived `${name}-b`, because apply_split names the right piece
+// from the clip NAME (and stamps a fresh, unrelated uuid). Anchoring
+// on `${clip_uuid}-b` would match neither piece → delete fails after
+// the first split.
+{
+  const snap = snapshotWithClips([
+    makeClipItem({
+      clipUuid: "c-1718000000000-0001", // stamped, differs from name
+      name: "foo",
+      proxyPath: "/proj/.montage/proxies/foo.mp4",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+  ]);
+  const ops = buildDeleteRangeOpsForStem({
+    snapshot: snap,
+    stem: "foo",
+    sourceStart: 10,
+    sourceEnd: 20,
+  });
+  assert.equal(ops.length, 3, "stamped clip still emits 3 ops");
+  assert.deepEqual(
+    ops[0],
+    {
+      kind: "split_clip",
+      anchor: { kind: "clip_uuid", uuid: "c-1718000000000-0001" },
+      atS: 10,
+    },
+    "first split anchors the original stamped uuid",
+  );
+  assert.deepEqual(
+    ops[1],
+    {
+      kind: "split_clip",
+      anchor: { kind: "clip_uuid", uuid: "foo-b" },
+      atS: 20,
+    },
+    "second split anchors `${name}-b`, not `${clip_uuid}-b`",
+  );
+  assert.deepEqual(
+    ops[2],
+    {
+      kind: "ripple_delete",
+      anchor: { kind: "clip_uuid", uuid: "foo-b" },
+    },
+    "ripple delete anchors `${name}-b`",
+  );
+}
+
+// Regression for findings #2/#4 (P2): a source-playable clip (proxy
+// still generating, proxy_path === null but playable_path set) appears
+// in the composed transcript and must be deletable — keyed by clipUuid
+// when known, and by its playable_path stem otherwise.
+{
+  const snap = snapshotWithClips([
+    makeClipItem({
+      clipUuid: "clip-src",
+      proxyPath: null,
+      playablePath: "/proj/raw/foo.MOV",
+      sourceStartS: 0,
+      durationS: 60,
+    }),
+  ]);
+  // By stem (no clipUuid): falls back to playable_path stem `foo`.
+  const byStem = buildDeleteRangeOpsForStem({
+    snapshot: snap,
+    stem: "foo",
+    sourceStart: 10,
+    sourceEnd: 20,
+  });
+  assert.equal(
+    byStem.length,
+    3,
+    "source-playable clip is deletable via playable_path stem",
+  );
+  // By clipUuid: matches regardless of stem, even though proxy is null.
+  const byUuid = buildDeleteRangeOpsForStem({
+    snapshot: snap,
+    stem: "wrong-stem",
+    clipUuid: "clip-src",
+    sourceStart: 10,
+    sourceEnd: 20,
+  });
+  assert.equal(
+    byUuid.length,
+    3,
+    "source-playable clip is deletable via clipUuid even when proxy_path is null",
   );
 }
 
