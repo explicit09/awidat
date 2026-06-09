@@ -98,6 +98,7 @@ pub struct ProviderKeyImportSummary {
 struct ProviderKeyUpdate {
     env_var: &'static str,
     env_value: Option<String>,
+    removed_value: Option<String>,
     rows: Vec<ProviderKeyRow>,
 }
 
@@ -135,6 +136,7 @@ pub async fn import_legacy_provider_keys() -> Result<ProviderKeyImportSummary, S
         montage_secrets::get_legacy_keychain(definition.account).map_err(|e| e.to_string())
     })?;
     montage_secrets::save_vault(&vault).map_err(|e| e.to_string())?;
+    export_imported_provider_env(&vault, &summary.imported);
     Ok(summary)
 }
 
@@ -185,6 +187,7 @@ fn save_provider_key_update(
     Ok(ProviderKeyUpdate {
         env_var: definition.env_var,
         env_value: Some(value.to_string()),
+        removed_value: None,
         rows: provider_rows(vault),
     })
 }
@@ -194,10 +197,12 @@ fn remove_provider_key_update(
     provider: &str,
 ) -> Result<ProviderKeyUpdate, String> {
     let definition = provider_definition(provider)?;
+    let removed_value = vault.get(definition.account).map(str::to_string);
     vault.remove(definition.account);
     Ok(ProviderKeyUpdate {
         env_var: definition.env_var,
         env_value: None,
+        removed_value,
         rows: provider_rows(vault),
     })
 }
@@ -240,13 +245,42 @@ fn apply_provider_env_update(update: &ProviderKeyUpdate) {
             }
         }
         None => {
+            let Some(removed_value) = update.removed_value.as_deref() else {
+                return;
+            };
+            let Ok(current_value) = std::env::var(update.env_var) else {
+                return;
+            };
+            if current_value != removed_value {
+                return;
+            }
+
             // SAFETY: Removing a provider key must also revoke the hydrated
-            // value for current-session Rust callers and subprocesses.
+            // value for current-session Rust callers and subprocesses. We only
+            // clear the exact value removed from the vault so a distinct
+            // launch-time env override remains intact.
             #[allow(unsafe_code)]
             unsafe {
                 std::env::remove_var(update.env_var);
             }
         }
+    }
+}
+
+fn export_imported_provider_env(vault: &SecretVault, imported: &[String]) {
+    for provider in imported {
+        let Ok(definition) = provider_definition(provider) else {
+            continue;
+        };
+        let Some(value) = vault.get(definition.account) else {
+            continue;
+        };
+        apply_provider_env_update(&ProviderKeyUpdate {
+            env_var: definition.env_var,
+            env_value: Some(value.to_string()),
+            removed_value: None,
+            rows: Vec::new(),
+        });
     }
 }
 
@@ -415,6 +449,7 @@ mod tests {
         assert_eq!(vault.get(accounts::DEEPGRAM_API_KEY), None);
         assert_eq!(update.env_var, env_vars::DEEPGRAM_API_KEY);
         assert_eq!(update.env_value, None);
+        assert_eq!(update.removed_value.as_deref(), Some("dg-valid-token"));
         assert!(
             update
                 .rows

@@ -342,6 +342,14 @@ pub fn save_vault(vault: &SecretVault) -> Result<(), SecretError> {
     save_vault_with_backend(&KeychainSecretBackend, vault)
 }
 
+/// Store a provider secret in the shared vault.
+pub fn set_vault_secret(account: &str, value: &str) -> Result<SecretVault, SecretError> {
+    let mut vault = load_vault()?;
+    vault.set(account, value);
+    save_vault(&vault)?;
+    Ok(vault)
+}
+
 fn save_vault_with_backend(
     backend: &impl SecretBackend,
     vault: &SecretVault,

@@ -587,9 +587,12 @@ fn cmd_secrets_set(account: &str) -> Result<()> {
     if value.is_empty() {
         return Err(anyhow::anyhow!("empty API key"));
     }
-    montage_secrets::set(account, &value)
-        .with_context(|| format!("failed to store secret '{account}' in keychain"))?;
-    eprintln!("stored '{account}' in keychain ({} chars)", value.len());
+    montage_secrets::set_vault_secret(account, &value)
+        .with_context(|| format!("failed to store secret '{account}' in provider key vault"))?;
+    eprintln!(
+        "stored '{account}' in provider key vault ({} chars)",
+        value.len()
+    );
     Ok(())
 }
 

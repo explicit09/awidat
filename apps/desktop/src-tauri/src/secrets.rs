@@ -45,6 +45,7 @@ use tracing::{info, warn};
 /// Set of well-known keys we resolve at startup.
 const RESOLVE_AT_STARTUP: &[(&str, &str)] = &[
     (env_vars::ANTHROPIC_API_KEY, accounts::ANTHROPIC_API_KEY),
+    (env_vars::DEEPGRAM_API_KEY, accounts::DEEPGRAM_API_KEY),
     (env_vars::HF_TOKEN, accounts::HF_TOKEN),
     (env_vars::OPENROUTER_API_KEY, accounts::OPENROUTER_API_KEY),
 ];
@@ -114,4 +115,16 @@ fn prefetch_enabled() -> bool {
             .filter(|s| !s.is_empty()),
         None | Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_resolution_includes_transcription_provider() {
+        assert!(
+            RESOLVE_AT_STARTUP.contains(&(env_vars::DEEPGRAM_API_KEY, accounts::DEEPGRAM_API_KEY))
+        );
+    }
 }
