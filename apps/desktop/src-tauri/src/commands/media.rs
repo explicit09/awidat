@@ -974,6 +974,12 @@ fn preview_media_content_type(path: &Path) -> &'static str {
         Some("mp3") => "audio/mpeg",
         Some("wav") => "audio/wav",
         Some("m4a") => "audio/mp4",
+        // Filmstrip thumbnail JPEGs served as the Landing tile's image
+        // fallback when a project has no proxy. Without these cases the
+        // file is served as video/mp4 and the `<img>` fails to decode.
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
         _ => "video/mp4",
     }
 }
@@ -1549,6 +1555,16 @@ mod tests {
         assert_eq!(
             preview_media_content_type(&PathBuf::from("proxy.mp4")),
             "video/mp4"
+        );
+        // Filmstrip thumbnail frames (Landing image-fallback path) must
+        // serve as image/*, not the video/mp4 default.
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("frame-0001.jpg")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("frame-0001.JPEG")),
+            "image/jpeg"
         );
     }
 
