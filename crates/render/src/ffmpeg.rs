@@ -104,17 +104,29 @@ pub fn ffprobe_path() -> Result<PathBuf, FfmpegError> {
 }
 
 fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
-    if let Ok(p) = std::env::var(env_var)
-        && !p.is_empty()
-    {
+    let override_path = std::env::var(env_var).ok();
+    let path_env = std::env::var_os("PATH");
+    resolve_binary_in(name, override_path.as_deref(), path_env.as_deref())
+}
+
+/// Pure resolution logic, factored out so it can be unit-tested without
+/// mutating the process environment (which is `unsafe` and races the
+/// parallel test harness). `override_path` is the env-var value (if
+/// any); `path_env` is the raw `PATH` (if any).
+fn resolve_binary_in(
+    name: &str,
+    override_path: Option<&str>,
+    path_env: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, ()> {
+    if let Some(p) = override_path.filter(|p| !p.is_empty()) {
         let pb = PathBuf::from(p);
         if pb.exists() {
             return Ok(pb);
         }
     }
     // Walk PATH ourselves so we don't pull in `which`.
-    if let Some(path_env) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_env) {
+    if let Some(path_env) = path_env {
+        for dir in std::env::split_paths(path_env) {
             let candidate = dir.join(name);
             if candidate.is_file() {
                 return Ok(candidate);
@@ -1955,19 +1967,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_binary_honors_env_override() {
-        // An existing absolute path in the override env var wins over
-        // any PATH/common-dir lookup. Use a binary that always exists.
-        let env_var = "MONTAGE_TEST_FFPROBE_OVERRIDE";
-        // SAFETY: single-threaded test; no other thread reads this var.
-        unsafe {
-            std::env::set_var(env_var, "/bin/sh");
-        }
-        let resolved = resolve_binary("definitely-not-a-real-binary-xyz", env_var);
-        unsafe {
-            std::env::remove_var(env_var);
-        }
+    fn resolve_binary_honors_override() {
+        // An existing absolute path in the override wins over any
+        // PATH/common-dir lookup. Uses the pure helper so it never
+        // touches the process env (which would race the parallel test
+        // harness). `/bin/sh` always exists.
+        let resolved =
+            resolve_binary_in("definitely-not-a-real-binary-xyz", Some("/bin/sh"), None);
         assert_eq!(resolved, Ok(PathBuf::from("/bin/sh")));
+    }
+
+    #[test]
+    fn resolve_binary_empty_override_is_ignored() {
+        // Empty override string must not be treated as a path; with no
+        // PATH and a bogus name, resolution falls through to Err.
+        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some(""), None);
+        assert_eq!(resolved, Err(()));
     }
 
     #[test]
