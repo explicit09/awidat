@@ -136,6 +136,32 @@ pub enum SecretError {
         #[source]
         source: keyring::Error,
     },
+    /// Serialized provider vault data could not be decoded.
+    #[error("provider key vault is corrupt: {message}")]
+    CorruptVault { message: String },
+}
+
+trait SecretBackend {
+    fn get_password(&self, account: &str) -> Result<Option<String>, keyring::Error>;
+    fn set_password(&self, account: &str, value: &str) -> Result<(), keyring::Error>;
+}
+
+struct KeychainSecretBackend;
+
+impl SecretBackend for KeychainSecretBackend {
+    fn get_password(&self, account: &str) -> Result<Option<String>, keyring::Error> {
+        let entry = keyring::Entry::new(SERVICE, account)?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn set_password(&self, account: &str, value: &str) -> Result<(), keyring::Error> {
+        let entry = keyring::Entry::new(SERVICE, account)?;
+        entry.set_password(value)
+    }
 }
 
 /// Fetch a secret. Tries `env_var_name` first, then the OS keychain entry
@@ -176,6 +202,50 @@ fn secret_read_services() -> [&'static str; 2] {
     [SERVICE, LEGACY_SERVICE]
 }
 
+/// Load the serialized provider secret vault from the OS keychain.
+///
+/// A missing vault entry means no provider secrets have been stored yet, so this
+/// returns the default empty vault.
+pub fn load_vault() -> Result<SecretVault, SecretError> {
+    load_vault_with_backend(&KeychainSecretBackend)
+}
+
+fn load_vault_with_backend(backend: &impl SecretBackend) -> Result<SecretVault, SecretError> {
+    let Some(json) = backend
+        .get_password(VAULT_ACCOUNT)
+        .map_err(|e| SecretError::Backend {
+            account: VAULT_ACCOUNT.to_string(),
+            source: e,
+        })?
+    else {
+        return Ok(SecretVault::default());
+    };
+
+    SecretVault::from_json(&json).map_err(|e| SecretError::CorruptVault {
+        message: e.to_string(),
+    })
+}
+
+/// Store the serialized provider secret vault in a single OS keychain entry.
+pub fn save_vault(vault: &SecretVault) -> Result<(), SecretError> {
+    save_vault_with_backend(&KeychainSecretBackend, vault)
+}
+
+fn save_vault_with_backend(
+    backend: &impl SecretBackend,
+    vault: &SecretVault,
+) -> Result<(), SecretError> {
+    let json = vault.to_json().map_err(|e| SecretError::CorruptVault {
+        message: e.to_string(),
+    })?;
+    backend
+        .set_password(VAULT_ACCOUNT, &json)
+        .map_err(|e| SecretError::Backend {
+            account: VAULT_ACCOUNT.to_string(),
+            source: e,
+        })
+}
+
 /// Store a secret in the keychain under `(SERVICE, account)`. Overwrites
 /// any existing value.
 pub fn set(account: &str, value: &str) -> Result<(), SecretError> {
@@ -212,6 +282,8 @@ pub mod accounts {
     /// Anthropic API key — used by `topic-mcp` premium labeling and the
     /// Week 3 agent loop.
     pub const ANTHROPIC_API_KEY: &str = "anthropic_api_key";
+    /// Deepgram API key — used by transcript and speech-to-text services.
+    pub const DEEPGRAM_API_KEY: &str = "deepgram_api_key";
     /// Pexels API key — used by the b-roll search/use tools (Phase 3).
     pub const PEXELS_API_KEY: &str = "pexels_api_key";
     /// OpenRouter API key — used by generated-media video providers.
@@ -226,6 +298,8 @@ pub mod env_vars {
     pub const HF_TOKEN: &str = "HF_TOKEN";
     /// Override for [`super::accounts::ANTHROPIC_API_KEY`].
     pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+    /// Override for [`super::accounts::DEEPGRAM_API_KEY`].
+    pub const DEEPGRAM_API_KEY: &str = "DEEPGRAM_API_KEY";
     /// Override for [`super::accounts::PEXELS_API_KEY`].
     pub const PEXELS_API_KEY: &str = "PEXELS_API_KEY";
     /// Override for [`super::accounts::OPENROUTER_API_KEY`].
@@ -237,6 +311,63 @@ pub mod env_vars {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    struct MemorySecretBackend {
+        entries: RefCell<BTreeMap<String, String>>,
+        fail_get: bool,
+        fail_set: bool,
+    }
+
+    impl MemorySecretBackend {
+        fn with_get_error() -> Self {
+            Self {
+                fail_get: true,
+                ..Self::default()
+            }
+        }
+
+        fn with_set_error() -> Self {
+            Self {
+                fail_set: true,
+                ..Self::default()
+            }
+        }
+
+        fn accounts(&self) -> Vec<String> {
+            self.entries.borrow().keys().cloned().collect()
+        }
+
+        fn insert(&self, account: &str, value: &str) {
+            self.entries
+                .borrow_mut()
+                .insert(account.to_string(), value.to_string());
+        }
+    }
+
+    fn synthetic_keyring_error(operation: &str) -> keyring::Error {
+        keyring::Error::Invalid("test_backend".to_string(), operation.to_string())
+    }
+
+    impl SecretBackend for MemorySecretBackend {
+        fn get_password(&self, account: &str) -> Result<Option<String>, keyring::Error> {
+            if self.fail_get {
+                return Err(synthetic_keyring_error("get"));
+            }
+            Ok(self.entries.borrow().get(account).cloned())
+        }
+
+        fn set_password(&self, account: &str, value: &str) -> Result<(), keyring::Error> {
+            if self.fail_set {
+                return Err(synthetic_keyring_error("set"));
+            }
+            self.entries
+                .borrow_mut()
+                .insert(account.to_string(), value.to_string());
+            Ok(())
+        }
+    }
 
     // The real env-var ↔ keychain interaction is exercised by manual smoke
     // (we deliberately don't write to the user's keychain from tests, and
@@ -246,6 +377,7 @@ mod tests {
     fn account_constants_are_distinct_from_env_var_names() {
         assert_ne!(accounts::HF_TOKEN, env_vars::HF_TOKEN);
         assert_ne!(accounts::ANTHROPIC_API_KEY, env_vars::ANTHROPIC_API_KEY);
+        assert_ne!(accounts::DEEPGRAM_API_KEY, env_vars::DEEPGRAM_API_KEY);
         assert_ne!(accounts::PEXELS_API_KEY, env_vars::PEXELS_API_KEY);
         assert_ne!(accounts::OPENROUTER_API_KEY, env_vars::OPENROUTER_API_KEY);
         assert_ne!(accounts::X_BEARER_TOKEN, env_vars::X_BEARER_TOKEN);
@@ -262,6 +394,61 @@ mod tests {
     fn legacy_service_name_is_read_fallback() {
         assert_eq!(LEGACY_SERVICE, "awidat");
         assert_eq!(secret_read_services(), ["montage", "awidat"]);
+    }
+
+    #[test]
+    fn load_vault_returns_default_when_keychain_entry_missing() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let vault = load_vault_with_backend(&backend)?;
+        assert_eq!(vault, SecretVault::default());
+        Ok(())
+    }
+
+    #[test]
+    fn save_then_load_vault_uses_single_keychain_account() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        let mut vault = SecretVault::default();
+        vault.set(accounts::DEEPGRAM_API_KEY, "dg-secret");
+        save_vault_with_backend(&backend, &vault)?;
+        assert_eq!(backend.accounts(), vec![VAULT_ACCOUNT.to_string()]);
+        let loaded = load_vault_with_backend(&backend)?;
+        assert_eq!(loaded.get(accounts::DEEPGRAM_API_KEY), Some("dg-secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn load_vault_maps_malformed_json_to_corrupt_vault() {
+        let backend = MemorySecretBackend::default();
+        backend.insert(VAULT_ACCOUNT, "not-json");
+        match load_vault_with_backend(&backend) {
+            Err(SecretError::CorruptVault { message }) => {
+                assert!(message.contains("expected ident"));
+            }
+            other => panic!("expected corrupt vault error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_vault_maps_backend_get_error_to_vault_account() {
+        let backend = MemorySecretBackend::with_get_error();
+        match load_vault_with_backend(&backend) {
+            Err(SecretError::Backend { account, .. }) => {
+                assert_eq!(account, VAULT_ACCOUNT);
+            }
+            other => panic!("expected backend error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_vault_maps_backend_set_error_to_vault_account() {
+        let backend = MemorySecretBackend::with_set_error();
+        let vault = SecretVault::default();
+        match save_vault_with_backend(&backend, &vault) {
+            Err(SecretError::Backend { account, .. }) => {
+                assert_eq!(account, VAULT_ACCOUNT);
+            }
+            other => panic!("expected backend error, got {other:?}"),
+        }
     }
 
     #[test]
