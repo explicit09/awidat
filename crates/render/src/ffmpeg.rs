@@ -1972,8 +1972,7 @@ mod tests {
         // PATH/common-dir lookup. Uses the pure helper so it never
         // touches the process env (which would race the parallel test
         // harness). `/bin/sh` always exists.
-        let resolved =
-            resolve_binary_in("definitely-not-a-real-binary-xyz", Some("/bin/sh"), None);
+        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some("/bin/sh"), None);
         assert_eq!(resolved, Ok(PathBuf::from("/bin/sh")));
     }
 
