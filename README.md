@@ -3,9 +3,10 @@
 Montage is a terminal-first, agent-native video editing harness. It combines a Rust CLI/TUI, a Tauri desktop app, Python MCP indexers, and bundled editorial skills so an agent can inspect footage, reason about edits, propose timeline changes, and render previews.
 
 This repository is a developer-preview source release. It is intended for
-contributors who can build and run the project from source. The consumer installers
-are not ready yet; release packaging, signing, notarization, auto-update, and
-bundled runtime polish are deferred to the consumer-release track.
+contributors who can build and run the project from source. The macOS consumer
+installer track now builds signed and notarized DMGs from GitHub Actions on
+`v*` tags; Linux packages, Windows installers, Homebrew publishing, auto-update,
+and broader bundled runtime polish remain future release work.
 
 ## What is in this repo
 
@@ -105,6 +106,51 @@ If the fixed Tauri dev port is busy:
 make desktop-stop
 ```
 
+## macOS consumer releases
+
+Strict macOS consumer releases are built by `.github/workflows/release.yml`.
+The workflow runs on `v*` tags and creates notarized DMGs for:
+
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+
+Tag pushes publish GitHub releases; manual `workflow_dispatch` runs from a
+non-`v*` branch or ref can rehearse the build path without publishing release
+assets.
+
+Required GitHub Actions secrets:
+
+- `APPLE_ID`
+- `APPLE_PASSWORD`
+- `APPLE_TEAM_ID`
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `KEYCHAIN_PASSWORD`
+
+`APPLE_CERTIFICATE` must be a base64-encoded Developer ID Application `.p12`.
+`APPLE_PASSWORD` should be an Apple app-specific password with notarization
+access for `APPLE_TEAM_ID`. CI currently uses supported macOS 15 runners for
+Apple Silicon and Intel release builds.
+
+Local rehearsal for the current Mac target:
+
+```sh
+make desktop-yt-dlp
+make desktop-codex
+scripts/release/verify-sidecars.sh "$(rustc -vV | awk '/^host:/ { print $2 }')"
+pnpm --dir apps/desktop tauri build --bundles dmg
+```
+
+CI release builds are strict: missing Apple secrets, stub sidecars, failed
+signing, failed notarization, or failed stapling all fail the release.
+Publishing also requires exactly these release assets:
+
+- `Montage-aarch64-apple-darwin.dmg`
+- `Montage-aarch64-apple-darwin.dmg.sha256`
+- `Montage-x86_64-apple-darwin.dmg`
+- `Montage-x86_64-apple-darwin.dmg.sha256`
+- `checksums.txt`
+
 ## Python Indexers
 
 The Python indexers live in a `uv` workspace under `python/`:
@@ -179,9 +225,10 @@ Makefile lane that matches the changed subsystem.
 
 ## Packaging
 
-Release packaging is not currently restored in this checkout. The historical
-`dist/` scripts referenced by older automation are absent, so use development
-commands until the release path is rebuilt.
+macOS consumer DMG packaging is handled by the strict GitHub Actions release
+workflow described above. The historical `dist/` scripts referenced by older
+automation are absent; Linux packages, Windows installers, Homebrew publishing,
+and auto-update remain future release work.
 
 ## Configuration
 
