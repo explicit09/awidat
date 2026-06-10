@@ -23,6 +23,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-15
             artifact_name: Montage-aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            artifact_name: Montage-x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -140,6 +143,8 @@ jobs:
           required_assets=(
             Montage-aarch64-apple-darwin.dmg
             Montage-aarch64-apple-darwin.dmg.sha256
+            Montage-x86_64-apple-darwin.dmg
+            Montage-x86_64-apple-darwin.dmg.sha256
           )
           for asset in "${required_assets[@]}"; do
             if [[ ! -f "release-assets/$asset" ]]; then
@@ -153,6 +158,7 @@ jobs:
           diff -u <(printf '%s\n' "${required_assets[@]}" | sed 's#^#release-assets/#' | sort) "$asset_list"
           cat \
             release-assets/Montage-aarch64-apple-darwin.dmg.sha256 \
+            release-assets/Montage-x86_64-apple-darwin.dmg.sha256 \
             > release-assets/checksums.txt
           ls -la release-assets
 
