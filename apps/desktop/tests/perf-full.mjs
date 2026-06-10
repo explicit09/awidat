@@ -106,7 +106,7 @@ function projectHarnessUrl() {
 async function installPageInstrumentation(context) {
   await context.addInitScript(`
     try {
-      localStorage.setItem("montage:welcome:shown", new Date().toISOString());
+      localStorage.setItem("montage:welcome:consent", new Date().toISOString());
     } catch {}
     window.__montagePerf = {
       longTasks: [],

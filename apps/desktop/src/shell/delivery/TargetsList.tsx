@@ -22,8 +22,6 @@ import {
  */
 const UPLOAD_CAPABLE_TARGETS: ReadonlySet<DeliveryTargetKey> = new Set([
   "youtube",
-  "tiktok",
-  "instagram",
   "twitter_x",
 ]);
 

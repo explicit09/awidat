@@ -1,7 +1,7 @@
 // Selected delivery targets store + target catalog.
 //
-// The DeliverySurface renders 6 platform cards (YouTube / TikTok /
-// Instagram / Twitter/X / Captions / Cover / Custom frame). This store tracks
+// The DeliverySurface renders the MVP target cards (YouTube / Twitter/X /
+// Captions / Cover / Custom frame). This store tracks
 // which of those the user has *selected* for the next export, and
 // persists the selection per-project so reloads keep the choices.
 //
@@ -97,6 +97,29 @@ export const DELIVERY_TARGETS: Record<DeliveryTargetKey, DeliveryTargetSpec> = {
   },
 };
 
+export const VISIBLE_DELIVERY_TARGET_KEYS: readonly DeliveryTargetKey[] = [
+  "youtube",
+  "twitter_x",
+  "captions",
+  "cover",
+  "custom",
+];
+
+const VISIBLE_DELIVERY_TARGET_SET = new Set<DeliveryTargetKey>(
+  VISIBLE_DELIVERY_TARGET_KEYS,
+);
+
+export function normalizeVisibleDeliveryTargetKeys(
+  keys: readonly unknown[],
+): DeliveryTargetKey[] {
+  return keys.filter(
+    (key): key is DeliveryTargetKey =>
+      typeof key === "string" &&
+      key in DELIVERY_TARGETS &&
+      VISIBLE_DELIVERY_TARGET_SET.has(key as DeliveryTargetKey),
+  );
+}
+
 export function renderQueueLabelForTarget(
   key: DeliveryTargetKey,
   selected: ReadonlySet<DeliveryTargetKey>,
@@ -124,12 +147,9 @@ function loadPersisted(): Set<DeliveryTargetKey> {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
     if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as DeliveryTargetKey[];
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return new Set();
-    const valid = parsed.filter(
-      (k): k is DeliveryTargetKey => k in DELIVERY_TARGETS,
-    );
-    return new Set(valid);
+    return new Set(normalizeVisibleDeliveryTargetKeys(parsed));
   } catch {
     return new Set();
   }
@@ -156,15 +176,13 @@ export const useDeliveryTargetsStore = create<State>((set) => ({
     }),
   setSelected: (keys) =>
     set(() => {
-      const next = new Set(keys);
+      const next = new Set(normalizeVisibleDeliveryTargetKeys(keys));
       persist(next);
       return { selected: next };
     }),
   selectAll: () =>
     set(() => {
-      const next = new Set<DeliveryTargetKey>(
-        Object.keys(DELIVERY_TARGETS) as DeliveryTargetKey[],
-      );
+      const next = new Set<DeliveryTargetKey>(VISIBLE_DELIVERY_TARGET_KEYS);
       persist(next);
       return { selected: next };
     }),

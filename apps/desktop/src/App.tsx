@@ -16,6 +16,7 @@ import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
+import { isAuthReadyForAgent } from "./agent/composerAuthGate";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
@@ -87,6 +88,7 @@ import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
 import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
+import { useAuth } from "./state/auth";
 import {
   providerKeyForTarget,
   useUploadPrefs,
@@ -145,7 +147,7 @@ function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_in
   };
 }
 
-const HELP_DOCS_URL = "https://github.com/explicit09/awidat#readme";
+const HELP_DOCS_URL = "https://tadiwa.co/montage/setup";
 const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
 
 function App() {
@@ -323,6 +325,14 @@ function App() {
 
   const hasProject = current !== null;
   const demoMode = !hasProject && !isTauri();
+  const authStatus = useAuth((s) => s.status);
+  const refreshAuth = useAuth((s) => s.refresh);
+  const openAuth = useAuth((s) => s.open);
+  const agentAuthReady = demoMode || isAuthReadyForAgent(authStatus);
+
+  useEffect(() => {
+    void refreshAuth();
+  }, [refreshAuth]);
   const demoScreenId = demoMode
     ? typeof window !== "undefined" && window.location.pathname === "/design/concept"
       ? "screen1"
@@ -494,6 +504,11 @@ function App() {
   async function runEngineCommand(command: string) {
     const input = command.trim();
     if (!isTauri() || !input) return;
+    if (!agentAuthReady) {
+      setCommandError("Sign in to get started");
+      openAuth();
+      return;
+    }
     setCommandError(null);
     setTurnError(null);
     setRunning(true);
@@ -569,8 +584,8 @@ function App() {
     );
     // If any video targets are selected, force the master render to
     // run first so the reframes can consume it. Users who picked
-    // only TikTok/Instagram get YouTube enqueued implicitly as the
-    // master.
+    // only vertical/social reframes get YouTube enqueued implicitly as
+    // the master.
     if (queueIncludesVideo && !selected.has("youtube")) {
       ordered.push("youtube");
     }
@@ -1665,8 +1680,6 @@ function App() {
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
       { key: "youtube", active: timelineDuration > 0 },
-      { key: "tiktok", active: false },
-      { key: "instagram", active: false },
       { key: "twitter_x", active: false },
       { key: "captions", active: completedJobKinds.has("indexing") },
       { key: "cover", active: false },

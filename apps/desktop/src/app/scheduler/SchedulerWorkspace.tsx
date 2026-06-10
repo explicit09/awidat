@@ -61,8 +61,6 @@ type CalendarDay = {
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const SOCIAL_PROVIDERS: readonly Provider[] = [
   "youtube",
-  "tiktok",
-  "instagram",
   "twitter_x",
 ];
 

@@ -2477,6 +2477,9 @@ Start a generated-media job and write the local generated-media \
 registry. Provider 'mock' creates an offline completed placeholder \
 record suitable for tests. Provider 'openrouter' submits an \
 asynchronous OpenRouter video generation job using the configured OpenRouter key. \
+For provider 'openrouter', include \
+cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\" \
+so the desktop approval text shows the paid-provider warning. \
 Provider 'seedance' is not direct; use OpenRouter or a future \
 dedicated adapter.",
         annotations(destructive_hint = true, read_only_hint = false)

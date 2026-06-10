@@ -17,7 +17,7 @@
 // modal readable.
 
 import { SocialAccounts } from "./social/SocialAccounts";
-import { PROVIDERS } from "./publishingSettingsModel";
+import { VISIBLE_PROVIDERS } from "./publishingSettingsModel";
 import { useAiDisclosure } from "../state/aiDisclosure";
 import { useUploadPrefs } from "../state/uploadPrefs";
 
@@ -47,7 +47,7 @@ export function PublishingSettings() {
         </div>
         <PreferenceToggle
           label="Auto-disclose AI content"
-          note="AI labels are required by YouTube, TikTok, and Meta for synthetic content."
+          note="AI labels may be required by connected platforms for synthetic content."
           checked={autoDisclose}
           onChange={setAutoDisclose}
         />
@@ -60,7 +60,7 @@ export function PublishingSettings() {
             you queue a new render.
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            {PROVIDERS.map((p) => (
+            {VISIBLE_PROVIDERS.map((p) => (
               <DefaultTargetCheckbox
                 key={p.key}
                 label={p.displayName}

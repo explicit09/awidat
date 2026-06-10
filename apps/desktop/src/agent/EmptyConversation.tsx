@@ -6,16 +6,21 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgentStore } from "./store";
+import { isAuthReadyForAgent } from "./composerAuthGate";
 import { useProjectStore } from "../app/state";
 import { getStarterPrompts } from "./starterPrompts";
 import type { ProjectType } from "../protocol";
+import { useAuth } from "../state/auth";
 
 export function EmptyConversation() {
   const current = useProjectStore((s) => s.current);
   const running = useAgentStore((s) => s.running);
   const setRunning = useAgentStore((s) => s.setRunning);
   const setTurnError = useAgentStore((s) => s.setTurnError);
+  const authStatus = useAuth((s) => s.status);
+  const openAuth = useAuth((s) => s.open);
   const [projectType, setProjectType] = useState<ProjectType | null>(null);
+  const authReady = isAuthReadyForAgent(authStatus);
 
   // Match ProjectBanner's pattern: pull the project type from the
   // backend whenever the active project changes. `Other` is treated as
@@ -46,6 +51,10 @@ export function EmptyConversation() {
 
   async function sendPrompt(prompt: string) {
     if (running || !current) return;
+    if (!authReady) {
+      openAuth();
+      return;
+    }
     setTurnError(null);
     setRunning(true);
     try {

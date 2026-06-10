@@ -100,7 +100,7 @@ try {
   });
   await ctx.addInitScript(`
     try {
-      localStorage.setItem("montage:welcome:shown", new Date().toISOString());
+      localStorage.setItem("montage:welcome:consent", new Date().toISOString());
     } catch {}
   `);
   const page = await ctx.newPage();

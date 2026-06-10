@@ -170,6 +170,20 @@ impl ExternalAppServerClient {
 }
 
 pub fn app_server_args(mcp_server_path: Option<&Path>, project_root: &Path) -> Vec<String> {
+    app_server_args_with_openrouter_cost_estimate(
+        mcp_server_path,
+        project_root,
+        std::env::var("OPENROUTER_VIDEO_COST_ESTIMATE_USD")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn app_server_args_with_openrouter_cost_estimate(
+    mcp_server_path: Option<&Path>,
+    project_root: &Path,
+    openrouter_cost_estimate_usd: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "app-server".to_string(),
         "--listen".to_string(),
@@ -188,12 +202,27 @@ pub fn app_server_args(mcp_server_path: Option<&Path>, project_root: &Path) -> V
                 project_root,
             ),
         ]);
+        if let Some(estimate) = openrouter_cost_estimate_usd
+            && !estimate.trim().is_empty()
+        {
+            args.extend([
+                "-c".to_string(),
+                format_toml_string_override_value(
+                    "mcp_servers.montage.env.OPENROUTER_VIDEO_COST_ESTIMATE_USD",
+                    estimate.trim(),
+                ),
+            ]);
+        }
     }
     args
 }
 
 fn format_toml_string_override(key: &str, path: &Path) -> String {
-    let value = toml::Value::String(path.display().to_string()).to_string();
+    format_toml_string_override_value(key, &path.display().to_string())
+}
+
+fn format_toml_string_override_value(key: &str, raw: &str) -> String {
+    let value = toml::Value::String(raw.to_string()).to_string();
     format!("{key}={value}")
 }
 
@@ -426,6 +455,18 @@ mod tests {
             args.iter()
                 .any(|arg| arg == "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT=\"/tmp/p\"")
         );
+    }
+
+    #[test]
+    fn app_server_args_forward_openrouter_cost_estimate_to_mcp() {
+        let args = app_server_args_with_openrouter_cost_estimate(
+            Some(Path::new("/bin/montage-mcp-server")),
+            Path::new("/tmp/p"),
+            Some("0.42"),
+        );
+        assert!(args.iter().any(|arg| {
+            arg == "mcp_servers.montage.env.OPENROUTER_VIDEO_COST_ESTIMATE_USD=\"0.42\""
+        }));
     }
 
     #[test]
