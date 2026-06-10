@@ -9,8 +9,8 @@
 //! Discovery mirrors `codex_session.rs` (lowest priority first; later
 //! layers override earlier on skill-name conflict, replacing entries
 //! entirely — not a field-by-field merge):
-//!   1. Bundled (`<repo>/skills/` in dev) — same walk-up resolution
-//!      `bundled_skill_root()` in codex_session uses.
+//!   1. Bundled (`<repo>/skills/` in dev, Tauri resource copy in
+//!      packaged apps) — same resolver the agent and MCP loader use.
 //!   2. User overrides under the platform config dir
 //!      (`~/Library/Application Support/montage/skills` on macOS,
 //!      `~/.config/montage/skills` on Linux, `%APPDATA%\montage\skills`
@@ -133,7 +133,7 @@ struct DiscoveryLayers {
 impl DiscoveryLayers {
     fn resolve(project_root: Option<PathBuf>) -> Self {
         Self {
-            bundled: bundled_skill_root(),
+            bundled: montage_config::defaults::skills_root(),
             user: user_skill_roots(),
             project: project_root.and_then(project_skill_root),
         }
@@ -350,8 +350,8 @@ fn create_skill_impl(
     description: String,
     project_root: Option<PathBuf>,
 ) -> Result<String, String> {
-    let bundled =
-        bundled_skill_root().ok_or_else(|| "bundled skills root not found".to_string())?;
+    let bundled = montage_config::defaults::skills_root()
+        .ok_or_else(|| "bundled skills root not found".to_string())?;
     let user = user_skills_primary_dir();
     create_skill_at(
         &target,
@@ -416,13 +416,13 @@ fn create_skill_at(
 /// Return the absolute path to the bundled skills authoring guide
 /// (`docs/skills-authoring.md`) so the Skills tab footer can open it
 /// in the system Markdown viewer / editor. The doc lives next to
-/// `skills/` at the repo / install root; we reuse `bundled_skill_root`
-/// to walk up to the same parent.
+/// `skills/` at the repo / install root; we reuse the shared bundled
+/// skills resolver so packaged apps and dev builds agree.
 #[tauri::command]
 pub async fn skills_authoring_guide_path() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
-        let bundled =
-            bundled_skill_root().ok_or_else(|| "bundled skills root not found".to_string())?;
+        let bundled = montage_config::defaults::skills_root()
+            .ok_or_else(|| "bundled skills root not found".to_string())?;
         let candidate = bundled
             .parent()
             .map(|p| p.join("docs").join("skills-authoring.md"))
@@ -438,24 +438,6 @@ pub async fn skills_authoring_guide_path() -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("skills_authoring_guide_path join: {e}"))?
-}
-
-/// Mirror of `codex_session::bundled_skill_root`. In `cargo tauri
-/// dev` the binary lives at `<repo>/target/debug/montage-desktop`, so
-/// the skills dir is `<repo>/skills`. Walk up three dirs from the
-/// binary path.
-fn bundled_skill_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe
-        .parent()? // target/debug
-        .parent()? // target
-        .parent()? // repo root
-        .join("skills");
-    if candidate.is_dir() {
-        Some(candidate)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

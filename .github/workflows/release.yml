@@ -93,6 +93,9 @@ jobs:
         timeout-minutes: 90
         run: pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles dmg
 
+      - name: Verify desktop resources
+        run: scripts/release/verify-desktop-resources.sh "target/${{ matrix.target }}/release/bundle/macos/Montage.app"
+
       - name: Stage DMG
         run: |
           set -euo pipefail

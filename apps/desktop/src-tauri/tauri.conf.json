@@ -42,7 +42,8 @@
       "binaries/yt-dlp"
     ],
     "resources": [
-      "../../../python"
+      "../../../python",
+      "../../../skills"
     ],
     "icon": [
       "icons/32x32.png",

@@ -6,7 +6,7 @@ import { useTimelineStore } from "../timeline/store";
 import { useTimelineSelectionStore } from "../properties/store";
 import type { Stage } from "../state/stages";
 import { useSettings } from "../state/settings";
-import { Settings as SettingsIcon } from "lucide-react";
+import { FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
@@ -435,26 +435,20 @@ export function StageShell(props: StageShellProps) {
         }}>
         <div className="relative flex min-w-0 flex-1 flex-col gap-2">
           <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
-            {preview}
+            {stageEmpty ? <div className="absolute inset-0 bg-black/55" /> : preview}
             {/* purposeful empty state — overlays the black hero when there's
                 nothing to review yet (no pending proposals). */}
             {stageEmpty ? (
               <div className="absolute inset-0 z-10 grid place-items-center p-8 text-center">
-                <div className="flex max-w-[420px] flex-col items-center gap-4">
-                  <div className="text-[22px] font-bold tracking-tight text-[var(--color-text-primary)]">Direct the edit.</div>
-                  <div className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
-                    Drop footage, pick media, or ask me to prepare a cut — I'll propose edits you review here.
-                  </div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <button
-                      onClick={() => onCommand("Prepare a starting cut for this project using AGENTS.md and the indexed signals.")}
-                      className="glass-cta rounded-xl px-4 py-2 text-[13px] font-semibold"
-                    >Prepare a starting cut</button>
-                    <button
-                      onClick={() => { onStage("edit"); setLeftPane("media"); }}
-                      className="glass-ghost rounded-xl px-4 py-2 text-[13px]"
-                    >Open media</button>
-                  </div>
+                <div className="flex min-h-[132px] w-full max-w-[320px] flex-col items-center justify-center gap-4">
+                  <div className="text-[21px] font-bold tracking-tight text-[var(--color-text-primary)]">No timeline media</div>
+                  <button
+                    onClick={() => { onStage("edit"); setLeftPane("media"); }}
+                    className="glass-cta inline-flex h-10 items-center gap-2 rounded-xl px-4 text-[13px] font-semibold"
+                  >
+                    <FolderOpen size={15} aria-hidden="true" />
+                    Open media
+                  </button>
                 </div>
               </div>
             ) : null}
