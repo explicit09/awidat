@@ -160,9 +160,27 @@ test_make_desktop_ffmpeg_supports_linux_targets() {
 test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts() {
   local output
   output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-apple-darwin)"
-  assert_contains "$output" "fetch_npm_sidecars darwin-arm64 4.1.5 darwin-arm64 5.0.1" "darwin arm64 ffmpeg and ffprobe tarballs are selected"
+  assert_contains "$output" "ffmpeg-darwin-arm64.gz" "darwin arm64 ffmpeg static binary is selected"
+  assert_contains "$output" "b6.1.1" "darwin arm64 ffmpeg uses transition-capable static release"
+  assert_contains "$output" "darwin-arm64-5.0.1.tgz" "darwin arm64 ffprobe tarball is selected"
   assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "ffmpeg skips reject CI stubs"
   pass "desktop ffmpeg uses arm64 darwin artifacts"
+}
+
+test_make_desktop_ffmpeg_marks_windows_sidecars_executable() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=x86_64-pc-windows-msvc)"
+  assert_contains "$output" 'chmod +x "$ffmpeg_dest" "$ffprobe_dest"' "windows ffmpeg sidecars are made executable"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "windows ffmpeg skips reject CI stubs"
+  pass "desktop ffmpeg marks windows sidecars executable"
+}
+
+test_make_desktop_uv_rejects_windows_stub_and_chmods() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-uv TARGET_TRIPLE=x86_64-pc-windows-msvc)"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "windows uv skips reject CI stubs"
+  assert_contains "$output" 'chmod +x "$uv_dest"' "windows uv sidecar is made executable"
+  pass "desktop uv rejects windows stubs and chmods"
 }
 
 test_make_desktop_mcp_server_builds_requested_target() {
@@ -303,6 +321,8 @@ test_verify_sidecars_rejects_missing_required_uv
 test_checksums_writes_sha256_files
 test_make_desktop_ffmpeg_supports_linux_targets
 test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts
+test_make_desktop_ffmpeg_marks_windows_sidecars_executable
+test_make_desktop_uv_rejects_windows_stub_and_chmods
 test_make_desktop_mcp_server_builds_requested_target
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path

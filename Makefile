@@ -7,6 +7,8 @@ FFMPEG_MACOS_BASE_URL ?= https://evermeet.cx/ffmpeg
 FFMPEG_WINDOWS_URL ?= https://github.com/GyanD/codexffmpeg/releases/download/$(FFMPEG_VERSION)/ffmpeg-$(FFMPEG_VERSION)-full_build.zip
 FFMPEG_NPM_BASE_URL ?= https://registry.npmjs.org/@ffmpeg-installer
 FFPROBE_NPM_BASE_URL ?= https://registry.npmjs.org/@ffprobe-installer
+FFMPEG_STATIC_RELEASE ?= b6.1.1
+FFMPEG_STATIC_BASE_URL ?= https://github.com/eugeneware/ffmpeg-static/releases/download/$(FFMPEG_STATIC_RELEASE)
 DESKTOP_CARGO_TARGET_DIR ?= ../../target
 MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
 
@@ -204,7 +206,18 @@ desktop-ffmpeg:
 	}; \
 	case "$$target_triple" in \
 	  aarch64-apple-darwin) \
-	    fetch_npm_sidecars darwin-arm64 4.1.5 darwin-arm64 5.0.1; \
+	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
+	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
+	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
+	        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
+	        exit 0; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/ffmpeg.gz" "$(FFMPEG_STATIC_BASE_URL)/ffmpeg-darwin-arm64.gz"; \
+	    gunzip -c "$$tmp/ffmpeg.gz" > "$$ffmpeg_dest"; \
+	    curl -fsSL -o "$$tmp/ffprobe.tgz" "$(FFPROBE_NPM_BASE_URL)/darwin-arm64/-/darwin-arm64-5.0.1.tgz"; \
+	    tar -xzf "$$tmp/ffprobe.tgz" -C "$$tmp" package/ffprobe; \
+	    cp "$$tmp/package/ffprobe" "$$ffprobe_dest"; \
+	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
 	    ;; \
 	  x86_64-apple-darwin) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
@@ -237,6 +250,7 @@ desktop-ffmpeg:
 	    curl -fsSL -o "$$tmp/ffmpeg-windows.zip" "$(FFMPEG_WINDOWS_URL)"; \
 	    unzip -p "$$tmp/ffmpeg-windows.zip" "ffmpeg-$(FFMPEG_VERSION)-full_build/bin/ffmpeg.exe" > "$$ffmpeg_dest"; \
 	    unzip -p "$$tmp/ffmpeg-windows.zip" "ffmpeg-$(FFMPEG_VERSION)-full_build/bin/ffprobe.exe" > "$$ffprobe_dest"; \
+	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
 	    ;; \
 	  *) echo "unknown ffmpeg target triple: $$target_triple" >&2; exit 1 ;; \
 	esac; \
@@ -270,13 +284,14 @@ desktop-uv:
 	    ;; \
 	  x86_64-pc-windows-msvc) \
 	    uv_dest="$$dest_dir/uv-$$target_triple.exe"; \
-	    if [ -s "$$uv_dest" ] && [ "$${UV_REFRESH:-0}" != "1" ]; then \
+	    if [ -s "$$uv_dest" ] && [ "$${UV_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$uv_dest"; then \
 	        echo "uv $(UV_VERSION) already at $$uv_dest"; \
 	        exit 0; \
 	    fi; \
 	    archive="uv-$$target_triple.zip"; \
 	    curl -fsSL -o "$$tmp/uv.zip" "https://github.com/astral-sh/uv/releases/download/$(UV_VERSION)/$$archive"; \
 	    unzip -p "$$tmp/uv.zip" "uv-$$target_triple/uv.exe" > "$$uv_dest"; \
+	    chmod +x "$$uv_dest"; \
 	    ;; \
 	  *) echo "unknown uv target triple: $$target_triple" >&2; exit 1 ;; \
 	esac; \

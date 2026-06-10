@@ -422,6 +422,7 @@ pub fn with_defaults() -> crate::Config {
         bundled_python_root().as_deref(),
         state_root().as_deref(),
     );
+    let sidecar_env = bundled_sidecar_env();
 
     let servers = RECIPES
         .iter()
@@ -434,6 +435,7 @@ pub fn with_defaults() -> crate::Config {
             if let Some(path) = &uv_project_environment {
                 env.insert("UV_PROJECT_ENVIRONMENT".into(), path.clone());
             }
+            env.extend(sidecar_env.clone());
             McpServer {
                 name: recipe.name.into(),
                 command: cmd.clone(),
@@ -458,6 +460,56 @@ pub fn with_defaults() -> crate::Config {
         mcp: McpConfig { servers },
         hooks: HooksConfig::default(),
     }
+}
+
+fn bundled_sidecar_env() -> HashMap<String, String> {
+    let Some(exe) = std::env::current_exe().ok() else {
+        return HashMap::new();
+    };
+    let Some(sidecar_dir) = bundled_sidecar_dir_from_exe(&exe) else {
+        return HashMap::new();
+    };
+    sidecar_env_for_dir(&sidecar_dir, std::env::var("PATH").ok().as_deref())
+}
+
+fn bundled_sidecar_dir_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    if ["ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe"]
+        .iter()
+        .any(|name| exe_dir.join(name).is_file())
+    {
+        return Some(exe_dir.to_path_buf());
+    }
+    None
+}
+
+fn sidecar_env_for_dir(sidecar_dir: &Path, current_path: Option<&str>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    let dir = sidecar_dir.to_string_lossy();
+    let path = match current_path {
+        Some(path) if !path.is_empty() => format!("{dir}{}{path}", path_separator()),
+        _ => dir.into_owned(),
+    };
+    env.insert("PATH".into(), path);
+
+    for (env_var, names) in [
+        ("MONTAGE_FFMPEG", ["ffmpeg", "ffmpeg.exe"]),
+        ("MONTAGE_FFPROBE", ["ffprobe", "ffprobe.exe"]),
+    ] {
+        if let Some(candidate) = names
+            .iter()
+            .map(|name| sidecar_dir.join(name))
+            .find(|candidate| candidate.is_file())
+        {
+            env.insert(env_var.into(), candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    env
+}
+
+fn path_separator() -> &'static str {
+    if cfg!(windows) { ";" } else { ":" }
 }
 
 fn uv_project_environment_for_python_root(
@@ -672,6 +724,42 @@ mod tests {
 
         let expected = python.canonicalize().unwrap();
         assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_sidecar_dir_from_exe_accepts_media_sidecar_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let ffmpeg = dir.path().join("ffmpeg");
+        std::fs::write(&ffmpeg, b"").unwrap();
+
+        let resolved = bundled_sidecar_dir_from_exe(&dir.path().join("montage-desktop"));
+
+        assert_eq!(resolved.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn sidecar_env_prepends_path_and_exports_media_binaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let ffmpeg = dir.path().join("ffmpeg");
+        let ffprobe = dir.path().join("ffprobe");
+        std::fs::write(&ffmpeg, b"").unwrap();
+        std::fs::write(&ffprobe, b"").unwrap();
+
+        let env = sidecar_env_for_dir(dir.path(), Some("/usr/bin:/bin"));
+
+        let expected_path = format!("{}:/usr/bin:/bin", dir.path().to_string_lossy());
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some(expected_path.as_str())
+        );
+        assert_eq!(
+            env.get("MONTAGE_FFMPEG").map(String::as_str),
+            Some(ffmpeg.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            env.get("MONTAGE_FFPROBE").map(String::as_str),
+            Some(ffprobe.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
