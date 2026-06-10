@@ -44,7 +44,7 @@ pub fn run(args: PlanGeneratedMediaArgs, _ctx: McpToolCtx) -> Result<String, Str
             "generation_modes": ["text_to_video"],
             "duration_seconds": {
                 "range": [4, 15],
-                "guidance": "Choose on demand: 4s for quick cutaways, 6-8s for readable explanations, 9-12s for process or environment shots, and 13-15s only when the shot needs room to establish context. Pass it as duration to start_generated_media_job and as duration_s to use_generated_media."
+                "guidance": "Choose on demand: 4s for quick cutaways, 6-8s for readable explanations, 9-12s for process or environment shots, and 13-15s only when the shot needs room to establish context. Pass it as duration to start_generated_media_job, pass cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\" for OpenRouter jobs, and pass the same value as duration_s to use_generated_media."
             },
             "note": "Use openrouter for US-accessible video generation. Use mock for offline tests."
         },

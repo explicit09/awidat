@@ -20,7 +20,16 @@ export function shouldStartDeferredIntro(args: {
   itemCount: number;
   mediaSourceCount: number;
   mediaProxyCount: number;
+  authReady: boolean;
+  welcomeConsentReady: boolean;
 }): boolean {
-  void args;
-  return false;
+  return (
+    args.scheduledProject === args.currentProject &&
+    !args.introduced &&
+    !args.running &&
+    args.itemCount === 0 &&
+    (args.mediaSourceCount > 0 || args.mediaProxyCount > 0) &&
+    args.authReady &&
+    args.welcomeConsentReady
+  );
 }

@@ -38,6 +38,7 @@ import {
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
 import { useAuth } from "./auth";
+import { useWelcome } from "./welcome";
 import {
   MENU_COMMANDS,
   emitMenuCommand,
@@ -88,6 +89,8 @@ export function useAppGlue() {
   const agentItemsCount = useAgentStore((s) => s.items.length);
   const introduced = useIntroState((s) => s.introduced);
   const markIntroduced = useIntroState((s) => s.markIntroduced);
+  const authReadyForAgent = useAuth((s) => isAuthReadyForAgent(s.status));
+  const welcomeConsentReady = useWelcome((s) => s.shown);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const hydrateSkillsFromDiskIfUnchanged = useSkillsStore(
     (s) => s.hydrateFromDiskIfUnchanged,
@@ -452,6 +455,8 @@ export function useAppGlue() {
           itemCount: agentState.items.length,
           mediaSourceCount: useMediaStore.getState().sources.length,
           mediaProxyCount: useMediaStore.getState().proxies.length,
+          authReady: isAuthReadyForAgent(useAuth.getState().status),
+          welcomeConsentReady: useWelcome.getState().shown,
         })
       ) {
         return;
@@ -459,7 +464,6 @@ export function useAppGlue() {
       // Latch the project before invoking. If `start_turn` fails (codex
       // not ready), we deliberately do NOT retry — the user can still
       // type manually. A failed intro should not block the manual path.
-      if (!isAuthReadyForAgent(useAuth.getState().status)) return;
       markIntroduced(scheduledProject);
       invoke<string>("start_turn", { input: INTRO_PROMPT })
         .then((turnId) => {
@@ -478,6 +482,8 @@ export function useAppGlue() {
     agentItemsCount,
     mediaSourceCount,
     mediaProxyCount,
+    authReadyForAgent,
+    welcomeConsentReady,
     markIntroduced,
     setRunning,
   ]);
