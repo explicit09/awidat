@@ -6,7 +6,30 @@ on:
     branches:
       - main
 
+# CARGO_INCREMENTAL=0: CI never reuses an incremental build within a job, so the
+#   incremental bookkeeping is pure overhead (~15-20%) and bloats target/.
+# RUSTFLAGS debuginfo=0: smaller target/, faster links — CI doesn't debug.
+# RUSTDOCFLAGS -D warnings: make `cargo doc` actually fail on broken intra-doc
+#   links (the previous config compiled docs but never gated on warnings).
+env:
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-C debuginfo=0"
+  RUSTDOCFLAGS: "-D warnings"
+
 jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format
+        run: cargo fmt --all -- --check
+
   security:
     name: Security hygiene
     runs-on: ubuntu-latest
@@ -36,16 +59,29 @@ jobs:
         # coverage (most contributors and CI runners default Linux).
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTFLAGS: "-C debuginfo=0"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Reclaim ~25-30 GB so clippy + test + doc can share a single target/
+      # without running out of disk. This REPLACES the old `cargo clean` steps
+      # between clippy/test/doc, which forced three full from-scratch rebuilds.
+      - name: Free disk space
+        if: matrix.os == 'ubuntu-latest'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          docker-images: true
+          # large-packages apt removal is slow (~2-3m); enable only if a build
+          # still hits ENOSPC after the faster reclaims above.
+          large-packages: false
+          swap-storage: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
       - name: Install Linux desktop dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -62,52 +98,53 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install ffmpeg
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Stable key (not the per-job default) so the cache is reusable; one
+          # cache per OS since macOS and Linux artifacts are incompatible.
+          shared-key: rust-${{ matrix.os }}
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Fetch desktop sidecars
         run: make desktop-sidecar-check-stubs
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
+      # Compute the vendored-crate excludes once and reuse across every cargo
+      # invocation below (DRY — was duplicated in clippy/test/doc previously).
+      - name: Compute vendored-crate excludes
         run: |
           set -euo pipefail
-          excludes=()
+          excludes=""
           while IFS= read -r package; do
-            excludes+=(--exclude "$package")
+            excludes+=" --exclude $package"
           done < <(
             cargo metadata --no-deps --format-version 1 \
               | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
           )
-          cargo clippy --workspace "${excludes[@]}" --all-targets -- -D warnings
-      - name: Free clippy build artifacts
+          echo "VENDOR_EXCLUDES=$excludes" >> "$GITHUB_ENV"
+
+      # macOS runs build+test only: fmt/clippy/doc are platform-independent and
+      # already gated on Linux, and macOS minutes bill at 10x. Linux runs the
+      # full gate. No `cargo clean` anywhere — one warm target/ per job.
+      - name: Clippy
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clean
+        run: cargo clippy --workspace $VENDOR_EXCLUDES --all-targets -- -D warnings
       - name: Test
         run: |
           set -euo pipefail
           export MONTAGE_FFMPEG="$(command -v ffmpeg)"
           export MONTAGE_FFPROBE="$(command -v ffprobe)"
-          excludes=(--exclude montage-desktop)
-          while IFS= read -r package; do
-            excludes+=(--exclude "$package")
-          done < <(
-            cargo metadata --no-deps --format-version 1 \
-              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
-          )
-          cargo test --workspace "${excludes[@]}"
-      - name: Free test build artifacts
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo clean
-      - name: Doc
+          cargo nextest run --workspace $VENDOR_EXCLUDES --exclude montage-desktop
+      - name: Doctests
         run: |
           set -euo pipefail
-          excludes=()
-          while IFS= read -r package; do
-            excludes+=(--exclude "$package")
-          done < <(
-            cargo metadata --no-deps --format-version 1 \
-              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print(p["name"]) for p in data["packages"] if "/vendor/" in p["manifest_path"]]'
-          )
-          cargo doc --no-deps --workspace "${excludes[@]}"
+          export MONTAGE_FFMPEG="$(command -v ffmpeg)"
+          export MONTAGE_FFPROBE="$(command -v ffprobe)"
+          cargo test --doc --workspace $VENDOR_EXCLUDES --exclude montage-desktop
+      - name: Doc
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo doc --no-deps --workspace $VENDOR_EXCLUDES
       - name: Whitespace
+        if: matrix.os == 'ubuntu-latest'
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
