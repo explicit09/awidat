@@ -83,6 +83,8 @@ jobs:
       - name: Test
         run: |
           set -euo pipefail
+          export MONTAGE_FFMPEG="$(command -v ffmpeg)"
+          export MONTAGE_FFPROBE="$(command -v ffprobe)"
           excludes=(--exclude montage-desktop)
           while IFS= read -r package; do
             excludes+=(--exclude "$package")
