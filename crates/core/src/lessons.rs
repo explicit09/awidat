@@ -98,7 +98,7 @@ pub struct ToolStats {
 }
 
 impl ToolStats {
-    /// Accept rate (`Allow` + `AllowForSession`) as a fraction in [0,1].
+    /// Accept rate (`Allow` + `AllowForSession`) as a fraction in `[0,1]`.
     pub fn accept_rate(&self) -> f64 {
         if self.total == 0 {
             return 0.0;
@@ -112,7 +112,7 @@ impl ToolStats {
         allowed as f64 / self.total as f64
     }
 
-    /// Deny rate as a fraction in [0,1].
+    /// Deny rate as a fraction in `[0,1]`.
     pub fn deny_rate(&self) -> f64 {
         if self.total == 0 {
             return 0.0;
@@ -144,7 +144,7 @@ impl Pattern {
         self.allow_count + self.deny_count
     }
 
-    /// Accept rate as a fraction in [0,1].
+    /// Accept rate as a fraction in `[0,1]`.
     pub fn accept_rate(&self) -> f64 {
         let total = self.total();
         if total == 0 {

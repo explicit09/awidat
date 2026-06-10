@@ -2,7 +2,7 @@
 //!
 //! `apply_edl` is the load-bearing tool of the v1 surface — see
 //! `PLAN.md` §6.2. The freeform Lark-shaped envelope is parsed into a
-//! typed [`EdlEnvelope`], anchors are resolved against a [`Timeline`]
+//! typed [`EdlEnvelope`], anchors are resolved against a `Timeline`
 //! via the 5-tier cascade in [`anchor`], then [`apply::apply`] produces
 //! a new timeline + an [`apply::ApplyOutcome`] log.
 //!

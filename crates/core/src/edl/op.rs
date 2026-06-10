@@ -277,7 +277,7 @@ pub enum EdlOp {
     /// against typos that would drop content. Use `Trim Track Tail`
     /// to clean trailing gaps before deletion if needed.
     ///
-    /// Counterpart to [`InsertTrack`]. Gives the agent a safe verb
+    /// Counterpart to `InsertTrack`. Gives the agent a safe verb
     /// for "delete empty track" instead of reaching for the shell
     /// to mutate `project.otio.json` directly.
     DeleteTrack {

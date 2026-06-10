@@ -1,6 +1,6 @@
 //! Built-in tool implementations.
 //!
-//! Week 3 ships [`bash`]. Week 4 adds the editorial tools per `PLAN.md`
+//! Week 3 ships `bash`. Week 4 adds the editorial tools per `PLAN.md`
 //! §6.
 
 pub mod analyze_sync;

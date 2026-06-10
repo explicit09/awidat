@@ -2,7 +2,7 @@
 //!
 //! This mirrors the reference editor's `EditorIntent -> Command -> Execute`
 //! shape while preserving Montage's single mutation path: commands lower to an
-//! [`EdlEnvelope`] and execute through [`super::apply`].
+//! [`EdlEnvelope`] and execute through `super::apply`.
 
 use montage_proto::otio::Timeline;
 use montage_proto::professional::SourceRange;
