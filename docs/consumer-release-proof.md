@@ -2,6 +2,8 @@
 
 Date: 2026-06-10
 
+HTML companion: `docs/consumer-release-proof.html`
+
 ## Branch
 
 - Branch: `codex/consumer-readiness-salvage`
@@ -28,7 +30,7 @@ Verified on this branch:
 - `node --experimental-strip-types tests/welcome.test.ts`: PASS
 - `node --experimental-strip-types tests/composer-auth-gate.test.ts`: PASS
 - `node --experimental-strip-types tests/generated-media-cost.test.ts`: PASS
-- `cargo test -p montage-core openrouter -- --nocapture`: PASS, 9 tests
+- `cargo test -p montage-core openrouter -- --nocapture`: PASS, 10 tests
 - `cargo fmt --all -- --check`: PASS
 - `pnpm --dir apps/desktop build`: PASS
 

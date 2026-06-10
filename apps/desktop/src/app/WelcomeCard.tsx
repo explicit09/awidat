@@ -9,7 +9,6 @@
 // Storage lives in `useWelcome`. The shell uses the shared glass system
 // so first launch feels like the rest of the Montage desktop surface.
 
-import { useEffect } from "react";
 import { BrandMark } from "../brand/BrandMark";
 import { useWelcome } from "../state/welcome";
 
@@ -35,31 +34,10 @@ export function WelcomeCard() {
   const isOpen = useWelcome((s) => s.isOpen);
   const consent = useWelcome((s) => s.consent);
 
-  // Cmd+W / Esc accepts the required acknowledgement. Registered at
-  // the document level so they win regardless of focus; only mounts
-  // while the modal is open.
-  useEffect(() => {
-    if (!isOpen) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        consent();
-        return;
-      }
-      const meta = event.metaKey || event.ctrlKey;
-      if (meta && (event.key === "w" || event.key === "W")) {
-        event.preventDefault();
-        consent();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, consent]);
-
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop" onClick={consent} role="presentation">
+    <div className="modal-backdrop" role="presentation">
       <div
         className="glass glass-strong flex flex-col overflow-hidden text-[var(--color-text-primary)]"
         onClick={(event) => event.stopPropagation()}
@@ -73,21 +51,13 @@ export function WelcomeCard() {
         aria-modal="true"
         aria-label="Welcome to Montage"
       >
-        <header className="flex items-center justify-between border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-4 py-3">
+        <header className="flex items-center border-b border-[var(--glass-border)] bg-[rgba(10,10,14,0.58)] px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <BrandMark size={20} className="drop-shadow-[0_0_14px_rgba(239,68,68,0.38)]" />
             <h2 className="truncate text-[17px] font-bold tracking-normal text-[var(--color-text-primary)]">
               Welcome to Montage
             </h2>
           </div>
-          <button
-            type="button"
-            className="glass-content grid h-8 w-8 place-items-center rounded-lg text-[18px] leading-none text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
-            onClick={consent}
-            aria-label="Accept welcome consent"
-          >
-            ×
-          </button>
         </header>
         <div className="flex flex-col gap-2.5 bg-[rgba(8,9,12,0.26)] p-4">
           {CORE_IDEAS.map((idea, index) => (
@@ -108,11 +78,8 @@ export function WelcomeCard() {
           </span>
         </div>
         <footer className="flex items-center justify-end gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-4 py-3">
-          <span
-            className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]"
-            title="Consent required"
-          >
-            ⌘W or Esc
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            Required before using agent features
           </span>
           <button
             type="button"

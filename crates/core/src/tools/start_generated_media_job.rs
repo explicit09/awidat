@@ -112,6 +112,15 @@ impl ToolHandler for StartGeneratedMediaJobTool {
         )]
     }
 
+    fn approval_summary(&self, invocation: &ToolInvocation) -> String {
+        let mut summary = crate::tool::summarize_args(&invocation.args);
+        let provider = invocation.args.get("provider").and_then(|v| v.as_str());
+        if provider == Some("openrouter") {
+            summary.push_str("; OpenRouter cost unknown; explicit confirmation required");
+        }
+        summary
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -412,5 +421,24 @@ mod tests {
         assert_eq!(keys.len(), 1);
         assert!(keys[0].operation.contains("cost unknown"));
         assert!(keys[0].operation.contains("explicit confirmation required"));
+    }
+
+    #[test]
+    fn openrouter_approval_summary_includes_visible_cost_warning() {
+        let invocation = crate::tool::ToolInvocation {
+            call_id: "c1".into(),
+            name: "start_generated_media_job".into(),
+            args: serde_json::json!({
+                "provider": "openrouter",
+                "artifact_kind": "video",
+                "workflow_purpose": "broll",
+                "prompt": "quiet street",
+                "model": "bytedance/seedance-2.0"
+            }),
+        };
+
+        let summary = StartGeneratedMediaJobTool.approval_summary(&invocation);
+        assert!(summary.contains("OpenRouter cost unknown"));
+        assert!(summary.contains("explicit confirmation required"));
     }
 }

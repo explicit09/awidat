@@ -74,13 +74,15 @@ assert.equal(STORAGE_KEY, "montage:welcome:consent");
   assert.equal(b.getState().isOpen, false);
 }
 
-// dismiss() maps to consent because closing the card is an explicit
-// acknowledgement path in current keyboard/modal UX.
+// dismiss() does not persist consent. Passive dismissal paths should
+// leave the gate open so only the explicit acknowledgement records a
+// timestamp.
 {
   const store = createWelcomeStore({ persist: false });
   store.getState().dismiss();
-  assert.equal(store.getState().shown, true);
-  assert.ok(store.getState().consentedAt);
+  assert.equal(store.getState().isOpen, true);
+  assert.equal(store.getState().shown, false);
+  assert.equal(store.getState().consentedAt, null);
 }
 
 // reset() wipes the persisted entry and re-opens

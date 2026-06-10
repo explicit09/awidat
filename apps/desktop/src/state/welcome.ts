@@ -93,7 +93,7 @@ export function createWelcomeStore(opts: CreateOpts = {}) {
       const consentedAt = get().consentedAt ?? persistConsent(storage);
       set({ isOpen: false, shown: true, consentedAt });
     },
-    dismiss: () => get().consent(),
+    dismiss: () => set({ isOpen: true }),
     markShown: () => {
       if (get().shown) return;
       const consentedAt = persistConsent(storage);
