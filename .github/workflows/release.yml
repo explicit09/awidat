@@ -78,7 +78,7 @@ jobs:
           make desktop-ffmpeg TARGET_TRIPLE=${{ matrix.target }}
           make desktop-uv TARGET_TRIPLE=${{ matrix.target }}
           make desktop-mcp-server TARGET_TRIPLE=${{ matrix.target }}
-          make desktop-codex TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-codex TARGET_TRIPLE=${{ matrix.target }} CODEX_PROFILE=release
 
       - name: Verify desktop sidecars
         run: scripts/release/verify-sidecars.sh ${{ matrix.target }}

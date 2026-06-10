@@ -197,6 +197,14 @@ test_make_desktop_mcp_server_builds_requested_target() {
   pass "desktop mcp server builds requested target"
 }
 
+test_make_desktop_codex_can_build_release_profile() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-codex TARGET_TRIPLE=x86_64-apple-darwin CODEX_PROFILE=release)"
+  assert_contains "$output" '--target "$target_triple" $codex_profile_flag' "codex sidecar build passes selected profile flag"
+  assert_contains "$output" 'target/$target_triple/$codex_profile/codex' "codex sidecar copies from selected profile"
+  pass "desktop codex can build release profile"
+}
+
 test_import_certificate_requires_env() {
   local output
   if output="$(env -i bash "$SCRIPT_DIR/import-apple-certificate.sh" 2>&1)"; then
@@ -330,6 +338,7 @@ test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts
 test_make_desktop_ffmpeg_marks_windows_sidecars_executable
 test_make_desktop_uv_rejects_windows_stub_and_chmods
 test_make_desktop_mcp_server_builds_requested_target
+test_make_desktop_codex_can_build_release_profile
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
 test_import_certificate_imports_identity_with_fake_security
