@@ -416,15 +416,23 @@ const RECIPES: &[IndexerRecipe] = &[
 pub fn with_defaults() -> crate::Config {
     let cmd = uv_command();
     let python_cwd = python_root();
+    let uv_project_environment = uv_project_environment_for_python_root(
+        python_cwd.as_deref(),
+        bundled_python_root().as_deref(),
+        state_root().as_deref(),
+    );
 
     let servers = RECIPES
         .iter()
         .map(|recipe| {
-            let env: HashMap<String, String> = recipe
+            let mut env: HashMap<String, String> = recipe
                 .env
                 .iter()
                 .map(|(k, v)| ((*k).into(), (*v).into()))
                 .collect();
+            if let Some(path) = &uv_project_environment {
+                env.insert("UV_PROJECT_ENVIRONMENT".into(), path.clone());
+            }
             McpServer {
                 name: recipe.name.into(),
                 command: cmd.clone(),
@@ -449,6 +457,24 @@ pub fn with_defaults() -> crate::Config {
         mcp: McpConfig { servers },
         hooks: HooksConfig::default(),
     }
+}
+
+fn uv_project_environment_for_python_root(
+    python_cwd: Option<&Path>,
+    bundled_python_cwd: Option<&Path>,
+    state_root: Option<&Path>,
+) -> Option<String> {
+    if python_cwd? != bundled_python_cwd? {
+        return None;
+    }
+    let state_root = state_root?;
+    Some(
+        state_root
+            .join("python")
+            .join(".venv")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -628,6 +654,35 @@ mod tests {
 
         let expected = python.canonicalize().unwrap();
         assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn uv_project_environment_uses_user_state_for_bundled_python() {
+        let python = Path::new("/Applications/Montage.app/Contents/Resources/python");
+        let state = Path::new("/Users/example/.local/share/montage");
+
+        let resolved =
+            uv_project_environment_for_python_root(Some(python), Some(python), Some(state));
+
+        assert_eq!(
+            resolved.as_deref(),
+            Some("/Users/example/.local/share/montage/python/.venv")
+        );
+    }
+
+    #[test]
+    fn uv_project_environment_leaves_dev_python_workspace_alone() {
+        let dev_python = Path::new("/repo/python");
+        let bundled_python = Path::new("/Applications/Montage.app/Contents/Resources/python");
+        let state = Path::new("/Users/example/.local/share/montage");
+
+        let resolved = uv_project_environment_for_python_root(
+            Some(dev_python),
+            Some(bundled_python),
+            Some(state),
+        );
+
+        assert_eq!(resolved, None);
     }
 
     // Note: `python_root()` reads `MONTAGE_PYTHON_ROOT` directly. We

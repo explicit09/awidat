@@ -147,6 +147,31 @@ test_checksums_writes_sha256_files() {
   pass "checksums are written"
 }
 
+test_make_desktop_ffmpeg_supports_linux_targets() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=x86_64-unknown-linux-gnu)"
+  assert_contains "$output" "fetch_npm_sidecars linux-x64 4.1.0 linux-x64 5.2.0" "linux x64 ffmpeg and ffprobe tarballs are selected"
+
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-unknown-linux-gnu)"
+  assert_contains "$output" "fetch_npm_sidecars linux-arm64 4.1.4 linux-arm64 5.2.0" "linux arm64 ffmpeg and ffprobe tarballs are selected"
+  pass "desktop ffmpeg supports linux targets"
+}
+
+test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-apple-darwin)"
+  assert_contains "$output" "fetch_npm_sidecars darwin-arm64 4.1.5 darwin-arm64 5.0.1" "darwin arm64 ffmpeg and ffprobe tarballs are selected"
+  pass "desktop ffmpeg uses arm64 darwin artifacts"
+}
+
+test_make_desktop_mcp_server_builds_requested_target() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-mcp-server TARGET_TRIPLE=x86_64-apple-darwin)"
+  assert_contains "$output" '--target "$target_triple"' "mcp sidecar build passes target triple"
+  assert_contains "$output" 'source="$cargo_target_dir/$target_triple/release/montage-mcp-server"' "mcp sidecar copies target-qualified binary"
+  pass "desktop mcp server builds requested target"
+}
+
 test_import_certificate_requires_env() {
   local output
   if output="$(env -i bash "$SCRIPT_DIR/import-apple-certificate.sh" 2>&1)"; then
@@ -275,6 +300,9 @@ test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
 test_verify_sidecars_rejects_missing_required_uv
 test_checksums_writes_sha256_files
+test_make_desktop_ffmpeg_supports_linux_targets
+test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts
+test_make_desktop_mcp_server_builds_requested_target
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
 test_import_certificate_imports_identity_with_fake_security

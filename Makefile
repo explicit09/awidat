@@ -5,6 +5,8 @@ FFMPEG_VERSION ?= 7.1.1
 UV_VERSION ?= 0.11.14
 FFMPEG_MACOS_BASE_URL ?= https://evermeet.cx/ffmpeg
 FFMPEG_WINDOWS_URL ?= https://github.com/GyanD/codexffmpeg/releases/download/$(FFMPEG_VERSION)/ffmpeg-$(FFMPEG_VERSION)-full_build.zip
+FFMPEG_NPM_BASE_URL ?= https://registry.npmjs.org/@ffmpeg-installer
+FFPROBE_NPM_BASE_URL ?= https://registry.npmjs.org/@ffprobe-installer
 DESKTOP_CARGO_TARGET_DIR ?= ../../target
 MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
 
@@ -180,8 +182,31 @@ desktop-ffmpeg:
 	mkdir -p "$$dest_dir"; \
 	tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
+	fetch_npm_sidecars() { \
+	    ffmpeg_pkg="$$1"; \
+	    ffmpeg_version="$$2"; \
+	    ffprobe_pkg="$$3"; \
+	    ffprobe_version="$$4"; \
+	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
+	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
+	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ]; then \
+	        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
+	        exit 0; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/ffmpeg.tgz" "$(FFMPEG_NPM_BASE_URL)/$$ffmpeg_pkg/-/$$ffmpeg_pkg-$$ffmpeg_version.tgz"; \
+	    curl -fsSL -o "$$tmp/ffprobe.tgz" "$(FFPROBE_NPM_BASE_URL)/$$ffprobe_pkg/-/$$ffprobe_pkg-$$ffprobe_version.tgz"; \
+	    tar -xzf "$$tmp/ffmpeg.tgz" -C "$$tmp" package/ffmpeg; \
+	    cp "$$tmp/package/ffmpeg" "$$ffmpeg_dest"; \
+	    rm -rf "$$tmp/package"; \
+	    tar -xzf "$$tmp/ffprobe.tgz" -C "$$tmp" package/ffprobe; \
+	    cp "$$tmp/package/ffprobe" "$$ffprobe_dest"; \
+	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+	}; \
 	case "$$target_triple" in \
-	  aarch64-apple-darwin|x86_64-apple-darwin) \
+	  aarch64-apple-darwin) \
+	    fetch_npm_sidecars darwin-arm64 4.1.5 darwin-arm64 5.0.1; \
+	    ;; \
+	  x86_64-apple-darwin) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
 	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
 	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ]; then \
@@ -195,6 +220,12 @@ desktop-ffmpeg:
 	    unzip -p "$$tmp/ffmpeg.zip" ffmpeg > "$$ffmpeg_dest"; \
 	    unzip -p "$$tmp/ffprobe.zip" ffprobe > "$$ffprobe_dest"; \
 	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+	    ;; \
+	  x86_64-unknown-linux-gnu) \
+	    fetch_npm_sidecars linux-x64 4.1.0 linux-x64 5.2.0; \
+	    ;; \
+	  aarch64-unknown-linux-gnu) \
+	    fetch_npm_sidecars linux-arm64 4.1.4 linux-arm64 5.2.0; \
 	    ;; \
 	  x86_64-pc-windows-msvc) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple.exe"; \
@@ -258,9 +289,9 @@ desktop-mcp-server:
 	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
 	fi; \
 	cargo_target_dir="$${CARGO_TARGET_DIR:-$(DESKTOP_CARGO_TARGET_DIR)}"; \
-	CARGO_TARGET_DIR="$$cargo_target_dir" cargo build -p montage-cli --bin montage-mcp-server --release; \
+	CARGO_TARGET_DIR="$$cargo_target_dir" cargo build -p montage-cli --bin montage-mcp-server --release --target "$$target_triple"; \
 	dest="apps/desktop/src-tauri/binaries/montage-mcp-server-$$target_triple"; \
-	source="$$cargo_target_dir/release/montage-mcp-server"; \
+	source="$$cargo_target_dir/$$target_triple/release/montage-mcp-server"; \
 	if echo "$$target_triple" | grep -q 'windows'; then \
 	    dest="$$dest.exe"; \
 	    source="$$source.exe"; \
