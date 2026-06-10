@@ -122,12 +122,26 @@ jobs:
           )
           echo "VENDOR_EXCLUDES=$excludes" >> "$GITHUB_ENV"
 
-      # macOS runs build+test only: fmt/clippy/doc are platform-independent and
-      # already gated on Linux, and macOS minutes bill at 10x. Linux runs the
-      # full gate. No `cargo clean` anywhere — one warm target/ per job.
+      # Linux runs the full gate (fmt/doc/whitespace + workspace clippy, whose
+      # --all-targets also compile-checks examples). macOS bills 10x, so it
+      # runs tests plus a targeted clippy over the crates that actually have
+      # #[cfg(target_os = "macos")] code or are macOS-first (the desktop app,
+      # seatbelt sandboxing, keychain secrets, AVFoundation index/render paths)
+      # — workspace-wide lint duplication stays off macOS. No `cargo clean`
+      # anywhere — one warm target/ per job.
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --workspace $VENDOR_EXCLUDES --all-targets -- -D warnings
+      - name: Clippy (macOS-gated crates)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo clippy \
+            -p montage-desktop \
+            -p montage-index \
+            -p montage-render \
+            -p montage-sandboxing \
+            -p montage-secrets \
+            --all-targets -- -D warnings
       - name: Test
         run: |
           set -euo pipefail
