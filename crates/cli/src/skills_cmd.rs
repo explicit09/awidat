@@ -4,7 +4,7 @@
 //!  - `montage skills list` — print the L1 catalog (name, description,
 //!    tier, source dir) of every discovered skill.
 //!  - `montage skills run <name> <project>` — open the TUI with a
-//!    pre-staged "please use the <name> skill" prompt so the agent
+//!    pre-staged "please use the `<name>` skill" prompt so the agent
 //!    loads the skill body on its first turn.
 //!
 //! `run` deliberately does NOT inject the skill body directly into

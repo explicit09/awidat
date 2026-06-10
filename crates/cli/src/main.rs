@@ -336,7 +336,7 @@ enum LessonsAction {
 enum SkillsAction {
     /// List installed skills (bundled + user-installed).
     List,
-    /// Open the TUI with a pre-staged "use the <name> skill" first turn.
+    /// Open the TUI with a pre-staged "use the `<name>` skill" first turn.
     /// The agent calls `load_skill(name=...)` itself on its first
     /// response to fetch the playbook.
     Run {
