@@ -101,6 +101,7 @@ fn bundled_python_root_from_exe(exe: &Path) -> Option<PathBuf> {
     let exe_dir = exe.parent()?;
     for candidate in [
         exe_dir.join("python"),
+        exe_dir.join("_up_/_up_/_up_/python"),
         exe_dir.join("../Resources/python"),
         exe_dir.join("../Resources/_up_/_up_/_up_/python"),
         exe_dir.join("../resources/python"),
@@ -651,6 +652,23 @@ mod tests {
         .unwrap();
 
         let resolved = bundled_python_root_from_exe(&dir.path().join("MacOS/montage-desktop"));
+
+        let expected = python.canonicalize().unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_python_root_from_exe_checks_direct_resource_up_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = dir.path().join("_up_/_up_/_up_/python");
+        std::fs::create_dir_all(python.join("packages/montage-mcp")).unwrap();
+        std::fs::write(
+            python.join("packages/montage-mcp/pyproject.toml"),
+            b"[project]\nname = \"montage-mcp\"\n",
+        )
+        .unwrap();
+
+        let resolved = bundled_python_root_from_exe(&dir.path().join("montage-desktop"));
 
         let expected = python.canonicalize().unwrap();
         assert_eq!(resolved.as_deref(), Some(expected.as_path()));

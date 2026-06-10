@@ -189,7 +189,7 @@ desktop-ffmpeg:
 	    ffprobe_version="$$4"; \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
 	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
-	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ]; then \
+	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
 	        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
 	        exit 0; \
 	    fi; \
@@ -230,7 +230,7 @@ desktop-ffmpeg:
 	  x86_64-pc-windows-msvc) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple.exe"; \
 	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple.exe"; \
-	    if [ -s "$$ffmpeg_dest" ] && [ -s "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ]; then \
+	    if [ -s "$$ffmpeg_dest" ] && [ -s "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
 	        echo "ffmpeg/ffprobe $(FFMPEG_VERSION) already at $$dest_dir for $$target_triple"; \
 	        exit 0; \
 	    fi; \

@@ -161,6 +161,7 @@ test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts() {
   local output
   output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-apple-darwin)"
   assert_contains "$output" "fetch_npm_sidecars darwin-arm64 4.1.5 darwin-arm64 5.0.1" "darwin arm64 ffmpeg and ffprobe tarballs are selected"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "ffmpeg skips reject CI stubs"
   pass "desktop ffmpeg uses arm64 darwin artifacts"
 }
 
