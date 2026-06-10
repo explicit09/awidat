@@ -32,7 +32,6 @@ mod events;
 mod generated_media_watcher;
 mod publishing;
 mod secrets;
-mod social_client;
 mod state;
 
 use std::path::PathBuf;
@@ -109,24 +108,6 @@ pub fn run() {
                 commands::transcode::spawn_sidecar_backfill_on_load(
                     app.handle().clone(),
                     project_root,
-                );
-            }
-
-            // Build the server-backed social publishing client from the
-            // environment and park it in AwidatState for the `social_*`
-            // commands (Phase 5). Per RECONCILIATION G6 there is no per-field
-            // desktop config struct, so the server URL + dev bearer come from
-            // `AWIDAT_SOCIAL_SERVER_URL` / `AWIDAT_SOCIAL_AUTH_TOKEN` (mirroring
-            // how `project_root` defaults from `AWIDAT_DESKTOP_PROJECT`). When
-            // the URL is unset the client stays `None` and the commands surface
-            // a clear "not initialized" error rather than hanging. The desktop
-            // no longer opens a local `social.sqlite` — all publishing state
-            // lives server-side.
-            if let Some(social_client) = social_client::SocialClient::from_env() {
-                *app.state::<AwidatState>().social_client.blocking_lock() = Some(social_client);
-            } else {
-                warn!(
-                    "AWIDAT_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
                 );
             }
             Ok(())
@@ -273,18 +254,6 @@ pub fn run() {
             commands::publishing::set_provider_client_credentials,
             commands::publishing::get_provider_client_credentials,
             commands::publishing::get_publishing_credentials_path,
-            commands::social::social_providers,
-            commands::social::social_accounts,
-            commands::social::social_oauth_start,
-            commands::social::social_disconnect_account,
-            commands::social::social_bind_target,
-            commands::social::social_validate_target,
-            commands::social::social_schedule_target,
-            commands::social::social_publish_job,
-            commands::social::social_cancel_job,
-            commands::social::social_retry_job,
-            commands::social::social_account_audit,
-            commands::social::social_upload_artifact,
         ])
         .build(tauri::generate_context!());
 

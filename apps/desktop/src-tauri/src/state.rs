@@ -43,13 +43,6 @@ pub struct AwidatState {
     /// Defaulted from `AWIDAT_DESKTOP_PROJECT` env var on startup so
     /// dev runs work without configuring.
     pub project_root: Mutex<Option<PathBuf>>,
-    /// Thin authenticated HTTPS client of the `awidat-social-server` (Phase 5).
-    /// `None` until initialized in the Tauri `.setup()` hook from
-    /// `AWIDAT_SOCIAL_SERVER_URL` (+ `AWIDAT_SOCIAL_AUTH_TOKEN`); stays `None`
-    /// when the server URL is unconfigured, and the `social_*` commands then
-    /// surface a clear "social client not initialized" error. The desktop holds
-    /// no secrets — all token material lives server-side.
-    pub social_client: Mutex<Option<crate::social_client::SocialClient>>,
     /// In-flight long jobs (yt-dlp / indexing) keyed by job-item id,
     /// so a `cancel_job` command can find them. Tracking by id rather
     /// than a single global slot lets concurrent jobs run (e.g. an

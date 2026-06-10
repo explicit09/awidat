@@ -16,8 +16,6 @@ members = [
     "crates/config",
     "crates/secrets",
     "crates/auth",
-    "crates/social",
-    "crates/social-server",
     "crates/index",
     "crates/desktop-protocol",
     "crates/codex-bridge",
@@ -216,8 +214,6 @@ awidat-lut = { path = "crates/lut" }
 awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-auth = { path = "crates/auth" }
-awidat-social = { path = "crates/social" }
-awidat-social-server = { path = "crates/social-server" }
 awidat-index = { path = "crates/index" }
 awidat-desktop-protocol = { path = "crates/desktop-protocol" }
 awidat-codex-bridge = { path = "crates/codex-bridge" }
@@ -423,7 +419,6 @@ aws-sigv4 = "1"
 aws-types = "1"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
-chacha20poly1305 = "0.10"
 chardetng = "0.1.17"
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
@@ -551,12 +546,6 @@ zip = "2.4.2"
 zstd = "0.13"
 wiremock = "0.6"
 zeroize = "1.8.2"
-# Sync Postgres client + blocking connection pool for PgSocialStore (D1).
-# The domain crate (awidat-social) stays synchronous; the async server shell
-# calls it via spawn_blocking.  Do not add the sqlx postgres backend here.
-postgres = { version = "0.19", features = ["with-serde_json-1"] }
-r2d2 = "0.8"
-r2d2_postgres = "0.18"
 
 # cargo-shear cannot see the platform-specific openssl-sys usage and a
 # few codex helpers, so we silence those false positives here instead of
@@ -571,12 +560,9 @@ ignored = [
 ]
 
 [profile.dev]
-# Disk-constrained machines: this monorepo vendors all of codex-rs (~1484
-# crates), so a debug `target/` runs 14G+ and repeatedly fills the disk. Drop
-# debug info entirely + strip symbols to cut target/debug by ~30-50%. Trade-off:
-# backtraces lose line numbers (use the `profiling` profile when you need them).
-debug = "none"
-strip = "symbols"
+# Keep line tables/backtraces while avoiding expensive full variable
+# debug info across local dev builds. Matches codex's default.
+debug = "limited"
 
 [profile.dev-small]
 # Codex's "fast iterate" dev profile.

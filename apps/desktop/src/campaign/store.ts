@@ -14,11 +14,6 @@ type CampaignState = {
   approveItem: (campaignId: string, itemId: string) => void;
   requestChanges: (campaignId: string, itemId: string) => void;
   approveVariant: (campaignId: string, variantId: string) => void;
-  setVariantPublishJob: (
-    campaignId: string,
-    variantId: string,
-    publishJobId: string,
-  ) => void;
   setVariantStatus: (
     campaignId: string,
     variantId: string,
@@ -138,20 +133,6 @@ export const useCampaignStore = create<CampaignState>((set) => ({
         };
         return { ...updated, approvalState: campaignApprovalState(updated) };
       });
-      persist(next);
-      return { campaigns: next };
-    });
-  },
-  setVariantPublishJob: (campaignId, variantId, publishJobId) => {
-    set((state) => {
-      const next = updateCampaign(state.campaigns, campaignId, (campaign) => ({
-        ...campaign,
-        platformVariants: campaign.platformVariants.map((variant) =>
-          variant.variantId === variantId
-            ? { ...variant, status: "uploading" as const, publishJobId }
-            : variant,
-        ),
-      }));
       persist(next);
       return { campaigns: next };
     });

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -21,7 +21,6 @@ use crate::{OutputPathPolicy, validate_render_output_path};
 
 /// Current render execution manifest schema version.
 pub const RENDER_MANIFEST_SCHEMA_VERSION: u32 = 1;
-const SAMPLED_FINGERPRINT_BYTES: u64 = 1024 * 1024;
 
 /// Errors returned while building or writing render manifests.
 #[derive(Debug, Error)]
@@ -256,28 +255,12 @@ pub enum RenderReplayPlan {
 pub struct RenderInputFingerprint {
     /// Absolute or project-relative file path.
     pub path: String,
-    /// SHA-256 hex digest. See `fingerprint_kind` for the hashed scope.
+    /// SHA-256 hex digest.
     pub sha256: String,
     /// File size in bytes.
     pub size_bytes: u64,
     /// Whether this input is required for replay.
     pub required: bool,
-    /// Fingerprint scope used for this input.
-    #[serde(
-        default = "default_input_fingerprint_kind",
-        skip_serializing_if = "is_content_sha256"
-    )]
-    pub fingerprint_kind: RenderInputFingerprintKind,
-}
-
-/// Scope used to fingerprint an input media file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RenderInputFingerprintKind {
-    /// Full file content SHA-256.
-    ContentSha256,
-    /// Bounded identity hash: file metadata plus head/tail samples.
-    SampledSha256,
 }
 
 /// Planned or completed render output artifact.
@@ -449,77 +432,6 @@ pub fn fingerprint_file(
         sha256: format!("{:x}", hasher.finalize()),
         size_bytes: metadata.len(),
         required,
-        fingerprint_kind: RenderInputFingerprintKind::ContentSha256,
-    })
-}
-
-/// Fingerprint a media input with a bounded SHA-256.
-///
-/// This is intended for large source media referenced by render manifests.
-/// It hashes file size, mtime, and up to 1 MiB from both the head and tail
-/// so export can spawn FFmpeg without first reading multi-GB inputs in full.
-pub fn fingerprint_file_sampled(
-    path: &Path,
-    required: bool,
-) -> Result<RenderInputFingerprint, RenderManifestError> {
-    let mut file = fs::File::open(path).map_err(|source| RenderManifestError::Io {
-        path: path.to_string_lossy().into_owned(),
-        source,
-    })?;
-    let metadata = file.metadata().map_err(|source| RenderManifestError::Io {
-        path: path.to_string_lossy().into_owned(),
-        source,
-    })?;
-    let modified = metadata
-        .modified()
-        .map_err(|source| RenderManifestError::Io {
-            path: path.to_string_lossy().into_owned(),
-            source,
-        })?;
-    let modified = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let size = metadata.len();
-    let mut hasher = Sha256::new();
-    hasher.update(b"awidat-sampled-input-v1");
-    hasher.update(size.to_le_bytes());
-    hasher.update(modified.as_secs().to_le_bytes());
-    hasher.update(modified.subsec_nanos().to_le_bytes());
-
-    let head_len = size.min(SAMPLED_FINGERPRINT_BYTES) as usize;
-    if head_len > 0 {
-        let mut head = vec![0_u8; head_len];
-        file.read_exact(&mut head)
-            .map_err(|source| RenderManifestError::Io {
-                path: path.to_string_lossy().into_owned(),
-                source,
-            })?;
-        hasher.update(b"head");
-        hasher.update(&head);
-    }
-
-    if size > SAMPLED_FINGERPRINT_BYTES {
-        file.seek(SeekFrom::End(-(SAMPLED_FINGERPRINT_BYTES as i64)))
-            .map_err(|source| RenderManifestError::Io {
-                path: path.to_string_lossy().into_owned(),
-                source,
-            })?;
-        let mut tail = vec![0_u8; SAMPLED_FINGERPRINT_BYTES as usize];
-        file.read_exact(&mut tail)
-            .map_err(|source| RenderManifestError::Io {
-                path: path.to_string_lossy().into_owned(),
-                source,
-            })?;
-        hasher.update(b"tail");
-        hasher.update(&tail);
-    }
-
-    Ok(RenderInputFingerprint {
-        path: path.to_string_lossy().into_owned(),
-        sha256: format!("{:x}", hasher.finalize()),
-        size_bytes: size,
-        required,
-        fingerprint_kind: RenderInputFingerprintKind::SampledSha256,
     })
 }
 
@@ -888,14 +800,6 @@ fn hex_sha256(bytes: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-fn default_input_fingerprint_kind() -> RenderInputFingerprintKind {
-    RenderInputFingerprintKind::ContentSha256
-}
-
-fn is_content_sha256(kind: &RenderInputFingerprintKind) -> bool {
-    *kind == RenderInputFingerprintKind::ContentSha256
-}
-
 fn resolve_manifest_artifact_path(project_root: &Path, path: &str) -> PathBuf {
     let artifact_path = Path::new(path);
     if artifact_path.is_absolute() {
@@ -919,14 +823,12 @@ fn validate_required_fingerprints(
                 artifact: input.path.clone(),
             });
         }
-        let live = match &input.fingerprint_kind {
-            RenderInputFingerprintKind::ContentSha256 => fingerprint_file(&path, true),
-            RenderInputFingerprintKind::SampledSha256 => fingerprint_file_sampled(&path, true),
-        }
-        .map_err(|_| RenderReplayError::MissingRequiredArtifact {
-            path: manifest_path.to_owned(),
-            kind: "input",
-            artifact: input.path.clone(),
+        let live = fingerprint_file(&path, true).map_err(|_| {
+            RenderReplayError::MissingRequiredArtifact {
+                path: manifest_path.to_owned(),
+                kind: "input",
+                artifact: input.path.clone(),
+            }
         })?;
         if live.sha256 != input.sha256 || live.size_bytes != input.size_bytes {
             return Err(RenderReplayError::FingerprintMismatch {
@@ -1001,7 +903,6 @@ mod tests {
                 sha256: "asset-hash".into(),
                 size_bytes: 5,
                 required: true,
-                fingerprint_kind: RenderInputFingerprintKind::ContentSha256,
             }],
             outputs: vec![RenderOutputArtifact {
                 path: "/project/renders/out.mp4".into(),
@@ -1038,27 +939,6 @@ mod tests {
         assert_eq!(fingerprint.size_bytes, 3);
         assert_eq!(fingerprint.path, path.to_string_lossy());
         assert!(fingerprint.required);
-        assert_eq!(
-            fingerprint.fingerprint_kind,
-            RenderInputFingerprintKind::ContentSha256
-        );
-    }
-
-    #[test]
-    fn sampled_sha256_records_bounded_input_kind() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("input.bin");
-        std::fs::write(&path, vec![b'a'; (SAMPLED_FINGERPRINT_BYTES + 5) as usize]).unwrap();
-
-        let fingerprint = fingerprint_file_sampled(&path, true).unwrap();
-
-        assert_eq!(fingerprint.size_bytes, SAMPLED_FINGERPRINT_BYTES + 5);
-        assert_eq!(fingerprint.path, path.to_string_lossy());
-        assert!(fingerprint.required);
-        assert_eq!(
-            fingerprint.fingerprint_kind,
-            RenderInputFingerprintKind::SampledSha256
-        );
     }
 
     #[test]
@@ -1215,29 +1095,6 @@ mod tests {
         let err = validate_replay_manifest(&manifest, &manifest_path).unwrap_err();
 
         assert!(err.to_string().contains("fingerprint mismatch"));
-    }
-
-    #[test]
-    fn replay_validation_accepts_sampled_required_input() {
-        let dir = tempdir().unwrap();
-        let input = dir.path().join("raw/a.mp4");
-        let output = dir.path().join("renders/out.mp4");
-        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
-        std::fs::write(&input, b"source media").unwrap();
-        let fingerprint = fingerprint_file_sampled(&input, true).unwrap();
-
-        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
-        manifest.project_root = dir.path().to_string_lossy().into_owned();
-        manifest.inputs = vec![fingerprint];
-        manifest.outputs = vec![output_artifact(&output, true)];
-        manifest.replay = RenderReplayPlan::FfmpegArgv {
-            argv: vec!["ffmpeg".into(), "-version".into()],
-            cwd: Some(dir.path().to_string_lossy().into_owned()),
-        };
-        let manifest_path = dir.path().join("out.render-manifest.json");
-
-        validate_replay_manifest(&manifest, &manifest_path).unwrap();
     }
 
     #[test]

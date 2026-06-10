@@ -195,10 +195,11 @@ fn fingerprint_manifest_inputs(
     project_root: &Path,
     input_paths: &[std::path::PathBuf],
 ) -> Result<Vec<awidat_render::RenderInputFingerprint>> {
-    // Dedupe by absolute path before fingerprinting. The render plan can
+    // Dedupe by absolute path before hashing. The render plan can
     // reference the same media asset many times (a 40-min .mov sliced
-    // into 27 segments still fingerprints to the same identity); doing
-    // that 27× blocks ffmpeg spawn and makes the export look hung.
+    // into 27 segments still hashes to the same digest); hashing it
+    // 27× wastes ~30 sec each, turning a single 5-sec hash into a
+    // 15-min stall. Software SHA-256 on multi-GB files is the bottleneck.
     let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
     let mut unique: Vec<std::path::PathBuf> = Vec::new();
     let mut order: Vec<std::path::PathBuf> = Vec::with_capacity(input_paths.len());
@@ -218,7 +219,7 @@ fn fingerprint_manifest_inputs(
         awidat_render::RenderInputFingerprint,
     > = std::collections::HashMap::new();
     for abs in unique {
-        let fp = awidat_render::fingerprint_file_sampled(&abs, true)
+        let fp = awidat_render::fingerprint_file(&abs, true)
             .with_context(|| format!("fingerprint input {}", abs.display()))?;
         by_path.insert(abs, fp);
     }

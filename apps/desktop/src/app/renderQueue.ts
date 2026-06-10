@@ -28,9 +28,9 @@ export type RenderTargetKind =
   | "still";
 
 /**
- * Per-target upload lifecycle for the server-backed social publish
- * job created after a render lands. `state` is the tag; the other
- * fields appear when the variant carries them.
+ * Per-target upload lifecycle. Mirrors the Rust `UploadState` enum
+ * shape returned by `poll_upload_states` — `state` is the tag, the
+ * other fields appear when the variant carries them.
  *
  *   - `pending`    — render done, upload not started yet
  *   - `uploading`  — in flight; `progress` is 0..1 (or NaN unknown)
@@ -40,10 +40,8 @@ export type RenderTargetKind =
 export type RenderUploadState =
   | { state: "pending" }
   | { state: "uploading"; progress: number }
-  | { state: "scheduled"; job_id: string }
-  | { state: "processing"; job_id: string }
   | { state: "published"; remote_url: string; remote_id: string }
-  | { state: "failed"; reason: string; job_id?: string };
+  | { state: "failed"; reason: string };
 
 export type RenderQueueEntry = {
   /** Stable id; survives reload. */
@@ -101,7 +99,8 @@ export type RenderQueueEntry = {
   uploadTargets?: string[];
   /**
    * Per-target lifecycle, keyed by provider key. Populated when the
-   * worker registers targets with the social backend.
+   * worker registers targets with the backend and updated by the
+   * upload poller. Mirrors the backend `UploadJobEntry.upload_states`.
    */
   uploadStates?: Record<string, RenderUploadState>;
   /**
@@ -115,9 +114,10 @@ export type RenderQueueEntry = {
    * schedule / thumbnail) the user configured before kicking the
    * render. Keyed by provider key — same set as `uploadTargets`.
    *
-   * The render-queue worker forwards each entry through the social
-   * server-backed publish commands. Missing keys (or `undefined`) →
-   * publishing falls back to the
+   * The render-queue worker forwards each entry to the backend via
+   * `start_uploads_for_job` so the upload dispatcher hands the real
+   * `UploadParams` to the provider instead of W5.A2's stub defaults.
+   * Missing keys (or `undefined`) → dispatcher falls back to the
    * default `(label, no description, private)` payload.
    */
   uploadMetadata?: Record<string, UploadMetadata>;
@@ -156,7 +156,8 @@ type State = {
   setUploadTargets: (id: string, providers: string[]) => void;
   /**
    * Replace this entry's per-target upload state map. Called by the
-   * server-backed publish path after each target state transition.
+   * upload poller after each backend `poll_upload_states` round trip;
+   * mirrors the wire shape verbatim so the row can render directly.
    */
   setUploadStates: (
     id: string,
@@ -165,7 +166,7 @@ type State = {
   ) => void;
   /**
    * Replace this entry's per-target upload metadata snapshot. Called
-   * by the worker just before server-backed publishing so the saved
+   * by the worker just before `start_uploads_for_job` so the saved
    * queue entry carries the same metadata the backend was handed —
    * useful for retry, where we don't want to re-read the user's form
    * state (they may have edited the form for a *different* render

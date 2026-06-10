@@ -1651,9 +1651,6 @@ impl MotionScene {
     }
 }
 
-// serde's `skip_serializing_if` requires `fn(&T) -> bool`, so the reference
-// is mandatory here even though clippy would prefer `f64` by value.
-#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero_f64(value: &f64) -> bool {
     *value == 0.0
 }

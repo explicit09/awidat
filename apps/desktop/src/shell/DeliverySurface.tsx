@@ -18,7 +18,6 @@ import {
   type PreflightSeverity,
 } from "../ui";
 import { useMode } from "../state/mode";
-import { useProjectStore } from "../app/state";
 import { useUploadPrefs } from "../state/uploadPrefs";
 import {
   useRenderQueueStore,
@@ -31,8 +30,6 @@ import { IssueInspector } from "./delivery/IssueInspector";
 import { RenderSummary, KV } from "./delivery/RenderSummary";
 import { RenderQueuePanel } from "./delivery/RenderQueue";
 import { UploadMetadataForm } from "./delivery/UploadMetadataForm";
-import { CampaignApprovalPanel } from "./delivery/CampaignApprovalPanel";
-import { SocialPublish } from "../app/social/SocialPublish";
 import { TARGET_META, targetKeyForKind } from "./delivery/targetMeta";
 import {
   ALL_TARGETS,
@@ -112,7 +109,6 @@ function DeliveryCockpit({
   const [severityFilter, setSeverityFilter] = useState<"all" | PreflightSeverity>("all");
   const [confirmExportOpen, setConfirmExportOpen] = useState(false);
   const queueEntries = useRenderQueueStore((s) => s.entries);
-  const projectRoot = useProjectStore((s) => s.current);
   const uploadAfterRender = useUploadPrefs((s) => s.enabled);
   const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
 
@@ -122,9 +118,6 @@ function DeliveryCockpit({
     return provided ?? { key, active: false };
   });
   const activeTargetCount = resolvedTargets.filter((target) => target.active).length;
-  const activeTargetKeys = resolvedTargets
-    .filter((target) => target.active)
-    .map((target) => target.key);
   const runningRender = [...queueEntries]
     .reverse()
     .find((entry) => entry.status === "running" || entry.status === "pending");
@@ -234,15 +227,7 @@ function DeliveryCockpit({
             ) : null}
             <RightColumnDetails mode={mode}>
               {summary ? <RenderSummary summary={summary} /> : null}
-              <CampaignApprovalPanel
-                sourceAssetId={projectRoot}
-                selectedTargets={activeTargetKeys}
-                renderEntries={queueEntries}
-              />
               <RenderQueuePanel />
-              {/* Server-backed publishing: connect an account + schedule a
-                  finished render to it (social_bind/validate/schedule/upload). */}
-              <SocialPublish />
             </RightColumnDetails>
             <Stack gap="2">
               <Button
@@ -320,14 +305,12 @@ function DeliverySheet({
   const uploadAfterRender = useUploadPrefs((s) => s.enabled);
   const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
   const queueEntries = useRenderQueueStore((s) => s.entries);
-  const projectRoot = useProjectStore((s) => s.current);
 
   const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
     const provided = targets.find((t) => t.key === key);
     return provided ?? { key, active: false };
   });
   const activeTargetCount = resolvedTargets.filter((t) => t.active).length;
-  const activeTargetKeys = resolvedTargets.filter((t) => t.active).map((t) => t.key);
   const counts = countBySeverity(findings);
   const blockingCount = counts.warning + counts.error + counts.failure;
 
@@ -463,15 +446,6 @@ function DeliverySheet({
             <RenderSummaryCard summary={summary} outputs={activeTargetCount} />
           </section>
         ) : null}
-
-        <section className="flex flex-col gap-3">
-          <SheetSectionLabel>Campaign</SheetSectionLabel>
-          <CampaignApprovalPanel
-            sourceAssetId={projectRoot}
-            selectedTargets={activeTargetKeys}
-            renderEntries={queueEntries}
-          />
-        </section>
 
         {/* Render queue — appears once there's something rendering/queued so
             the sheet stays calm when idle. Same panel the cockpit uses. */}
