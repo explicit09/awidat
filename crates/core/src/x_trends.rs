@@ -215,9 +215,7 @@ pub fn missing_credentials_context(queries: Vec<String>) -> XTrendContext {
         usage: XTrendUsage {
             pass_to: "plan_short_form_review.trend_context".to_string(),
             note: format!(
-                "Set {} or keychain account {} to enable X trend reads for queries: {}",
-                montage_secrets::env_vars::X_BEARER_TOKEN,
-                montage_secrets::accounts::X_BEARER_TOKEN,
+                "Add your X bearer token in Settings -> Advanced -> Provider Keys to enable trend reads for queries: {}",
                 queries.join(", ")
             ),
         },
@@ -255,7 +253,7 @@ fn capabilities(read_configured: bool) -> XProviderCapabilities {
             reason: if read_configured {
                 "X trend reads can use configured bearer credentials."
             } else {
-                "X trend reads require X_BEARER_TOKEN or keychain account x_bearer_token."
+                "X trend reads need an X bearer token in Settings -> Advanced -> Provider Keys."
             }
             .to_string(),
         },
@@ -361,7 +359,7 @@ mod tests {
             context.usage.pass_to,
             "plan_short_form_review.trend_context"
         );
-        assert!(context.usage.note.contains("X_BEARER_TOKEN"));
+        assert!(context.usage.note.contains("Provider Keys"));
     }
 
     #[test]

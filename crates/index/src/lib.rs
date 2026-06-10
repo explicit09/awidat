@@ -1020,12 +1020,54 @@ fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
             project_root.join(c)
         }
     });
+    let mut env = server.env.clone();
+    hydrate_provider_env(&mut env);
     ServerConfig {
         name: server.name.clone(),
         command: server.command.clone(),
         args: server.args.clone(),
-        env: server.env.clone(),
+        env,
         cwd,
+    }
+}
+
+const PROVIDER_CHILD_ENV: &[(&str, &str)] = &[
+    (
+        montage_secrets::env_vars::ANTHROPIC_API_KEY,
+        montage_secrets::accounts::ANTHROPIC_API_KEY,
+    ),
+    (
+        montage_secrets::env_vars::DEEPGRAM_API_KEY,
+        montage_secrets::accounts::DEEPGRAM_API_KEY,
+    ),
+    (
+        montage_secrets::env_vars::HF_TOKEN,
+        montage_secrets::accounts::HF_TOKEN,
+    ),
+    (
+        montage_secrets::env_vars::OPENROUTER_API_KEY,
+        montage_secrets::accounts::OPENROUTER_API_KEY,
+    ),
+];
+
+fn hydrate_provider_env(env: &mut std::collections::HashMap<String, String>) {
+    hydrate_provider_env_with(env, |env_name, account| {
+        montage_secrets::get(env_name, account).ok().flatten()
+    });
+}
+
+fn hydrate_provider_env_with(
+    env: &mut std::collections::HashMap<String, String>,
+    mut resolve: impl FnMut(&str, &str) -> Option<String>,
+) {
+    for (env_name, account) in PROVIDER_CHILD_ENV {
+        if env.contains_key(*env_name) {
+            continue;
+        }
+        let Some(value) = resolve(env_name, account).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        env.insert((*env_name).to_string(), value);
     }
 }
 
@@ -1229,6 +1271,47 @@ mod tests {
     #[test]
     fn indexer_initialize_timeout_allows_heavy_python_startup() {
         assert_eq!(INDEXER_INITIALIZE_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn provider_env_hydration_includes_transcription_keys() {
+        let mut env = HashMap::new();
+
+        hydrate_provider_env_with(&mut env, |env_name, _account| match env_name {
+            montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("dg-vault".to_string()),
+            montage_secrets::env_vars::HF_TOKEN => Some("hf-vault".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            env.get(montage_secrets::env_vars::DEEPGRAM_API_KEY)
+                .map(String::as_str),
+            Some("dg-vault")
+        );
+        assert_eq!(
+            env.get(montage_secrets::env_vars::HF_TOKEN)
+                .map(String::as_str),
+            Some("hf-vault")
+        );
+    }
+
+    #[test]
+    fn provider_env_hydration_preserves_explicit_server_env() {
+        let mut env = HashMap::from([(
+            montage_secrets::env_vars::DEEPGRAM_API_KEY.to_string(),
+            "configured-deepgram".to_string(),
+        )]);
+
+        hydrate_provider_env_with(&mut env, |env_name, _account| match env_name {
+            montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("vault-deepgram".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            env.get(montage_secrets::env_vars::DEEPGRAM_API_KEY)
+                .map(String::as_str),
+            Some("configured-deepgram")
+        );
     }
 
     #[test]

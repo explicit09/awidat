@@ -210,7 +210,7 @@ impl CapabilityMetadata {
                 metadata.approval_required = true;
                 metadata.side_effects = vec![
                     "writes generated media registry records".into(),
-                    "openrouter provider submits network video generation jobs when OPENROUTER_API_KEY is set".into(),
+                    "openrouter provider submits network video generation jobs when its provider key is configured".into(),
                     "mock provider writes placeholder media under raw/generated".into(),
                 ];
             }

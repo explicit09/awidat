@@ -48,8 +48,10 @@ pub enum ClientError {
     /// Parser error — malformed frame from the server.
     #[error("stream parse error: {0}")]
     Parse(#[from] StreamParseError),
-    /// API key missing — neither env var nor keychain has it.
-    #[error("ANTHROPIC_API_KEY not set in env or keychain")]
+    /// API key missing from provider configuration.
+    #[error(
+        "Anthropic is needed for premium topic labeling. Add your Anthropic key in Settings -> Advanced -> Provider Keys."
+    )]
     MissingApiKey,
 }
 
