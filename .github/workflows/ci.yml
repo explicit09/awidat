@@ -63,9 +63,7 @@ jobs:
         run: brew install ffmpeg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch desktop sidecars
-        env:
-          YT_DLP_ALLOW_PLACEHOLDER: "1"
-        run: make desktop-yt-dlp desktop-codex-check-stub
+        run: make desktop-sidecar-check-stubs
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -85,6 +83,8 @@ jobs:
       - name: Test
         run: |
           set -euo pipefail
+          export MONTAGE_FFMPEG="$(command -v ffmpeg)"
+          export MONTAGE_FFPROBE="$(command -v ffprobe)"
           excludes=(--exclude montage-desktop)
           while IFS= read -r package; do
             excludes+=(--exclude "$package")

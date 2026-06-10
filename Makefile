@@ -1,6 +1,15 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-codex desktop-codex-check-stub
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
+FFMPEG_VERSION ?= 7.1.1
+UV_VERSION ?= 0.11.14
+FFMPEG_MACOS_BASE_URL ?= https://evermeet.cx/ffmpeg
+FFMPEG_WINDOWS_URL ?= https://github.com/GyanD/codexffmpeg/releases/download/$(FFMPEG_VERSION)/ffmpeg-$(FFMPEG_VERSION)-full_build.zip
+FFMPEG_NPM_BASE_URL ?= https://registry.npmjs.org/@ffmpeg-installer
+FFPROBE_NPM_BASE_URL ?= https://registry.npmjs.org/@ffprobe-installer
+FFMPEG_STATIC_RELEASE ?= b6.1.1
+FFMPEG_STATIC_BASE_URL ?= https://github.com/eugeneware/ffmpeg-static/releases/download/$(FFMPEG_STATIC_RELEASE)
+DESKTOP_CARGO_TARGET_DIR ?= ../../target
 MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
 
 MONTAGE_APP_PACKAGES := \
@@ -146,7 +155,153 @@ desktop-codex-check-stub:
 	chmod +x "$$dest"; \
 	echo "wrote check stub $$dest"
 
-desktop: desktop-deps desktop-yt-dlp desktop-codex
+desktop-sidecar-check-stubs:
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest_dir="apps/desktop/src-tauri/binaries"; \
+	mkdir -p "$$dest_dir"; \
+	suffix="-$$target_triple"; \
+	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
+	    suffix="$$suffix.exe"; \
+	fi; \
+	for sidecar in codex ffmpeg ffprobe montage-mcp-server uv yt-dlp; do \
+	    dest="$$dest_dir/$$sidecar$$suffix"; \
+	    printf '%s\n' '#!/usr/bin/env sh' "echo \"$$sidecar sidecar check stub; fetch a runnable sidecar before packaging\" >&2" 'exit 127' > "$$dest"; \
+	    chmod +x "$$dest"; \
+	    echo "wrote check stub $$dest"; \
+	done
+
+desktop-ffmpeg:
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest_dir="apps/desktop/src-tauri/binaries"; \
+	mkdir -p "$$dest_dir"; \
+		tmp="$$(mktemp -d)"; \
+		trap 'rm -rf "$$tmp"' EXIT; \
+		fetch_static_sidecars() { \
+		    static_platform="$$1"; \
+		    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
+		    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
+		    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
+		        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
+		        exit 0; \
+		    fi; \
+		    echo "fetching $(FFMPEG_STATIC_BASE_URL)/ffmpeg-$$static_platform.gz"; \
+		    curl -fsSL -o "$$tmp/ffmpeg.gz" "$(FFMPEG_STATIC_BASE_URL)/ffmpeg-$$static_platform.gz"; \
+		    gunzip -c "$$tmp/ffmpeg.gz" > "$$ffmpeg_dest"; \
+		    echo "fetching $(FFMPEG_STATIC_BASE_URL)/ffprobe-$$static_platform.gz"; \
+		    curl -fsSL -o "$$tmp/ffprobe.gz" "$(FFMPEG_STATIC_BASE_URL)/ffprobe-$$static_platform.gz"; \
+		    gunzip -c "$$tmp/ffprobe.gz" > "$$ffprobe_dest"; \
+		    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+		}; \
+		case "$$target_triple" in \
+		  aarch64-apple-darwin) \
+		    fetch_static_sidecars darwin-arm64; \
+		    ;; \
+	  x86_64-apple-darwin) \
+	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
+	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
+	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ]; then \
+	        if "$$ffmpeg_dest" -version 2>/dev/null | head -n 1 | grep -q "ffmpeg version $(FFMPEG_VERSION)" && "$$ffprobe_dest" -version 2>/dev/null | head -n 1 | grep -q "ffprobe version $(FFMPEG_VERSION)"; then \
+	            echo "ffmpeg/ffprobe $(FFMPEG_VERSION) already at $$dest_dir for $$target_triple"; \
+	            exit 0; \
+	        fi; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/ffmpeg.zip" "$(FFMPEG_MACOS_BASE_URL)/ffmpeg-$(FFMPEG_VERSION).zip"; \
+	    curl -fsSL -o "$$tmp/ffprobe.zip" "$(FFMPEG_MACOS_BASE_URL)/ffprobe-$(FFMPEG_VERSION).zip"; \
+	    unzip -p "$$tmp/ffmpeg.zip" ffmpeg > "$$ffmpeg_dest"; \
+	    unzip -p "$$tmp/ffprobe.zip" ffprobe > "$$ffprobe_dest"; \
+	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+	    ;; \
+		  x86_64-unknown-linux-gnu) \
+		    fetch_static_sidecars linux-x64; \
+		    ;; \
+		  aarch64-unknown-linux-gnu) \
+		    fetch_static_sidecars linux-arm64; \
+		    ;; \
+	  x86_64-pc-windows-msvc) \
+	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple.exe"; \
+	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple.exe"; \
+	    if [ -s "$$ffmpeg_dest" ] && [ -s "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
+	        echo "ffmpeg/ffprobe $(FFMPEG_VERSION) already at $$dest_dir for $$target_triple"; \
+	        exit 0; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/ffmpeg-windows.zip" "$(FFMPEG_WINDOWS_URL)"; \
+	    unzip -p "$$tmp/ffmpeg-windows.zip" "ffmpeg-$(FFMPEG_VERSION)-full_build/bin/ffmpeg.exe" > "$$ffmpeg_dest"; \
+	    unzip -p "$$tmp/ffmpeg-windows.zip" "ffmpeg-$(FFMPEG_VERSION)-full_build/bin/ffprobe.exe" > "$$ffprobe_dest"; \
+	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+	    ;; \
+	  *) echo "unknown ffmpeg target triple: $$target_triple" >&2; exit 1 ;; \
+	esac; \
+	echo "wrote $$ffmpeg_dest"; \
+	echo "wrote $$ffprobe_dest"
+
+desktop-uv:
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest_dir="apps/desktop/src-tauri/binaries"; \
+	mkdir -p "$$dest_dir"; \
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	case "$$target_triple" in \
+	  aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) \
+	    uv_dest="$$dest_dir/uv-$$target_triple"; \
+	    if [ -x "$$uv_dest" ] && [ "$${UV_REFRESH:-0}" != "1" ]; then \
+	        if "$$uv_dest" --version 2>/dev/null | grep -q "uv $(UV_VERSION)"; then \
+	            echo "uv $(UV_VERSION) already at $$uv_dest"; \
+	            exit 0; \
+	        fi; \
+	    fi; \
+	    archive="uv-$$target_triple.tar.gz"; \
+	    curl -fsSL -o "$$tmp/uv.tar.gz" "https://github.com/astral-sh/uv/releases/download/$(UV_VERSION)/$$archive"; \
+	    tar -xzf "$$tmp/uv.tar.gz" -C "$$tmp"; \
+	    cp "$$tmp/uv-$$target_triple/uv" "$$uv_dest"; \
+	    chmod +x "$$uv_dest"; \
+	    ;; \
+	  x86_64-pc-windows-msvc) \
+	    uv_dest="$$dest_dir/uv-$$target_triple.exe"; \
+	    if [ -s "$$uv_dest" ] && [ "$${UV_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$uv_dest"; then \
+	        echo "uv $(UV_VERSION) already at $$uv_dest"; \
+	        exit 0; \
+	    fi; \
+	    archive="uv-$$target_triple.zip"; \
+	    curl -fsSL -o "$$tmp/uv.zip" "https://github.com/astral-sh/uv/releases/download/$(UV_VERSION)/$$archive"; \
+	    unzip -p "$$tmp/uv.zip" "uv-$$target_triple/uv.exe" > "$$uv_dest"; \
+	    chmod +x "$$uv_dest"; \
+	    ;; \
+	  *) echo "unknown uv target triple: $$target_triple" >&2; exit 1 ;; \
+	esac; \
+	echo "wrote $$uv_dest"
+
+desktop-mcp-server:
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	cargo_target_dir="$${CARGO_TARGET_DIR:-$(DESKTOP_CARGO_TARGET_DIR)}"; \
+	CARGO_TARGET_DIR="$$cargo_target_dir" cargo build -p montage-cli --bin montage-mcp-server --release --target "$$target_triple"; \
+	dest="apps/desktop/src-tauri/binaries/montage-mcp-server-$$target_triple"; \
+	source="$$cargo_target_dir/$$target_triple/release/montage-mcp-server"; \
+	if echo "$$target_triple" | grep -q 'windows'; then \
+	    dest="$$dest.exe"; \
+	    source="$$source.exe"; \
+	fi; \
+	mkdir -p "$$(dirname "$$dest")"; \
+	cp "$$source" "$$dest"; \
+	chmod +x "$$dest"; \
+	echo "wrote $$dest"
+
+desktop: desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-mcp-server desktop-codex
 	cd apps/desktop && pnpm tauri dev
 
 # Stop stale dev processes that can keep Vite's fixed Tauri port busy.

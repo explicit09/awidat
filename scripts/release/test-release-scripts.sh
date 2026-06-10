@@ -87,8 +87,12 @@ test_verify_sidecars_rejects_yt_dlp_ci_placeholder() {
   local dir="$TMP_DIR/yt-dlp-placeholder"
   mkdir -p "$dir"
   printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo uv-real' > "$dir/uv-aarch64-apple-darwin"
   printf '%s\n' '#!/bin/sh' 'echo "yt-dlp sidecar unavailable in CI compile check" >&2' 'exit 127' > "$dir/yt-dlp-aarch64-apple-darwin"
-  chmod +x "$dir/codex-aarch64-apple-darwin" "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
   local output
   if output="$(RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin 2>&1)"; then
     fail "yt-dlp CI placeholder should fail"
@@ -101,10 +105,33 @@ test_verify_sidecars_accepts_executable_non_stub_files() {
   local dir="$TMP_DIR/real"
   mkdir -p "$dir"
   printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo uv-real' > "$dir/uv-aarch64-apple-darwin"
   printf '%s\n' '#!/bin/sh' 'echo 2026.03.17' > "$dir/yt-dlp-aarch64-apple-darwin"
-  chmod +x "$dir/codex-aarch64-apple-darwin" "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
   RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin
   pass "executable non-stub sidecars are accepted"
+}
+
+test_verify_sidecars_rejects_missing_required_uv() {
+  local dir="$TMP_DIR/missing-uv"
+  mkdir -p "$dir"
+  printf '%s\n' '#!/bin/sh' 'echo codex-real' > "$dir/codex-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffmpeg-real' > "$dir/ffmpeg-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo ffprobe-real' > "$dir/ffprobe-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo mcp-real' > "$dir/montage-mcp-server-aarch64-apple-darwin"
+  printf '%s\n' '#!/bin/sh' 'echo 2026.03.17' > "$dir/yt-dlp-aarch64-apple-darwin"
+  chmod +x "$dir"/*-aarch64-apple-darwin
+
+  local output
+  if output="$(RELEASE_BINARIES_DIR="$dir" bash "$SCRIPT_DIR/verify-sidecars.sh" aarch64-apple-darwin 2>&1)"; then
+    fail "missing uv sidecar should fail"
+  fi
+  assert_contains "$output" "missing sidecar" "missing uv sidecar is reported"
+  assert_contains "$output" "uv-aarch64-apple-darwin" "missing uv path is named"
+  pass "missing uv sidecar is rejected"
 }
 
 test_checksums_writes_sha256_files() {
@@ -118,6 +145,56 @@ test_checksums_writes_sha256_files() {
   assert_equals "$(cat "$dir/Montage_aarch64.dmg.sha256")" "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8  Montage_aarch64.dmg" "aarch64 checksum line matches fixture digest"
   assert_equals "$(cat "$dir/Montage_x64.dmg.sha256")" "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753  Montage_x64.dmg" "x64 checksum line matches fixture digest"
   pass "checksums are written"
+}
+
+test_make_desktop_ffmpeg_supports_linux_targets() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=x86_64-unknown-linux-gnu)"
+  assert_contains "$output" "fetch_static_sidecars linux-x64" "linux x64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "linux x64 ffmpeg uses static binary template"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "linux x64 ffprobe uses static binary template"
+
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-unknown-linux-gnu)"
+  assert_contains "$output" "fetch_static_sidecars linux-arm64" "linux arm64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "linux arm64 ffmpeg uses static binary template"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "linux arm64 ffprobe uses static binary template"
+  assert_contains "$output" "b6.1.1" "linux ffmpeg uses transition-capable static release"
+  pass "desktop ffmpeg supports linux targets"
+}
+
+test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-apple-darwin)"
+  assert_contains "$output" "fetch_static_sidecars darwin-arm64" "darwin arm64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "darwin arm64 ffmpeg uses static binary template"
+  assert_contains "$output" "b6.1.1" "darwin arm64 ffmpeg uses transition-capable static release"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "darwin arm64 ffprobe uses static binary template"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "ffmpeg skips reject CI stubs"
+  pass "desktop ffmpeg uses arm64 darwin artifacts"
+}
+
+test_make_desktop_ffmpeg_marks_windows_sidecars_executable() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=x86_64-pc-windows-msvc)"
+  assert_contains "$output" 'chmod +x "$ffmpeg_dest" "$ffprobe_dest"' "windows ffmpeg sidecars are made executable"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "windows ffmpeg skips reject CI stubs"
+  pass "desktop ffmpeg marks windows sidecars executable"
+}
+
+test_make_desktop_uv_rejects_windows_stub_and_chmods() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-uv TARGET_TRIPLE=x86_64-pc-windows-msvc)"
+  assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "windows uv skips reject CI stubs"
+  assert_contains "$output" 'chmod +x "$uv_dest"' "windows uv sidecar is made executable"
+  pass "desktop uv rejects windows stubs and chmods"
+}
+
+test_make_desktop_mcp_server_builds_requested_target() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-mcp-server TARGET_TRIPLE=x86_64-apple-darwin)"
+  assert_contains "$output" '--target "$target_triple"' "mcp sidecar build passes target triple"
+  assert_contains "$output" 'source="$cargo_target_dir/$target_triple/release/montage-mcp-server"' "mcp sidecar copies target-qualified binary"
+  pass "desktop mcp server builds requested target"
 }
 
 test_import_certificate_requires_env() {
@@ -246,7 +323,13 @@ test_verify_sidecars_rejects_missing_files
 test_verify_sidecars_rejects_stub
 test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
+test_verify_sidecars_rejects_missing_required_uv
 test_checksums_writes_sha256_files
+test_make_desktop_ffmpeg_supports_linux_targets
+test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts
+test_make_desktop_ffmpeg_marks_windows_sidecars_executable
+test_make_desktop_uv_rejects_windows_stub_and_chmods
+test_make_desktop_mcp_server_builds_requested_target
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
 test_import_certificate_imports_identity_with_fake_security

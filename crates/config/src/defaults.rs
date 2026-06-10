@@ -1,10 +1,13 @@
 //! Bundled indexer registry.
 //!
-//! Montage ships with 11 canonical indexers pre-registered. New
+//! Montage ships with canonical Python indexers pre-registered. New
 //! projects work with zero `[[mcp.servers]]` config — the user's
 //! `.montage/config.toml` (and `~/.config/montage/config.toml`) become
 //! purely *additive overlays*: add custom indexers, swap a model,
 //! or `enabled = false` to disable a default.
+//!
+//! Consumer release policy: the downloadable desktop app bundles the
+//! Python workspace and `uv` sidecar so indexers work out of the box.
 //!
 //! ## Resolution model
 //!
@@ -13,15 +16,16 @@
 //! - **Python workspace root** — where the bundled `<name>-mcp`
 //!   packages live. Resolved in priority order:
 //!     1. `MONTAGE_PYTHON_ROOT` env var (explicit override; dev use)
-//!     2. Walk up from the montage binary looking for `python/`
-//!     3. Documented install location: `<prefix>/share/montage/python`
-//!     4. Fall back to a literal-empty path; defaults are still
+//!     2. Bundled Tauri resource next to the app executable
+//!     3. Walk up from the montage binary looking for `python/`
+//!     4. Documented install location: `<prefix>/share/montage/python`
+//!     5. Fall back to a literal-empty path; defaults are still
 //!        registered, but launching them will fail with a clear error
 //!        (`uv` won't find the package). The user can fix by setting
 //!        the env var or installing from a packaged release.
 //!
-//! - **`uv` executable** — `which uv` first, else
-//!   `~/.local/bin/uv` (uv's documented install path on macOS/Linux),
+//! - **`uv` executable** — bundled sibling sidecar first, then `which uv`,
+//!   then `~/.local/bin/uv` (uv's documented install path on macOS/Linux),
 //!   else fall back to the literal `"uv"` (assumes PATH at launch).
 //!
 //! ## Why this lives in montage-config and not montage-cli
@@ -51,6 +55,9 @@ pub fn python_root() -> Option<PathBuf> {
         // wrong, which is better than silently using a different
         // python tree.
         return Some(p);
+    }
+    if let Some(found) = bundled_python_root() {
+        return Some(found);
     }
     // Walk up from the binary location, then from the current dir.
     // Either should land on the montage repo root in a dev install.
@@ -85,6 +92,28 @@ pub fn python_root() -> Option<PathBuf> {
     None
 }
 
+fn bundled_python_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_python_root_from_exe(&exe)
+}
+
+fn bundled_python_root_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    for candidate in [
+        exe_dir.join("python"),
+        exe_dir.join("_up_/_up_/_up_/python"),
+        exe_dir.join("../Resources/python"),
+        exe_dir.join("../Resources/_up_/_up_/_up_/python"),
+        exe_dir.join("../resources/python"),
+        exe_dir.join("../resources/_up_/_up_/_up_/python"),
+    ] {
+        if python_workspace_marker_exists(&candidate) {
+            return Some(candidate.canonicalize().unwrap_or(candidate));
+        }
+    }
+    None
+}
+
 /// Walk up from `start` looking for a directory containing a
 /// `python/packages/montage-mcp/pyproject.toml` — the unambiguous
 /// marker of the montage python workspace.
@@ -92,15 +121,18 @@ fn walk_up_for_python(start: &Path) -> Option<PathBuf> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
         let candidate = dir.join("python");
-        if candidate
-            .join("packages/montage-mcp/pyproject.toml")
-            .exists()
-        {
+        if python_workspace_marker_exists(&candidate) {
             return Some(candidate);
         }
         cur = dir.parent();
     }
     None
+}
+
+fn python_workspace_marker_exists(candidate: &Path) -> bool {
+    candidate
+        .join("packages/montage-mcp/pyproject.toml")
+        .exists()
 }
 
 /// Resolve the bundled-skills directory. Mirrors `python_root` —
@@ -206,6 +238,9 @@ pub fn state_root() -> Option<PathBuf> {
 /// Resolve the `uv` executable path. Returns the absolute path when
 /// findable; falls back to the literal `"uv"` (assumes PATH).
 pub fn uv_command() -> String {
+    if let Some(path) = bundled_uv_command() {
+        return path.to_string_lossy().into_owned();
+    }
     // `which uv` — the canonical resolver. We don't shell out to
     // `which`; we walk PATH ourselves to keep startup deterministic
     // and avoid a process spawn on every Config::load.
@@ -224,6 +259,22 @@ pub fn uv_command() -> String {
         }
     }
     "uv".to_string()
+}
+
+fn bundled_uv_command() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_uv_command_from_exe(&exe)
+}
+
+fn bundled_uv_command_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    for file_name in ["uv", "uv.exe"] {
+        let candidate = exe_dir.join(file_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// One bundled indexer recipe.
@@ -366,15 +417,25 @@ const RECIPES: &[IndexerRecipe] = &[
 pub fn with_defaults() -> crate::Config {
     let cmd = uv_command();
     let python_cwd = python_root();
+    let uv_project_environment = uv_project_environment_for_python_root(
+        python_cwd.as_deref(),
+        bundled_python_root().as_deref(),
+        state_root().as_deref(),
+    );
+    let sidecar_env = bundled_sidecar_env();
 
     let servers = RECIPES
         .iter()
         .map(|recipe| {
-            let env: HashMap<String, String> = recipe
+            let mut env: HashMap<String, String> = recipe
                 .env
                 .iter()
                 .map(|(k, v)| ((*k).into(), (*v).into()))
                 .collect();
+            if let Some(path) = &uv_project_environment {
+                env.insert("UV_PROJECT_ENVIRONMENT".into(), path.clone());
+            }
+            env.extend(sidecar_env.clone());
             McpServer {
                 name: recipe.name.into(),
                 command: cmd.clone(),
@@ -399,6 +460,74 @@ pub fn with_defaults() -> crate::Config {
         mcp: McpConfig { servers },
         hooks: HooksConfig::default(),
     }
+}
+
+fn bundled_sidecar_env() -> HashMap<String, String> {
+    let Some(exe) = std::env::current_exe().ok() else {
+        return HashMap::new();
+    };
+    let Some(sidecar_dir) = bundled_sidecar_dir_from_exe(&exe) else {
+        return HashMap::new();
+    };
+    sidecar_env_for_dir(&sidecar_dir, std::env::var("PATH").ok().as_deref())
+}
+
+fn bundled_sidecar_dir_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    if ["ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe"]
+        .iter()
+        .any(|name| exe_dir.join(name).is_file())
+    {
+        return Some(exe_dir.to_path_buf());
+    }
+    None
+}
+
+fn sidecar_env_for_dir(sidecar_dir: &Path, current_path: Option<&str>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    let dir = sidecar_dir.to_string_lossy();
+    let path = match current_path {
+        Some(path) if !path.is_empty() => format!("{dir}{}{path}", path_separator()),
+        _ => dir.into_owned(),
+    };
+    env.insert("PATH".into(), path);
+
+    for (env_var, names) in [
+        ("MONTAGE_FFMPEG", ["ffmpeg", "ffmpeg.exe"]),
+        ("MONTAGE_FFPROBE", ["ffprobe", "ffprobe.exe"]),
+    ] {
+        if let Some(candidate) = names
+            .iter()
+            .map(|name| sidecar_dir.join(name))
+            .find(|candidate| candidate.is_file())
+        {
+            env.insert(env_var.into(), candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    env
+}
+
+fn path_separator() -> &'static str {
+    if cfg!(windows) { ";" } else { ":" }
+}
+
+fn uv_project_environment_for_python_root(
+    python_cwd: Option<&Path>,
+    bundled_python_cwd: Option<&Path>,
+    state_root: Option<&Path>,
+) -> Option<String> {
+    if python_cwd? != bundled_python_cwd? {
+        return None;
+    }
+    let state_root = state_root?;
+    Some(
+        state_root
+            .join("python")
+            .join(".venv")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -537,6 +666,129 @@ mod tests {
         let cfg = with_defaults();
         let clip = cfg.find_server("clip").unwrap();
         assert_eq!(clip.args, vec!["run", "--package", "clip-mcp", "clip-mcp"]);
+    }
+
+    #[test]
+    fn bundled_uv_command_from_exe_prefers_required_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let uv = dir.path().join("uv");
+        std::fs::write(&uv, b"").unwrap();
+
+        let resolved = bundled_uv_command_from_exe(&dir.path().join("montage-desktop"));
+
+        assert_eq!(resolved.as_deref(), Some(uv.as_path()));
+    }
+
+    #[test]
+    fn bundled_uv_command_from_exe_accepts_windows_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let uv = dir.path().join("uv.exe");
+        std::fs::write(&uv, b"").unwrap();
+
+        let resolved = bundled_uv_command_from_exe(&dir.path().join("montage-desktop.exe"));
+
+        assert_eq!(resolved.as_deref(), Some(uv.as_path()));
+    }
+
+    #[test]
+    fn bundled_python_root_from_exe_checks_tauri_resource_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("MacOS")).unwrap();
+        let resources = dir.path().join("Resources");
+        let python = resources.join("python");
+        std::fs::create_dir_all(python.join("packages/montage-mcp")).unwrap();
+        std::fs::write(
+            python.join("packages/montage-mcp/pyproject.toml"),
+            b"[project]\nname = \"montage-mcp\"\n",
+        )
+        .unwrap();
+
+        let resolved = bundled_python_root_from_exe(&dir.path().join("MacOS/montage-desktop"));
+
+        let expected = python.canonicalize().unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_python_root_from_exe_checks_direct_resource_up_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = dir.path().join("_up_/_up_/_up_/python");
+        std::fs::create_dir_all(python.join("packages/montage-mcp")).unwrap();
+        std::fs::write(
+            python.join("packages/montage-mcp/pyproject.toml"),
+            b"[project]\nname = \"montage-mcp\"\n",
+        )
+        .unwrap();
+
+        let resolved = bundled_python_root_from_exe(&dir.path().join("montage-desktop"));
+
+        let expected = python.canonicalize().unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_sidecar_dir_from_exe_accepts_media_sidecar_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let ffmpeg = dir.path().join("ffmpeg");
+        std::fs::write(&ffmpeg, b"").unwrap();
+
+        let resolved = bundled_sidecar_dir_from_exe(&dir.path().join("montage-desktop"));
+
+        assert_eq!(resolved.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn sidecar_env_prepends_path_and_exports_media_binaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let ffmpeg = dir.path().join("ffmpeg");
+        let ffprobe = dir.path().join("ffprobe");
+        std::fs::write(&ffmpeg, b"").unwrap();
+        std::fs::write(&ffprobe, b"").unwrap();
+
+        let env = sidecar_env_for_dir(dir.path(), Some("/usr/bin:/bin"));
+
+        let expected_path = format!("{}:/usr/bin:/bin", dir.path().to_string_lossy());
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some(expected_path.as_str())
+        );
+        assert_eq!(
+            env.get("MONTAGE_FFMPEG").map(String::as_str),
+            Some(ffmpeg.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            env.get("MONTAGE_FFPROBE").map(String::as_str),
+            Some(ffprobe.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn uv_project_environment_uses_user_state_for_bundled_python() {
+        let python = Path::new("/Applications/Montage.app/Contents/Resources/python");
+        let state = Path::new("/Users/example/.local/share/montage");
+
+        let resolved =
+            uv_project_environment_for_python_root(Some(python), Some(python), Some(state));
+
+        assert_eq!(
+            resolved.as_deref(),
+            Some("/Users/example/.local/share/montage/python/.venv")
+        );
+    }
+
+    #[test]
+    fn uv_project_environment_leaves_dev_python_workspace_alone() {
+        let dev_python = Path::new("/repo/python");
+        let bundled_python = Path::new("/Applications/Montage.app/Contents/Resources/python");
+        let state = Path::new("/Users/example/.local/share/montage");
+
+        let resolved = uv_project_environment_for_python_root(
+            Some(dev_python),
+            Some(bundled_python),
+            Some(state),
+        );
+
+        assert_eq!(resolved, None);
     }
 
     // Note: `python_root()` reads `MONTAGE_PYTHON_ROOT` directly. We

@@ -3,8 +3,8 @@
 //!
 //! Discovery order (matches what every Rust ffmpeg wrapper does in
 //! 2026): the `MONTAGE_FFMPEG` / `MONTAGE_FFPROBE` env overrides first,
-//! then `which ffmpeg` / `which ffprobe`. We do not bundle a static
-//! ffmpeg binary — that's a v2 packaging concern.
+//! then packaged sidecars beside the current executable, then `which
+//! ffmpeg` / `which ffprobe`.
 //!
 //! Frame extraction uses `-ss` before `-i` for fast keyframe seek; for
 //! sub-frame accuracy `-ss` lands after `-i` (slower). We choose the
@@ -105,17 +105,25 @@ pub fn ffprobe_path() -> Result<PathBuf, FfmpegError> {
 
 fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
     let override_path = std::env::var(env_var).ok();
+    let current_exe = std::env::current_exe().ok();
     let path_env = std::env::var_os("PATH");
-    resolve_binary_in(name, override_path.as_deref(), path_env.as_deref())
+    resolve_binary_in(
+        name,
+        override_path.as_deref(),
+        current_exe.as_deref(),
+        path_env.as_deref(),
+    )
 }
 
 /// Pure resolution logic, factored out so it can be unit-tested without
 /// mutating the process environment (which is `unsafe` and races the
 /// parallel test harness). `override_path` is the env-var value (if
-/// any); `path_env` is the raw `PATH` (if any).
+/// any); `current_exe` is the running desktop executable (if known);
+/// `path_env` is the raw `PATH` (if any).
 fn resolve_binary_in(
     name: &str,
     override_path: Option<&str>,
+    current_exe: Option<&Path>,
     path_env: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, ()> {
     if let Some(p) = override_path.filter(|p| !p.is_empty()) {
@@ -124,12 +132,26 @@ fn resolve_binary_in(
             return Ok(pb);
         }
     }
+
+    if let Some(exe) = current_exe
+        && let Some(dir) = exe.parent()
+    {
+        for file_name in binary_file_names(name) {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
     // Walk PATH ourselves so we don't pull in `which`.
     if let Some(path_env) = path_env {
         for dir in std::env::split_paths(path_env) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Ok(candidate);
+            for file_name in binary_file_names(name) {
+                let candidate = dir.join(file_name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -140,12 +162,23 @@ fn resolve_binary_in(
     // install locations before giving up — the env-var override stays
     // as the escape hatch for non-standard installs.
     for dir in COMMON_BIN_DIRS {
-        let candidate = Path::new(dir).join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
+        for file_name in binary_file_names(name) {
+            let candidate = Path::new(dir).join(file_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
     }
+
     Err(())
+}
+
+fn binary_file_names(name: &str) -> [String; 2] {
+    if name.ends_with(".exe") {
+        [name.to_string(), name.to_string()]
+    } else {
+        [name.to_string(), format!("{name}.exe")]
+    }
 }
 
 /// Well-known package-manager bin dirs to probe when `PATH` doesn't
@@ -1947,6 +1980,59 @@ mod tests {
     }
 
     #[test]
+    fn resolve_binary_candidate_prefers_env_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_bin = dir.path().join("custom-ffmpeg");
+        let sidecar_bin = dir.path().join("ffmpeg");
+        std::fs::write(&env_bin, b"").unwrap();
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffmpeg",
+            env_bin.to_str(),
+            Some(&dir.path().join("montage-desktop")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(env_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_falls_back_to_exe_sibling_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffprobe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffprobe",
+            None,
+            Some(&dir.path().join("montage-desktop")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_accepts_windows_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffmpeg.exe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffmpeg",
+            None,
+            Some(&dir.path().join("montage-desktop.exe")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
+    }
+
+    #[test]
     fn bucket_peaks_picks_max_abs_per_bucket() {
         let samples = [0.1, -0.5, 0.2, 0.9, -0.3, 0.0, 0.4, -0.8];
         let buckets = bucket_peaks(&samples, 4);
@@ -1972,7 +2058,12 @@ mod tests {
         // PATH/common-dir lookup. Uses the pure helper so it never
         // touches the process env (which would race the parallel test
         // harness). `/bin/sh` always exists.
-        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some("/bin/sh"), None);
+        let resolved = resolve_binary_in(
+            "definitely-not-a-real-binary-xyz",
+            Some("/bin/sh"),
+            None,
+            None,
+        );
         assert_eq!(resolved, Ok(PathBuf::from("/bin/sh")));
     }
 
@@ -1980,7 +2071,7 @@ mod tests {
     fn resolve_binary_empty_override_is_ignored() {
         // Empty override string must not be treated as a path; with no
         // PATH and a bogus name, resolution falls through to Err.
-        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some(""), None);
+        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some(""), None, None);
         assert_eq!(resolved, Err(()));
     }
 
