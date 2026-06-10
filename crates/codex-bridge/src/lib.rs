@@ -180,6 +180,10 @@ pub struct CodexAppServer {
     backend: CodexBackend,
     /// Stable codex thread id (one per project lifecycle).
     thread_id: String,
+    /// Pre-rendered L1 skills catalog. Prepended to every turn so the
+    /// agent can route dynamically while full skill bodies stay behind
+    /// `load_skill`.
+    skills_catalog: Option<String>,
     /// Pre-rendered L1 recent-feedback fragment (Wave 5 C3). Lists the
     /// user's most recent proposal rejections so the agent doesn't repeat
     /// patterns the user just turned down. Prepended to each turn because it
@@ -278,8 +282,6 @@ impl CodexAppServer {
             .await
             .map_err(|e| BridgeError::Startup(format!("initialized: {e}")))?;
 
-        let developer_instructions =
-            compose_session_instructions(developer_instructions, skills_catalog);
         let thread_id = if let Some(resume_id) = resume_thread_id {
             let resume_response: wire::ThreadResponse = client
                 .request(wire::thread_resume_request(
@@ -315,6 +317,7 @@ impl CodexAppServer {
         Ok(Self {
             backend: CodexBackend::External { client },
             thread_id,
+            skills_catalog,
             recent_feedback,
             pending,
             shutdown_tx: Some(shutdown_tx),
@@ -436,9 +439,9 @@ impl CodexAppServer {
         let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
 
         // 6. Start (or resume) the thread. The Montage per-format addendum
-        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) and skills
-        //    catalog ride on `developer_instructions` so editorial context is
-        //    not resent or persisted as user text on every turn.
+        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides on
+        //    `developer_instructions`; the compact skills catalog stays
+        //    per-turn so resumed sessions see current routing options.
         //
         //    Resume path: when the desktop asks to continue an existing
         //    chat we call `thread/resume` against the stored thread_id.
@@ -446,8 +449,6 @@ impl CodexAppServer {
         //    (vendor/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
         //    and the resulting thread keeps the same id, so subsequent
         //    `turn/start` calls thread off the persisted history.
-        let developer_instructions =
-            compose_session_instructions(developer_instructions, skills_catalog);
         let thread_id = if let Some(resume_id) = resume_thread_id {
             let resume_response: ThreadResumeResponse = request_handle
                 .request_typed(ClientRequest::ThreadResume {
@@ -501,6 +502,7 @@ impl CodexAppServer {
                 resolve_tx,
             },
             thread_id,
+            skills_catalog,
             recent_feedback,
             pending,
             shutdown_tx: Some(shutdown_tx),
@@ -515,7 +517,11 @@ impl CodexAppServer {
         input: String,
         model: Option<String>,
     ) -> Result<String, BridgeError> {
-        let text = compose_turn_input(self.recent_feedback.as_deref(), &input);
+        let text = compose_turn_input(
+            self.recent_feedback.as_deref(),
+            self.skills_catalog.as_deref(),
+            &input,
+        );
         let turn_id = match &self.backend {
             CodexBackend::External { client } => {
                 let response: wire::TurnStartResponse = client
@@ -1102,24 +1108,8 @@ fn next_request_id() -> i64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Compose the session instructions the agent sees once at thread
-/// start/resume. The skills catalog belongs here, not inside every user
-/// turn, otherwise simple prompts become large internal prompts and get
-/// persisted as user text in Codex rollouts.
-fn compose_session_instructions(
-    developer_instructions: Option<String>,
-    skills_catalog: Option<String>,
-) -> Option<String> {
-    match (developer_instructions, skills_catalog) {
-        (Some(dev), Some(skills)) => Some(format!("{}\n\n{}", dev.trim_end(), skills.trim())),
-        (Some(dev), None) => Some(dev),
-        (None, Some(skills)) => Some(skills),
-        (None, None) => None,
-    }
-}
-
-/// Compose the per-turn text the agent sees: optional recent feedback
-/// followed by the user input.
+/// Compose the per-turn text the agent sees: optional recent feedback,
+/// optional compact skills catalog, then the user input.
 ///
 /// Recent feedback is behavioural ("don't repeat these rejections"), and
 /// earlier prompt text is treated as higher priority by the model, so it
@@ -1127,10 +1117,17 @@ fn compose_session_instructions(
 ///
 /// Extracted from `CodexAppServer::start_turn` so the unit test can pin
 /// the exact composition without standing up the in-process app-server.
-fn compose_turn_input(recent_feedback: Option<&str>, input: &str) -> String {
-    let mut parts: Vec<&str> = Vec::with_capacity(2);
+fn compose_turn_input(
+    recent_feedback: Option<&str>,
+    skills_catalog: Option<&str>,
+    input: &str,
+) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(3);
     if let Some(fb) = recent_feedback {
         parts.push(fb);
+    }
+    if let Some(skills) = skills_catalog {
+        parts.push(skills);
     }
     parts.push(input);
     parts.join("\n\n")
@@ -1223,28 +1220,17 @@ mod tests {
 
 #[cfg(test)]
 mod compose_tests {
-    use super::{compose_session_instructions, compose_turn_input};
+    use super::compose_turn_input;
 
     #[test]
-    fn session_instructions_include_skills_once() {
-        let out = compose_session_instructions(Some("<DEV>".to_string()), Some("<SK>".to_string()))
-            .expect("instructions");
-        assert_eq!(out, "<DEV>\n\n<SK>");
-    }
-
-    #[test]
-    fn turn_input_does_not_include_skills_catalog() {
-        let out = compose_turn_input(Some("<FB>"), "hello");
-        assert!(
-            !out.contains("<SK>"),
-            "skills must not ride per-turn: {out}"
-        );
-        assert_eq!(out, "<FB>\n\nhello");
+    fn turn_input_includes_skills_catalog_after_feedback() {
+        let out = compose_turn_input(Some("<FB>"), Some("<SK>"), "hello");
+        assert_eq!(out, "<FB>\n\n<SK>\n\nhello");
     }
 
     #[test]
     fn simple_chat_turn_stays_plain_user_input() {
-        let out = compose_turn_input(None, "how are you");
+        let out = compose_turn_input(None, None, "how are you");
         assert_eq!(out, "how are you");
         assert!(
             !out.contains("AGENTS.md")
@@ -1256,13 +1242,13 @@ mod compose_tests {
 
     #[test]
     fn no_fragments_returns_input_only() {
-        let out = compose_turn_input(None, "hello");
+        let out = compose_turn_input(None, None, "hello");
         assert_eq!(out, "hello");
     }
 
     #[test]
     fn feedback_only_prefixes_input() {
-        let out = compose_turn_input(Some("<FB>"), "hello");
+        let out = compose_turn_input(Some("<FB>"), None, "hello");
         assert_eq!(out, "<FB>\n\nhello");
     }
 }

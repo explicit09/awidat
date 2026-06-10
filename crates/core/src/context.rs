@@ -129,9 +129,17 @@ the L1 catalog above is everything you see by default. The full L2 \
 body comes back from `load_skill`. L3 — bundled scripts — runs via \
 the `bash` tool against paths the L2 body references.\n  - Multiple \
 skills: if the request spans domains (tighten THEN suggest b-roll), \
-load both, in order, and announce which you're using.\n  - Skip \
-gracefully: if no skill applies, just do the work with the regular \
-tools. Skills are a shortcut, not a gate.\n  - Edit graph first: \
+load both, in order, and announce which you're using. For production \
+requests, load the generic producer skill first, then any brand/private \
+skill that matches the project or show; brand/private skills compose \
+with generic producers, not replace them.\n  - Workflow gates: if the \
+request asks you to produce, prepare, finish, render, package, make \
+shorts, or otherwise complete an output and a matching producer/director \
+skill exists, load it before planning or editing. If a brand/private \
+skill is missing, continue with the matching generic producer and say \
+which brand layer was unavailable.\n  - Skip gracefully: if no skill \
+applies, just do the work with the regular tools. Skills are optional \
+only when no matching workflow exists.\n  - Edit graph first: \
 skills may use scripts to score/analyze, but all editorial changes \
 must become graph edits through `apply_edl`, then be inspected with \
 `view_timeline`/`vedit_diff` and rendered with `start_render(scope=\"timeline\")`. \

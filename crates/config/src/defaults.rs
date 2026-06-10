@@ -235,13 +235,17 @@ pub fn user_skills_root() -> Option<PathBuf> {
 }
 
 /// User-scoped skill directories, ordered from lower to higher
-/// priority. We include the XDG-style `~/.config/montage/skills`
-/// fallback even on macOS so skills copied there by older docs or
-/// hand-written installers still load.
+/// priority. Keep this in sync with the desktop catalog renderer so
+/// `load_skill` can resolve every skill the agent was shown.
 pub fn user_skills_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".awidat/skills"));
+        roots.push(home.join(".montage/skills"));
         roots.push(home.join(".config/montage/skills"));
+    }
+    if let Some(config) = dirs::config_dir() {
+        roots.push(config.join("awidat/skills"));
     }
     if let Some(primary) = user_skills_root()
         && !roots.iter().any(|p| p == &primary)
