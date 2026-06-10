@@ -1,0 +1,94 @@
+name: codex-sidecar
+
+# Prebuilds the codex sidecar so release builds download it instead of
+# compiling its 892-crate closure inline (19-57 minutes per release leg).
+# Binaries are published as assets on a rolling prerelease tagged
+# `codex-sidecar-cache`, keyed by the vendor/codex-rs tree hash + Cargo.lock
+# hash, and consumed by release.yml's "Fetch prebuilt codex sidecar" step
+# (which falls back to building from source when no key matches).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "vendor/codex-rs/**"
+      - "Cargo.lock"
+      - ".github/workflows/codex-sidecar.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: codex-sidecar
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Prebuild codex sidecar (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    # Both targets build on M-series runners; x86_64 is cross-compiled
+    # (Intel runner hardware compiles ~2x slower and is being phased out).
+    runs-on: macos-15
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-C debuginfo=0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute sidecar cache key
+        id: key
+        run: |
+          set -euo pipefail
+          key="$(git rev-parse "HEAD:vendor/codex-rs" | cut -c1-12)-$(git hash-object Cargo.lock | cut -c1-12)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "asset=codex-$key-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already published
+        id: existing
+        run: |
+          set -euo pipefail
+          if gh release view codex-sidecar-cache --json assets --jq '.assets[].name' 2>/dev/null \
+            | grep -qx "${{ steps.key.outputs.asset }}"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.key.outputs.asset }} already published; nothing to do"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.existing.outputs.exists == 'false'
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.existing.outputs.exists == 'false'
+        with:
+          shared-key: codex-sidecar-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Build codex sidecar
+        if: steps.existing.outputs.exists == 'false'
+        run: make desktop-codex TARGET_TRIPLE=${{ matrix.target }} CODEX_PROFILE=release
+
+      - name: Publish to rolling cache release
+        if: steps.existing.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          src="apps/desktop/src-tauri/binaries/codex-${{ matrix.target }}"
+          asset="${{ steps.key.outputs.asset }}"
+          cp "$src" "$asset"
+          if ! gh release view codex-sidecar-cache >/dev/null 2>&1; then
+            # Both matrix legs may race to create the release; tolerate the
+            # loser failing and rely on the upload below.
+            gh release create codex-sidecar-cache \
+              --title "codex sidecar build cache" \
+              --notes "Prebuilt codex sidecar binaries keyed by vendor/codex-rs tree + Cargo.lock hash. Consumed by release.yml; not for direct download." \
+              --prerelease || true
+          fi
+          gh release upload codex-sidecar-cache "$asset" --clobber
