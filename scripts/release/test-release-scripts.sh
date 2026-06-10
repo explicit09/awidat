@@ -150,19 +150,25 @@ test_checksums_writes_sha256_files() {
 test_make_desktop_ffmpeg_supports_linux_targets() {
   local output
   output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=x86_64-unknown-linux-gnu)"
-  assert_contains "$output" "fetch_npm_sidecars linux-x64 4.1.0 linux-x64 5.2.0" "linux x64 ffmpeg and ffprobe tarballs are selected"
+  assert_contains "$output" "fetch_static_sidecars linux-x64" "linux x64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "linux x64 ffmpeg uses static binary template"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "linux x64 ffprobe uses static binary template"
 
   output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-unknown-linux-gnu)"
-  assert_contains "$output" "fetch_npm_sidecars linux-arm64 4.1.4 linux-arm64 5.2.0" "linux arm64 ffmpeg and ffprobe tarballs are selected"
+  assert_contains "$output" "fetch_static_sidecars linux-arm64" "linux arm64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "linux arm64 ffmpeg uses static binary template"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "linux arm64 ffprobe uses static binary template"
+  assert_contains "$output" "b6.1.1" "linux ffmpeg uses transition-capable static release"
   pass "desktop ffmpeg supports linux targets"
 }
 
 test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts() {
   local output
   output="$(make -C "$ROOT_DIR" -n desktop-ffmpeg TARGET_TRIPLE=aarch64-apple-darwin)"
-  assert_contains "$output" "ffmpeg-darwin-arm64.gz" "darwin arm64 ffmpeg static binary is selected"
+  assert_contains "$output" "fetch_static_sidecars darwin-arm64" "darwin arm64 ffmpeg static artifacts are selected"
+  assert_contains "$output" 'ffmpeg-$static_platform.gz' "darwin arm64 ffmpeg uses static binary template"
   assert_contains "$output" "b6.1.1" "darwin arm64 ffmpeg uses transition-capable static release"
-  assert_contains "$output" "darwin-arm64-5.0.1.tgz" "darwin arm64 ffprobe tarball is selected"
+  assert_contains "$output" 'ffprobe-$static_platform.gz' "darwin arm64 ffprobe uses static binary template"
   assert_contains "$output" 'sidecar check stub|sidecar unavailable in CI compile check' "ffmpeg skips reject CI stubs"
   pass "desktop ffmpeg uses arm64 darwin artifacts"
 }

@@ -182,43 +182,28 @@ desktop-ffmpeg:
 	fi; \
 	dest_dir="apps/desktop/src-tauri/binaries"; \
 	mkdir -p "$$dest_dir"; \
-	tmp="$$(mktemp -d)"; \
-	trap 'rm -rf "$$tmp"' EXIT; \
-	fetch_npm_sidecars() { \
-	    ffmpeg_pkg="$$1"; \
-	    ffmpeg_version="$$2"; \
-	    ffprobe_pkg="$$3"; \
-	    ffprobe_version="$$4"; \
-	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
-	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
-	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
-	        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
-	        exit 0; \
-	    fi; \
-	    curl -fsSL -o "$$tmp/ffmpeg.tgz" "$(FFMPEG_NPM_BASE_URL)/$$ffmpeg_pkg/-/$$ffmpeg_pkg-$$ffmpeg_version.tgz"; \
-	    curl -fsSL -o "$$tmp/ffprobe.tgz" "$(FFPROBE_NPM_BASE_URL)/$$ffprobe_pkg/-/$$ffprobe_pkg-$$ffprobe_version.tgz"; \
-	    tar -xzf "$$tmp/ffmpeg.tgz" -C "$$tmp" package/ffmpeg; \
-	    cp "$$tmp/package/ffmpeg" "$$ffmpeg_dest"; \
-	    rm -rf "$$tmp/package"; \
-	    tar -xzf "$$tmp/ffprobe.tgz" -C "$$tmp" package/ffprobe; \
-	    cp "$$tmp/package/ffprobe" "$$ffprobe_dest"; \
-	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
-	}; \
-	case "$$target_triple" in \
-	  aarch64-apple-darwin) \
-	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
-	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
-	    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
-	        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
-	        exit 0; \
-	    fi; \
-	    curl -fsSL -o "$$tmp/ffmpeg.gz" "$(FFMPEG_STATIC_BASE_URL)/ffmpeg-darwin-arm64.gz"; \
-	    gunzip -c "$$tmp/ffmpeg.gz" > "$$ffmpeg_dest"; \
-	    curl -fsSL -o "$$tmp/ffprobe.tgz" "$(FFPROBE_NPM_BASE_URL)/darwin-arm64/-/darwin-arm64-5.0.1.tgz"; \
-	    tar -xzf "$$tmp/ffprobe.tgz" -C "$$tmp" package/ffprobe; \
-	    cp "$$tmp/package/ffprobe" "$$ffprobe_dest"; \
-	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
-	    ;; \
+		tmp="$$(mktemp -d)"; \
+		trap 'rm -rf "$$tmp"' EXIT; \
+		fetch_static_sidecars() { \
+		    static_platform="$$1"; \
+		    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
+		    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
+		    if [ -x "$$ffmpeg_dest" ] && [ -x "$$ffprobe_dest" ] && [ "$${FFMPEG_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$ffmpeg_dest" "$$ffprobe_dest"; then \
+		        echo "ffmpeg/ffprobe already at $$dest_dir for $$target_triple"; \
+		        exit 0; \
+		    fi; \
+		    echo "fetching $(FFMPEG_STATIC_BASE_URL)/ffmpeg-$$static_platform.gz"; \
+		    curl -fsSL -o "$$tmp/ffmpeg.gz" "$(FFMPEG_STATIC_BASE_URL)/ffmpeg-$$static_platform.gz"; \
+		    gunzip -c "$$tmp/ffmpeg.gz" > "$$ffmpeg_dest"; \
+		    echo "fetching $(FFMPEG_STATIC_BASE_URL)/ffprobe-$$static_platform.gz"; \
+		    curl -fsSL -o "$$tmp/ffprobe.gz" "$(FFMPEG_STATIC_BASE_URL)/ffprobe-$$static_platform.gz"; \
+		    gunzip -c "$$tmp/ffprobe.gz" > "$$ffprobe_dest"; \
+		    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
+		}; \
+		case "$$target_triple" in \
+		  aarch64-apple-darwin) \
+		    fetch_static_sidecars darwin-arm64; \
+		    ;; \
 	  x86_64-apple-darwin) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple"; \
 	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple"; \
@@ -234,12 +219,12 @@ desktop-ffmpeg:
 	    unzip -p "$$tmp/ffprobe.zip" ffprobe > "$$ffprobe_dest"; \
 	    chmod +x "$$ffmpeg_dest" "$$ffprobe_dest"; \
 	    ;; \
-	  x86_64-unknown-linux-gnu) \
-	    fetch_npm_sidecars linux-x64 4.1.0 linux-x64 5.2.0; \
-	    ;; \
-	  aarch64-unknown-linux-gnu) \
-	    fetch_npm_sidecars linux-arm64 4.1.4 linux-arm64 5.2.0; \
-	    ;; \
+		  x86_64-unknown-linux-gnu) \
+		    fetch_static_sidecars linux-x64; \
+		    ;; \
+		  aarch64-unknown-linux-gnu) \
+		    fetch_static_sidecars linux-arm64; \
+		    ;; \
 	  x86_64-pc-windows-msvc) \
 	    ffmpeg_dest="$$dest_dir/ffmpeg-$$target_triple.exe"; \
 	    ffprobe_dest="$$dest_dir/ffprobe-$$target_triple.exe"; \
