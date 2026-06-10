@@ -30,7 +30,7 @@
 //!   TWITTER_X_CLIENT_SECRET — Twitter/X OAuth client secret (server-only)
 //!   SOCIAL_TOKEN_AEAD_KEY   — 64 hex chars = 32-byte ChaCha20-Poly1305 key (Phase 2)
 //!   SOCIAL_TOKEN_KEY_ID     — key identifier stored alongside every token (Phase 2)
-//!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. "https://montage-social.fly.dev"
+//!   OAUTH_REDIRECT_BASE     — base URL for OAuth redirect URIs, e.g. `https://montage-social.fly.dev`
 //!   YOUTUBE_FORCE_PRIVATE   — "false" allows non-private uploads (default "true"; keep true pre-audit)
 //!   ARTIFACT_BASE_DIR       — root dir for file:// artifact refs (default "/var/lib/montage-artifacts")
 //!   SOCIAL_MIGRATIONS_DIR   — SQL migration dir (default: ../social/migrations from Cargo manifest)
