@@ -105,6 +105,21 @@ export const VISIBLE_DELIVERY_TARGET_KEYS: readonly DeliveryTargetKey[] = [
   "custom",
 ];
 
+const VISIBLE_DELIVERY_TARGET_SET = new Set<DeliveryTargetKey>(
+  VISIBLE_DELIVERY_TARGET_KEYS,
+);
+
+export function normalizeVisibleDeliveryTargetKeys(
+  keys: readonly unknown[],
+): DeliveryTargetKey[] {
+  return keys.filter(
+    (key): key is DeliveryTargetKey =>
+      typeof key === "string" &&
+      key in DELIVERY_TARGETS &&
+      VISIBLE_DELIVERY_TARGET_SET.has(key as DeliveryTargetKey),
+  );
+}
+
 export function renderQueueLabelForTarget(
   key: DeliveryTargetKey,
   selected: ReadonlySet<DeliveryTargetKey>,
@@ -132,12 +147,9 @@ function loadPersisted(): Set<DeliveryTargetKey> {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
     if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as DeliveryTargetKey[];
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return new Set();
-    const valid = parsed.filter(
-      (k): k is DeliveryTargetKey => k in DELIVERY_TARGETS,
-    );
-    return new Set(valid);
+    return new Set(normalizeVisibleDeliveryTargetKeys(parsed));
   } catch {
     return new Set();
   }
@@ -164,7 +176,7 @@ export const useDeliveryTargetsStore = create<State>((set) => ({
     }),
   setSelected: (keys) =>
     set(() => {
-      const next = new Set(keys);
+      const next = new Set(normalizeVisibleDeliveryTargetKeys(keys));
       persist(next);
       return { selected: next };
     }),
