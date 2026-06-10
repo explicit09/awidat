@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  VISIBLE_DELIVERY_TARGET_KEYS,
   renderQueueLabelForTarget,
   type DeliveryTargetKey,
 } from "../src/app/deliveryTargets.ts";
@@ -16,6 +17,12 @@ assert.equal(
   renderQueueLabelForTarget("youtube", youtubeSelected),
   "YouTube",
   "selected YouTube target should keep the YouTube queue label",
+);
+
+assert.deepEqual(
+  VISIBLE_DELIVERY_TARGET_KEYS,
+  ["youtube", "twitter_x", "captions", "cover", "custom"],
+  "MVP delivery UI should hide TikTok and Instagram until those paths are real",
 );
 
 console.log("delivery-targets: OK");

@@ -19,9 +19,9 @@ import {
 } from "./socialModel";
 import { startConnect } from "./socialActions";
 import { SocialAudit } from "./SocialAudit";
-import { PROVIDERS, providerDisplayName } from "../publishingSettingsModel";
+import { VISIBLE_PROVIDERS, providerDisplayName } from "../publishingSettingsModel";
 
-const SOCIAL_PROVIDERS = PROVIDERS.map((provider) => provider.key);
+const SOCIAL_PROVIDERS = VISIBLE_PROVIDERS.map((provider) => provider.key);
 
 // status → dot color token. Connected = success; needs-action = warning; the
 // rest = muted. Keeps the "dot + label" language, no full-color pills.

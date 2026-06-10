@@ -1,7 +1,7 @@
 // Selected delivery targets store + target catalog.
 //
-// The DeliverySurface renders 6 platform cards (YouTube / TikTok /
-// Instagram / Twitter/X / Captions / Cover / Custom frame). This store tracks
+// The DeliverySurface renders the MVP target cards (YouTube / Twitter/X /
+// Captions / Cover / Custom frame). This store tracks
 // which of those the user has *selected* for the next export, and
 // persists the selection per-project so reloads keep the choices.
 //
@@ -97,6 +97,14 @@ export const DELIVERY_TARGETS: Record<DeliveryTargetKey, DeliveryTargetSpec> = {
   },
 };
 
+export const VISIBLE_DELIVERY_TARGET_KEYS: readonly DeliveryTargetKey[] = [
+  "youtube",
+  "twitter_x",
+  "captions",
+  "cover",
+  "custom",
+];
+
 export function renderQueueLabelForTarget(
   key: DeliveryTargetKey,
   selected: ReadonlySet<DeliveryTargetKey>,
@@ -162,9 +170,7 @@ export const useDeliveryTargetsStore = create<State>((set) => ({
     }),
   selectAll: () =>
     set(() => {
-      const next = new Set<DeliveryTargetKey>(
-        Object.keys(DELIVERY_TARGETS) as DeliveryTargetKey[],
-      );
+      const next = new Set<DeliveryTargetKey>(VISIBLE_DELIVERY_TARGET_KEYS);
       persist(next);
       return { selected: next };
     }),

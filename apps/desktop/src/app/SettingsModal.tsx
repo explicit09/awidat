@@ -149,6 +149,19 @@ export function SettingsModal() {
     }
   }
 
+  async function revealLogs() {
+    setActionError(null);
+    if (!isTauri()) {
+      setActionError("Log folder actions are only available in the desktop app.");
+      return;
+    }
+    try {
+      await invoke("reveal_app_log_dir");
+    } catch (e) {
+      setActionError(String(e));
+    }
+  }
+
   function editAgentsMd() {
     if (!projectPath) return;
     openAgentsMdEditor();
@@ -328,6 +341,12 @@ export function SettingsModal() {
           <SettingsCard title="About Montage" description="Desktop build details.">
             <SettingsRow label="Version" mono value={APP_VERSION} />
             <SettingsRow label="Montage" value="Studio for agent-driven editing" />
+            <SettingsRow label="Logs" value="Use this when reporting crashes, failed indexers, or export errors.">
+              <GlassButton variant="ghost" onClick={() => void revealLogs()}>
+                Open logs
+              </GlassButton>
+            </SettingsRow>
+            {actionError ? <SettingsError message={actionError} /> : null}
           </SettingsCard>
         );
     }

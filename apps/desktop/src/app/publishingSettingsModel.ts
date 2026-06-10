@@ -41,6 +41,10 @@ export const PROVIDERS: ReadonlyArray<{
   },
 ];
 
+export const VISIBLE_PROVIDERS = PROVIDERS.filter(
+  (provider) => provider.key !== "tiktok" && provider.key !== "instagram",
+);
+
 export function providerDisplayName(key: DeliveryTargetKey): string {
   return PROVIDERS.find((provider) => provider.key === key)?.displayName ?? key;
 }

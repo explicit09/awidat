@@ -66,7 +66,7 @@ export function WelcomeCard() {
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
             Review the{" "}
             <a
-              href="https://github.com/explicit09/awidat/blob/main/PRIVACY.md"
+              href="https://tadiwa.co/montage/privacy"
               target="_blank"
               rel="noreferrer"
             >

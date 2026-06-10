@@ -1,9 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Check, Download, KeyRound, Loader2, Trash2, X } from "lucide-react";
+import { Check, Download, ExternalLink, KeyRound, Loader2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
   providerKeyActionLabel,
+  providerKeySetupUrl,
   providerKeyStatusLabel,
   providerKeySubtitle,
   type ProviderKeyImportSummary,
@@ -189,6 +190,17 @@ export function ProviderKeysSettings() {
                   <p className="m-0 mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
                     {providerKeySubtitle(row)}
                   </p>
+                  {providerKeySetupUrl(row) ? (
+                    <a
+                      className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--color-brand)] hover:text-[var(--color-brand-strong,var(--color-brand))]"
+                      href={providerKeySetupUrl(row) ?? undefined}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      Get key
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ) : null}
                   <p className="m-0 mt-1 font-mono text-[11px] text-[var(--color-text-secondary)]">
                     {row.redacted ?? row.account}
                   </p>

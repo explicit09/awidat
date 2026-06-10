@@ -12,6 +12,9 @@ fn openrouter_requires_visible_cost_confirmation_argument() {
         ..Default::default()
     };
 
-    let err = validate_openrouter_cost_confirmation(&args).unwrap_err();
+    let err = match validate_openrouter_cost_confirmation(&args) {
+        Ok(()) => panic!("OpenRouter cost confirmation should be required"),
+        Err(err) => err,
+    };
     assert!(err.contains("OpenRouter cost unknown"));
 }

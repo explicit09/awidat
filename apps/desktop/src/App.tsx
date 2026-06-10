@@ -147,7 +147,7 @@ function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_in
   };
 }
 
-const HELP_DOCS_URL = "https://github.com/explicit09/awidat#readme";
+const HELP_DOCS_URL = "https://tadiwa.co/montage/setup";
 const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
 
 function App() {
@@ -584,8 +584,8 @@ function App() {
     );
     // If any video targets are selected, force the master render to
     // run first so the reframes can consume it. Users who picked
-    // only TikTok/Instagram get YouTube enqueued implicitly as the
-    // master.
+    // only vertical/social reframes get YouTube enqueued implicitly as
+    // the master.
     if (queueIncludesVideo && !selected.has("youtube")) {
       ordered.push("youtube");
     }
@@ -1680,8 +1680,6 @@ function App() {
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
       { key: "youtube", active: timelineDuration > 0 },
-      { key: "tiktok", active: false },
-      { key: "instagram", active: false },
       { key: "twitter_x", active: false },
       { key: "captions", active: completedJobKinds.has("indexing") },
       { key: "cover", active: false },

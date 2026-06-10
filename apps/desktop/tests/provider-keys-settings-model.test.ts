@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 
 import {
   providerKeyActionLabel,
+  providerKeySetupUrl,
   providerKeyStatusLabel,
   providerKeySubtitle,
   type ProviderKeyRow,
@@ -32,5 +33,6 @@ const missing: ProviderKeyRow = {
 
 assert.equal(providerKeyStatusLabel(missing), "Not set");
 assert.equal(providerKeyActionLabel(missing), "Add");
+assert.equal(providerKeySetupUrl(configured), "https://openrouter.ai/settings/keys");
 
 console.log("provider-keys-settings-model: OK");
