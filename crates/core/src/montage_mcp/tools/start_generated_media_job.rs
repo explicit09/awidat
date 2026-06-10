@@ -158,5 +158,5 @@ pub const DESCRIPTION: &str = "\
 Start a generated-media job and write the local generated-media registry. \
 Provider 'mock' creates an offline completed placeholder record suitable \
 for tests. Provider 'openrouter' submits an asynchronous OpenRouter video \
-generation job using OPENROUTER_API_KEY. Provider 'seedance' is not direct; \
+generation job using the configured OpenRouter key. Provider 'seedance' is not direct; \
 use OpenRouter or a future dedicated adapter.";

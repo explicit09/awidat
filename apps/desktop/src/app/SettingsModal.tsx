@@ -8,6 +8,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState, type ReactNode } from "react";
+import { ProviderKeysSettings } from "./ProviderKeysSettings";
 import { PublishingSettings } from "./PublishingSettings";
 import { useProjectStore } from "./state";
 import { useAgentsMdEditor } from "../state/agentsMdEditor";
@@ -46,6 +47,7 @@ type SettingsSectionId =
   | "publishing"
   | "agent"
   | "workspace"
+  | "advanced"
   | "indexers"
   | "about";
 
@@ -55,6 +57,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string; d
   { id: "publishing", label: "Publishing", detail: "Social targets" },
   { id: "agent", label: "Agent", detail: "Runtime info" },
   { id: "workspace", label: "Workspace", detail: "Mode and shortcuts" },
+  { id: "advanced", label: "Advanced", detail: "Provider keys" },
   { id: "indexers", label: "Indexers", detail: "Config paths" },
   { id: "about", label: "About", detail: "Version" },
 ];
@@ -309,6 +312,15 @@ export function SettingsModal() {
                 </GlassButton>
               ) : null}
             </SettingsRow>
+          </SettingsCard>
+        );
+      case "advanced":
+        return (
+          <SettingsCard
+            title="Provider keys"
+            description="Local provider keys for advanced bring-your-own workflows."
+          >
+            <ProviderKeysSettings />
           </SettingsCard>
         );
       case "about":

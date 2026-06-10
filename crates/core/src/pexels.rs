@@ -5,8 +5,8 @@
 //! Anything else is YAGNI — the agent's b-roll loop only needs query →
 //! preview → pick → download.
 //!
-//! Key resolution: [`Client::from_env_or_keychain`] tries `PEXELS_API_KEY`
-//! then the `pexels_api_key` keychain account, and errors with
+//! Key resolution: [`Client::from_env_or_keychain`] tries the configured
+//! Pexels provider key, and errors with
 //! [`PexelsError::MissingApiKey`] otherwise. No config-file fallback —
 //! keys live in the keychain per `PLAN.md` §10.4.
 //!
@@ -52,7 +52,9 @@ pub enum PexelsError {
         source: std::io::Error,
     },
     /// API key missing — neither env var nor keychain has it.
-    #[error("PEXELS_API_KEY not set in env or keychain")]
+    #[error(
+        "Pexels is needed for stock b-roll. Add your Pexels key in Settings -> Advanced -> Provider Keys."
+    )]
     MissingApiKey,
     /// Keychain backend itself failed (locked, missing).
     #[error("keychain access failed: {0}")]
@@ -106,8 +108,8 @@ impl Client {
         })
     }
 
-    /// Resolve the key from `PEXELS_API_KEY` or the `pexels_api_key`
-    /// keychain entry, then build a client with default config.
+    /// Resolve the Pexels key from the provider key store, then build a client
+    /// with default config.
     pub fn from_env_or_keychain(config: ClientConfig) -> Result<Self, PexelsError> {
         let key = montage_secrets::get(
             montage_secrets::env_vars::PEXELS_API_KEY,

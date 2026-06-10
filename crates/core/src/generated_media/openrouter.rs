@@ -15,7 +15,7 @@ const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 /// OpenRouter video-generation request settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenRouterVideoConfig {
-    /// Bearer token from `OPENROUTER_API_KEY`.
+    /// Bearer token from the configured OpenRouter provider key.
     pub api_key: String,
     /// Model id sent to OpenRouter.
     pub model: String,
@@ -269,8 +269,10 @@ pub struct OpenRouterStatusResponse {
 /// OpenRouter provider errors.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenRouterError {
-    /// API key is not available in the process environment.
-    #[error("OPENROUTER_API_KEY is not set")]
+    /// API key is not available in the provider key store.
+    #[error(
+        "OpenRouter is needed for generated media. Add your OpenRouter key in Settings -> Advanced -> Provider Keys."
+    )]
     MissingApiKey,
     /// OpenRouter returned a non-success response.
     #[error("OpenRouter video request failed: {0}")]
