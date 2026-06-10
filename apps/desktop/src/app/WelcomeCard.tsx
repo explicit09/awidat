@@ -1,10 +1,10 @@
-// WelcomeCard - one-screen first-launch welcome.
+// WelcomeCard - one-screen first-launch consent gate.
 //
 // Montage is structurally unusual: a local-first AI editorial NLE where
 // the agent has READ your media and AGENTS.md, proposes editorial
 // work, and the human reviews/accepts/rejects. New users don't have a
-// mental model for this. The welcome explains the three core ideas in
-// one screen: read once, dismiss, done.
+// mental model for this. The welcome explains the core ideas and
+// requires explicit local/remote data-flow consent.
 //
 // Storage lives in `useWelcome`. The shell uses the shared glass system
 // so first launch feels like the rest of the Montage desktop surface.
@@ -33,32 +33,33 @@ const CORE_IDEAS: ReadonlyArray<{ step: string; title: string; body: string }> =
 
 export function WelcomeCard() {
   const isOpen = useWelcome((s) => s.isOpen);
-  const dismiss = useWelcome((s) => s.dismiss);
+  const consent = useWelcome((s) => s.consent);
 
-  // Cmd+W / Esc dismisses. Registered at the document level so they win
-  // regardless of focus; only mounts while the modal is open.
+  // Cmd+W / Esc accepts the required acknowledgement. Registered at
+  // the document level so they win regardless of focus; only mounts
+  // while the modal is open.
   useEffect(() => {
     if (!isOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        dismiss();
+        consent();
         return;
       }
       const meta = event.metaKey || event.ctrlKey;
       if (meta && (event.key === "w" || event.key === "W")) {
         event.preventDefault();
-        dismiss();
+        consent();
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, dismiss]);
+  }, [isOpen, consent]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop" onClick={dismiss} role="presentation">
+    <div className="modal-backdrop" onClick={consent} role="presentation">
       <div
         className="glass glass-strong flex flex-col overflow-hidden text-[var(--color-text-primary)]"
         onClick={(event) => event.stopPropagation()}
@@ -82,8 +83,8 @@ export function WelcomeCard() {
           <button
             type="button"
             className="glass-content grid h-8 w-8 place-items-center rounded-lg text-[18px] leading-none text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
-            onClick={dismiss}
-            aria-label="Dismiss welcome"
+            onClick={consent}
+            aria-label="Accept welcome consent"
           >
             ×
           </button>
@@ -102,21 +103,23 @@ export function WelcomeCard() {
               privacy policy
             </a>{" "}
             before connecting accounts or sending media-derived context to model providers.
+            By continuing, you acknowledge that configured provider workflows can send
+            media-derived context off this device.
           </span>
         </div>
         <footer className="flex items-center justify-end gap-3 border-t border-[var(--glass-border)] bg-[rgba(10,10,14,0.52)] px-4 py-3">
           <span
             className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]"
-            title="Dismiss"
+            title="Consent required"
           >
             ⌘W or Esc
           </span>
           <button
             type="button"
             className="glass-cta rounded-lg px-4 py-2 text-[12px] font-semibold tracking-normal"
-            onClick={dismiss}
+            onClick={consent}
           >
-            Get started
+            I understand
           </button>
         </footer>
       </div>

@@ -10,6 +10,7 @@ import {
 } from "../ui";
 import type { GeneratedMediaEntry } from "./generatedMediaStore";
 import { useBriefProposalsStore } from "../state/briefProposals";
+import { generatedMediaCostLabel } from "./generatedMediaCost";
 
 export function GeneratedMediaPanel({
   entries,
@@ -117,6 +118,7 @@ function GeneratedMediaJobCard({
           {entry.model}
           {entry.requires_disclosure ? " · AI disclosure" : ""}
           {entry.uses_likeness ? " · likeness" : ""}
+          {entry.provider === "openrouter" ? ` · ${generatedMediaCostLabel(entry)}` : ""}
         </span>
         {pendingInBrief ? (
           <span

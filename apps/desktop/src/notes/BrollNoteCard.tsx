@@ -16,9 +16,11 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgentStore } from "../agent/store";
+import { isAuthReadyForAgent } from "../agent/composerAuthGate";
 import { useMediaStore } from "../media/store";
 import type { Note, DismissalBucket } from "./store";
 import type { BrollAnchor } from "../protocol";
+import { useAuth } from "../state/auth";
 
 export function BrollNoteCard({
   note,
@@ -35,7 +37,10 @@ export function BrollNoteCard({
 }) {
   const requestSeek = useMediaStore((s) => s.requestTimelineSeek);
   const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
+  const authStatus = useAuth((s) => s.status);
+  const openAuth = useAuth((s) => s.open);
   const [busy, setBusy] = useState(false);
+  const authReady = isAuthReadyForAgent(authStatus);
 
   function seek() {
     requestSeek(note.anchorAtS);
@@ -43,6 +48,10 @@ export function BrollNoteCard({
 
   async function searchPexels() {
     if (!note.brollQuery) return;
+    if (!authReady) {
+      openAuth();
+      return;
+    }
     setBusy(true);
     try {
       // Ask the agent to search and re-emit the note with previews
@@ -65,6 +74,10 @@ export function BrollNoteCard({
   async function useThis(pexelsId: bigint, durationS: number) {
     const anchorArg = formatUseBrollAnchor(note.brollAnchor);
     if (!anchorArg) return;
+    if (!authReady) {
+      openAuth();
+      return;
+    }
     setBusy(true);
     try {
       // The cutaway duration: prefer the note's source-range length
@@ -169,9 +182,9 @@ export function BrollNoteCard({
             <button
               onClick={searchPexels}
               disabled={busy}
-              title="Ask the agent to fetch Pexels previews for this query"
+              title={authReady ? "Ask the agent to fetch Pexels previews for this query" : "Sign in to get started"}
             >
-              {busy ? "…" : "Search Pexels"}
+              {busy ? "…" : authReady ? "Search Pexels" : "Sign in to get started"}
             </button>
           )}
           <button onClick={resolve} disabled={busy} title="Mark resolved">

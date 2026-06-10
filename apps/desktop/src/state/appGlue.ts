@@ -18,6 +18,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { shouldStartDeferredIntro } from "../app/deferredHydrationGuards";
 import { deferNonCriticalHydration } from "../app/startupHydration";
 import { useAgentStore } from "../agent/store";
+import { isAuthReadyForAgent } from "../agent/composerAuthGate";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
 import { useMediaStore } from "../media/store";
@@ -36,6 +37,7 @@ import {
 } from "./briefProposals";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
+import { useAuth } from "./auth";
 import {
   MENU_COMMANDS,
   emitMenuCommand,
@@ -457,6 +459,7 @@ export function useAppGlue() {
       // Latch the project before invoking. If `start_turn` fails (codex
       // not ready), we deliberately do NOT retry — the user can still
       // type manually. A failed intro should not block the manual path.
+      if (!isAuthReadyForAgent(useAuth.getState().status)) return;
       markIntroduced(scheduledProject);
       invoke<string>("start_turn", { input: INTRO_PROMPT })
         .then((turnId) => {

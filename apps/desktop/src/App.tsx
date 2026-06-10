@@ -16,6 +16,7 @@ import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
+import { isAuthReadyForAgent } from "./agent/composerAuthGate";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
@@ -87,6 +88,7 @@ import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
 import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
+import { useAuth } from "./state/auth";
 import {
   providerKeyForTarget,
   useUploadPrefs,
@@ -323,6 +325,14 @@ function App() {
 
   const hasProject = current !== null;
   const demoMode = !hasProject && !isTauri();
+  const authStatus = useAuth((s) => s.status);
+  const refreshAuth = useAuth((s) => s.refresh);
+  const openAuth = useAuth((s) => s.open);
+  const agentAuthReady = demoMode || isAuthReadyForAgent(authStatus);
+
+  useEffect(() => {
+    void refreshAuth();
+  }, [refreshAuth]);
   const demoScreenId = demoMode
     ? typeof window !== "undefined" && window.location.pathname === "/design/concept"
       ? "screen1"
@@ -494,6 +504,11 @@ function App() {
   async function runEngineCommand(command: string) {
     const input = command.trim();
     if (!isTauri() || !input) return;
+    if (!agentAuthReady) {
+      setCommandError("Sign in to get started");
+      openAuth();
+      return;
+    }
     setCommandError(null);
     setTurnError(null);
     setRunning(true);

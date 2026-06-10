@@ -99,10 +99,15 @@ impl ToolHandler for StartGeneratedMediaJobTool {
             .and_then(|v| v.as_str())
             .map(crate::generated_media::registry::prompt_hash)
             .unwrap_or_else(|| "<missing-prompt>".to_string());
+        let cost_confirmation = if provider == "openrouter" {
+            "; cost unknown; explicit confirmation required"
+        } else {
+            ""
+        };
         vec![ApprovalKey::new(
             self.name(),
             format!(
-                "generated_media:{artifact_kind}:{workflow_purpose}:{provider}:{model}:{prompt_hash}:dest=raw/generated"
+                "generated_media:{artifact_kind}:{workflow_purpose}:{provider}:{model}:{prompt_hash}:dest=raw/generated{cost_confirmation}"
             ),
         )]
     }
@@ -387,5 +392,25 @@ mod tests {
                     "quiet street"
                 ))
         );
+    }
+
+    #[test]
+    fn openrouter_approval_key_requires_cost_confirmation() {
+        let invocation = crate::tool::ToolInvocation {
+            call_id: "c1".into(),
+            name: "start_generated_media_job".into(),
+            args: serde_json::json!({
+                "provider": "openrouter",
+                "artifact_kind": "video",
+                "workflow_purpose": "broll",
+                "prompt": "quiet street",
+                "model": "bytedance/seedance-2.0"
+            }),
+        };
+
+        let keys = StartGeneratedMediaJobTool.approval_keys(&invocation);
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].operation.contains("cost unknown"));
+        assert!(keys[0].operation.contains("explicit confirmation required"));
     }
 }
