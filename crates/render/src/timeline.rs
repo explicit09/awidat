@@ -467,7 +467,7 @@ fn interpolate_time_remap_segment(
 /// `input_transform_lut → shaper_lut → look_lut → output_transform_lut`.
 /// Color-space identifiers (`clip_input_space`, `working_space`,
 /// `lut_input_space`, `output_space`) are stable strings from
-/// [`montage_effects::KNOWN_COLOR_SPACES`]. `output_space` flows out
+/// `montage_effects::KNOWN_COLOR_SPACES`. `output_space` flows out
 /// to the encoder as `-color_primaries / -color_trc / -colorspace /
 /// -color_range`; the other space fields are carried for the agent's
 /// reasoning today and reserved for automatic conversion in a

@@ -24,7 +24,7 @@
 //!   writes it back through `Project::write` so every managed file
 //!   stays consistent. A vedit audit-commit captures the restore
 //!   itself, so the version-control history records "Restored
-//!   timeline to <history-entry timestamp>" — same shape as the
+//!   timeline to `<history-entry timestamp>`" — same shape as the
 //!   existing vedit-ref restore.
 
 use montage_proto::otio::Timeline;

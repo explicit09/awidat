@@ -3,7 +3,7 @@
 //!
 //! # Why this crate exists
 //!
-//! `crates/core` exposes [`SessionEvent`](montage_core::SessionEvent) — an
+//! `crates/core` exposes `montage_core::SessionEvent` — an
 //! internal enum the TUI consumes directly. The desktop frontend cannot
 //! consume that enum: it is not `serde`-friendly (carries non-serializable
 //! variants like `Usage`), it is not stable across releases, and its
@@ -17,7 +17,7 @@
 //!    a proposed edit overlay).
 //! 2. Groups Items into [`Turn`]s and Turns into [`Thread`]s for resume /
 //!    fork / persistence semantics.
-//! 3. Treats agent-proposed mutations as first-class via [`ProposedEdit`] —
+//! 3. Treats agent-proposed mutations as first-class via `ProposedEdit` —
 //!    rendered as ghost overlays in the timeline, accept/reject/adjust by
 //!    the user. This replaces the TUI's modal-approval pattern.
 //!

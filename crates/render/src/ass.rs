@@ -599,9 +599,9 @@ const CAPTION_FONT_FALLBACK: &str = "Sans Serif";
 /// Order of resolution:
 ///   1. `env_getter("MONTAGE_CAPTION_FONT")` returning `Some(name)`
 ///      with a non-empty (after trim) value — that wins, no probing.
-///   2. First entry in [`CAPTION_FONT_CANDIDATES`] whose file path
+///   2. First entry in `CAPTION_FONT_CANDIDATES` whose file path
 ///      exists on disk → return its family name.
-///   3. [`CAPTION_FONT_FALLBACK`] (`"Sans Serif"`).
+///   3. `CAPTION_FONT_FALLBACK` (`"Sans Serif"`).
 ///
 /// Injecting `env_getter` (instead of calling `std::env::var`
 /// directly) lets tests drive every branch without touching the
@@ -631,7 +631,7 @@ pub fn default_caption_font_name() -> String {
     resolve_caption_font_name(|key| std::env::var(key).ok())
 }
 
-/// Test-visible re-export of [`build_ass_document`] using the default 1920×1080
+/// Test-visible re-export of `build_ass_document` using the default 1920×1080
 /// canvas so existing callers stay unchanged.
 pub fn build_ass_document_for_test(title: &TitlePlan) -> String {
     build_ass_document(title, RenderCanvas::default())
