@@ -1543,7 +1543,6 @@ function ColorCorrectionControl({
   }
 
   function apply() {
-    lastCommittedRef.current = currentSig;
     const op: EdlOp = {
       kind: "set_color_correction",
       anchor: { kind: "clip_uuid", uuid: clipUuid },
@@ -1556,6 +1555,7 @@ function ColorCorrectionControl({
       highlights: local.highlights,
     };
     editorDispatch.proposeUserEdit([op]).catch((err) => {
+      clearPreviewOverride(clipUuid);
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_color_correction) failed", err);
     });

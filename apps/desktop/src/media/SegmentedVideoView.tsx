@@ -257,12 +257,8 @@ function SegmentedPlayer({
       ),
     [timelineSnapshot],
   );
-  const activeShapes = useMemo(
-    () => activeMotionShapeOverlays(timelineSnapshot),
-    [timelineSnapshot],
-  );
-  const activeImages = useMemo(
-    () => activeMotionImageOverlays(timelineSnapshot, projectRoot),
+  const activeMotionSceneLayers = useMemo(
+    () => activeMotionSceneOverlays(timelineSnapshot, projectRoot),
     [timelineSnapshot, projectRoot],
   );
   const activeVideoOverlays = useMemo(
@@ -402,6 +398,8 @@ function SegmentedPlayer({
         activeKeyRef.current = activeKeyNow;
         setActiveKey(activeKeyNow);
         active = inactive;
+        const preloaded = active.ref.current;
+        if (preloaded) updateActiveMediaSize(activeKeyNow, preloaded);
       } else {
         ensureSlotLoaded(active, seg);
         active.segIdx = segIdx;
@@ -964,6 +962,7 @@ function SegmentedPlayer({
           <GradeCanvas
             grade={activeGrade}
             lutPath={activeGradeSeg?.lutPath ?? null}
+            projectRoot={projectRoot}
             lutStrength={activeGradeSeg?.lutStrength ?? null}
             getVideo={getActiveVideo}
             isPlaying={isPlaying}
@@ -996,16 +995,9 @@ function SegmentedPlayer({
               width={programFrameSize.width}
               height={programFrameSize.height}
             />
-            <TimelineTitleOverlays
-              overlays={activeTitles}
-              timelineTime={timelineTime}
-            />
-            <TimelineMotionShapeOverlays
-              overlays={activeShapes}
-              timelineTime={timelineTime}
-            />
-            <TimelineMotionImageOverlays
-              overlays={activeImages}
+            <TimelineTitleOverlays overlays={activeTitles} timelineTime={timelineTime} />
+            <TimelineMotionSceneOverlays
+              overlays={activeMotionSceneLayers}
               timelineTime={timelineTime}
             />
             <TimelineBroadcastOverlay
@@ -1989,6 +1981,11 @@ type PreviewMotionImageOverlay = {
   animations: TimelineParameterAnimation[];
 };
 
+type PreviewMotionSceneOverlay =
+  | { kind: "title"; overlay: PreviewTitleOverlay }
+  | { kind: "shape"; overlay: PreviewMotionShapeOverlay }
+  | { kind: "image"; overlay: PreviewMotionImageOverlay };
+
 function activeTitleOverlays(
   snapshot: TimelineSnapshot,
   _durationS: number,
@@ -2007,6 +2004,7 @@ function activeTitleOverlays(
     for (const item of track.items) {
       if (item.kind !== "clip" || item.title === null) continue;
       const isMotionScene = item.title.role === "motion_scene";
+      if (isMotionScene) continue;
       if (suppressProgramTitles && !isMotionScene) continue;
       const startS = item.track_start_s;
       const endS = item.track_start_s + item.duration_s;
@@ -2062,73 +2060,85 @@ function titleAlign(value: string | null): "left" | "center" | "right" {
   return value === "left" || value === "right" ? value : "center";
 }
 
-function activeMotionShapeOverlays(
-  snapshot: TimelineSnapshot,
-): PreviewMotionShapeOverlay[] {
-  const overlays: PreviewMotionShapeOverlay[] = [];
-  for (const track of snapshot.tracks) {
-    for (const item of track.items) {
-      if (item.kind !== "clip" || item.motion_shape === null) continue;
-      if (item.motion_shape.shape !== "rect") continue;
-      const startS = item.track_start_s;
-      const endS = item.track_start_s + item.duration_s;
-      if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
-        continue;
-      }
-      overlays.push({
-        key: item.clip_uuid || item.name,
-        startS,
-        endS,
-        shape: "rect",
-        x: item.motion_shape.x,
-        y: item.motion_shape.y,
-        width: item.motion_shape.width,
-        height: item.motion_shape.height,
-        color: item.motion_shape.color || "#FFFFFF",
-        opacity: clampOpacity(item.motion_shape.opacity),
-        scale: item.motion_shape.scale,
-        anchorX: item.motion_shape.anchor_x,
-        anchorY: item.motion_shape.anchor_y,
-        rotationDeg: item.motion_shape.rotation_deg,
-        animations: item.animations ?? [],
-      });
-    }
-  }
-  return overlays;
-}
-
-function activeMotionImageOverlays(
+function activeMotionSceneOverlays(
   snapshot: TimelineSnapshot,
   projectRoot: string | null,
-): PreviewMotionImageOverlay[] {
-  const overlays: PreviewMotionImageOverlay[] = [];
+): PreviewMotionSceneOverlay[] {
+  const overlays: PreviewMotionSceneOverlay[] = [];
   for (const track of snapshot.tracks) {
     for (const item of track.items) {
-      if (item.kind !== "clip" || item.motion_image === null) continue;
-      const src = projectAssetUrl(projectRoot, item.motion_image.asset_id);
-      if (src === null) continue;
+      if (item.kind !== "clip") continue;
       const startS = item.track_start_s;
       const endS = item.track_start_s + item.duration_s;
       if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
         continue;
       }
-      overlays.push({
-        key: item.clip_uuid || item.name,
-        startS,
-        endS,
-        src,
-        x: item.motion_image.x,
-        y: item.motion_image.y,
-        width: item.motion_image.width,
-        height: item.motion_image.height,
-        opacity: clampOpacity(item.motion_image.opacity),
-        fit: motionImageFit(item.motion_image.fit),
-        scale: item.motion_image.scale,
-        anchorX: item.motion_image.anchor_x,
-        anchorY: item.motion_image.anchor_y,
-        rotationDeg: item.motion_image.rotation_deg,
-        animations: item.animations ?? [],
-      });
+      if (item.title?.role === "motion_scene") {
+        overlays.push({
+          kind: "title",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            text: item.title.text,
+            position: titlePosition(item.title.position),
+            fontSize: item.title.font_size,
+            color: item.title.color || "#FFFFFF",
+            fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
+            animation: titleAnimation(item.title.animation),
+            reveal: titleReveal(item.title.reveal),
+            animations: item.animations ?? [],
+            isMotionScene: true,
+            box: titleOverlayBox(item.title),
+          },
+        });
+      }
+      if (item.motion_shape !== null && item.motion_shape.shape === "rect") {
+        overlays.push({
+          kind: "shape",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            shape: "rect",
+            x: item.motion_shape.x,
+            y: item.motion_shape.y,
+            width: item.motion_shape.width,
+            height: item.motion_shape.height,
+            color: item.motion_shape.color || "#FFFFFF",
+            opacity: clampOpacity(item.motion_shape.opacity),
+            scale: item.motion_shape.scale,
+            anchorX: item.motion_shape.anchor_x,
+            anchorY: item.motion_shape.anchor_y,
+            rotationDeg: item.motion_shape.rotation_deg,
+            animations: item.animations ?? [],
+          },
+        });
+      }
+      if (item.motion_image !== null) {
+        const src = projectAssetUrl(projectRoot, item.motion_image.asset_id);
+        if (src === null) continue;
+        overlays.push({
+          kind: "image",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            src,
+            x: item.motion_image.x,
+            y: item.motion_image.y,
+            width: item.motion_image.width,
+            height: item.motion_image.height,
+            opacity: clampOpacity(item.motion_image.opacity),
+            fit: motionImageFit(item.motion_image.fit),
+            scale: item.motion_image.scale,
+            anchorX: item.motion_image.anchor_x,
+            anchorY: item.motion_image.anchor_y,
+            rotationDeg: item.motion_image.rotation_deg,
+            animations: item.animations ?? [],
+          },
+        });
+      }
     }
   }
   return overlays;
@@ -2170,51 +2180,56 @@ function TimelineTitleOverlays({
   );
 }
 
-function TimelineMotionShapeOverlays({
+function TimelineMotionSceneOverlays({
   overlays,
   timelineTime,
 }: {
-  overlays: PreviewMotionShapeOverlay[];
+  overlays: PreviewMotionSceneOverlay[];
   timelineTime: number;
 }) {
   const active = overlays.filter(
-    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
+    ({ overlay }) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
   );
   if (active.length === 0) return null;
   return (
-    <div className="timeline-motion-shape-layer" aria-hidden="true">
-      {active.map((overlay) => (
-        <div
-          key={overlay.key}
-          className="timeline-motion-shape-rect"
-          style={motionShapeOverlayStyle(overlay, timelineTime)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function TimelineMotionImageOverlays({
-  overlays,
-  timelineTime,
-}: {
-  overlays: PreviewMotionImageOverlay[];
-  timelineTime: number;
-}) {
-  const active = overlays.filter(
-    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
-  );
-  if (active.length === 0) return null;
-  return (
-    <div className="timeline-motion-image-layer" aria-hidden="true">
-      {active.map((overlay) => (
-        <img
-          key={overlay.key}
-          className="timeline-motion-image"
-          src={overlay.src}
-          style={motionImageOverlayStyle(overlay, timelineTime)}
-        />
-      ))}
+    <div className="timeline-motion-scene-layer" aria-hidden="true">
+      {active.map((layer) => {
+        if (layer.kind === "title") {
+          const overlay = layer.overlay;
+          return (
+            <div
+              key={`title:${overlay.key}`}
+              className={
+                overlay.box
+                  ? "timeline-title-overlay"
+                  : `timeline-title-overlay title-pos-${overlay.position}`
+              }
+              style={titleOverlayStyle(overlay, timelineTime)}
+            >
+              {titleRevealText(overlay, timelineTime)}
+            </div>
+          );
+        }
+        if (layer.kind === "shape") {
+          const overlay = layer.overlay;
+          return (
+            <div
+              key={`shape:${overlay.key}`}
+              className="timeline-motion-shape-rect"
+              style={motionShapeOverlayStyle(overlay, timelineTime)}
+            />
+          );
+        }
+        const overlay = layer.overlay;
+        return (
+          <img
+            key={`image:${overlay.key}`}
+            className="timeline-motion-image"
+            src={overlay.src}
+            style={motionImageOverlayStyle(overlay, timelineTime)}
+          />
+        );
+      })}
     </div>
   );
 }

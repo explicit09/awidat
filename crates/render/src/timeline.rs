@@ -2354,6 +2354,9 @@ fn motion_scene_text_layer_animations(layer: &MotionSceneLayer) -> Vec<RenderPar
         .filter_map(|animation| {
             let parameter = match animation.parameter.as_str() {
                 "overlay.opacity" | "title.opacity" => "title.opacity".to_string(),
+                "overlay.x" | "title.x" => "title.x".to_string(),
+                "overlay.y" | "title.y" => "title.y".to_string(),
+                "overlay.position" | "title.position" => "title.position".to_string(),
                 other if other.starts_with("title.") && is_phase_3a_parameter(other) => {
                     other.to_string()
                 }
@@ -5537,7 +5540,7 @@ fn append_motion_images(
                 image,
                 "overlay.opacity",
                 &fmt_filter_num(image.transform.opacity),
-                "T",
+                &format!("(T+{})", fmt_filter_num(image.start_s)),
             );
             format!(
                 "format=gbrap,geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*({opacity_expr})'"
@@ -18149,6 +18152,68 @@ layout_box: None,
         assert!(
             filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
             "title.y animation should offset the resting y expression: {filter}"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_layer_remaps_overlay_transform_animations() {
+        let mut layer = MotionSceneLayer {
+            kind: MotionSceneLayerKind::Text,
+            duration_s: 2.0,
+            ..MotionSceneLayer::default()
+        };
+        layer.params.insert(
+            "animations".to_string(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.x",
+                    "keyframes": [{ "time_s": 0.0, "value": 0.1, "interpolation": "linear" }]
+                },
+                {
+                    "parameter": "overlay.y",
+                    "keyframes": [{ "time_s": 0.0, "value": 0.2, "interpolation": "linear" }]
+                },
+                {
+                    "parameter": "overlay.position",
+                    "keyframes": [{ "time_s": 0.0, "value": 0.3, "interpolation": "linear" }]
+                }
+            ]),
+        );
+
+        let params: Vec<_> = motion_scene_text_layer_animations(&layer)
+            .into_iter()
+            .map(|animation| animation.parameter)
+            .collect();
+
+        assert!(params.contains(&"title.x".to_string()));
+        assert!(params.contains(&"title.y".to_string()));
+        assert!(params.contains(&"title.position".to_string()));
+    }
+
+    #[test]
+    fn motion_scene_image_opacity_uses_layer_local_alpha_clock() {
+        let image = MotionImagePlan {
+            asset_path: PathBuf::from("/tmp/image.png"),
+            start_s: 5.0,
+            end_s: 7.0,
+            transform: MotionSceneTransform::default(),
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.opacity".to_string(),
+                keyframes: vec![
+                    montage_proto::professional::Keyframe::linear(0.0, 0.0),
+                    montage_proto::professional::Keyframe::linear(1.0, 1.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let expr = motion_image_animation_value_expr(&image, "overlay.opacity", "1", "(T+5)");
+
+        assert!(
+            expr.contains("T") && !expr.contains("T-5"),
+            "image opacity should evaluate on the still layer's local alpha clock: {expr}"
         );
     }
 

@@ -3536,7 +3536,7 @@ button {
   overflow: hidden;
 }
 
-.timeline-motion-shape-layer {
+.timeline-motion-scene-layer {
   position: absolute;
   inset: 0;
   z-index: 4;
@@ -3546,14 +3546,6 @@ button {
 
 .timeline-motion-shape-rect {
   position: absolute;
-}
-
-.timeline-motion-image-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-  overflow: hidden;
 }
 
 .timeline-motion-image {

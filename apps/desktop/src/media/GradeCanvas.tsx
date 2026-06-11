@@ -36,13 +36,20 @@ type PreviewLutData = {
   rgba: Uint8Array;
 };
 
-// One parse per LUT path per session — the table is immutable on
-// disk for a given project state and re-parsing a 33³ cube on every
-// clip selection would be wasted IPC.
+// One parse per LUT path per project state — relative LUT paths resolve
+// against the active project root, so the cache key must include it.
 const lutCache = new Map<string, Promise<PreviewLutData | null>>();
 
-function fetchPreviewLut(lutPath: string): Promise<PreviewLutData | null> {
-  let pending = lutCache.get(lutPath);
+function previewLutCacheKey(projectRoot: string | null, lutPath: string): string {
+  return `${projectRoot ?? ""}\u0000${lutPath}`;
+}
+
+function fetchPreviewLut(
+  projectRoot: string | null,
+  lutPath: string,
+): Promise<PreviewLutData | null> {
+  const cacheKey = previewLutCacheKey(projectRoot, lutPath);
+  let pending = lutCache.get(cacheKey);
   if (!pending) {
     pending = invoke<{
       size: number;
@@ -61,7 +68,7 @@ function fetchPreviewLut(lutPath: string): Promise<PreviewLutData | null> {
         console.warn(`preview LUT load failed (${lutPath})`, e);
         return null;
       });
-    lutCache.set(lutPath, pending);
+    lutCache.set(cacheKey, pending);
   }
   return pending;
 }
@@ -253,6 +260,7 @@ function initGl(canvas: HTMLCanvasElement): GlState | null {
 export function GradeCanvas({
   grade,
   lutPath,
+  projectRoot,
   lutStrength,
   getVideo,
   isPlaying,
@@ -265,6 +273,7 @@ export function GradeCanvas({
    *  applied after the color-correction stages — the render chain's
    *  lut3d position. */
   lutPath: string | null;
+  projectRoot: string | null;
   /** LUT blend strength 0..=1; null = full strength (the render's
    *  default when the effect carries no valid `strength`). */
   lutStrength: number | null;
@@ -286,7 +295,7 @@ export function GradeCanvas({
   const [lutKey, setLutKey] = useState<string>("");
 
   // Resolve the LUT table off the main effect — parse round-trips
-  // through the backend once per path, then caches for the session.
+  // through the backend once per project/path, then caches for the session.
   useEffect(() => {
     if (!lutPath) {
       setLut(null);
@@ -294,15 +303,17 @@ export function GradeCanvas({
       return;
     }
     let stale = false;
-    fetchPreviewLut(lutPath).then((data) => {
+    setLut(null);
+    setLutKey("");
+    fetchPreviewLut(projectRoot, lutPath).then((data) => {
       if (stale) return;
       setLut(data);
-      setLutKey(data ? lutPath : "");
+      setLutKey(data ? previewLutCacheKey(projectRoot, lutPath) : "");
     });
     return () => {
       stale = true;
     };
-  }, [lutPath]);
+  }, [projectRoot, lutPath]);
 
   const active =
     !suspended &&

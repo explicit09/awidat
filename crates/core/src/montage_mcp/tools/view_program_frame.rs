@@ -177,12 +177,8 @@ fn rewrite_timeline_argv_for_window(
     }
     let output_index = argv.len() - 1;
     argv[output_index] = output_path.to_string_lossy().into_owned();
-    let input_index = argv
-        .iter()
-        .position(|arg| arg == "-i")
-        .ok_or_else(|| "view_program_frame: timeline render argv has no input".to_string())?;
     argv.splice(
-        input_index..input_index,
+        output_index..output_index,
         [
             "-ss".to_string(),
             format!("{start_s}"),
@@ -278,8 +274,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(argv[argv.len() - 1], "/tmp/frame-window.mp4");
-        assert_eq!(&argv[1..5], ["-ss", "12.5", "-t", "0.12"]);
-        assert_eq!(&argv[5..8], ["-i", "raw/a.mp4", "-c:v"]);
+        assert_eq!(&argv[1..3], ["-i", "raw/a.mp4"]);
+        assert_eq!(&argv[5..9], ["-ss", "12.5", "-t", "0.12"]);
+        assert_eq!(argv.last().unwrap(), "/tmp/frame-window.mp4");
     }
 
     #[test]
