@@ -1,11 +1,26 @@
 import { strict as assert } from "node:assert";
 import {
   ENTRY_DRIFT_TOLERANCE_S,
+  SHUTTLE_MIN_RATE,
   UNDERRUN_REBASE_MAX_S,
   driftRecoveryAction,
+  isShuttleRate,
   syncDriftThresholdS,
   timelineTimeForSegmentPosition,
 } from "../src/media/previewHandoff.ts";
+
+// --- isShuttleRate ---------------------------------------------------------
+
+// Continuous (audible) decode up to and including the threshold;
+// silent shuttle stepping above it.
+{
+  assert.equal(isShuttleRate(1), false);
+  assert.equal(isShuttleRate(2.4), false); // common working speed — keeps audio
+  assert.equal(isShuttleRate(SHUTTLE_MIN_RATE), false);
+  assert.equal(isShuttleRate(SHUTTLE_MIN_RATE + 0.01), true);
+  assert.equal(isShuttleRate(8), true);
+  assert.equal(isShuttleRate(NaN), false);
+}
 
 // --- syncDriftThresholdS -------------------------------------------------
 

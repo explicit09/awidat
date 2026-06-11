@@ -44,9 +44,13 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import {
+  SHUTTLE_STEP_MS,
   driftRecoveryAction,
+  isShuttleRate,
   timelineTimeForSegmentPosition,
 } from "./previewHandoff";
+import { colorPreviewCssFilter } from "./colorPreviewFilter";
+import { useColorPreviewOverride } from "../properties/store";
 import {
   shouldRenderTransitionOnGpu,
   useGpuTransitionPreview,
@@ -226,6 +230,11 @@ function SegmentedPlayer({
   });
   const forceMediaSyncRef = useRef(true);
   const lastSeekRequestRef = useRef(seekRequestId);
+  // Shuttle mode (>2× effective rate): element paused, frames stepped
+  // off the clock. Refs because the rVFC-driven driver and media
+  // event handlers both consult them without re-rendering.
+  const shuttleRef = useRef(false);
+  const lastShuttleStepMsRef = useRef(0);
   // Subscribe to the snapshot itself (Zustand caches the reference)
   // and derive the overlay list with useMemo. The previous shape
   // returned a fresh array from inside the selector on every render,
@@ -397,6 +406,29 @@ function SegmentedPlayer({
     applySegmentPlaybackSettings(v, seg);
     const precise = forceMediaSyncRef.current || !isPlaying;
     const desiredSource = sourceTimeForTimelineTime(seg, timelineTime);
+    const shuttle =
+      isPlaying && isShuttleRate(safeSegmentSpeed(seg.speed) * rate);
+    shuttleRef.current = shuttle;
+    if (shuttle) {
+      // Shuttle: continuous decode can't sustain this rate, so the
+      // element stays paused (silent, like an NLE shuttle) and frames
+      // are stepped off the clock. The all-keyframe proxy makes each
+      // step a single-frame decode.
+      pauseSlot(active);
+      if (Number.isFinite(desiredSource)) {
+        const nowMs = performance.now();
+        const stepDue =
+          precise ||
+          nowMs - lastShuttleStepMsRef.current >= SHUTTLE_STEP_MS;
+        if (stepDue && Math.abs((v.currentTime || 0) - desiredSource) > 0.001) {
+          tryAssignCurrentTime(v, desiredSource);
+          lastShuttleStepMsRef.current = nowMs;
+        }
+      }
+      forceMediaSyncRef.current = false;
+      primePreroll(segIdx);
+      return;
+    }
     if (Number.isFinite(desiredSource)) {
       const action = driftRecoveryAction({
         precise,
@@ -459,6 +491,7 @@ function SegmentedPlayer({
   function playActiveSlotIfNeeded(slot: Slot) {
     if (slot !== slotsRef.current[activeKeyRef.current]) return;
     if (!useMediaStore.getState().isPlaying) return;
+    if (shuttleRef.current) return; // shuttle owns the paused element
     playSlot(slot);
   }
 
@@ -513,6 +546,9 @@ function SegmentedPlayer({
     if (!seg) return;
     const isActive = key === activeKeyRef.current;
     if (isActive && useMediaStore.getState().isPlaying) {
+      // Shuttle stepping completes a seek per step; the element is
+      // SUPPOSED to lag the clock by up to one step — don't re-base.
+      if (shuttleRef.current) return;
       // canplay/loadedmetadata after a seek or decode underrun while
       // playback runs. The wall clock kept advancing while the decoder
       // worked, so re-seeking the element against it would stall again
@@ -602,6 +638,9 @@ function SegmentedPlayer({
     const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
     if (isPlaying && v.paused) {
+      // In shuttle mode the element is intentionally paused; the
+      // driver steps frames instead.
+      if (shuttleRef.current) return;
       v.play().catch((err) => {
         setMediaError(`Playback failed: ${String(err)}`);
         setPlaying(false);
@@ -620,6 +659,19 @@ function SegmentedPlayer({
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
     if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
     if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
+    // Live color preview (exposure/contrast/saturation approximation).
+    // While the Inspector's sliders are mid-drag, the transient
+    // override for this clip wins over the persisted timeline values.
+    // Set imperatively: `filter` isn't in the React style props, so
+    // the reconciler leaves it alone; remounts get it re-applied by
+    // the next driver tick.
+    const colorOverride = useColorPreviewOverride.getState().override;
+    const colorSource =
+      colorOverride && colorOverride.clipUuid === seg.clipUuid
+        ? colorOverride.values
+        : seg.colorCorrection;
+    const colorFilter = colorPreviewCssFilter(colorSource);
+    if (v.style.filter !== colorFilter) v.style.filter = colorFilter;
     // Above 2× the audio time-stretcher (pitch correction) is real
     // CPU that competes with video decode — shuttle-style playback
     // drops it, like every NLE. WebKit ships it prefixed.
@@ -639,13 +691,18 @@ function SegmentedPlayer({
     }
   }
 
+  // Re-apply playback settings outside the driver tick: master
+  // volume/rate changes, and live color-override drags — the driver
+  // only runs while timeline time moves, but color work usually
+  // happens paused.
+  const liveColorOverride = useColorPreviewOverride((s) => s.override);
   useEffect(() => {
     const slot = slotsRef.current[activeKeyRef.current];
     const v = slot.ref.current;
     const seg = segmentsRef.current[slot.segIdx];
     if (v && seg) applySegmentPlaybackSettings(v, seg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey, volume, rate]);
+  }, [activeKey, volume, rate, liveColorOverride]);
 
   function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
     const el = e.currentTarget;

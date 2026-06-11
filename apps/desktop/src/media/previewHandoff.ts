@@ -24,6 +24,28 @@
  *  (mis-parked preroll, cold slot) still fall through to a seek. */
 export const ENTRY_DRIFT_TOLERANCE_S = 0.15;
 
+/** Above this effective rate, playback switches to shuttle: the
+ *  element is paused and frames are stepped via currentTime off the
+ *  clock (the proxy is all-keyframe precisely so each step decodes a
+ *  single frame). Shuttle is SILENT — the paused element produces no
+ *  audio — so the threshold sits at 4×, not at the decoder's ~2×
+ *  comfort ceiling: between 2× and 4× the editor wants to keep
+ *  hearing speech, and continuous decode degrades gracefully there
+ *  (clock follows the lagging video). Beyond 4× video collapses
+ *  entirely and smooth silent stepping wins. */
+export const SHUTTLE_MIN_RATE = 4;
+
+/** Frame-step cadence in shuttle mode (~12.5fps) — fast enough to
+ *  read motion, slow enough that each single-keyframe seek finishes
+ *  comfortably before the next. */
+export const SHUTTLE_STEP_MS = 80;
+
+/** Whether an effective element rate (segment speed × master rate)
+ *  plays via shuttle stepping instead of continuous decode. */
+export function isShuttleRate(effectiveRate: number): boolean {
+  return Number.isFinite(effectiveRate) && effectiveRate > SHUTTLE_MIN_RATE;
+}
+
 /** Drift threshold (seconds) for syncing a media element to the
  *  timeline clock.
  *

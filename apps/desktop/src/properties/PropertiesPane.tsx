@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTimelineStore } from "../timeline/store";
 import type { TimelineItem, TimelineTrack } from "../timeline/store";
-import { useTimelineSelectionStore } from "./store";
+import { useColorPreviewOverride, useTimelineSelectionStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
@@ -1485,6 +1485,20 @@ function colorSignature(value: ColorCorrectionValue): string {
     .join("|");
 }
 
+function toColorStyling(
+  v: ColorCorrectionValue,
+): import("../protocol").ColorCorrectionStyling {
+  return {
+    exposure_ev: v.exposureEv,
+    contrast: v.contrast,
+    saturation: v.saturation,
+    temperature: v.temperature,
+    tint: v.tint,
+    shadows: v.shadows,
+    highlights: v.highlights,
+  };
+}
+
 function ColorCorrectionControl({
   clipUuid,
   value,
@@ -1495,12 +1509,23 @@ function ColorCorrectionControl({
   const initial = normalizeColorCorrection(value);
   const [local, setLocal] = useState<ColorCorrectionValue>(initial);
   const lastCommittedRef = useRef<string>(colorSignature(initial));
+  const setPreviewOverride = useColorPreviewOverride((s) => s.setOverride);
+  const clearPreviewOverride = useColorPreviewOverride((s) => s.clearOverride);
 
   useEffect(() => {
     const next = normalizeColorCorrection(value);
     setLocal(next);
     lastCommittedRef.current = colorSignature(next);
-  }, [clipUuid, value]);
+    // Persisted values caught up (accept landed / clip changed) — the
+    // monitor should render from the timeline again, not the drag.
+    clearPreviewOverride();
+  }, [clipUuid, value, clearPreviewOverride]);
+
+  // Leaving the control (deselect, panel switch) ends the live
+  // preview for this clip; a newer clip's override is left alone.
+  useEffect(() => {
+    return () => clearPreviewOverride(clipUuid);
+  }, [clipUuid, clearPreviewOverride]);
 
   const currentSig = colorSignature(local);
   const dirty = currentSig !== lastCommittedRef.current;
@@ -1509,7 +1534,12 @@ function ColorCorrectionControl({
     key: K,
     nextValue: number,
   ) {
-    setLocal((prev) => ({ ...prev, [key]: nextValue }));
+    setLocal((prev) => {
+      const next = { ...prev, [key]: nextValue };
+      // Live monitor feedback while dragging — before Apply/Accept.
+      setPreviewOverride({ clipUuid, values: toColorStyling(next) });
+      return next;
+    });
   }
 
   function apply() {

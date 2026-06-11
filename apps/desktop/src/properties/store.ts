@@ -29,3 +29,34 @@ export const useTimelineSelectionStore = create<State>((set) => ({
   select: (key) => set({ selectedClipKey: key }),
   clear: () => set({ selectedClipKey: null }),
 }));
+
+/** Transient color-correction values for one clip while the user
+ *  drags the Inspector's Visual sliders — applied to the preview
+ *  monitor immediately (CSS filter), BEFORE any Apply/Accept, so
+ *  color work is eyes-on. Cleared when the persisted values catch up
+ *  (proposal accepted → timeline refresh) or the control unmounts.
+ *  Never persisted; the proposal pipeline remains the only writer of
+ *  project state. */
+export type ColorPreviewOverride = {
+  clipUuid: string;
+  values: import("../protocol").ColorCorrectionStyling;
+};
+
+type ColorPreviewState = {
+  override: ColorPreviewOverride | null;
+  setOverride: (override: ColorPreviewOverride) => void;
+  clearOverride: (clipUuid?: string) => void;
+};
+
+export const useColorPreviewOverride = create<ColorPreviewState>((set) => ({
+  override: null,
+  setOverride: (override) => set({ override }),
+  // Scoped clear: a stale unmount cleanup must not wipe a newer
+  // clip's live preview.
+  clearOverride: (clipUuid) =>
+    set((s) =>
+      clipUuid === undefined || s.override?.clipUuid === clipUuid
+        ? { override: null }
+        : s,
+    ),
+}));

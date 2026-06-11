@@ -58,6 +58,9 @@ export type PlaySegment = {
   volume: number;
   /** Effective clip speed from the timeline, clamped by the player. */
   speed: number;
+  /** Clip color correction, approximated in preview via CSS filters
+   *  (exposure/contrast/saturation only — see colorPreviewFilter). */
+  colorCorrection: import("../protocol").ColorCorrectionStyling | null;
   /** Stable timeline clip id backing this segment. */
   clipUuid: string;
   /** Clip index inside its track. Useful for diagnostics + diff hints. */
@@ -195,6 +198,7 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           timelineEnd: item.track_start_s + item.duration_s,
           volume: 0,
           speed,
+          colorCorrection: item.color_correction ?? null,
           clipUuid: item.clip_uuid,
           clipIndex: item.index,
           mode: isPip ? "pip" : "full_frame",
@@ -309,6 +313,7 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       timelineEnd: item.track_start_s + item.duration_s,
       volume: item.volume ?? 1,
       speed,
+      colorCorrection: item.color_correction ?? null,
       clipUuid: item.clip_uuid,
       clipIndex: item.index,
     };
