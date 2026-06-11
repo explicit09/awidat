@@ -47,6 +47,7 @@ import {
   shouldRenderTransitionOnGpu,
   useGpuTransitionPreview,
 } from "./useGpuTransitionPreview";
+import { containedProgramFrame, programFrameStyle } from "./programFrame";
 import { useProjectStore } from "../app/state";
 import {
   useTimelineStore,
@@ -282,6 +283,11 @@ function SegmentedPlayer({
   useEffect(() => {
     activeKeyRef.current = activeKey;
   }, [activeKey]);
+  useEffect(() => {
+    const v = slotsRef.current[activeKey].ref.current;
+    if (v) updateActiveMediaSize(activeKey, v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey]);
 
   // Reset both slots when the segments array identity changes (e.g.
   // an apply_edl landed). This must run before the resync effect
@@ -496,6 +502,20 @@ function SegmentedPlayer({
     playActiveSlotIfNeeded(slot);
   }
 
+  function updateActiveMediaSize(key: "a" | "b", v: HTMLVideoElement) {
+    if (key !== activeKeyRef.current) return;
+    const width = v.videoWidth;
+    const height = v.videoHeight;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+    setActiveMediaSize((previous) =>
+      previous?.width === width && previous.height === height
+        ? previous
+        : { width, height },
+    );
+  }
+
   // Push view-state (~1Hz, integer-second granularity). Use the
   // *source* asset's stem so the agent's view-context line resolves
   // to a file under `raw/`. The proxy stem (e.g. `<id>-1080p-<hash>`)
@@ -640,11 +660,35 @@ function SegmentedPlayer({
     [activeKey, activeSlotOpacity],
   );
 
+  const monitorShellRef = useRef<HTMLDivElement | null>(null);
   const stackRef = useRef<HTMLDivElement | null>(null);
+  const [monitorShellSize, setMonitorShellSize] = useState<{
+    width: number;
+    height: number;
+  }>({
+    width: 0,
+    height: 0,
+  });
   const [stackSize, setStackSize] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
   });
+  const [activeMediaSize, setActiveMediaSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const el = monitorShellRef.current;
+    if (!el) return;
+    const update = () => {
+      setMonitorShellSize({ width: el.clientWidth, height: el.clientHeight });
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => update());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const el = stackRef.current;
     if (!el) return;
@@ -657,79 +701,142 @@ function SegmentedPlayer({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  const monitorFrame = useMemo(
+    () =>
+      containedProgramFrame(
+        monitorShellSize.width,
+        monitorShellSize.height,
+        activeMediaSize?.width ?? 16,
+        activeMediaSize?.height ?? 9,
+      ),
+    [activeMediaSize, monitorShellSize.height, monitorShellSize.width],
+  );
+  const monitorFrameCss = useMemo(
+    () => programFrameStyle(monitorFrame),
+    [monitorFrame],
+  );
+  const programFrameCss = useMemo(
+    () => programFrameStyle(null),
+    [],
+  );
+  const programFrameSize = stackSize;
+
+  const monitorShellStyle = useMemo(
+    () =>
+      ({
+        "--monitor-aspect": `${activeMediaSize?.width ?? 16} / ${activeMediaSize?.height ?? 9}`,
+      }) as CSSProperties,
+    [activeMediaSize],
+  );
+
+  // Publish the media's aspect on :root so ancestor chrome (the
+  // program monitor box in PreviewSurface) can size itself to the
+  // picture. CSS variables only flow downward, and the box can't
+  // derive this from content height (WebKit intrinsic sizing zeroes
+  // the inner percentage-height chain). --monitor-aspect-num is w/h
+  // for `aspect-ratio`; --monitor-invaspect is h/w for height calcs.
+  useEffect(() => {
+    const width = activeMediaSize?.width ?? 16;
+    const height = activeMediaSize?.height ?? 9;
+    const root = document.documentElement;
+    root.style.setProperty("--monitor-aspect-num", (width / height).toFixed(6));
+    root.style.setProperty("--monitor-invaspect", (height / width).toFixed(6));
+    // Mirror into the media store so React chrome (the stage context
+    // bar's format badge) can read the real pixel size too.
+    useMediaStore.getState().setActiveMediaSize(activeMediaSize);
+    return () => {
+      root.style.removeProperty("--monitor-aspect-num");
+      root.style.removeProperty("--monitor-invaspect");
+      useMediaStore.getState().setActiveMediaSize(null);
+    };
+  }, [activeMediaSize]);
 
   return (
     <div className="video-wrap">
-      <div className="video-stack" ref={stackRef}>
-        {mediaError && <MediaErrorOverlay message={mediaError} />}
-        <video
-          ref={refA}
-          className="video-el"
-          preload="auto"
-          style={styleA}
-          onLoadedMetadata={() => alignSlotAfterLoad("a")}
-          onCanPlay={() => {
-            setMediaError(null);
-            alignSlotAfterLoad("a");
-          }}
-          onError={onVideoError}
-          onClick={activeKey === "a" ? togglePlay : undefined}
-        />
-        <video
-          ref={refB}
-          className="video-el"
-          preload="auto"
-          style={styleB}
-          onLoadedMetadata={() => alignSlotAfterLoad("b")}
-          onCanPlay={() => {
-            setMediaError(null);
-            alignSlotAfterLoad("b");
-          }}
-          onError={onVideoError}
-          onClick={activeKey === "b" ? togglePlay : undefined}
-        />
-        <TimelineVideoOverlays
-          overlays={activeVideoOverlays}
-          timelineTime={timelineTime}
-          isPlaying={isPlaying}
-        />
-        {previewGap && <TimelineGapOverlay />}
-        <TimelineTransitionOverlay
-          transition={
-            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-          }
-          timelineTime={timelineTime}
-          isPlaying={isPlaying}
-        />
-        <TimelineTransitionColorOverlay
-          transition={
-            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-          }
-          timelineTime={timelineTime}
-        />
-        <GpuTransitionPreview
-          transition={activeTransition}
-          timelineTime={timelineTime}
-          width={stackSize.width}
-          height={stackSize.height}
-        />
-        <TimelineTitleOverlays
-          overlays={activeTitles}
-          timelineTime={timelineTime}
-        />
-        <TimelineMotionShapeOverlays
-          overlays={activeShapes}
-          timelineTime={timelineTime}
-        />
-        <TimelineMotionImageOverlays
-          overlays={activeImages}
-          timelineTime={timelineTime}
-        />
-        <TimelineBroadcastOverlay
-          overlay={timelineSnapshot.broadcast_overlay}
-          timelineTime={timelineTime}
-          projectRoot={projectRoot}
-        />
+      <div
+        className="video-monitor-shell"
+        ref={monitorShellRef}
+        style={monitorShellStyle}
+      >
+        <div className="video-stack" ref={stackRef} style={monitorFrameCss}>
+          {mediaError && <MediaErrorOverlay message={mediaError} />}
+          <video
+            ref={refA}
+            className="video-el"
+            preload="auto"
+            style={styleA}
+            onLoadedMetadata={(event) => {
+              updateActiveMediaSize("a", event.currentTarget);
+              alignSlotAfterLoad("a");
+            }}
+            onCanPlay={() => {
+              setMediaError(null);
+              alignSlotAfterLoad("a");
+            }}
+            onError={onVideoError}
+            onClick={activeKey === "a" ? togglePlay : undefined}
+          />
+          <video
+            ref={refB}
+            className="video-el"
+            preload="auto"
+            style={styleB}
+            onLoadedMetadata={(event) => {
+              updateActiveMediaSize("b", event.currentTarget);
+              alignSlotAfterLoad("b");
+            }}
+            onCanPlay={() => {
+              setMediaError(null);
+              alignSlotAfterLoad("b");
+            }}
+            onError={onVideoError}
+            onClick={activeKey === "b" ? togglePlay : undefined}
+          />
+          <div className="timeline-program-frame" style={programFrameCss}>
+            <TimelineVideoOverlays
+              overlays={activeVideoOverlays}
+              timelineTime={timelineTime}
+              isPlaying={isPlaying}
+            />
+            {previewGap && <TimelineGapOverlay />}
+            <TimelineTransitionOverlay
+              transition={
+                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+              }
+              timelineTime={timelineTime}
+              isPlaying={isPlaying}
+            />
+            <TimelineTransitionColorOverlay
+              transition={
+                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+              }
+              timelineTime={timelineTime}
+            />
+            <GpuTransitionPreview
+              transition={activeTransition}
+              timelineTime={timelineTime}
+              width={programFrameSize.width}
+              height={programFrameSize.height}
+            />
+            <TimelineTitleOverlays
+              overlays={activeTitles}
+              timelineTime={timelineTime}
+            />
+            <TimelineMotionShapeOverlays
+              overlays={activeShapes}
+              timelineTime={timelineTime}
+            />
+            <TimelineMotionImageOverlays
+              overlays={activeImages}
+              timelineTime={timelineTime}
+            />
+            <TimelineBroadcastOverlay
+              overlay={timelineSnapshot.broadcast_overlay}
+              timelineTime={timelineTime}
+              projectRoot={projectRoot}
+            />
+          </div>
+        </div>
       </div>
       {chrome ? (
         <>
