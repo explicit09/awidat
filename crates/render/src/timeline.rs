@@ -11048,7 +11048,25 @@ fn plan_one_audio_track(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    build_timeline_render_spec_inner(project_root, None)
+    build_timeline_render_spec_inner(project_root, None, None)
+}
+
+/// Build a timeline render spec whose browser broadcast overlay is rendered
+/// only for `[window_start_s, window_start_s + window_duration_s]` instead of
+/// the whole episode. The overlay clip carries timeline-aligned timestamps, so
+/// the caller composites it with an output seek to the same window. This keeps
+/// single-frame inspection (`view_program_frame`) from rendering a multi-GB,
+/// full-length overlay that times out or fills the disk.
+pub fn build_timeline_render_spec_overlay_windowed(
+    project_root: &Path,
+    window_start_s: f64,
+    window_duration_s: f64,
+) -> Result<RenderJobSpec, RenderTimelineError> {
+    let window = OverlayRenderWindow {
+        start_s: window_start_s.max(0.0),
+        duration_s: window_duration_s.max(MIN_OVERLAY_WINDOW_S),
+    };
+    build_timeline_render_spec_inner(project_root, None, Some(window))
 }
 
 /// Build a timeline render spec clipped to one guide-track marker range.
@@ -11058,12 +11076,24 @@ pub fn build_timeline_section_render_spec(
     marker_id: &str,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
     let section = resolve_timeline_section(project_root, guide_track_id, marker_id)?;
-    build_timeline_render_spec_inner(project_root, Some(section))
+    build_timeline_render_spec_inner(project_root, Some(section), None)
 }
+
+/// Render window for the browser broadcast overlay, in timeline seconds.
+#[derive(Debug, Clone, Copy)]
+struct OverlayRenderWindow {
+    start_s: f64,
+    duration_s: f64,
+}
+
+/// Floor for an overlay window so a degenerate duration still yields at least
+/// one rendered frame.
+const MIN_OVERLAY_WINDOW_S: f64 = 0.05;
 
 fn build_timeline_render_spec_inner(
     project_root: &Path,
     section: Option<TimelineSectionRange>,
+    overlay_window: Option<OverlayRenderWindow>,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
     let (
         mut segs,
@@ -11179,9 +11209,14 @@ fn build_timeline_render_spec_inner(
         && overlay.config.enabled
         && !overlay.config.short_form_mode
     {
+        let (overlay_duration_s, overlay_offset_s) = match overlay_window {
+            Some(window) => (window.duration_s, window.start_s),
+            None => (total_duration_s, 0.0),
+        };
         Some(prepare_browser_broadcast_overlay_video(
             overlay,
-            total_duration_s,
+            overlay_duration_s,
+            overlay_offset_s,
             &renders_dir,
             &timestamp.to_string(),
         )?)
@@ -11671,9 +11706,38 @@ fn render_input_paths(
         .collect()
 }
 
+/// Build a human-readable tail from a failed overlay renderer's captured
+/// streams. stderr carries node's `console.error` and ffmpeg's inherited
+/// diagnostics; stdout is a fallback. We trim to the last few lines so a
+/// single render failure cannot flood the agent's tool result, while still
+/// preserving the actionable cause (e.g. `ENOSPC: no space left on device`).
+fn overlay_renderer_failure_detail(stderr: &[u8], stdout: &[u8]) -> String {
+    fn tail(bytes: &[u8]) -> String {
+        let text = String::from_utf8_lossy(bytes);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        let tail: Vec<&str> = trimmed.lines().rev().take(8).collect();
+        tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+    }
+    let stderr_tail = tail(stderr);
+    let chosen = if stderr_tail.is_empty() {
+        tail(stdout)
+    } else {
+        stderr_tail
+    };
+    if chosen.is_empty() {
+        " (no diagnostics captured from renderer)".to_string()
+    } else {
+        format!(":\n{chosen}")
+    }
+}
+
 fn prepare_browser_broadcast_overlay_video(
     overlay: &BroadcastOverlayPlan,
     duration_s: f64,
+    time_offset_s: f64,
     renders_dir: &Path,
     timestamp: &str,
 ) -> Result<PathBuf, RenderTimelineError> {
@@ -11700,7 +11764,8 @@ fn prepare_browser_broadcast_overlay_video(
     let output = renders_dir.join(format!("broadcast-overlay-{timestamp}.mov"));
     let config_json = serde_json::to_string(&overlay.config)
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
-    let status = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(&script)
         .arg("--config")
         .arg(config_json)
@@ -11715,13 +11780,27 @@ fn prepare_browser_broadcast_overlay_video(
         .arg("--height")
         .arg("1080")
         .arg("--fps")
-        .arg("30")
+        .arg("30");
+    // Windowed render: shift the overlay's animation clock and the encoded
+    // file's timestamps so a short clip composites at the right timeline
+    // position. `view_program_frame` uses this to inspect one frame without
+    // rendering the entire episode's overlay (multi-GB, fills the disk).
+    if time_offset_s > 0.0 {
+        command.arg("--time-offset").arg(format!("{time_offset_s}"));
+    }
+    let result = command
         .current_dir(repo_root.join("apps").join("desktop"))
-        .status()
+        .output()
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
-    if !status.success() {
+    if !result.status.success() {
+        // Surface the renderer's own diagnostics. `.status()` would inherit
+        // stderr into the MCP server process where the agent never sees it,
+        // turning actionable failures (ENOSPC, missing asset, chromium launch)
+        // into an opaque "exit status 1". Capture and include the tail instead.
+        let detail = overlay_renderer_failure_detail(&result.stderr, &result.stdout);
         return Err(RenderTimelineError::BroadcastOverlayRender(format!(
-            "overlay renderer exited with {status}"
+            "overlay renderer exited with {}{detail}",
+            result.status
         )));
     }
     Ok(output)
@@ -11742,6 +11821,26 @@ mod tests {
         TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar, TrackingPackage,
     };
     use std::fs;
+
+    #[test]
+    fn overlay_failure_detail_surfaces_stderr_tail() {
+        let stderr = b"node:internal/process/promises\nError: ENOSPC: no space left on device, write\n    at ffmpeg\n";
+        let detail = overlay_renderer_failure_detail(stderr, b"");
+        assert!(detail.contains("ENOSPC: no space left on device"));
+        assert!(detail.starts_with(":\n"));
+    }
+
+    #[test]
+    fn overlay_failure_detail_falls_back_to_stdout() {
+        let detail = overlay_renderer_failure_detail(b"   \n", b"chromium launch failed");
+        assert!(detail.contains("chromium launch failed"));
+    }
+
+    #[test]
+    fn overlay_failure_detail_handles_empty_streams() {
+        let detail = overlay_renderer_failure_detail(b"", b"");
+        assert!(detail.contains("no diagnostics captured"));
+    }
 
     fn write_fixture_project(dir: &Path) -> PathBuf {
         let asset_rel = "raw/x.mp4";
