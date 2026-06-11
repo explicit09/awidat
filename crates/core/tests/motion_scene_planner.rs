@@ -5,22 +5,32 @@ use montage_core::edl::anchor::AnchorContext;
 use montage_core::edl::apply::apply;
 use montage_core::edl::op::EdlOp;
 use montage_core::edl::parser::parse;
-use montage_core::tools::plan_motion_scene::plan_motion_scene_request;
+use montage_core::tools::plan_motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
 use montage_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
 use montage_proto::otio::Timeline;
 use montage_proto::professional::MotionSceneLayerKind;
 
+fn onboarding_steps() -> Vec<String> {
+    vec![
+        "Sign up with your workspace".into(),
+        "Import your first project".into(),
+        "Invite the team".into(),
+    ]
+}
+
 #[test]
 fn planner_returns_valid_motion_scene_and_storable_edl() {
-    let plan = match plan_motion_scene_request(
-        "animate a three-step explainer for the onboarding framework",
-        Some("scene-onboarding"),
-        Some(5.0),
-        Some(1280),
-        Some(720),
-        Some(24.0),
-        None,
-    ) {
+    let plan = match plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "animate a three-step explainer for the onboarding framework".into(),
+        scene_id: Some("scene-onboarding".into()),
+        duration_s: Some(5.0),
+        width: Some(1280),
+        height: Some(720),
+        fps: Some(24.0),
+        headline: Some("The onboarding framework".into()),
+        step_labels: onboarding_steps(),
+        ..MotionScenePlanRequest::default()
+    }) {
         Ok(plan) => plan,
         Err(error) => panic!("plan motion scene: {error}"),
     };
@@ -48,24 +58,116 @@ fn planner_returns_valid_motion_scene_and_storable_edl() {
 
 #[test]
 fn planner_rejects_invalid_scene_timing() {
-    let error =
-        plan_motion_scene_request("animated callout", None, Some(0.0), None, None, None, None)
-            .expect_err("zero duration should be rejected");
+    let error = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "animated callout".into(),
+        duration_s: Some(0.0),
+        headline: Some("Callout".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect_err("zero duration should be rejected");
 
     assert!(error.contains("duration_s"));
 }
 
 #[test]
+fn planner_requires_headline_or_evidence_text() {
+    // The planner used to truncate the request prompt into the
+    // headline, putting the editor's instructions on screen.
+    let error = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "animated callout for the key claim".into(),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect_err("missing content must hard-fail");
+
+    assert!(error.contains("headline"), "error: {error}");
+    assert!(error.contains("evidence_text"), "error: {error}");
+}
+
+#[test]
+fn planner_requires_step_labels_for_step_requests() {
+    // "Step 1/2/3" placeholders are never invented.
+    let error = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "three-step process card".into(),
+        headline: Some("Hardware-first drone workflow".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect_err("step request without labels must hard-fail");
+
+    assert!(error.contains("step_labels"), "error: {error}");
+}
+
+#[test]
+fn planner_derives_headline_from_evidence_text() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "animated callout".into(),
+        evidence_text: Some(
+            "If AI makes a mistake with code, you might have a cybersecurity issue. The rest \
+             of the window keeps going."
+                .into(),
+        ),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan motion scene from evidence");
+
+    let headline = plan
+        .scene
+        .layers
+        .iter()
+        .find(|layer| layer.id == "headline")
+        .and_then(|layer| layer.params.get("text"))
+        .and_then(|value| value.as_str())
+        .expect("headline text");
+    assert_eq!(
+        headline,
+        "If AI makes a mistake with code, you might have a cybersecurity issue"
+    );
+    assert!(
+        plan.scene
+            .rationale
+            .as_deref()
+            .is_some_and(|rationale| rationale.contains("transcript evidence")),
+        "rationale records the evidence window: {:?}",
+        plan.scene.rationale
+    );
+}
+
+#[test]
+fn planner_puts_step_labels_on_screen() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "three-step explainer".into(),
+        headline: Some("The onboarding framework".into()),
+        step_labels: onboarding_steps(),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan motion scene");
+
+    let step_texts: Vec<&str> = plan
+        .scene
+        .layers
+        .iter()
+        .filter(|layer| layer.id.starts_with("step-"))
+        .filter_map(|layer| layer.params.get("text").and_then(|value| value.as_str()))
+        .collect();
+    assert_eq!(
+        step_texts,
+        vec![
+            "Sign up with your workspace",
+            "Import your first project",
+            "Invite the team"
+        ]
+    );
+}
+
+#[test]
 fn planner_adds_panel_and_image_layers_for_visual_still_requests() {
-    let plan = plan_motion_scene_request(
-        "make a callout card with the product logo screenshot",
-        Some("scene-logo"),
-        Some(3.0),
-        None,
-        None,
-        None,
-        Some("raw/logo.png"),
-    )
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "make a callout card with the product logo screenshot".into(),
+        scene_id: Some("scene-logo".into()),
+        duration_s: Some(3.0),
+        image_asset: Some("raw/logo.png".into()),
+        headline: Some("Product logo".into()),
+        ..MotionScenePlanRequest::default()
+    })
     .expect("plan motion scene");
 
     assert!(plan.scene.layers.iter().any(|layer| {
@@ -94,15 +196,20 @@ fn planner_adds_panel_and_image_layers_for_visual_still_requests() {
 
 #[test]
 fn planner_builds_multi_layer_explainer_scene() {
-    let plan = plan_motion_scene_request(
-        "create a three-step explainer card with a headline, step labels, callout arrow, and product screenshot",
-        Some("scene-steps"),
-        Some(4.0),
-        Some(1920),
-        Some(1080),
-        Some(30.0),
-        Some("raw/product.png"),
-    )
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "create a three-step explainer card with a headline, step labels, callout \
+                  arrow, and product screenshot"
+            .into(),
+        scene_id: Some("scene-steps".into()),
+        duration_s: Some(4.0),
+        width: Some(1920),
+        height: Some(1080),
+        fps: Some(30.0),
+        image_asset: Some("raw/product.png".into()),
+        headline: Some("The onboarding framework".into()),
+        step_labels: onboarding_steps(),
+        ..MotionScenePlanRequest::default()
+    })
     .expect("plan motion scene");
 
     assert!(
@@ -162,15 +269,18 @@ fn visual_route_planner_and_apply_persist_multilayer_motion_scene() {
         .collect();
     assert_eq!(motion_tools, vec!["plan_motion_scene", "apply_edl"]);
 
-    let plan = plan_motion_scene_request(
-        request,
-        Some("scene-onboarding-e2e"),
-        Some(4.0),
-        Some(1920),
-        Some(1080),
-        Some(30.0),
-        Some("raw/product.png"),
-    )
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: request.into(),
+        scene_id: Some("scene-onboarding-e2e".into()),
+        duration_s: Some(4.0),
+        width: Some(1920),
+        height: Some(1080),
+        fps: Some(30.0),
+        image_asset: Some("raw/product.png".into()),
+        headline: Some("The onboarding process".into()),
+        step_labels: onboarding_steps(),
+        ..MotionScenePlanRequest::default()
+    })
     .expect("plan motion scene");
     let envelope = parse(&plan.edl).expect("parse generated EDL");
     let timeline = Timeline::empty("motion-scene-route-apply");
