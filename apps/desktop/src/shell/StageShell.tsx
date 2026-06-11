@@ -9,6 +9,7 @@ import { useSettings } from "../state/settings";
 import { FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
+import type { PermissionMode } from "../protocol";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
 /**
@@ -114,6 +115,8 @@ export type StageShellProps = {
   onOpenHistory?: () => void;
   onSelectChatSession?: (session: ChatSessionSummary) => void;
   onNewChat?: () => void;
+  permissionMode?: PermissionMode;
+  onSetPermissionMode?: (mode: PermissionMode) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -130,6 +133,7 @@ export function StageShell(props: StageShellProps) {
     stage, onStage, onCommand, running, onCancel, mediaSuggestions = [], onPickMedia,
     chatSessions = [], activeChatSession = null, chatLoading = false,
     onOpenHistory, onSelectChatSession, onNewChat,
+    permissionMode = "manual", onSetPermissionMode,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -408,6 +412,8 @@ export function StageShell(props: StageShellProps) {
                 onOpenHistory={onOpenHistory}
                 onSelectChatSession={onSelectChatSession}
                 onNewChat={onNewChat}
+                permissionMode={permissionMode}
+                onSetPermissionMode={onSetPermissionMode}
               />
             ) : rightNode}
           </div>
@@ -425,16 +431,18 @@ export function StageShell(props: StageShellProps) {
 
       {/* STAGE LAYER — preview hero + proposal deck. Bottom padding tracks the
           timeline height; side padding makes room for open side panes. */}
-      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
+      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-4 px-10 pt-12"
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: `calc(28px + ${timelineHeight})`,
+          // Same bottom line as the side panes (paneBottom) so the
+          // center panels and the side rails end flush.
+          paddingBottom: paneBottom,
           paddingLeft: LEFT_PANE_RESERVE,
           paddingRight: RIGHT_PANE_RESERVE,
         }}>
-        <div className="relative flex min-w-0 flex-1 flex-col gap-2">
-          <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
+        <div className="stage-hero-col relative flex min-w-0 flex-1 flex-col gap-2">
+          <div className="stage-hero-card glass relative min-h-0 overflow-hidden" style={{ borderRadius: 18 }}>
             {stageEmpty ? <div className="absolute inset-0 bg-black/55" /> : preview}
             {/* purposeful empty state — overlays the black hero when there's
                 nothing to review yet (no pending proposals). */}

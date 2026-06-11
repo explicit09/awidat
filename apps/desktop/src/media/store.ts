@@ -79,6 +79,12 @@ type MediaState = {
   timelineSeekRequestId: number;
   /** Target seconds for the most recent timeline-time seek request. */
   timelineSeekTargetS: number;
+  /**
+   * Pixel dimensions of the video the timeline preview is currently
+   * showing. Published by SegmentedVideoView on loadedmetadata so
+   * chrome (the stage context bar's format badge) can display them.
+   */
+  activeMediaSize: { width: number; height: number } | null;
 
   /** Refresh from `list_proxies`. */
   refresh: () => Promise<void>;
@@ -101,6 +107,8 @@ type MediaState = {
   setTimelineDuration: (d: number) => void;
   /** External caller asks the segmented player to seek (timeline-time). */
   requestTimelineSeek: (t: number) => void;
+  /** Called by the segmented player when the active video's pixel size changes. */
+  setActiveMediaSize: (size: { width: number; height: number } | null) => void;
 };
 
 export const useMediaStore = create<MediaState>((set, get) => ({
@@ -117,6 +125,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   timelineDurationS: 0,
   timelineSeekRequestId: 0,
   timelineSeekTargetS: 0,
+  activeMediaSize: null,
 
   refresh: async () => {
     try {
@@ -206,6 +215,13 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         timelineSeekTargetS: target,
       };
     }),
+  setActiveMediaSize: (size) =>
+    set((state) =>
+      state.activeMediaSize?.width === size?.width &&
+      state.activeMediaSize?.height === size?.height
+        ? state
+        : { activeMediaSize: size },
+    ),
 }));
 
 function clampTimelineTime(t: number, durationS: number): number {
