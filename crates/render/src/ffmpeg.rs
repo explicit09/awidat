@@ -732,28 +732,37 @@ pub type TranscodeProgressCallback =
 
 /// Proxy resolution + codec quality.
 ///
-/// **Why 1440p, not 1080p?** Modern displays are 2x DPR (Retina,
-/// 4K, HDR monitors). A 1080p proxy rendered into a CSS-540 box on a
-/// 2x display only fills ~540 physical pixels — the browser then
-/// upscales for the actual screen, producing visible blur. 1440p
-/// gives us enough source pixels that even a half-width preview pane
-/// on a Retina screen shows crisp detail.
+/// Distribution-era schema (2026-06): 1080p, CRF 23, GOP 12. The
+/// previous 1440p all-keyframe CRF-20 scheme produced proxies larger
+/// than many sources (measured: ~21 GB per 86-min hour of dense 1080p
+/// at all-I CRF 20 vs ~0.8 GB at this schema) — unacceptable disk
+/// cost for end-user machines with 256 GB SSDs.
 ///
-/// **Why CRF 20, not 26?** CRF 26 trades ~5 dB of PSNR for file size.
-/// On a still frame that's the visual difference between "looks good"
-/// and "looks soft". DaVinci's preview proxies are typically CRF
-/// 18-20. Bumped to 20 — file size grows ~50% but the all-keyframe
-/// path was already inflating size 5-10x over a normal GOP, so the
-/// absolute hit is modest.
-const PROXY_TARGET_HEIGHT: u32 = 1440;
-const PROXY_CRF: &str = "20";
+/// **Why GOP 12, not all-keyframe?** A seek decodes from the previous
+/// keyframe: at most 11 frames of hardware H.264 decode (~15-40 ms),
+/// imperceptible against pipeline seek latency. Empirically validated:
+/// `.mov` sources took the remux path for months, giving editors
+/// ~75-frame GOPs whose transcript-click seeks felt fine — GOP 12 is
+/// 6x denser than that. All-I inflated files 5-10x for headroom the
+/// UX never needed. (`-sc_threshold 0` keeps the cadence exact so the
+/// player's frame-step shuttle has a bounded decode cost per step.)
+///
+/// **Why 1080p, not 1440p?** The scale filter never upscales small
+/// sources in practice, and pro NLE defaults (Premiere H.264 720p,
+/// Resolve half-res) sit far below source resolution. 1080p in a
+/// half-width Retina pane loses little; the disk/decode win is large.
+const PROXY_TARGET_HEIGHT: u32 = 1080;
+const PROXY_CRF: &str = "23";
+/// Keyframe interval in frames. ~0.4 s at 30 fps — every seek decodes
+/// at most `PROXY_GOP - 1` frames past a keyframe.
+const PROXY_GOP: &str = "12";
 /// Schema tag embedded in proxy filenames. Bumping this string
 /// invalidates every existing proxy at the next project-load orphan
-/// scan, forcing a clean re-transcode under the new height/CRF
-/// targets. Older `*-1080p-*` files become orphans on the next scan
-/// and get cleaned up. Format: `<height>q<crf>` so a future bump
-/// (e.g. `2160q18`) is self-describing in the filename.
-pub const PROXY_SCHEMA_TAG: &str = "1440q20";
+/// scan, forcing a clean re-transcode under the new targets. Older
+/// tags become orphans on the next scan and get cleaned up. Format:
+/// `<height>g<gop>q<crf>` so a future bump is self-describing in the
+/// filename.
+pub const PROXY_SCHEMA_TAG: &str = "1080g12q23";
 
 fn proxy_scale_filter() -> String {
     format!("scale=-2:{PROXY_TARGET_HEIGHT}")
@@ -795,7 +804,9 @@ pub async fn transcode_proxy(
         cb(TranscodeProgress::Started { total_duration_s });
     }
 
-    if should_try_lossless_mp4_remux(asset_path) {
+    if should_try_lossless_mp4_remux(asset_path)
+        && remux_within_bitrate_budget(asset_path, total_duration_s.unwrap_or(0.0))
+    {
         let mut remux = Command::new(&bin);
         remux
             .arg("-loglevel")
@@ -858,9 +869,9 @@ pub async fn transcode_proxy(
         .arg("-crf")
         .arg(PROXY_CRF)
         .arg("-g")
-        .arg("1")
+        .arg(PROXY_GOP)
         .arg("-keyint_min")
-        .arg("1")
+        .arg(PROXY_GOP)
         .arg("-sc_threshold")
         .arg("0")
         .arg("-pix_fmt")
@@ -982,6 +993,31 @@ fn should_try_lossless_mp4_remux(asset_path: &Path) -> bool {
             .as_deref(),
         Some("mov" | "m4v")
     )
+}
+
+/// Remux ceiling in megabits per second. A remux copies the source's
+/// bits verbatim — instant import, original quality — so it stays the
+/// right call while the source is already proxy-class. Measured on an
+/// 86-min 7.6 Mbps OBS recording: transcoding under the proxy schema
+/// saved only ~14% (4.5 vs 5.2 GB) at a ~23-minute import cost, so
+/// efficient screen/podcast recordings up to ~10 Mbps remux. Heavy
+/// camera/phone sources (commonly 50-100 Mbps) blow past the ceiling
+/// and take the transcode's 5-10x disk savings instead.
+const REMUX_MAX_MBPS: f64 = 10.0;
+
+/// Whether a lossless remux is acceptable disk-wise: source average
+/// bitrate at or under [`REMUX_MAX_MBPS`]. Unknown duration or size
+/// errs toward remux (the historical behavior) rather than a
+/// surprise transcode.
+fn remux_within_bitrate_budget(asset_path: &Path, total_duration_s: f64) -> bool {
+    if !total_duration_s.is_finite() || total_duration_s <= 1.0 {
+        return true;
+    }
+    let Ok(meta) = std::fs::metadata(asset_path) else {
+        return true;
+    };
+    let mbps = (meta.len() as f64 * 8.0) / total_duration_s / 1_000_000.0;
+    mbps <= REMUX_MAX_MBPS
 }
 
 async fn run_short_ffmpeg(
@@ -1929,13 +1965,31 @@ mod tests {
 
     #[test]
     fn proxy_scale_filter_targets_current_viewer_grade() {
-        // Schema bumped from 1080p to 1440p so DPR-2 displays see
-        // crisp detail in the preview pane.
+        // Distribution schema: 1080p GOP-12 CRF-23 — see the
+        // PROXY_TARGET_HEIGHT doc comment for the size/seek research
+        // behind the move off 1440p all-keyframe.
         assert_eq!(
             proxy_scale_filter(),
             format!("scale=-2:{PROXY_TARGET_HEIGHT}")
         );
-        assert_eq!(PROXY_TARGET_HEIGHT, 1440);
+        assert_eq!(PROXY_TARGET_HEIGHT, 1080);
+        assert_eq!(PROXY_SCHEMA_TAG, "1080g12q23");
+    }
+
+    #[test]
+    fn remux_budget_rejects_heavy_sources() {
+        // A file whose average bitrate exceeds the ceiling must
+        // transcode (the 86-min 4.9 GB OBS recording measured
+        // ~7.6 Mbps and duplicated itself into the proxy cache).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("heavy.mov");
+        std::fs::write(&path, vec![0u8; 2_000_000]).unwrap(); // 2 MB
+        // 2 MB over 1.143s ≈ 14 Mbps > 10 Mbps ceiling → transcode.
+        assert!(!remux_within_bitrate_budget(&path, 16.0 / 14.0));
+        // Proxy-class bitrate (2 MB over 2s = 8 Mbps) remuxes.
+        assert!(remux_within_bitrate_budget(&path, 2.0));
+        // Unknown duration errs toward the historical remux path.
+        assert!(remux_within_bitrate_budget(&path, 0.0));
     }
 
     #[test]
