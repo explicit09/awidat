@@ -19,6 +19,8 @@ export {
   type PreviewChange,
   type PreviewViewMode,
 } from "./PreviewSurface";
+export { PreviewReviewQueue } from "./PreviewReviewQueue";
+export { PreviewInsights } from "./PreviewInsights";
 export {
   TimelineHybrid,
   TIMELINE_TABS,
