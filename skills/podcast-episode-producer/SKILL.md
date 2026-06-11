@@ -468,7 +468,9 @@ for that from the start instead of discovering it at the end:
   4. Radio edit: classify + apply cleanup, repair boundaries
   5. Structure: order the body on the spine
   6. Brand/show package applied (or reported unavailable)
-  7. Visual support + audio mix + loudness/package metadata
+  7. Visual support — B-roll pass (find_broll_opportunities +
+     b-roll/stock/source-backed lanes), MotionScene/cards — then
+     audio mix + loudness/package metadata
   8. Confirm overall structure with the user
   9. Render scope="timeline", poll to completed, verify
   10. Publishing package: title/description/chapters/tags/thumbnail,
