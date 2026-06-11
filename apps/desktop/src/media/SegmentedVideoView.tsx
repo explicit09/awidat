@@ -2316,10 +2316,17 @@ function titleOverlayStyle(
     // (translate(-50%, -50%) recenters the element on that point).
     style.left = `${overlay.box.x * 100}%`;
     style.top = `${overlay.box.y * 100}%`;
-    if (overlay.box.width !== null) {
-      style.width = `${overlay.box.width * 100}%`;
-      style.maxWidth = "none";
-    }
+    // Without an explicit width, fall back to the widest centered box
+    // that stays on screen (mirrors the render's effective_width) so
+    // long text wraps instead of overflowing the frame.
+    const width =
+      overlay.box.width ??
+      Math.max(
+        0.05,
+        Math.min(0.92, 2 * overlay.box.x, 2 * (1 - overlay.box.x)),
+      );
+    style.width = `${width * 100}%`;
+    style.maxWidth = "none";
     style.textAlign = overlay.box.align;
     // Scene text uses explicit line breaks ("1\nCLIENT NEED") and
     // wraps inside its box instead of the single-line band layout.

@@ -3570,7 +3570,10 @@ button {
   text-align: center;
   line-height: 1.08;
   letter-spacing: 0;
-  white-space: nowrap;
+  /* pre-line keeps authored "\n" breaks AND wraps long lines inside
+     max-width — nowrap let long titles run off the frame edge. */
+  white-space: pre-line;
+  overflow-wrap: break-word;
   text-shadow:
     0 2px 8px rgba(0, 0, 0, 0.95),
     0 0 2px rgba(0, 0, 0, 0.95);

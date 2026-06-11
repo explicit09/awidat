@@ -476,6 +476,12 @@ fn motion_scene_preview_track(
     for scene in &metadata.motion_scenes {
         for layer in sorted_motion_scene_layers(scene) {
             let clip_uuid = format!("{}:{}", scene.id, layer.id);
+            // Scene-default enter/exit fades peak at the layer's
+            // authored opacity (text has no opacity param → 1.0).
+            let peak_opacity = match layer.kind {
+                MotionSceneLayerKind::Text => 1.0,
+                _ => MotionSceneTransform::from_layer_params(&layer.params).opacity,
+            };
             let (title, motion_shape, motion_image) = match layer.kind {
                 MotionSceneLayerKind::Text => {
                     let Some(title) = motion_scene_title_for_protocol(scene, layer) else {
@@ -531,7 +537,11 @@ fn motion_scene_preview_track(
                 video_overlay: None,
                 motion_shape,
                 motion_image,
-                animations: motion_scene_layer_animations_for_protocol(layer, &clip_uuid),
+                animations: motion_scene_layer_animations_for_protocol(
+                    layer,
+                    &clip_uuid,
+                    peak_opacity,
+                ),
             });
         }
     }
@@ -712,9 +722,10 @@ fn motion_scene_image_for_protocol(
 fn motion_scene_layer_animations_for_protocol(
     layer: &MotionSceneLayer,
     clip_uuid: &str,
+    peak_opacity: f64,
 ) -> Vec<montage_desktop_protocol::TimelineParameterAnimation> {
     layer
-        .motion_animations()
+        .motion_animations_with_scene_fade(peak_opacity)
         .into_iter()
         .filter(|animation| is_phase_3a_parameter(&animation.parameter))
         .map(
@@ -783,11 +794,16 @@ fn motion_scene_layer_animations_for_protocol(
         .collect()
 }
 
+/// Legacy animation channel for MotionScene text. Opacity keyframes
+/// (authored or scene-default via
+/// `motion_animations_with_scene_fade`) own the fade, so only slide
+/// directions still flow through the legacy name — mirroring the
+/// render's `motion_scene_title_animation`.
 fn motion_scene_animation_name(layer: &MotionSceneLayer) -> String {
     match layer_string_param(layer, "animation").as_deref() {
-        Some("fade_slide_in") => "fade_in".into(),
-        Some(value) => value.to_string(),
-        None => "none".into(),
+        Some("slide_in") => "slide_in".into(),
+        Some("slide_out") => "slide_out".into(),
+        _ => "none".into(),
     }
 }
 
@@ -1786,8 +1802,17 @@ mod tests {
         assert_eq!(image.anchor_x, 0.5);
         assert_eq!(image.anchor_y, 0.5);
         assert_eq!(image.rotation_deg, -6.0);
-        assert_eq!(animations.len(), 1);
+        // overlay.x is authored; overlay.opacity is the synthesized
+        // scene-default enter/exit fade peaking at the layer opacity.
+        assert_eq!(animations.len(), 2);
         assert_eq!(animations[0].target.parameter, "overlay.x");
+        let fade = animations
+            .iter()
+            .find(|animation| animation.target.parameter == "overlay.opacity")
+            .expect("scene-default opacity fade");
+        assert_eq!(fade.keyframes.first().map(|kf| kf.value), Some(0.0));
+        assert_eq!(fade.keyframes.get(1).map(|kf| kf.value), Some(0.75));
+        assert_eq!(fade.keyframes.last().map(|kf| kf.value), Some(0.0));
         assert!(
             snapshot
                 .preview_limitations
