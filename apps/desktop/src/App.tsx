@@ -31,6 +31,7 @@ import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
+import { resumePreviewAudio } from "./media/previewAudioGraph";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { aspectRatioLabel } from "./media/programFrame";
@@ -1978,6 +1979,10 @@ function App() {
   ) : null;
   const stageProgress =
     effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
+  const togglePreviewPlayback = () => {
+    if (!isPlaying) resumePreviewAudio();
+    setMediaPlaying(!isPlaying);
+  };
   const stagePreview = (
     <div className="flex h-full w-full min-h-0 flex-col gap-2 overflow-hidden">
       {/* context bar — proposal context left, pending count right */}
@@ -2029,7 +2034,7 @@ function App() {
       {/* transport — slim row directly under the picture */}
       <div className="flex h-9 shrink-0 items-center gap-3 px-0.5">
         <button
-          onClick={() => setMediaPlaying(!isPlaying)}
+          onClick={togglePreviewPlayback}
           className="glass-ghost grid h-8 w-8 place-items-center rounded-full text-[12px]"
         >
           {isPlaying ? "❚❚" : "▶"}
@@ -2294,7 +2299,7 @@ function App() {
                         sourceMedia={slateSourceMedia}
                         hasProxyFrame={hasProxyFrame}
                         indexing={slateIndexing}
-                        onPlayPause={() => setMediaPlaying(!isPlaying)}
+                        onPlayPause={togglePreviewPlayback}
                         onSelectChange={selectPreviewChange}
                         onPrevCut={() => jumpPreviewChange(-1)}
                         onNextCut={() => jumpPreviewChange(1)}
@@ -2354,7 +2359,7 @@ function App() {
             sourceMedia={slateSourceMedia}
             hasProxyFrame={hasProxyFrame}
             indexing={slateIndexing}
-            onPlayPause={() => setMediaPlaying(!isPlaying)}
+            onPlayPause={togglePreviewPlayback}
             onSelectChange={selectPreviewChange}
             onPrevCut={() => jumpPreviewChange(-1)}
             onNextCut={() => jumpPreviewChange(1)}

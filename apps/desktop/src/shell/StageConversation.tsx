@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { History, Plus } from "lucide-react";
 import { ChatStream } from "../agent/ChatStream";
+import type { PermissionMode } from "../protocol/generated/PermissionMode";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
 type ConversationPanelProps = {
@@ -18,6 +19,8 @@ type ConversationPanelProps = {
   onOpenHistory?: () => void;
   onSelectChatSession?: (session: ChatSessionSummary) => void;
   onNewChat?: () => void;
+  permissionMode?: PermissionMode;
+  onSetPermissionMode?: (mode: PermissionMode) => void;
 };
 
 export function ConversationPanel({

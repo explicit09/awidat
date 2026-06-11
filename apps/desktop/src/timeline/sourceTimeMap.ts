@@ -60,7 +60,8 @@ export function onTimelineSpan(
     const lo = Math.max(startS, seg.sourceStart);
     const hi = Math.min(endS, seg.sourceEnd);
     if (hi <= lo) continue;
-    overlapS += hi - lo;
+    const speed = Number.isFinite(seg.speed) && seg.speed > 0 ? seg.speed : 1;
+    overlapS += (hi - lo) / speed;
     if (lo < firstSourceS) firstSourceS = lo;
   }
   return overlapS > 0 ? { overlapS, firstSourceS } : null;

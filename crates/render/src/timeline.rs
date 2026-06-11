@@ -8303,9 +8303,6 @@ fn widest_word_px(text: &str, font_size: u32) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// Wrap every line of `text` to `max_width_px`, preserving explicit
-/// line breaks. Unlike [`auto_wrap_title_text`], pre-broken lines are
-/// still wrapped when they exceed the width — the box wins.
 fn wrap_title_text_to_width(text: &str, font_size: u32, max_width_px: f64) -> String {
     let max_chars = title_wrap_max_chars(font_size, max_width_px);
     text.split('\n')

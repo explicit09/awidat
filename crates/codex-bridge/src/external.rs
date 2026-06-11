@@ -34,7 +34,6 @@ const SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
     "item/fileChange/requestApproval",
     "item/permissions/requestApproval",
     "item/tool/requestUserInput",
-    "mcpServer/elicitation/request",
 ];
 
 type PendingResponse = oneshot::Sender<Result<serde_json::Value, String>>;
@@ -718,6 +717,9 @@ mod tests {
         ));
         assert!(is_supported_server_request_method(
             "item/tool/requestUserInput"
+        ));
+        assert!(!is_supported_server_request_method(
+            "mcpServer/elicitation/request"
         ));
         assert!(!is_supported_server_request_method("future/server/request"));
     }

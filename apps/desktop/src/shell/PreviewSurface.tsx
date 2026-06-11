@@ -284,6 +284,33 @@ export function PreviewSurface({
         ) : null}
       </div>
 
+      {changes.length > 0 ? (
+        <div className="flex h-7 shrink-0 items-center gap-2 overflow-hidden px-0.5">
+          <span className="shrink-0 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
+            Jump to change
+          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {changes.map((change) => (
+              <button
+                key={change.id}
+                type="button"
+                onClick={() => onSelectChange?.(change)}
+                aria-pressed={change.id === activeChangeId}
+                title={change.label ?? `Change ${change.index}`}
+                className={cn(
+                  "grid h-6 min-w-6 place-items-center rounded-[var(--radius-sm)] border px-1.5 font-mono text-[var(--text-caption)] transition-colors",
+                  change.id === activeChangeId
+                    ? "border-[rgba(217,165,75,0.75)] bg-[rgba(217,165,75,0.16)] text-[var(--color-text-primary)]"
+                    : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]",
+                )}
+              >
+                {String(change.index).padStart(2, "0")}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Transport — one slim transparent row under the monitor:
           prev/play/next, scrubber with change markers, timecode,
           then rate / quality / volume. */}

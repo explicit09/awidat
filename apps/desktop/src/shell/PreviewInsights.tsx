@@ -79,13 +79,14 @@ export function PreviewInsights({
     if (!projectRoot) return;
     let cancelled = false;
     for (const stem of stems) {
-      if (silencesByStem[stem]) continue;
+      const cacheKey = silenceCacheKey(projectRoot, stem);
+      if (silencesByStem[cacheKey]) continue;
       invoke<Silence[]>("read_silences", { projectPath: projectRoot, stem })
         .then((ranges) => {
-          if (!cancelled) setSilencesByStem((prev) => ({ ...prev, [stem]: ranges }));
+          if (!cancelled) setSilencesByStem((prev) => ({ ...prev, [cacheKey]: ranges }));
         })
         .catch(() => {
-          if (!cancelled) setSilencesByStem((prev) => ({ ...prev, [stem]: [] }));
+          if (!cancelled) setSilencesByStem((prev) => ({ ...prev, [cacheKey]: [] }));
         });
     }
     return () => {
@@ -102,7 +103,11 @@ export function PreviewInsights({
       const words =
         transcript?.state === "loaded" ? transcript.transcript.words : [];
       const raw = [
-        ...detectSilenceMoments(silencesByStem[stem] ?? [], stem, SILENCE_MIN_S),
+        ...detectSilenceMoments(
+          silencesByStem[silenceCacheKey(projectRoot ?? "", stem)] ?? [],
+          stem,
+          SILENCE_MIN_S,
+        ),
         ...detectFillerMoments(words, stem),
       ];
       for (const m of raw) {
@@ -297,6 +302,10 @@ export function PreviewInsights({
       </section>
     </div>
   );
+}
+
+function silenceCacheKey(projectRoot: string, stem: string): string {
+  return `${projectRoot}\u0000${stem}`;
 }
 
 function IconTile({

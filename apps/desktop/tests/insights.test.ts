@@ -33,6 +33,8 @@ assert.deepEqual(onTimelineSpan(segments, "ep1", 58, 63), { overlapS: 2, firstSo
 assert.equal(onTimelineSpan(segments, "ep1", 70, 80), null);
 // Silence 85..95: head cut off, tail survives from 90.
 assert.deepEqual(onTimelineSpan(segments, "ep1", 85, 95), { overlapS: 5, firstSourceS: 90 });
+// Source seconds in a 2x segment occupy half as much timeline time.
+assert.deepEqual(onTimelineSpan(segments, "ep2", 10, 14), { overlapS: 2, firstSourceS: 10 });
 assert.equal(onTimelineSpan(segments, "ep1", 59, 59), null, "empty span");
 
 // ── filler detection ───────────────────────────────────────────────

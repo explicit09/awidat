@@ -7,10 +7,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use montage_proto::project::files;
+use montage_render::RenderJobSpec;
 use montage_render::ffmpeg::{ImageFormat, extract_frame_filtered};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,11 +71,18 @@ pub async fn run(args: ViewProgramFrameArgs, ctx: McpToolCtx) -> Result<String, 
         Detail::Preview => Some(PREVIEW_MAX_DIM),
         Detail::Original => None,
     };
-    let frame_path = cache_frame_path(&ctx.project_root, args.t_s, format, max_dim)?;
+    let mut spec = program_window_spec(&ctx.project_root, args.t_s)?;
+    let frame_path = cache_frame_path(
+        &ctx.project_root,
+        args.t_s,
+        format,
+        max_dim,
+        &spec.input_paths,
+    )?;
     let clip_path = frame_path.with_extension("mp4");
 
     if !frame_path.exists() {
-        render_program_window(&ctx.project_root, args.t_s, &clip_path).await?;
+        render_program_window(&ctx.project_root, args.t_s, &clip_path, &mut spec).await?;
         let bytes = extract_frame_filtered(&clip_path, 0.0, format, max_dim, None)
             .await
             .map_err(|e| format!("view_program_frame: frame extraction failed: {e}"))?;
@@ -119,17 +128,8 @@ async fn render_program_window(
     project_root: &Path,
     t_s: f64,
     output_path: &Path,
+    spec: &mut RenderJobSpec,
 ) -> Result<(), String> {
-    // Render the broadcast overlay for ONLY the inspection window. The full
-    // timeline builder would render the entire episode's overlay (a multi-GB
-    // headless-browser job) just to grab one frame — that is what made this
-    // tool time out and fill the disk on real-length episodes.
-    let mut spec = montage_render::build_timeline_render_spec_overlay_windowed(
-        project_root,
-        t_s,
-        FRAME_WINDOW_S,
-    )
-    .map_err(|e| format!("view_program_frame: timeline render plan failed: {e}"))?;
     rewrite_timeline_argv_for_window(&mut spec.args, t_s, FRAME_WINDOW_S, output_path)?;
     let ffmpeg = montage_render::ffmpeg_path()
         .map_err(|e| format!("view_program_frame: failed to locate ffmpeg: {e}"))?;
@@ -157,6 +157,15 @@ async fn render_program_window(
     Ok(())
 }
 
+fn program_window_spec(project_root: &Path, t_s: f64) -> Result<RenderJobSpec, String> {
+    // Render the broadcast overlay for ONLY the inspection window. The full
+    // timeline builder would render the entire episode's overlay (a multi-GB
+    // headless-browser job) just to grab one frame — that is what made this
+    // tool time out and fill the disk on real-length episodes.
+    montage_render::build_timeline_render_spec_overlay_windowed(project_root, t_s, FRAME_WINDOW_S)
+        .map_err(|e| format!("view_program_frame: timeline render plan failed: {e}"))
+}
+
 fn rewrite_timeline_argv_for_window(
     argv: &mut Vec<String>,
     start_s: f64,
@@ -168,8 +177,12 @@ fn rewrite_timeline_argv_for_window(
     }
     let output_index = argv.len() - 1;
     argv[output_index] = output_path.to_string_lossy().into_owned();
+    let input_index = argv
+        .iter()
+        .position(|arg| arg == "-i")
+        .ok_or_else(|| "view_program_frame: timeline render argv has no input".to_string())?;
     argv.splice(
-        output_index..output_index,
+        input_index..input_index,
         [
             "-ss".to_string(),
             format!("{start_s}"),
@@ -185,12 +198,14 @@ fn cache_frame_path(
     t_s: f64,
     format: ImageFormat,
     max_dim: Option<u32>,
+    input_paths: &[PathBuf],
 ) -> Result<PathBuf, String> {
     let mut h = Sha256::new();
     h.update(project_root.to_string_lossy().as_bytes());
     let project_bytes = std::fs::read(project_root.join(files::OTIO))
         .map_err(|e| format!("view_program_frame: project OTIO unreadable: {e}"))?;
     h.update(&project_bytes);
+    update_hash_with_input_metadata(&mut h, input_paths);
     let root_hash = format!("{:x}", h.finalize());
     let project_tag: String = root_hash.chars().take(12).collect();
     let t_ms = (t_s * 1000.0).round() as i64;
@@ -207,6 +222,25 @@ fn cache_frame_path(
         .join("program-frames")
         .join(project_tag)
         .join(format!("{t_ms}_{dim_tag}.{ext}")))
+}
+
+fn update_hash_with_input_metadata(h: &mut Sha256, input_paths: &[PathBuf]) {
+    let mut paths = input_paths.to_vec();
+    paths.sort();
+    for path in paths {
+        h.update(path.to_string_lossy().as_bytes());
+        match std::fs::metadata(&path) {
+            Ok(metadata) => {
+                h.update(metadata.len().to_le_bytes());
+                if let Ok(modified) = metadata.modified()
+                    && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+                {
+                    h.update(duration.as_nanos().to_le_bytes());
+                }
+            }
+            Err(_) => h.update(b"missing"),
+        }
+    }
 }
 
 fn tail(value: &str, max_chars: usize) -> String {
@@ -244,17 +278,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(argv[argv.len() - 1], "/tmp/frame-window.mp4");
-        assert_eq!(
-            &argv[argv.len() - 5..argv.len() - 1],
-            ["-ss", "12.5", "-t", "0.12"]
-        );
+        assert_eq!(&argv[1..5], ["-ss", "12.5", "-t", "0.12"]);
+        assert_eq!(&argv[5..8], ["-i", "raw/a.mp4", "-c:v"]);
     }
 
     #[test]
     fn cache_frame_path_uses_time_dimension_and_format() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(files::OTIO), "{}").unwrap();
-        let path = cache_frame_path(dir.path(), 1.234, ImageFormat::Jpeg, Some(768)).unwrap();
+        let path = cache_frame_path(dir.path(), 1.234, ImageFormat::Jpeg, Some(768), &[]).unwrap();
         let rendered = path.to_string_lossy();
         assert!(rendered.contains("/.montage/cache/program-frames/"));
         assert!(rendered.ends_with("1234_d768.jpg"));
@@ -264,10 +296,38 @@ mod tests {
     fn cache_frame_path_changes_when_project_changes() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(files::OTIO), "{\"a\":1}").unwrap();
-        let first = cache_frame_path(dir.path(), 1.0, ImageFormat::Png, Some(768)).unwrap();
+        let first = cache_frame_path(dir.path(), 1.0, ImageFormat::Png, Some(768), &[]).unwrap();
 
         std::fs::write(dir.path().join(files::OTIO), "{\"a\":2}").unwrap();
-        let second = cache_frame_path(dir.path(), 1.0, ImageFormat::Png, Some(768)).unwrap();
+        let second = cache_frame_path(dir.path(), 1.0, ImageFormat::Png, Some(768), &[]).unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn cache_frame_path_changes_when_input_asset_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(files::OTIO), "{}").unwrap();
+        let asset = dir.path().join("asset.png");
+        std::fs::write(&asset, "first").unwrap();
+        let first = cache_frame_path(
+            dir.path(),
+            1.0,
+            ImageFormat::Png,
+            Some(768),
+            std::slice::from_ref(&asset),
+        )
+        .unwrap();
+
+        std::fs::write(&asset, "second-content").unwrap();
+        let second = cache_frame_path(
+            dir.path(),
+            1.0,
+            ImageFormat::Png,
+            Some(768),
+            std::slice::from_ref(&asset),
+        )
+        .unwrap();
 
         assert_ne!(first, second);
     }

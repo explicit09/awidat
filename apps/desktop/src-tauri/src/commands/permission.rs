@@ -47,10 +47,9 @@ pub async fn set_permission_mode(
         .ok_or_else(|| "no project loaded".to_string())?;
     write_mode(&project_root, mode)?;
 
-    // Step 8d: codex's subprocess is spawned fresh for every turn, so
-    // there's no cached agent state to evict here — the next
-    // `start_turn` will see the new permission_mode value on disk.
-    let _ = state;
+    // The external app-server keeps approval policy in its launch args, so
+    // rebuild it after a dropdown change.
+    super::project::tear_down_codex_session(&state).await;
     Ok(())
 }
 
