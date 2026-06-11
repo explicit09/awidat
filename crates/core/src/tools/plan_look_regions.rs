@@ -825,6 +825,9 @@ mod tests {
 
     #[tokio::test]
     async fn plan_auto_discovers_color_sidecars_and_writes_artifacts() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
 
@@ -873,6 +876,9 @@ mod tests {
 
     #[tokio::test]
     async fn plan_multi_region_edl_splits_remaining_piece() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
         std::fs::write(
@@ -952,6 +958,9 @@ mod tests {
 
     #[tokio::test]
     async fn plan_reports_missing_color_indexes() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("project.otio.json"),
@@ -984,6 +993,9 @@ mod tests {
 
     #[tokio::test]
     async fn review_writes_contact_sheet_and_package_when_render_exists() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         if std::process::Command::new("ffmpeg")
             .arg("-version")
             .output()
@@ -1064,6 +1076,9 @@ mod tests {
 
     #[tokio::test]
     async fn review_flags_excessive_lift_when_before_render_is_available() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         if std::process::Command::new("ffmpeg")
             .arg("-version")
             .output()
@@ -1157,6 +1172,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_pass_plans_applies_and_starts_timeline_render() {
+        // Script discovery reads the process-global MONTAGE_SKILLS_ROOT;
+        // serialize against tests that mutate it (see crate::test_env).
+        let _env = crate::test_env::SKILLS_ROOT_ENV_LOCK.lock().await;
         if std::process::Command::new("ffmpeg")
             .arg("-version")
             .output()

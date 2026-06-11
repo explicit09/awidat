@@ -106,6 +106,21 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Test-only synchronization for tests that touch process-global env.
+#[cfg(test)]
+pub(crate) mod test_env {
+    /// Serializes every test that SETS, REMOVES, or READS the
+    /// process-global `MONTAGE_SKILLS_ROOT` env var (via
+    /// `montage_config::defaults::skills_root()` or directly). Under
+    /// the parallel test harness, a mutator swapping the var to its
+    /// tempdir races readers in other modules — e.g.
+    /// `plan_look_regions` resolving bundled color-corrector scripts
+    /// against a root that lacks them ("look_region_plan.py was not
+    /// found"). Hold this for the full mutation/read window.
+    pub(crate) static SKILLS_ROOT_ENV_LOCK: tokio::sync::Mutex<()> =
+        tokio::sync::Mutex::const_new(());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
