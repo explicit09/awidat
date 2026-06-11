@@ -18,7 +18,7 @@
 
 import { create } from "zustand";
 import type { Item, ItemLifecycle } from "../protocol";
-import { useColorPreviewOverride } from "../properties/store";
+import { useColorPreviewOverride } from "../properties/store.ts";
 import {
   usePendingProposals,
   type PendingProposal,
