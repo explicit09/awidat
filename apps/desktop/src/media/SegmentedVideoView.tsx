@@ -1905,6 +1905,19 @@ type PreviewTitleOverlay = {
   animation: "none" | "fade_in" | "fade_out" | "fade_in_out" | "slide_in" | "slide_out";
   reveal: "none" | "typewriter" | "word" | "line";
   animations: TimelineParameterAnimation[];
+  /** True for MotionScene text layers (protocol role "motion_scene"). */
+  isMotionScene: boolean;
+  /**
+   * Explicit normalized text box (MotionScene layers with x/y params).
+   * `x`/`y` are the box center in program-frame space; `null` falls
+   * back to the `position` band layout.
+   */
+  box: {
+    x: number;
+    y: number;
+    width: number | null;
+    align: "left" | "center" | "right";
+  } | null;
 };
 
 type PreviewMotionShapeOverlay = {
@@ -1947,34 +1960,73 @@ function activeTitleOverlays(
   snapshot: TimelineSnapshot,
   _durationS: number,
 ): PreviewTitleOverlay[] {
-  if (broadcastOverlayOwnsProgramTitles(snapshot.broadcast_overlay)) return [];
-
-  const titleTrack = snapshot.tracks.find((track) => track.role === "titles");
-  if (!titleTrack) return [];
+  // A broadcast overlay owns the regular program titles, but MotionScene
+  // text is program content (panels, labels, diagrams) — it must keep
+  // rendering alongside the broadcast chrome, exactly as the render
+  // plan keeps role "motion_scene" titles.
+  const suppressProgramTitles = broadcastOverlayOwnsProgramTitles(
+    snapshot.broadcast_overlay,
+  );
 
   const overlays: PreviewTitleOverlay[] = [];
-  for (const item of titleTrack.items) {
-    if (item.kind !== "clip" || item.title === null) continue;
-    const startS = item.track_start_s;
-    const endS = item.track_start_s + item.duration_s;
-    if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
-      continue;
+  for (const track of snapshot.tracks) {
+    if (track.role !== "titles") continue;
+    for (const item of track.items) {
+      if (item.kind !== "clip" || item.title === null) continue;
+      const isMotionScene = item.title.role === "motion_scene";
+      if (suppressProgramTitles && !isMotionScene) continue;
+      const startS = item.track_start_s;
+      const endS = item.track_start_s + item.duration_s;
+      if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
+        continue;
+      }
+      overlays.push({
+        key: item.clip_uuid || item.name,
+        startS,
+        endS,
+        text: item.title.text,
+        position: titlePosition(item.title.position),
+        fontSize: item.title.font_size,
+        color: item.title.color || "#FFFFFF",
+        fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
+        animation: titleAnimation(item.title.animation),
+        reveal: titleReveal(item.title.reveal),
+        animations: item.animations ?? [],
+        isMotionScene,
+        box: titleOverlayBox(item.title),
+      });
     }
-    overlays.push({
-      key: item.clip_uuid || item.name,
-      startS,
-      endS,
-      text: item.title.text,
-      position: titlePosition(item.title.position),
-      fontSize: item.title.font_size,
-      color: item.title.color || "#FFFFFF",
-      fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
-      animation: titleAnimation(item.title.animation),
-      reveal: titleReveal(item.title.reveal),
-      animations: item.animations ?? [],
-    });
   }
   return overlays;
+}
+
+function titleOverlayBox(title: {
+  x: number | null;
+  y: number | null;
+  width: number | null;
+  align: string | null;
+}): PreviewTitleOverlay["box"] {
+  if (
+    title.x === null ||
+    title.y === null ||
+    !Number.isFinite(title.x) ||
+    !Number.isFinite(title.y)
+  ) {
+    return null;
+  }
+  return {
+    x: title.x,
+    y: title.y,
+    width:
+      title.width !== null && Number.isFinite(title.width) && title.width > 0
+        ? title.width
+        : null,
+    align: titleAlign(title.align),
+  };
+}
+
+function titleAlign(value: string | null): "left" | "center" | "right" {
+  return value === "left" || value === "right" ? value : "center";
 }
 
 function activeMotionShapeOverlays(
@@ -2071,7 +2123,11 @@ function TimelineTitleOverlays({
       {active.map((overlay) => (
         <div
           key={overlay.key}
-          className={`timeline-title-overlay title-pos-${overlay.position}`}
+          className={
+            overlay.box
+              ? "timeline-title-overlay"
+              : `timeline-title-overlay title-pos-${overlay.position}`
+          }
           style={titleOverlayStyle(overlay, timelineTime)}
         >
           {titleRevealText(overlay, timelineTime)}
@@ -2201,22 +2257,43 @@ function titleOverlayStyle(
     const p = Math.min(1, Math.max(0, remaining / 0.55));
     translateX = `calc(-50% + ${(1 - p) * 18}%)`;
   }
-  const translateY = overlay.position === "center" ? "-50%" : "0";
+  // Explicit boxes center on (x, y); band layout centers vertically
+  // only for the "center" band.
+  const translateY = overlay.box || overlay.position === "center" ? "-50%" : "0";
   const animated = evaluateAnimations(overlay.animations, elapsed);
   if (animated["title.opacity"] !== undefined) {
     opacity = clampOpacity(animated["title.opacity"]);
+  }
+  if (animated["overlay.opacity"] !== undefined) {
+    opacity = clampOpacity(animated["overlay.opacity"]);
   }
   const fontSize = animated["title.font_size"] ?? overlay.fontSize;
   const xOffset = animated["title.x"] ?? 0;
   const yOffset = animated["title.y"] ?? 0;
 
-  return {
+  const style: React.CSSProperties = {
     color: overlay.color,
-    fontSize: `clamp(15px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
+    fontSize: `clamp(11px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
     fontWeight: overlay.fontWeight === "bold" ? 750 : 500,
     opacity,
     transform: `translate(calc(${translateX} + ${xOffset * 100}vw), calc(${translateY} + ${yOffset * 100}vh))`,
   };
+  if (overlay.box) {
+    // MotionScene text box: position at the normalized box center
+    // (translate(-50%, -50%) recenters the element on that point).
+    style.left = `${overlay.box.x * 100}%`;
+    style.top = `${overlay.box.y * 100}%`;
+    if (overlay.box.width !== null) {
+      style.width = `${overlay.box.width * 100}%`;
+      style.maxWidth = "none";
+    }
+    style.textAlign = overlay.box.align;
+    // Scene text uses explicit line breaks ("1\nCLIENT NEED") and
+    // wraps inside its box instead of the single-line band layout.
+    style.whiteSpace = "pre-line";
+    style.lineHeight = 1.15;
+  }
+  return style;
 }
 
 function titlePosition(value: string): PreviewTitleOverlay["position"] {
