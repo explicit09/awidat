@@ -445,6 +445,27 @@ or the source material genuinely demands it.
 - Don't ask the user to confirm every clip. Confirm the OVERALL
   structure, then commit + render.
 
+## Long-run context discipline
+
+A full episode production is longer than one context window. Budget
+for that from the start instead of discovering it at the end:
+
+- Maintain `update_plan` with one step per playbook stage (preflight,
+  start/end, spine, radio edit, draft, visual, audio/metadata,
+  confirm, render, package). Update it at every stage transition —
+  the plan is your recovery spine if the context is compacted.
+- Keep tool output lean. Request `podcast_edit_proposal` /
+  review-pack batches of at most ~30 items per pass and apply them
+  before requesting more; view timeline windows narrowly (the region
+  you are editing, not the whole episode). Giant result dumps crowd
+  out the playbook and earlier decisions.
+- If you see a context-checkpoint summary instead of full history,
+  you were compacted mid-production: re-run `load_skill` for this
+  skill (and any brand/director skills the summary names) BEFORE the
+  next edit, re-check state with `view_timeline` + `vedit_diff`, then
+  continue from the first unfinished plan step. Compaction is a
+  checkpoint, not a finish line.
+
 ## You are done when...
 
 Persist until ALL of these are true. Stopping early on a coding-style

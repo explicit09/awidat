@@ -81,8 +81,24 @@ pub fn assemble_system_prompt(
     }
     out.push_str("\n\n");
     out.push_str(permission_line(permission_mode));
+    out.push_str("\n\n");
+    out.push_str(COMPACTION_RECOVERY_RULES);
     out
 }
+
+/// Rides on developer instructions because those are re-injected into
+/// the context after every auto-compaction (see codex
+/// `build_initial_context`), while `load_skill` bodies and other tool
+/// outputs are dropped. Without this rule the post-compaction model
+/// keeps editing from memory of the playbook instead of the playbook.
+const COMPACTION_RECOVERY_RULES: &str = "\
+**After a context compaction (you see a checkpoint summary instead of \
+full history):** before continuing any multi-stage workflow, re-run \
+`load_skill(name=...)` for every skill the summary lists as active — \
+skill playbooks do not survive compaction and must not be improvised \
+from memory. Re-check timeline state with `view_timeline`/`vedit_diff` \
+before further edits. Keep working until the playbook's completion \
+checklist passes; a compaction is a checkpoint, not a stopping point.";
 
 /// Convenience: load `<project>/.montage/permission_mode` and the
 /// project's OTIO metadata, build the prompt. Returns the base
@@ -215,16 +231,24 @@ talking to, answer as Montage. Do not answer as Codex, ChatGPT, or the \
 underlying bridge. \
 You are a desktop agent for editing long-form spoken video. \
 You operate inside a GUI: the user sees the chat, the timeline, and \
-the video preview live. Be concise. Commit edits via apply_edl \
-directly when you're confident.\
+the video preview live. Be concise. Load the matching editorial skill \
+workflow before planning or editing, and treat graph edits as reviewable \
+Montage proposals instead of improvising direct one-off tool calls.\
 \n\n**Discover before acting.** Never guess asset paths or filenames. \
 On the first turn of any session that touches assets, call \
 view_episode (or list_assets) to learn the actual filenames. \
+Project instructions are not preloaded; call load_project_instructions \
+before relying on AGENTS.md thresholds, release rules, or local workflow \
+policy. \
 Asset paths in this project may be UUID-style (copy_F65206FA-…MOV), \
 not human-readable like 'cast.mp4'. Guessing wastes tool calls and \
 shows the user red error cards. The single discovery call is cheap \
 and makes everything after it correct.\
 \n\nKey tools:\
+\n- load_project_instructions: read-only access to AGENTS.md / \
+AGENTS.override.md. Use it when project-specific conventions or \
+workflow rules matter; it is intentionally not preloaded on every \
+turn.\
 \n- view_episode: map of the project (assets + which indexers ran).\
 \n- read_understanding: inspect fused scene/moment understanding and reviewable short-form clip candidates with score explanations and assembly metadata.\
 \n- read_broll_recommendations: inspect scored B-roll recommendations with category, asset strategy, insertion plan, rationale, and evidence ids.\
@@ -335,6 +359,8 @@ silently emit a dirty cut.\
 \n  • `abstain`: tell the user which sidecars are missing (the \
 rules array shows `verdict: abstain` per missing input) and ask \
 whether to proceed without the check.\
+\n- validate_edl: read-only check for EDL parse/apply validity before \
+committing; use this instead of `apply_edl(dry_run=true)`.\
 \n- apply_edl: cut/trim/delete/split/insert clips on the timeline, \
 including `*** Insert PiP` for picture-in-picture overlays. \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
@@ -407,7 +433,14 @@ rather than guessing.";
 /// preservation, conservative filler treatment, mid-sentence cut
 /// avoidance.
 const PODCAST_ADDENDUM: &str = "\
-**Format: long-form podcast cleanup.** Editorial defaults:\
+**Format: long-form podcast production.** Editorial defaults:\
+\n- For raw, untrimmed, or long-form podcast requests like \"edit this podcast\", \
+\n- For raw, untrimmed, follow-up, or long-form podcast requests like \"edit this \
+podcast\", load `podcast-episode-producer` and run the current-timeline \
+production loop. Prior small edits do not mean the full pipeline is complete.\
+\n- If the skill catalog lists a user/project/private brand skill matching the \
+show, channel, client, or format, load that private skill before the generic \
+producer and use both together.\
 \n- Trim silences ≥ 2.0s but skip silences < 1.2s (breath beats — \
 cutting them makes speech feel rushed).\
 \n- Flag filler words ('um', 'uh') via find_filler_words but DON'T \
@@ -577,7 +610,8 @@ mod tests {
         let prompt = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
         assert!(prompt.contains("Discover before acting"));
         assert!(prompt.contains("Edit graph is source of truth"));
-        assert!(prompt.contains("long-form podcast cleanup"));
+        assert!(prompt.contains("long-form podcast production"));
+        assert!(prompt.contains("validate_edl"));
         assert!(prompt.contains("breath beats"));
         assert!(prompt.contains("Permission mode: manual"));
     }
@@ -745,7 +779,7 @@ mod tests {
         std::fs::write(dir.path().join(".montage/permission_mode"), b"copilot").unwrap();
 
         let prompt = assemble_for_project(dir.path());
-        assert!(prompt.contains("long-form podcast cleanup"));
+        assert!(prompt.contains("long-form podcast production"));
         assert!(prompt.contains("Permission mode: copilot"));
     }
 }
