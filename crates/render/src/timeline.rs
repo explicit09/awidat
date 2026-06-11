@@ -8865,11 +8865,19 @@ fn format_chapter_cards(
     for (idx, chapter) in c.chapters.iter().enumerate() {
         let start = chapter.time_seconds.max(st.title_visible_end);
         let end = start + st.chapter_display_duration;
-        out.push(format!("drawbox=x=iw*0.30:y=ih*0.38:w=80:h=50:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
-        out.push(format!("drawbox=x=iw*0.30+80:y=ih*0.38:w=iw*0.40:h=50:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        // Size the card to its text (estimated: ~21px/char for the
+        // 36px bold face + padding) and center the WHOLE card so the
+        // words sit visually centered — a fixed-width bar centers the
+        // box, not the text.
+        let title = chapter.text.to_uppercase();
+        let text_w = (title.chars().count() as f64) * 21.0 + 28.0;
+        let total_w = 80.0 + text_w;
+        let x0 = format!("(iw-{total_w:.0})/2");
+        out.push(format!("drawbox=x={x0}:y=ih*0.38:w=80:h=50:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        out.push(format!("drawbox=x={x0}+80:y=ih*0.38:w={text_w:.0}:h=50:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"));
         out.push(broadcast_drawtext(
             &(idx + 1).to_string(),
-            "w*0.30+32",
+            &format!("(w-{total_w:.0})/2+40-text_w/2"),
             "h*0.38+36",
             36,
             navy,
@@ -8878,8 +8886,8 @@ fn format_chapter_cards(
             true,
         ));
         out.push(broadcast_drawtext(
-            &chapter.text.to_uppercase(),
-            "w*0.30+96",
+            &title,
+            &format!("(w-{total_w:.0})/2+94"),
             "h*0.38+36",
             36,
             "#FFFFFF",

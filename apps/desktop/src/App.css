@@ -3458,10 +3458,14 @@ button {
   left: 50%;
   top: 38%;
   height: 4.63%;
-  min-width: min(50%, 780px);
+  /* Hug the text: a fixed min-width centers the BAR, leaving the
+     text visually off-center. fit-content + translate centers the
+     words themselves. */
+  width: fit-content;
+  max-width: min(72%, 1000px);
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: 4.17cqw minmax(0, 1fr);
+  grid-template-columns: 4.17cqw auto;
   align-items: center;
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.4);
 }
