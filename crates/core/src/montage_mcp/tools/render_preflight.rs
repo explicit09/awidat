@@ -50,6 +50,9 @@ pub fn run(args: RenderPreflightArgs, ctx: McpToolCtx) -> Result<String, String>
     let project = Project::read(&ctx.project_root)
         .map_err(|error| format!("render_preflight: project read failed: {error}"))?;
     let caption_summary = crate::captions::summarize_captions(&project);
+    let motion_scenes =
+        crate::tools::render_preflight::motion_scene_preflight_json(&project.timeline);
+    let motion_scene_count = motion_scenes["count"].as_u64().unwrap_or(0);
     let backend = render_backend_json_value(&preflight.backend);
     let mut backend_evidence = preflight.metadata.clone();
     enrich_render_metadata_with_backend_capability(&mut backend_evidence, &preflight.backend);
@@ -83,8 +86,10 @@ pub fn run(args: RenderPreflightArgs, ctx: McpToolCtx) -> Result<String, String>
             "editable_subtitle_tracks": preflight.editable_subtitle_track_count,
             "annotations": preflight.annotation_count,
             "audio_tracks": preflight.audio_track_count,
+            "motion_scenes": motion_scene_count,
             "limitations": limitations.len(),
         },
+        "motion_scenes": motion_scenes,
         "limitations": limitations,
     });
     Ok(body.to_string())

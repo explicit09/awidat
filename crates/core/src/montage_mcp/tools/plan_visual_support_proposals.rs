@@ -266,10 +266,11 @@ pub fn run_artifact_verification(
     args: VerifyVisualSupportArtifactArgs,
     ctx: McpToolCtx,
 ) -> Result<String, String> {
-    let project_root = args
-        .require_project_asset_exists
-        .then_some(ctx.project_root.as_path());
-    let body = verify_visual_support_artifact(args, project_root)?;
+    // The project root is always available so the verifier can
+    // recognize MotionScene proposals that are already stored in
+    // timeline metadata; B-roll asset existence stays gated by
+    // `require_project_asset_exists` inside the checks.
+    let body = verify_visual_support_artifact(args, Some(ctx.project_root.as_path()))?;
     serde_json::to_string_pretty(&body)
         .map_err(|e| format!("verify_visual_support_artifact: serialize failed: {e}"))
 }
@@ -772,20 +773,57 @@ pub fn verify_visual_support_artifact(
     }
     let artifact_type = args.proposal["artifact_type"]
         .as_str()
-        .ok_or_else(|| "verify_visual_support_artifact: missing artifact_type".to_string())?;
-    let mut checks = common_artifact_checks(&args.proposal);
-    match artifact_type {
-        "quote_highlight" => checks.extend(quote_highlight_checks(&args.proposal)),
-        "animated_list" => checks.extend(animated_list_checks(&args.proposal)),
+        .ok_or_else(|| "verify_visual_support_artifact: missing artifact_type".to_string())?
+        .to_string();
+    // A proposal whose MotionScene is already stored in timeline
+    // metadata is applied, not "not apply-ready". Recognize it, and
+    // audit the stored scene when the proposal carries no apply_edl.
+    let stored_scene = project_root
+        .zip(proposal_motion_scene_id(&args.proposal))
+        .and_then(|(root, scene_id)| stored_motion_scene(root, &scene_id));
+    let mut proposal = args.proposal;
+    if let Some(scene) = &stored_scene {
+        let has_edl = proposal["apply_edl"]["edl"]
+            .as_str()
+            .is_some_and(|edl| !edl.trim().is_empty());
+        if !has_edl && let Ok(scene_json) = serde_json::to_string(scene) {
+            proposal["apply_edl"] = serde_json::json!({
+                "tool": "apply_edl",
+                "edl": format!(
+                    "*** Begin EDL\n*** Set Motion Scene\n+ scene_json: {scene_json}\n*** End EDL\n"
+                ),
+                "reasoning": "synthesized from the MotionScene already stored in timeline metadata",
+            });
+        }
+    }
+    let mut checks =
+        common_artifact_checks(&proposal, stored_scene.as_ref().map(|scene| scene.id.as_str()));
+    if let Some(scene) = &stored_scene {
+        checks.push(check(
+            "motion_scene_stored_in_timeline",
+            "pass",
+            &format!(
+                "MotionScene {} is stored in timeline metadata at start_s {} with {} layer(s) — the proposal is already applied",
+                scene.id,
+                scene.start_s,
+                scene.layers.len()
+            ),
+            "high",
+        ));
+    }
+    match artifact_type.as_str() {
+        "quote_highlight" => checks.extend(quote_highlight_checks(&proposal)),
+        "animated_list" => checks.extend(animated_list_checks(&proposal)),
         "broll_package" => checks.extend(broll_package_checks(
-            &args.proposal,
+            &proposal,
             project_root,
             args.require_project_asset_exists,
         )),
-        "map_visualization" => checks.extend(map_visualization_checks(&args.proposal)),
-        "counter_stat_graphic" => checks.extend(counter_stat_graphic_checks(&args.proposal)),
-        "search_bar" => checks.extend(search_bar_checks(&args.proposal)),
-        "title_card" => checks.extend(title_card_checks(&args.proposal)),
+        "map_visualization" => checks.extend(map_visualization_checks(&proposal)),
+        "counter_stat_graphic" => checks.extend(counter_stat_graphic_checks(&proposal)),
+        "search_bar" => checks.extend(search_bar_checks(&proposal)),
+        "title_card" => checks.extend(title_card_checks(&proposal)),
+        "motion_scene" => checks.extend(motion_scene_artifact_checks(&proposal)),
         _ => checks.push(check(
             "artifact_contract_known",
             "needs_review",
@@ -794,7 +832,7 @@ pub fn verify_visual_support_artifact(
         )),
     }
     let (frame_verification, frame_checks) =
-        render_frame_verification(&args.proposal, args.render_frame_report.as_ref());
+        render_frame_verification(&proposal, args.render_frame_report.as_ref());
     checks.extend(frame_checks);
     let status = aggregate_status(&checks);
     Ok(serde_json::json!({
@@ -802,7 +840,7 @@ pub fn verify_visual_support_artifact(
         "artifact_type": artifact_type,
         "status": status,
         "checks": checks,
-        "frame_verification_contract": frame_verification_contract(&args.proposal),
+        "frame_verification_contract": frame_verification_contract(&proposal),
         "frame_verification": frame_verification,
         "render_verification_required": true,
         "next_step": if status == "pass" {
@@ -811,6 +849,97 @@ pub fn verify_visual_support_artifact(
             "review failed or incomplete artifact checks before apply_edl/render"
         }
     }))
+}
+
+/// Generic checks for a `motion_scene` artifact: the proposal (or the
+/// stored scene synthesized into it) must contain a readable
+/// MotionScene with at least one renderable layer.
+fn motion_scene_artifact_checks(proposal: &serde_json::Value) -> Vec<serde_json::Value> {
+    let Some(scene) = motion_scene_from_proposal(proposal) else {
+        return vec![check(
+            "motion_scene_readable",
+            "fail",
+            "proposal does not contain a readable MotionScene EDL and no stored scene with its id exists in timeline metadata",
+            "high",
+        )];
+    };
+    let text_layer_count = scene
+        .layers
+        .iter()
+        .filter(|layer| {
+            layer.kind == montage_proto::professional::MotionSceneLayerKind::Text
+                && layer
+                    .params
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+        })
+        .count();
+    vec![
+        check(
+            "motion_scene_readable",
+            "pass",
+            &format!(
+                "MotionScene {} has {} layer(s) over {}s",
+                scene.id,
+                scene.layers.len(),
+                scene.duration_s
+            ),
+            "high",
+        ),
+        check_bool(
+            "motion_scene_has_renderable_layers",
+            !scene.layers.is_empty(),
+            "MotionScene contains renderable layers",
+            "MotionScene has no layers",
+            "high",
+        ),
+        check_bool(
+            "motion_scene_text_layers_have_content",
+            text_layer_count > 0,
+            &format!("MotionScene contains {text_layer_count} non-empty text layer(s)"),
+            "MotionScene has no non-empty text layers",
+            "medium",
+        ),
+    ]
+}
+
+/// Scene id a proposal refers to: parsed from its `apply_edl`
+/// Set Motion Scene payload, or named directly via `scene_id`,
+/// `scene.id`, `motion_scene.id`, or `motion_scene_id`.
+fn proposal_motion_scene_id(proposal: &serde_json::Value) -> Option<String> {
+    if let Some(scene) = motion_scene_from_proposal(proposal) {
+        return Some(scene.id);
+    }
+    [
+        &proposal["scene_id"],
+        &proposal["scene"]["id"],
+        &proposal["motion_scene"]["id"],
+        &proposal["motion_scene_id"],
+    ]
+    .into_iter()
+    .find_map(|value| value.as_str())
+    .map(str::trim)
+    .filter(|id| !id.is_empty())
+    .map(str::to_string)
+}
+
+/// Load the stored MotionScene with `scene_id` from the project's
+/// timeline metadata, if present.
+fn stored_motion_scene(
+    project_root: &Path,
+    scene_id: &str,
+) -> Option<montage_proto::professional::MotionScene> {
+    let project = montage_proto::project::Project::read(project_root).ok()?;
+    project
+        .timeline
+        .metadata
+        .montage
+        .as_ref()?
+        .motion_scenes
+        .iter()
+        .find(|scene| scene.id == scene_id)
+        .cloned()
 }
 
 fn render_frame_verification(
@@ -932,28 +1061,68 @@ fn frame_sample_points(duration_s: f64) -> Vec<f64> {
     points
 }
 
-fn common_artifact_checks(proposal: &serde_json::Value) -> Vec<serde_json::Value> {
+fn common_artifact_checks(
+    proposal: &serde_json::Value,
+    applied_scene_id: Option<&str>,
+) -> Vec<serde_json::Value> {
     let mut checks = Vec::new();
     let has_evidence = proposal["review"]["evidence"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty());
-    checks.push(check_bool(
-        "proposal_has_evidence",
-        has_evidence,
-        "proposal includes review evidence",
-        "proposal is missing review evidence",
-        "high",
-    ));
+    if has_evidence {
+        checks.push(check(
+            "proposal_has_evidence",
+            "pass",
+            "proposal includes review evidence",
+            "high",
+        ));
+    } else if let Some(scene_id) = applied_scene_id {
+        // The scene is already stored in the timeline; missing review
+        // evidence is worth flagging but must not read as "the scene
+        // failed to apply".
+        checks.push(check(
+            "proposal_has_evidence",
+            "needs_review",
+            &format!(
+                "proposal carries no review evidence, but MotionScene {scene_id} is already stored in timeline metadata; attach transcript evidence for the editorial record"
+            ),
+            "medium",
+        ));
+    } else {
+        checks.push(check(
+            "proposal_has_evidence",
+            "fail",
+            "proposal is missing review evidence",
+            "high",
+        ));
+    }
     let has_edl = proposal["apply_edl"]["edl"]
         .as_str()
         .is_some_and(|edl| !edl.trim().is_empty());
-    checks.push(check_bool(
-        "proposal_has_apply_edl",
-        has_edl,
-        "proposal includes an apply_edl payload",
-        "proposal is not apply-ready",
-        "high",
-    ));
+    if has_edl {
+        checks.push(check(
+            "proposal_has_apply_edl",
+            "pass",
+            "proposal includes an apply_edl payload",
+            "high",
+        ));
+    } else if let Some(scene_id) = applied_scene_id {
+        checks.push(check(
+            "proposal_has_apply_edl",
+            "pass",
+            &format!(
+                "proposal has no apply_edl payload, but MotionScene {scene_id} already exists in timeline metadata — it is applied, not apply-pending"
+            ),
+            "high",
+        ));
+    } else {
+        checks.push(check(
+            "proposal_has_apply_edl",
+            "fail",
+            "proposal is not apply-ready",
+            "high",
+        ));
+    }
     checks
 }
 
@@ -4323,6 +4492,103 @@ mod tests {
                     |check| check["id"] == "title_text_matches_transcript_anchor"
                         && check["status"] == "pass"
                 )
+        );
+    }
+
+    fn project_with_stored_scene(scene_id: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        project
+            .timeline
+            .metadata
+            .montage
+            .get_or_insert_with(Default::default)
+            .motion_scenes
+            .push(montage_proto::professional::MotionScene {
+                id: scene_id.to_string(),
+                start_s: 531.14,
+                duration_s: 6.0,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![montage_proto::professional::MotionSceneLayer {
+                    id: "heading".into(),
+                    kind: montage_proto::professional::MotionSceneLayerKind::Text,
+                    from_s: 0.0,
+                    duration_s: 6.0,
+                    z_index: 10,
+                    params: [(
+                        "text".to_string(),
+                        serde_json::json!("AI MISTAKE VS DRONE MISTAKE"),
+                    )]
+                    .into_iter()
+                    .collect(),
+                }],
+                rationale: None,
+            });
+        project.write(dir.path()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn verify_recognizes_stored_motion_scene_as_applied() {
+        // An agent that hand-applied a Set Motion Scene EDL then asked
+        // for verification used to get "proposal is not apply-ready" —
+        // the scene was stored, not pending.
+        let scene_id = "ai-vs-drone-mistake-comparison-manual";
+        let dir = project_with_stored_scene(scene_id);
+
+        let report = verify_visual_support_artifact(
+            VerifyVisualSupportArtifactArgs {
+                proposal: serde_json::json!({
+                    "artifact_type": "motion_scene",
+                    "scene_id": scene_id,
+                }),
+                ..VerifyVisualSupportArtifactArgs::default()
+            },
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert_ne!(report["status"], "fail", "report: {report}");
+        let checks = report["checks"].as_array().unwrap();
+        let check_status = |id: &str| {
+            checks
+                .iter()
+                .find(|check| check["id"] == id)
+                .map(|check| check["status"].as_str().unwrap_or_default().to_string())
+                .unwrap_or_default()
+        };
+        assert_eq!(check_status("motion_scene_stored_in_timeline"), "pass");
+        assert_eq!(check_status("proposal_has_apply_edl"), "pass");
+        assert_eq!(check_status("motion_scene_readable"), "pass");
+        assert_eq!(check_status("motion_scene_text_layers_have_content"), "pass");
+    }
+
+    #[test]
+    fn verify_still_fails_unknown_scene_without_apply_edl() {
+        let dir = project_with_stored_scene("some-other-scene");
+
+        let report = verify_visual_support_artifact(
+            VerifyVisualSupportArtifactArgs {
+                proposal: serde_json::json!({
+                    "artifact_type": "motion_scene",
+                    "scene_id": "never-applied-scene",
+                }),
+                ..VerifyVisualSupportArtifactArgs::default()
+            },
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert_eq!(report["status"], "fail");
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["id"] == "proposal_has_apply_edl"
+                    && check["status"] == "fail")
         );
     }
 
