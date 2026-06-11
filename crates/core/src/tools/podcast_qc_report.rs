@@ -304,7 +304,7 @@ fn has_cut_quality_evidence(spec: &SemanticCutSpec) -> bool {
     if spec
         .reason
         .as_deref()
-        .is_some_and(|reason| text_mentions_quality_evidence(reason))
+        .is_some_and(text_mentions_quality_evidence)
     {
         return true;
     }

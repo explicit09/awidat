@@ -168,56 +168,6 @@ pub fn motion_scene_preflight_json(timeline: &montage_proto::otio::Timeline) -> 
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::motion_scene_preflight_json;
-
-    #[test]
-    fn motion_scene_preflight_json_reports_stored_scenes() {
-        let mut timeline = montage_proto::otio::Timeline::empty("preflight-scenes");
-        timeline.metadata.montage = Some(montage_proto::montage_meta::MontageTimelineMetadata {
-            motion_scenes: vec![montage_proto::professional::MotionScene {
-                id: "ai-vs-drone-mistake-comparison-manual".into(),
-                start_s: 531.14,
-                duration_s: 6.0,
-                fps: 30.0,
-                width: 1920,
-                height: 1080,
-                layers: vec![montage_proto::professional::MotionSceneLayer {
-                    id: "heading".into(),
-                    kind: montage_proto::professional::MotionSceneLayerKind::Text,
-                    from_s: 0.0,
-                    duration_s: 6.0,
-                    z_index: 10,
-                    params: Default::default(),
-                }],
-                rationale: None,
-            }],
-            ..Default::default()
-        });
-
-        let summary = motion_scene_preflight_json(&timeline);
-
-        assert_eq!(summary["count"], 1);
-        assert_eq!(
-            summary["scenes"][0]["id"],
-            "ai-vs-drone-mistake-comparison-manual"
-        );
-        assert_eq!(summary["scenes"][0]["start_s"], 531.14);
-        assert_eq!(summary["scenes"][0]["layer_count"], 1);
-        let note = summary["note"].as_str().unwrap_or_default();
-        assert!(note.contains("video_overlays"));
-    }
-
-    #[test]
-    fn motion_scene_preflight_json_handles_empty_metadata() {
-        let timeline = montage_proto::otio::Timeline::empty("no-scenes");
-        let summary = motion_scene_preflight_json(&timeline);
-        assert_eq!(summary["count"], 0);
-        assert!(summary["scenes"].as_array().is_some_and(Vec::is_empty));
-    }
-}
-
 fn caption_layout_readiness_json(summary: &crate::captions::CaptionSummary) -> serde_json::Value {
     let safe_area_ready = summary.caption_overlay_count == summary.safe_area_caption_overlay_count;
     let word_timing_ready =
@@ -287,4 +237,54 @@ fn enrich_render_metadata_with_backend_capability(
     metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
         backend,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::motion_scene_preflight_json;
+
+    #[test]
+    fn motion_scene_preflight_json_reports_stored_scenes() {
+        let mut timeline = montage_proto::otio::Timeline::empty("preflight-scenes");
+        timeline.metadata.montage = Some(montage_proto::montage_meta::MontageTimelineMetadata {
+            motion_scenes: vec![montage_proto::professional::MotionScene {
+                id: "ai-vs-drone-mistake-comparison-manual".into(),
+                start_s: 531.14,
+                duration_s: 6.0,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![montage_proto::professional::MotionSceneLayer {
+                    id: "heading".into(),
+                    kind: montage_proto::professional::MotionSceneLayerKind::Text,
+                    from_s: 0.0,
+                    duration_s: 6.0,
+                    z_index: 10,
+                    params: Default::default(),
+                }],
+                rationale: None,
+            }],
+            ..Default::default()
+        });
+
+        let summary = motion_scene_preflight_json(&timeline);
+
+        assert_eq!(summary["count"], 1);
+        assert_eq!(
+            summary["scenes"][0]["id"],
+            "ai-vs-drone-mistake-comparison-manual"
+        );
+        assert_eq!(summary["scenes"][0]["start_s"], 531.14);
+        assert_eq!(summary["scenes"][0]["layer_count"], 1);
+        let note = summary["note"].as_str().unwrap_or_default();
+        assert!(note.contains("video_overlays"));
+    }
+
+    #[test]
+    fn motion_scene_preflight_json_handles_empty_metadata() {
+        let timeline = montage_proto::otio::Timeline::empty("no-scenes");
+        let summary = motion_scene_preflight_json(&timeline);
+        assert_eq!(summary["count"], 0);
+        assert!(summary["scenes"].as_array().is_some_and(Vec::is_empty));
+    }
 }
