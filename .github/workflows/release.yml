@@ -122,13 +122,18 @@ jobs:
 
       - name: Build signed DMG
         timeout-minutes: 90
+        # `app` is requested alongside `dmg` because with `--bundles dmg`
+        # alone tauri treats bundle/macos/Montage.app as an intermediate and
+        # CLEANS it after the DMG is built — which made the later
+        # "Verify desktop resources" step inspect a gutted .app and fail on
+        # a missing Contents/Resources.
         # Retried because codesign reaches Apple's timestamp server, which
         # flakes (one such flake previously discarded a 112-minute build). A
         # retry reuses the warm target/, so only bundling and signing rerun.
         run: |
           set -uo pipefail
           for attempt in 1 2 3; do
-            if pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles dmg; then
+            if pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles app,dmg; then
               exit 0
             fi
             echo "tauri build attempt $attempt failed; retrying in 30s" >&2
