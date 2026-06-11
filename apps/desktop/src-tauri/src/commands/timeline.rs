@@ -1471,9 +1471,7 @@ mod tests {
         }
     }
 
-    fn timeline_with_text_scene(
-        layer: montage_proto::professional::MotionSceneLayer,
-    ) -> Timeline {
+    fn timeline_with_text_scene(layer: montage_proto::professional::MotionSceneLayer) -> Timeline {
         let mut timeline = Timeline::empty("motion-scene-text-box");
         timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
             motion_scenes: vec![MotionScene {
@@ -1491,9 +1489,7 @@ mod tests {
         timeline
     }
 
-    fn first_preview_title(
-        snapshot: &TimelineSnapshot,
-    ) -> montage_desktop_protocol::TitleStyling {
+    fn first_preview_title(snapshot: &TimelineSnapshot) -> montage_desktop_protocol::TitleStyling {
         let title_track = snapshot
             .tracks
             .iter()

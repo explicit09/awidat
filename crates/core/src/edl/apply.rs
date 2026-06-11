@@ -1106,9 +1106,9 @@ fn resolve_locator_for_op(
     // Rewrite `{left_uuid}-b` references to the fresh uuid the engine
     // actually stamped on the split's right half (see `apply`).
     let aliased = match anchor {
-        Anchor::ClipUuid { uuid } => split_aliases.get(uuid).map(|real| Anchor::ClipUuid {
-            uuid: real.clone(),
-        }),
+        Anchor::ClipUuid { uuid } => split_aliases
+            .get(uuid)
+            .map(|real| Anchor::ClipUuid { uuid: real.clone() }),
         _ => None,
     };
     resolve(working, aliased.as_ref().unwrap_or(anchor), ctx)
@@ -13062,7 +13062,10 @@ mod tests {
         };
         let r = audio.source_range.as_ref().unwrap();
         assert!((r.start_time.to_seconds() - 1.0).abs() < 1e-6);
-        assert!((r.duration.to_seconds() - 7.0).abs() < 1e-6, "audio must widen to [1..8]");
+        assert!(
+            (r.duration.to_seconds() - 7.0).abs() < 1e-6,
+            "audio must widen to [1..8]"
+        );
     }
 
     #[test]

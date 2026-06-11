@@ -939,10 +939,7 @@ fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, hea
     // forced a full re-download of it on every project open, which
     // dominated first-frame latency. Non-proxy media (raw sources,
     // mutable thumbnails) keeps `no-store`.
-    let cache_control = if path
-        .components()
-        .any(|c| c.as_os_str() == "proxies")
-    {
+    let cache_control = if path.components().any(|c| c.as_os_str() == "proxies") {
         "public, max-age=31536000, immutable"
     } else {
         "no-store"

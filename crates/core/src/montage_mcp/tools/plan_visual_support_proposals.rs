@@ -806,8 +806,10 @@ pub fn verify_visual_support_artifact(
             });
         }
     }
-    let mut checks =
-        common_artifact_checks(&proposal, stored_scene.as_ref().map(|scene| scene.id.as_str()));
+    let mut checks = common_artifact_checks(
+        &proposal,
+        stored_scene.as_ref().map(|scene| scene.id.as_str()),
+    );
     if let Some(scene) = &stored_scene {
         checks.push(check(
             "motion_scene_stored_in_timeline",
@@ -4730,7 +4732,10 @@ mod tests {
         assert_eq!(check_status("motion_scene_stored_in_timeline"), "pass");
         assert_eq!(check_status("proposal_has_apply_edl"), "pass");
         assert_eq!(check_status("motion_scene_readable"), "pass");
-        assert_eq!(check_status("motion_scene_text_layers_have_content"), "pass");
+        assert_eq!(
+            check_status("motion_scene_text_layers_have_content"),
+            "pass"
+        );
     }
 
     #[test]
@@ -4755,8 +4760,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|check| check["id"] == "proposal_has_apply_edl"
-                    && check["status"] == "fail")
+                .any(|check| check["id"] == "proposal_has_apply_edl" && check["status"] == "fail")
         );
     }
 

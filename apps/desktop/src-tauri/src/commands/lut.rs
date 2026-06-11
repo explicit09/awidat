@@ -28,9 +28,7 @@ pub struct PreviewLut {
 /// skipping hidden/derived directories. Paths come back sorted and
 /// ready to feed `apply_lut` / `read_preview_lut` verbatim.
 #[tauri::command]
-pub async fn list_preview_luts(
-    state: State<'_, MontageState>,
-) -> Result<Vec<String>, String> {
+pub async fn list_preview_luts(state: State<'_, MontageState>) -> Result<Vec<String>, String> {
     let project_root = state
         .project_root
         .lock()
@@ -106,10 +104,9 @@ pub async fn read_preview_lut(
     let src = tokio::fs::read_to_string(&path)
         .await
         .map_err(|e| format!("read LUT {trimmed}: {e}"))?;
-    let parsed =
-        tokio::task::spawn_blocking(move || parse_cube(&src).map_err(|e| e.to_string()))
-            .await
-            .map_err(|e| format!("LUT parse join: {e}"))??;
+    let parsed = tokio::task::spawn_blocking(move || parse_cube(&src).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("LUT parse join: {e}"))??;
 
     match parsed {
         Lut::Three(lut) => Ok(PreviewLut {

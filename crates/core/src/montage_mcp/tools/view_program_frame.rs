@@ -124,9 +124,12 @@ async fn render_program_window(
     // timeline builder would render the entire episode's overlay (a multi-GB
     // headless-browser job) just to grab one frame — that is what made this
     // tool time out and fill the disk on real-length episodes.
-    let mut spec =
-        montage_render::build_timeline_render_spec_overlay_windowed(project_root, t_s, FRAME_WINDOW_S)
-            .map_err(|e| format!("view_program_frame: timeline render plan failed: {e}"))?;
+    let mut spec = montage_render::build_timeline_render_spec_overlay_windowed(
+        project_root,
+        t_s,
+        FRAME_WINDOW_S,
+    )
+    .map_err(|e| format!("view_program_frame: timeline render plan failed: {e}"))?;
     rewrite_timeline_argv_for_window(&mut spec.args, t_s, FRAME_WINDOW_S, output_path)?;
     let ffmpeg = montage_render::ffmpeg_path()
         .map_err(|e| format!("view_program_frame: failed to locate ffmpeg: {e}"))?;

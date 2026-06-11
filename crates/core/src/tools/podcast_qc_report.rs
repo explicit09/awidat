@@ -139,9 +139,7 @@ fn workflow_section_receipt(
     let unresolved_cleanup_cut_count = meta
         .cut_boundaries
         .iter()
-        .filter(|(boundary, spec)| {
-            is_unverified_cleanup_hard_cut(boundary, spec, transition_keys)
-        })
+        .filter(|(boundary, spec)| is_unverified_cleanup_hard_cut(boundary, spec, transition_keys))
         .count();
     serde_json::json!([
         {
@@ -236,10 +234,7 @@ fn transition_boundary_keys(stack: &Stack) -> std::collections::HashSet<String> 
     keys
 }
 
-fn collect_transition_keys_from_stack(
-    stack: &Stack,
-    keys: &mut std::collections::HashSet<String>,
-) {
+fn collect_transition_keys_from_stack(stack: &Stack, keys: &mut std::collections::HashSet<String>) {
     for stack_child in &stack.children {
         match stack_child {
             StackChild::Track(track) => {
@@ -733,9 +728,7 @@ mod tests {
             out_offset: RationalTime::new(0.09 * 24.0, 24.0),
             metadata: Default::default(),
         };
-        track
-            .children
-            .insert(1, TrackChild::Transition(transition));
+        track.children.insert(1, TrackChild::Transition(transition));
         project.write(dir.path()).unwrap();
 
         let out = PodcastQcReportTool
