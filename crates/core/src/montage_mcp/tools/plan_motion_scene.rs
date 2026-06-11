@@ -49,6 +49,12 @@ pub struct PlanMotionSceneArgs {
     /// scene rationale.
     #[serde(default)]
     pub evidence_text: Option<String>,
+    /// Backdrop mode: `"full"` covers the entire frame edge-to-edge
+    /// (use for full-frame cards), `"panel"` is an inset card,
+    /// `"none"` skips the backdrop. Default: panel when the request
+    /// implies a card/diagram or an image is used.
+    #[serde(default)]
+    pub backdrop: Option<String>,
 }
 
 /// Run `plan_motion_scene`. The project root from [`McpToolCtx`] is
@@ -66,6 +72,7 @@ pub fn run(args: PlanMotionSceneArgs, _ctx: McpToolCtx) -> Result<String, String
         headline: args.headline,
         step_labels: args.step_labels,
         evidence_text: args.evidence_text,
+        backdrop: args.backdrop,
     })
     .map_err(|message| format!("plan_motion_scene: {message}"))?;
     serde_json::to_string_pretty(&plan)
@@ -80,5 +87,9 @@ copy must come from transcript evidence: pass headline (and step_labels for \
 step/process scenes) or evidence_text — the planner never puts the request \
 prompt on screen or invents placeholder labels. Text layers, rectangle/solid, \
 and project-asset image layers are preview/render supported; video/media \
-layers are stored with explicit limitations and footage should use B-roll/PiP.\
+layers are stored with explicit limitations and footage should use B-roll/PiP. \
+Pass backdrop='full' for scenes that must cover the whole frame (the default \
+panel backdrop is inset). Text boxes are authoritative: the planner wraps and \
+shrinks font sizes so text cannot overflow its box, and every layer gets a \
+default 0.4s enter/exit fade.\
 ";

@@ -320,3 +320,101 @@ fn visual_route_planner_and_apply_persist_multilayer_motion_scene() {
             .any(|layer| layer.kind == MotionSceneLayerKind::Image)
     );
 }
+
+#[test]
+fn planner_full_backdrop_spans_the_entire_frame() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "full-frame quote card".into(),
+        headline: Some("Hardware mistakes move into the real world".into()),
+        backdrop: Some("full".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan full-backdrop scene");
+
+    let backdrop = plan
+        .scene
+        .layers
+        .iter()
+        .find(|layer| layer.id == "backdrop-full")
+        .expect("full-bleed backdrop layer");
+    assert_eq!(backdrop.kind, MotionSceneLayerKind::Solid);
+    let param = |key: &str| {
+        backdrop
+            .params
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_else(|| panic!("backdrop param {key}"))
+    };
+    // True full bleed: exactly 0,0 → 1,1, no inset margins.
+    assert_eq!(param("x"), 0.0);
+    assert_eq!(param("y"), 0.0);
+    assert_eq!(param("width"), 1.0);
+    assert_eq!(param("height"), 1.0);
+}
+
+#[test]
+fn planner_rejects_unknown_backdrop_mode() {
+    let error = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "quote card".into(),
+        headline: Some("A headline".into()),
+        backdrop: Some("hero".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect_err("unknown backdrop must be rejected");
+    assert!(error.contains("backdrop 'hero'"), "{error}");
+}
+
+#[test]
+fn planner_headline_carries_an_explicit_text_box() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "quote card".into(),
+        headline: Some("Software is too easy to get into".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan quote scene");
+
+    let headline = plan
+        .scene
+        .layers
+        .iter()
+        .find(|layer| layer.id == "headline")
+        .expect("headline layer");
+    for key in ["x", "y", "width", "font_size"] {
+        assert!(
+            headline.params.contains_key(key),
+            "headline should carry an explicit box param {key}: {:?}",
+            headline.params
+        );
+    }
+}
+
+#[test]
+fn planner_shrinks_font_until_text_fits_its_box() {
+    // A single word far wider than the 0.76 headline box at 64px —
+    // the planner must step font_size down instead of overflowing.
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "quote card".into(),
+        headline: Some(
+            "Antidisestablishmentarianism-Antidisestablishmentarianism-Antidisestablishmentarianism"
+                .into(),
+        ),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan oversized headline scene");
+
+    let headline = plan
+        .scene
+        .layers
+        .iter()
+        .find(|layer| layer.id == "headline")
+        .expect("headline layer");
+    let font_size = headline
+        .params
+        .get("font_size")
+        .and_then(serde_json::Value::as_u64)
+        .expect("font_size param");
+    assert!(
+        font_size < 64,
+        "oversized headline should auto-shrink, got {font_size}"
+    );
+}
