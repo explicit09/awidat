@@ -4,13 +4,16 @@
 // TimelineItem::Clip. Values hold:
 //   - the list of absolute jpeg paths (one per source-second, at
 //     density 1/sec — see crates/render/src/ffmpeg.rs::generate_thumbnails)
-//   - one HTMLImageElement per path, lazily decoded on first request
+//   - one HTMLImageElement per path, decoded ON DEMAND
 //
 // The canvas calls `getStrip(dir)` during paint and gets back a
 // possibly-empty array of decoded HTMLImageElements (or `null` when
-// the dir is still being listed). Frames that haven't decoded yet
-// kick off async load + register a one-shot `onLoaded` callback so
-// the canvas can re-paint when more frames are ready.
+// the dir is still being listed), then `ensureFrame(dir, i)` for the
+// specific indices it actually draws. Decoding is strictly
+// demand-driven: a long source has thousands of frames (an 86-minute
+// episode ships 6,757 jpegs) and eagerly decoding them all floods the
+// asset protocol at project open, starving the transcript/preview IPC
+// while the timeline only ever paints ~width/50 tiles.
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
@@ -19,6 +22,8 @@ type StripEntry = {
   paths: string[];
   /** Decoded images, parallel to `paths`. `null` until loaded. */
   images: Array<HTMLImageElement | null>;
+  /** Indices with a decode in flight or done — never re-request. */
+  requested: Set<number>;
 };
 
 const cache = new Map<string, StripEntry | "pending">();
@@ -33,47 +38,39 @@ export function onThumbnailDecoded(cb: () => void): () => void {
   };
 }
 
+// Coalesce decode notifications to one repaint per frame. Without
+// this, a burst of decodes (first paint of a long clip) schedules one
+// full canvas repaint per jpeg.
+let notifyScheduled = false;
 function notifyDecoded() {
-  for (const cb of onLoadedHooks) cb();
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  requestAnimationFrame(() => {
+    notifyScheduled = false;
+    for (const cb of onLoadedHooks) cb();
+  });
 }
 
-/** Returns the strip entry for `dir`, kicking off a list + async
- *  decode of all frames on first call. Returns `null` while the
- *  initial list is in flight. */
+/** Returns the strip entry for `dir`, kicking off the path listing on
+ *  first call. Returns `null` while the initial list is in flight.
+ *  Frames are NOT decoded here — callers request the specific indices
+ *  they paint via `ensureFrame`. */
 export function getStrip(dir: string): StripEntry | null {
   const cached = cache.get(dir);
   if (cached === "pending") return null;
   if (cached) return cached;
 
-  // Mark pending and fire the list-then-decode pipeline.
   cache.set(dir, "pending");
   void (async () => {
     try {
       const paths = await invoke<string[]>("list_thumbnail_frames", { dir });
-      const entry: StripEntry = {
+      cache.set(dir, {
         paths,
         images: paths.map(() => null),
-      };
-      cache.set(dir, entry);
-      // Kick off async decode for every frame. We don't gate this on
-      // viewport visibility — the typical strip is dozens of files
-      // (one per second), and the browser handles concurrent decodes
-      // fine. A 60-min source is 3600 frames at ~3KB each = ~10 MB,
-      // still within the same order as one mp4 segment.
-      paths.forEach((p, i) => {
-        const img = new Image();
-        img.onload = () => {
-          entry.images[i] = img;
-          notifyDecoded();
-        };
-        img.onerror = () => {
-          // Ignore — frame just won't render. The fall-back
-          // coloured rect is already visible.
-        };
-        img.src = convertFileSrc(p);
+        requested: new Set(),
       });
-      // Fire one immediate notify so the canvas re-paints with the
-      // (still-empty) strip ready, in case all decodes are slow.
+      // One notify so the canvas re-paints now that the strip exists
+      // and can request the frames it actually needs.
       notifyDecoded();
     } catch {
       // Failed list — wipe the pending sentinel so a future paint
@@ -82,6 +79,27 @@ export function getStrip(dir: string): StripEntry | null {
     }
   })();
   return null;
+}
+
+/** Start decoding frame `index` of `dir`'s strip if it hasn't been
+ *  requested yet. Safe to call on every paint — repeat calls are
+ *  no-ops. The canvas repaints via `onThumbnailDecoded` when ready. */
+export function ensureFrame(dir: string, index: number): void {
+  const entry = cache.get(dir);
+  if (!entry || entry === "pending") return;
+  if (index < 0 || index >= entry.paths.length) return;
+  if (entry.requested.has(index)) return;
+  entry.requested.add(index);
+  const img = new Image();
+  img.onload = () => {
+    entry.images[index] = img;
+    notifyDecoded();
+  };
+  img.onerror = () => {
+    // Ignore — frame just won't render. The fall-back coloured rect
+    // is already visible.
+  };
+  img.src = convertFileSrc(entry.paths[index]);
 }
 
 /** Visible for tests + the rare "the dir got regenerated, drop

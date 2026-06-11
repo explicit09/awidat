@@ -11,7 +11,7 @@ import {
 } from "./canvasPrimitives.ts";
 import type { PendingProposal } from "./pendingProposals.ts";
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
-import { getStrip } from "./thumbnailCache.ts";
+import { ensureFrame, getStrip } from "./thumbnailCache.ts";
 import { getWaveform } from "./waveformCache.ts";
 
 // Canvas needs literal colors but every value mirrors a token from
@@ -570,7 +570,13 @@ function drawClipFilmstrip(
       Math.max(0, Math.floor(sourceTime)),
     );
     const img = strip.images[frameIndex];
-    if (!img) continue;
+    if (!img) {
+      // Demand-driven decode: only the frames the canvas actually
+      // paints get loaded (see thumbnailCache.ts). Repaint arrives
+      // via onThumbnailDecoded once the jpeg lands.
+      ensureFrame(item.thumbnail_dir, frameIndex);
+      continue;
+    }
     const tx = x + i * tileWidth;
     ctx.drawImage(img, tx, y, tileWidth, h);
     drewAny = true;

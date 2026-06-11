@@ -31,8 +31,10 @@ import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
+import { resumePreviewAudio } from "./media/previewAudioGraph";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
+import { aspectRatioLabel } from "./media/programFrame";
 import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
 import { droppedImportPaths } from "./media/dropImportPaths";
 import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
@@ -52,6 +54,7 @@ import {
   IndexRail,
   isTranscriptFirstProjectType,
   PreviewSurface,
+  PreviewInsights,
   TranscriptSource,
   ProposalInspector,
   TimelineHybrid,
@@ -189,6 +192,7 @@ function App() {
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const sourceCurrentTimeS = useMediaStore((s) => s.currentTime);
   const sourceDurationS = useMediaStore((s) => s.durationS);
+  const activeMediaSize = useMediaStore((s) => s.activeMediaSize);
   const timelineTimeS = useMediaStore((s) => s.timelineTime);
   const isPlaying = useMediaStore((s) => s.isPlaying);
   const setSourceTime = useMediaStore((s) => s.setTime);
@@ -1975,31 +1979,62 @@ function App() {
   ) : null;
   const stageProgress =
     effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
+  const togglePreviewPlayback = () => {
+    if (!isPlaying) resumePreviewAudio();
+    setMediaPlaying(!isPlaying);
+  };
   const stagePreview = (
-    <div className="relative h-full w-full overflow-hidden bg-black/40">
-      {/* the footage — must FILL the hero (the player sizes to its box),
-          not sit centered at intrinsic size or it renders ~zero/black. */}
-      {stageVideoSlot ? (
-        <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
-      ) : (
-        <div className="absolute inset-0 grid place-items-center">
-          <div className="text-center">
-            <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
-              {slateIndexing ? "Indexing…" : "Preview"}
-            </div>
-            <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-              {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+    <div className="flex h-full w-full min-h-0 flex-col gap-2 overflow-hidden">
+      {/* context bar — proposal context left, pending count right */}
+      <div className="flex h-7 shrink-0 items-center gap-2 px-0.5">
+        <span className="inline-flex h-7 max-w-[60%] items-center gap-2 truncate rounded-full border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.045)] px-3 text-[12px] font-semibold text-[var(--color-text-primary)]">
+          {activeProposal ? (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: "rgb(217, 165, 75)", boxShadow: "0 0 8px rgba(217,165,75,.7)" }}
+              aria-hidden
+            />
+          ) : null}
+          <span className="truncate">{activeProposal?.summary ?? (current ? projectName(current) : "Preview")}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {effectiveChanges.length > 0 ? (
+            <span className="font-mono text-[10.5px] tracking-[0.05em] text-[var(--color-text-muted)]">
+              {effectiveChanges.length} pending
+            </span>
+          ) : null}
+          {activeMediaSize ? (
+            <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[rgba(0,0,0,0.35)] px-2 font-mono text-[10px] tracking-[0.04em] text-[var(--color-text-secondary)]">
+              <strong className="font-semibold text-[var(--color-text-primary)]">
+                {activeMediaSize.width}×{activeMediaSize.height}
+              </strong>
+              {aspectRatioLabel(activeMediaSize.width, activeMediaSize.height)}
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {/* program monitor box — sized to the media aspect; the picture
+          fills it edge-to-edge (see .preview-monitor-box). */}
+      <div className="preview-monitor-box relative min-w-0 overflow-hidden">
+        {stageVideoSlot ? (
+          <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
+        ) : (
+          <div className="absolute inset-0 grid place-items-center">
+            <div className="text-center">
+              <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
+                {slateIndexing ? "Indexing…" : "Preview"}
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+                {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      {/* minimal glass scrubber */}
-      <div
-        className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 py-3"
-        style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.55), transparent)" }}
-      >
+        )}
+      </div>
+      {/* transport — slim row directly under the picture */}
+      <div className="flex h-9 shrink-0 items-center gap-3 px-0.5">
         <button
-          onClick={() => setMediaPlaying(!isPlaying)}
+          onClick={togglePreviewPlayback}
           className="glass-ghost grid h-8 w-8 place-items-center rounded-full text-[12px]"
         >
           {isPlaying ? "❚❚" : "▶"}
@@ -2020,6 +2055,15 @@ function App() {
           {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
         </span>
       </div>
+      {/* insights — suggestion cards + detection/review queue absorb
+          the leftover hero height with real analysis data */}
+      <PreviewInsights
+        changes={effectiveChanges}
+        activeChangeId={selectedPreviewChangeId}
+        onSelectChange={selectPreviewChange}
+        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
+        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
+      />
     </div>
   );
   // Bare timeline canvas — no Hybrid tabs in the Stage strip. TimelinePane's
@@ -2157,6 +2201,8 @@ function App() {
         onOpenHistory={() => void refreshChatSessions()}
         onSelectChatSession={(session) => void selectChatSession(session)}
         onNewChat={() => void startNewChat()}
+        permissionMode={permissionMode}
+        onSetPermissionMode={(mode) => void changePermissionMode(mode)}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject
@@ -2253,7 +2299,7 @@ function App() {
                         sourceMedia={slateSourceMedia}
                         hasProxyFrame={hasProxyFrame}
                         indexing={slateIndexing}
-                        onPlayPause={() => setMediaPlaying(!isPlaying)}
+                        onPlayPause={togglePreviewPlayback}
                         onSelectChange={selectPreviewChange}
                         onPrevCut={() => jumpPreviewChange(-1)}
                         onNextCut={() => jumpPreviewChange(1)}
@@ -2313,7 +2359,7 @@ function App() {
             sourceMedia={slateSourceMedia}
             hasProxyFrame={hasProxyFrame}
             indexing={slateIndexing}
-            onPlayPause={() => setMediaPlaying(!isPlaying)}
+            onPlayPause={togglePreviewPlayback}
             onSelectChange={selectPreviewChange}
             onPrevCut={() => jumpPreviewChange(-1)}
             onNextCut={() => jumpPreviewChange(1)}

@@ -44,6 +44,7 @@ const snapshot = {
           has_audio: true,
           color_correction: null,
           lut_path: null,
+          lut_strength: null,
           title: null,
           video_overlay: null,
           motion_shape: null,

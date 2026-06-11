@@ -10,6 +10,7 @@
 //! gating matches the dropdown.
 
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use montage_desktop_protocol::PermissionMode;
 use tauri::State;
@@ -47,11 +48,36 @@ pub async fn set_permission_mode(
         .ok_or_else(|| "no project loaded".to_string())?;
     write_mode(&project_root, mode)?;
 
-    // Step 8d: codex's subprocess is spawned fresh for every turn, so
-    // there's no cached agent state to evict here — the next
-    // `start_turn` will see the new permission_mode value on disk.
-    let _ = state;
+    // The external app-server keeps approval policy in its launch args, so
+    // rebuild it after a dropdown change. If a turn is active, defer the
+    // rebuild so the pump can emit its normal turn-end and clear state.turn.
+    match session_rebuild_after_permission_change(state.turn.lock().await.is_some()) {
+        PermissionSessionRebuild::DeferUntilNextTurn => {
+            state.permission_dirty.store(true, Ordering::SeqCst);
+            tracing::info!(
+                "permission mode changed during an active turn; the session will rebuild on the next turn"
+            );
+        }
+        PermissionSessionRebuild::TearDownNow => {
+            super::project::tear_down_codex_session(&state).await;
+            state.permission_dirty.store(false, Ordering::SeqCst);
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionSessionRebuild {
+    TearDownNow,
+    DeferUntilNextTurn,
+}
+
+fn session_rebuild_after_permission_change(turn_active: bool) -> PermissionSessionRebuild {
+    if turn_active {
+        PermissionSessionRebuild::DeferUntilNextTurn
+    } else {
+        PermissionSessionRebuild::TearDownNow
+    }
 }
 
 /// Pure helper: parse the string in the file → `PermissionMode`.
@@ -119,5 +145,17 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"bogus").unwrap();
         assert_eq!(read_mode(dir.path()), PermissionMode::Manual);
+    }
+
+    #[test]
+    fn active_turn_defers_permission_session_rebuild() {
+        assert_eq!(
+            session_rebuild_after_permission_change(true),
+            PermissionSessionRebuild::DeferUntilNextTurn
+        );
+        assert_eq!(
+            session_rebuild_after_permission_change(false),
+            PermissionSessionRebuild::TearDownNow
+        );
     }
 }

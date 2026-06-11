@@ -52,6 +52,7 @@ montage-desktop-protocol = { workspace = true }
 montage-proto = { workspace = true }
 montage-config = { path = "../../../crates/config" }
 montage-index = { workspace = true }
+montage-lut = { workspace = true }
 montage-mcp = { path = "../../../crates/mcp" }
 montage-render = { workspace = true }
 montage-render-gpu = { workspace = true }

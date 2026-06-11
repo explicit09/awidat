@@ -681,6 +681,7 @@ mod tests {
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }
     }
 
@@ -715,6 +716,7 @@ mod tests {
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }
     }
 

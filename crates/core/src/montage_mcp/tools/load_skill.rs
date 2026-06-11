@@ -6,10 +6,10 @@
 //! `Arc<SkillRegistry>` constructed once per session. The MCP
 //! short-lived process model has no session, so this port rediscovers
 //! the registry on every call using the same hierarchy
-//! (`montage_config::defaults::skills_root()` for bundled skills +
-//! `user_skills_roots()` for user overrides). Discovery is cheap
-//! (filesystem reads + frontmatter parsing) and bounded by the user's
-//! skill count.
+//! (`montage_config::defaults::skills_root()` for bundled skills,
+//! `user_skills_roots()` for user overrides, and `<project>/skills`
+//! for project overrides). Discovery is cheap (filesystem reads +
+//! frontmatter parsing) and bounded by the user's skill count.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -25,12 +25,16 @@ pub struct LoadSkillArgs {
 
 /// Run `load_skill`. Returns the assembled L2 body as `Ok(String)`,
 /// or an error message including a "did you mean?" hint.
-pub fn run(args: LoadSkillArgs, _ctx: McpToolCtx) -> Result<String, String> {
+pub fn run(args: LoadSkillArgs, ctx: McpToolCtx) -> Result<String, String> {
     let bundled = montage_config::defaults::skills_root();
-    let user_roots = montage_config::defaults::user_skills_roots();
+    let mut overlay_roots = montage_config::defaults::user_skills_roots();
+    let project_skills = ctx.project_root.join("skills");
+    if project_skills.is_dir() {
+        overlay_roots.push(project_skills);
+    }
     let (registry, _errors) = crate::skills::SkillRegistry::discover_many(
         bundled.as_deref(),
-        user_roots.iter().map(std::path::PathBuf::as_path),
+        overlay_roots.iter().map(std::path::PathBuf::as_path),
     );
 
     let Some(skill) = registry.get(&args.name) else {
@@ -93,3 +97,39 @@ end-to-end episode flow\
 You can call multiple skills in a single turn if the request spans \
 their domains (e.g. tighten THEN suggest b-roll).\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::montage_mcp::context::McpToolCtx;
+
+    fn write_skill(root: &std::path::Path, name: &str) {
+        let skill_dir = root.join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: project-only test skill\n---\n# Project skill\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn loads_project_local_skill_from_mcp_context() {
+        let project = tempfile::tempdir().unwrap();
+        write_skill(project.path(), "project-only-skill");
+
+        let out = run(
+            LoadSkillArgs {
+                name: "project-only-skill".to_string(),
+            },
+            McpToolCtx {
+                project_root: project.path().to_path_buf(),
+            },
+        )
+        .expect("project skill should load");
+
+        assert!(out.contains("Skill loaded: project-only-skill"));
+    }
+}

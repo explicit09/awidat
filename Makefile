@@ -131,13 +131,21 @@ desktop-codex:
 	if [ -z "$$target_triple" ]; then \
 	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
 	fi; \
+	codex_profile="$${CODEX_PROFILE:-debug}"; \
+	codex_profile_flag=""; \
+	if [ "$$codex_profile" = "release" ]; then \
+	    codex_profile_flag="--release"; \
+	elif [ "$$codex_profile" != "debug" ]; then \
+	    echo "unsupported CODEX_PROFILE=$$codex_profile; expected debug or release" >&2; \
+	    exit 1; \
+	fi; \
 	dest="apps/desktop/src-tauri/binaries/codex-$$target_triple"; \
 	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
 	    dest="$$dest.exe"; \
 	fi; \
-	cargo build -p codex-cli --bin codex --target "$$target_triple"; \
+	cargo build -p codex-cli --bin codex --target "$$target_triple" $$codex_profile_flag; \
 	mkdir -p "$$(dirname "$$dest")"; \
-	cp "target/$$target_triple/debug/codex$$(if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then echo .exe; fi)" "$$dest"; \
+	cp "target/$$target_triple/$$codex_profile/codex$$(if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then echo .exe; fi)" "$$dest"; \
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 

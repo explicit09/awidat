@@ -58,6 +58,18 @@ export type PlaySegment = {
   volume: number;
   /** Effective clip speed from the timeline, clamped by the player. */
   speed: number;
+  /** Clip color correction, approximated in preview via CSS filters
+   *  (exposure/contrast/saturation only — see colorPreviewFilter). */
+  colorCorrection: import("../protocol").ColorCorrectionStyling | null;
+  /** Project-relative `.cube` LUT (`montage.lut` Effect) — previewed
+   *  by the WebGL grade pass. */
+  lutPath: string | null;
+  /** LUT blend strength 0..=1; null means full strength. */
+  lutStrength: number | null;
+  /** Audio fade-in/out durations (`montage.audio_fade`), seconds.
+   *  Applied in preview via the WebAudio gain stage. */
+  fadeInS: number | null;
+  fadeOutS: number | null;
   /** Stable timeline clip id backing this segment. */
   clipUuid: string;
   /** Clip index inside its track. Useful for diagnostics + diff hints. */
@@ -195,6 +207,11 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           timelineEnd: item.track_start_s + item.duration_s,
           volume: 0,
           speed,
+          colorCorrection: item.color_correction ?? null,
+          lutPath: item.lut_path ?? null,
+          lutStrength: item.lut_strength ?? null,
+          fadeInS: item.fade_in_s ?? null,
+          fadeOutS: item.fade_out_s ?? null,
           clipUuid: item.clip_uuid,
           clipIndex: item.index,
           mode: isPip ? "pip" : "full_frame",
@@ -309,6 +326,11 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       timelineEnd: item.track_start_s + item.duration_s,
       volume: item.volume ?? 1,
       speed,
+      colorCorrection: item.color_correction ?? null,
+      lutPath: item.lut_path ?? null,
+      lutStrength: item.lut_strength ?? null,
+      fadeInS: item.fade_in_s ?? null,
+      fadeOutS: item.fade_out_s ?? null,
       clipUuid: item.clip_uuid,
       clipIndex: item.index,
     };

@@ -13,9 +13,20 @@ const width = Number(args.width ?? 1920);
 const height = Number(args.height ?? 1080);
 const fps = Number(process.env.MONTAGE_BROADCAST_OVERLAY_FPS ?? args.fps ?? 30);
 const duration = Number(args.duration);
+// Optional render window. `--time-offset T` shifts both the overlay's
+// internal animation clock (frame N maps to overlay-time T + N/fps) and the
+// encoded file's presentation timestamps (via ffmpeg -output_ts_offset), so a
+// short windowed clip lands at the correct timeline position when composited.
+// Used by view_program_frame to inspect one frame without rendering the whole
+// episode's overlay (which is multi-GB and fills the disk).
+const timeOffset = Number(args["time-offset"] ?? 0);
 
 const projectRoot = args["project-root"];
 
+if (!Number.isFinite(timeOffset) || timeOffset < 0) {
+  console.error("--time-offset must be a non-negative number of seconds");
+  process.exit(2);
+}
 if (!args.config || !projectRoot || !args.output || !Number.isFinite(duration) || duration <= 0) {
   console.error("usage: render-broadcast-overlay --config <json> --project-root <path> --duration <seconds> --output <mov> [--width 1920] [--height 1080] [--fps 30]");
   process.exit(2);
@@ -116,6 +127,9 @@ try {
     "qtrle",
     "-pix_fmt",
     "argb",
+    // Shift encoded timestamps so a windowed clip aligns to its timeline
+    // position; 0 for a full-episode render leaves PTS starting at 0.
+    ...(timeOffset > 0 ? ["-output_ts_offset", String(timeOffset)] : []),
     output,
   ], { stdio: ["pipe", "inherit", "inherit"] });
 
@@ -132,7 +146,7 @@ try {
   try {
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (ffmpegFailure) break;
-      const t = frame / fps;
+      const t = timeOffset + frame / fps;
       await page.evaluate((time) => window.__MONTAGE_SET_OVERLAY_TIME__?.(time), t);
       const png = await page.screenshot({
         omitBackground: true,

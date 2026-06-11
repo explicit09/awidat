@@ -134,6 +134,58 @@ test_verify_sidecars_rejects_missing_required_uv() {
   pass "missing uv sidecar is rejected"
 }
 
+stage_resource_app() {
+  local app="$1"
+  local layout="$2"
+  local resources="$app/Contents/Resources"
+  mkdir -p "$resources"
+  case "$layout" in
+    direct)
+      resource_root="$resources"
+      ;;
+    up)
+      resource_root="$resources/_up_/_up_/_up_"
+      ;;
+    *)
+      fail "unknown resource layout fixture"
+      ;;
+  esac
+  mkdir -p "$resource_root/python/packages/montage-mcp" "$resource_root/skills"
+  printf '[project]\nname = "montage-mcp"\n' > "$resource_root/python/packages/montage-mcp/pyproject.toml"
+  : > "$resource_root/skills/.bundled-marker"
+  for skill in auto-cutter podcast-editor podcast-episode-producer podcast-hook short-form talking-head-vertical viral-clip-extractor; do
+    mkdir -p "$resource_root/skills/$skill"
+    printf '%s\n' "---" "name: $skill" "description: fixture" "---" "" "# $skill" > "$resource_root/skills/$skill/SKILL.md"
+  done
+}
+
+test_verify_desktop_resources_accepts_direct_layout() {
+  local app="$TMP_DIR/direct/Montage.app"
+  stage_resource_app "$app" direct
+  bash "$SCRIPT_DIR/verify-desktop-resources.sh" "$app"
+  pass "desktop resources accepts direct layout"
+}
+
+test_verify_desktop_resources_accepts_tauri_up_layout() {
+  local app="$TMP_DIR/up/Montage.app"
+  stage_resource_app "$app" up
+  bash "$SCRIPT_DIR/verify-desktop-resources.sh" "$app"
+  pass "desktop resources accepts tauri up layout"
+}
+
+test_verify_desktop_resources_rejects_missing_podcast_skill() {
+  local app="$TMP_DIR/missing-skill/Montage.app"
+  stage_resource_app "$app" up
+  rm -f "$app/Contents/Resources/_up_/_up_/_up_/skills/podcast-episode-producer/SKILL.md"
+  local output
+  if output="$(bash "$SCRIPT_DIR/verify-desktop-resources.sh" "$app" 2>&1)"; then
+    fail "missing podcast skill should fail"
+  fi
+  assert_contains "$output" "missing bundled skill" "missing podcast skill is reported"
+  assert_contains "$output" "podcast-episode-producer" "missing podcast skill names the skill"
+  pass "desktop resources rejects missing podcast skill"
+}
+
 test_checksums_writes_sha256_files() {
   local dir="$TMP_DIR/artifacts"
   mkdir -p "$dir"
@@ -195,6 +247,14 @@ test_make_desktop_mcp_server_builds_requested_target() {
   assert_contains "$output" '--target "$target_triple"' "mcp sidecar build passes target triple"
   assert_contains "$output" 'source="$cargo_target_dir/$target_triple/release/montage-mcp-server"' "mcp sidecar copies target-qualified binary"
   pass "desktop mcp server builds requested target"
+}
+
+test_make_desktop_codex_can_build_release_profile() {
+  local output
+  output="$(make -C "$ROOT_DIR" -n desktop-codex TARGET_TRIPLE=x86_64-apple-darwin CODEX_PROFILE=release)"
+  assert_contains "$output" '--target "$target_triple" $codex_profile_flag' "codex sidecar build passes selected profile flag"
+  assert_contains "$output" 'target/$target_triple/$codex_profile/codex' "codex sidecar copies from selected profile"
+  pass "desktop codex can build release profile"
 }
 
 test_import_certificate_requires_env() {
@@ -324,12 +384,16 @@ test_verify_sidecars_rejects_stub
 test_verify_sidecars_rejects_yt_dlp_ci_placeholder
 test_verify_sidecars_accepts_executable_non_stub_files
 test_verify_sidecars_rejects_missing_required_uv
+test_verify_desktop_resources_accepts_direct_layout
+test_verify_desktop_resources_accepts_tauri_up_layout
+test_verify_desktop_resources_rejects_missing_podcast_skill
 test_checksums_writes_sha256_files
 test_make_desktop_ffmpeg_supports_linux_targets
 test_make_desktop_ffmpeg_uses_arm64_darwin_artifacts
 test_make_desktop_ffmpeg_marks_windows_sidecars_executable
 test_make_desktop_uv_rejects_windows_stub_and_chmods
 test_make_desktop_mcp_server_builds_requested_target
+test_make_desktop_codex_can_build_release_profile
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
 test_import_certificate_imports_identity_with_fake_security

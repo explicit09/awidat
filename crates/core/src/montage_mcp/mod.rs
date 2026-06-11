@@ -177,6 +177,7 @@ use crate::montage_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::montage_mcp::tools::verify_render::{self, VerifyRenderArgs};
 use crate::montage_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::montage_mcp::tools::view_frame::{self, ViewFrameArgs};
+use crate::montage_mcp::tools::view_program_frame::{self, ViewProgramFrameArgs};
 use crate::montage_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
 /// The Montage MCP server. One short-lived struct per child-process
@@ -884,10 +885,12 @@ fragment. Use it when the job is emphasis inside a clip, not a cut boundary.",
         description = "\
 Read-only planner for native procedural MotionScene documents. Use after \
 plan_visual_support chooses the motion_scene lane. It returns a valid \
-MotionScene plus a Set Motion Scene EDL snippet for apply_edl. Text layers \
-text, rectangle/solid, and project-asset image layers are preview/render \
-supported; video/media layers are stored with explicit limitations and \
-footage should use B-roll/PiP.",
+MotionScene plus a Set Motion Scene EDL snippet for apply_edl. On-screen copy \
+must come from transcript evidence: pass headline (and step_labels for \
+step/process scenes) or evidence_text — the planner never puts the request \
+prompt on screen or invents placeholder labels. Text layers, rectangle/solid, \
+and project-asset image layers are preview/render supported; video/media \
+layers are stored with explicit limitations and footage should use B-roll/PiP.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_motion_scene(
@@ -1350,6 +1353,28 @@ detail='original' returns source resolution. format='png' (default) | \
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
+    /// `view_program_frame` — render one composed timeline frame and
+    /// return it as a JSON payload with a base64-encoded image.
+    #[tool(
+        description = "\
+Render one composed program frame at timeline-local `t_s` and return a JSON \
+payload carrying base64-encoded image bytes plus cache paths. Use this after \
+applying visual changes to inspect what the rendered program frame actually \
+looks like: MotionScene layers, titles, B-roll/PiP, annotations, and broadcast \
+overlays are captured together. detail='preview' (default, <=768px longest \
+edge) keeps the image cheap; detail='original' returns source resolution. \
+format='png' (default) | 'jpeg'.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_program_frame(
+        &self,
+        args: Parameters<ViewProgramFrameArgs>,
+    ) -> Result<String, ErrorData> {
+        view_program_frame::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     /// `podcast_qc_report` — pre-render podcast QC gate.
     #[tool(
         description = "\
@@ -1549,7 +1574,9 @@ Read-only Proposal-to-Visual-Support planner. Given selected transcript/topic \
 text and an editor request, returns visual artifact proposals with evidence, \
 missing-information prompts, apply_edl payloads, preview expectations, and \
 render-verification steps. Use before apply_edl for quote highlights, animated \
-lists, title cards, search bars, counters, maps, and B-roll packages.",
+lists, title cards, search bars, counters, maps, and B-roll packages. Pass \
+lane=\"motion_scene\" or lane=\"broll\" to constrain proposals to one lane; the \
+planner honors the constraint instead of switching lanes.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_visual_support_proposals(

@@ -1682,6 +1682,9 @@ pub struct MotionSceneLayer {
     pub params: BTreeMap<String, serde_json::Value>,
 }
 
+/// Default enter/exit fade for MotionScene layers, in seconds.
+pub const MOTION_SCENE_DEFAULT_FADE_S: f64 = 0.4;
+
 impl MotionSceneLayer {
     /// Parse layer-local MotionScene animations from `params.animations`.
     pub fn motion_animations(&self) -> Vec<MotionSceneLayerAnimation> {
@@ -1695,6 +1698,66 @@ impl MotionSceneLayer {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Animations with the scene-default enter/exit opacity fade
+    /// applied (shared by preview and render so both fade alike).
+    ///
+    /// MotionScene layers should never pop on/off:
+    ///   - without any `overlay.opacity`/`title.opacity` animation, a
+    ///     [`MOTION_SCENE_DEFAULT_FADE_S`] fade in and out (clamped to
+    ///     a quarter of the layer duration) is synthesized, peaking at
+    ///     `peak_opacity`;
+    ///   - with an opacity animation that ends early at a visible
+    ///     value (e.g. an authored fade-in only), an exit fade to 0 is
+    ///     appended; authored trailing fades are preserved untouched.
+    ///
+    /// Keyframe times are layer-relative seconds.
+    pub fn motion_animations_with_scene_fade(
+        &self,
+        peak_opacity: f64,
+    ) -> Vec<MotionSceneLayerAnimation> {
+        let mut animations = self.motion_animations();
+        let fade_s = (self.duration_s * 0.25).min(MOTION_SCENE_DEFAULT_FADE_S);
+        if !fade_s.is_finite() || fade_s <= 0.0 {
+            return animations;
+        }
+        let opacity_index = animations.iter().position(|animation| {
+            matches!(
+                animation.parameter.as_str(),
+                "overlay.opacity" | "title.opacity"
+            )
+        });
+        match opacity_index {
+            None => animations.push(MotionSceneLayerAnimation {
+                parameter: "overlay.opacity".into(),
+                keyframes: vec![
+                    Keyframe::linear(0.0, 0.0),
+                    Keyframe::linear(fade_s, peak_opacity),
+                    Keyframe::linear(self.duration_s - fade_s, peak_opacity),
+                    Keyframe::linear(self.duration_s, 0.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::default(),
+                post_extrapolation: ExtrapolationMode::default(),
+                motion_path: None,
+            }),
+            Some(index) => {
+                let animation = &mut animations[index];
+                let Some(last) = animation.keyframes.last() else {
+                    return animations;
+                };
+                if last.value > 0.0 && last.time_s < self.duration_s - fade_s {
+                    let peak = last.value;
+                    animation
+                        .keyframes
+                        .push(Keyframe::linear(self.duration_s - fade_s, peak));
+                    animation
+                        .keyframes
+                        .push(Keyframe::linear(self.duration_s, 0.0));
+                }
+            }
+        }
+        animations
     }
 }
 

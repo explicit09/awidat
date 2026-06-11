@@ -132,12 +132,24 @@ pub fn apply(
 ) -> Result<(Timeline, ApplyOutcome), ApplyError> {
     let mut working = original.clone();
     let mut applied = Vec::with_capacity(envelope.ops.len());
+    // Envelope-scoped split aliases: `Split Clip` keeps the original
+    // uuid on the left half and stamps a FRESH uuid on the right, but
+    // batch compilers (and agents) deterministically reference the
+    // right half as `{left_uuid}-b` in the SAME envelope. Map that
+    // convention to the real uuid so multi-op split chains resolve.
+    let mut split_aliases: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for (index, op) in envelope.ops.iter().enumerate() {
-        let locator = resolve_locator_for_op(&working, index, op, ctx)?;
+        let locator = resolve_locator_for_op(&working, index, op, ctx, &split_aliases)?;
         let mut metadata = metadata_before_apply(&working, op, locator.as_ref());
         let description = apply_one(&mut working, index, op, ctx, locator)?;
         metadata_after_apply(&working, op, &mut metadata);
+        if matches!(op, EdlOp::SplitClip { .. })
+            && let [left_id, .., right_id] = metadata.affected_clip_ids.as_slice()
+        {
+            split_aliases.insert(format!("{left_id}-b"), right_id.clone());
+        }
         prune_stale_cut_boundaries(&mut working);
         prune_stale_split_edits(&mut working);
         applied.push(AppliedOp {
@@ -1011,6 +1023,7 @@ fn resolve_locator_for_op(
     index: usize,
     op: &EdlOp,
     ctx: &AnchorContext,
+    split_aliases: &std::collections::HashMap<String, String>,
 ) -> Result<Option<ClipLocator>, ApplyError> {
     let anchor = match op {
         EdlOp::TrimClip { anchor, .. }
@@ -1090,7 +1103,15 @@ fn resolve_locator_for_op(
         | EdlOp::InsertTrack { .. }
         | EdlOp::DeleteTrack { .. } => return Ok(None),
     };
-    resolve(working, anchor, ctx)
+    // Rewrite `{left_uuid}-b` references to the fresh uuid the engine
+    // actually stamped on the split's right half (see `apply`).
+    let aliased = match anchor {
+        Anchor::ClipUuid { uuid } => split_aliases
+            .get(uuid)
+            .map(|real| Anchor::ClipUuid { uuid: real.clone() }),
+        _ => None,
+    };
+    resolve(working, aliased.as_ref().unwrap_or(anchor), ctx)
         .map(Some)
         .map_err(|miss| ApplyError::AnchorMiss { index, miss })
 }
@@ -3096,6 +3117,7 @@ fn apply_untrim(
             message: "anchor resolved to a non-clip track child".into(),
         });
     };
+    let link_group_id = clip_link_group_id(clip);
     let Some(range) = clip.source_range.as_ref() else {
         return Err(ApplyError::Invalid {
             index,
@@ -3178,9 +3200,36 @@ fn apply_untrim(
         montage_proto::otio::RationalTime::new(new_dur * rate, rate),
     ));
     let name = clip.name.clone();
+
+    // Widen link-group siblings (the audio half of an A/V pair) to the
+    // same range, mirroring Trim Clip. Without this, restoring a cut
+    // via Untrim leaves the linked audio still trimmed and the pair
+    // out of sync (observed in the podcast-producer session trace).
+    let mut linked_untrim_count = 0usize;
+    if let Some(group_id) = link_group_id.as_deref() {
+        linked_untrim_count = trim_linked_siblings(
+            working,
+            locator,
+            group_id,
+            final_start,
+            final_end,
+            cur_start_s,
+            cur_end_s,
+            index,
+        )?;
+    }
+    let linked_note = if linked_untrim_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({} linked sibling{} also untrimmed)",
+            linked_untrim_count,
+            if linked_untrim_count == 1 { "" } else { "s" }
+        )
+    };
     Ok(format!(
         "untrimmed clip {name:?} to [{final_start:.3}s..{final_end:.3}s] \
-         ({new_dur:.3}s) — was [{cur_start_s:.3}s..{cur_end_s:.3}s]"
+         ({new_dur:.3}s) — was [{cur_start_s:.3}s..{cur_end_s:.3}s]{linked_note}"
     ))
 }
 
@@ -12877,6 +12926,146 @@ mod tests {
         };
         assert!(matches!(&v.children[0], TrackChild::Clip(c) if c.name == "v0"));
         assert!(matches!(&a.children[0], TrackChild::Clip(c) if c.name == "a0"));
+    }
+
+    #[test]
+    fn split_right_half_b_alias_resolves_within_envelope() {
+        // Real projects anchor by montage.clip_uuid (≠ clip name), and
+        // batch compilers reference a split's right half as
+        // `{left_uuid}-b` — but the engine stamps a FRESH uuid on the
+        // right half. The envelope-scoped alias must bridge that:
+        // split/split/ripple-delete carving [4s..6s] out of one clip.
+        use montage_proto::montage_meta::MontageClipMetadata;
+        use montage_proto::otio::{
+            Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
+            TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut t = Track::empty("V1", TrackKind::Video);
+        let mut montage_meta = MontageClipMetadata::default();
+        montage_meta
+            .extra
+            .insert("clip_uuid".into(), serde_json::json!("c-111"));
+        let mut c = Clip::empty("episode".to_string());
+        c.media_reference = MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        c.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(10.0 * 24.0, 24.0),
+        ));
+        c.metadata = ClipMetadata {
+            montage: Some(montage_meta),
+            ..ClipMetadata::default()
+        };
+        t.children.push(TrackChild::Clip(c));
+        tl.tracks.children.push(StackChild::Track(t));
+
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "c-111".into(),
+                    },
+                    at_s: 4.0,
+                    snap: None,
+                },
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "c-111-b".into(),
+                    },
+                    at_s: 6.0,
+                    snap: None,
+                },
+                EdlOp::RippleDelete {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "c-111-b".into(),
+                    },
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty())
+            .expect("-b alias must resolve to the split's actual right half");
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let clips: Vec<_> = t
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                TrackChild::Clip(c) => c.source_range.as_ref().map(|r| {
+                    (
+                        r.start_time.to_seconds(),
+                        r.start_time.to_seconds() + r.duration.to_seconds(),
+                    )
+                }),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(clips.len(), 2, "middle piece should be ripple-deleted");
+        assert!((clips[0].0 - 0.0).abs() < 1e-6 && (clips[0].1 - 4.0).abs() < 1e-6);
+        assert!((clips[1].0 - 6.0).abs() < 1e-6 && (clips[1].1 - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_untrim_widens_link_group_siblings() {
+        // Restoring a cut via Untrim must widen the linked audio
+        // sibling too, or the A/V pair desyncs (podcast session trace).
+        use montage_proto::montage_meta::MontageClipMetadata;
+        use montage_proto::otio::{
+            Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
+            TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut montage_meta = MontageClipMetadata::default();
+        montage_meta
+            .extra
+            .insert("link_group_id".into(), serde_json::json!("g0"));
+        let build = |name: &str, kind: TrackKind, clip_name: &str| {
+            let mut t = Track::empty(name, kind);
+            let mut c = Clip::empty(clip_name.to_string());
+            c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(1.0 * 24.0, 24.0),
+                RationalTime::new(4.0 * 24.0, 24.0),
+            ));
+            c.metadata = ClipMetadata {
+                montage: Some(montage_meta.clone()),
+                ..ClipMetadata::default()
+            };
+            t.children.push(TrackChild::Clip(c));
+            t
+        };
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("V1", TrackKind::Video, "v0")));
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("A1", TrackKind::Audio, "a0")));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::UntrimClip {
+                anchor: Anchor::ClipUuid { uuid: "v0".into() },
+                start: None,
+                end: Some(8.0),
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0].description.contains("linked sibling"),
+            "expected linked-sibling note; got {:?}",
+            outcome.applied[0].description,
+        );
+        let StackChild::Track(a) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(audio) = &a.children[0] else {
+            panic!()
+        };
+        let r = audio.source_range.as_ref().unwrap();
+        assert!((r.start_time.to_seconds() - 1.0).abs() < 1e-6);
+        assert!(
+            (r.duration.to_seconds() - 7.0).abs() < 1e-6,
+            "audio must widen to [1..8]"
+        );
     }
 
     #[test]

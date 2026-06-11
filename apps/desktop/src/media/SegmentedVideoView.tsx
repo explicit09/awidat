@@ -33,6 +33,7 @@
 // elements as the master clock.
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -44,9 +45,24 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import {
+  SHUTTLE_STEP_MS,
+  driftRecoveryAction,
+  fadeGainMultiplier,
+  isShuttleRate,
+  timelineTimeForSegmentPosition,
+} from "./previewHandoff";
+import {
+  resumePreviewAudio,
+  setPreviewElementGain,
+} from "./previewAudioGraph";
+import { colorPreviewCssFilter } from "./colorPreviewFilter";
+import { GradeCanvas } from "./GradeCanvas";
+import { useColorPreviewOverride } from "../properties/store";
+import {
   shouldRenderTransitionOnGpu,
   useGpuTransitionPreview,
 } from "./useGpuTransitionPreview";
+import { containedProgramFrame, programFrameStyle } from "./programFrame";
 import { useProjectStore } from "../app/state";
 import {
   useTimelineStore,
@@ -221,6 +237,11 @@ function SegmentedPlayer({
   });
   const forceMediaSyncRef = useRef(true);
   const lastSeekRequestRef = useRef(seekRequestId);
+  // Shuttle mode (>2× effective rate): element paused, frames stepped
+  // off the clock. Refs because the rVFC-driven driver and media
+  // event handlers both consult them without re-rendering.
+  const shuttleRef = useRef(false);
+  const lastShuttleStepMsRef = useRef(0);
   // Subscribe to the snapshot itself (Zustand caches the reference)
   // and derive the overlay list with useMemo. The previous shape
   // returned a fresh array from inside the selector on every render,
@@ -236,12 +257,8 @@ function SegmentedPlayer({
       ),
     [timelineSnapshot],
   );
-  const activeShapes = useMemo(
-    () => activeMotionShapeOverlays(timelineSnapshot),
-    [timelineSnapshot],
-  );
-  const activeImages = useMemo(
-    () => activeMotionImageOverlays(timelineSnapshot, projectRoot),
+  const activeMotionSceneLayers = useMemo(
+    () => activeMotionSceneOverlays(timelineSnapshot, projectRoot),
     [timelineSnapshot, projectRoot],
   );
   const activeVideoOverlays = useMemo(
@@ -281,6 +298,11 @@ function SegmentedPlayer({
   const activeKeyRef = useRef(activeKey);
   useEffect(() => {
     activeKeyRef.current = activeKey;
+  }, [activeKey]);
+  useEffect(() => {
+    const v = slotsRef.current[activeKey].ref.current;
+    if (v) updateActiveMediaSize(activeKey, v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey]);
 
   // Reset both slots when the segments array identity changes (e.g.
@@ -376,6 +398,8 @@ function SegmentedPlayer({
         activeKeyRef.current = activeKeyNow;
         setActiveKey(activeKeyNow);
         active = inactive;
+        const preloaded = active.ref.current;
+        if (preloaded) updateActiveMediaSize(activeKeyNow, preloaded);
       } else {
         ensureSlotLoaded(active, seg);
         active.segIdx = segIdx;
@@ -384,10 +408,58 @@ function SegmentedPlayer({
     }
     const v = active.ref.current;
     if (!v) return;
-    applySegmentPlaybackSettings(v, seg);
-    syncVideoToTimeline(v, seg, timelineTime, {
-      force: forceMediaSyncRef.current || enteredSegment || !isPlaying,
-    });
+    applySegmentPlaybackSettings(
+      v,
+      seg,
+      fadeGainMultiplier({
+        timelineTimeS: timelineTime,
+        startS: seg.timelineStart,
+        endS: seg.timelineEnd,
+        fadeInS: seg.fadeInS,
+        fadeOutS: seg.fadeOutS,
+      }),
+    );
+    const precise = forceMediaSyncRef.current || !isPlaying;
+    const desiredSource = sourceTimeForTimelineTime(seg, timelineTime);
+    const shuttle =
+      isPlaying && isShuttleRate(safeSegmentSpeed(seg.speed) * rate);
+    shuttleRef.current = shuttle;
+    if (shuttle) {
+      // Shuttle: continuous decode can't sustain this rate, so the
+      // element stays paused (silent, like an NLE shuttle) and frames
+      // are stepped off the clock. The all-keyframe proxy makes each
+      // step a single-frame decode.
+      pauseSlot(active);
+      if (Number.isFinite(desiredSource)) {
+        const nowMs = performance.now();
+        const stepDue =
+          precise ||
+          nowMs - lastShuttleStepMsRef.current >= SHUTTLE_STEP_MS;
+        if (stepDue && Math.abs((v.currentTime || 0) - desiredSource) > 0.001) {
+          tryAssignCurrentTime(v, desiredSource);
+          lastShuttleStepMsRef.current = nowMs;
+        }
+      }
+      forceMediaSyncRef.current = false;
+      primePreroll(segIdx);
+      return;
+    }
+    if (Number.isFinite(desiredSource)) {
+      const action = driftRecoveryAction({
+        precise,
+        entry: enteredSegment && !precise,
+        elementPaused: v.paused,
+        driftS: desiredSource - (v.currentTime || 0),
+      });
+      if (action === "seekElement") {
+        tryAssignCurrentTime(v, desiredSource);
+      } else if (action === "rebaseClock") {
+        previewClockSeek(
+          clockRef.current,
+          timelineTimeForSegmentPosition(seg, v.currentTime || 0),
+        );
+      }
+    }
     forceMediaSyncRef.current = false;
     if (isPlaying) {
       playSlot(active);
@@ -434,6 +506,7 @@ function SegmentedPlayer({
   function playActiveSlotIfNeeded(slot: Slot) {
     if (slot !== slotsRef.current[activeKeyRef.current]) return;
     if (!useMediaStore.getState().isPlaying) return;
+    if (shuttleRef.current) return; // shuttle owns the paused element
     playSlot(slot);
   }
 
@@ -486,14 +559,44 @@ function SegmentedPlayer({
     if (!v || slot.segIdx < 0) return;
     const seg = segmentsRef.current[slot.segIdx];
     if (!seg) return;
-    const desired =
-      key === activeKeyRef.current
-        ? sourceTimeForTimelineTime(seg, useMediaStore.getState().timelineTime)
-        : seg.sourceStart;
+    const isActive = key === activeKeyRef.current;
+    if (isActive && useMediaStore.getState().isPlaying) {
+      // Shuttle stepping completes a seek per step; the element is
+      // SUPPOSED to lag the clock by up to one step — don't re-base.
+      if (shuttleRef.current) return;
+      // canplay/loadedmetadata after a seek or decode underrun while
+      // playback runs. The wall clock kept advancing while the decoder
+      // worked, so re-seeking the element against it would stall again
+      // and cascade (seek → canplay → clock ran ahead → seek …). Hold
+      // the video; move the CLOCK to where the media actually is.
+      const mapped = timelineTimeForSegmentPosition(seg, v.currentTime);
+      if (Math.abs(previewClockNow(clockRef.current) - mapped) > 0.05) {
+        previewClockSeek(clockRef.current, mapped);
+      }
+      playActiveSlotIfNeeded(slot);
+      return;
+    }
+    const desired = isActive
+      ? sourceTimeForTimelineTime(seg, useMediaStore.getState().timelineTime)
+      : seg.sourceStart;
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
     }
     playActiveSlotIfNeeded(slot);
+  }
+
+  function updateActiveMediaSize(key: "a" | "b", v: HTMLVideoElement) {
+    if (key !== activeKeyRef.current) return;
+    const width = v.videoWidth;
+    const height = v.videoHeight;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+    setActiveMediaSize((previous) =>
+      previous?.width === width && previous.height === height
+        ? previous
+        : { width, height },
+    );
   }
 
   // Push view-state (~1Hz, integer-second granularity). Use the
@@ -535,6 +638,9 @@ function SegmentedPlayer({
   }, []);
 
   function togglePlay() {
+    // User gesture — the one place WebKit lets a suspended
+    // AudioContext start.
+    resumePreviewAudio();
     if (isPlaying) {
       setPlaying(false);
     } else {
@@ -550,6 +656,9 @@ function SegmentedPlayer({
     const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
     if (isPlaying && v.paused) {
+      // In shuttle mode the element is intentionally paused; the
+      // driver steps frames instead.
+      if (shuttleRef.current) return;
       v.play().catch((err) => {
         setMediaError(`Playback failed: ${String(err)}`);
         setPlaying(false);
@@ -559,28 +668,104 @@ function SegmentedPlayer({
     }
   }, [activeKey, isPlaying, setMediaError, setPlaying]);
 
-  function applySegmentPlaybackSettings(v: HTMLVideoElement, seg: PlaySegment) {
+  function applySegmentPlaybackSettings(
+    v: HTMLVideoElement,
+    seg: PlaySegment,
+    fadeMul = 1,
+  ) {
+    // Audio: WebAudio gain stage first — it has no 1.0 ceiling, so
+    // clip volumes above unity are actually audible, and fades ride
+    // the same node. Element volume pins at 1 while routed; if the
+    // graph is unavailable the legacy clamped path takes over.
     const segmentVolume = Number.isFinite(seg.volume)
-      ? Math.max(0, Math.min(1, seg.volume))
+      ? Math.max(0, Math.min(4, seg.volume))
       : 1;
+    const targetGain = segmentVolume * Math.max(0, Math.min(1, volume)) * fadeMul;
+    if (setPreviewElementGain(v, targetGain)) {
+      if (v.volume !== 1) v.volume = 1;
+    } else {
+      const clamped = Math.max(0, Math.min(1, targetGain));
+      if (Math.abs(v.volume - clamped) > 0.001) v.volume = clamped;
+    }
     const speed = safeSegmentSpeed(seg.speed);
-    const effectiveVolume = Math.max(0, Math.min(1, segmentVolume * volume));
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
-    if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
     if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
+    // Live color preview. The WebGL grade pass (GradeCanvas) is the
+    // primary path — full seven-field fidelity against the render
+    // chain; while it paints, the element carries no CSS filter. The
+    // CSS approximation (exposure/contrast/saturation only) remains
+    // as the fallback when WebGL is unavailable or the pass is
+    // suspended. Set imperatively: `filter` isn't in the React style
+    // props, so the reconciler leaves it alone.
+    const colorOverride = useColorPreviewOverride.getState().override;
+    const colorSource =
+      colorOverride && colorOverride.clipUuid === seg.clipUuid
+        ? colorOverride.values
+        : seg.colorCorrection;
+    const colorFilter = gradePassActiveRef.current
+      ? ""
+      : colorPreviewCssFilter(colorSource);
+    if (v.style.filter !== colorFilter) v.style.filter = colorFilter;
+    // Above 2× the audio time-stretcher (pitch correction) is real
+    // CPU that competes with video decode — shuttle-style playback
+    // drops it, like every NLE. WebKit ships it prefixed.
+    const wantPitchCorrection = effectiveRate <= 2;
+    const media = v as HTMLVideoElement & {
+      preservesPitch?: boolean;
+      webkitPreservesPitch?: boolean;
+    };
+    if (typeof media.preservesPitch === "boolean") {
+      if (media.preservesPitch !== wantPitchCorrection) {
+        media.preservesPitch = wantPitchCorrection;
+      }
+    } else if (typeof media.webkitPreservesPitch === "boolean") {
+      if (media.webkitPreservesPitch !== wantPitchCorrection) {
+        media.webkitPreservesPitch = wantPitchCorrection;
+      }
+    }
   }
 
+  // Re-apply playback settings outside the driver tick: master
+  // volume/rate changes, and live color-override drags — the driver
+  // only runs while timeline time moves, but color work usually
+  // happens paused.
+  const liveColorOverride = useColorPreviewOverride((s) => s.override);
+  // WebGL grade pass: true while the canvas is painting the active
+  // clip's grade — the CSS-filter approximation stands down then.
+  const gradePassActiveRef = useRef(false);
+  const getActiveVideo = useCallback(
+    () => slotsRef.current[activeKeyRef.current].ref.current,
+    [],
+  );
+  const activeGradeSegIdx = findActiveSegment(segments, timelineTime);
+  const activeGradeSeg =
+    activeGradeSegIdx >= 0 ? segments[activeGradeSegIdx] : null;
+  const activeGrade = activeGradeSeg
+    ? liveColorOverride && liveColorOverride.clipUuid === activeGradeSeg.clipUuid
+      ? liveColorOverride.values
+      : activeGradeSeg.colorCorrection
+    : null;
   useEffect(() => {
     const slot = slotsRef.current[activeKeyRef.current];
     const v = slot.ref.current;
     const seg = segmentsRef.current[slot.segIdx];
     if (v && seg) applySegmentPlaybackSettings(v, seg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey, volume, rate]);
+  }, [activeKey, volume, rate, liveColorOverride]);
 
   function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
-    const err = e.currentTarget.error;
+    const el = e.currentTarget;
+    const err = el.error;
     const code = err ? `code ${err.code}` : "unknown error";
+    // Only the visible slot's failures warrant blanking the monitor.
+    // The hidden preroll slot errors transiently while its media URL
+    // is still resolving; if its media is genuinely broken, the same
+    // error re-fires when it becomes the active slot.
+    if (el !== slotsRef.current[activeKeyRef.current].ref.current) {
+      // eslint-disable-next-line no-console
+      console.warn(`preroll slot media error (${code})`);
+      return;
+    }
     setMediaError(`Preview media failed to load (${code}).`);
   }
 
@@ -640,11 +825,35 @@ function SegmentedPlayer({
     [activeKey, activeSlotOpacity],
   );
 
+  const monitorShellRef = useRef<HTMLDivElement | null>(null);
   const stackRef = useRef<HTMLDivElement | null>(null);
+  const [monitorShellSize, setMonitorShellSize] = useState<{
+    width: number;
+    height: number;
+  }>({
+    width: 0,
+    height: 0,
+  });
   const [stackSize, setStackSize] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
   });
+  const [activeMediaSize, setActiveMediaSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const el = monitorShellRef.current;
+    if (!el) return;
+    const update = () => {
+      setMonitorShellSize({ width: el.clientWidth, height: el.clientHeight });
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => update());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const el = stackRef.current;
     if (!el) return;
@@ -657,79 +866,148 @@ function SegmentedPlayer({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  const monitorFrame = useMemo(
+    () =>
+      containedProgramFrame(
+        monitorShellSize.width,
+        monitorShellSize.height,
+        activeMediaSize?.width ?? 16,
+        activeMediaSize?.height ?? 9,
+      ),
+    [activeMediaSize, monitorShellSize.height, monitorShellSize.width],
+  );
+  const monitorFrameCss = useMemo(
+    () => programFrameStyle(monitorFrame),
+    [monitorFrame],
+  );
+  const programFrameCss = useMemo(
+    () => programFrameStyle(null),
+    [],
+  );
+  const programFrameSize = stackSize;
+
+  const monitorShellStyle = useMemo(
+    () =>
+      ({
+        "--monitor-aspect": `${activeMediaSize?.width ?? 16} / ${activeMediaSize?.height ?? 9}`,
+      }) as CSSProperties,
+    [activeMediaSize],
+  );
+
+  // Publish the media's aspect on :root so ancestor chrome (the
+  // program monitor box in PreviewSurface) can size itself to the
+  // picture. CSS variables only flow downward, and the box can't
+  // derive this from content height (WebKit intrinsic sizing zeroes
+  // the inner percentage-height chain). --monitor-aspect-num is w/h
+  // for `aspect-ratio`; --monitor-invaspect is h/w for height calcs.
+  useEffect(() => {
+    const width = activeMediaSize?.width ?? 16;
+    const height = activeMediaSize?.height ?? 9;
+    const root = document.documentElement;
+    root.style.setProperty("--monitor-aspect-num", (width / height).toFixed(6));
+    root.style.setProperty("--monitor-invaspect", (height / width).toFixed(6));
+    // Mirror into the media store so React chrome (the stage context
+    // bar's format badge) can read the real pixel size too.
+    useMediaStore.getState().setActiveMediaSize(activeMediaSize);
+    return () => {
+      root.style.removeProperty("--monitor-aspect-num");
+      root.style.removeProperty("--monitor-invaspect");
+      useMediaStore.getState().setActiveMediaSize(null);
+    };
+  }, [activeMediaSize]);
 
   return (
     <div className="video-wrap">
-      <div className="video-stack" ref={stackRef}>
-        {mediaError && <MediaErrorOverlay message={mediaError} />}
-        <video
-          ref={refA}
-          className="video-el"
-          preload="auto"
-          style={styleA}
-          onLoadedMetadata={() => alignSlotAfterLoad("a")}
-          onCanPlay={() => {
-            setMediaError(null);
-            alignSlotAfterLoad("a");
-          }}
-          onError={onVideoError}
-          onClick={activeKey === "a" ? togglePlay : undefined}
-        />
-        <video
-          ref={refB}
-          className="video-el"
-          preload="auto"
-          style={styleB}
-          onLoadedMetadata={() => alignSlotAfterLoad("b")}
-          onCanPlay={() => {
-            setMediaError(null);
-            alignSlotAfterLoad("b");
-          }}
-          onError={onVideoError}
-          onClick={activeKey === "b" ? togglePlay : undefined}
-        />
-        <TimelineVideoOverlays
-          overlays={activeVideoOverlays}
-          timelineTime={timelineTime}
-          isPlaying={isPlaying}
-        />
-        {previewGap && <TimelineGapOverlay />}
-        <TimelineTransitionOverlay
-          transition={
-            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-          }
-          timelineTime={timelineTime}
-          isPlaying={isPlaying}
-        />
-        <TimelineTransitionColorOverlay
-          transition={
-            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-          }
-          timelineTime={timelineTime}
-        />
-        <GpuTransitionPreview
-          transition={activeTransition}
-          timelineTime={timelineTime}
-          width={stackSize.width}
-          height={stackSize.height}
-        />
-        <TimelineTitleOverlays
-          overlays={activeTitles}
-          timelineTime={timelineTime}
-        />
-        <TimelineMotionShapeOverlays
-          overlays={activeShapes}
-          timelineTime={timelineTime}
-        />
-        <TimelineMotionImageOverlays
-          overlays={activeImages}
-          timelineTime={timelineTime}
-        />
-        <TimelineBroadcastOverlay
-          overlay={timelineSnapshot.broadcast_overlay}
-          timelineTime={timelineTime}
-          projectRoot={projectRoot}
-        />
+      <div
+        className="video-monitor-shell"
+        ref={monitorShellRef}
+        style={monitorShellStyle}
+      >
+        <div className="video-stack" ref={stackRef} style={monitorFrameCss}>
+          {mediaError && <MediaErrorOverlay message={mediaError} />}
+          <video
+            ref={refA}
+            className="video-el"
+            preload="auto"
+            crossOrigin="anonymous"
+            style={styleA}
+            onLoadedMetadata={(event) => {
+              updateActiveMediaSize("a", event.currentTarget);
+              alignSlotAfterLoad("a");
+            }}
+            onCanPlay={() => {
+              setMediaError(null);
+              alignSlotAfterLoad("a");
+            }}
+            onError={onVideoError}
+            onClick={activeKey === "a" ? togglePlay : undefined}
+          />
+          <video
+            ref={refB}
+            className="video-el"
+            preload="auto"
+            crossOrigin="anonymous"
+            style={styleB}
+            onLoadedMetadata={(event) => {
+              updateActiveMediaSize("b", event.currentTarget);
+              alignSlotAfterLoad("b");
+            }}
+            onCanPlay={() => {
+              setMediaError(null);
+              alignSlotAfterLoad("b");
+            }}
+            onError={onVideoError}
+            onClick={activeKey === "b" ? togglePlay : undefined}
+          />
+          <GradeCanvas
+            grade={activeGrade}
+            lutPath={activeGradeSeg?.lutPath ?? null}
+            projectRoot={projectRoot}
+            lutStrength={activeGradeSeg?.lutStrength ?? null}
+            getVideo={getActiveVideo}
+            isPlaying={isPlaying}
+            suspended={activeTransition !== null}
+            availabilityRef={gradePassActiveRef}
+          />
+          <div className="timeline-program-frame" style={programFrameCss}>
+            <TimelineVideoOverlays
+              overlays={activeVideoOverlays}
+              timelineTime={timelineTime}
+              isPlaying={isPlaying}
+            />
+            {previewGap && <TimelineGapOverlay />}
+            <TimelineTransitionOverlay
+              transition={
+                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+              }
+              timelineTime={timelineTime}
+              isPlaying={isPlaying}
+            />
+            <TimelineTransitionColorOverlay
+              transition={
+                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+              }
+              timelineTime={timelineTime}
+            />
+            <GpuTransitionPreview
+              transition={activeTransition}
+              timelineTime={timelineTime}
+              width={programFrameSize.width}
+              height={programFrameSize.height}
+            />
+            <TimelineTitleOverlays overlays={activeTitles} timelineTime={timelineTime} />
+            <TimelineMotionSceneOverlays
+              overlays={activeMotionSceneLayers}
+              timelineTime={timelineTime}
+            />
+            <TimelineBroadcastOverlay
+              overlay={timelineSnapshot.broadcast_overlay}
+              timelineTime={timelineTime}
+              projectRoot={projectRoot}
+              previewFrameSize={programFrameSize}
+            />
+          </div>
+        </div>
       </div>
       {chrome ? (
         <>
@@ -1204,15 +1482,18 @@ export function TimelineBroadcastOverlay({
   timelineTime,
   projectRoot,
   resolveAssetUrl = projectAssetUrl,
+  previewFrameSize,
 }: {
   overlay: TimelineSnapshot["broadcast_overlay"];
   timelineTime: number;
   projectRoot: string | null;
   resolveAssetUrl?: (projectRoot: string | null, relPath: string | null) => string | null;
+  previewFrameSize?: { width: number; height: number };
 }) {
   if (!overlay?.enabled) return null;
 
   const style = overlay.style;
+  const previewScale = responsiveBroadcastOverlayScale(previewFrameSize);
   const gold = normalizeCssHex(style.gold_hex, "#C9A028");
   const goldLight = normalizeCssHex(style.gold_light_hex, "#E8C040");
   const cyan = normalizeCssHex(style.cyan_hex, "#22D3EE");
@@ -1240,10 +1521,11 @@ export function TimelineBroadcastOverlay({
       ? `${overlay.sponsors.join("   ◆   ")}   ◆`
       : overlay.show_name || overlay.template_name || "BROADCAST";
   const overlayStyleVars = {
-    "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height),
-    "--broadcast-ticker-height": refHeightPercent(style.ticker_height),
-    "--broadcast-host-strip-height": refHeightPercent(style.host_strip_height),
-    "--broadcast-ticker-label-width": refWidthPercent(680),
+    "--broadcast-preview-scale": previewScale,
+    "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height * previewScale),
+    "--broadcast-ticker-height": refHeightPercent(style.ticker_height * previewScale),
+    "--broadcast-host-strip-height": refHeightPercent(style.host_strip_height * previewScale),
+    "--broadcast-ticker-label-width": refWidthPercent(680 * previewScale),
   } as React.CSSProperties;
 
   return (
@@ -1610,6 +1892,17 @@ function normalizeCssHex(value: string, fallback: string): string {
   return value.startsWith("#") ? value : `#${value}`;
 }
 
+function responsiveBroadcastOverlayScale(
+  previewFrameSize: { width: number; height: number } | undefined,
+): number {
+  if (!previewFrameSize || previewFrameSize.width <= 0 || previewFrameSize.height <= 0) {
+    return 1;
+  }
+  const widthScale = previewFrameSize.width / 960;
+  const heightScale = previewFrameSize.height / 540;
+  return Math.max(0.62, Math.min(1, widthScale, heightScale));
+}
+
 function refHeightPercent(value: number): string {
   return `${(value / 2160) * 100}%`;
 }
@@ -1637,6 +1930,19 @@ type PreviewTitleOverlay = {
   animation: "none" | "fade_in" | "fade_out" | "fade_in_out" | "slide_in" | "slide_out";
   reveal: "none" | "typewriter" | "word" | "line";
   animations: TimelineParameterAnimation[];
+  /** True for MotionScene text layers (protocol role "motion_scene"). */
+  isMotionScene: boolean;
+  /**
+   * Explicit normalized text box (MotionScene layers with x/y params).
+   * `x`/`y` are the box center in program-frame space; `null` falls
+   * back to the `position` band layout.
+   */
+  box: {
+    x: number;
+    y: number;
+    width: number | null;
+    align: "left" | "center" | "right";
+  } | null;
 };
 
 type PreviewMotionShapeOverlay = {
@@ -1675,48 +1981,31 @@ type PreviewMotionImageOverlay = {
   animations: TimelineParameterAnimation[];
 };
 
+type PreviewMotionSceneOverlay =
+  | { kind: "title"; overlay: PreviewTitleOverlay }
+  | { kind: "shape"; overlay: PreviewMotionShapeOverlay }
+  | { kind: "image"; overlay: PreviewMotionImageOverlay };
+
 function activeTitleOverlays(
   snapshot: TimelineSnapshot,
   _durationS: number,
 ): PreviewTitleOverlay[] {
-  if (broadcastOverlayOwnsProgramTitles(snapshot.broadcast_overlay)) return [];
-
-  const titleTrack = snapshot.tracks.find((track) => track.role === "titles");
-  if (!titleTrack) return [];
+  // A broadcast overlay owns the regular program titles, but MotionScene
+  // text is program content (panels, labels, diagrams) — it must keep
+  // rendering alongside the broadcast chrome, exactly as the render
+  // plan keeps role "motion_scene" titles.
+  const suppressProgramTitles = broadcastOverlayOwnsProgramTitles(
+    snapshot.broadcast_overlay,
+  );
 
   const overlays: PreviewTitleOverlay[] = [];
-  for (const item of titleTrack.items) {
-    if (item.kind !== "clip" || item.title === null) continue;
-    const startS = item.track_start_s;
-    const endS = item.track_start_s + item.duration_s;
-    if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
-      continue;
-    }
-    overlays.push({
-      key: item.clip_uuid || item.name,
-      startS,
-      endS,
-      text: item.title.text,
-      position: titlePosition(item.title.position),
-      fontSize: item.title.font_size,
-      color: item.title.color || "#FFFFFF",
-      fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
-      animation: titleAnimation(item.title.animation),
-      reveal: titleReveal(item.title.reveal),
-      animations: item.animations ?? [],
-    });
-  }
-  return overlays;
-}
-
-function activeMotionShapeOverlays(
-  snapshot: TimelineSnapshot,
-): PreviewMotionShapeOverlay[] {
-  const overlays: PreviewMotionShapeOverlay[] = [];
   for (const track of snapshot.tracks) {
+    if (track.role !== "titles") continue;
     for (const item of track.items) {
-      if (item.kind !== "clip" || item.motion_shape === null) continue;
-      if (item.motion_shape.shape !== "rect") continue;
+      if (item.kind !== "clip" || item.title === null) continue;
+      const isMotionScene = item.title.role === "motion_scene";
+      if (isMotionScene) continue;
+      if (suppressProgramTitles && !isMotionScene) continue;
       const startS = item.track_start_s;
       const endS = item.track_start_s + item.duration_s;
       if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
@@ -1726,56 +2015,130 @@ function activeMotionShapeOverlays(
         key: item.clip_uuid || item.name,
         startS,
         endS,
-        shape: "rect",
-        x: item.motion_shape.x,
-        y: item.motion_shape.y,
-        width: item.motion_shape.width,
-        height: item.motion_shape.height,
-        color: item.motion_shape.color || "#FFFFFF",
-        opacity: clampOpacity(item.motion_shape.opacity),
-        scale: item.motion_shape.scale,
-        anchorX: item.motion_shape.anchor_x,
-        anchorY: item.motion_shape.anchor_y,
-        rotationDeg: item.motion_shape.rotation_deg,
+        text: item.title.text,
+        position: titlePosition(item.title.position),
+        fontSize: item.title.font_size,
+        color: item.title.color || "#FFFFFF",
+        fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
+        animation: titleAnimation(item.title.animation),
+        reveal: titleReveal(item.title.reveal),
         animations: item.animations ?? [],
+        isMotionScene,
+        box: titleOverlayBox(item.title),
       });
     }
   }
   return overlays;
 }
 
-function activeMotionImageOverlays(
+function titleOverlayBox(title: {
+  x: number | null;
+  y: number | null;
+  width: number | null;
+  align: string | null;
+}): PreviewTitleOverlay["box"] {
+  if (
+    title.x === null ||
+    title.y === null ||
+    !Number.isFinite(title.x) ||
+    !Number.isFinite(title.y)
+  ) {
+    return null;
+  }
+  return {
+    x: title.x,
+    y: title.y,
+    width:
+      title.width !== null && Number.isFinite(title.width) && title.width > 0
+        ? title.width
+        : null,
+    align: titleAlign(title.align),
+  };
+}
+
+function titleAlign(value: string | null): "left" | "center" | "right" {
+  return value === "left" || value === "right" ? value : "center";
+}
+
+function activeMotionSceneOverlays(
   snapshot: TimelineSnapshot,
   projectRoot: string | null,
-): PreviewMotionImageOverlay[] {
-  const overlays: PreviewMotionImageOverlay[] = [];
+): PreviewMotionSceneOverlay[] {
+  const overlays: PreviewMotionSceneOverlay[] = [];
   for (const track of snapshot.tracks) {
     for (const item of track.items) {
-      if (item.kind !== "clip" || item.motion_image === null) continue;
-      const src = projectAssetUrl(projectRoot, item.motion_image.asset_id);
-      if (src === null) continue;
+      if (item.kind !== "clip") continue;
       const startS = item.track_start_s;
       const endS = item.track_start_s + item.duration_s;
       if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
         continue;
       }
-      overlays.push({
-        key: item.clip_uuid || item.name,
-        startS,
-        endS,
-        src,
-        x: item.motion_image.x,
-        y: item.motion_image.y,
-        width: item.motion_image.width,
-        height: item.motion_image.height,
-        opacity: clampOpacity(item.motion_image.opacity),
-        fit: motionImageFit(item.motion_image.fit),
-        scale: item.motion_image.scale,
-        anchorX: item.motion_image.anchor_x,
-        anchorY: item.motion_image.anchor_y,
-        rotationDeg: item.motion_image.rotation_deg,
-        animations: item.animations ?? [],
-      });
+      if (item.title?.role === "motion_scene") {
+        overlays.push({
+          kind: "title",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            text: item.title.text,
+            position: titlePosition(item.title.position),
+            fontSize: item.title.font_size,
+            color: item.title.color || "#FFFFFF",
+            fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
+            animation: titleAnimation(item.title.animation),
+            reveal: titleReveal(item.title.reveal),
+            animations: item.animations ?? [],
+            isMotionScene: true,
+            box: titleOverlayBox(item.title),
+          },
+        });
+      }
+      if (item.motion_shape !== null && item.motion_shape.shape === "rect") {
+        overlays.push({
+          kind: "shape",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            shape: "rect",
+            x: item.motion_shape.x,
+            y: item.motion_shape.y,
+            width: item.motion_shape.width,
+            height: item.motion_shape.height,
+            color: item.motion_shape.color || "#FFFFFF",
+            opacity: clampOpacity(item.motion_shape.opacity),
+            scale: item.motion_shape.scale,
+            anchorX: item.motion_shape.anchor_x,
+            anchorY: item.motion_shape.anchor_y,
+            rotationDeg: item.motion_shape.rotation_deg,
+            animations: item.animations ?? [],
+          },
+        });
+      }
+      if (item.motion_image !== null) {
+        const src = projectAssetUrl(projectRoot, item.motion_image.asset_id);
+        if (src === null) continue;
+        overlays.push({
+          kind: "image",
+          overlay: {
+            key: item.clip_uuid || item.name,
+            startS,
+            endS,
+            src,
+            x: item.motion_image.x,
+            y: item.motion_image.y,
+            width: item.motion_image.width,
+            height: item.motion_image.height,
+            opacity: clampOpacity(item.motion_image.opacity),
+            fit: motionImageFit(item.motion_image.fit),
+            scale: item.motion_image.scale,
+            anchorX: item.motion_image.anchor_x,
+            anchorY: item.motion_image.anchor_y,
+            rotationDeg: item.motion_image.rotation_deg,
+            animations: item.animations ?? [],
+          },
+        });
+      }
     }
   }
   return overlays;
@@ -1803,7 +2166,11 @@ function TimelineTitleOverlays({
       {active.map((overlay) => (
         <div
           key={overlay.key}
-          className={`timeline-title-overlay title-pos-${overlay.position}`}
+          className={
+            overlay.box
+              ? "timeline-title-overlay"
+              : `timeline-title-overlay title-pos-${overlay.position}`
+          }
           style={titleOverlayStyle(overlay, timelineTime)}
         >
           {titleRevealText(overlay, timelineTime)}
@@ -1813,51 +2180,56 @@ function TimelineTitleOverlays({
   );
 }
 
-function TimelineMotionShapeOverlays({
+function TimelineMotionSceneOverlays({
   overlays,
   timelineTime,
 }: {
-  overlays: PreviewMotionShapeOverlay[];
+  overlays: PreviewMotionSceneOverlay[];
   timelineTime: number;
 }) {
   const active = overlays.filter(
-    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
+    ({ overlay }) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
   );
   if (active.length === 0) return null;
   return (
-    <div className="timeline-motion-shape-layer" aria-hidden="true">
-      {active.map((overlay) => (
-        <div
-          key={overlay.key}
-          className="timeline-motion-shape-rect"
-          style={motionShapeOverlayStyle(overlay, timelineTime)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function TimelineMotionImageOverlays({
-  overlays,
-  timelineTime,
-}: {
-  overlays: PreviewMotionImageOverlay[];
-  timelineTime: number;
-}) {
-  const active = overlays.filter(
-    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
-  );
-  if (active.length === 0) return null;
-  return (
-    <div className="timeline-motion-image-layer" aria-hidden="true">
-      {active.map((overlay) => (
-        <img
-          key={overlay.key}
-          className="timeline-motion-image"
-          src={overlay.src}
-          style={motionImageOverlayStyle(overlay, timelineTime)}
-        />
-      ))}
+    <div className="timeline-motion-scene-layer" aria-hidden="true">
+      {active.map((layer) => {
+        if (layer.kind === "title") {
+          const overlay = layer.overlay;
+          return (
+            <div
+              key={`title:${overlay.key}`}
+              className={
+                overlay.box
+                  ? "timeline-title-overlay"
+                  : `timeline-title-overlay title-pos-${overlay.position}`
+              }
+              style={titleOverlayStyle(overlay, timelineTime)}
+            >
+              {titleRevealText(overlay, timelineTime)}
+            </div>
+          );
+        }
+        if (layer.kind === "shape") {
+          const overlay = layer.overlay;
+          return (
+            <div
+              key={`shape:${overlay.key}`}
+              className="timeline-motion-shape-rect"
+              style={motionShapeOverlayStyle(overlay, timelineTime)}
+            />
+          );
+        }
+        const overlay = layer.overlay;
+        return (
+          <img
+            key={`image:${overlay.key}`}
+            className="timeline-motion-image"
+            src={overlay.src}
+            style={motionImageOverlayStyle(overlay, timelineTime)}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -1933,22 +2305,50 @@ function titleOverlayStyle(
     const p = Math.min(1, Math.max(0, remaining / 0.55));
     translateX = `calc(-50% + ${(1 - p) * 18}%)`;
   }
-  const translateY = overlay.position === "center" ? "-50%" : "0";
+  // Explicit boxes center on (x, y); band layout centers vertically
+  // only for the "center" band.
+  const translateY = overlay.box || overlay.position === "center" ? "-50%" : "0";
   const animated = evaluateAnimations(overlay.animations, elapsed);
   if (animated["title.opacity"] !== undefined) {
     opacity = clampOpacity(animated["title.opacity"]);
+  }
+  if (animated["overlay.opacity"] !== undefined) {
+    opacity = clampOpacity(animated["overlay.opacity"]);
   }
   const fontSize = animated["title.font_size"] ?? overlay.fontSize;
   const xOffset = animated["title.x"] ?? 0;
   const yOffset = animated["title.y"] ?? 0;
 
-  return {
+  const style: React.CSSProperties = {
     color: overlay.color,
-    fontSize: `clamp(15px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
+    fontSize: `clamp(11px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
     fontWeight: overlay.fontWeight === "bold" ? 750 : 500,
     opacity,
     transform: `translate(calc(${translateX} + ${xOffset * 100}vw), calc(${translateY} + ${yOffset * 100}vh))`,
   };
+  if (overlay.box) {
+    // MotionScene text box: position at the normalized box center
+    // (translate(-50%, -50%) recenters the element on that point).
+    style.left = `${overlay.box.x * 100}%`;
+    style.top = `${overlay.box.y * 100}%`;
+    // Without an explicit width, fall back to the widest centered box
+    // that stays on screen (mirrors the render's effective_width) so
+    // long text wraps instead of overflowing the frame.
+    const width =
+      overlay.box.width ??
+      Math.max(
+        0.05,
+        Math.min(0.92, 2 * overlay.box.x, 2 * (1 - overlay.box.x)),
+      );
+    style.width = `${width * 100}%`;
+    style.maxWidth = "none";
+    style.textAlign = overlay.box.align;
+    // Scene text uses explicit line breaks ("1\nCLIENT NEED") and
+    // wraps inside its box instead of the single-line band layout.
+    style.whiteSpace = "pre-line";
+    style.lineHeight = 1.15;
+  }
+  return style;
 }
 
 function titlePosition(value: string): PreviewTitleOverlay["position"] {
@@ -2069,22 +2469,6 @@ function TimelineGapOverlay() {
       aria-hidden="true"
     />
   );
-}
-
-function syncVideoToTimeline(
-  v: HTMLVideoElement,
-  seg: PlaySegment,
-  timelineTime: number,
-  opts: { force?: boolean } = {},
-) {
-  const desired = sourceTimeForTimelineTime(seg, timelineTime);
-  if (!Number.isFinite(desired)) return;
-  const drift = Math.abs((v.currentTime || 0) - desired);
-  const playingVideo = !v.paused;
-  const threshold = opts.force || !playingVideo ? 0.02 : 0.5;
-  if (drift > threshold) {
-    tryAssignCurrentTime(v, desired);
-  }
 }
 
 // Some browsers throw when setting currentTime before the readyState

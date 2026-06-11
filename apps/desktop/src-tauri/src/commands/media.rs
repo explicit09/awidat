@@ -932,8 +932,20 @@ fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, hea
     };
     let content_len = end - start + 1;
     let content_type = preview_media_content_type(path);
+    // Proxy files are content-hashed and schema-tagged in their
+    // filenames (`<stem>-1440q20-<hash>.mp4`), so their bytes never
+    // change under a given URL — let the webview cache them. The
+    // all-keyframe proxy's moov atom alone is several MB; `no-store`
+    // forced a full re-download of it on every project open, which
+    // dominated first-frame latency. Non-proxy media (raw sources,
+    // mutable thumbnails) keeps `no-store`.
+    let cache_control = if path.components().any(|c| c.as_os_str() == "proxies") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
     let mut header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: {cache_control}\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
     );
     if status.starts_with("206") {
         header.push_str(&format!("Content-Range: bytes {start}-{end}/{len}\r\n"));

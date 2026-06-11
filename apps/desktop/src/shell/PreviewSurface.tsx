@@ -22,6 +22,7 @@ import {
 } from "../ui";
 import type { PreviewQualityMode } from "../media/previewSource";
 import { FilmSlate } from "./empty/FilmSlate";
+import { PreviewReviewQueue } from "./PreviewReviewQueue";
 
 /**
  * Shape of the loading-state metadata the slate needs. Anything not
@@ -186,15 +187,13 @@ export function PreviewSurface({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   return (
-    <Stack gap="0" className="h-full w-full bg-[var(--color-surface-app)]">
+    <Stack gap="2" className="h-full w-full bg-transparent">
       {/*
-        Header — visually merged into the video stage so the viewer
-        reads as the center of gravity. Pure black background, no
-        bottom border; chrome dissolves into the stage. Only the
-        proposal selector and mode toggle stay visible. Everything
-        else moved to the overflow menu.
+        Context bar — slim transparent strip above the monitor:
+        proposal selector + pending count on the left, view-mode
+        toggle and overflow controls on the right.
       */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 h-10 bg-black shrink-0">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-0.5 h-8 bg-transparent shrink-0">
         <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
           <button
             type="button"
@@ -245,9 +244,11 @@ export function PreviewSurface({
         </Inline>
       </div>
 
-      {/* Video stage — pure black, no top border. The header above
-          shares the same background so the viewer extends visually
-          to the very top of the panel.
+      {/* Program monitor box — sized to the media aspect (the
+          --monitor-aspect-num root variable published by
+          SegmentedVideoView) so the picture fills it edge-to-edge;
+          shrinks when the column is short and the inner fitted stack
+          letterboxes gracefully. See .preview-monitor-box in App.css.
 
           Loading state: when `sourceMedia` is set but the underlying
           player has not produced a first frame yet (`!hasProxyFrame`),
@@ -256,7 +257,7 @@ export function PreviewSurface({
           than a hard cut. When no `sourceMedia` is supplied (e.g.
           no project loaded yet) the slate is skipped entirely and
           the legacy placeholder still appears. */}
-      <div className="relative flex-1 min-h-0 min-w-0 bg-black overflow-hidden">
+      <div className="preview-monitor-box relative min-w-0 overflow-hidden">
         {videoSlot ?? <VideoPlaceholder viewMode={viewMode} />}
         {sourceMedia ? (
           <div
@@ -283,44 +284,38 @@ export function PreviewSurface({
         ) : null}
       </div>
 
-      {/* Jump chips */}
       {changes.length > 0 ? (
-        <div className="px-4 py-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] shrink-0">
-          <Inline gap="2" align="center" className="overflow-x-auto">
-            <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)] shrink-0">
-              Jump to change
-            </span>
-            <Inline gap="1" align="center">
-              {changes.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => onSelectChange?.(c)}
-                  className={cn(
-                    "inline-flex items-center justify-center h-6 min-w-7 px-1.5 rounded-[var(--radius-xs)]",
-                    "text-[var(--text-caption)] font-mono font-semibold border",
-                    "transition-[background-color,border-color,color] duration-[120ms]",
-                    c.id === activeChangeId
-                      ? "bg-[var(--color-job-failed-fill)] border-[var(--color-job-failed-border)] text-[var(--color-job-failed-text)]"
-                      : "bg-[var(--color-surface-card)] border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]",
-                  )}
-                  title={c.label}
-                >
-                  {String(c.index).padStart(2, "0")}
-                </button>
-              ))}
-            </Inline>
-          </Inline>
+        <div className="flex h-7 shrink-0 items-center gap-2 overflow-hidden px-0.5">
+          <span className="shrink-0 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
+            Jump to change
+          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {changes.map((change) => (
+              <button
+                key={change.id}
+                type="button"
+                onClick={() => onSelectChange?.(change)}
+                aria-pressed={change.id === activeChangeId}
+                title={change.label ?? `Change ${change.index}`}
+                className={cn(
+                  "grid h-6 min-w-6 place-items-center rounded-[var(--radius-sm)] border px-1.5 font-mono text-[var(--text-caption)] transition-colors",
+                  change.id === activeChangeId
+                    ? "border-[rgba(217,165,75,0.75)] bg-[rgba(217,165,75,0.16)] text-[var(--color-text-primary)]"
+                    : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]",
+                )}
+              >
+                {String(change.index).padStart(2, "0")}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
-      {/* Transport */}
-      <div className="px-4 h-12 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] grid grid-cols-[auto_1fr_auto] items-center gap-4 shrink-0">
-        <span className="font-mono text-[var(--text-timecode)] text-[var(--color-text-primary)]">
-          <span className="text-[var(--color-text-primary)]">{formatTimecode(currentTimeS)}</span>
-          <span className="text-[var(--color-text-muted)]"> / {formatTimecode(durationS)}</span>
-        </span>
-        <Inline gap="1" align="center" justify="center">
+      {/* Transport — one slim transparent row under the monitor:
+          prev/play/next, scrubber with change markers, timecode,
+          then rate / quality / volume. */}
+      <div className="px-0.5 h-10 grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 shrink-0">
+        <Inline gap="1" align="center">
           <IconButton icon={<SkipBack />} label="Previous cut" size="md" onClick={onPrevCut} />
           <IconButton
             icon={isPlaying ? <Pause /> : <Play />}
@@ -332,6 +327,18 @@ export function PreviewSurface({
           />
           <IconButton icon={<SkipForward />} label="Next cut" size="md" onClick={onNextCut} />
         </Inline>
+        <Scrubber
+          changes={changes}
+          currentTimeS={currentTimeS}
+          durationS={durationS}
+          onSeek={onSeek}
+          onSelectChange={onSelectChange}
+          activeChangeId={activeChangeId}
+        />
+        <span className="font-mono text-[var(--text-timecode)] text-[var(--color-text-primary)]">
+          <span className="text-[var(--color-text-primary)]">{formatTimecode(currentTimeS)}</span>
+          <span className="text-[var(--color-text-muted)]"> / {formatTimecode(durationS)}</span>
+        </span>
         <Inline gap="3" align="center">
           <div className="relative">
             <button
@@ -389,20 +396,15 @@ export function PreviewSurface({
         </Inline>
       </div>
 
-      {/* Scrubber + marker rail */}
-      <div className="px-4 py-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] shrink-0">
-        <Scrubber
-          changes={changes}
-          currentTimeS={currentTimeS}
-          durationS={durationS}
-          onSeek={onSeek}
-          onSelectChange={onSelectChange}
-          activeChangeId={activeChangeId}
-        />
-        <Inline justify="between" align="center" className="mt-1">
-          <Timecodes durationS={durationS} />
-        </Inline>
-      </div>
+      {/* Review queue — absorbs the leftover column height. */}
+      <PreviewReviewQueue
+        changes={changes}
+        activeChangeId={activeChangeId}
+        durationLabel={formatTimecode(durationS)}
+        onSelectChange={onSelectChange}
+        onAcceptProposal={onAcceptProposal}
+        onRejectProposal={onRejectProposal}
+      />
     </Stack>
   );
 }
@@ -656,18 +658,6 @@ function MarkerDot({
   );
 }
 
-function Timecodes({ durationS }: { durationS: number }) {
-  const ticks = 6;
-  const step = durationS / ticks;
-  return (
-    <div className="flex w-full justify-between font-mono text-[var(--text-micro)] text-[var(--color-text-muted)]">
-      {Array.from({ length: ticks + 1 }).map((_, i) => (
-        <span key={i}>{formatTimecodeShort(i * step)}</span>
-      ))}
-    </div>
-  );
-}
-
 function pad(n: number) {
   return n.toString().padStart(2, "0");
 }
@@ -680,11 +670,4 @@ function formatTimecode(totalSeconds: number) {
   const seconds = Math.floor(total % 60);
   const frames = Math.floor((total - Math.floor(total)) * 24);
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
-}
-
-function formatTimecodeShort(totalSeconds: number) {
-  if (!isFinite(totalSeconds) || totalSeconds < 0) return "00:00";
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  return `${pad(minutes)}:${pad(seconds)}`;
 }

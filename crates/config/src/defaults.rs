@@ -148,6 +148,9 @@ pub fn skills_root() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("MONTAGE_SKILLS_ROOT") {
         return Some(PathBuf::from(env));
     }
+    if let Some(found) = bundled_skills_root() {
+        return Some(found);
+    }
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
         && let Some(found) = walk_up_for_skills(parent)
@@ -186,16 +189,42 @@ pub fn skills_root() -> Option<PathBuf> {
     None
 }
 
+fn bundled_skills_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_skills_root_from_exe(&exe)
+}
+
+fn bundled_skills_root_from_exe(exe: &Path) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    for candidate in [
+        exe_dir.join("skills"),
+        exe_dir.join("_up_/_up_/_up_/skills"),
+        exe_dir.join("../Resources/skills"),
+        exe_dir.join("../Resources/_up_/_up_/_up_/skills"),
+        exe_dir.join("../resources/skills"),
+        exe_dir.join("../resources/_up_/_up_/_up_/skills"),
+    ] {
+        if skills_marker_exists(&candidate) {
+            return Some(candidate.canonicalize().unwrap_or(candidate));
+        }
+    }
+    None
+}
+
 fn walk_up_for_skills(start: &Path) -> Option<PathBuf> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
         let candidate = dir.join("skills");
-        if candidate.join(".bundled-marker").exists() {
+        if skills_marker_exists(&candidate) {
             return Some(candidate);
         }
         cur = dir.parent();
     }
     None
+}
+
+fn skills_marker_exists(candidate: &Path) -> bool {
+    candidate.join(".bundled-marker").exists()
 }
 
 /// Primary user-scoped skills dir. On macOS this is usually
@@ -206,13 +235,17 @@ pub fn user_skills_root() -> Option<PathBuf> {
 }
 
 /// User-scoped skill directories, ordered from lower to higher
-/// priority. We include the XDG-style `~/.config/montage/skills`
-/// fallback even on macOS so skills copied there by older docs or
-/// hand-written installers still load.
+/// priority. Keep this in sync with the desktop catalog renderer so
+/// `load_skill` can resolve every skill the agent was shown.
 pub fn user_skills_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".awidat/skills"));
+        roots.push(home.join(".montage/skills"));
         roots.push(home.join(".config/montage/skills"));
+    }
+    if let Some(config) = dirs::config_dir() {
+        roots.push(config.join("awidat/skills"));
     }
     if let Some(primary) = user_skills_root()
         && !roots.iter().any(|p| p == &primary)
@@ -723,6 +756,33 @@ mod tests {
         let resolved = bundled_python_root_from_exe(&dir.path().join("montage-desktop"));
 
         let expected = python.canonicalize().unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_skills_root_from_exe_checks_tauri_resource_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("MacOS")).unwrap();
+        let skills = dir.path().join("Resources/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join(".bundled-marker"), b"").unwrap();
+
+        let resolved = bundled_skills_root_from_exe(&dir.path().join("MacOS/montage-desktop"));
+
+        let expected = skills.canonicalize().unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_path()));
+    }
+
+    #[test]
+    fn bundled_skills_root_from_exe_checks_direct_resource_up_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = dir.path().join("_up_/_up_/_up_/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join(".bundled-marker"), b"").unwrap();
+
+        let resolved = bundled_skills_root_from_exe(&dir.path().join("montage-desktop"));
+
+        let expected = skills.canonicalize().unwrap();
         assert_eq!(resolved.as_deref(), Some(expected.as_path()));
     }
 

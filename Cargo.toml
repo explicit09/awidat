@@ -588,8 +588,18 @@ strip = "symbols"
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+# codegen-units intentionally left at the default (16): cu=1 made release
+# compiles 2-3x slower across the ~1000-crate closure for low-single-digit %
+# runtime gains (thin LTO recovers most cross-unit inlining). The CPU-bound
+# montage crates below keep cu=1 where it can actually matter.
 strip = "symbols"
+
+[profile.release.package.montage-lut]
+codegen-units = 1
+[profile.release.package.montage-effects]
+codegen-units = 1
+[profile.release.package.montage-render]
+codegen-units = 1
 
 [profile.profiling]
 # Codex profile for sampling profilers: release-shaped binary with

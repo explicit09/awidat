@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { History, Plus } from "lucide-react";
 import { ChatStream } from "../agent/ChatStream";
+import type { PermissionMode } from "../protocol/generated/PermissionMode";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
 type ConversationPanelProps = {
@@ -18,6 +19,8 @@ type ConversationPanelProps = {
   onOpenHistory?: () => void;
   onSelectChatSession?: (session: ChatSessionSummary) => void;
   onNewChat?: () => void;
+  permissionMode?: PermissionMode;
+  onSetPermissionMode?: (mode: PermissionMode) => void;
 };
 
 export function ConversationPanel({
@@ -35,6 +38,8 @@ export function ConversationPanel({
   onOpenHistory,
   onSelectChatSession,
   onNewChat,
+  permissionMode = "manual",
+  onSetPermissionMode,
 }: ConversationPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
@@ -160,6 +165,22 @@ export function ConversationPanel({
           >
             <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
           </button>
+          <label className="stage-permission-control" title="Agent permission mode">
+            <span className="stage-permission-icon" aria-hidden>
+              ∞
+            </span>
+            <select
+              className="stage-permission-select"
+              value={permissionMode}
+              disabled={!onSetPermissionMode}
+              onChange={(event) => onSetPermissionMode?.(event.target.value as PermissionMode)}
+              aria-label="Agent permission mode"
+            >
+              <option value="manual">Manual</option>
+              <option value="copilot">Copilot</option>
+              <option value="autopilot">Auto</option>
+            </select>
+          </label>
         </div>
         {historyOpen ? (
           <div className="stage-chat-history mt-2 max-h-48 overflow-auto rounded-lg border border-[var(--glass-border)] bg-[rgba(10,10,18,0.86)] p-1">

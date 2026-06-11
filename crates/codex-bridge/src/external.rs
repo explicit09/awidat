@@ -28,6 +28,7 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const SERVER_ERROR: i64 = -32000;
 const AUTH_REFRESH_UNSUPPORTED: &str =
     "chatgpt auth token refresh is not supported for external app-server runtime";
+const PERMISSION_MODE_FILE: &str = "permission_mode";
 const SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
@@ -179,6 +180,36 @@ pub fn app_server_args(mcp_server_path: Option<&Path>, project_root: &Path) -> V
     )
 }
 
+/// Custom auto-compaction prompt. Codex's default compact prompt is a
+/// generic "handoff summary" — it drops the facts a mid-production
+/// editing agent needs to keep going: which skills were loaded (their
+/// L2 bodies are tool outputs, which compaction discards entirely),
+/// which playbook stage is in flight, and what edits already landed.
+/// Without these, the post-compaction model improvises the rest of the
+/// pipeline instead of following the playbook. See
+/// vendor/codex-rs/core/src/compact.rs for what survives compaction:
+/// initial context + ~20k tokens of recent user messages + this
+/// summary; everything else is gone.
+const COMPACT_PROMPT: &str = "\
+You are performing a CONTEXT CHECKPOINT COMPACTION for a video-editing agent \
+that is mid-task. Write a handoff summary so another LLM can resume the SAME \
+production without losing the workflow.
+
+Include, in this order:
+1. The user's goal, the active workflow/playbook, and the current stage — \
+list stages already DONE and stages REMAINING.
+2. Skills loaded via load_skill (exact names). State explicitly that the \
+resuming LLM MUST call load_skill again for each one before continuing — \
+skill playbook bodies do NOT survive compaction.
+3. Timeline/edit state: edits applied (clip/proposal ids and source ranges), \
+accepted-but-unapplied proposal ids, and anything rolled back or failed.
+4. Key decisions, measurements, thresholds, constraints, and user \
+preferences already established.
+5. Concrete next steps, in playbook order.
+
+Never present the task as complete while playbook stages remain. Do not drop \
+the stage list to save space.";
+
 fn app_server_args_with_openrouter_cost_estimate(
     mcp_server_path: Option<&Path>,
     project_root: &Path,
@@ -191,6 +222,14 @@ fn app_server_args_with_openrouter_cost_estimate(
         "--enable-codex-api-key-env".to_string(),
         "-c".to_string(),
         "model_auto_compact_token_limit=200000".to_string(),
+        "-c".to_string(),
+        format_toml_string_override_value("compact_prompt", COMPACT_PROMPT),
+        "-c".to_string(),
+        "project_doc_max_bytes=0".to_string(),
+        "-c".to_string(),
+        format_toml_string_override_value("approval_policy", codex_approval_policy(project_root)),
+        "-c".to_string(),
+        "features.tool_search_always_defer_mcp_tools=true".to_string(),
     ];
     if let Some(mcp_path) = mcp_server_path {
         args.extend([
@@ -217,12 +256,40 @@ fn app_server_args_with_openrouter_cost_estimate(
     args
 }
 
+fn codex_approval_policy(project_root: &Path) -> &'static str {
+    let path = project_root.join(".montage").join(PERMISSION_MODE_FILE);
+    match std::fs::read_to_string(path).ok().as_deref().map(str::trim) {
+        Some("autopilot") => "never",
+        Some("manual" | "copilot") | None => "on-request",
+        Some(_) => "on-request",
+    }
+}
+
 fn format_toml_string_override(key: &str, path: &Path) -> String {
     format_toml_string_override_value(key, &path.display().to_string())
 }
 
 fn format_toml_string_override_value(key: &str, raw: &str) -> String {
-    let value = toml::Value::String(raw.to_string()).to_string();
+    // Always emit a single-line TOML basic string. The toml crate's
+    // Display switches to `"""` multi-line form for values containing
+    // newlines, which codex's `-c` value parser rejects — escape
+    // control characters instead.
+    let mut value = String::with_capacity(raw.len() + 2);
+    value.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => value.push_str("\\\""),
+            '\\' => value.push_str("\\\\"),
+            '\n' => value.push_str("\\n"),
+            '\r' => value.push_str("\\r"),
+            '\t' => value.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                value.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => value.push(c),
+        }
+    }
+    value.push('"');
     format!("{key}={value}")
 }
 
@@ -436,13 +503,25 @@ fn response_id(value: &serde_json::Value) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_project_dir(name: &str) -> PathBuf {
+        let nonce = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "montage-codex-bridge-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test project dir");
+        dir
+    }
 
     #[test]
     fn app_server_args_include_stdio_and_montage_mcp_overrides() {
-        let args = app_server_args(
-            Some(Path::new("/bin/montage-mcp-server")),
-            Path::new("/tmp/p"),
-        );
+        let dir = test_project_dir("mcp-overrides");
+        let args = app_server_args(Some(Path::new("/bin/montage-mcp-server")), &dir);
         assert!(
             args.windows(3)
                 .any(|w| w == ["--listen", "stdio://", "--enable-codex-api-key-env"])
@@ -451,17 +530,23 @@ mod tests {
             args.iter()
                 .any(|arg| arg == "mcp_servers.montage.command=\"/bin/montage-mcp-server\"")
         );
+        let project_override = format!(
+            "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT=\"{}\"",
+            dir.display()
+        );
+        assert!(args.iter().any(|arg| arg == &project_override));
         assert!(
             args.iter()
-                .any(|arg| arg == "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT=\"/tmp/p\"")
+                .any(|arg| arg == "features.tool_search_always_defer_mcp_tools=true")
         );
     }
 
     #[test]
     fn app_server_args_forward_openrouter_cost_estimate_to_mcp() {
+        let dir = test_project_dir("cost-estimate");
         let args = app_server_args_with_openrouter_cost_estimate(
             Some(Path::new("/bin/montage-mcp-server")),
-            Path::new("/tmp/p"),
+            &dir,
             Some("0.42"),
         );
         assert!(args.iter().any(|arg| {
@@ -471,18 +556,66 @@ mod tests {
 
     #[test]
     fn app_server_args_allow_missing_mcp_path_for_degraded_startup() {
-        let args = app_server_args(None, Path::new("/tmp/p"));
+        let dir = test_project_dir("missing-mcp");
+        let args = app_server_args(None, &dir);
+        let expected: Vec<String> = vec![
+            "app-server".into(),
+            "--listen".into(),
+            "stdio://".into(),
+            "--enable-codex-api-key-env".into(),
+            "-c".into(),
+            "model_auto_compact_token_limit=200000".into(),
+            "-c".into(),
+            format_toml_string_override_value("compact_prompt", COMPACT_PROMPT),
+            "-c".into(),
+            "project_doc_max_bytes=0".into(),
+            "-c".into(),
+            "approval_policy=\"on-request\"".into(),
+            "-c".into(),
+            "features.tool_search_always_defer_mcp_tools=true".into(),
+        ];
+        assert_eq!(args, expected);
+    }
+
+    #[test]
+    fn compact_prompt_override_survives_toml_round_trip() {
+        // Mirror codex's `-c` parsing exactly (utils/cli
+        // config_override.rs): split on the first '=', then parse the
+        // value side as a TOML value via a sentinel table. The prompt
+        // is multi-line, so this guards the single-line escaping in
+        // format_toml_string_override_value.
+        let override_arg = format_toml_string_override_value("compact_prompt", COMPACT_PROMPT);
+        let (key, value_str) = override_arg.split_once('=').expect("key=value form");
+        assert_eq!(key, "compact_prompt");
+        let wrapped = format!("_x_ = {value_str}");
+        let table: toml::Table = toml::from_str(&wrapped).expect("valid TOML value");
         assert_eq!(
-            args,
-            [
-                "app-server",
-                "--listen",
-                "stdio://",
-                "--enable-codex-api-key-env",
-                "-c",
-                "model_auto_compact_token_limit=200000"
-            ]
+            table.get("_x_").and_then(toml::Value::as_str),
+            Some(COMPACT_PROMPT),
         );
+        assert!(COMPACT_PROMPT.contains("load_skill again"));
+    }
+
+    #[test]
+    fn app_server_args_default_old_projects_to_manual_approval() {
+        let dir = test_project_dir("default-manual");
+        let args = app_server_args(None, &dir);
+        assert!(
+            args.iter()
+                .any(|arg| arg == "approval_policy=\"on-request\"")
+        );
+    }
+
+    #[test]
+    fn app_server_args_map_autopilot_to_codex_never() {
+        let dir = test_project_dir("autopilot");
+        std::fs::create_dir_all(dir.join(".montage")).expect("create .montage");
+        std::fs::write(dir.join(".montage/permission_mode"), "autopilot")
+            .expect("write permission mode");
+
+        let args = app_server_args(None, &dir);
+
+        assert!(args.iter().any(|arg| arg == "approval_policy=\"never\""));
     }
 
     #[test]
@@ -584,6 +717,9 @@ mod tests {
         ));
         assert!(is_supported_server_request_method(
             "item/tool/requestUserInput"
+        ));
+        assert!(!is_supported_server_request_method(
+            "mcpServer/elicitation/request"
         ));
         assert!(!is_supported_server_request_method("future/server/request"));
     }

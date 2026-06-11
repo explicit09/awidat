@@ -556,8 +556,10 @@ mod tests {
     /// mid-run races another that just set it, surfacing as intermittent
     /// "no shaper" failures (finding 3364995226). Every test that sets or
     /// removes the var holds this lock for the duration of its mutation and
-    /// the `run()` call.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    /// the `run()` call. Crate-shared so READERS in other modules (e.g.
+    /// plan_look_regions resolving bundled scripts via skills_root())
+    /// serialize against the mutations too.
+    use crate::test_env::SKILLS_ROOT_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn normalize_lut_path_rejects_absolute_and_traversal() {

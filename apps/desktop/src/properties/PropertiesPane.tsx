@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTimelineStore } from "../timeline/store";
 import type { TimelineItem, TimelineTrack } from "../timeline/store";
-import { useTimelineSelectionStore } from "./store";
+import { useColorPreviewOverride, useTimelineSelectionStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
@@ -1485,6 +1485,20 @@ function colorSignature(value: ColorCorrectionValue): string {
     .join("|");
 }
 
+function toColorStyling(
+  v: ColorCorrectionValue,
+): import("../protocol").ColorCorrectionStyling {
+  return {
+    exposure_ev: v.exposureEv,
+    contrast: v.contrast,
+    saturation: v.saturation,
+    temperature: v.temperature,
+    tint: v.tint,
+    shadows: v.shadows,
+    highlights: v.highlights,
+  };
+}
+
 function ColorCorrectionControl({
   clipUuid,
   value,
@@ -1495,12 +1509,23 @@ function ColorCorrectionControl({
   const initial = normalizeColorCorrection(value);
   const [local, setLocal] = useState<ColorCorrectionValue>(initial);
   const lastCommittedRef = useRef<string>(colorSignature(initial));
+  const setPreviewOverride = useColorPreviewOverride((s) => s.setOverride);
+  const clearPreviewOverride = useColorPreviewOverride((s) => s.clearOverride);
 
   useEffect(() => {
     const next = normalizeColorCorrection(value);
     setLocal(next);
     lastCommittedRef.current = colorSignature(next);
-  }, [clipUuid, value]);
+    // Persisted values caught up (accept landed / clip changed) — the
+    // monitor should render from the timeline again, not the drag.
+    clearPreviewOverride();
+  }, [clipUuid, value, clearPreviewOverride]);
+
+  // Leaving the control (deselect, panel switch) ends the live
+  // preview for this clip; a newer clip's override is left alone.
+  useEffect(() => {
+    return () => clearPreviewOverride(clipUuid);
+  }, [clipUuid, clearPreviewOverride]);
 
   const currentSig = colorSignature(local);
   const dirty = currentSig !== lastCommittedRef.current;
@@ -1509,11 +1534,15 @@ function ColorCorrectionControl({
     key: K,
     nextValue: number,
   ) {
-    setLocal((prev) => ({ ...prev, [key]: nextValue }));
+    setLocal((prev) => {
+      const next = { ...prev, [key]: nextValue };
+      // Live monitor feedback while dragging — before Apply/Accept.
+      setPreviewOverride({ clipUuid, values: toColorStyling(next) });
+      return next;
+    });
   }
 
   function apply() {
-    lastCommittedRef.current = currentSig;
     const op: EdlOp = {
       kind: "set_color_correction",
       anchor: { kind: "clip_uuid", uuid: clipUuid },
@@ -1526,6 +1555,7 @@ function ColorCorrectionControl({
       highlights: local.highlights,
     };
     editorDispatch.proposeUserEdit([op]).catch((err) => {
+      clearPreviewOverride(clipUuid);
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_color_correction) failed", err);
     });
@@ -1658,6 +1688,23 @@ function LutControl({
   const initial = lutPath ?? "";
   const [local, setLocal] = useState(initial);
   const lastCommittedRef = useRef(initial);
+  // Project .cube files for the dropdown — scanned once per mount;
+  // the free-text input remains for paths the scan missed.
+  const [available, setAvailable] = useState<string[]>([]);
+
+  useEffect(() => {
+    let stale = false;
+    invoke<string[]>("list_preview_luts")
+      .then((luts) => {
+        if (!stale) setAvailable(luts);
+      })
+      .catch(() => {
+        // No project / scan failure — dropdown simply doesn't render.
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
 
   useEffect(() => {
     setLocal(initial);
@@ -1714,6 +1761,25 @@ function LutControl({
     <Field label="LUT">
       <div className="properties-lut-row">
         <LutSwatch state={lutState} />
+        {available.length > 0 && (
+          <select
+            className="properties-select"
+            value={available.includes(local) ? local : ""}
+            onChange={(e) => {
+              if (e.target.value) setLocal(e.target.value);
+            }}
+            aria-label="Choose a project LUT"
+          >
+            <option value="">
+              {local && !available.includes(local) ? "(custom path)" : "Choose LUT…"}
+            </option>
+            {available.map((path) => (
+              <option key={path} value={path}>
+                {path}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           type="text"
           className="properties-text-input"
