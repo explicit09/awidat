@@ -18,6 +18,14 @@ tools_allowlist:
   - find_filler_words
   - find_false_starts
   - podcast_editorial_review_pack
+  - podcast_apply_accepted_edits
+  - podcast_smooth_cut_boundaries
+  - podcast_post_draft_check
+  - podcast_visual_polish
+  - podcast_audio_polish
+  - podcast_qc_report
+  - transition_context
+  - plan_transition
   - find_speaker_oncam
   - plan_visual_support
   - plan_visual_support_proposals
@@ -44,6 +52,13 @@ goal is **a single ~30-90 minute mp4 the user can publish today**. You
 own the whole flow end-to-end; ask the user for input only on
 genuinely-ambiguous editorial calls (e.g. "do you want to keep this
 tangent at 22:14?"), not on mechanics.
+
+Completion means the whole producer pipeline, not a few cleanup edits.
+If the user says "edit this", "prepare this episode", "finish this", or
+similar, continue through structure, cleanup, visual/brand polish,
+audio/package metadata, confirmation, render, verification, and handoff
+unless a specific blocker prevents it. Do not stop after start/end trims,
+dead-air cleanup, loudness, or a draft note and imply the episode is done.
 
 ## The editor-order playbook
 
@@ -175,6 +190,14 @@ boundary, stamp `Set Cut Intent` for a clean hard cut, use
 `Set Audio Lead` / `Set Audio Trail` for J/L speaker handoffs, or cover
 the visual discontinuity with b-roll. Do not hide mid-sentence or
 mid-motion problems with a decorative dissolve.
+
+After applying any transcript, chatter, dead-air, filler, false-start, or
+planning removal, run `podcast_smooth_cut_boundaries` using the applied edit
+batch, then run every returned `assess_edit_quality` call. A hard cut is not
+complete until the boundary is either recut, converted to `Set Audio Lead` /
+`Set Audio Trail`, covered with motivated visual support, changed through
+`transition_context` / `plan_transition`, or explicitly stamped with verified
+hard-cut evidence from the quality check.
 
 ### 6. Draft the timeline
 
@@ -380,6 +403,10 @@ or the source material genuinely demands it.
   `Set Audio Lead` / `Set Audio Trail` before reaching for a visible
   transition. If a hard cut works, stamp `Set Cut Intent` so the edit
   graph preserves why it stays hard.
+- **Post-cut gate**: cleanup hard cuts without smoothing or
+  `assess_edit_quality` evidence are render blockers. Run
+  `podcast_qc_report` before render and fix every `error` issue; do not
+  present the episode as finished while workflow sections are `blocked`.
 - **Render scope**: ALWAYS `scope="timeline"`. Never `scope="preview"`
   for the final cut — preview gives you the raw asset, not the edit.
 - **Lower thirds and chapters**: use `Set Broadcast Overlay` for show
