@@ -450,18 +450,25 @@ or the source material genuinely demands it.
 A full episode production is longer than one context window. Budget
 for that from the start instead of discovering it at the end:
 
-- Maintain `update_plan` with one step per playbook stage. Use this
-  exact step list — do not merge or drop stages, and keep the
-  post-confirmation stages in the plan from the start (the plan is
-  your recovery spine if the context is compacted; a plan that ends
-  at "confirm" loses the render/package stages to a late compaction):
+- Maintain `update_plan` with one step per production gate. The
+  backbone below guarantees COVERAGE — it does not script the edit.
+  How you cut inside each gate (cold-open choice, story order,
+  punch-ins, b-roll taste, pacing, what deserves a MotionScene) is
+  editorial judgment, and loaded brand/private/user skills extend or
+  replace gates when they match: fold their workflows into the plan
+  as their own steps (a show package expands gate 6 with its overlay
+  and chapter workflow; a multicam or short-form skill adds its own
+  passes). What you must NOT do is silently drop a gate, or end the
+  plan at the confirmation gate — the plan is your recovery spine if
+  the context is compacted, and a plan without the render/package
+  gates loses them to a late compaction.
   1. Preflight assets, instructions, timeline state
-  2. Find real start AND ending; decide cold open
-  3. Editorial spine: find_beat hooks/punchlines/CTA + dependencies
+  2. Real start AND ending; cold-open decision
+  3. Editorial spine: hooks/punchlines/CTA + dependencies
   4. Radio edit: classify + apply cleanup, repair boundaries
-  5. Draft structure: 3-act order on the spine
-  6. Apply brand package (overlay, lower thirds, ticker, chapters)
-  7. Visual polish + audio mix + loudness/package metadata
+  5. Structure: order the body on the spine
+  6. Brand/show package applied (or reported unavailable)
+  7. Visual support + audio mix + loudness/package metadata
   8. Confirm overall structure with the user
   9. Render scope="timeline", poll to completed, verify
   10. Publishing package: title/description/chapters/tags/thumbnail,
