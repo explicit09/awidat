@@ -291,10 +291,16 @@ Once the conversation flow is locked, make visual decisions:
   one timeline-level graph config.
 - Build one canonical chapter/topic list from transcript/topic evidence
   and reuse it for overlay cards, ticker topics, YouTube chapters,
-  metadata, and shorts planning. For long-form episodes, aim for 5-8
-  meaningful chapters. Chapter names should promise a viewer payoff
-  ("Why Hardware Startups Move Slower"), not just label a subject
-  ("Hardware").
+  metadata, and shorts planning. Chapter density is time-based, not a
+  fixed count: aim for a chapter roughly every 4-6 minutes of runtime
+  (an 80-minute episode wants ~13-18 chapters, not 8). Let real topic
+  arcs set the exact count — a deep-dive can stretch past 6 minutes,
+  quick topic runs can tighten toward 3-4. Chapter names should promise
+  a viewer payoff ("Why Hardware Startups Move Slower"), not just label
+  a subject ("Hardware"). Chapters drive the structural layer (chapter
+  cards + YouTube chapters); ticker "NOW DISCUSSING" topics are a
+  separate, denser layer that may subdivide a chapter so the lower
+  third keeps refreshing — topics need not match chapters 1:1.
 - Chapters/topics are timeline-relative after extraction and cuts.
   Primary `Delete Clip` edits shift broadcast overlay timestamps
   forward in the graph, but after major restructuring you should
