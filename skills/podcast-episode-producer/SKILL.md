@@ -278,6 +278,9 @@ Once the conversation flow is locked, make visual decisions:
 - Use `find_broll_opportunities` and the b-roll skills for products,
   locations, websites, screenshots, charts, logos, photos, and demos.
   B-roll should support the sentence; random b-roll is worse than none.
+- For real-number charts, animated stat counters, or polished motion
+  assets beyond the MotionScene subset, load the `drawn-artifacts`
+  skill (matplotlib/Manim/Lottie generators with alpha-safe outputs).
 - Add lower thirds, chapter cards, sponsor cards, intro/outro cards,
   and text callouts with `Insert Title`. Keep them short and readable.
 - Use frame-quality/shot/gaze data for thumbnail candidates and camera
