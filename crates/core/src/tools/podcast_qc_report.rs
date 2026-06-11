@@ -98,8 +98,14 @@ pub(crate) fn build_podcast_qc_report(
             "message": "No cut-boundary intent metadata found; suspicious cuts may be harder to audit."
         }));
     }
-    let workflow_sections = workflow_section_receipt(project.timeline.metadata.montage.as_ref());
-    collect_workflow_guardrail_issues(project.timeline.metadata.montage.as_ref(), &mut issues);
+    let transition_keys = transition_boundary_keys(&project.timeline.tracks);
+    let workflow_sections =
+        workflow_section_receipt(project.timeline.metadata.montage.as_ref(), &transition_keys);
+    collect_workflow_guardrail_issues(
+        project.timeline.metadata.montage.as_ref(),
+        &transition_keys,
+        &mut issues,
+    );
     let status = if issues.iter().any(|issue| issue["severity"] == "error") {
         "blocked"
     } else if issues.iter().any(|issue| issue["severity"] == "warning") {
@@ -118,7 +124,10 @@ pub(crate) fn build_podcast_qc_report(
     })
 }
 
-fn workflow_section_receipt(meta: Option<&MontageTimelineMetadata>) -> serde_json::Value {
+fn workflow_section_receipt(
+    meta: Option<&MontageTimelineMetadata>,
+    transition_keys: &std::collections::HashSet<String>,
+) -> serde_json::Value {
     let Some(meta) = meta else {
         return serde_json::json!([]);
     };
@@ -129,8 +138,10 @@ fn workflow_section_receipt(meta: Option<&MontageTimelineMetadata>) -> serde_jso
         .count();
     let unresolved_cleanup_cut_count = meta
         .cut_boundaries
-        .values()
-        .filter(|spec| is_unverified_cleanup_hard_cut(spec))
+        .iter()
+        .filter(|(boundary, spec)| {
+            is_unverified_cleanup_hard_cut(boundary, spec, transition_keys)
+        })
         .count();
     serde_json::json!([
         {
@@ -181,13 +192,14 @@ fn workflow_section_receipt(meta: Option<&MontageTimelineMetadata>) -> serde_jso
 
 fn collect_workflow_guardrail_issues(
     meta: Option<&MontageTimelineMetadata>,
+    transition_keys: &std::collections::HashSet<String>,
     issues: &mut Vec<serde_json::Value>,
 ) {
     let Some(meta) = meta else {
         return;
     };
     for (boundary, spec) in &meta.cut_boundaries {
-        if is_unverified_cleanup_hard_cut(spec) {
+        if is_unverified_cleanup_hard_cut(boundary, spec, transition_keys) {
             issues.push(serde_json::json!({
                 "kind": "cleanup_hard_cut_smoothing_missing",
                 "severity": "error",
@@ -195,17 +207,71 @@ fn collect_workflow_guardrail_issues(
                 "cut_type": "hard_cut",
                 "intent": spec.intent,
                 "reason": spec.reason,
-                "message": "Cleanup/transcript-removal hard cut has no smoothing or assess_edit_quality evidence. Run podcast_smooth_cut_boundaries, assess_edit_quality for this boundary, then recut, Set Audio Lead/Trail, cover with b-roll/cutaway, or stamp verified hard-cut evidence."
+                "message": "Cleanup/transcript-removal hard cut has no smoothing or assess_edit_quality evidence. Run podcast_smooth_cut_boundaries, assess_edit_quality for this boundary, then recut, Set Audio Lead/Trail, cover with b-roll/cutaway, insert a transition at the boundary, or stamp verified hard-cut evidence."
             }));
         }
     }
 }
 
-fn is_unverified_cleanup_hard_cut(spec: &SemanticCutSpec) -> bool {
+fn is_unverified_cleanup_hard_cut(
+    boundary: &str,
+    spec: &SemanticCutSpec,
+    transition_keys: &std::collections::HashSet<String>,
+) -> bool {
     is_cleanup_cut(spec)
         && spec.cut_type == CutType::HardCut
         && spec.audio_relation == AudioRelation::Sync
         && !has_cut_quality_evidence(spec)
+        // A transition physically spanning this clip pair IS the
+        // smoothing — the playbook sanctions plan_transition as a
+        // repair, so QC must not keep flagging a covered boundary.
+        && !transition_keys.contains(boundary)
+}
+
+/// Collect `{from}::{to}` boundary keys for every transition that sits
+/// between two clips, matching `montage_proto::montage_meta::cut_boundary_key`.
+fn transition_boundary_keys(stack: &Stack) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    collect_transition_keys_from_stack(stack, &mut keys);
+    keys
+}
+
+fn collect_transition_keys_from_stack(
+    stack: &Stack,
+    keys: &mut std::collections::HashSet<String>,
+) {
+    for stack_child in &stack.children {
+        match stack_child {
+            StackChild::Track(track) => {
+                for (index, child) in track.children.iter().enumerate() {
+                    if !matches!(child, TrackChild::Transition(_)) {
+                        continue;
+                    }
+                    let from = track.children[..index].iter().rev().find_map(qc_clip_id);
+                    let to = track.children[index + 1..].iter().find_map(qc_clip_id);
+                    if let (Some(from), Some(to)) = (from, to) {
+                        keys.insert(montage_proto::montage_meta::cut_boundary_key(from, to));
+                    }
+                }
+            }
+            StackChild::Stack(inner) => collect_transition_keys_from_stack(inner, keys),
+            _ => {}
+        }
+    }
+}
+
+fn qc_clip_id(child: &TrackChild) -> Option<&str> {
+    let TrackChild::Clip(clip) = child else {
+        return None;
+    };
+    Some(
+        clip.metadata
+            .montage
+            .as_ref()
+            .and_then(|meta| meta.extra.get("clip_uuid"))
+            .and_then(|value| value.as_str())
+            .unwrap_or(clip.name.as_str()),
+    )
 }
 
 fn is_cleanup_cut(spec: &SemanticCutSpec) -> bool {
@@ -645,6 +711,61 @@ mod tests {
                 .iter()
                 .any(|section| {
                     section["id"] == "cleanup_cut_smoothing" && section["status"] == "blocked"
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn transition_at_boundary_satisfies_smoothing_gate() {
+        // The agent covered the cleanup boundary with a transition
+        // (e.g. montage.motion_blur via Insert Transition) — QC must
+        // count that as smoothing instead of staying blocked.
+        let dir = tempfile::tempdir().unwrap();
+        write_cleanup_cut_project(dir.path(), false);
+        let mut project = Project::read(dir.path()).unwrap();
+        let StackChild::Track(track) = &mut project.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let transition = montage_proto::otio::Transition {
+            name: "motion blur".into(),
+            transition_type: "montage.motion_blur".into(),
+            in_offset: RationalTime::new(0.09 * 24.0, 24.0),
+            out_offset: RationalTime::new(0.09 * 24.0, 24.0),
+            metadata: Default::default(),
+        };
+        track
+            .children
+            .insert(1, TrackChild::Transition(transition));
+        project.write(dir.path()).unwrap();
+
+        let out = PodcastQcReportTool
+            .handle(
+                ToolInvocation {
+                    call_id: "q5".into(),
+                    name: "podcast_qc_report".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert!(
+            !value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "cleanup_hard_cut_smoothing_missing"),
+            "transition spanning the boundary must satisfy the smoothing gate; got {}",
+            value["issues"]
+        );
+        assert!(
+            value["workflow_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|section| {
+                    section["id"] == "cleanup_cut_smoothing" && section["status"] == "done"
                 })
         );
     }
