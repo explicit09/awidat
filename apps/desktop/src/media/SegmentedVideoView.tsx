@@ -44,6 +44,10 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import {
+  driftRecoveryAction,
+  timelineTimeForSegmentPosition,
+} from "./previewHandoff";
+import {
   shouldRenderTransitionOnGpu,
   useGpuTransitionPreview,
 } from "./useGpuTransitionPreview";
@@ -391,9 +395,24 @@ function SegmentedPlayer({
     const v = active.ref.current;
     if (!v) return;
     applySegmentPlaybackSettings(v, seg);
-    syncVideoToTimeline(v, seg, timelineTime, {
-      force: forceMediaSyncRef.current || enteredSegment || !isPlaying,
-    });
+    const precise = forceMediaSyncRef.current || !isPlaying;
+    const desiredSource = sourceTimeForTimelineTime(seg, timelineTime);
+    if (Number.isFinite(desiredSource)) {
+      const action = driftRecoveryAction({
+        precise,
+        entry: enteredSegment && !precise,
+        elementPaused: v.paused,
+        driftS: desiredSource - (v.currentTime || 0),
+      });
+      if (action === "seekElement") {
+        tryAssignCurrentTime(v, desiredSource);
+      } else if (action === "rebaseClock") {
+        previewClockSeek(
+          clockRef.current,
+          timelineTimeForSegmentPosition(seg, v.currentTime || 0),
+        );
+      }
+    }
     forceMediaSyncRef.current = false;
     if (isPlaying) {
       playSlot(active);
@@ -492,10 +511,23 @@ function SegmentedPlayer({
     if (!v || slot.segIdx < 0) return;
     const seg = segmentsRef.current[slot.segIdx];
     if (!seg) return;
-    const desired =
-      key === activeKeyRef.current
-        ? sourceTimeForTimelineTime(seg, useMediaStore.getState().timelineTime)
-        : seg.sourceStart;
+    const isActive = key === activeKeyRef.current;
+    if (isActive && useMediaStore.getState().isPlaying) {
+      // canplay/loadedmetadata after a seek or decode underrun while
+      // playback runs. The wall clock kept advancing while the decoder
+      // worked, so re-seeking the element against it would stall again
+      // and cascade (seek → canplay → clock ran ahead → seek …). Hold
+      // the video; move the CLOCK to where the media actually is.
+      const mapped = timelineTimeForSegmentPosition(seg, v.currentTime);
+      if (Math.abs(previewClockNow(clockRef.current) - mapped) > 0.05) {
+        previewClockSeek(clockRef.current, mapped);
+      }
+      playActiveSlotIfNeeded(slot);
+      return;
+    }
+    const desired = isActive
+      ? sourceTimeForTimelineTime(seg, useMediaStore.getState().timelineTime)
+      : seg.sourceStart;
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
     }
@@ -588,6 +620,23 @@ function SegmentedPlayer({
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
     if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
     if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
+    // Above 2× the audio time-stretcher (pitch correction) is real
+    // CPU that competes with video decode — shuttle-style playback
+    // drops it, like every NLE. WebKit ships it prefixed.
+    const wantPitchCorrection = effectiveRate <= 2;
+    const media = v as HTMLVideoElement & {
+      preservesPitch?: boolean;
+      webkitPreservesPitch?: boolean;
+    };
+    if (typeof media.preservesPitch === "boolean") {
+      if (media.preservesPitch !== wantPitchCorrection) {
+        media.preservesPitch = wantPitchCorrection;
+      }
+    } else if (typeof media.webkitPreservesPitch === "boolean") {
+      if (media.webkitPreservesPitch !== wantPitchCorrection) {
+        media.webkitPreservesPitch = wantPitchCorrection;
+      }
+    }
   }
 
   useEffect(() => {
@@ -599,8 +648,18 @@ function SegmentedPlayer({
   }, [activeKey, volume, rate]);
 
   function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
-    const err = e.currentTarget.error;
+    const el = e.currentTarget;
+    const err = el.error;
     const code = err ? `code ${err.code}` : "unknown error";
+    // Only the visible slot's failures warrant blanking the monitor.
+    // The hidden preroll slot errors transiently while its media URL
+    // is still resolving; if its media is genuinely broken, the same
+    // error re-fires when it becomes the active slot.
+    if (el !== slotsRef.current[activeKeyRef.current].ref.current) {
+      // eslint-disable-next-line no-console
+      console.warn(`preroll slot media error (${code})`);
+      return;
+    }
     setMediaError(`Preview media failed to load (${code}).`);
   }
 
@@ -2192,22 +2251,6 @@ function TimelineGapOverlay() {
       aria-hidden="true"
     />
   );
-}
-
-function syncVideoToTimeline(
-  v: HTMLVideoElement,
-  seg: PlaySegment,
-  timelineTime: number,
-  opts: { force?: boolean } = {},
-) {
-  const desired = sourceTimeForTimelineTime(seg, timelineTime);
-  if (!Number.isFinite(desired)) return;
-  const drift = Math.abs((v.currentTime || 0) - desired);
-  const playingVideo = !v.paused;
-  const threshold = opts.force || !playingVideo ? 0.02 : 0.5;
-  if (drift > threshold) {
-    tryAssignCurrentTime(v, desired);
-  }
 }
 
 // Some browsers throw when setting currentTime before the readyState
