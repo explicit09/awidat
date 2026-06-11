@@ -4,10 +4,50 @@ import {
   SHUTTLE_MIN_RATE,
   UNDERRUN_REBASE_MAX_S,
   driftRecoveryAction,
+  fadeGainMultiplier,
   isShuttleRate,
   syncDriftThresholdS,
   timelineTimeForSegmentPosition,
 } from "../src/media/previewHandoff.ts";
+
+// --- fadeGainMultiplier ------------------------------------------------------
+
+const fadeClip = { startS: 10, endS: 20, fadeInS: 2, fadeOutS: 4 };
+
+// No fades → unity everywhere.
+{
+  const noFades = { ...fadeClip, fadeInS: null, fadeOutS: null };
+  assert.equal(fadeGainMultiplier({ ...noFades, timelineTimeS: 10 }), 1);
+  assert.equal(fadeGainMultiplier({ ...noFades, timelineTimeS: 19.99 }), 1);
+}
+
+// Linear ramp through the fade-in, unity in the middle.
+{
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 10 }), 0);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 11 }), 0.5);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 12 }), 1);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 14 }), 1);
+}
+
+// Linear ramp down through the fade-out.
+{
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 16 }), 1);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 18 }), 0.5);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 20 }), 0);
+}
+
+// Overlapping fades on a short clip take the quieter ramp.
+{
+  const short = { startS: 0, endS: 2, fadeInS: 2, fadeOutS: 2 };
+  assert.equal(fadeGainMultiplier({ ...short, timelineTimeS: 0.5 }), 0.25);
+  assert.equal(fadeGainMultiplier({ ...short, timelineTimeS: 1.5 }), 0.25);
+}
+
+// Out-of-range times clamp to [0,1].
+{
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 9 }), 0);
+  assert.equal(fadeGainMultiplier({ ...fadeClip, timelineTimeS: 25 }), 0);
+}
 
 // --- isShuttleRate ---------------------------------------------------------
 

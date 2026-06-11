@@ -231,6 +231,15 @@ pub fn flatten_timeline_public(
                         .and_then(|e| e.metadata.get("lut_path"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+                    // Same validity rule as the render's blend path:
+                    // only finite values inside 0..=1 count.
+                    let lut_strength = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "montage.lut")
+                        .and_then(|e| e.metadata.get("strength"))
+                        .and_then(serde_json::Value::as_f64)
+                        .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
                     // Titles track special handling: clips use their
                     // source_range.start_time as the timeline-time
                     // anchor (rather than the cumulative cursor), and
@@ -340,6 +349,7 @@ pub fn flatten_timeline_public(
                         has_audio: Some(matches!(track.kind, TrackKind::Audio)),
                         color_correction,
                         lut_path,
+                        lut_strength,
                         title,
                         video_overlay,
                         motion_shape: None,
@@ -516,6 +526,7 @@ fn motion_scene_preview_track(
                 has_audio: Some(false),
                 color_correction: None,
                 lut_path: None,
+                lut_strength: None,
                 title,
                 video_overlay: None,
                 motion_shape,

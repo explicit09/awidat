@@ -90,6 +90,7 @@ uniform vec3 u_cbHighlights;
 uniform mediump sampler3D u_lut;
 uniform int u_useLut;
 uniform float u_lutSize;
+uniform float u_lutStrength;
 uniform vec3 u_lutDomainMin;
 uniform vec3 u_lutDomainMax;
 in vec2 v_uv;
@@ -134,6 +135,7 @@ void main() {
   // 3D LUT after color correction — same chain position as the
   // render's lut3d filter. Trilinear via LINEAR texture filtering;
   // coords offset by half a texel so grid points sample exactly.
+  // Blended by strength, mirroring the render's split→lut3d→blend.
   if (u_useLut == 1) {
     vec3 t = clamp(
       (c - u_lutDomainMin) / max(u_lutDomainMax - u_lutDomainMin, vec3(1e-6)),
@@ -141,7 +143,7 @@ void main() {
       1.0
     );
     vec3 coord = t * ((u_lutSize - 1.0) / u_lutSize) + 0.5 / u_lutSize;
-    c = texture(u_lut, coord).rgb;
+    c = mix(c, texture(u_lut, coord).rgb, clamp(u_lutStrength, 0.0, 1.0));
   }
 
   outColor = vec4(c, 1.0);
@@ -236,6 +238,7 @@ function initGl(canvas: HTMLCanvasElement): GlState | null {
     "u_lut",
     "u_useLut",
     "u_lutSize",
+    "u_lutStrength",
     "u_lutDomainMin",
     "u_lutDomainMax",
   ];
@@ -250,6 +253,7 @@ function initGl(canvas: HTMLCanvasElement): GlState | null {
 export function GradeCanvas({
   grade,
   lutPath,
+  lutStrength,
   getVideo,
   isPlaying,
   suspended,
@@ -257,10 +261,13 @@ export function GradeCanvas({
 }: {
   /** Resolved grade for the ACTIVE clip (override wins upstream). */
   grade: ColorCorrectionStyling | null;
-  /** Project-relative `.cube` for the active clip (`montage.lut`).
-   *  Previewed at full strength after the color-correction stages —
-   *  the render chain's lut3d position. */
+  /** Project-relative `.cube` for the active clip (`montage.lut`),
+   *  applied after the color-correction stages — the render chain's
+   *  lut3d position. */
   lutPath: string | null;
+  /** LUT blend strength 0..=1; null = full strength (the render's
+   *  default when the effect carries no valid `strength`). */
+  lutStrength: number | null;
   getVideo: () => HTMLVideoElement | null;
   isPlaying: boolean;
   /** True during a transition window — the CSS cross-fade under us
@@ -361,6 +368,7 @@ export function GradeCanvas({
     }
     gl.uniform1i(uniforms.u_useLut, lut ? 1 : 0);
     if (lut) {
+      gl.uniform1f(uniforms.u_lutStrength, lutStrength ?? 1);
       gl.uniform1f(uniforms.u_lutSize, lut.size);
       gl.uniform3fv(uniforms.u_lutDomainMin, lut.domainMin);
       gl.uniform3fv(uniforms.u_lutDomainMax, lut.domainMax);
@@ -443,7 +451,7 @@ export function GradeCanvas({
       v?.removeEventListener("seeked", onFrame);
       v?.removeEventListener("loadeddata", onFrame);
     };
-  }, [grade, lut, lutKey, active, isPlaying, getVideo, availabilityRef]);
+  }, [grade, lut, lutKey, lutStrength, active, isPlaying, getVideo, availabilityRef]);
 
   return (
     <canvas

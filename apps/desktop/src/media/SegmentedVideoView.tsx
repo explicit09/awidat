@@ -47,9 +47,14 @@ import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import {
   SHUTTLE_STEP_MS,
   driftRecoveryAction,
+  fadeGainMultiplier,
   isShuttleRate,
   timelineTimeForSegmentPosition,
 } from "./previewHandoff";
+import {
+  resumePreviewAudio,
+  setPreviewElementGain,
+} from "./previewAudioGraph";
 import { colorPreviewCssFilter } from "./colorPreviewFilter";
 import { GradeCanvas } from "./GradeCanvas";
 import { useColorPreviewOverride } from "../properties/store";
@@ -405,7 +410,17 @@ function SegmentedPlayer({
     }
     const v = active.ref.current;
     if (!v) return;
-    applySegmentPlaybackSettings(v, seg);
+    applySegmentPlaybackSettings(
+      v,
+      seg,
+      fadeGainMultiplier({
+        timelineTimeS: timelineTime,
+        startS: seg.timelineStart,
+        endS: seg.timelineEnd,
+        fadeInS: seg.fadeInS,
+        fadeOutS: seg.fadeOutS,
+      }),
+    );
     const precise = forceMediaSyncRef.current || !isPlaying;
     const desiredSource = sourceTimeForTimelineTime(seg, timelineTime);
     const shuttle =
@@ -625,6 +640,9 @@ function SegmentedPlayer({
   }, []);
 
   function togglePlay() {
+    // User gesture — the one place WebKit lets a suspended
+    // AudioContext start.
+    resumePreviewAudio();
     if (isPlaying) {
       setPlaying(false);
     } else {
@@ -652,14 +670,27 @@ function SegmentedPlayer({
     }
   }, [activeKey, isPlaying, setMediaError, setPlaying]);
 
-  function applySegmentPlaybackSettings(v: HTMLVideoElement, seg: PlaySegment) {
+  function applySegmentPlaybackSettings(
+    v: HTMLVideoElement,
+    seg: PlaySegment,
+    fadeMul = 1,
+  ) {
+    // Audio: WebAudio gain stage first — it has no 1.0 ceiling, so
+    // clip volumes above unity are actually audible, and fades ride
+    // the same node. Element volume pins at 1 while routed; if the
+    // graph is unavailable the legacy clamped path takes over.
     const segmentVolume = Number.isFinite(seg.volume)
-      ? Math.max(0, Math.min(1, seg.volume))
+      ? Math.max(0, Math.min(4, seg.volume))
       : 1;
+    const targetGain = segmentVolume * Math.max(0, Math.min(1, volume)) * fadeMul;
+    if (setPreviewElementGain(v, targetGain)) {
+      if (v.volume !== 1) v.volume = 1;
+    } else {
+      const clamped = Math.max(0, Math.min(1, targetGain));
+      if (Math.abs(v.volume - clamped) > 0.001) v.volume = clamped;
+    }
     const speed = safeSegmentSpeed(seg.speed);
-    const effectiveVolume = Math.max(0, Math.min(1, segmentVolume * volume));
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
-    if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
     if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
     // Live color preview. The WebGL grade pass (GradeCanvas) is the
     // primary path — full seven-field fidelity against the render
@@ -933,6 +964,7 @@ function SegmentedPlayer({
           <GradeCanvas
             grade={activeGrade}
             lutPath={activeGradeSeg?.lutPath ?? null}
+            lutStrength={activeGradeSeg?.lutStrength ?? null}
             getVideo={getActiveVideo}
             isPlaying={isPlaying}
             suspended={activeTransition !== null}

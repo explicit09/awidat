@@ -157,6 +157,13 @@ color_correction: ColorCorrectionStyling | null,
  */
 lut_path: string | null,
 /**
+ * LUT blend strength from the `montage.lut` Effect's
+ * `strength` key, validated to `0.0..=1.0`. `None` means
+ * full strength. The preview blends the LUT output by this
+ * factor, mirroring the render's split→lut3d→blend path.
+ */
+lut_strength: number | null,
+/**
  * Title-overlay styling, populated when the clip carries an
  * `montage.title` Effect (i.e. it's on the Titles track).
  * `None` for ordinary media clips. The frontend renders the

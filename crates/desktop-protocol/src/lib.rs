@@ -1429,6 +1429,11 @@ pub enum TimelineItem {
         color_correction: Option<ColorCorrectionStyling>,
         /// Project-relative LUT path (`montage.lut` Effect), if present.
         lut_path: Option<String>,
+        /// LUT blend strength from the `montage.lut` Effect's
+        /// `strength` key, validated to `0.0..=1.0`. `None` means
+        /// full strength. The preview blends the LUT output by this
+        /// factor, mirroring the render's split→lut3d→blend path.
+        lut_strength: Option<f64>,
         /// Title-overlay styling, populated when the clip carries an
         /// `montage.title` Effect (i.e. it's on the Titles track).
         /// `None` for ordinary media clips. The frontend renders the
@@ -2329,6 +2334,7 @@ mod tests {
             has_audio: Some(false),
             color_correction: None,
             lut_path: None,
+            lut_strength: None,
             title: None,
             video_overlay: None,
             motion_shape: None,
@@ -2526,6 +2532,7 @@ mod tests {
             has_audio: Some(true),
             color_correction: None,
             lut_path: None,
+            lut_strength: None,
             title: None,
             video_overlay: None,
             motion_shape: None,

@@ -46,6 +46,29 @@ export function isShuttleRate(effectiveRate: number): boolean {
   return Number.isFinite(effectiveRate) && effectiveRate > SHUTTLE_MIN_RATE;
 }
 
+/** Audio-fade gain multiplier at timeline time `t` for a clip
+ *  spanning [startS, endS) with `montage.audio_fade` durations.
+ *  Linear edges, matching the render's afade ramps; overlapping
+ *  fades take the quieter of the two. */
+export function fadeGainMultiplier(opts: {
+  timelineTimeS: number;
+  startS: number;
+  endS: number;
+  fadeInS: number | null;
+  fadeOutS: number | null;
+}): number {
+  let m = 1;
+  const fadeIn = opts.fadeInS ?? 0;
+  const fadeOut = opts.fadeOutS ?? 0;
+  if (Number.isFinite(fadeIn) && fadeIn > 0) {
+    m = Math.min(m, (opts.timelineTimeS - opts.startS) / fadeIn);
+  }
+  if (Number.isFinite(fadeOut) && fadeOut > 0) {
+    m = Math.min(m, (opts.endS - opts.timelineTimeS) / fadeOut);
+  }
+  return Math.max(0, Math.min(1, m));
+}
+
 /** Drift threshold (seconds) for syncing a media element to the
  *  timeline clock.
  *
