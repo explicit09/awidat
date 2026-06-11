@@ -2383,17 +2383,6 @@ fn motion_scene_title_animation(layer: &MotionSceneLayer) -> TitleAnimation {
     }
 }
 
-fn layer_title_animation(layer: &MotionSceneLayer) -> TitleAnimation {
-    match layer_string_param(layer, "animation").as_deref() {
-        Some("fade_in") | Some("fade_slide_in") => TitleAnimation::FadeIn,
-        Some("fade_out") => TitleAnimation::FadeOut,
-        Some("fade_in_out") => TitleAnimation::FadeInOut,
-        Some("slide_in") => TitleAnimation::SlideIn,
-        Some("slide_out") => TitleAnimation::SlideOut,
-        _ => TitleAnimation::None,
-    }
-}
-
 fn layer_text_reveal(layer: &MotionSceneLayer) -> TextReveal {
     match layer_string_param(layer, "reveal").as_deref() {
         Some("typewriter") => TextReveal::Typewriter,
@@ -11718,8 +11707,9 @@ fn overlay_renderer_failure_detail(stderr: &[u8], stdout: &[u8]) -> String {
         if trimmed.is_empty() {
             return String::new();
         }
-        let tail: Vec<&str> = trimmed.lines().rev().take(8).collect();
-        tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        let lines: Vec<&str> = trimmed.lines().collect();
+        let start = lines.len().saturating_sub(8);
+        lines[start..].join("\n")
     }
     let stderr_tail = tail(stderr);
     let chosen = if stderr_tail.is_empty() {
