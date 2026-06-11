@@ -53,6 +53,11 @@ const checks = [
   ["keeps composer inside conversation panel", /stage-chat-composer/],
   ["stage chat exposes visible session controls", /stage-chat-session-header[\s\S]+Chat history[\s\S]+New chat/],
   ["stage chat uses compact icon controls", /stage-chat-icon-button[\s\S]+aria-label="Chat history"[\s\S]+<History[\s\S]+aria-label="New chat"[\s\S]+<Plus/],
+  [
+    "stage chat renders the permission mode menu",
+    /stage-permission-control[\s\S]+aria-label="Agent permission mode"/.test(conversation) &&
+      /stage-permission-control[\s\S]+onSetPermissionMode/.test(conversation),
+  ],
   ["app adds optimistic user input before backend history catches up", /createOptimisticUserInput[\s\S]+kind:\s*"user_input"[\s\S]+optimistic-user[\s\S]+upsertAgentItem\(createOptimisticUserInput\(input\)\)/],
   ["agent store dedupes optimistic user input when backend item arrives", /isOptimisticUserInput[\s\S]+existing\.text === item\.text/],
   ["stage chat lists saved sessions", /chatSessions\.map\(\(session\)[\s\S]+onSelectChatSession\?\.\(session\)/],

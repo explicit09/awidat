@@ -133,6 +133,10 @@ pub struct MontageState {
     /// credentials mid-turn). The next `start_turn` honors it by tearing the
     /// session down and relaunching with the new `auth.json`.
     pub auth_dirty: std::sync::atomic::AtomicBool,
+    /// Set when permission mode changes during an active turn. Approval policy
+    /// is passed to the external app-server at launch, so the next turn must
+    /// rebuild the cached session after the current turn ends.
+    pub permission_dirty: std::sync::atomic::AtomicBool,
 }
 
 /// Shared state for the localhost media streamer.

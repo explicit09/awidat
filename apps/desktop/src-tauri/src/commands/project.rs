@@ -20,7 +20,7 @@ use crate::state::MontageState;
 /// `set_project_root` and `init_project`.
 pub(crate) fn allow_project_asset_dirs(app: &AppHandle, project_root: &Path) {
     let scope = app.asset_protocol_scope();
-    for sub in [".montage/proxies", ".montage/thumbnails", "branding"] {
+    for sub in project_asset_scope_dirs() {
         let dir = project_root.join(sub);
         // The dirs may not exist yet (first import will create them).
         // Allow them preemptively — the scope check is a glob, not a
@@ -33,6 +33,15 @@ pub(crate) fn allow_project_asset_dirs(app: &AppHandle, project_root: &Path) {
             );
         }
     }
+}
+
+fn project_asset_scope_dirs() -> &'static [&'static str] {
+    &[
+        ".montage/proxies",
+        ".montage/thumbnails",
+        "branding",
+        "generated/drawn",
+    ]
 }
 
 /// Maximum number of recent project paths to remember.
@@ -1046,5 +1055,10 @@ mod tests {
         assert_eq!(summary.episodes[0].id, "accepted");
         assert_eq!(summary.episodes[0].duration_s, 180.0);
         assert_eq!(summary.episodes[1].evidence_count, 1);
+    }
+
+    #[test]
+    fn asset_protocol_scope_includes_generated_drawn_assets() {
+        assert!(project_asset_scope_dirs().contains(&"generated/drawn"));
     }
 }
