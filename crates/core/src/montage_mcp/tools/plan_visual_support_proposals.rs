@@ -75,6 +75,12 @@ pub struct PlanVisualSupportProposalArgs {
     /// proposal.
     #[serde(default)]
     pub revision_instruction: Option<String>,
+    /// Optional lane constraint: `"motion_scene"` returns only native
+    /// MotionScene proposals and `"broll"` only the B-roll package.
+    /// The planner honors the constraint instead of switching lanes;
+    /// omit it to let editorial skills choose.
+    #[serde(default)]
+    pub lane: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -299,6 +305,7 @@ pub fn plan_visual_support_proposals(
     } else {
         format!("{selection} {story_context_text}")
     };
+    let lane = parse_lane_constraint(args.lane.as_deref())?;
     let registry = EditorialSkillRegistry::bundled();
     let skill_instances = registry.match_instances(MatchEditorialSkillsRequest {
         selection_text: match_selection,
@@ -306,6 +313,7 @@ pub fn plan_visual_support_proposals(
         anchor_transcript: Some(anchor.to_string()),
     });
     let artifacts = artifact_types_for_instances(&skill_instances);
+    let (artifacts, lane_constraint) = apply_lane_constraint(artifacts, lane);
     let proposals: Vec<serde_json::Value> = artifacts
         .into_iter()
         .map(|artifact| {
@@ -322,6 +330,7 @@ pub fn plan_visual_support_proposals(
             "text": selection,
             "anchor_transcript": anchor,
         },
+        "lane_constraint": lane_constraint,
         "story_context": story_context_contract(&args.story_context),
         "project_defaults": {
             "path": ".montage/visual_support_defaults.json",
@@ -674,6 +683,7 @@ fn convert_proposal_to_artifact(
         safe_area_policy: proposal_style_default(proposal, "safe_area_policy"),
         brand_package: proposal_style_default(proposal, "brand_package"),
         revision_instruction: Some(instruction.to_string()),
+        lane: None,
     };
     proposal_for_artifact(artifact, None, &anchor, instruction, &anchor, &args)
 }
@@ -1767,6 +1777,97 @@ fn revise_broll_edl_duration(edl: &str, duration_s: f64) -> Option<String> {
 
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+/// Lane constraint a caller can put on the proposal planner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneConstraint {
+    /// Only native MotionScene proposals.
+    MotionScene,
+    /// Only the B-roll package proposal.
+    Broll,
+}
+
+fn parse_lane_constraint(lane: Option<&str>) -> Result<Option<LaneConstraint>, String> {
+    let Some(lane) = lane.map(str::trim).filter(|lane| !lane.is_empty()) else {
+        return Ok(None);
+    };
+    match lane.to_ascii_lowercase().replace('-', "_").as_str() {
+        "motion_scene" | "motionscene" => Ok(Some(LaneConstraint::MotionScene)),
+        "broll" | "b_roll" | "broll_package" | "source_backed_broll" => {
+            Ok(Some(LaneConstraint::Broll))
+        }
+        other => Err(format!(
+            "plan_visual_support_proposals: unknown lane {other:?}. Supported lanes: \
+\"motion_scene\" (native MotionScene proposals only) and \"broll\" (B-roll package only). \
+Omit lane to let editorial skills choose."
+        )),
+    }
+}
+
+/// Honor a caller's lane constraint instead of switching lanes.
+///
+/// Returns the constrained artifact list plus a `lane_constraint` JSON
+/// block explaining what the constraint did — including when the
+/// skill-matched artifacts had to be replaced to stay in-lane.
+fn apply_lane_constraint(
+    artifacts: Vec<ArtifactType>,
+    lane: Option<LaneConstraint>,
+) -> (Vec<ArtifactType>, serde_json::Value) {
+    let Some(lane) = lane else {
+        return (artifacts, serde_json::Value::Null);
+    };
+    let matched: Vec<ArtifactType> = artifacts
+        .iter()
+        .copied()
+        .filter(|artifact| match lane {
+            LaneConstraint::MotionScene => *artifact != ArtifactType::BrollPackage,
+            LaneConstraint::Broll => *artifact == ArtifactType::BrollPackage,
+        })
+        .collect();
+    let (constrained, note) = if matched.is_empty() {
+        match lane {
+            // A MotionScene can always be planned procedurally; fall
+            // back to a quote-highlight scene rather than leaving the
+            // lane or returning nothing.
+            LaneConstraint::MotionScene => (
+                vec![ArtifactType::QuoteHighlight],
+                "no MotionScene artifact matched the editorial skills for this selection, so a \
+quote-highlight MotionScene was planned to honor the lane constraint"
+                    .to_string(),
+            ),
+            LaneConstraint::Broll => (
+                vec![ArtifactType::BrollPackage],
+                "no B-roll artifact matched the editorial skills for this selection, so a B-roll \
+package was planned to honor the lane constraint (pass broll_asset to make it apply-ready)"
+                    .to_string(),
+            ),
+        }
+    } else {
+        let dropped = artifacts.len() - matched.len();
+        (
+            matched,
+            if dropped > 0 {
+                format!(
+                    "{dropped} skill-matched proposal(s) outside the requested lane were dropped"
+                )
+            } else {
+                "all skill-matched proposals already satisfy the lane constraint".to_string()
+            },
+        )
+    };
+    let lane_name = match lane {
+        LaneConstraint::MotionScene => "motion_scene",
+        LaneConstraint::Broll => "broll",
+    };
+    (
+        constrained,
+        serde_json::json!({
+            "lane": lane_name,
+            "honored": true,
+            "note": note,
+        }),
+    )
 }
 
 fn artifact_types_for_instances(instances: &[EditorialSkillInstance]) -> Vec<ArtifactType> {
@@ -3411,6 +3512,7 @@ mod tests {
             safe_area_policy: None,
             brand_package: None,
             revision_instruction: Some("make it 3x faster and less intense".into()),
+            lane: None,
         })
         .unwrap();
 
@@ -4493,6 +4595,72 @@ mod tests {
                         && check["status"] == "pass"
                 )
         );
+    }
+
+    #[test]
+    fn motion_scene_lane_constraint_never_returns_broll() {
+        // A footage-flavored request used to come back as a
+        // source-backed B-roll proposal with apply_edl null even when
+        // the caller constrained the lane to motion_scene.
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "The founder describes a crowded market.".into(),
+            request: "add footage-like b-roll support here".into(),
+            lane: Some("motion_scene".into()),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposals = value["proposals"].as_array().unwrap();
+        assert!(!proposals.is_empty());
+        for proposal in proposals {
+            assert_ne!(proposal["artifact_type"], "broll_package");
+            assert!(
+                proposal["apply_edl"]["edl"]
+                    .as_str()
+                    .is_some_and(|edl| edl.contains("Set Motion Scene")),
+                "motion_scene lane proposals must carry a Set Motion Scene apply_edl: {proposal}"
+            );
+        }
+        assert_eq!(value["lane_constraint"]["lane"], "motion_scene");
+        assert_eq!(value["lane_constraint"]["honored"], true);
+        assert!(
+            value["lane_constraint"]["note"]
+                .as_str()
+                .is_some_and(|note| !note.is_empty())
+        );
+    }
+
+    #[test]
+    fn broll_lane_constraint_returns_only_broll() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "This is the quote that should land harder.".into(),
+            request: "make this quote pop visually".into(),
+            lane: Some("broll".into()),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposals = value["proposals"].as_array().unwrap();
+        assert!(!proposals.is_empty());
+        for proposal in proposals {
+            assert_eq!(proposal["artifact_type"], "broll_package");
+        }
+        assert_eq!(value["lane_constraint"]["lane"], "broll");
+    }
+
+    #[test]
+    fn unknown_lane_constraint_is_rejected_with_supported_lanes() {
+        let error = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "Some selection.".into(),
+            request: "support this".into(),
+            lane: Some("timeline_edit".into()),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .expect_err("unknown lane must error");
+
+        assert!(error.contains("unknown lane"), "error: {error}");
+        assert!(error.contains("motion_scene"), "error: {error}");
+        assert!(error.contains("broll"), "error: {error}");
     }
 
     fn project_with_stored_scene(scene_id: &str) -> tempfile::TempDir {

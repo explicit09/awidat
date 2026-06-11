@@ -884,10 +884,12 @@ fragment. Use it when the job is emphasis inside a clip, not a cut boundary.",
         description = "\
 Read-only planner for native procedural MotionScene documents. Use after \
 plan_visual_support chooses the motion_scene lane. It returns a valid \
-MotionScene plus a Set Motion Scene EDL snippet for apply_edl. Text layers \
-text, rectangle/solid, and project-asset image layers are preview/render \
-supported; video/media layers are stored with explicit limitations and \
-footage should use B-roll/PiP.",
+MotionScene plus a Set Motion Scene EDL snippet for apply_edl. On-screen copy \
+must come from transcript evidence: pass headline (and step_labels for \
+step/process scenes) or evidence_text — the planner never puts the request \
+prompt on screen or invents placeholder labels. Text layers, rectangle/solid, \
+and project-asset image layers are preview/render supported; video/media \
+layers are stored with explicit limitations and footage should use B-roll/PiP.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_motion_scene(
@@ -1549,7 +1551,9 @@ Read-only Proposal-to-Visual-Support planner. Given selected transcript/topic \
 text and an editor request, returns visual artifact proposals with evidence, \
 missing-information prompts, apply_edl payloads, preview expectations, and \
 render-verification steps. Use before apply_edl for quote highlights, animated \
-lists, title cards, search bars, counters, maps, and B-roll packages.",
+lists, title cards, search bars, counters, maps, and B-roll packages. Pass \
+lane=\"motion_scene\" or lane=\"broll\" to constrain proposals to one lane; the \
+planner honors the constraint instead of switching lanes.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_visual_support_proposals(
