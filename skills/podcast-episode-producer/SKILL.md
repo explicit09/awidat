@@ -36,6 +36,7 @@ tools_allowlist:
   - inspect_clip
   - view_timeline
   - view_frame
+  - view_program_frame
   - apply_edl
   - vedit_diff
   - start_render
@@ -266,6 +267,21 @@ Once the conversation flow is locked, make visual decisions:
   screenshots, product stills, diagrams, charts, and generated PNG
   overlays. Use B-roll/PiP for actual footage; video/media MotionScene
   layers remain stored with explicit limitations.
+- Route visual work by complexity: use MotionScene for instant branded
+  cards, quote cards, step/process cards, callouts, text-on-panel
+  explainers, simple diagrams, and still overlays that should preview
+  and render natively. Use `drawn-artifacts` when the visual needs a
+  real chart from numbers, Manim-style math/diagram motion, Lottie/
+  Motion Canvas animation, transparent alpha video, or polish beyond
+  MotionScene's native layer set; place the rendered asset as B-roll,
+  PiP, or a MotionScene image layer.
+- After applying any visual, call `view_program_frame` at the midpoint
+  of the visual's timeline window. Inspect the composed frame, not just
+  the source asset: text must stay inside frame and boxes, remain
+  readable, avoid covering faces/mouths/captions/key objects, and show
+  MotionScene plus broadcast overlay together. If it fails, adjust the
+  visual and call `view_program_frame` again before declaring the visual
+  done.
 - Use `find_speaker_oncam` and `shot_summary` to choose speaker angles,
   wide/two-shots, reactions, and resets. Avoid frantic cuts on every
   word swap; hold angles long enough to breathe.

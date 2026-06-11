@@ -177,6 +177,7 @@ use crate::montage_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::montage_mcp::tools::verify_render::{self, VerifyRenderArgs};
 use crate::montage_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::montage_mcp::tools::view_frame::{self, ViewFrameArgs};
+use crate::montage_mcp::tools::view_program_frame::{self, ViewProgramFrameArgs};
 use crate::montage_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
 /// The Montage MCP server. One short-lived struct per child-process
@@ -1348,6 +1349,28 @@ detail='original' returns source resolution. format='png' (default) | \
     )]
     pub async fn view_frame(&self, args: Parameters<ViewFrameArgs>) -> Result<String, ErrorData> {
         view_frame::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_program_frame` — render one composed timeline frame and
+    /// return it as a JSON payload with a base64-encoded image.
+    #[tool(
+        description = "\
+Render one composed program frame at timeline-local `t_s` and return a JSON \
+payload carrying base64-encoded image bytes plus cache paths. Use this after \
+applying visual changes to inspect what the rendered program frame actually \
+looks like: MotionScene layers, titles, B-roll/PiP, annotations, and broadcast \
+overlays are captured together. detail='preview' (default, <=768px longest \
+edge) keeps the image cheap; detail='original' returns source resolution. \
+format='png' (default) | 'jpeg'.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_program_frame(
+        &self,
+        args: Parameters<ViewProgramFrameArgs>,
+    ) -> Result<String, ErrorData> {
+        view_program_frame::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
