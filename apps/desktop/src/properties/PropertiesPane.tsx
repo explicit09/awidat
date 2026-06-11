@@ -1688,6 +1688,23 @@ function LutControl({
   const initial = lutPath ?? "";
   const [local, setLocal] = useState(initial);
   const lastCommittedRef = useRef(initial);
+  // Project .cube files for the dropdown — scanned once per mount;
+  // the free-text input remains for paths the scan missed.
+  const [available, setAvailable] = useState<string[]>([]);
+
+  useEffect(() => {
+    let stale = false;
+    invoke<string[]>("list_preview_luts")
+      .then((luts) => {
+        if (!stale) setAvailable(luts);
+      })
+      .catch(() => {
+        // No project / scan failure — dropdown simply doesn't render.
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
 
   useEffect(() => {
     setLocal(initial);
@@ -1744,6 +1761,25 @@ function LutControl({
     <Field label="LUT">
       <div className="properties-lut-row">
         <LutSwatch state={lutState} />
+        {available.length > 0 && (
+          <select
+            className="properties-select"
+            value={available.includes(local) ? local : ""}
+            onChange={(e) => {
+              if (e.target.value) setLocal(e.target.value);
+            }}
+            aria-label="Choose a project LUT"
+          >
+            <option value="">
+              {local && !available.includes(local) ? "(custom path)" : "Choose LUT…"}
+            </option>
+            {available.map((path) => (
+              <option key={path} value={path}>
+                {path}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           type="text"
           className="properties-text-input"

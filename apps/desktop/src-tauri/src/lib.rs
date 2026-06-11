@@ -203,6 +203,8 @@ pub fn run() {
             commands::media::project_preview_url,
             commands::media::proxy_path_for_stem,
             commands::media::relink_missing_asset,
+            commands::lut::list_preview_luts,
+            commands::lut::read_preview_lut,
             commands::preview::render_transition_preview_frame,
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,

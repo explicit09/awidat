@@ -17,6 +17,7 @@ pub mod import;
 pub mod index;
 pub mod indexer_config_overlay;
 pub mod indexer_data;
+pub mod lut;
 pub mod media;
 pub mod motion;
 pub mod notes;

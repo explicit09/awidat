@@ -18,14 +18,53 @@
 //   sends ACAO:*); a tainted-canvas SecurityError or context loss
 //   permanently disables the pass for the session → CSS fallback.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ColorCorrectionStyling } from "../protocol";
 import {
   CURVE_LUT_SIZE,
   buildCurveLut,
   buildGradePlan,
   isDefaultGrade,
+  lutToRgba8,
 } from "./gradeMath";
+
+type PreviewLutData = {
+  size: number;
+  domainMin: [number, number, number];
+  domainMax: [number, number, number];
+  rgba: Uint8Array;
+};
+
+// One parse per LUT path per session — the table is immutable on
+// disk for a given project state and re-parsing a 33³ cube on every
+// clip selection would be wasted IPC.
+const lutCache = new Map<string, Promise<PreviewLutData | null>>();
+
+function fetchPreviewLut(lutPath: string): Promise<PreviewLutData | null> {
+  let pending = lutCache.get(lutPath);
+  if (!pending) {
+    pending = invoke<{
+      size: number;
+      domain_min: [number, number, number];
+      domain_max: [number, number, number];
+      table: number[];
+    }>("read_preview_lut", { lutPath })
+      .then((raw) => ({
+        size: raw.size,
+        domainMin: raw.domain_min,
+        domainMax: raw.domain_max,
+        rgba: lutToRgba8(raw.table, raw.size),
+      }))
+      .catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn(`preview LUT load failed (${lutPath})`, e);
+        return null;
+      });
+    lutCache.set(lutPath, pending);
+  }
+  return pending;
+}
 
 const VERT = `#version 300 es
 in vec2 a_pos;
@@ -48,6 +87,11 @@ uniform int u_useCurves;
 uniform int u_useCb;
 uniform vec3 u_cbShadows;
 uniform vec3 u_cbHighlights;
+uniform mediump sampler3D u_lut;
+uniform int u_useLut;
+uniform float u_lutSize;
+uniform vec3 u_lutDomainMin;
+uniform vec3 u_lutDomainMax;
 in vec2 v_uv;
 out vec4 outColor;
 
@@ -87,6 +131,19 @@ void main() {
     c = clamp(c + u_cbShadows * ws + u_cbHighlights * wh, 0.0, 1.0);
   }
 
+  // 3D LUT after color correction — same chain position as the
+  // render's lut3d filter. Trilinear via LINEAR texture filtering;
+  // coords offset by half a texel so grid points sample exactly.
+  if (u_useLut == 1) {
+    vec3 t = clamp(
+      (c - u_lutDomainMin) / max(u_lutDomainMax - u_lutDomainMin, vec3(1e-6)),
+      0.0,
+      1.0
+    );
+    vec3 coord = t * ((u_lutSize - 1.0) / u_lutSize) + 0.5 / u_lutSize;
+    c = texture(u_lut, coord).rgb;
+  }
+
   outColor = vec4(c, 1.0);
 }`;
 
@@ -95,6 +152,7 @@ type GlState = {
   program: WebGLProgram;
   videoTex: WebGLTexture;
   curveTex: WebGLTexture;
+  lutTex: WebGLTexture;
   uniforms: Record<string, WebGLUniformLocation | null>;
 };
 
@@ -155,7 +213,14 @@ function initGl(canvas: HTMLCanvasElement): GlState | null {
   };
   const videoTex = makeTex();
   const curveTex = makeTex();
-  if (!videoTex || !curveTex) return null;
+  const lutTex = gl.createTexture();
+  if (!videoTex || !curveTex || !lutTex) return null;
+  gl.bindTexture(gl.TEXTURE_3D, lutTex);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
   const names = [
     "u_video",
@@ -168,16 +233,23 @@ function initGl(canvas: HTMLCanvasElement): GlState | null {
     "u_useCb",
     "u_cbShadows",
     "u_cbHighlights",
+    "u_lut",
+    "u_useLut",
+    "u_lutSize",
+    "u_lutDomainMin",
+    "u_lutDomainMax",
   ];
   const uniforms: GlState["uniforms"] = {};
   for (const name of names) uniforms[name] = gl.getUniformLocation(program, name);
   gl.uniform1i(uniforms.u_video, 0);
   gl.uniform1i(uniforms.u_curve, 1);
-  return { gl, program, videoTex, curveTex, uniforms };
+  gl.uniform1i(uniforms.u_lut, 2);
+  return { gl, program, videoTex, curveTex, lutTex, uniforms };
 }
 
 export function GradeCanvas({
   grade,
+  lutPath,
   getVideo,
   isPlaying,
   suspended,
@@ -185,6 +257,10 @@ export function GradeCanvas({
 }: {
   /** Resolved grade for the ACTIVE clip (override wins upstream). */
   grade: ColorCorrectionStyling | null;
+  /** Project-relative `.cube` for the active clip (`montage.lut`).
+   *  Previewed at full strength after the color-correction stages —
+   *  the render chain's lut3d position. */
+  lutPath: string | null;
   getVideo: () => HTMLVideoElement | null;
   isPlaying: boolean;
   /** True during a transition window — the CSS cross-fade under us
@@ -198,8 +274,33 @@ export function GradeCanvas({
   const glRef = useRef<GlState | null>(null);
   const deadRef = useRef(false);
   const curveKeyRef = useRef<string>("");
+  const lutKeyRef = useRef<string>("");
+  const [lut, setLut] = useState<PreviewLutData | null>(null);
+  const [lutKey, setLutKey] = useState<string>("");
 
-  const active = !suspended && !deadRef.current && !isDefaultGrade(grade);
+  // Resolve the LUT table off the main effect — parse round-trips
+  // through the backend once per path, then caches for the session.
+  useEffect(() => {
+    if (!lutPath) {
+      setLut(null);
+      setLutKey("");
+      return;
+    }
+    let stale = false;
+    fetchPreviewLut(lutPath).then((data) => {
+      if (stale) return;
+      setLut(data);
+      setLutKey(data ? lutPath : "");
+    });
+    return () => {
+      stale = true;
+    };
+  }, [lutPath]);
+
+  const active =
+    !suspended &&
+    !deadRef.current &&
+    (!isDefaultGrade(grade) || lut !== null);
 
   useEffect(() => {
     availabilityRef.current = active && !deadRef.current;
@@ -257,6 +358,29 @@ export function GradeCanvas({
     if (plan.colorBalance) {
       gl.uniform3fv(uniforms.u_cbShadows, plan.colorBalance.shadows);
       gl.uniform3fv(uniforms.u_cbHighlights, plan.colorBalance.highlights);
+    }
+    gl.uniform1i(uniforms.u_useLut, lut ? 1 : 0);
+    if (lut) {
+      gl.uniform1f(uniforms.u_lutSize, lut.size);
+      gl.uniform3fv(uniforms.u_lutDomainMin, lut.domainMin);
+      gl.uniform3fv(uniforms.u_lutDomainMax, lut.domainMax);
+      if (lutKey !== lutKeyRef.current) {
+        lutKeyRef.current = lutKey;
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_3D, state.lutTex);
+        gl.texImage3D(
+          gl.TEXTURE_3D,
+          0,
+          gl.RGBA8,
+          lut.size,
+          lut.size,
+          lut.size,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          lut.rgba,
+        );
+      }
     }
 
     let raf = 0;
@@ -319,7 +443,7 @@ export function GradeCanvas({
       v?.removeEventListener("seeked", onFrame);
       v?.removeEventListener("loadeddata", onFrame);
     };
-  }, [grade, active, isPlaying, getVideo, availabilityRef]);
+  }, [grade, lut, lutKey, active, isPlaying, getVideo, availabilityRef]);
 
   return (
     <canvas

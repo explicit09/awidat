@@ -61,6 +61,9 @@ export type PlaySegment = {
   /** Clip color correction, approximated in preview via CSS filters
    *  (exposure/contrast/saturation only — see colorPreviewFilter). */
   colorCorrection: import("../protocol").ColorCorrectionStyling | null;
+  /** Project-relative `.cube` LUT (`montage.lut` Effect) — previewed
+   *  by the WebGL grade pass at full strength. */
+  lutPath: string | null;
   /** Stable timeline clip id backing this segment. */
   clipUuid: string;
   /** Clip index inside its track. Useful for diagnostics + diff hints. */
@@ -199,6 +202,7 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           volume: 0,
           speed,
           colorCorrection: item.color_correction ?? null,
+          lutPath: item.lut_path ?? null,
           clipUuid: item.clip_uuid,
           clipIndex: item.index,
           mode: isPip ? "pip" : "full_frame",
@@ -314,6 +318,7 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       volume: item.volume ?? 1,
       speed,
       colorCorrection: item.color_correction ?? null,
+      lutPath: item.lut_path ?? null,
       clipUuid: item.clip_uuid,
       clipIndex: item.index,
     };

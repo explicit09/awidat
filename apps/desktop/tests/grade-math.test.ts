@@ -5,6 +5,7 @@ import {
   buildCurveLut,
   buildGradePlan,
   isDefaultGrade,
+  lutToRgba8,
   naturalCubicSpline,
 } from "../src/media/gradeMath.ts";
 
@@ -177,6 +178,32 @@ function near(a: number, b: number, eps = 1e-6) {
   const [r, g, b] = applyGradeToRgb(plan, [0.8, 0.3, 0.2]);
   near(r, g, 1e-3);
   near(g, b, 1e-3);
+}
+
+// --- lutToRgba8 --------------------------------------------------------------
+
+// A 2×2×2 identity-corner cube quantizes to RGBA8 with opaque alpha,
+// preserving the Iridas R-fastest layout (texel i ← triplet i).
+{
+  // Triplets for corners (r,g,b) in R-fastest order.
+  const table = [
+    0, 0, 0,  1, 0, 0,  0, 1, 0,  1, 1, 0,
+    0, 0, 1,  1, 0, 1,  0, 1, 1,  1, 1, 1,
+  ];
+  const rgba = lutToRgba8(table, 2);
+  assert.equal(rgba.length, 8 * 4);
+  // texel 1 = (r=1,g=0,b=0) corner → red.
+  assert.deepEqual([...rgba.slice(4, 8)], [255, 0, 0, 255]);
+  // texel 6 = (r=0,g=1,b=1) corner → cyan.
+  assert.deepEqual([...rgba.slice(24, 28)], [0, 255, 255, 255]);
+  // alpha always opaque.
+  for (let i = 0; i < 8; i++) assert.equal(rgba[i * 4 + 3], 255);
+}
+
+// Out-of-range table values clamp instead of wrapping.
+{
+  const rgba = lutToRgba8([-0.5, 2, 0.5], 1);
+  assert.deepEqual([...rgba], [0, 255, 128, 255]);
 }
 
 console.log("grade-math: all assertions passed");

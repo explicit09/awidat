@@ -208,6 +208,26 @@ export function buildCurveLut(curves: CurveParams | null): Uint8Array {
   return lut;
 }
 
+/** Convert a parsed `.cube` table (size³ RGB f32 triplets, R-fastest
+ *  per the Iridas spec — same layout `montage-lut` ships) into RGBA8
+ *  texels for a WebGL 3D texture (x=R, y=G, z=B, alpha opaque).
+ *  8-bit quantization matches the display path; the render's lut3d
+ *  interpolates the same table at float precision. */
+export function lutToRgba8(
+  table: ArrayLike<number>,
+  size: number,
+): Uint8Array {
+  const texels = size * size * size;
+  const out = new Uint8Array(texels * 4);
+  for (let i = 0; i < texels; i++) {
+    out[i * 4] = Math.round(clamp(table[i * 3] ?? 0, 0, 1) * 255);
+    out[i * 4 + 1] = Math.round(clamp(table[i * 3 + 1] ?? 0, 0, 1) * 255);
+    out[i * 4 + 2] = Math.round(clamp(table[i * 3 + 2] ?? 0, 0, 1) * 255);
+    out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // CPU reference of the full chain. The fragment shader implements the
 // same math on the GPU; this reference exists so the formulas are

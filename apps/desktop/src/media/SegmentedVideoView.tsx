@@ -932,6 +932,7 @@ function SegmentedPlayer({
           />
           <GradeCanvas
             grade={activeGrade}
+            lutPath={activeGradeSeg?.lutPath ?? null}
             getVideo={getActiveVideo}
             isPlaying={isPlaying}
             suspended={activeTransition !== null}
