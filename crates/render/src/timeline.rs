@@ -8256,20 +8256,37 @@ const TITLE_MIN_FONT_SIZE: u32 = 24;
 /// and the (possibly reduced) font size.
 fn fit_title_text(t: &TitlePlan, text: &str) -> (String, u32) {
     let max_width_px = title_max_text_width_px(t);
-    let mut font_size = t.font_size.max(1);
-    while font_size > TITLE_MIN_FONT_SIZE && widest_word_px(text, font_size) > max_width_px {
-        font_size = font_size.saturating_sub(4).max(TITLE_MIN_FONT_SIZE);
-    }
     if t.layout_box.is_some() {
-        (
-            wrap_title_text_to_width(text, font_size, max_width_px),
-            font_size,
-        )
+        fit_text_to_width_px(text, t.font_size, max_width_px)
     } else {
         // Band titles keep the legacy behavior: explicit line breaks
         // are authoritative and skip auto-wrapping.
+        let font_size = shrink_font_to_fit_widest_word(text, t.font_size, max_width_px);
         (auto_wrap_title_text(text, font_size), font_size)
     }
+}
+
+/// Wrap `text` to `max_width_px` (estimated against the 1080p
+/// reference frame) and step the font size down while any single word
+/// is still wider than the box. Returns the wrapped text and the
+/// (possibly reduced) font size.
+///
+/// Public so planners (e.g. `plan_motion_scene`) validate text
+/// extents with exactly the math the drawtext lowering uses.
+pub fn fit_text_to_width_px(text: &str, font_size: u32, max_width_px: f64) -> (String, u32) {
+    let font_size = shrink_font_to_fit_widest_word(text, font_size, max_width_px);
+    (
+        wrap_title_text_to_width(text, font_size, max_width_px),
+        font_size,
+    )
+}
+
+fn shrink_font_to_fit_widest_word(text: &str, font_size: u32, max_width_px: f64) -> u32 {
+    let mut font_size = font_size.max(1);
+    while font_size > TITLE_MIN_FONT_SIZE && widest_word_px(text, font_size) > max_width_px {
+        font_size = font_size.saturating_sub(4).max(TITLE_MIN_FONT_SIZE);
+    }
+    font_size
 }
 
 fn title_max_text_width_px(t: &TitlePlan) -> f64 {
