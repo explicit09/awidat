@@ -3114,10 +3114,16 @@ button {
   width: 100%;
   min-height: 120px;
   aspect-ratio: var(--monitor-aspect-num, 1.77778);
-  border-radius: 14px;
-  overflow: hidden;
+  /* Layout container only — no black of its own. When the column is
+     height-limited (ultrawide windows) the box clamps WIDER than the
+     picture; the fitted .video-stack inside carries the monitor
+     chrome so the clamped sides show backdrop, not black bars. */
+  background: transparent;
+}
+
+.preview-monitor-box .video-stack {
+  border-radius: 12px;
   outline: 1px solid rgba(255, 255, 255, 0.14);
-  background: black;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
 }
 
