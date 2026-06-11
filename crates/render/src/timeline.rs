@@ -625,6 +625,12 @@ pub struct AnnotationPlan {
     pub stroke_width: u32,
     /// Optional review label.
     pub label: Option<String>,
+    /// Optional fill-opacity keyframes in seconds relative to
+    /// `start_s` (MotionScene solids). `drawbox` cannot animate color
+    /// alpha, so these lower to stepped constant-alpha windows. When
+    /// non-empty, `color` must be a base color WITHOUT an `@opacity`
+    /// suffix — the keyframes own the alpha.
+    pub fill_opacity_keyframes: Vec<montage_proto::professional::Keyframe>,
 }
 
 /// Render-time annotation primitive.
@@ -2068,6 +2074,7 @@ fn collect_motion_scene_title_plans(
                         ));
                         continue;
                     };
+                    let animations = motion_scene_text_layer_animations(layer);
                     titles.push(TitlePlan {
                         text,
                         start_s: scene.start_s + layer.from_s,
@@ -2077,17 +2084,18 @@ fn collect_motion_scene_title_plans(
                         color: layer_string_param(layer, "color")
                             .unwrap_or_else(|| "#FFFFFF".to_string()),
                         font_weight: layer_font_weight(layer),
-                        animation: layer_title_animation(layer),
+                        animation: motion_scene_title_animation(layer),
                         phases: None,
                         reveal: layer_text_reveal(layer),
                         role: "motion_scene".into(),
                         safe_area: None,
                         rich_segments: Vec::new(),
                         word_timings: Vec::new(),
-                        animations: Vec::new(),
+                        animations,
                         font_path: layer_string_param(layer, "font_path"),
                         font_family: layer_string_param(layer, "font_family"),
                         caption_style: None,
+                        layout_box: motion_scene_layer_layout_box(scene, layer),
                     });
                 }
                 MotionSceneLayerKind::Shape
@@ -2151,12 +2159,13 @@ fn collect_motion_scene_image_plans(
                 continue;
             };
             let asset_path = project_root.join(asset);
+            let transform = MotionSceneTransform::from_layer_params(&layer.params);
             images.push(MotionImagePlan {
                 asset_path,
                 start_s: scene.start_s + layer.from_s,
                 end_s: scene.start_s + layer.from_s + layer.duration_s,
-                transform: MotionSceneTransform::from_layer_params(&layer.params),
-                animations: motion_scene_layer_animations_for_render(layer),
+                transform,
+                animations: motion_scene_layer_animations_for_render(layer, transform.opacity),
             });
         }
     }
@@ -2165,9 +2174,10 @@ fn collect_motion_scene_image_plans(
 
 fn motion_scene_layer_animations_for_render(
     layer: &MotionSceneLayer,
+    peak_opacity: f64,
 ) -> Vec<RenderParameterAnimation> {
     layer
-        .motion_animations()
+        .motion_animations_with_scene_fade(peak_opacity)
         .into_iter()
         .filter(|animation| is_phase_3a_parameter(&animation.parameter))
         .map(|animation| RenderParameterAnimation {
@@ -2199,6 +2209,24 @@ fn motion_scene_rect_annotation(
     let opacity = layer_f64_param(layer, "opacity")
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
+    // Scene-default enter/exit fades: the keyframed opacity owns the
+    // alpha, so the color stays a base color (no `@opacity` suffix).
+    let fill_opacity_keyframes = layer
+        .motion_animations_with_scene_fade(opacity)
+        .into_iter()
+        .find(|animation| {
+            matches!(
+                animation.parameter.as_str(),
+                "overlay.opacity" | "title.opacity"
+            )
+        })
+        .map(|animation| animation.keyframes)
+        .unwrap_or_default();
+    let color = if fill_opacity_keyframes.is_empty() {
+        format!("{color}@{opacity}")
+    } else {
+        color
+    };
     Some(AnnotationPlan {
         kind: AnnotationKind::Rectangle,
         start_s: scene.start_s + layer.from_s,
@@ -2207,9 +2235,10 @@ fn motion_scene_rect_annotation(
         y: layer_f64_param(layer, "y").unwrap_or(0.0),
         width: layer_f64_param(layer, "width").unwrap_or(1.0),
         height: layer_f64_param(layer, "height").unwrap_or(1.0),
-        color: format!("{color}@{opacity}"),
+        color,
         stroke_width: 0,
         label: Some(format!("{}:{}", scene.id, layer.id)),
+        fill_opacity_keyframes,
     })
 }
 
@@ -2265,9 +2294,92 @@ fn layer_title_position(layer: &MotionSceneLayer) -> TitlePosition {
 }
 
 fn layer_font_weight(layer: &MotionSceneLayer) -> TitleWeight {
-    match layer_string_param(layer, "font_weight").as_deref() {
+    // Stored scenes use either `font_weight` or `weight` — the
+    // desktop preview accepts both, so the render must too.
+    match layer_string_param(layer, "font_weight")
+        .or_else(|| layer_string_param(layer, "weight"))
+        .as_deref()
+    {
         Some("bold") => TitleWeight::Bold,
         _ => TitleWeight::Normal,
+    }
+}
+
+/// Explicit scene-space layout box for a MotionScene text layer.
+///
+/// Mirrors the desktop preview (`motion_scene_title_for_protocol`):
+/// `x`/`y` are the box center, normalized either as fractions or as
+/// scene-space pixels against the scene extents.
+fn motion_scene_layer_layout_box(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+) -> Option<TitleLayoutBox> {
+    let x = scene_normalized_layer_param(layer, "x", scene.width)?;
+    let y = scene_normalized_layer_param(layer, "y", scene.height)?;
+    Some(TitleLayoutBox {
+        x,
+        y,
+        width: scene_normalized_layer_param(layer, "width", scene.width).filter(|w| *w > 0.0),
+        height: scene_normalized_layer_param(layer, "height", scene.height).filter(|h| *h > 0.0),
+        align: match layer_string_param(layer, "align").as_deref() {
+            Some("left") => TitleBoxAlign::Left,
+            Some("right") => TitleBoxAlign::Right,
+            _ => TitleBoxAlign::Center,
+        },
+    })
+}
+
+/// Read a finite numeric layer param normalized to `[0, 1]` output
+/// space. Values with magnitude above 1 are scene-space pixels and
+/// are divided by the scene extent; values within `[-1, 1]` are
+/// already normalized fractions. Mirrors the desktop preview.
+fn scene_normalized_layer_param(layer: &MotionSceneLayer, key: &str, extent: u32) -> Option<f64> {
+    let value = layer_f64_param(layer, key)?;
+    if value.abs() > 1.0 && extent > 0 {
+        Some(value / f64::from(extent))
+    } else {
+        Some(value)
+    }
+}
+
+/// Supported render animations for a MotionScene text layer.
+///
+/// The preview drives title fades from `overlay.opacity` keyframes;
+/// the render title path evaluates `title.*` parameters, so
+/// `overlay.opacity` is remapped to `title.opacity` for parity.
+fn motion_scene_text_layer_animations(layer: &MotionSceneLayer) -> Vec<RenderParameterAnimation> {
+    layer
+        .motion_animations_with_scene_fade(1.0)
+        .into_iter()
+        .filter_map(|animation| {
+            let parameter = match animation.parameter.as_str() {
+                "overlay.opacity" | "title.opacity" => "title.opacity".to_string(),
+                other if other.starts_with("title.") && is_phase_3a_parameter(other) => {
+                    other.to_string()
+                }
+                _ => return None,
+            };
+            Some(RenderParameterAnimation {
+                parameter,
+                keyframes: animation.keyframes,
+                pre_extrapolation: animation.pre_extrapolation,
+                post_extrapolation: animation.post_extrapolation,
+                motion_path: animation.motion_path,
+            })
+        })
+        .collect()
+}
+
+/// Title animation for a MotionScene text layer. Opacity keyframes
+/// (authored or scene-default via
+/// [`MotionSceneLayer::motion_animations_with_scene_fade`]) own the
+/// fade, so only slide directions still flow through the legacy
+/// [`TitleAnimation`] channel.
+fn motion_scene_title_animation(layer: &MotionSceneLayer) -> TitleAnimation {
+    match layer_string_param(layer, "animation").as_deref() {
+        Some("slide_in") => TitleAnimation::SlideIn,
+        Some("slide_out") => TitleAnimation::SlideOut,
+        _ => TitleAnimation::None,
     }
 }
 
@@ -3718,6 +3830,7 @@ fn parse_title_plan(
         font_path,
         font_family,
         caption_style,
+        layout_box: None,
     };
     Some((plan, animation_selection))
 }
@@ -3770,6 +3883,7 @@ fn parse_annotation_plan(clip: &montage_proto::otio::Clip) -> Option<AnnotationP
             .get("label")
             .and_then(|value| value.as_str())
             .map(str::to_string),
+        fill_opacity_keyframes: Vec::new(),
     })
 }
 
@@ -4397,6 +4511,54 @@ pub struct TitlePlan {
     /// When `Some`, the renderer can use these values to override the
     /// default drawtext / ASS styling for caption overlays.
     pub caption_style: Option<CaptionRenderStyle>,
+    /// Optional explicit scene-space layout box (MotionScene text
+    /// layers). When `Some`, the drawtext x/y come from this box
+    /// instead of the [`TitlePosition`] band, matching the desktop
+    /// preview's box placement.
+    pub layout_box: Option<TitleLayoutBox>,
+}
+
+/// Scene-space layout box for a title, normalized to the frame.
+///
+/// `x`/`y` are the box CENTER — the preview places the element at
+/// `(x, y)` and recenters it with `translate(-50%, -50%)`, so the
+/// render must vertically/horizontally center the text block on the
+/// same point for parity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TitleLayoutBox {
+    /// Normalized box-center x in `[0, 1]`.
+    pub x: f64,
+    /// Normalized box-center y in `[0, 1]`.
+    pub y: f64,
+    /// Normalized box width. `None` derives a safe width from `x`.
+    pub width: Option<f64>,
+    /// Normalized box height (informational; text centers on `y`).
+    pub height: Option<f64>,
+    /// Horizontal alignment of text inside the box.
+    pub align: TitleBoxAlign,
+}
+
+impl TitleLayoutBox {
+    /// Effective normalized text width: the explicit box width, or the
+    /// widest centered box that stays on screen (capped at 0.92) when
+    /// the layer stores no width.
+    pub fn effective_width(&self) -> f64 {
+        self.width
+            .filter(|w| *w > 0.0)
+            .unwrap_or_else(|| (2.0 * self.x.min(1.0 - self.x)).clamp(0.0, 0.92))
+            .clamp(0.05, 1.0)
+    }
+}
+
+/// Horizontal text alignment inside a [`TitleLayoutBox`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleBoxAlign {
+    /// Flush with the box's left edge.
+    Left,
+    /// Centered on the box center (default).
+    Center,
+    /// Flush with the box's right edge.
+    Right,
 }
 
 /// One transcript word timing attached to a caption title.
@@ -5373,12 +5535,30 @@ fn append_motion_images(
         let scale = motion_image_animation_value_expr(image, "overlay.scale", "1", "t");
         let width = format!("{}*({scale})", fmt_filter_num(image.transform.width));
         let height = format!("{}*({scale})", fmt_filter_num(image.transform.height));
-        let opacity = motion_image_animation_value_expr(
-            image,
-            "overlay.opacity",
-            &fmt_filter_num(image.transform.opacity),
-            "t",
-        );
+        // `colorchannelmixer=aa=` only takes a constant, so keyframed
+        // opacity lowers through `geq` (per-pixel, but supports the
+        // `T` time variable) and constant opacity keeps the cheap
+        // colorchannelmixer path.
+        let alpha_filter = if image
+            .animations
+            .iter()
+            .any(|animation| animation.parameter == "overlay.opacity")
+        {
+            let opacity_expr = motion_image_animation_value_expr(
+                image,
+                "overlay.opacity",
+                &fmt_filter_num(image.transform.opacity),
+                "T",
+            );
+            format!(
+                "format=gbrap,geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*({opacity_expr})'"
+            )
+        } else {
+            format!(
+                "colorchannelmixer=aa={}",
+                fmt_filter_num(image.transform.opacity)
+            )
+        };
         let x = motion_image_animation_value_expr(
             image,
             "overlay.x",
@@ -5404,7 +5584,7 @@ fn append_motion_images(
             "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS[motion_image_src{idx}];\
              [motion_image_src{idx}]{current}scale2ref=w=main_w*({width}):h=main_h*({height}){scale_mode}:eval=frame{scaled}{reference};\
              {scaled}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated};\
-             {rotated}format=rgba,colorchannelmixer=aa={opacity}{alpha};\
+             {rotated}format=rgba,{alpha_filter}{alpha};\
              {reference}{alpha}overlay=x=main_w*({x}):y=main_h*({y}):enable='between(t\\,{start}\\,{end})'{next}",
             start = image.start_s,
             end = image.end_s,
@@ -5492,6 +5672,9 @@ fn rectangle_annotation_filter(
     } else {
         annotation.stroke_width.to_string()
     };
+    if !annotation.fill_opacity_keyframes.is_empty() {
+        return faded_rectangle_annotation_filter(in_label, out_label, annotation, &thickness);
+    }
     format!(
         "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=ih*{height}:color={color}:t={stroke}:enable='between(t\\,{start}\\,{end})'{out_label}",
         x = fmt_filter_num(annotation.x),
@@ -5503,6 +5686,89 @@ fn rectangle_annotation_filter(
         start = fmt_filter_num(annotation.start_s),
         end = fmt_filter_num(annotation.end_s),
     )
+}
+
+/// Lower a rectangle with fill-opacity keyframes (MotionScene solids)
+/// to a comma-chained run of constant-alpha `drawbox` windows.
+/// `drawbox` cannot animate color alpha, so fade ramps are stepped:
+/// each ramp becomes [`ANNOTATION_FADE_STEPS`] short windows sampled
+/// at the ramp midpoints, plateaus stay single windows.
+fn faded_rectangle_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+    thickness: &str,
+) -> String {
+    let color = annotation_filter_color(&annotation.color);
+    let boxes = annotation_opacity_windows(annotation)
+        .into_iter()
+        .map(|(t0, t1, alpha)| {
+            format!(
+                "drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=ih*{height}:color={color}@{alpha}:t={thickness}:enable='between(t\\,{start}\\,{end})'",
+                x = fmt_filter_num(annotation.x),
+                y = fmt_filter_num(annotation.y),
+                width = fmt_filter_num(annotation.width),
+                height = fmt_filter_num(annotation.height),
+                color = color,
+                alpha = fmt_filter_num(alpha),
+                start = fmt_filter_num(t0),
+                end = fmt_filter_num(t1),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    if boxes.is_empty() {
+        // Fully transparent for its whole lifetime: pass through.
+        format!("{in_label}null{out_label}")
+    } else {
+        format!("{in_label}{boxes}{out_label}")
+    }
+}
+
+/// Windows per opacity ramp in [`faded_rectangle_annotation_filter`].
+const ANNOTATION_FADE_STEPS: usize = 4;
+
+/// Constant-alpha `(start_s, end_s, alpha)` windows approximating the
+/// annotation's fill-opacity keyframes. Keyframe times are relative
+/// to `annotation.start_s`; returned times are absolute.
+fn annotation_opacity_windows(annotation: &AnnotationPlan) -> Vec<(f64, f64, f64)> {
+    let start = annotation.start_s;
+    let end = annotation.end_s;
+    let keyframes = &annotation.fill_opacity_keyframes;
+    let mut windows: Vec<(f64, f64, f64)> = Vec::new();
+    let mut push = |t0: f64, t1: f64, alpha: f64| {
+        let t0 = t0.max(start);
+        let t1 = t1.min(end);
+        if t1 > t0 + 1e-9 && alpha > 1e-6 {
+            windows.push((t0, t1, alpha.clamp(0.0, 1.0)));
+        }
+    };
+    if let Some(first) = keyframes.first() {
+        push(start, start + first.time_s, first.value);
+    }
+    for pair in keyframes.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let t0 = start + a.time_s;
+        let t1 = start + b.time_s;
+        if (a.value - b.value).abs() < 1e-6 {
+            push(t0, t1, a.value);
+            continue;
+        }
+        for step in 0..ANNOTATION_FADE_STEPS {
+            let f0 = step as f64 / ANNOTATION_FADE_STEPS as f64;
+            let f1 = (step + 1) as f64 / ANNOTATION_FADE_STEPS as f64;
+            let mid = (f0 + f1) / 2.0;
+            push(
+                t0 + (t1 - t0) * f0,
+                t0 + (t1 - t0) * f1,
+                a.value + (b.value - a.value) * mid,
+            );
+        }
+    }
+    if let Some(last) = keyframes.last() {
+        push(start + last.time_s, end, last.value);
+    }
+    windows
 }
 
 fn blur_annotation_filter(
@@ -7773,14 +8039,10 @@ fn format_drawtext_filter_with_text(
     end_s: f64,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
-    let wrapped_text = auto_wrap_title_text(text, t.font_size);
+    let (wrapped_text, fitted_font_size) = fit_title_text(t, text);
     let escaped_text = drawtext_escape(&wrapped_text);
-    let resting_y = match t.position {
-        TitlePosition::Top => "h*0.05".to_string(),
-        TitlePosition::Center => "(h-text_h)/2".to_string(),
-        TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
-    };
-    let resting_x = "(w-text_w)/2".to_string();
+    let resting_y = title_resting_y(t, broadcast_overlay);
+    let resting_x = title_resting_x(t);
     let weight_attr = title_weight_drawtext_attr(t.font_weight);
     let fontfile = title_fontfile_attr(t);
     let anim = apply_title_animation(t, &resting_x, &resting_y);
@@ -7823,9 +8085,9 @@ fn format_drawtext_filter_with_text(
         anim.y
     };
     let size = if has_title_animation(t, "title.font_size") {
-        title_animation_value_expr(t, "title.font_size", &t.font_size.to_string())
+        title_animation_value_expr(t, "title.font_size", &fitted_font_size.to_string())
     } else {
-        t.font_size.to_string()
+        fitted_font_size.to_string()
     };
     format!(
         "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
@@ -7841,6 +8103,36 @@ fn format_drawtext_filter_with_text(
         start = start_s,
         end = end_s,
     )
+}
+
+/// Resting x expression for a title: the explicit layout box when one
+/// is present (MotionScene text layers), else the centered band.
+fn title_resting_x(t: &TitlePlan) -> String {
+    let Some(layout_box) = t.layout_box else {
+        return "(w-text_w)/2".to_string();
+    };
+    let half_width = layout_box.effective_width() / 2.0;
+    match layout_box.align {
+        TitleBoxAlign::Left => format!("w*({})", fmt_filter_num(layout_box.x - half_width)),
+        TitleBoxAlign::Center => format!("w*({})-text_w/2", fmt_filter_num(layout_box.x)),
+        TitleBoxAlign::Right => {
+            format!("w*({})-text_w", fmt_filter_num(layout_box.x + half_width))
+        }
+    }
+}
+
+/// Resting y expression: layout-box titles center the text block on
+/// the box-center y (preview parity with `translate(-50%, -50%)`);
+/// band titles keep the legacy top/center/bottom expressions.
+fn title_resting_y(t: &TitlePlan, broadcast_overlay: Option<&BroadcastOverlayPlan>) -> String {
+    if let Some(layout_box) = t.layout_box {
+        return format!("h*({})-text_h/2", fmt_filter_num(layout_box.y));
+    }
+    match t.position {
+        TitlePosition::Top => "h*0.05".to_string(),
+        TitlePosition::Center => "(h-text_h)/2".to_string(),
+        TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
+    }
 }
 
 fn title_weight_drawtext_attr(font_weight: TitleWeight) -> &'static str {
@@ -7949,17 +8241,82 @@ fn auto_wrap_title_text(text: &str, font_size: u32) -> String {
     if text.contains('\n') {
         return text.to_string();
     }
-    let max_chars = title_wrap_max_chars(font_size);
+    let max_chars = title_wrap_max_chars(font_size, TITLE_SAFE_WIDTH_PX);
     if grapheme_count(text) <= max_chars {
         return text.to_string();
     }
     wrap_text_by_words(text, max_chars)
 }
 
-fn title_wrap_max_chars(font_size: u32) -> usize {
-    const TITLE_SAFE_WIDTH_PX: f64 = 1500.0;
+/// Default usable width for band-positioned titles, in reference px.
+const TITLE_SAFE_WIDTH_PX: f64 = 1500.0;
+
+/// Reference frame width that `font_size` and the glyph-width
+/// estimates are specified against (1080p frame).
+const TITLE_REFERENCE_WIDTH_PX: f64 = 1920.0;
+
+/// Smallest font size auto-fitting will shrink to.
+const TITLE_MIN_FONT_SIZE: u32 = 24;
+
+/// Fit title text to its available width: the layout box when one is
+/// present (the box is authoritative), else the band-safe width.
+///
+/// Wraps each line to the width and steps the font size down (4px at
+/// a time, floored at [`TITLE_MIN_FONT_SIZE`]) while any single word
+/// is still estimated wider than the box. Returns the wrapped text
+/// and the (possibly reduced) font size.
+fn fit_title_text(t: &TitlePlan, text: &str) -> (String, u32) {
+    let max_width_px = title_max_text_width_px(t);
+    let mut font_size = t.font_size.max(1);
+    while font_size > TITLE_MIN_FONT_SIZE && widest_word_px(text, font_size) > max_width_px {
+        font_size = font_size.saturating_sub(4).max(TITLE_MIN_FONT_SIZE);
+    }
+    if t.layout_box.is_some() {
+        (
+            wrap_title_text_to_width(text, font_size, max_width_px),
+            font_size,
+        )
+    } else {
+        // Band titles keep the legacy behavior: explicit line breaks
+        // are authoritative and skip auto-wrapping.
+        (auto_wrap_title_text(text, font_size), font_size)
+    }
+}
+
+fn title_max_text_width_px(t: &TitlePlan) -> f64 {
+    match t.layout_box {
+        Some(layout_box) => (layout_box.effective_width() * TITLE_REFERENCE_WIDTH_PX).max(120.0),
+        None => TITLE_SAFE_WIDTH_PX,
+    }
+}
+
+/// Estimated width of the widest whitespace-delimited word.
+fn widest_word_px(text: &str, font_size: u32) -> f64 {
+    text.split_whitespace()
+        .map(|word| approximate_text_width_px(word, font_size))
+        .fold(0.0, f64::max)
+}
+
+/// Wrap every line of `text` to `max_width_px`, preserving explicit
+/// line breaks. Unlike [`auto_wrap_title_text`], pre-broken lines are
+/// still wrapped when they exceed the width — the box wins.
+fn wrap_title_text_to_width(text: &str, font_size: u32, max_width_px: f64) -> String {
+    let max_chars = title_wrap_max_chars(font_size, max_width_px);
+    text.split('\n')
+        .map(|line| {
+            if grapheme_count(line) <= max_chars {
+                line.to_string()
+            } else {
+                wrap_text_by_words(line, max_chars)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn title_wrap_max_chars(font_size: u32, max_width_px: f64) -> usize {
     let average_glyph_width = (font_size.max(1) as f64 * 0.55).max(1.0);
-    (TITLE_SAFE_WIDTH_PX / average_glyph_width).floor().max(8.0) as usize
+    (max_width_px / average_glyph_width).floor().max(8.0) as usize
 }
 
 fn wrap_text_by_words(text: &str, max_chars: usize) -> String {
@@ -12263,6 +12620,257 @@ mod tests {
     }
 
     #[test]
+    fn motion_scene_text_layer_renders_at_its_layout_box() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "left-title".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 2.0,
+                z_index: 11,
+                params: [
+                    ("text".to_string(), serde_json::json!("SOFTWARE BUG")),
+                    ("align".to_string(), serde_json::json!("center")),
+                    ("font_size".to_string(), serde_json::json!(44)),
+                    ("weight".to_string(), serde_json::json!("bold")),
+                    ("width".to_string(), serde_json::json!(0.3)),
+                    ("height".to_string(), serde_json::json!(0.07)),
+                    ("x".to_string(), serde_json::json!(0.295)),
+                    ("y".to_string(), serde_json::json!(0.39)),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // Box placement: text block centered on the normalized box
+        // center (preview parity), not the legacy band expressions.
+        assert!(
+            cmd.contains("x=w*(0.295)-text_w/2"),
+            "boxed motion scene text should center on the box x: {cmd}"
+        );
+        assert!(
+            cmd.contains("y=h*(0.39)-text_h/2"),
+            "boxed motion scene text should center on the box y: {cmd}"
+        );
+        assert!(
+            !cmd.contains("x=(w-text_w)/2"),
+            "boxed motion scene text must not fall back to the centered band: {cmd}"
+        );
+        // `weight` (preview spelling) maps to bold like `font_weight`.
+        assert!(
+            cmd.contains("drawtext=text='SOFTWARE BUG'"),
+            "boxed motion scene text should render via drawtext: {cmd}"
+        );
+        assert!(
+            cmd.contains("fontsize=44:fontcolor=#FFFFFF:borderw=2"),
+            "boxed motion scene text should keep size/color/weight: {cmd}"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_layer_respects_left_and_right_box_alignment() {
+        let make_layer = |align: &str| MotionSceneLayer {
+            id: format!("{align}-text"),
+            kind: MotionSceneLayerKind::Text,
+            from_s: 0.0,
+            duration_s: 2.0,
+            z_index: 11,
+            params: [
+                ("text".to_string(), serde_json::json!("Aligned")),
+                ("align".to_string(), serde_json::json!(align)),
+                ("width".to_string(), serde_json::json!(0.4)),
+                ("x".to_string(), serde_json::json!(0.5)),
+                ("y".to_string(), serde_json::json!(0.5)),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![make_layer("left"), make_layer("right")],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // Left: box left edge = x - width/2; right: box right edge - text_w.
+        assert!(
+            cmd.contains("x=w*(0.3)"),
+            "left-aligned text should sit on the box's left edge: {cmd}"
+        );
+        assert!(
+            cmd.contains("x=w*(0.7)-text_w"),
+            "right-aligned text should end on the box's right edge: {cmd}"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_wraps_to_its_layout_box_width() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 2.0,
+                z_index: 10,
+                params: [
+                    (
+                        "text".to_string(),
+                        serde_json::json!(
+                            "If AI makes a mistake with code, you might have a cybersecurity issue"
+                        ),
+                    ),
+                    ("font_size".to_string(), serde_json::json!(64)),
+                    ("width".to_string(), serde_json::json!(0.5)),
+                    ("x".to_string(), serde_json::json!(0.5)),
+                    ("y".to_string(), serde_json::json!(0.5)),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // 0.5 * 1920 = 960px box at 64px font → ~27 chars/line, so the
+        // quote must break across lines instead of overflowing the box.
+        let drawtext = cmd
+            .split("drawtext=text='")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .expect("drawtext payload");
+        assert!(
+            drawtext.contains("\\n"),
+            "long quote should wrap inside its box: {drawtext}"
+        );
+        for line in drawtext.split("\\n") {
+            assert!(
+                line.chars().count() <= 27,
+                "wrapped line should fit the box width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn motion_scene_text_shrinks_font_when_a_word_exceeds_the_box() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 2.0,
+                z_index: 10,
+                params: [
+                    (
+                        "text".to_string(),
+                        serde_json::json!("Anthropomorphization"),
+                    ),
+                    ("font_size".to_string(), serde_json::json!(72)),
+                    ("width".to_string(), serde_json::json!(0.2)),
+                    ("x".to_string(), serde_json::json!(0.5)),
+                    ("y".to_string(), serde_json::json!(0.5)),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // 0.2 * 1920 = 384px box; "Anthropomorphization" at 72px is
+        // ~792px, so the font must step down instead of overflowing.
+        assert!(
+            !cmd.contains("fontsize=72"),
+            "oversized single word should shrink the font: {cmd}"
+        );
+        assert!(
+            cmd.contains("fontsize=32"),
+            "font should step down until the word fits the box: {cmd}"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_without_animation_gets_default_fade_in_out() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 2.0,
+                z_index: 10,
+                params: [("text".to_string(), serde_json::json!("Soft enter"))]
+                    .into_iter()
+                    .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // The scene-default fade synthesizes opacity keyframes which
+        // lower to a drawtext alpha expression ramping 0 → 1 → 0.
+        assert!(
+            cmd.contains(":alpha='if(lt("),
+            "motion scene text should default to a fade in/out: {cmd}"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_opacity_keyframes_drive_drawtext_alpha() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "heading".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 2.0,
+                z_index: 10,
+                params: [
+                    ("text".to_string(), serde_json::json!("Keyframed")),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([{
+                            "parameter": "overlay.opacity",
+                            "keyframes": [
+                                { "time_s": 0.0, "value": 0.0 },
+                                { "time_s": 0.35, "value": 1.0 }
+                            ]
+                        }]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // overlay.opacity keyframes drive the preview title fade; the
+        // render maps them to title.opacity so the export matches.
+        assert!(
+            cmd.contains(":alpha='"),
+            "opacity keyframes should lower to a drawtext alpha expression: {cmd}"
+        );
+    }
+
+    #[test]
     fn motion_scene_start_offset_shifts_layers_to_the_anchored_timeline_moment() {
         let dir = tempfile::tempdir().unwrap();
         let otio_path = write_fixture_project_with_motion_scene(
@@ -12373,9 +12981,20 @@ mod tests {
         let spec = build_timeline_render_spec(dir.path()).unwrap();
         let cmd = spec.args.join(" ");
 
+        // The scene-default enter/exit fade lowers as stepped
+        // constant-alpha drawbox windows: a plateau at the authored
+        // opacity bracketed by ramp steps.
         assert!(
-            cmd.contains("drawbox=x=iw*0.1:y=ih*0.2:w=iw*0.3:h=ih*0.4:color=#224466@0.75:t=fill:enable='between(t\\,0.25\\,1.75)'"),
-            "rectangle motion scene should render via drawbox: {cmd}"
+            cmd.contains("drawbox=x=iw*0.1:y=ih*0.2:w=iw*0.3:h=ih*0.4:color=#224466@0.75:t=fill:enable='between(t\\,0.625\\,1.375)'"),
+            "rectangle motion scene should render its plateau via drawbox: {cmd}"
+        );
+        assert!(
+            cmd.contains("color=#224466@0.09375:t=fill:enable='between(t\\,0.25\\,0.34375)'"),
+            "rectangle motion scene should fade in via stepped drawbox windows: {cmd}"
+        );
+        assert!(
+            cmd.contains("color=#224466@0.09375:t=fill:enable='between(t\\,1.65625\\,1.75)'"),
+            "rectangle motion scene should fade out via stepped drawbox windows: {cmd}"
         );
         assert!(
             spec.limitations
@@ -12459,9 +13078,15 @@ mod tests {
             cmd.contains("rotate='(PI/180)*(if("),
             "image motion scene should lower animated rotation: {cmd}"
         );
+        // Keyframed opacity must lower through geq (colorchannelmixer
+        // aa only takes constants and rejects time expressions).
         assert!(
-            cmd.contains("colorchannelmixer=aa=if("),
-            "image motion scene should lower animated opacity: {cmd}"
+            cmd.contains("geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*(if("),
+            "image motion scene should lower animated opacity via geq alpha: {cmd}"
+        );
+        assert!(
+            !cmd.contains("colorchannelmixer=aa=if("),
+            "animated opacity must not land in colorchannelmixer: {cmd}"
         );
         assert!(
             spec.limitations
@@ -15438,6 +16063,7 @@ mod tests {
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -15492,6 +16118,7 @@ mod tests {
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
         let mut overlay = montage_proto::montage_meta::BroadcastOverlayConfig::default();
@@ -15544,6 +16171,7 @@ mod tests {
                 font_path: None,
                 font_family: None,
                 caption_style: None,
+                layout_box: None,
             },
             TitlePlan {
                 text: "Two".into(),
@@ -15564,6 +16192,7 @@ mod tests {
                 font_path: None,
                 font_family: None,
                 caption_style: None,
+                layout_box: None,
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -15598,6 +16227,7 @@ animations: Vec::new(),
 font_path: None,
 font_family: None,
 caption_style: None,
+layout_box: None,
         };
 
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -15704,6 +16334,7 @@ caption_style: None,
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -15846,6 +16477,7 @@ caption_style: None,
             color: "#FFCC00".into(),
             stroke_width: 6,
             label: None,
+            fill_opacity_keyframes: Vec::new(),
         }];
         let titles = vec![TitlePlan {
             text: "Caption".into(),
@@ -15866,6 +16498,7 @@ caption_style: None,
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }];
 
         let argv = build_timeline_argv_full_with_annotations(
@@ -15911,6 +16544,7 @@ caption_style: None,
             color: "red:t=fill".into(),
             stroke_width: 6,
             label: None,
+            fill_opacity_keyframes: Vec::new(),
         }];
         let plan = append_annotations(
             FilterPlan {
@@ -15942,6 +16576,7 @@ caption_style: None,
             color: "#FFCC00".into(),
             stroke_width: 6,
             label: None,
+            fill_opacity_keyframes: Vec::new(),
         }];
 
         let argv = build_timeline_argv_full_with_annotations(
@@ -15986,6 +16621,7 @@ caption_style: None,
                 color: "#FFCC00".into(),
                 stroke_width: 6,
                 label: None,
+                fill_opacity_keyframes: Vec::new(),
             },
             AnnotationPlan {
                 kind: AnnotationKind::Arrow,
@@ -15998,6 +16634,7 @@ caption_style: None,
                 color: "#FFCC00".into(),
                 stroke_width: 6,
                 label: None,
+                fill_opacity_keyframes: Vec::new(),
             },
             AnnotationPlan {
                 kind: AnnotationKind::Bracket,
@@ -16010,6 +16647,7 @@ caption_style: None,
                 color: "#FFCC00".into(),
                 stroke_width: 6,
                 label: None,
+                fill_opacity_keyframes: Vec::new(),
             },
         ];
 
@@ -16150,6 +16788,7 @@ caption_style: None,
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         };
         let overlay = BroadcastOverlayPlan {
             config: BroadcastOverlayConfig {
@@ -16876,6 +17515,7 @@ caption_style: None,
             color: "#FFCC00".into(),
             stroke_width: 4,
             label: None,
+            fill_opacity_keyframes: Vec::new(),
         }];
         let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
         title.start_s = 0.0;
@@ -17581,6 +18221,7 @@ caption_style: None,
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         }
     }
 
@@ -18022,6 +18663,7 @@ caption_style: None,
             font_path: None,
             font_family: None,
             caption_style: None,
+            layout_box: None,
         };
 
         let vertical_canvas = RenderCanvas {
