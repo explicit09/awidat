@@ -16178,6 +16178,8 @@ caption_style: None,
         config.host_b.name = "Elvis Kimara".into();
         config.host_b.title = "Co-Host".into();
         config.host_b.photo_path = Some("branding/elvis.jpg".into());
+        config.style.name_bar_height = 150.0;
+        config.style.ticker_height = 200.0;
         config
             .topics
             .push(montage_proto::montage_meta::BroadcastTimedEntry {
@@ -16205,6 +16207,12 @@ caption_style: None,
         assert!(
             plan.filter_complex.contains("drawbox=x=0:y=ih-100"),
             "expected ticker bar, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("drawbox=x=0:y=ih-175:w=iw:h=75"),
+            "expected persistent name bar, got: {}",
             plan.filter_complex,
         );
         assert!(

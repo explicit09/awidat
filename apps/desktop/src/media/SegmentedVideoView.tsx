@@ -834,6 +834,7 @@ function SegmentedPlayer({
               overlay={timelineSnapshot.broadcast_overlay}
               timelineTime={timelineTime}
               projectRoot={projectRoot}
+              previewFrameSize={programFrameSize}
             />
           </div>
         </div>
@@ -1311,15 +1312,18 @@ export function TimelineBroadcastOverlay({
   timelineTime,
   projectRoot,
   resolveAssetUrl = projectAssetUrl,
+  previewFrameSize,
 }: {
   overlay: TimelineSnapshot["broadcast_overlay"];
   timelineTime: number;
   projectRoot: string | null;
   resolveAssetUrl?: (projectRoot: string | null, relPath: string | null) => string | null;
+  previewFrameSize?: { width: number; height: number };
 }) {
   if (!overlay?.enabled) return null;
 
   const style = overlay.style;
+  const previewScale = responsiveBroadcastOverlayScale(previewFrameSize);
   const gold = normalizeCssHex(style.gold_hex, "#C9A028");
   const goldLight = normalizeCssHex(style.gold_light_hex, "#E8C040");
   const cyan = normalizeCssHex(style.cyan_hex, "#22D3EE");
@@ -1347,10 +1351,11 @@ export function TimelineBroadcastOverlay({
       ? `${overlay.sponsors.join("   ◆   ")}   ◆`
       : overlay.show_name || overlay.template_name || "BROADCAST";
   const overlayStyleVars = {
-    "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height),
-    "--broadcast-ticker-height": refHeightPercent(style.ticker_height),
-    "--broadcast-host-strip-height": refHeightPercent(style.host_strip_height),
-    "--broadcast-ticker-label-width": refWidthPercent(680),
+    "--broadcast-preview-scale": previewScale,
+    "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height * previewScale),
+    "--broadcast-ticker-height": refHeightPercent(style.ticker_height * previewScale),
+    "--broadcast-host-strip-height": refHeightPercent(style.host_strip_height * previewScale),
+    "--broadcast-ticker-label-width": refWidthPercent(680 * previewScale),
   } as React.CSSProperties;
 
   return (
@@ -1715,6 +1720,17 @@ function titleCardOpacity(
 function normalizeCssHex(value: string, fallback: string): string {
   if (!value.trim()) return fallback;
   return value.startsWith("#") ? value : `#${value}`;
+}
+
+function responsiveBroadcastOverlayScale(
+  previewFrameSize: { width: number; height: number } | undefined,
+): number {
+  if (!previewFrameSize || previewFrameSize.width <= 0 || previewFrameSize.height <= 0) {
+    return 1;
+  }
+  const widthScale = previewFrameSize.width / 960;
+  const heightScale = previewFrameSize.height / 540;
+  return Math.max(0.62, Math.min(1, widthScale, heightScale));
 }
 
 function refHeightPercent(value: number): string {
