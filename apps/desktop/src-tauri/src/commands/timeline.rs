@@ -502,10 +502,14 @@ fn motion_scene_preview_track(
                 index: items.len(),
                 name: format!("MotionScene {}", layer.id),
                 clip_uuid: clip_uuid.clone(),
-                track_start_s: layer.from_s,
+                // Layer from_s is relative to the scene anchor (see
+                // proto MotionScene.start_s) — the render path already
+                // adds the offset; without it here, scenes anchored
+                // mid-episode preview at program start instead.
+                track_start_s: scene.start_s + layer.from_s,
                 duration_s: layer.duration_s,
                 asset_id: None,
-                source_start_s: Some(layer.from_s),
+                source_start_s: Some(scene.start_s + layer.from_s),
                 proxy_path: None,
                 playable_path: None,
                 playable_kind: montage_desktop_protocol::PlayableKind::Missing,
@@ -1382,6 +1386,46 @@ mod tests {
         assert_eq!(*track_start_s, 0.5);
         assert_eq!(*duration_s, 2.0);
         assert_eq!(title.text, "Motion Scene");
+    }
+
+    #[test]
+    fn motion_scene_anchor_offsets_preview_layer_times() {
+        // Scenes anchored mid-episode must preview at the anchor, not
+        // at program start — layer from_s is relative to start_s.
+        let mut timeline = Timeline::empty("motion-scene-anchor");
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-b".to_string(),
+                start_s: 531.14,
+                duration_s: 6.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "card".to_string(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.5,
+                    duration_s: 5.0,
+                    z_index: 10,
+                    params: [("text".to_string(), serde_json::json!("Comparison"))]
+                        .into_iter()
+                        .collect(),
+                }],
+                rationale: None,
+            }],
+            ..montage_meta::MontageTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let title_track = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+            .expect("preview title track");
+        let TimelineItem::Clip { track_start_s, .. } = &title_track.items[0] else {
+            panic!("expected motion scene title clip");
+        };
+        assert!((track_start_s - 531.64).abs() < 1e-9);
     }
 
     #[test]
