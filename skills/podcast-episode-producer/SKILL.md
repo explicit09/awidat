@@ -450,10 +450,22 @@ or the source material genuinely demands it.
 A full episode production is longer than one context window. Budget
 for that from the start instead of discovering it at the end:
 
-- Maintain `update_plan` with one step per playbook stage (preflight,
-  start/end, spine, radio edit, draft, visual, audio/metadata,
-  confirm, render, package). Update it at every stage transition —
-  the plan is your recovery spine if the context is compacted.
+- Maintain `update_plan` with one step per playbook stage. Use this
+  exact step list — do not merge or drop stages, and keep the
+  post-confirmation stages in the plan from the start (the plan is
+  your recovery spine if the context is compacted; a plan that ends
+  at "confirm" loses the render/package stages to a late compaction):
+  1. Preflight assets, instructions, timeline state
+  2. Find real start AND ending; decide cold open
+  3. Editorial spine: find_beat hooks/punchlines/CTA + dependencies
+  4. Radio edit: classify + apply cleanup, repair boundaries
+  5. Draft structure: 3-act order on the spine
+  6. Apply brand package (overlay, lower thirds, ticker, chapters)
+  7. Visual polish + audio mix + loudness/package metadata
+  8. Confirm overall structure with the user
+  9. Render scope="timeline", poll to completed, verify
+  10. Publishing package: title/description/chapters/tags/thumbnail,
+      report output path + duration
 - Keep tool output lean. Request `podcast_edit_proposal` /
   review-pack batches of at most ~30 items per pass and apply them
   before requesting more; view timeline windows narrowly (the region
