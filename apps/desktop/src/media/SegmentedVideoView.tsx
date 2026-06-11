@@ -33,6 +33,7 @@
 // elements as the master clock.
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -50,6 +51,7 @@ import {
   timelineTimeForSegmentPosition,
 } from "./previewHandoff";
 import { colorPreviewCssFilter } from "./colorPreviewFilter";
+import { GradeCanvas } from "./GradeCanvas";
 import { useColorPreviewOverride } from "../properties/store";
 import {
   shouldRenderTransitionOnGpu,
@@ -659,18 +661,21 @@ function SegmentedPlayer({
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
     if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
     if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
-    // Live color preview (exposure/contrast/saturation approximation).
-    // While the Inspector's sliders are mid-drag, the transient
-    // override for this clip wins over the persisted timeline values.
-    // Set imperatively: `filter` isn't in the React style props, so
-    // the reconciler leaves it alone; remounts get it re-applied by
-    // the next driver tick.
+    // Live color preview. The WebGL grade pass (GradeCanvas) is the
+    // primary path — full seven-field fidelity against the render
+    // chain; while it paints, the element carries no CSS filter. The
+    // CSS approximation (exposure/contrast/saturation only) remains
+    // as the fallback when WebGL is unavailable or the pass is
+    // suspended. Set imperatively: `filter` isn't in the React style
+    // props, so the reconciler leaves it alone.
     const colorOverride = useColorPreviewOverride.getState().override;
     const colorSource =
       colorOverride && colorOverride.clipUuid === seg.clipUuid
         ? colorOverride.values
         : seg.colorCorrection;
-    const colorFilter = colorPreviewCssFilter(colorSource);
+    const colorFilter = gradePassActiveRef.current
+      ? ""
+      : colorPreviewCssFilter(colorSource);
     if (v.style.filter !== colorFilter) v.style.filter = colorFilter;
     // Above 2× the audio time-stretcher (pitch correction) is real
     // CPU that competes with video decode — shuttle-style playback
@@ -696,6 +701,21 @@ function SegmentedPlayer({
   // only runs while timeline time moves, but color work usually
   // happens paused.
   const liveColorOverride = useColorPreviewOverride((s) => s.override);
+  // WebGL grade pass: true while the canvas is painting the active
+  // clip's grade — the CSS-filter approximation stands down then.
+  const gradePassActiveRef = useRef(false);
+  const getActiveVideo = useCallback(
+    () => slotsRef.current[activeKeyRef.current].ref.current,
+    [],
+  );
+  const activeGradeSegIdx = findActiveSegment(segments, timelineTime);
+  const activeGradeSeg =
+    activeGradeSegIdx >= 0 ? segments[activeGradeSegIdx] : null;
+  const activeGrade = activeGradeSeg
+    ? liveColorOverride && liveColorOverride.clipUuid === activeGradeSeg.clipUuid
+      ? liveColorOverride.values
+      : activeGradeSeg.colorCorrection
+    : null;
   useEffect(() => {
     const slot = slotsRef.current[activeKeyRef.current];
     const v = slot.ref.current;
@@ -880,6 +900,7 @@ function SegmentedPlayer({
             ref={refA}
             className="video-el"
             preload="auto"
+            crossOrigin="anonymous"
             style={styleA}
             onLoadedMetadata={(event) => {
               updateActiveMediaSize("a", event.currentTarget);
@@ -896,6 +917,7 @@ function SegmentedPlayer({
             ref={refB}
             className="video-el"
             preload="auto"
+            crossOrigin="anonymous"
             style={styleB}
             onLoadedMetadata={(event) => {
               updateActiveMediaSize("b", event.currentTarget);
@@ -907,6 +929,13 @@ function SegmentedPlayer({
             }}
             onError={onVideoError}
             onClick={activeKey === "b" ? togglePlay : undefined}
+          />
+          <GradeCanvas
+            grade={activeGrade}
+            getVideo={getActiveVideo}
+            isPlaying={isPlaying}
+            suspended={activeTransition !== null}
+            availabilityRef={gradePassActiveRef}
           />
           <div className="timeline-program-frame" style={programFrameCss}>
             <TimelineVideoOverlays
