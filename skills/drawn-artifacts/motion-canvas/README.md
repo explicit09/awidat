@@ -1,4 +1,4 @@
-# Motion Canvas (deferred — manual setup required)
+# Motion Canvas optional template
 
 Motion Canvas (https://motioncanvas.io, MIT license) is a Node/Vite
 TypeScript framework for rich custom 2D animated scenes. It is the
@@ -6,43 +6,48 @@ right tool when a brief outgrows matplotlib/manim/Lottie — bespoke
 choreographed infographics, multi-element animated diagrams, kinetic
 typography systems.
 
-It is NOT scaffolded as a runnable project here, deliberately:
+It is optional, not part of the default Montage build. The template in
+`template/` gives a ready starting point without adding Node
+dependencies to normal editing workflows.
 
-- Rendering requires a full `npm install` of `@motion-canvas/core`,
-  `@motion-canvas/2d`, `@motion-canvas/ui`, and Vite — hundreds of MB
-  and minutes of install time the agent should not burn mid-edit.
-- There is no first-class headless render CLI: the supported render
-  path runs the Vite dev server and drives the editor's Render button
-  in a browser (manually or via Puppeteer automation). That browser
-  dependency makes unattended agent-time rendering fragile.
+## Optional setup
 
-## Manual setup (one-time, done by the user)
+Copy the template into the active project when the user chooses this
+lane:
 
 ```bash
-npm init @motion-canvas@latest   # scaffold a project (pick 2D)
-cd <project>
+mkdir -p generated/drawn/motion-canvas
+cp -R <skill-root>/motion-canvas/template/. generated/drawn/motion-canvas/
+cd generated/drawn/motion-canvas
 npm install
-npm run serve                    # opens the editor at localhost:9000
+npm run serve
 ```
 
-Author scenes in `src/scenes/*.tsx` using the brand palette
-(gold `#C8A84E`, navy `#070D17`, ivory `#F2EDE3`). In the editor,
-choose **Render**, set the output to image sequence (PNG, transparent
-background) or use `@motion-canvas/ffmpeg` for direct video export.
+The editor opens at `http://127.0.0.1:9000`. The template includes a
+brand-card scene using the Montage palette: gold `#C8A84E`, navy
+`#070D17`, ivory `#F2EDE3`. Author new scenes in `src/scenes/*.tsx`
+and register them from `src/project.ts` with the required `?scene`
+import suffix.
 
 ## Handoff back to Montage
 
-Export a transparent PNG sequence, then assemble it with the same
-ffmpeg recipe the Lottie lane uses:
+In the Motion Canvas editor, export a transparent PNG sequence. Then
+assemble it into a transparent ProRes 4444 asset:
 
 ```bash
-ffmpeg -framerate 30 -i frame_%05d.png \
-  -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le \
-  generated/drawn/<slug>.mov
+npm run export:frames -- \
+  --frames output/frame_%05d.png \
+  --fps 30 \
+  --out generated/drawn/<slug>.mov
 ```
 
-Drop the .mov in the active project under `generated/drawn/` and place
-it with `Insert PiP` / `Insert BRoll` like any other drawn artifact.
+Place the `.mov` with `Insert PiP` or overlay `Insert BRoll`, then
+verify with `view_frame` or a short render inside the asset's timeline
+window.
+
+Do not run `npm install` for Motion Canvas during ordinary edits. This
+lane is for briefs that genuinely need custom 2D choreography beyond
+native MotionScene, matplotlib, Manim, and Lottie.
 
 Note: Remotion (the other popular React video framework) was
 deliberately excluded — its company license terms don't fit this

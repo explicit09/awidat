@@ -29,7 +29,10 @@ previewable/renderable layered motion. MotionScene supports multi-layer
 text, rectangle/solid panels, callout rectangles, and project-relative
 still image layers, with shared transforms and layer-local animations
 for opacity, position, scale, and rotation; keep actual footage in
-B-roll/PiP. Use the generated asset workflow below only when the scene
+B-roll/PiP. Pass transcript-backed on-screen content to
+`plan_motion_scene`: `headline` or `evidence_text`, plus exact
+`step_labels` for step/process scenes. Do not call it with only the
+freeform visual request. Use the generated asset workflow below only when the scene
 needs custom motion beyond that subset, subject-aware compositing, video
 media inside the graphic, or a renderer path that MotionScene does not
 yet provide.
