@@ -107,3 +107,29 @@ fn exposes_visual_reasoning_for_explainer_hybrid_requests() {
         step.lane == VisualSupportLane::Broll && step.tool == "find_broll_opportunities"
     }));
 }
+
+#[test]
+fn motion_scene_plan_step_names_required_content_args() {
+    let route = route_visual_support_request(
+        "turn this into a three-step animated card with a product screenshot",
+    );
+
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+
+    assert!(
+        step.action.contains("headline") && step.action.contains("evidence_text"),
+        "plan_motion_scene now rejects request-only calls; action should name content args: {}",
+        step.action
+    );
+    assert!(
+        step.action.contains("step_labels"),
+        "step/process MotionScenes must pass exact labels: {}",
+        step.action
+    );
+}
