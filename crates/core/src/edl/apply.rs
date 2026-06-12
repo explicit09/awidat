@@ -9285,18 +9285,27 @@ fn track_cursor(track: &montage_proto::otio::Track) -> f64 {
 }
 
 fn timeline_duration(timeline: &Timeline) -> f64 {
-    // The root `tracks` is itself a Stack: an explicit source_range trims the
-    // program shorter than its child tracks, so honor it before walking
-    // children (mirrors app_mcp/CLI duration logic).
-    if let Some(range) = timeline.tracks.source_range.as_ref() {
-        return range.duration.to_seconds();
-    }
-    timeline
-        .tracks
-        .children
-        .iter()
-        .map(stack_child_cursor)
-        .fold(0.0_f64, f64::max)
+    // The root `tracks` is itself a Stack, so the same helper that measures
+    // nested stacks measures the program: honor its source_range first, then
+    // fall back to the longest parallel child (mirrors app_mcp/CLI logic).
+    stack_cursor(&timeline.tracks)
+}
+
+/// Program length contributed by a Stack. A Stack composites its children in
+/// parallel, so its length is the longest child — unless an explicit
+/// source_range trims it. Used for the root `tracks`, top-level `StackChild`s,
+/// and track-local `TrackChild::Stack`s alike.
+fn stack_cursor(stack: &montage_proto::otio::Stack) -> f64 {
+    stack.source_range.as_ref().map_or_else(
+        || {
+            stack
+                .children
+                .iter()
+                .map(stack_child_cursor)
+                .fold(0.0_f64, f64::max)
+        },
+        |range| range.duration.to_seconds(),
+    )
 }
 
 /// Program length contributed by one top-level stack child. Top-level children
@@ -9311,16 +9320,7 @@ fn stack_child_cursor(child: &StackChild) -> f64 {
             .source_range
             .as_ref()
             .map_or(0.0, |range| range.duration.to_seconds()),
-        StackChild::Stack(stack) => stack.source_range.as_ref().map_or_else(
-            || {
-                stack
-                    .children
-                    .iter()
-                    .map(stack_child_cursor)
-                    .fold(0.0_f64, f64::max)
-            },
-            |range| range.duration.to_seconds(),
-        ),
+        StackChild::Stack(stack) => stack_cursor(stack),
     }
 }
 
@@ -9456,9 +9456,10 @@ fn child_duration(child: &TrackChild) -> f64 {
         // not extra timeline length). For the cursor math here we
         // treat them as zero — they don't push later clips later.
         TrackChild::Transition(_) => 0.0,
-        // Nested stacks aren't produced anywhere in the montage
-        // pipeline today; treat as zero rather than panicking.
-        TrackChild::Stack(_) => 0.0,
+        // A track-local stack (valid in imported OTIO) composites in
+        // parallel; measure it so the cursor and the visual-range guards
+        // see the real program length instead of a too-short timeline.
+        TrackChild::Stack(stack) => stack_cursor(stack),
     }
 }
 
