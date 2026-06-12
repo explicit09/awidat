@@ -145,8 +145,8 @@ fn audit_scene(
             continue;
         };
         if let (Some(text_box), Some(backing_box)) = (
-            normalized_box(layer, BoxAnchor::Center),
-            normalized_box(backing, BoxAnchor::TopLeft),
+            normalized_box(scene, layer, BoxAnchor::Center),
+            normalized_box(scene, backing, BoxAnchor::TopLeft),
         ) && !backing_box.contains(&text_box)
         {
             report.issues.push(MotionSceneQaIssue {
@@ -178,7 +178,7 @@ fn audit_layer(scene: &MotionScene, layer: &MotionSceneLayer, report: &mut Motio
         }
         _ => return,
     };
-    let Some(layer_box) = normalized_box(layer, anchor) else {
+    let Some(layer_box) = normalized_box(scene, layer, anchor) else {
         return;
     };
 
@@ -263,11 +263,26 @@ impl NormalizedBox {
     }
 }
 
-fn normalized_box(layer: &MotionSceneLayer, anchor: BoxAnchor) -> Option<NormalizedBox> {
-    let x = number_param(layer, "x")?;
-    let y = number_param(layer, "y")?;
-    let width = number_param(layer, "width")?;
-    let height = number_param(layer, "height")?;
+/// Mirror the renderer: a layer value greater than 1 is scene-space pixels and
+/// is divided by the scene extent to normalize, anything <= 1 is already a
+/// fraction. See `scene_normalized_layer_param` in the render crate.
+fn normalize_extent(value: f64, extent: u32) -> f64 {
+    if value.abs() > 1.0 && extent > 0 {
+        value / f64::from(extent)
+    } else {
+        value
+    }
+}
+
+fn normalized_box(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+    anchor: BoxAnchor,
+) -> Option<NormalizedBox> {
+    let x = normalize_extent(number_param(layer, "x")?, scene.width);
+    let y = normalize_extent(number_param(layer, "y")?, scene.height);
+    let width = normalize_extent(number_param(layer, "width")?, scene.width);
+    let height = normalize_extent(number_param(layer, "height")?, scene.height);
     if !x.is_finite()
         || !y.is_finite()
         || !width.is_finite()
