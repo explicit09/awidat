@@ -83,8 +83,22 @@ pub fn motion_scenes(args: MotionScenesArgs) -> Result<()> {
         .get("issues")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    if issue_count > 0 {
-        bail!("MotionScene visual QA found {issue_count} issue(s)");
+    // A requested frame that failed to render (missing asset, ffmpeg error)
+    // means rendered-frame QA did NOT actually pass, so it must fail the exit
+    // status — otherwise an agent could mark QA green without a single frame.
+    let render_failures = report
+        .get("rendered_frames")
+        .and_then(Value::as_array)
+        .map_or(0, |frames| {
+            frames
+                .iter()
+                .filter(|frame| frame.get("error").is_some())
+                .count()
+        });
+    if issue_count > 0 || render_failures > 0 {
+        bail!(
+            "MotionScene visual QA found {issue_count} issue(s) and {render_failures} frame render failure(s)"
+        );
     }
     Ok(())
 }
