@@ -27,6 +27,7 @@ mod plan_transcript_trim_edl_cmd;
 mod render_cmd;
 mod skills_cmd;
 mod upgrade_cmd;
+mod visual_qa_cmd;
 
 /// Top-level CLI.
 #[derive(Parser, Debug)]
@@ -317,8 +318,58 @@ enum Command {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Capture and audit visual output for agent QA.
+    VisualQa {
+        /// What to inspect.
+        #[command(subcommand)]
+        action: VisualQaAction,
+    },
     /// Print the version of the montage binary.
     Version,
+}
+
+/// Sub-action for `montage visual-qa`.
+#[derive(Subcommand, Debug)]
+enum VisualQaAction {
+    /// Audit MotionScene metadata and optionally render sample frames.
+    MotionScenes {
+        /// Project directory.
+        path: PathBuf,
+        /// Limit QA to one MotionScene id.
+        #[arg(long)]
+        scene_id: Option<String>,
+        /// Render start/mid/end composed program frames for each checked scene.
+        #[arg(long, default_value_t = false)]
+        render_frames: bool,
+        /// Frame detail when rendering samples: preview or original.
+        #[arg(long)]
+        detail: Option<String>,
+    },
+    /// Render one composed program frame at a timeline second.
+    ProgramFrame {
+        /// Project directory.
+        path: PathBuf,
+        /// Timeline-local second to inspect.
+        #[arg(long)]
+        t_s: f64,
+        /// Frame detail: preview or original.
+        #[arg(long)]
+        detail: Option<String>,
+        /// Image format: png or jpeg.
+        #[arg(long)]
+        format: Option<String>,
+        /// Include base64 image bytes in JSON output.
+        #[arg(long, default_value_t = false)]
+        include_base64: bool,
+    },
+    /// Capture the current desktop as a PNG for UI-level inspection.
+    DesktopScreenshot {
+        /// Project directory used for the default output path.
+        path: PathBuf,
+        /// Output PNG path. Defaults under `<project>/.montage/visual-qa/`.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Sub-action for `montage lessons`.
@@ -544,6 +595,38 @@ fn main() -> ExitCode {
         Command::Lessons { action } => match action {
             LessonsAction::Learn => lessons_cmd::learn(),
             LessonsAction::Show => lessons_cmd::show(),
+        },
+        Command::VisualQa { action } => match action {
+            VisualQaAction::MotionScenes {
+                path,
+                scene_id,
+                render_frames,
+                detail,
+            } => visual_qa_cmd::motion_scenes(visual_qa_cmd::MotionScenesArgs {
+                project_root: path,
+                scene_id,
+                render_frames,
+                detail,
+            }),
+            VisualQaAction::ProgramFrame {
+                path,
+                t_s,
+                detail,
+                format,
+                include_base64,
+            } => visual_qa_cmd::program_frame(visual_qa_cmd::ProgramFrameArgs {
+                project_root: path,
+                t_s,
+                detail,
+                format,
+                include_base64,
+            }),
+            VisualQaAction::DesktopScreenshot { path, output } => {
+                visual_qa_cmd::desktop_screenshot(visual_qa_cmd::DesktopScreenshotArgs {
+                    project_root: path,
+                    output,
+                })
+            }
         },
         Command::Upgrade {
             from,
