@@ -103,7 +103,19 @@ async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), 
 
     let snapshot = collect_snapshot(&app).await;
     let response = handle_json_rpc_value(request.body, snapshot, ScreenshotHandler::desktop());
-    write_http_response(&mut stream, 200, "application/json", &response.to_string(), cors).await?;
+    if response.is_null() {
+        // JSON-RPC notification (e.g. notifications/initialized): no response body.
+        write_http_response(&mut stream, 200, "", "", cors).await?;
+    } else {
+        write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            &response.to_string(),
+            cors,
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -398,9 +410,11 @@ fn track_child_duration_s(child: &TrackChild, counts: &mut TimelineCounts) -> f6
             counts.gap_count += 1;
             gap.source_range.duration.to_seconds().max(0.0)
         }
-        TrackChild::Transition(transition) => {
+        TrackChild::Transition(_transition) => {
             counts.transition_count += 1;
-            transition.in_offset.to_seconds().max(0.0) + transition.out_offset.to_seconds().max(0.0)
+            // Transitions overlap neighboring clips rather than adding track
+            // time; the EDL cursor (apply.rs) treats them as zero duration.
+            0.0
         }
         TrackChild::Stack(stack) => stack_duration_s(stack, counts),
     }
@@ -467,7 +481,9 @@ fn handle_json_rpc_value(
                 }
             }),
         ),
-        "notifications/initialized" => success_response(id, Value::Null),
+        // A JSON-RPC notification has no id and must not receive a response;
+        // Value::Null signals "write no body" to the caller.
+        "notifications/initialized" => Value::Null,
         "tools/list" => success_response(id, json!({ "tools": tool_definitions() })),
         "resources/list" => success_response(
             id,
