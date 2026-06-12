@@ -218,7 +218,7 @@ async fn write_http_response(
         Some(origin) => format!(
             "Access-Control-Allow-Origin: {origin}\r\n\
              Access-Control-Allow-Methods: POST, OPTIONS\r\n\
-             Access-Control-Allow-Headers: Content-Type\r\n"
+             Access-Control-Allow-Headers: Content-Type, MCP-Protocol-Version, Mcp-Session-Id\r\n"
         ),
         None => String::new(),
     };
@@ -460,6 +460,12 @@ fn handle_json_rpc_value(
     snapshot: AppMcpSnapshot,
     screenshot_handler: ScreenshotHandler,
 ) -> Value {
+    // A JSON-RPC notification carries no id and must never receive a response
+    // (e.g. notifications/initialized, cancellations, roots-change). Handle the
+    // missing id once here so no id-less method/default response is emitted.
+    if request.get("id").is_none() {
+        return Value::Null;
+    }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request
         .get("method")
@@ -481,9 +487,6 @@ fn handle_json_rpc_value(
                 }
             }),
         ),
-        // A JSON-RPC notification has no id and must not receive a response;
-        // Value::Null signals "write no body" to the caller.
-        "notifications/initialized" => Value::Null,
         "tools/list" => success_response(id, json!({ "tools": tool_definitions() })),
         "resources/list" => success_response(
             id,
