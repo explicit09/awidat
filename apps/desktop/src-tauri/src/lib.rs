@@ -25,6 +25,7 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod app_mcp;
 mod app_menu;
 mod codex_session;
 mod commands;
@@ -130,6 +131,7 @@ pub fn run() {
                     "MONTAGE_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
                 );
             }
+            app_mcp::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
