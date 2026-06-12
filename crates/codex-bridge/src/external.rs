@@ -60,6 +60,13 @@ impl ExternalAppServerClient {
         mcp_server_path: Option<PathBuf>,
     ) -> Result<(Self, mpsc::Receiver<ExternalServerEvent>), BridgeError> {
         let codex_bin = resolve_codex_bin();
+        // Bundled sidecars (codex, rg, ffmpeg, …) live next to codex_bin. Capture
+        // that dir before codex_bin is moved into the command so we can put it on
+        // the agent's PATH below.
+        let sidecar_dir = codex_bin
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(|dir| dir.to_path_buf());
         let args = app_server_args(mcp_server_path.as_deref(), project_root);
         let mut command = Command::new(codex_bin);
         command
@@ -69,6 +76,17 @@ impl ExternalAppServerClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
+        // Prepend the bundled sidecar dir to PATH so codex's shell tool can find
+        // bundled binaries like `rg` in a packaged app, where the GUI-inherited
+        // PATH is minimal and excludes the app bundle's sidecar location.
+        if let Some(dir) = sidecar_dir {
+            let existing = std::env::var_os("PATH").unwrap_or_default();
+            let mut entries = vec![dir];
+            entries.extend(std::env::split_paths(&existing));
+            if let Ok(joined) = std::env::join_paths(entries) {
+                command.env("PATH", joined);
+            }
+        }
 
         let mut child = command
             .spawn()

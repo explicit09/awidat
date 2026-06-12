@@ -86,6 +86,7 @@ jobs:
           make desktop-yt-dlp TARGET_TRIPLE=${{ matrix.target }}
           make desktop-ffmpeg TARGET_TRIPLE=${{ matrix.target }}
           make desktop-uv TARGET_TRIPLE=${{ matrix.target }}
+          make desktop-rg TARGET_TRIPLE=${{ matrix.target }}
           make desktop-mcp-server TARGET_TRIPLE=${{ matrix.target }}
 
       - name: Fetch prebuilt codex sidecar
