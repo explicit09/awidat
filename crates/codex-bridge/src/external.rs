@@ -80,17 +80,26 @@ impl ExternalAppServerClient {
         // bundled binaries like `rg` in a packaged app, where the GUI-inherited
         // PATH is minimal and excludes the app bundle's sidecar location.
         if let Some(dir) = sidecar_dir {
-            let existing = std::env::var_os("PATH").unwrap_or_default();
-            let mut entries = vec![dir];
-            // Drop empty components: an empty PATH entry means "current directory"
-            // on Unix, and codex is spawned with current_dir(project_root) — so a
-            // stray empty entry (e.g. from an unset/empty inherited PATH) would let
-            // project-local executables shadow system tools.
-            entries.extend(
-                std::env::split_paths(&existing).filter(|path| !path.as_os_str().is_empty()),
-            );
-            if let Ok(joined) = std::env::join_paths(entries) {
-                command.env("PATH", joined);
+            // Collect the inherited PATH, dropping empty components — an empty
+            // entry means "current directory" on Unix, and codex runs with
+            // current_dir(project_root), so it could shadow system tools.
+            let inherited: Vec<PathBuf> = std::env::var_os("PATH")
+                .map(|value| {
+                    std::env::split_paths(&value)
+                        .filter(|path| !path.as_os_str().is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Only override PATH when there is a usable value to preserve.
+            // Otherwise leaving it untouched keeps the child's default search
+            // path (e.g. /usr/bin) instead of narrowing it to just the sidecar
+            // dir, which would break tools like git/find/grep.
+            if !inherited.is_empty() {
+                let mut entries = vec![dir];
+                entries.extend(inherited);
+                if let Ok(joined) = std::env::join_paths(entries) {
+                    command.env("PATH", joined);
+                }
             }
         }
 
