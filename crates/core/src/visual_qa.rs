@@ -65,15 +65,22 @@ pub fn audit_motion_scenes(
     timeline_duration_s: Option<f64>,
     scene_id: Option<&str>,
 ) -> MotionSceneQaReport {
-    let Some(metadata) = timeline.metadata.montage.as_ref() else {
-        return MotionSceneQaReport::default();
-    };
-
-    let scenes: Vec<_> = metadata
-        .motion_scenes
-        .iter()
-        .filter(|scene| scene_id.is_none_or(|target| target == scene.id))
-        .collect();
+    // An imported/unversioned project may carry no montage metadata at all.
+    // Don't early-return: the explicit scene-id miss check below must still
+    // run so a typo'd or unpersisted `--scene-id` is reported, not silently
+    // passed as an empty successful report.
+    let scenes: Vec<&MotionScene> = timeline
+        .metadata
+        .montage
+        .as_ref()
+        .map(|metadata| {
+            metadata
+                .motion_scenes
+                .iter()
+                .filter(|scene| scene_id.is_none_or(|target| target == scene.id))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut report = MotionSceneQaReport {
         scene_count: scenes.len(),
@@ -187,9 +194,15 @@ fn audit_layer(scene: &MotionScene, layer: &MotionSceneLayer, report: &mut Motio
 
     let anchor = match layer.kind {
         MotionSceneLayerKind::Text => BoxAnchor::Center,
-        MotionSceneLayerKind::Shape | MotionSceneLayerKind::Solid | MotionSceneLayerKind::Image => {
-            BoxAnchor::TopLeft
-        }
+        MotionSceneLayerKind::Shape | MotionSceneLayerKind::Solid => BoxAnchor::TopLeft,
+        // Image layers scale to their box with `force_original_aspect_ratio`
+        // (cover=`increase`, the default) and are overlaid WITHOUT cropping, so
+        // the declared x/y/width/height is not the rendered extent — a small
+        // in-frame box can still render well past the frame. Structural box QA
+        // can't bound that without the asset's aspect ratio, so don't assert
+        // containment here; image framing is verified via the rendered
+        // frame_samples instead. See crates/render/src/timeline.rs image lowering.
+        MotionSceneLayerKind::Image => return,
         _ => return,
     };
     let Some(layer_box) = normalized_box(scene, layer, anchor) else {
@@ -306,9 +319,9 @@ fn normalized_box(
     } else {
         (0, 0)
     };
-    // Shape/solid/image lowering fills missing geometry with the renderer's
-    // defaults (x=0, y=0, width=1, height=1), so mirror that for non-text layers
-    // — a geometry-less solid renders full-frame and must remain auditable. Text
+    // Shape/solid lowering fills missing geometry with the renderer's defaults
+    // (x=0, y=0, width=1, height=1), so mirror that for non-text layers — a
+    // geometry-less solid renders full-frame and must remain auditable. Text
     // layers without an explicit box are skipped.
     let param = |key: &str, default: f64| -> Option<f64> {
         match number_param(layer, key) {
