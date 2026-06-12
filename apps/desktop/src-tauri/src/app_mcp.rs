@@ -364,15 +364,19 @@ struct TimelineCounts {
 }
 
 fn stack_duration_s(stack: &Stack, counts: &mut TimelineCounts) -> f64 {
-    if let Some(range) = &stack.source_range {
-        return range.duration.to_seconds().max(0.0);
-    }
-
-    stack
+    // Always walk children to populate the track/clip/gap/transition counters,
+    // even when an explicit source_range overrides the reported duration —
+    // otherwise a trimmed/imported root stack looks empty to MCP clients.
+    let walked = stack
         .children
         .iter()
         .map(|child| stack_child_duration_s(child, counts))
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max);
+
+    match &stack.source_range {
+        Some(range) => range.duration.to_seconds().max(0.0),
+        None => walked,
+    }
 }
 
 fn stack_child_duration_s(child: &StackChild, counts: &mut TimelineCounts) -> f64 {
