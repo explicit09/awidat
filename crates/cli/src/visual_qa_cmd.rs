@@ -161,12 +161,9 @@ fn unix_ms() -> u128 {
 }
 
 fn timeline_duration_s(timeline: &montage_proto::otio::Timeline) -> Option<f64> {
-    let duration = timeline
-        .tracks
-        .children
-        .iter()
-        .map(stack_child_duration_s)
-        .fold(0.0_f64, f64::max);
+    // The root `tracks` Stack honors its own source_range first (mirrors
+    // app_mcp/edl duration logic), then falls back to the longest child.
+    let duration = stack_duration_s(&timeline.tracks);
     duration.is_finite().then_some(duration)
 }
 
