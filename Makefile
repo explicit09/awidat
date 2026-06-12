@@ -353,7 +353,7 @@ desktop-mcp-server:
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 
-desktop: desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-mcp-server desktop-codex
+desktop: desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex
 	cd apps/desktop && pnpm tauri dev
 
 # Stop stale dev processes that can keep Vite's fixed Tauri port busy.
