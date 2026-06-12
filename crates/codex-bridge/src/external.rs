@@ -82,7 +82,13 @@ impl ExternalAppServerClient {
         if let Some(dir) = sidecar_dir {
             let existing = std::env::var_os("PATH").unwrap_or_default();
             let mut entries = vec![dir];
-            entries.extend(std::env::split_paths(&existing));
+            // Drop empty components: an empty PATH entry means "current directory"
+            // on Unix, and codex is spawned with current_dir(project_root) — so a
+            // stray empty entry (e.g. from an unset/empty inherited PATH) would let
+            // project-local executables shadow system tools.
+            entries.extend(
+                std::env::split_paths(&existing).filter(|path| !path.as_os_str().is_empty()),
+            );
             if let Ok(joined) = std::env::join_paths(entries) {
                 command.env("PATH", joined);
             }
