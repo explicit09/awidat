@@ -6272,20 +6272,13 @@ fn apply_insert_broll(
 
     let locator = required_locator(index, locator)?;
     let anchor_track_time = track_time_at(working, locator.track_index, locator.child_index);
-    validate_visual_timeline_range(
-        working,
-        index,
-        "broll",
-        asset,
-        anchor_track_time,
-        duration_s,
-    )?;
 
     // Snapshot the anchor clip's source range + name + rate before
     // mutating anything — we'll need them in both branches and
     // referencing back into `working` via locator after a structural
-    // change is fragile.
-    let (anchor_name, rate, anchor_source_start, anchor_source_dur) = {
+    // change is fragile. `anchor_track_total` is the anchor track's full
+    // length, needed to validate the post-replace end below.
+    let (anchor_name, rate, anchor_source_start, anchor_source_dur, anchor_track_total) = {
         let StackChild::Track(track) = &working.tracks.children[locator.track_index] else {
             return Err(ApplyError::Invalid {
                 index,
@@ -6310,8 +6303,28 @@ fn apply_insert_broll(
             range.start_time.rate,
             range.start_time.to_seconds(),
             range.duration.to_seconds(),
+            track_cursor(track),
         )
     };
+
+    // Generated visual inserts must not lengthen the program. Overlay places the
+    // clip at `anchor_track_time` on another track (end = anchor_track_time +
+    // duration). Replace swaps the clip in place and shifts every later clip, so
+    // the anchor track grows by `max(0, duration - anchor_source_dur)` — validate
+    // the resulting track end, not just the anchor span, or a long replacement
+    // over an early anchor slips past the guard.
+    let range_check_start = match position {
+        super::op::BRollPosition::Overlay => anchor_track_time,
+        super::op::BRollPosition::Replace => (anchor_track_total - anchor_source_dur).max(0.0),
+    };
+    validate_visual_timeline_range(
+        working,
+        index,
+        "broll",
+        asset,
+        range_check_start,
+        duration_s,
+    )?;
 
     // Build the broll clip — same shape as apply_insert_clip's clip
     // construction.
