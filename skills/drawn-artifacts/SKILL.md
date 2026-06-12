@@ -146,8 +146,10 @@ dependency cost, author scenes in `src/scenes/*.tsx`, and run
 `http://127.0.0.1:9000`.
 
 Export transparent PNG frames from the editor, then run
-`npm run export:frames -- --frames output/frame_%05d.png --out generated/drawn/<slug>.mov`
-inside the copied template. Place the resulting ProRes 4444 `.mov`
+`npm run export:frames -- --frames output/frame_%05d.png --out ../<slug>.mov`
+inside the copied template (cwd is `generated/drawn/motion-canvas`, so
+`../<slug>.mov` resolves to the project-level `generated/drawn/<slug>.mov`).
+Place the resulting ProRes 4444 `.mov`
 through `Insert PiP` or overlay `Insert BRoll`, then verify with
 `view_frame` or a short render.
 
