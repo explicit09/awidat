@@ -81,6 +81,20 @@ pub fn audit_motion_scenes(
         frame_samples: Vec::new(),
     };
 
+    // An explicit scene-id that matches nothing must not silently pass QA — it
+    // would let an agent mark a typo'd or unpersisted scene as audited.
+    if let Some(target) = scene_id
+        && scenes.is_empty()
+    {
+        report.issues.push(MotionSceneQaIssue {
+            severity: MotionSceneQaSeverity::Error,
+            kind: MotionSceneQaIssueKind::InvalidScene,
+            scene_id: target.to_string(),
+            layer_id: None,
+            message: format!("scene-id '{target}' was not found among stored MotionScenes"),
+        });
+    }
+
     for scene in scenes {
         audit_scene(scene, timeline_duration_s, &mut report);
     }
@@ -282,19 +296,31 @@ fn normalized_box(
     layer: &MotionSceneLayer,
     anchor: BoxAnchor,
 ) -> Option<NormalizedBox> {
+    let is_text = layer.kind == MotionSceneLayerKind::Text;
     // Only text layers are normalized by the renderer (scene_normalized_layer_param).
     // Shape/image lowering copies raw x/y/width/height, so a pixel-space solid
     // really does render off-frame and must stay flagged — pass extent 0 there
     // so normalize_extent leaves the value untouched.
-    let (ext_w, ext_h) = if layer.kind == MotionSceneLayerKind::Text {
+    let (ext_w, ext_h) = if is_text {
         (scene.width, scene.height)
     } else {
         (0, 0)
     };
-    let x = normalize_extent(number_param(layer, "x")?, ext_w);
-    let y = normalize_extent(number_param(layer, "y")?, ext_h);
-    let width = normalize_extent(number_param(layer, "width")?, ext_w);
-    let height = normalize_extent(number_param(layer, "height")?, ext_h);
+    // Shape/solid/image lowering fills missing geometry with the renderer's
+    // defaults (x=0, y=0, width=1, height=1), so mirror that for non-text layers
+    // — a geometry-less solid renders full-frame and must remain auditable. Text
+    // layers without an explicit box are skipped.
+    let param = |key: &str, default: f64| -> Option<f64> {
+        match number_param(layer, key) {
+            Some(value) => Some(value),
+            None if is_text => None,
+            None => Some(default),
+        }
+    };
+    let x = normalize_extent(param("x", 0.0)?, ext_w);
+    let y = normalize_extent(param("y", 0.0)?, ext_h);
+    let width = normalize_extent(param("width", 1.0)?, ext_w);
+    let height = normalize_extent(param("height", 1.0)?, ext_h);
     if !x.is_finite()
         || !y.is_finite()
         || !width.is_finite()
