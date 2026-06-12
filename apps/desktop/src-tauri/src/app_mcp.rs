@@ -104,8 +104,10 @@ async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), 
     let snapshot = collect_snapshot(&app).await;
     let response = handle_json_rpc_value(request.body, snapshot, ScreenshotHandler::desktop());
     if response.is_null() {
-        // JSON-RPC notification (e.g. notifications/initialized): no response body.
-        write_http_response(&mut stream, 200, "", "", cors).await?;
+        // JSON-RPC notification (e.g. notifications/initialized): the MCP
+        // Streamable HTTP transport requires `202 Accepted` with no body for
+        // accepted notifications, which strict browser clients check.
+        write_http_response(&mut stream, 202, "", "", cors).await?;
     } else {
         write_http_response(
             &mut stream,
@@ -205,6 +207,7 @@ async fn write_http_response(
 ) -> Result<(), AppMcpError> {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         404 => "Not Found",
         405 => "Method Not Allowed",
         _ => "Error",
