@@ -140,10 +140,10 @@ fn render_program_frame_json(args: ProgramFrameArgs) -> Result<Value> {
         .map_err(|message| anyhow::anyhow!(message))?;
     let mut value: Value =
         serde_json::from_str(&raw).context("program frame returned invalid JSON")?;
-    if !args.include_base64 {
-        if let Some(object) = value.as_object_mut() {
-            object.remove("image_base64");
-        }
+    if !args.include_base64
+        && let Some(object) = value.as_object_mut()
+    {
+        object.remove("image_base64");
     }
     Ok(value)
 }

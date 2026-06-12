@@ -1,4 +1,5 @@
 //! Visual-support routing policy tests.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use montage_core::tools::plan_visual_support::{
     VisualSupportIntent, VisualSupportLane, VisualSupportNeedKind, route_visual_support_request,

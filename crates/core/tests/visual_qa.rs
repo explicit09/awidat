@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::collections::BTreeMap;
 
 use montage_core::visual_qa::{MotionSceneQaIssueKind, audit_motion_scenes};
