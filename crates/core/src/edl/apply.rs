@@ -6538,6 +6538,20 @@ fn apply_insert_pip(
     };
 
     let anchor_track_time = track_time_at(working, locator.track_index, locator.child_index);
+    // PiP always overlays a video track, so apply the same generated-visual
+    // range guard as Insert BRoll / Insert Clip: a generated asset whose
+    // duration runs past the program end must be rejected, not silently
+    // extend the timeline.
+    if is_generated_visual_asset(asset) {
+        validate_visual_range(
+            index,
+            "insert_pip",
+            asset,
+            anchor_track_time,
+            duration_s,
+            timeline_duration(working),
+        )?;
+    }
     let StackChild::Track(target) = &mut working.tracks.children[target_idx] else {
         return Err(ApplyError::Invalid {
             index,
@@ -9271,6 +9285,12 @@ fn track_cursor(track: &montage_proto::otio::Track) -> f64 {
 }
 
 fn timeline_duration(timeline: &Timeline) -> f64 {
+    // The root `tracks` is itself a Stack: an explicit source_range trims the
+    // program shorter than its child tracks, so honor it before walking
+    // children (mirrors app_mcp/CLI duration logic).
+    if let Some(range) = timeline.tracks.source_range.as_ref() {
+        return range.duration.to_seconds();
+    }
     timeline
         .tracks
         .children
