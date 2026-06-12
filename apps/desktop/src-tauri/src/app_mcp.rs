@@ -24,7 +24,16 @@ use crate::state::{MontageState, ViewState};
 pub const LISTEN_ADDR: &str = "127.0.0.1:8420";
 
 /// Start the app-hosted MCP server in the Tauri async runtime.
+///
+/// Opt-in only: this endpoint exposes live editor state and screenshot capture
+/// (using the app's screen-recording permission), so it must not run on every
+/// launch where any local process could reach `127.0.0.1:8420`. It starts only
+/// when `MONTAGE_APP_MCP` is set.
 pub fn start(app: AppHandle) {
+    if std::env::var_os("MONTAGE_APP_MCP").is_none() {
+        info!("app MCP server disabled (set MONTAGE_APP_MCP=1 to enable)");
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         let listener = match TcpListener::bind(LISTEN_ADDR).await {
             Ok(listener) => listener,
@@ -61,8 +70,10 @@ pub fn start(app: AppHandle) {
 
 async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), AppMcpError> {
     let raw = read_http_request(&mut stream).await?;
+    let allow_origin = allowed_cors_origin(&raw);
+    let cors = allow_origin.as_deref();
     if is_options_request(&raw) {
-        write_http_response(&mut stream, 200, "", "").await?;
+        write_http_response(&mut stream, 200, "", "", cors).await?;
         return Ok(());
     }
 
@@ -73,6 +84,7 @@ async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), 
             405,
             "application/json",
             &json_error_text("method not allowed"),
+            cors,
         )
         .await?;
         return Ok(());
@@ -83,6 +95,7 @@ async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), 
             404,
             "application/json",
             &json_error_text("not found"),
+            cors,
         )
         .await?;
         return Ok(());
@@ -90,7 +103,7 @@ async fn handle_connection(app: AppHandle, mut stream: TcpStream) -> Result<(), 
 
     let snapshot = collect_snapshot(&app).await;
     let response = handle_json_rpc_value(request.body, snapshot, ScreenshotHandler::desktop());
-    write_http_response(&mut stream, 200, "application/json", &response.to_string()).await?;
+    write_http_response(&mut stream, 200, "application/json", &response.to_string(), cors).await?;
     Ok(())
 }
 
@@ -140,11 +153,43 @@ fn is_options_request(raw: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// Echo the request `Origin` only when it is a loopback origin (localhost /
+/// 127.0.0.1 / [::1], any port). A non-loopback or absent origin gets no CORS
+/// header — non-browser clients are unaffected since they ignore CORS, while a
+/// browser dev origin like `http://localhost:5173` now matches.
+fn allowed_cors_origin(raw: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(raw).ok()?;
+    let head = text.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(text);
+    let origin = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("origin")
+            .then(|| value.trim().to_string())
+    })?;
+    is_loopback_origin(&origin).then_some(origin)
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let host = authority
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(authority);
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+}
+
 async fn write_http_response(
     stream: &mut TcpStream,
     status: u16,
     content_type: &str,
     body: &str,
+    allow_origin: Option<&str>,
 ) -> Result<(), AppMcpError> {
     let reason = match status {
         200 => "OK",
@@ -157,12 +202,18 @@ async fn write_http_response(
     } else {
         format!("Content-Type: {content_type}\r\n")
     };
+    let cors_header = match allow_origin {
+        Some(origin) => format!(
+            "Access-Control-Allow-Origin: {origin}\r\n\
+             Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+             Access-Control-Allow-Headers: Content-Type\r\n"
+        ),
+        None => String::new(),
+    };
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          {content_type_header}\
-         Access-Control-Allow-Origin: http://localhost\r\n\
-         Access-Control-Allow-Methods: POST, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type\r\n\
+         {cors_header}\
          Content-Length: {}\r\n\
          Connection: close\r\n\
          \r\n\
