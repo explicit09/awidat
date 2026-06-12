@@ -10610,7 +10610,10 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         .filter(|title| title_visible_with_broadcast_overlay(title, broadcast_overlay))
         .cloned()
         .collect();
-    if !visible_titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
+    if !visible_titles.is_empty()
+        || ffmpeg_broadcast_overlay.is_some()
+        || !editable_subtitle_tracks.is_empty()
+    {
         let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
             &[],
             &[],
