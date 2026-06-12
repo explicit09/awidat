@@ -910,6 +910,14 @@ fn apply_one(
             Ok(format!("stored motion template {}", template.id))
         }
         EdlOp::SetMotionScene { scene } => {
+            validate_visual_timeline_range(
+                working,
+                index,
+                "motion_scene",
+                &scene.id,
+                scene.start_s,
+                scene.duration_s,
+            )?;
             let meta = timeline_montage_metadata(working);
             replace_by_id(&mut meta.motion_scenes, scene.clone(), |item| &item.id);
             Ok(format!("stored motion scene {}", scene.id))
@@ -3320,6 +3328,20 @@ fn apply_insert_clip(
                 ),
             });
         }
+        if matches!(
+            infer_insert_track_kind(track_name, track_kind_hint),
+            TrackKind::Video
+        ) && is_generated_visual_asset(asset)
+        {
+            validate_visual_timeline_range(
+                working,
+                index,
+                "insert_clip",
+                asset,
+                at_s,
+                end - start,
+            )?;
+        }
     }
     let rate = 24.0_f64;
     let source_range = TimeRange::new(
@@ -3339,6 +3361,7 @@ fn apply_insert_clip(
         }
     });
 
+    let timeline_end_s = timeline_duration(working);
     let StackChild::Track(track) = &mut working.tracks.children[track_idx] else {
         return Err(ApplyError::Invalid {
             index,
@@ -3398,6 +3421,22 @@ fn apply_insert_clip(
         .or(at_position)
         .unwrap_or(track.children.len())
         .min(track.children.len());
+    let placement_start_s = track
+        .children
+        .iter()
+        .take(position)
+        .map(child_duration)
+        .sum();
+    if matches!(track.kind, TrackKind::Video) && is_generated_visual_asset(asset) {
+        validate_visual_range(
+            index,
+            "insert_clip",
+            asset,
+            placement_start_s,
+            end - start,
+            timeline_end_s,
+        )?;
+    }
     let chosen_name = name_override
         .map(str::to_string)
         .unwrap_or_else(|| default_clip_name_for_asset(track, asset));
@@ -6232,6 +6271,15 @@ fn apply_insert_broll(
     }
 
     let locator = required_locator(index, locator)?;
+    let anchor_track_time = track_time_at(working, locator.track_index, locator.child_index);
+    validate_visual_timeline_range(
+        working,
+        index,
+        "broll",
+        asset,
+        anchor_track_time,
+        duration_s,
+    )?;
 
     // Snapshot the anchor clip's source range + name + rate before
     // mutating anything — we'll need them in both branches and
@@ -6328,9 +6376,6 @@ fn apply_insert_broll(
             // time; if every existing overlay track is occupied
             // there, create another overlay track instead of
             // appending to the end and silently moving the b-roll.
-            let anchor_track_time =
-                track_time_at(working, locator.track_index, locator.child_index);
-
             let mut broll = Some(broll);
             let mut target_name = None;
             for track_idx in 0..working.tracks.children.len() {
@@ -9225,6 +9270,80 @@ fn track_cursor(track: &montage_proto::otio::Track) -> f64 {
     track.children.iter().map(child_duration).sum()
 }
 
+fn timeline_duration(timeline: &Timeline) -> f64 {
+    timeline
+        .tracks
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            StackChild::Track(track) => Some(track_cursor(track)),
+            StackChild::Gap(gap) => Some(gap.source_range.duration.to_seconds()),
+            StackChild::Stack(_) | StackChild::Clip(_) => None,
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn validate_visual_timeline_range(
+    timeline: &Timeline,
+    index: usize,
+    kind: &str,
+    label: &str,
+    start_s: f64,
+    duration_s: f64,
+) -> Result<(), ApplyError> {
+    validate_visual_range(
+        index,
+        kind,
+        label,
+        start_s,
+        duration_s,
+        timeline_duration(timeline),
+    )
+}
+
+fn validate_visual_range(
+    index: usize,
+    kind: &str,
+    label: &str,
+    start_s: f64,
+    duration_s: f64,
+    timeline_end_s: f64,
+) -> Result<(), ApplyError> {
+    if !start_s.is_finite() || start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{kind} {label:?} start {start_s} must be a finite non-negative timeline time"
+            ),
+        });
+    }
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("{kind} {label:?} duration {duration_s} must be > 0"),
+        });
+    }
+
+    if timeline_end_s <= 0.001 {
+        return Ok(());
+    }
+    let end_s = start_s + duration_s;
+    if end_s > timeline_end_s + 0.001 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{kind} {label:?} is outside timeline: [{start_s:.3}s..{end_s:.3}s] exceeds current timeline end {timeline_end_s:.3}s"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn is_generated_visual_asset(asset: &str) -> bool {
+    asset.contains("raw/generated/") || asset.contains("/generated/")
+}
+
 fn insert_overlay_clip_at(
     track: &mut montage_proto::otio::Track,
     clip: TrackChild,
@@ -9376,8 +9495,8 @@ mod tests {
         Track, TrackChild, TrackKind,
     };
     use montage_proto::professional::{
-        CoordinateSpace, ReframeSmoothing, SourceRange, TrackKind as ProfessionalTrackKind,
-        TrackSample, TrackSidecar, TrackingPackage,
+        CoordinateSpace, MotionScene, ReframeSmoothing, SourceRange,
+        TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar, TrackingPackage,
     };
 
     fn timeline_with_three_clips() -> Timeline {
@@ -11167,6 +11286,36 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_clip_rejects_generated_append_after_timeline_end() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/generated/openrouter/late.mp4".into(),
+                track: "V1".into(),
+                track_kind: Some(InsertTrackKind::Video),
+                at_position: None,
+                at_s: None,
+                start: Some(0.0),
+                end: Some(5.0),
+                name: None,
+                link_group_id: None,
+                snap: None,
+            }],
+        };
+
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        match err {
+            ApplyError::Invalid { message, .. } => {
+                assert!(
+                    message.contains("outside timeline"),
+                    "expected timeline overrun error, got: {message}"
+                );
+            }
+            other => panic!("want Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn apply_insert_clip_can_create_audio_track() {
         use montage_proto::otio::Timeline as Tl;
         let tl = Tl::empty("test");
@@ -11470,6 +11619,62 @@ mod tests {
             panic!("expected broll at v2 idx 1")
         };
         assert!(broll.name.starts_with("broll-from-clip-1"));
+    }
+
+    #[test]
+    fn apply_insert_broll_overlay_rejects_timeline_overrun() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "charlie snippet".into(),
+                },
+                asset: "raw/broll.mp4".into(),
+                duration_s: 6.0,
+                position: super::super::op::BRollPosition::Overlay,
+            }],
+        };
+
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        match err {
+            ApplyError::Invalid { message, .. } => {
+                assert!(
+                    message.contains("outside timeline"),
+                    "expected timeline overrun error, got: {message}"
+                );
+            }
+            other => panic!("want Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_set_motion_scene_rejects_timeline_overrun() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetMotionScene {
+                scene: MotionScene {
+                    id: "scene-after-end".into(),
+                    start_s: 14.0,
+                    duration_s: 2.0,
+                    fps: 30.0,
+                    width: 1920,
+                    height: 1080,
+                    layers: Vec::new(),
+                    rationale: Some("should be rejected".into()),
+                },
+            }],
+        };
+
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        match err {
+            ApplyError::Invalid { message, .. } => {
+                assert!(
+                    message.contains("outside timeline"),
+                    "expected timeline overrun error, got: {message}"
+                );
+            }
+            other => panic!("want Invalid, got {other:?}"),
+        }
     }
 
     #[test]
