@@ -35,10 +35,12 @@ In the Motion Canvas editor, export a transparent PNG sequence. Then
 assemble it into a transparent ProRes 4444 asset:
 
 ```bash
+# cwd is generated/drawn/motion-canvas (the copied template), so `../<slug>.mov`
+# lands at the project-level generated/drawn/<slug>.mov the placement step expects.
 npm run export:frames -- \
   --frames output/frame_%05d.png \
   --fps 30 \
-  --out generated/drawn/<slug>.mov
+  --out ../<slug>.mov
 ```
 
 Place the `.mov` with `Insert PiP` or overlay `Insert BRoll`, then
