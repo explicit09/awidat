@@ -28,6 +28,7 @@ required_sidecars=(
   ffmpeg
   ffprobe
   montage-mcp-server
+  rg
   uv
   yt-dlp
 )

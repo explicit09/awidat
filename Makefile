@@ -1,8 +1,9 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
 FFMPEG_VERSION ?= 7.1.1
 UV_VERSION ?= 0.11.14
+RIPGREP_VERSION ?= 14.1.1
 FFMPEG_MACOS_BASE_URL ?= https://evermeet.cx/ffmpeg
 FFMPEG_WINDOWS_URL ?= https://github.com/GyanD/codexffmpeg/releases/download/$(FFMPEG_VERSION)/ffmpeg-$(FFMPEG_VERSION)-full_build.zip
 FFMPEG_NPM_BASE_URL ?= https://registry.npmjs.org/@ffmpeg-installer
@@ -175,7 +176,7 @@ desktop-sidecar-check-stubs:
 	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
 	    suffix="$$suffix.exe"; \
 	fi; \
-	for sidecar in codex ffmpeg ffprobe montage-mcp-server uv yt-dlp; do \
+	for sidecar in codex ffmpeg ffprobe montage-mcp-server rg uv yt-dlp; do \
 	    dest="$$dest_dir/$$sidecar$$suffix"; \
 	    printf '%s\n' '#!/usr/bin/env sh' "echo \"$$sidecar sidecar check stub; fetch a runnable sidecar before packaging\" >&2" 'exit 127' > "$$dest"; \
 	    chmod +x "$$dest"; \
@@ -290,6 +291,49 @@ desktop-uv:
 	esac; \
 	echo "wrote $$uv_dest"
 
+desktop-rg:
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
+	if [ -z "$$target_triple" ]; then \
+	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
+	fi; \
+	dest_dir="apps/desktop/src-tauri/binaries"; \
+	mkdir -p "$$dest_dir"; \
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	asset_triple="$$target_triple"; \
+	if [ "$$target_triple" = "x86_64-unknown-linux-gnu" ]; then \
+	    asset_triple="x86_64-unknown-linux-musl"; \
+	fi; \
+	base="https://github.com/BurntSushi/ripgrep/releases/download/$(RIPGREP_VERSION)"; \
+	case "$$target_triple" in \
+	  aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) \
+	    rg_dest="$$dest_dir/rg-$$target_triple"; \
+	    if [ -x "$$rg_dest" ] && [ "$${RIPGREP_REFRESH:-0}" != "1" ]; then \
+	        if "$$rg_dest" --version 2>/dev/null | grep -q "ripgrep $(RIPGREP_VERSION)"; then \
+	            echo "ripgrep $(RIPGREP_VERSION) already at $$rg_dest"; \
+	            exit 0; \
+	        fi; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/rg.tar.gz" "$$base/ripgrep-$(RIPGREP_VERSION)-$$asset_triple.tar.gz"; \
+	    tar -xzf "$$tmp/rg.tar.gz" -C "$$tmp"; \
+	    cp "$$tmp/ripgrep-$(RIPGREP_VERSION)-$$asset_triple/rg" "$$rg_dest"; \
+	    chmod +x "$$rg_dest"; \
+	    ;; \
+	  x86_64-pc-windows-msvc) \
+	    rg_dest="$$dest_dir/rg-$$target_triple.exe"; \
+	    if [ -s "$$rg_dest" ] && [ "$${RIPGREP_REFRESH:-0}" != "1" ] && ! grep -Eaq "sidecar check stub|sidecar unavailable in CI compile check" "$$rg_dest"; then \
+	        echo "ripgrep $(RIPGREP_VERSION) already at $$rg_dest"; \
+	        exit 0; \
+	    fi; \
+	    curl -fsSL -o "$$tmp/rg.zip" "$$base/ripgrep-$(RIPGREP_VERSION)-x86_64-pc-windows-msvc.zip"; \
+	    unzip -p "$$tmp/rg.zip" "ripgrep-$(RIPGREP_VERSION)-x86_64-pc-windows-msvc/rg.exe" > "$$rg_dest"; \
+	    chmod +x "$$rg_dest"; \
+	    ;; \
+	  *) echo "unknown ripgrep target triple: $$target_triple" >&2; exit 1 ;; \
+	esac; \
+	echo "wrote $$rg_dest"
+
 desktop-mcp-server:
 	@set -e; \
 	target_triple="$(TARGET_TRIPLE)"; \
@@ -309,7 +353,7 @@ desktop-mcp-server:
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 
-desktop: desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-mcp-server desktop-codex
+desktop: desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex
 	cd apps/desktop && pnpm tauri dev
 
 # Stop stale dev processes that can keep Vite's fixed Tauri port busy.

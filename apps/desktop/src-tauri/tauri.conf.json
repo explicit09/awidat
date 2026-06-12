@@ -38,6 +38,7 @@
       "binaries/ffmpeg",
       "binaries/ffprobe",
       "binaries/montage-mcp-server",
+      "binaries/rg",
       "binaries/uv",
       "binaries/yt-dlp"
     ],
