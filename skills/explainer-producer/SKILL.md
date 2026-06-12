@@ -134,8 +134,10 @@ the lane by intent:
   is worse than none.
 - **`motion_scene`** — native explainers/diagrams/cards/kinetic text, and the
   default for an asset that doesn't exist as footage, via `plan_motion_scene` →
-  `Set Motion Scene`. **Timing is the craft:** the on-screen beat must hit the
-  exact word (MKBHD). Oversimplify — show only what the point needs; extra detail
+  `Set Motion Scene`. Pass transcript-backed on-screen content to
+  `plan_motion_scene`: `headline` or `evidence_text`, and exact `step_labels`
+  for step/process scenes. A request-only call is invalid. **Timing is the craft:**
+  the on-screen beat must hit the exact word (MKBHD). Oversimplify — show only what the point needs; extra detail
   distracts. Apply easing on every move (start slow / move / end slow) so it
   reads as professional, not robotic.
 - **`title_annotation`** — simple lower thirds / labels / arrows.

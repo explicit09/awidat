@@ -147,3 +147,44 @@ fn validate_prints_index_path_warnings() {
 
     fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn visual_qa_motion_scenes_reports_structural_issues() {
+    let root = tmp_dir("visual-qa-motion-scenes");
+    let root_arg = root.to_string_lossy();
+    let init = run(&["init", &root_arg]);
+    assert!(init.status.success(), "{}", stderr(&init));
+
+    let project_path = root.join("project.otio.json");
+    let mut timeline: serde_json::Value =
+        serde_json::from_slice(&fs::read(&project_path).unwrap()).unwrap();
+    timeline["metadata"]["montage"]["motion_scenes"] = serde_json::json!([
+        {
+            "id": "bad-scene",
+            "start_s": 0.0,
+            "duration_s": 4.0,
+            "fps": 30.0,
+            "width": 1920,
+            "height": 1080,
+            "layers": [
+                {
+                    "id": "veil",
+                    "kind": "solid",
+                    "from_s": 0.0,
+                    "duration_s": 4.0,
+                    "z_index": 0,
+                    "params": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+                }
+            ]
+        }
+    ]);
+    fs::write(&project_path, serde_json::to_vec_pretty(&timeline).unwrap()).unwrap();
+
+    let output = run(&["visual-qa", "motion-scenes", &root_arg]);
+    assert!(!output.status.success());
+    let out = stdout(&output);
+    assert!(out.contains("bad-scene"));
+    assert!(out.contains("full_frame_backing"));
+
+    fs::remove_dir_all(&root).ok();
+}

@@ -42,7 +42,7 @@ licensing terms). All four lanes below are permissively licensed.
 | Chart / data viz from real numbers (bar, line, comparison) | matplotlib | `scripts/chart.py` |
 | Concept / math / counter animation (animated stat, growing bars, diagrams in motion) | Manim CE | `scripts/manim_scene.py` |
 | Polished decorative motion (confetti, checkmarks, flourishes, animated icons) | Lottie (python-lottie + ffmpeg) | `scripts/lottie_render.py` |
-| Rich custom 2D animated scenes beyond the above | Motion Canvas | `motion-canvas/README.md` (manual setup — deferred) |
+| Rich custom 2D animated scenes beyond the above | Motion Canvas optional template | `motion-canvas/template/` + `motion-canvas/README.md` |
 
 All scripts run through `uv` — no system Python packages needed. `uv`
 is on PATH (`/opt/homebrew/bin/uv`) and also bundled with the desktop
@@ -134,14 +134,24 @@ uv run --with 'lottie[all]' <skill-root>/scripts/lottie_render.py \
 VERIFIED: sample animation rendered end-to-end; .mov probes as
 `prores / yuva444p12le` (alpha kept), PNG frames probe as `rgba`.
 
-## 4. Motion Canvas — deferred
+## 4. Motion Canvas optional template
 
-No agent-time lane: rendering needs a full npm install plus a
-browser-driven render step, so it is not scriptable here. When a brief
-genuinely needs it, point the user at
-`<skill-root>/motion-canvas/README.md` for the one-time manual setup
-and the PNG-sequence → ProRes 4444 handoff recipe. Don't attempt
-`npm install` mid-edit.
+Use this only when native MotionScene, matplotlib, Manim, or Lottie
+cannot express the brief. The repo includes a ready template at
+`<skill-root>/motion-canvas/template/`, pinned to the current
+Motion Canvas package family. It is opt-in: copy the template into the
+active project, run `npm install` there when the user accepts the
+dependency cost, author scenes in `src/scenes/*.tsx`, and run
+`npm run serve` to open the Motion Canvas editor at
+`http://127.0.0.1:9000`.
+
+Export transparent PNG frames from the editor, then run
+`npm run export:frames -- --frames output/frame_%05d.png --out ../<slug>.mov`
+inside the copied template (cwd is `generated/drawn/motion-canvas`, so
+`../<slug>.mov` resolves to the project-level `generated/drawn/<slug>.mov`).
+Place the resulting ProRes 4444 `.mov`
+through `Insert PiP` or overlay `Insert BRoll`, then verify with
+`view_frame` or a short render.
 
 ## Alpha support in the render pipeline (verified facts)
 
@@ -215,7 +225,8 @@ Practical consequences:
   doesn't support — charts assert facts; verify the values first.
 - Don't ship a LottieFiles asset without the user confirming its
   license.
-- Don't run `npm install` for Motion Canvas at agent-time.
+- Don't run `npm install` for Motion Canvas during ordinary edits; it
+  is only appropriate after the user has chosen this optional lane.
 - Don't paste raw filter graphs into EDL — artifacts enter through
   `Insert PiP`, `Insert BRoll`, or `Set Motion Scene` only.
 

@@ -4954,9 +4954,11 @@ impl<'a> FilterPlanner<'a> {
         } else {
             base
         };
-        let has_program_titles = !self.titles.is_empty()
-            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
-        if !has_program_titles && self.editable_subtitle_tracks.is_empty() {
+        let has_visible_titles = self
+            .titles
+            .iter()
+            .any(|title| title_visible_with_broadcast_overlay(title, self.broadcast_overlay));
+        if !has_visible_titles && self.editable_subtitle_tracks.is_empty() {
             base
         } else {
             self.append_titles(base)
@@ -4978,9 +4980,11 @@ impl<'a> FilterPlanner<'a> {
         if let Some(overlay) = self.broadcast_overlay {
             base = self.append_broadcast_overlay(base, overlay);
         }
-        let has_program_titles = !self.titles.is_empty()
-            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
-        if has_program_titles || !self.editable_subtitle_tracks.is_empty() {
+        let has_visible_titles = self
+            .titles
+            .iter()
+            .any(|title| title_visible_with_broadcast_overlay(title, self.broadcast_overlay));
+        if has_visible_titles || !self.editable_subtitle_tracks.is_empty() {
             base = self.append_titles(base);
         }
         base
@@ -5015,6 +5019,7 @@ impl<'a> FilterPlanner<'a> {
         let mut parts: Vec<String> = self
             .titles
             .iter()
+            .filter(|title| title_visible_with_broadcast_overlay(title, self.broadcast_overlay))
             .enumerate()
             .map(|(index, title)| self.format_title_filter(title, index))
             .collect();
@@ -8643,6 +8648,13 @@ fn broadcast_overlay_owns_program_titles(broadcast_overlay: Option<&BroadcastOve
         .is_some_and(|overlay| overlay.config.enabled && !overlay.config.short_form_mode)
 }
 
+fn title_visible_with_broadcast_overlay(
+    title: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> bool {
+    !broadcast_overlay_owns_program_titles(broadcast_overlay) || title.role == "motion_scene"
+}
+
 fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<String> {
     let c = &overlay.config;
     let st = &c.style;
@@ -10315,19 +10327,23 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     let media = append_video_overlays(base, &video_overlays, segs.len());
     let images = append_motion_images(media, motion_images, first_motion_image_input);
     let annotated = append_annotations(images, annotations);
-    let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
-        &[]
-    } else {
-        titles
-    };
     let ffmpeg_broadcast_overlay = browser_broadcast_overlay
         .is_none()
         .then_some(broadcast_overlay)
         .flatten();
+    // Title ownership uses the REAL overlay (browser or ffmpeg): an enabled
+    // long-form overlay owns generic chapter/program titles, so drop them and
+    // keep only role=="motion_scene". Without this a browser overlay (which
+    // leaves ffmpeg_broadcast_overlay=None) would duplicate the generic titles.
+    let visible_titles: Vec<TitlePlan> = titles
+        .iter()
+        .filter(|title| title_visible_with_broadcast_overlay(title, broadcast_overlay))
+        .cloned()
+        .collect();
     let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
         &[],
         &[],
-        titles,
+        &visible_titles,
         ffmpeg_broadcast_overlay,
     )
     .with_canvas(canvas)
@@ -10583,20 +10599,25 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     let annotated = append_annotations(images, annotations);
     filter = annotated.filter_complex;
     let mut video_label = annotated.video_out_label;
-    let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
-        &[]
-    } else {
-        titles
-    };
     let ffmpeg_broadcast_overlay = browser_broadcast_overlay
         .is_none()
         .then_some(broadcast_overlay)
         .flatten();
-    if !titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
+    // See the no-audio builder: title ownership uses the real overlay so a
+    // browser overlay drops generic titles but keeps motion_scene ones.
+    let visible_titles: Vec<TitlePlan> = titles
+        .iter()
+        .filter(|title| title_visible_with_broadcast_overlay(title, broadcast_overlay))
+        .cloned()
+        .collect();
+    if !visible_titles.is_empty()
+        || ffmpeg_broadcast_overlay.is_some()
+        || !editable_subtitle_tracks.is_empty()
+    {
         let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
             &[],
             &[],
-            titles,
+            &visible_titles,
             ffmpeg_broadcast_overlay,
         )
         .with_canvas(canvas)
@@ -16911,6 +16932,57 @@ layout_box: None,
         assert!(
             !plan.filter_complex.contains("text='Chapter'"),
             "filter graph: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn long_form_broadcast_overlay_keeps_motion_scene_titles() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
+        let title = TitlePlan {
+            text: "Prompt".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position: TitlePosition::Top,
+            font_size: 32,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::None,
+            phases: None,
+            reveal: TextReveal::None,
+            role: "motion_scene".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            word_timings: Vec::new(),
+            animations: Vec::new(),
+            font_path: None,
+            font_family: None,
+            caption_style: None,
+            layout_box: Some(TitleLayoutBox {
+                x: 0.3,
+                y: 0.3,
+                width: Some(0.2),
+                height: Some(0.08),
+                align: TitleBoxAlign::Center,
+            }),
+        };
+        let overlay = BroadcastOverlayPlan {
+            config: BroadcastOverlayConfig {
+                enabled: true,
+                show_name: "SHOW".into(),
+                sponsors: vec!["Sponsor".into()],
+                ..BroadcastOverlayConfig::default()
+            },
+            project_root: PathBuf::from("/tmp"),
+        };
+
+        let plan =
+            FilterPlanner::with_titles_and_broadcast_overlay(&[s0], &[], &[title], Some(&overlay))
+                .plan();
+
+        assert!(
+            plan.filter_complex.contains("text='Prompt'"),
+            "motion scene title should not be suppressed by broadcast overlay: {}",
             plan.filter_complex
         );
     }

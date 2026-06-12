@@ -266,7 +266,10 @@ Once the conversation flow is locked, make visual decisions:
   fades, slides, scale, and rotation. Use still image layers for logos,
   screenshots, product stills, diagrams, charts, and generated PNG
   overlays. Use B-roll/PiP for actual footage; video/media MotionScene
-  layers remain stored with explicit limitations.
+  layers remain stored with explicit limitations. `plan_motion_scene`
+  requires transcript-backed on-screen content: pass `headline` or
+  `evidence_text`, and pass exact `step_labels` for step/process scenes.
+  Do not call it with only the freeform visual request.
 - Route visual work by complexity: use MotionScene for instant branded
   cards, quote cards, step/process cards, callouts, text-on-panel
   explainers, simple diagrams, and still overlays that should preview
