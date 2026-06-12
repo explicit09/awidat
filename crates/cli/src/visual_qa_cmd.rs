@@ -54,13 +54,19 @@ pub fn motion_scenes(args: MotionScenesArgs) -> Result<()> {
             let Some(t_s) = sample.get("t_s").and_then(Value::as_f64) else {
                 continue;
             };
-            let mut frame = render_program_frame_json(ProgramFrameArgs {
+            // A scene with structural problems (e.g. ending past the timeline)
+            // can fail to render. Capture that failure in the report instead of
+            // aborting the whole QA pass, so the structural issues still print.
+            let mut frame = match render_program_frame_json(ProgramFrameArgs {
                 project_root: args.project_root.clone(),
                 t_s,
                 detail: args.detail.clone(),
                 format: Some("png".into()),
                 include_base64: false,
-            })?;
+            }) {
+                Ok(frame) => frame,
+                Err(error) => serde_json::json!({ "error": error.to_string() }),
+            };
             if let Some(scene_id) = sample.get("scene_id") {
                 frame["scene_id"] = scene_id.clone();
             }
@@ -174,7 +180,18 @@ fn stack_child_duration_s(child: &StackChild) -> f64 {
 }
 
 fn stack_duration_s(stack: &Stack) -> f64 {
-    stack.children.iter().map(stack_child_duration_s).sum()
+    // A Stack composites its children in parallel, so its duration is the
+    // longest child, not their sum. An explicit source_range overrides that.
+    stack.source_range.as_ref().map_or_else(
+        || {
+            stack
+                .children
+                .iter()
+                .map(stack_child_duration_s)
+                .fold(0.0_f64, f64::max)
+        },
+        |range| range.duration.to_seconds(),
+    )
 }
 
 fn track_duration_s(track: &Track) -> f64 {
