@@ -192,10 +192,13 @@ fn audit_layer(scene: &MotionScene, layer: &MotionSceneLayer, report: &mut Motio
         });
     }
 
+    // `backdrop-full` is the planner's supported full-bleed card backing
+    // (backdrop='full'); only flag *unexpected* full-frame backing layers.
     if matches!(
         layer.kind,
         MotionSceneLayerKind::Shape | MotionSceneLayerKind::Solid
-    ) && layer_box.left <= 0.01
+    ) && layer.id != "backdrop-full"
+        && layer_box.left <= 0.01
         && layer_box.top <= 0.01
         && layer_box.right >= 0.99
         && layer_box.bottom >= 0.99
@@ -279,10 +282,19 @@ fn normalized_box(
     layer: &MotionSceneLayer,
     anchor: BoxAnchor,
 ) -> Option<NormalizedBox> {
-    let x = normalize_extent(number_param(layer, "x")?, scene.width);
-    let y = normalize_extent(number_param(layer, "y")?, scene.height);
-    let width = normalize_extent(number_param(layer, "width")?, scene.width);
-    let height = normalize_extent(number_param(layer, "height")?, scene.height);
+    // Only text layers are normalized by the renderer (scene_normalized_layer_param).
+    // Shape/image lowering copies raw x/y/width/height, so a pixel-space solid
+    // really does render off-frame and must stay flagged — pass extent 0 there
+    // so normalize_extent leaves the value untouched.
+    let (ext_w, ext_h) = if layer.kind == MotionSceneLayerKind::Text {
+        (scene.width, scene.height)
+    } else {
+        (0, 0)
+    };
+    let x = normalize_extent(number_param(layer, "x")?, ext_w);
+    let y = normalize_extent(number_param(layer, "y")?, ext_h);
+    let width = normalize_extent(number_param(layer, "width")?, ext_w);
+    let height = normalize_extent(number_param(layer, "height")?, ext_h);
     if !x.is_finite()
         || !y.is_finite()
         || !width.is_finite()
