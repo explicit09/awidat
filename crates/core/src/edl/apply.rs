@@ -9341,7 +9341,9 @@ fn validate_visual_range(
 }
 
 fn is_generated_visual_asset(asset: &str) -> bool {
-    asset.contains("raw/generated/") || asset.contains("/generated/")
+    asset.starts_with("generated/")
+        || asset.contains("raw/generated/")
+        || asset.contains("/generated/")
 }
 
 fn insert_overlay_clip_at(
