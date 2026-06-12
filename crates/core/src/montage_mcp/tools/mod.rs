@@ -53,6 +53,7 @@ pub mod list_episodes;
 pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;
+pub mod load_project_instructions;
 pub mod load_skill;
 pub mod local_review_package;
 pub mod manage_assets;

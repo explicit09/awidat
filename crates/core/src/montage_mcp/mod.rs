@@ -94,6 +94,7 @@ use crate::montage_mcp::tools::list_episodes::{self, ListEpisodesArgs};
 use crate::montage_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::montage_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::montage_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::montage_mcp::tools::load_project_instructions::{self, LoadProjectInstructionsArgs};
 use crate::montage_mcp::tools::load_skill::{self, LoadSkillArgs};
 use crate::montage_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::montage_mcp::tools::manage_assets::{
@@ -2416,6 +2417,23 @@ their domains (e.g. tighten THEN suggest b-roll).\
     )]
     pub async fn load_skill(&self, args: Parameters<LoadSkillArgs>) -> Result<String, ErrorData> {
         load_skill::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `load_project_instructions` — read project docs (AGENTS.md) on demand.
+    #[tool(
+        description = "\
+Read the project's instructions/docs (AGENTS.md and similar) on demand as plain \
+text. Montage keeps the first turn lean instead of auto-injecting these, so call \
+this when you need the project's editorial conventions or constraints. Pass \
+`max_bytes` to cap the returned size.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn load_project_instructions(
+        &self,
+        args: Parameters<LoadProjectInstructionsArgs>,
+    ) -> Result<String, ErrorData> {
+        load_project_instructions::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
