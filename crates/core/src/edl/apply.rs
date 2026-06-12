@@ -9275,12 +9275,33 @@ fn timeline_duration(timeline: &Timeline) -> f64 {
         .tracks
         .children
         .iter()
-        .filter_map(|child| match child {
-            StackChild::Track(track) => Some(track_cursor(track)),
-            StackChild::Gap(gap) => Some(gap.source_range.duration.to_seconds()),
-            StackChild::Stack(_) | StackChild::Clip(_) => None,
-        })
+        .map(stack_child_cursor)
         .fold(0.0_f64, f64::max)
+}
+
+/// Program length contributed by one top-level stack child. Top-level children
+/// (and stack children) are parallel, so the timeline cursor is their max — but
+/// bare `Clip`/`Stack` children (valid in imported OTIO) must be measured too,
+/// not dropped, or the visual-range guards see a too-short timeline.
+fn stack_child_cursor(child: &StackChild) -> f64 {
+    match child {
+        StackChild::Track(track) => track_cursor(track),
+        StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+        StackChild::Clip(clip) => clip
+            .source_range
+            .as_ref()
+            .map_or(0.0, |range| range.duration.to_seconds()),
+        StackChild::Stack(stack) => stack.source_range.as_ref().map_or_else(
+            || {
+                stack
+                    .children
+                    .iter()
+                    .map(stack_child_cursor)
+                    .fold(0.0_f64, f64::max)
+            },
+            |range| range.duration.to_seconds(),
+        ),
+    }
 }
 
 fn validate_visual_timeline_range(
