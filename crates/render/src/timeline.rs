@@ -10331,10 +10331,19 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         .is_none()
         .then_some(broadcast_overlay)
         .flatten();
+    // Title ownership uses the REAL overlay (browser or ffmpeg): an enabled
+    // long-form overlay owns generic chapter/program titles, so drop them and
+    // keep only role=="motion_scene". Without this a browser overlay (which
+    // leaves ffmpeg_broadcast_overlay=None) would duplicate the generic titles.
+    let visible_titles: Vec<TitlePlan> = titles
+        .iter()
+        .filter(|title| title_visible_with_broadcast_overlay(title, broadcast_overlay))
+        .cloned()
+        .collect();
     let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
         &[],
         &[],
-        titles,
+        &visible_titles,
         ffmpeg_broadcast_overlay,
     )
     .with_canvas(canvas)
@@ -10594,11 +10603,18 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         .is_none()
         .then_some(broadcast_overlay)
         .flatten();
-    if !titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
+    // See the no-audio builder: title ownership uses the real overlay so a
+    // browser overlay drops generic titles but keeps motion_scene ones.
+    let visible_titles: Vec<TitlePlan> = titles
+        .iter()
+        .filter(|title| title_visible_with_broadcast_overlay(title, broadcast_overlay))
+        .cloned()
+        .collect();
+    if !visible_titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
         let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
             &[],
             &[],
-            titles,
+            &visible_titles,
             ffmpeg_broadcast_overlay,
         )
         .with_canvas(canvas)
