@@ -149,8 +149,9 @@ pub fn run(args: FindSpeakerOncamArgs, ctx: McpToolCtx) -> Result<String, String
             "hint": format!(
                 "speaker '{}' not found in any face sidecar's speaker_to_face mapping. \
                  The mapping is only populated when whisper-mcp ran with diarization \
-                 before face-mcp. Run `montage index --indexer whisper` first \
-                 (with HF_TOKEN set), then re-run `montage index --indexer face`.",
+                 before face-mcp. Add your Hugging Face key in Settings -> Advanced -> \
+                 Provider Keys, run `montage index --indexer whisper`, then re-run \
+                 `montage index --indexer face`.",
                 args.speaker
             ),
         })

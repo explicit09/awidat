@@ -706,6 +706,62 @@ pub async fn media_url_for_path(
     Ok(format!("http://127.0.0.1:{port}/media/{token}"))
 }
 
+/// Streaming URL for a recent-project tile on the Landing screen.
+///
+/// Unlike [`media_url_for_path`], this does NOT use the globally-loaded
+/// project (the Landing screen shows when no project is open, so
+/// `project_root` is `None` — see `close_project`). The caller passes the
+/// tile's own project root explicitly, and the requested media is validated
+/// against THAT project's cache dirs (`.montage/proxies` or
+/// `.montage/thumbnails`). The media server is per-file-token, not
+/// per-project, so it serves fine without a loaded project.
+#[tauri::command]
+pub async fn project_preview_url(
+    state: State<'_, MontageState>,
+    project_path: String,
+    media_path: String,
+) -> Result<String, String> {
+    let project_root = PathBuf::from(&project_path);
+    if !project_root.join("project.otio.json").is_file() {
+        return Err("not a montage project".into());
+    }
+    let requested = std::fs::canonicalize(&media_path)
+        .map_err(|e| format!("media path does not exist: {e}"))?;
+    if !is_project_preview_path(&project_root, &requested) {
+        return Err("media path is outside this project's preview directories".into());
+    }
+
+    let (port, files) = ensure_media_server(&state)?;
+    let token = media_token(&requested);
+    files
+        .lock()
+        .map_err(|_| "media server lock poisoned".to_string())?
+        .insert(token.clone(), requested);
+    Ok(format!("http://127.0.0.1:{port}/media/{token}"))
+}
+
+/// Path validation for project-manager preview tiles. Accepts the same
+/// proxy/raw media as [`is_project_media_path`], plus the filmstrip
+/// thumbnail JPEGs under `.montage/thumbnails/` (which the tile uses as
+/// the image fallback when no proxy exists).
+fn is_project_preview_path(project_root: &Path, requested: &Path) -> bool {
+    if is_project_media_path(project_root, requested) {
+        return true;
+    }
+    if let Ok(thumbs_dir) = std::fs::canonicalize(project_root.join(".montage").join("thumbnails"))
+    {
+        if requested.starts_with(&thumbs_dir)
+            && requested
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("jpg"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_project_media_path(project_root: &Path, requested: &Path) -> bool {
     if let Ok(proxies_dir) = std::fs::canonicalize(project_root.join(".montage").join("proxies")) {
         if requested.starts_with(&proxies_dir) && is_proxy_file(requested) {
@@ -876,8 +932,20 @@ fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, hea
     };
     let content_len = end - start + 1;
     let content_type = preview_media_content_type(path);
+    // Proxy files are content-hashed and schema-tagged in their
+    // filenames (`<stem>-1440q20-<hash>.mp4`), so their bytes never
+    // change under a given URL — let the webview cache them. The
+    // all-keyframe proxy's moov atom alone is several MB; `no-store`
+    // forced a full re-download of it on every project open, which
+    // dominated first-frame latency. Non-proxy media (raw sources,
+    // mutable thumbnails) keeps `no-store`.
+    let cache_control = if path.components().any(|c| c.as_os_str() == "proxies") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
     let mut header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: {cache_control}\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
     );
     if status.starts_with("206") {
         header.push_str(&format!("Content-Range: bytes {start}-{end}/{len}\r\n"));
@@ -918,6 +986,12 @@ fn preview_media_content_type(path: &Path) -> &'static str {
         Some("mp3") => "audio/mpeg",
         Some("wav") => "audio/wav",
         Some("m4a") => "audio/mp4",
+        // Filmstrip thumbnail JPEGs served as the Landing tile's image
+        // fallback when a project has no proxy. Without these cases the
+        // file is served as video/mp4 and the `<img>` fails to decode.
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
         _ => "video/mp4",
     }
 }
@@ -1493,6 +1567,16 @@ mod tests {
         assert_eq!(
             preview_media_content_type(&PathBuf::from("proxy.mp4")),
             "video/mp4"
+        );
+        // Filmstrip thumbnail frames (Landing image-fallback path) must
+        // serve as image/*, not the video/mp4 default.
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("frame-0001.jpg")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("frame-0001.JPEG")),
+            "image/jpeg"
         );
     }
 

@@ -275,10 +275,23 @@
     gap: 6px;
   }
 
+  /* Fitted program monitor shell — shrink-wraps to the media aspect
+     (see App.css note); transparent so dead space reads as backdrop,
+     not letterbox matte. */
+  .video-monitor-shell {
+    position: relative;
+    min-height: 0;
+    width: 100%;
+    flex: 0 1 auto;
+    aspect-ratio: var(--monitor-aspect, 16 / 9);
+    max-height: 100%;
+    margin-block: auto;
+    background: transparent;
+  }
+
   .video-stack {
     position: relative;
     min-height: 0;
-    flex: 1;
     overflow: hidden;
     background: #000;
   }
@@ -295,6 +308,19 @@
   .video-stack > .video-el {
     position: absolute;
     inset: 0;
+  }
+
+  /* Empty state mounts .video-stack directly under .video-wrap (no
+     monitor shell); give it height there. */
+  .video-wrap > .video-stack {
+    flex: 1;
+  }
+
+  .timeline-program-frame {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    overflow: hidden;
   }
 
   .timeline-video-overlay-layer,

@@ -61,8 +61,8 @@ pub struct GoogleOAuthExchangeConfig {
 /// Exchanges a Google OAuth code for tokens and resolves the YouTube channel ID.
 ///
 /// Two round-trips:
-/// 1. POST https://oauth2.googleapis.com/token — get access + refresh tokens.
-/// 2. GET  https://www.googleapis.com/youtube/v3/channels?part=id&mine=true — resolve channel.
+/// 1. POST <https://oauth2.googleapis.com/token> — get access + refresh tokens.
+/// 2. GET  <https://www.googleapis.com/youtube/v3/channels?part=id&mine=true> — resolve channel.
 pub struct GoogleOAuthExchange {
     config: GoogleOAuthExchangeConfig,
     client: reqwest::Client,

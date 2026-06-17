@@ -113,36 +113,38 @@ pub fn run(args: PodcastApplyAcceptedEditsArgs, ctx: McpToolCtx) -> Result<Strin
 
     let mut edl = String::from("*** Begin EDL\n");
     let mut batched = Vec::new();
+    let mut skipped = Vec::new();
     for candidate in &accepted {
-        let target = find_clip_target(&clip_targets, candidate).ok_or_else(|| {
-            format!(
-                "podcast_apply_accepted_edits: could not map proposal item {} to a current timeline clip. Re-run view_timeline and podcast_edit_proposal.",
-                candidate.id
-            )
-        })?;
-        let right_anchor = format!("{}-b", target.anchor);
-        edl.push_str("*** Split Clip\n");
-        edl.push_str(&format!("@@ anchor: clip_uuid={}\n", target.anchor));
-        edl.push_str(&format!("+ at_s: {:.3}\n", candidate.source_start_s));
-        edl.push_str("*** Split Clip\n");
-        edl.push_str(&format!("@@ anchor: clip_uuid={right_anchor}\n"));
-        edl.push_str(&format!("+ at_s: {:.3}\n", candidate.source_end_s));
-        edl.push_str("*** Ripple Delete\n");
-        edl.push_str(&format!("@@ anchor: clip_uuid={right_anchor}\n"));
-        batched.push(serde_json::json!({
-            "id": candidate.id,
-            "kind": candidate.kind,
-            "risk": candidate.risk,
-            "asset_id": candidate.asset_id,
-            "source_start_s": candidate.source_start_s,
-            "source_end_s": candidate.source_end_s,
-            "timeline_start_s": candidate.timeline_start_s,
-            "timeline_end_s": candidate.timeline_end_s,
-            "anchor": target.anchor,
-            "evidence": candidate.evidence,
-        }));
+        match compile_candidate(&clip_targets, candidate) {
+            Some((ops, target_anchor, op_kind)) => {
+                edl.push_str(&ops);
+                batched.push(serde_json::json!({
+                    "id": candidate.id,
+                    "kind": candidate.kind,
+                    "risk": candidate.risk,
+                    "asset_id": candidate.asset_id,
+                    "source_start_s": candidate.source_start_s,
+                    "source_end_s": candidate.source_end_s,
+                    "timeline_start_s": candidate.timeline_start_s,
+                    "timeline_end_s": candidate.timeline_end_s,
+                    "anchor": target_anchor,
+                    "op": op_kind,
+                    "evidence": candidate.evidence,
+                }));
+            }
+            None => skipped.push(serde_json::json!({
+                "id": candidate.id,
+                "reason": "no current timeline clip covers this source range (already cut or re-segmented); re-run podcast_edit_proposal for a fresh id",
+            })),
+        }
     }
     edl.push_str("*** End EDL\n");
+    if batched.is_empty() {
+        return Err(format!(
+            "podcast_apply_accepted_edits: none of the {} accepted item(s) map to current timeline clips — the proposal is stale. Re-run view_timeline and podcast_edit_proposal.",
+            accepted.len()
+        ));
+    }
 
     let quality_evidence: Vec<_> = args
         .quality_evidence
@@ -158,10 +160,16 @@ pub fn run(args: PodcastApplyAcceptedEditsArgs, ctx: McpToolCtx) -> Result<Strin
     let body = serde_json::json!({
         "status": "ready_to_apply",
         "summary_for_agent": format!(
-            "Prepared {} accepted podcast edit(s) as one end-to-start apply_edl batch. Run apply_edl next, then view_timeline, vedit_diff, podcast_smooth_cut_boundaries, and podcast_post_draft_check.",
-            accepted.len()
+            "Prepared {} accepted podcast edit(s) as one end-to-start apply_edl batch{}. Run apply_edl next, then view_timeline, vedit_diff, podcast_smooth_cut_boundaries, and podcast_post_draft_check.",
+            batched.len(),
+            if skipped.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} stale item(s) skipped — see skipped_items)", skipped.len())
+            }
         ),
         "batched_edits": batched,
+        "skipped_items": skipped,
         "quality_evidence": quality_evidence,
         "apply_edl_tool_call": {
             "name": "apply_edl",
@@ -298,15 +306,66 @@ fn collect_clip_targets(timeline: &Timeline) -> Vec<ClipTarget> {
     targets
 }
 
-fn find_clip_target<'a>(
-    targets: &'a [ClipTarget],
+/// Boundary slack when matching proposal ranges against clip bounds.
+/// Proposal scanners and clip edges round independently; without this,
+/// a candidate that an earlier edit left flush against a clip edge is
+/// reported "unmappable" even though a Trim handles it cleanly.
+const EDGE_EPS_S: f64 = 0.05;
+
+/// Compile one accepted candidate into EDL text against the current
+/// clips. Interior ranges become split/split/ripple-delete (the second
+/// split and the delete anchor the right half as `{uuid}-b`, resolved
+/// envelope-scoped by apply_edl). Ranges flush with a clip edge become
+/// a Trim (head/tail) and ranges covering a whole clip become a Ripple
+/// Delete — these are exactly the candidates the old strict mapper
+/// refused as "could not map". Returns None when no current clip
+/// covers the range (genuinely stale: skip and report).
+fn compile_candidate(
+    targets: &[ClipTarget],
     candidate: &Candidate,
-) -> Option<&'a ClipTarget> {
-    targets.iter().find(|target| {
+) -> Option<(String, String, &'static str)> {
+    let target = targets.iter().find(|target| {
         candidate.asset_id == target.asset_id
-            && candidate.source_start_s > target.source_start_s
-            && candidate.source_end_s < target.source_end_s
-    })
+            && candidate.source_start_s >= target.source_start_s - EDGE_EPS_S
+            && candidate.source_end_s <= target.source_end_s + EDGE_EPS_S
+            && candidate.source_end_s > candidate.source_start_s
+    })?;
+    let head_aligned = candidate.source_start_s <= target.source_start_s + EDGE_EPS_S;
+    let tail_aligned = candidate.source_end_s >= target.source_end_s - EDGE_EPS_S;
+    let anchor = target.anchor.clone();
+    let mut ops = String::new();
+    let op_kind = match (head_aligned, tail_aligned) {
+        (true, true) => {
+            ops.push_str("*** Ripple Delete\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={anchor}\n"));
+            "ripple_delete_clip"
+        }
+        (true, false) => {
+            ops.push_str("*** Trim Clip\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={anchor}\n"));
+            ops.push_str(&format!("+ start: {:.3}\n", candidate.source_end_s));
+            "trim_head"
+        }
+        (false, true) => {
+            ops.push_str("*** Trim Clip\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={anchor}\n"));
+            ops.push_str(&format!("+ end: {:.3}\n", candidate.source_start_s));
+            "trim_tail"
+        }
+        (false, false) => {
+            let right_anchor = format!("{anchor}-b");
+            ops.push_str("*** Split Clip\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={anchor}\n"));
+            ops.push_str(&format!("+ at_s: {:.3}\n", candidate.source_start_s));
+            ops.push_str("*** Split Clip\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={right_anchor}\n"));
+            ops.push_str(&format!("+ at_s: {:.3}\n", candidate.source_end_s));
+            ops.push_str("*** Ripple Delete\n");
+            ops.push_str(&format!("@@ anchor: clip_uuid={right_anchor}\n"));
+            "split_ripple_delete"
+        }
+    };
+    Some((ops, anchor, op_kind))
 }
 
 pub const DESCRIPTION: &str =

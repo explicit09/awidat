@@ -16,6 +16,7 @@ import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
+import { isAuthReadyForAgent } from "./agent/composerAuthGate";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
@@ -30,8 +31,10 @@ import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
+import { resumePreviewAudio } from "./media/previewAudioGraph";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
+import { aspectRatioLabel } from "./media/programFrame";
 import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
 import { droppedImportPaths } from "./media/dropImportPaths";
 import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
@@ -51,6 +54,7 @@ import {
   IndexRail,
   isTranscriptFirstProjectType,
   PreviewSurface,
+  PreviewInsights,
   TranscriptSource,
   ProposalInspector,
   TimelineHybrid,
@@ -87,6 +91,7 @@ import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
 import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
+import { useAuth } from "./state/auth";
 import {
   providerKeyForTarget,
   useUploadPrefs,
@@ -145,7 +150,7 @@ function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_in
   };
 }
 
-const HELP_DOCS_URL = "https://github.com/explicit09/awidat#readme";
+const HELP_DOCS_URL = "https://tadiwa.co/montage/setup";
 const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
 
 function App() {
@@ -187,6 +192,7 @@ function App() {
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const sourceCurrentTimeS = useMediaStore((s) => s.currentTime);
   const sourceDurationS = useMediaStore((s) => s.durationS);
+  const activeMediaSize = useMediaStore((s) => s.activeMediaSize);
   const timelineTimeS = useMediaStore((s) => s.timelineTime);
   const isPlaying = useMediaStore((s) => s.isPlaying);
   const setSourceTime = useMediaStore((s) => s.setTime);
@@ -323,6 +329,14 @@ function App() {
 
   const hasProject = current !== null;
   const demoMode = !hasProject && !isTauri();
+  const authStatus = useAuth((s) => s.status);
+  const refreshAuth = useAuth((s) => s.refresh);
+  const openAuth = useAuth((s) => s.open);
+  const agentAuthReady = demoMode || isAuthReadyForAgent(authStatus);
+
+  useEffect(() => {
+    void refreshAuth();
+  }, [refreshAuth]);
   const demoScreenId = demoMode
     ? typeof window !== "undefined" && window.location.pathname === "/design/concept"
       ? "screen1"
@@ -494,6 +508,11 @@ function App() {
   async function runEngineCommand(command: string) {
     const input = command.trim();
     if (!isTauri() || !input) return;
+    if (!agentAuthReady) {
+      setCommandError("Sign in to get started");
+      openAuth();
+      return;
+    }
     setCommandError(null);
     setTurnError(null);
     setRunning(true);
@@ -569,8 +588,8 @@ function App() {
     );
     // If any video targets are selected, force the master render to
     // run first so the reframes can consume it. Users who picked
-    // only TikTok/Instagram get YouTube enqueued implicitly as the
-    // master.
+    // only vertical/social reframes get YouTube enqueued implicitly as
+    // the master.
     if (queueIncludesVideo && !selected.has("youtube")) {
       ordered.push("youtube");
     }
@@ -1665,8 +1684,6 @@ function App() {
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
       { key: "youtube", active: timelineDuration > 0 },
-      { key: "tiktok", active: false },
-      { key: "instagram", active: false },
       { key: "twitter_x", active: false },
       { key: "captions", active: completedJobKinds.has("indexing") },
       { key: "cover", active: false },
@@ -1962,31 +1979,62 @@ function App() {
   ) : null;
   const stageProgress =
     effectiveDuration > 0 ? Math.min(100, (effectiveCurrentTime / effectiveDuration) * 100) : 0;
+  const togglePreviewPlayback = () => {
+    if (!isPlaying) resumePreviewAudio();
+    setMediaPlaying(!isPlaying);
+  };
   const stagePreview = (
-    <div className="relative h-full w-full overflow-hidden bg-black/40">
-      {/* the footage — must FILL the hero (the player sizes to its box),
-          not sit centered at intrinsic size or it renders ~zero/black. */}
-      {stageVideoSlot ? (
-        <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
-      ) : (
-        <div className="absolute inset-0 grid place-items-center">
-          <div className="text-center">
-            <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
-              {slateIndexing ? "Indexing…" : "Preview"}
-            </div>
-            <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-              {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+    <div className="flex h-full w-full min-h-0 flex-col gap-2 overflow-hidden">
+      {/* context bar — proposal context left, pending count right */}
+      <div className="flex h-7 shrink-0 items-center gap-2 px-0.5">
+        <span className="inline-flex h-7 max-w-[60%] items-center gap-2 truncate rounded-full border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.045)] px-3 text-[12px] font-semibold text-[var(--color-text-primary)]">
+          {activeProposal ? (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: "rgb(217, 165, 75)", boxShadow: "0 0 8px rgba(217,165,75,.7)" }}
+              aria-hidden
+            />
+          ) : null}
+          <span className="truncate">{activeProposal?.summary ?? (current ? projectName(current) : "Preview")}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {effectiveChanges.length > 0 ? (
+            <span className="font-mono text-[10.5px] tracking-[0.05em] text-[var(--color-text-muted)]">
+              {effectiveChanges.length} pending
+            </span>
+          ) : null}
+          {activeMediaSize ? (
+            <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[rgba(0,0,0,0.35)] px-2 font-mono text-[10px] tracking-[0.04em] text-[var(--color-text-secondary)]">
+              <strong className="font-semibold text-[var(--color-text-primary)]">
+                {activeMediaSize.width}×{activeMediaSize.height}
+              </strong>
+              {aspectRatioLabel(activeMediaSize.width, activeMediaSize.height)}
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {/* program monitor box — sized to the media aspect; the picture
+          fills it edge-to-edge (see .preview-monitor-box). */}
+      <div className="preview-monitor-box relative min-w-0 overflow-hidden">
+        {stageVideoSlot ? (
+          <div className="absolute inset-0 [&>*]:h-full [&>*]:w-full">{stageVideoSlot}</div>
+        ) : (
+          <div className="absolute inset-0 grid place-items-center">
+            <div className="text-center">
+              <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
+                {slateIndexing ? "Indexing…" : "Preview"}
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+                {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      {/* minimal glass scrubber */}
-      <div
-        className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 py-3"
-        style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.55), transparent)" }}
-      >
+        )}
+      </div>
+      {/* transport — slim row directly under the picture */}
+      <div className="flex h-9 shrink-0 items-center gap-3 px-0.5">
         <button
-          onClick={() => setMediaPlaying(!isPlaying)}
+          onClick={togglePreviewPlayback}
           className="glass-ghost grid h-8 w-8 place-items-center rounded-full text-[12px]"
         >
           {isPlaying ? "❚❚" : "▶"}
@@ -2007,6 +2055,15 @@ function App() {
           {formatDuration(effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
         </span>
       </div>
+      {/* insights — suggestion cards + detection/review queue absorb
+          the leftover hero height with real analysis data */}
+      <PreviewInsights
+        changes={effectiveChanges}
+        activeChangeId={selectedPreviewChangeId}
+        onSelectChange={selectPreviewChange}
+        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
+        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
+      />
     </div>
   );
   // Bare timeline canvas — no Hybrid tabs in the Stage strip. TimelinePane's
@@ -2144,6 +2201,8 @@ function App() {
         onOpenHistory={() => void refreshChatSessions()}
         onSelectChatSession={(session) => void selectChatSession(session)}
         onNewChat={() => void startNewChat()}
+        permissionMode={permissionMode}
+        onSetPermissionMode={(mode) => void changePermissionMode(mode)}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject
@@ -2240,7 +2299,7 @@ function App() {
                         sourceMedia={slateSourceMedia}
                         hasProxyFrame={hasProxyFrame}
                         indexing={slateIndexing}
-                        onPlayPause={() => setMediaPlaying(!isPlaying)}
+                        onPlayPause={togglePreviewPlayback}
                         onSelectChange={selectPreviewChange}
                         onPrevCut={() => jumpPreviewChange(-1)}
                         onNextCut={() => jumpPreviewChange(1)}
@@ -2300,7 +2359,7 @@ function App() {
             sourceMedia={slateSourceMedia}
             hasProxyFrame={hasProxyFrame}
             indexing={slateIndexing}
-            onPlayPause={() => setMediaPlaying(!isPlaying)}
+            onPlayPause={togglePreviewPlayback}
             onSelectChange={selectPreviewChange}
             onPrevCut={() => jumpPreviewChange(-1)}
             onNextCut={() => jumpPreviewChange(1)}

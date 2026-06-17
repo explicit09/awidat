@@ -15,8 +15,10 @@ import { useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Button, type ButtonProps } from "../../ui";
 import { useAgentStore } from "../../agent/store";
+import { isAuthReadyForAgent } from "../../agent/composerAuthGate";
 import { useBriefProposalsStore } from "../../state/briefProposals";
 import { PREPARE_PROMPT } from "../../state/introState";
+import { useAuth } from "../../state/auth";
 
 export interface PrepareButtonProps {
   variant?: ButtonProps["variant"];
@@ -43,6 +45,9 @@ export function PrepareButton({
   const [inFlight, setInFlight] = useState(false);
   const running = useAgentStore((s) => s.running);
   const pendingCount = useBriefProposalsStore((s) => s.pending().length);
+  const authStatus = useAuth((s) => s.status);
+  const openAuth = useAuth((s) => s.open);
+  const authReady = isAuthReadyForAgent(authStatus);
 
   // As soon as the agent starts emitting pending work, drop the
   // in-flight flag — the user can see something is happening, no need
@@ -57,6 +62,10 @@ export function PrepareButton({
       // so the click reads as registered, but skip the invoke.
       setInFlight(true);
       setTimeout(() => setInFlight(false), 600);
+      return;
+    }
+    if (!authReady) {
+      openAuth();
       return;
     }
     setInFlight(true);
@@ -81,6 +90,7 @@ export function PrepareButton({
   }
 
   const isDisabled = inFlight || running;
+  const effectiveLabel = authReady ? label : "Sign in to get started";
 
   return (
     <Button
@@ -89,9 +99,9 @@ export function PrepareButton({
       className={className}
       disabled={isDisabled}
       onClick={onClick}
-      aria-label={label}
+      aria-label={effectiveLabel}
     >
-      {inFlight ? inFlightLabel : label}
+      {inFlight ? inFlightLabel : effectiveLabel}
     </Button>
   );
 }

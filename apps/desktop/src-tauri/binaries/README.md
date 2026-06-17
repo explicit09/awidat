@@ -2,7 +2,7 @@
 
 Tauri bundles these alongside the desktop app at build time. Dropped
 out of git because some are tens of MB; they're fetched on demand
-by `make desktop-yt-dlp` (also auto-run by `make desktop`).
+by the root `Makefile` sidecar targets (also auto-run by `make desktop`).
 
 ## Codex
 
@@ -14,10 +14,10 @@ sidecar is absent. Build the active-target sidecar with:
 make desktop-codex
 ```
 
-CI compile checks use `make desktop-codex-check-stub` to satisfy
-Tauri's externalBin path validation without rebuilding the full Codex
-CLI for every Rust check. Do not use that stub for a runnable desktop
-app or release package.
+CI compile checks use `make desktop-sidecar-check-stubs` to satisfy
+Tauri's externalBin path validation without downloading media tools or
+rebuilding the full Codex/MCP binaries for every Rust check. Do not use
+those stubs for a runnable desktop app or release package.
 
 Files this dir should contain (per platform target):
 
@@ -61,3 +61,27 @@ the Tauri build. The pinned yt-dlp macOS asset is shared by both
 uses the Tauri target triple so `.sidecar("yt-dlp")` resolves correctly.
 Bump `YT_DLP_VERSION` in the root `Makefile` when upgrading the bundled
 downloader; set `YT_DLP_REFRESH=1` to force a local re-download.
+
+## Required runtime sidecars
+
+Consumer builds require these sidecars beside `montage-desktop`:
+
+- `codex` for the bundled agent CLI.
+- `ffmpeg` and `ffprobe` for render, proxy, thumbnail, waveform, and media probe work.
+- `montage-mcp-server` so the agent can call Montage tools in packaged builds.
+- `uv` for the bundled Python indexer workspace.
+- `yt-dlp` for media import support.
+
+Use the root Makefile targets to populate runnable binaries for the active
+target:
+
+```sh
+make desktop-codex
+make desktop-ffmpeg
+make desktop-mcp-server
+make desktop-uv
+make desktop-yt-dlp
+```
+
+Release builds run those targets for the matrix target and then call
+`scripts/release/verify-sidecars.sh`, which rejects CI check stubs.

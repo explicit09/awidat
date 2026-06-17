@@ -33,7 +33,7 @@ pub struct Timeline {
     pub global_start_time: Option<RationalTime>,
     /// Root stack of tracks. Stack-at-root needs custom (de)serialization
     /// because [`Stack`] itself omits its schema field (the field is only
-    /// emitted at this position via [`stack_at_root`]).
+    /// emitted at this position via `stack_at_root`).
     #[serde(with = "stack_at_root")]
     pub tracks: Stack,
     /// OTIO `metadata` blob; we model `montage` strongly and keep the rest as
@@ -119,7 +119,7 @@ impl<'de> Deserialize<'de> for TimelineMetadata {
 ///
 /// Note: `Stack` has no inline `otio_schema` field. When it appears inside
 /// a tagged enum, the enum's tag emits the schema; when it appears standalone
-/// at [`Timeline::tracks`], the [`stack_at_root`] helper emits it.
+/// at [`Timeline::tracks`], the `stack_at_root` helper emits it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stack {
     /// Stack name.

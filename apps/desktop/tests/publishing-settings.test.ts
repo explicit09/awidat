@@ -15,6 +15,7 @@ import { strict as assert } from "node:assert";
 import {
   DEFAULT_PROVIDER_STATE,
   PROVIDERS,
+  VISIBLE_PROVIDERS,
   providerDisplayName,
   primaryAction,
   statusText,
@@ -36,6 +37,11 @@ import {
       `${p.key} dev console must be https`,
     );
   }
+  assert.deepEqual(
+    VISIBLE_PROVIDERS.map((p) => p.key),
+    ["youtube", "twitter_x"],
+    "MVP publishing settings should hide TikTok and Instagram until those paths are real",
+  );
   assert.deepEqual(
     PROVIDERS.map((p) => providerDisplayName(p.key)),
     ["YouTube", "TikTok", "Instagram", "Twitter/X"],

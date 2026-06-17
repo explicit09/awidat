@@ -25,6 +25,7 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod app_mcp;
 mod app_menu;
 mod codex_session;
 mod commands;
@@ -130,6 +131,7 @@ pub fn run() {
                     "MONTAGE_SOCIAL_SERVER_URL unset; social-publishing commands disabled until configured"
                 );
             }
+            app_mcp::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -179,6 +181,11 @@ pub fn run() {
             commands::config::set_project_indexer_enabled,
             commands::professional::read_professional_lenses,
             commands::professional::read_pre_autonomy_inspection,
+            commands::provider_keys::list_provider_keys,
+            commands::provider_keys::save_provider_key,
+            commands::provider_keys::remove_provider_key,
+            commands::provider_keys::import_legacy_provider_keys,
+            commands::provider_keys::test_provider_key,
             commands::motion::read_motion,
             commands::import::import_local,
             commands::import::import_locals,
@@ -195,8 +202,11 @@ pub fn run() {
             commands::media::list_proxies,
             commands::media::read_media_readiness,
             commands::media::media_url_for_path,
+            commands::media::project_preview_url,
             commands::media::proxy_path_for_stem,
             commands::media::relink_missing_asset,
+            commands::lut::list_preview_luts,
+            commands::lut::read_preview_lut,
             commands::preview::render_transition_preview_frame,
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,

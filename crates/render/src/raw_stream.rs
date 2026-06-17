@@ -213,7 +213,7 @@ impl RawStreamComposer {
         .await
     }
 
-    /// Same as [`compose_transition_window`] but with per-frame
+    /// Same as [`Self::compose_transition_window`] but with per-frame
     /// parameter curves. The shader receives the curves' evaluated
     /// values via `extra_params.xyzw` on every frame.
     #[allow(clippy::too_many_arguments)]

@@ -6,9 +6,10 @@ import { useTimelineStore } from "../timeline/store";
 import { useTimelineSelectionStore } from "../properties/store";
 import type { Stage } from "../state/stages";
 import { useSettings } from "../state/settings";
-import { Settings as SettingsIcon } from "lucide-react";
+import { FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
+import type { PermissionMode } from "../protocol";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
 /**
@@ -114,6 +115,8 @@ export type StageShellProps = {
   onOpenHistory?: () => void;
   onSelectChatSession?: (session: ChatSessionSummary) => void;
   onNewChat?: () => void;
+  permissionMode?: PermissionMode;
+  onSetPermissionMode?: (mode: PermissionMode) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -130,6 +133,7 @@ export function StageShell(props: StageShellProps) {
     stage, onStage, onCommand, running, onCancel, mediaSuggestions = [], onPickMedia,
     chatSessions = [], activeChatSession = null, chatLoading = false,
     onOpenHistory, onSelectChatSession, onNewChat,
+    permissionMode = "manual", onSetPermissionMode,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -408,6 +412,8 @@ export function StageShell(props: StageShellProps) {
                 onOpenHistory={onOpenHistory}
                 onSelectChatSession={onSelectChatSession}
                 onNewChat={onNewChat}
+                permissionMode={permissionMode}
+                onSetPermissionMode={onSetPermissionMode}
               />
             ) : rightNode}
           </div>
@@ -425,36 +431,32 @@ export function StageShell(props: StageShellProps) {
 
       {/* STAGE LAYER — preview hero + proposal deck. Bottom padding tracks the
           timeline height; side padding makes room for open side panes. */}
-      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-6 px-20 pt-16"
+      <div className="absolute inset-0 z-10 flex items-stretch justify-center gap-4 px-10 pt-12"
         style={{
           filter: onStage_ ? "none" : "brightness(0.58)",
           pointerEvents: onStage_ ? "auto" : "none",
-          paddingBottom: `calc(28px + ${timelineHeight})`,
+          // Same bottom line as the side panes (paneBottom) so the
+          // center panels and the side rails end flush.
+          paddingBottom: paneBottom,
           paddingLeft: LEFT_PANE_RESERVE,
           paddingRight: RIGHT_PANE_RESERVE,
         }}>
-        <div className="relative flex min-w-0 flex-1 flex-col gap-2">
-          <div className="glass relative min-h-0 flex-1 overflow-hidden" style={{ borderRadius: 18 }}>
-            {preview}
+        <div className="stage-hero-col relative flex min-w-0 flex-1 flex-col gap-2">
+          <div className="stage-hero-card glass relative min-h-0 overflow-hidden" style={{ borderRadius: 18 }}>
+            {stageEmpty ? <div className="absolute inset-0 bg-black/55" /> : preview}
             {/* purposeful empty state — overlays the black hero when there's
                 nothing to review yet (no pending proposals). */}
             {stageEmpty ? (
               <div className="absolute inset-0 z-10 grid place-items-center p-8 text-center">
-                <div className="flex max-w-[420px] flex-col items-center gap-4">
-                  <div className="text-[22px] font-bold tracking-tight text-[var(--color-text-primary)]">Direct the edit.</div>
-                  <div className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
-                    Drop footage, pick media, or ask me to prepare a cut — I'll propose edits you review here.
-                  </div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <button
-                      onClick={() => onCommand("Prepare a starting cut for this project using AGENTS.md and the indexed signals.")}
-                      className="glass-cta rounded-xl px-4 py-2 text-[13px] font-semibold"
-                    >Prepare a starting cut</button>
-                    <button
-                      onClick={() => { onStage("edit"); setLeftPane("media"); }}
-                      className="glass-ghost rounded-xl px-4 py-2 text-[13px]"
-                    >Open media</button>
-                  </div>
+                <div className="flex min-h-[132px] w-full max-w-[320px] flex-col items-center justify-center gap-4">
+                  <div className="text-[21px] font-bold tracking-tight text-[var(--color-text-primary)]">No timeline media</div>
+                  <button
+                    onClick={() => { onStage("edit"); setLeftPane("media"); }}
+                    className="glass-cta inline-flex h-10 items-center gap-2 rounded-xl px-4 text-[13px] font-semibold"
+                  >
+                    <FolderOpen size={15} aria-hidden="true" />
+                    Open media
+                  </button>
                 </div>
               </div>
             ) : null}

@@ -18,6 +18,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { shouldStartDeferredIntro } from "../app/deferredHydrationGuards";
 import { deferNonCriticalHydration } from "../app/startupHydration";
 import { useAgentStore } from "../agent/store";
+import { isAuthReadyForAgent } from "../agent/composerAuthGate";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
 import { useMediaStore } from "../media/store";
@@ -36,6 +37,8 @@ import {
 } from "./briefProposals";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
+import { useAuth } from "./auth";
+import { useWelcome } from "./welcome";
 import {
   MENU_COMMANDS,
   emitMenuCommand,
@@ -86,6 +89,8 @@ export function useAppGlue() {
   const agentItemsCount = useAgentStore((s) => s.items.length);
   const introduced = useIntroState((s) => s.introduced);
   const markIntroduced = useIntroState((s) => s.markIntroduced);
+  const authReadyForAgent = useAuth((s) => isAuthReadyForAgent(s.status));
+  const welcomeConsentReady = useWelcome((s) => s.shown);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const hydrateSkillsFromDiskIfUnchanged = useSkillsStore(
     (s) => s.hydrateFromDiskIfUnchanged,
@@ -450,6 +455,8 @@ export function useAppGlue() {
           itemCount: agentState.items.length,
           mediaSourceCount: useMediaStore.getState().sources.length,
           mediaProxyCount: useMediaStore.getState().proxies.length,
+          authReady: isAuthReadyForAgent(useAuth.getState().status),
+          welcomeConsentReady: useWelcome.getState().shown,
         })
       ) {
         return;
@@ -475,6 +482,8 @@ export function useAppGlue() {
     agentItemsCount,
     mediaSourceCount,
     mediaProxyCount,
+    authReadyForAgent,
+    welcomeConsentReady,
     markIntroduced,
     setRunning,
   ]);

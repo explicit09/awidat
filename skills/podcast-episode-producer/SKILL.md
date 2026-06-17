@@ -18,6 +18,14 @@ tools_allowlist:
   - find_filler_words
   - find_false_starts
   - podcast_editorial_review_pack
+  - podcast_apply_accepted_edits
+  - podcast_smooth_cut_boundaries
+  - podcast_post_draft_check
+  - podcast_visual_polish
+  - podcast_audio_polish
+  - podcast_qc_report
+  - transition_context
+  - plan_transition
   - find_speaker_oncam
   - plan_visual_support
   - plan_visual_support_proposals
@@ -28,6 +36,7 @@ tools_allowlist:
   - inspect_clip
   - view_timeline
   - view_frame
+  - view_program_frame
   - apply_edl
   - vedit_diff
   - start_render
@@ -44,6 +53,13 @@ goal is **a single ~30-90 minute mp4 the user can publish today**. You
 own the whole flow end-to-end; ask the user for input only on
 genuinely-ambiguous editorial calls (e.g. "do you want to keep this
 tangent at 22:14?"), not on mechanics.
+
+Completion means the whole producer pipeline, not a few cleanup edits.
+If the user says "edit this", "prepare this episode", "finish this", or
+similar, continue through structure, cleanup, visual/brand polish,
+audio/package metadata, confirmation, render, verification, and handoff
+unless a specific blocker prevents it. Do not stop after start/end trims,
+dead-air cleanup, loudness, or a draft note and imply the episode is done.
 
 ## The editor-order playbook
 
@@ -176,6 +192,14 @@ boundary, stamp `Set Cut Intent` for a clean hard cut, use
 the visual discontinuity with b-roll. Do not hide mid-sentence or
 mid-motion problems with a decorative dissolve.
 
+After applying any transcript, chatter, dead-air, filler, false-start, or
+planning removal, run `podcast_smooth_cut_boundaries` using the applied edit
+batch, then run every returned `assess_edit_quality` call. A hard cut is not
+complete until the boundary is either recut, converted to `Set Audio Lead` /
+`Set Audio Trail`, covered with motivated visual support, changed through
+`transition_context` / `plan_transition`, or explicitly stamped with verified
+hard-cut evidence from the quality check.
+
 ### 6. Draft the timeline
 
 Build a 3-act structure on top of the editorial spine:
@@ -242,7 +266,25 @@ Once the conversation flow is locked, make visual decisions:
   fades, slides, scale, and rotation. Use still image layers for logos,
   screenshots, product stills, diagrams, charts, and generated PNG
   overlays. Use B-roll/PiP for actual footage; video/media MotionScene
-  layers remain stored with explicit limitations.
+  layers remain stored with explicit limitations. `plan_motion_scene`
+  requires transcript-backed on-screen content: pass `headline` or
+  `evidence_text`, and pass exact `step_labels` for step/process scenes.
+  Do not call it with only the freeform visual request.
+- Route visual work by complexity: use MotionScene for instant branded
+  cards, quote cards, step/process cards, callouts, text-on-panel
+  explainers, simple diagrams, and still overlays that should preview
+  and render natively. Use `drawn-artifacts` when the visual needs a
+  real chart from numbers, Manim-style math/diagram motion, Lottie/
+  Motion Canvas animation, transparent alpha video, or polish beyond
+  MotionScene's native layer set; place the rendered asset as B-roll,
+  PiP, or a MotionScene image layer.
+- After applying any visual, call `view_program_frame` at the midpoint
+  of the visual's timeline window. Inspect the composed frame, not just
+  the source asset: text must stay inside frame and boxes, remain
+  readable, avoid covering faces/mouths/captions/key objects, and show
+  MotionScene plus broadcast overlay together. If it fails, adjust the
+  visual and call `view_program_frame` again before declaring the visual
+  done.
 - Use `find_speaker_oncam` and `shot_summary` to choose speaker angles,
   wide/two-shots, reactions, and resets. Avoid frantic cuts on every
   word swap; hold angles long enough to breathe.
@@ -255,6 +297,9 @@ Once the conversation flow is locked, make visual decisions:
 - Use `find_broll_opportunities` and the b-roll skills for products,
   locations, websites, screenshots, charts, logos, photos, and demos.
   B-roll should support the sentence; random b-roll is worse than none.
+- For real-number charts, animated stat counters, or polished motion
+  assets beyond the MotionScene subset, load the `drawn-artifacts`
+  skill (matplotlib/Manim/Lottie generators with alpha-safe outputs).
 - Add lower thirds, chapter cards, sponsor cards, intro/outro cards,
   and text callouts with `Insert Title`. Keep them short and readable.
 - Use frame-quality/shot/gaze data for thumbnail candidates and camera
@@ -268,10 +313,16 @@ Once the conversation flow is locked, make visual decisions:
   one timeline-level graph config.
 - Build one canonical chapter/topic list from transcript/topic evidence
   and reuse it for overlay cards, ticker topics, YouTube chapters,
-  metadata, and shorts planning. For long-form episodes, aim for 5-8
-  meaningful chapters. Chapter names should promise a viewer payoff
-  ("Why Hardware Startups Move Slower"), not just label a subject
-  ("Hardware").
+  metadata, and shorts planning. Chapter density is time-based, not a
+  fixed count: aim for a chapter roughly every 4-6 minutes of runtime
+  (an 80-minute episode wants ~13-18 chapters, not 8). Let real topic
+  arcs set the exact count — a deep-dive can stretch past 6 minutes,
+  quick topic runs can tighten toward 3-4. Chapter names should promise
+  a viewer payoff ("Why Hardware Startups Move Slower"), not just label
+  a subject ("Hardware"). Chapters drive the structural layer (chapter
+  cards + YouTube chapters); ticker "NOW DISCUSSING" topics are a
+  separate, denser layer that may subdivide a chapter so the lower
+  third keeps refreshing — topics need not match chapters 1:1.
 - Chapters/topics are timeline-relative after extraction and cuts.
   Primary `Delete Clip` edits shift broadcast overlay timestamps
   forward in the graph, but after major restructuring you should
@@ -380,6 +431,10 @@ or the source material genuinely demands it.
   `Set Audio Lead` / `Set Audio Trail` before reaching for a visible
   transition. If a hard cut works, stamp `Set Cut Intent` so the edit
   graph preserves why it stays hard.
+- **Post-cut gate**: cleanup hard cuts without smoothing or
+  `assess_edit_quality` evidence are render blockers. Run
+  `podcast_qc_report` before render and fix every `error` issue; do not
+  present the episode as finished while workflow sections are `blocked`.
 - **Render scope**: ALWAYS `scope="timeline"`. Never `scope="preview"`
   for the final cut — preview gives you the raw asset, not the edit.
 - **Lower thirds and chapters**: use `Set Broadcast Overlay` for show
@@ -417,6 +472,48 @@ or the source material genuinely demands it.
   artifact behind it.
 - Don't ask the user to confirm every clip. Confirm the OVERALL
   structure, then commit + render.
+
+## Long-run context discipline
+
+A full episode production is longer than one context window. Budget
+for that from the start instead of discovering it at the end:
+
+- Maintain `update_plan` with one step per production gate. The
+  backbone below guarantees COVERAGE — it does not script the edit.
+  How you cut inside each gate (cold-open choice, story order,
+  punch-ins, b-roll taste, pacing, what deserves a MotionScene) is
+  editorial judgment, and loaded brand/private/user skills extend or
+  replace gates when they match: fold their workflows into the plan
+  as their own steps (a show package expands gate 6 with its overlay
+  and chapter workflow; a multicam or short-form skill adds its own
+  passes). What you must NOT do is silently drop a gate, or end the
+  plan at the confirmation gate — the plan is your recovery spine if
+  the context is compacted, and a plan without the render/package
+  gates loses them to a late compaction.
+  1. Preflight assets, instructions, timeline state
+  2. Real start AND ending; cold-open decision
+  3. Editorial spine: hooks/punchlines/CTA + dependencies
+  4. Radio edit: classify + apply cleanup, repair boundaries
+  5. Structure: order the body on the spine
+  6. Brand/show package applied (or reported unavailable)
+  7. Visual support — B-roll pass (find_broll_opportunities +
+     b-roll/stock/source-backed lanes), MotionScene/cards — then
+     audio mix + loudness/package metadata
+  8. Confirm overall structure with the user
+  9. Render scope="timeline", poll to completed, verify
+  10. Publishing package: title/description/chapters/tags/thumbnail,
+      report output path + duration
+- Keep tool output lean. Request `podcast_edit_proposal` /
+  review-pack batches of at most ~30 items per pass and apply them
+  before requesting more; view timeline windows narrowly (the region
+  you are editing, not the whole episode). Giant result dumps crowd
+  out the playbook and earlier decisions.
+- If you see a context-checkpoint summary instead of full history,
+  you were compacted mid-production: re-run `load_skill` for this
+  skill (and any brand/director skills the summary names) BEFORE the
+  next edit, re-check state with `view_timeline` + `vedit_diff`, then
+  continue from the first unfinished plan step. Compaction is a
+  checkpoint, not a finish line.
 
 ## You are done when...
 

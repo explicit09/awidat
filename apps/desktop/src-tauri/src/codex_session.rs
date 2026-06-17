@@ -96,8 +96,7 @@ impl CodexSession {
         if mcp_server_path.is_none() {
             let warning = "montage-mcp-server binary missing next to montage-desktop. \
                 The agent will fall back to shell-only and won't use Montage tools \
-                (view_timeline, apply_edl, etc.). Build it with \
-                `cargo build -p montage-cli --bin montage-mcp-server`.";
+                (view_timeline, apply_edl, etc.). Reinstall Montage or report this issue.";
             tracing::error!("{warning}");
             crate::events::emit_item(
                 &app,
@@ -159,10 +158,7 @@ impl CodexSession {
 /// first; later layers override earlier by skill name, replacing the
 /// entry entirely — not a field-by-field merge):
 ///   1. bundled — `<repo>/skills` in dev; in a packaged build,
-///      `<install>/share/montage/skills`. We pick the repo-relative
-///      `skills/` dir via the running binary's grandparent (works in
-///      `cargo tauri dev`; packaged builds will need a separate
-///      resolver later when we ship installers).
+///      the Tauri resource copy of `skills/`.
 ///   2. user roots — legacy Awidat skill folders, then
 ///      `~/.montage/skills`, then platform config skill folders.
 ///   3. project — `<project>/skills/` — per-project overrides win
@@ -178,7 +174,7 @@ impl CodexSession {
 /// loaded successfully.
 fn render_skills_catalog(project_root: &Path) -> Option<String> {
     let user_roots = user_skill_roots();
-    let bundled = bundled_skill_root();
+    let bundled = montage_config::defaults::skills_root();
     let project_override = project_skill_root(project_root);
     let cfg = crate::commands::skill_config::load_skill_config_sync(project_root);
     render_skills_catalog_from_roots(
@@ -517,20 +513,6 @@ fn project_skill_root(project_root: &Path) -> Option<PathBuf> {
 /// Best-effort bundled-skills root. In `cargo tauri dev` the binary
 /// lives at `<repo>/target/debug/montage-desktop`, so the skills dir
 /// is `<repo>/skills`. Walk up three dirs from the binary path.
-fn bundled_skill_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe
-        .parent()? // target/debug
-        .parent()? // target
-        .parent()? // repo root
-        .join("skills");
-    if candidate.is_dir() {
-        Some(candidate)
-    } else {
-        None
-    }
-}
-
 /// Resolve the sibling `montage-mcp-server` binary path so the bridge
 /// can inject it as a `mcp_servers.montage.command` config override.
 ///
@@ -538,17 +520,22 @@ fn bundled_skill_root() -> Option<PathBuf> {
 /// without our MCP tools (matching the pre-step-3 behavior).
 fn resolve_mcp_server_binary() -> Option<PathBuf> {
     let self_exe = std::env::current_exe().ok()?;
+    resolve_mcp_server_binary_from_exe(&self_exe)
+}
+
+fn resolve_mcp_server_binary_from_exe(self_exe: &Path) -> Option<PathBuf> {
     let parent = self_exe.parent()?;
-    let candidate = parent.join("montage-mcp-server");
-    if candidate.exists() {
-        Some(candidate)
-    } else {
-        tracing::warn!(
-            path = %candidate.display(),
-            "montage-mcp-server sibling binary missing; agent will run without Montage tools"
-        );
-        None
+    for file_name in ["montage-mcp-server", "montage-mcp-server.exe"] {
+        let candidate = parent.join(file_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
     }
+    tracing::warn!(
+        path = %parent.display(),
+        "montage-mcp-server sibling binary missing; agent will run without Montage tools"
+    );
+    None
 }
 
 #[cfg(test)]
@@ -604,6 +591,17 @@ mod tests {
             rendered.contains("beta-skill"),
             "beta still expected: {rendered}"
         );
+    }
+
+    #[test]
+    fn resolve_mcp_server_binary_from_exe_accepts_windows_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mcp = dir.path().join("montage-mcp-server.exe");
+        fs::write(&mcp, b"").unwrap();
+
+        let resolved = resolve_mcp_server_binary_from_exe(&dir.path().join("montage-desktop.exe"));
+
+        assert_eq!(resolved.as_deref(), Some(mcp.as_path()));
     }
 
     #[test]

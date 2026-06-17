@@ -240,7 +240,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let body = serde_json::json!({
         "findings": findings,
         "more_available": findings.len() == max_results,
-        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, and duration set to round(duration_s). After the job succeeds, call use_generated_media with the same duration_s."
+        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to round(duration_s), and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same duration_s."
     });
     Ok(body.to_string())
 }
@@ -699,5 +699,6 @@ visual concepts, explanations, abstract-to-concrete moments, emotional \
 spikes, story reconstruction, and statistics. This is read-only and \
 does not call a generation provider. It returns scored candidates with \
 OpenRouter/Seedance-ready prompts so the agent can review the moment \
-before calling `start_generated_media_job`.\
+before calling `start_generated_media_job`; OpenRouter calls must include \
+cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\".\
 ";

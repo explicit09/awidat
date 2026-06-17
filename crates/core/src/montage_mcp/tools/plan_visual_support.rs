@@ -516,7 +516,7 @@ fn plan_steps_for_route(
                 steps.push(step(
                     lane,
                     "plan_motion_scene",
-                    "Draft a native layered MotionScene for the visual need.",
+                    "Draft a native layered MotionScene using transcript-backed content: pass `headline` or `evidence_text`, and pass exact `step_labels` for step/process scenes.",
                 ));
                 steps.push(step(
                     lane,

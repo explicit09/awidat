@@ -231,6 +231,15 @@ pub fn flatten_timeline_public(
                         .and_then(|e| e.metadata.get("lut_path"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+                    // Same validity rule as the render's blend path:
+                    // only finite values inside 0..=1 count.
+                    let lut_strength = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "montage.lut")
+                        .and_then(|e| e.metadata.get("strength"))
+                        .and_then(serde_json::Value::as_f64)
+                        .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
                     // Titles track special handling: clips use their
                     // source_range.start_time as the timeline-time
                     // anchor (rather than the cumulative cursor), and
@@ -283,6 +292,12 @@ pub fn flatten_timeline_public(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("none")
                                 .to_string(),
+                            x: None,
+                            y: None,
+                            width: None,
+                            height: None,
+                            align: None,
+                            role: None,
                         });
                     let video_overlay = clip
                         .effects
@@ -334,6 +349,7 @@ pub fn flatten_timeline_public(
                         has_audio: Some(matches!(track.kind, TrackKind::Audio)),
                         color_correction,
                         lut_path,
+                        lut_strength,
                         title,
                         video_overlay,
                         motion_shape: None,
@@ -460,30 +476,18 @@ fn motion_scene_preview_track(
     for scene in &metadata.motion_scenes {
         for layer in sorted_motion_scene_layers(scene) {
             let clip_uuid = format!("{}:{}", scene.id, layer.id);
+            // Scene-default enter/exit fades peak at the layer's
+            // authored opacity (text has no opacity param → 1.0).
+            let peak_opacity = match layer.kind {
+                MotionSceneLayerKind::Text => 1.0,
+                _ => MotionSceneTransform::from_layer_params(&layer.params).opacity,
+            };
             let (title, motion_shape, motion_image) = match layer.kind {
                 MotionSceneLayerKind::Text => {
-                    let Some(text) =
-                        layer_string_param(layer, "text").filter(|text| !text.trim().is_empty())
-                    else {
+                    let Some(title) = motion_scene_title_for_protocol(scene, layer) else {
                         continue;
                     };
-                    (
-                        Some(montage_desktop_protocol::TitleStyling {
-                            text,
-                            position: layer_string_param(layer, "position")
-                                .unwrap_or_else(|| "center".into()),
-                            font_size: layer_u32_param(layer, "font_size").unwrap_or(64),
-                            color: layer_string_param(layer, "color")
-                                .unwrap_or_else(|| "#FFFFFF".into()),
-                            font_weight: layer_string_param(layer, "font_weight")
-                                .unwrap_or_else(|| "normal".into()),
-                            animation: motion_scene_animation_name(layer),
-                            reveal: layer_string_param(layer, "reveal")
-                                .unwrap_or_else(|| "none".into()),
-                        }),
-                        None,
-                        None,
-                    )
+                    (Some(title), None, None)
                 }
                 MotionSceneLayerKind::Image => {
                     let Some(image) = motion_scene_image_for_protocol(layer) else {
@@ -502,10 +506,14 @@ fn motion_scene_preview_track(
                 index: items.len(),
                 name: format!("MotionScene {}", layer.id),
                 clip_uuid: clip_uuid.clone(),
-                track_start_s: layer.from_s,
+                // Layer from_s is relative to the scene anchor (see
+                // proto MotionScene.start_s) — the render path already
+                // adds the offset; without it here, scenes anchored
+                // mid-episode preview at program start instead.
+                track_start_s: scene.start_s + layer.from_s,
                 duration_s: layer.duration_s,
                 asset_id: None,
-                source_start_s: Some(layer.from_s),
+                source_start_s: Some(scene.start_s + layer.from_s),
                 proxy_path: None,
                 playable_path: None,
                 playable_kind: montage_desktop_protocol::PlayableKind::Missing,
@@ -524,11 +532,16 @@ fn motion_scene_preview_track(
                 has_audio: Some(false),
                 color_correction: None,
                 lut_path: None,
+                lut_strength: None,
                 title,
                 video_overlay: None,
                 motion_shape,
                 motion_image,
-                animations: motion_scene_layer_animations_for_protocol(layer, &clip_uuid),
+                animations: motion_scene_layer_animations_for_protocol(
+                    layer,
+                    &clip_uuid,
+                    peak_opacity,
+                ),
             });
         }
     }
@@ -603,6 +616,54 @@ fn layer_u32_param(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
         .and_then(|value| u32::try_from(value).ok())
 }
 
+/// Convert a MotionScene text layer to preview [`TitleStyling`].
+///
+/// Stored scenes position text with explicit `x`/`y`/`width`/`height`
+/// params — the box center in scene space (either normalized fractions
+/// or scene-space pixels against `scene.width`/`scene.height`) — plus
+/// `align` and `weight`. Without explicit coordinates the layer falls
+/// back to the legacy `position` band keyword.
+fn motion_scene_title_for_protocol(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+) -> Option<montage_desktop_protocol::TitleStyling> {
+    let text = layer_string_param(layer, "text").filter(|text| !text.trim().is_empty())?;
+    Some(montage_desktop_protocol::TitleStyling {
+        text,
+        position: layer_string_param(layer, "position").unwrap_or_else(|| "center".into()),
+        font_size: layer_u32_param(layer, "font_size").unwrap_or(64),
+        color: layer_string_param(layer, "color").unwrap_or_else(|| "#FFFFFF".into()),
+        font_weight: layer_string_param(layer, "font_weight")
+            .or_else(|| layer_string_param(layer, "weight"))
+            .unwrap_or_else(|| "normal".into()),
+        animation: motion_scene_animation_name(layer),
+        reveal: layer_string_param(layer, "reveal").unwrap_or_else(|| "none".into()),
+        x: scene_normalized_param(layer, "x", scene.width),
+        y: scene_normalized_param(layer, "y", scene.height),
+        width: scene_normalized_param(layer, "width", scene.width),
+        height: scene_normalized_param(layer, "height", scene.height),
+        align: layer_string_param(layer, "align"),
+        role: Some("motion_scene".into()),
+    })
+}
+
+/// Read a finite numeric layer param normalized to `[0, 1]` output
+/// space. Values with magnitude above 1 are scene-space pixels and are
+/// divided by the scene extent; values within `[-1, 1]` are already
+/// normalized fractions.
+fn scene_normalized_param(layer: &MotionSceneLayer, key: &str, extent: u32) -> Option<f64> {
+    let value = layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite())?;
+    if value.abs() > 1.0 && extent > 0 {
+        Some(value / f64::from(extent))
+    } else {
+        Some(value)
+    }
+}
+
 fn motion_scene_shape_for_protocol(
     layer: &MotionSceneLayer,
 ) -> Option<montage_desktop_protocol::MotionShapeStyling> {
@@ -661,9 +722,10 @@ fn motion_scene_image_for_protocol(
 fn motion_scene_layer_animations_for_protocol(
     layer: &MotionSceneLayer,
     clip_uuid: &str,
+    peak_opacity: f64,
 ) -> Vec<montage_desktop_protocol::TimelineParameterAnimation> {
     layer
-        .motion_animations()
+        .motion_animations_with_scene_fade(peak_opacity)
         .into_iter()
         .filter(|animation| is_phase_3a_parameter(&animation.parameter))
         .map(
@@ -732,11 +794,16 @@ fn motion_scene_layer_animations_for_protocol(
         .collect()
 }
 
+/// Legacy animation channel for MotionScene text. Opacity keyframes
+/// (authored or scene-default via
+/// `motion_animations_with_scene_fade`) own the fade, so only slide
+/// directions still flow through the legacy name — mirroring the
+/// render's `motion_scene_title_animation`.
 fn motion_scene_animation_name(layer: &MotionSceneLayer) -> String {
     match layer_string_param(layer, "animation").as_deref() {
-        Some("fade_slide_in") => "fade_in".into(),
-        Some(value) => value.to_string(),
-        None => "none".into(),
+        Some("slide_in") => "slide_in".into(),
+        Some("slide_out") => "slide_out".into(),
+        _ => "none".into(),
     }
 }
 
@@ -1382,6 +1449,153 @@ mod tests {
         assert_eq!(*track_start_s, 0.5);
         assert_eq!(*duration_s, 2.0);
         assert_eq!(title.text, "Motion Scene");
+        // No explicit box coords: fall back to the position band.
+        assert_eq!(title.x, None);
+        assert_eq!(title.y, None);
+        assert_eq!(title.role.as_deref(), Some("motion_scene"));
+    }
+
+    fn text_layer_with_params(
+        params: Vec<(&str, serde_json::Value)>,
+    ) -> montage_proto::professional::MotionSceneLayer {
+        MotionSceneLayer {
+            id: "label".to_string(),
+            kind: MotionSceneLayerKind::Text,
+            from_s: 0.0,
+            duration_s: 3.0,
+            z_index: 10,
+            params: params
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect(),
+        }
+    }
+
+    fn timeline_with_text_scene(layer: montage_proto::professional::MotionSceneLayer) -> Timeline {
+        let mut timeline = Timeline::empty("motion-scene-text-box");
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-box".to_string(),
+                start_s: 0.0,
+                duration_s: 3.0,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![layer],
+                rationale: None,
+            }],
+            ..montage_meta::MontageTimelineMetadata::default()
+        });
+        timeline
+    }
+
+    fn first_preview_title(snapshot: &TimelineSnapshot) -> montage_desktop_protocol::TitleStyling {
+        let title_track = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+            .expect("preview title track");
+        let TimelineItem::Clip {
+            title: Some(title), ..
+        } = &title_track.items[0]
+        else {
+            panic!("expected motion scene title clip");
+        };
+        title.clone()
+    }
+
+    #[test]
+    fn motion_scene_text_layer_surfaces_explicit_box_coords() {
+        // Stored scenes place text with normalized box-center coords
+        // plus `align`/`weight`; the preview title must carry them so
+        // the frontend can draw labels inside their panels instead of
+        // collapsing everything to the center band.
+        let timeline = timeline_with_text_scene(text_layer_with_params(vec![
+            ("text", serde_json::json!("SOFTWARE BUG")),
+            ("x", serde_json::json!(0.295)),
+            ("y", serde_json::json!(0.39)),
+            ("width", serde_json::json!(0.3)),
+            ("height", serde_json::json!(0.07)),
+            ("align", serde_json::json!("center")),
+            ("weight", serde_json::json!("bold")),
+            ("font_size", serde_json::json!(44)),
+            ("color", serde_json::json!("#070D17")),
+        ]));
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let title = first_preview_title(&snapshot);
+
+        assert_eq!(title.text, "SOFTWARE BUG");
+        assert_eq!(title.x, Some(0.295));
+        assert_eq!(title.y, Some(0.39));
+        assert_eq!(title.width, Some(0.3));
+        assert_eq!(title.height, Some(0.07));
+        assert_eq!(title.align.as_deref(), Some("center"));
+        assert_eq!(title.font_weight, "bold");
+        assert_eq!(title.font_size, 44);
+        assert_eq!(title.color, "#070D17");
+        assert_eq!(title.role.as_deref(), Some("motion_scene"));
+    }
+
+    #[test]
+    fn motion_scene_text_layer_normalizes_scene_pixel_coords() {
+        // Coordinates above 1.0 are scene-space pixels; normalize them
+        // against the scene's 1920x1080 canvas.
+        let timeline = timeline_with_text_scene(text_layer_with_params(vec![
+            ("text", serde_json::json!("Pixel positioned")),
+            ("x", serde_json::json!(960.0)),
+            ("y", serde_json::json!(216.0)),
+            ("width", serde_json::json!(1497.6)),
+            ("height", serde_json::json!(86.4)),
+        ]));
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let title = first_preview_title(&snapshot);
+
+        assert_eq!(title.x, Some(0.5));
+        assert_eq!(title.y, Some(0.2));
+        assert!((title.width.expect("width") - 0.78).abs() < 1e-9);
+        assert!((title.height.expect("height") - 0.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn motion_scene_anchor_offsets_preview_layer_times() {
+        // Scenes anchored mid-episode must preview at the anchor, not
+        // at program start — layer from_s is relative to start_s.
+        let mut timeline = Timeline::empty("motion-scene-anchor");
+        timeline.metadata.montage = Some(montage_meta::MontageTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-b".to_string(),
+                start_s: 531.14,
+                duration_s: 6.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "card".to_string(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.5,
+                    duration_s: 5.0,
+                    z_index: 10,
+                    params: [("text".to_string(), serde_json::json!("Comparison"))]
+                        .into_iter()
+                        .collect(),
+                }],
+                rationale: None,
+            }],
+            ..montage_meta::MontageTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let title_track = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+            .expect("preview title track");
+        let TimelineItem::Clip { track_start_s, .. } = &title_track.items[0] else {
+            panic!("expected motion scene title clip");
+        };
+        assert!((track_start_s - 531.64).abs() < 1e-9);
     }
 
     #[test]
@@ -1584,8 +1798,17 @@ mod tests {
         assert_eq!(image.anchor_x, 0.5);
         assert_eq!(image.anchor_y, 0.5);
         assert_eq!(image.rotation_deg, -6.0);
-        assert_eq!(animations.len(), 1);
+        // overlay.x is authored; overlay.opacity is the synthesized
+        // scene-default enter/exit fade peaking at the layer opacity.
+        assert_eq!(animations.len(), 2);
         assert_eq!(animations[0].target.parameter, "overlay.x");
+        let fade = animations
+            .iter()
+            .find(|animation| animation.target.parameter == "overlay.opacity")
+            .expect("scene-default opacity fade");
+        assert_eq!(fade.keyframes.first().map(|kf| kf.value), Some(0.0));
+        assert_eq!(fade.keyframes.get(1).map(|kf| kf.value), Some(0.75));
+        assert_eq!(fade.keyframes.last().map(|kf| kf.value), Some(0.0));
         assert!(
             snapshot
                 .preview_limitations

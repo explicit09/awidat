@@ -178,7 +178,11 @@ async fn fetch_video_by_id(client: &pexels::Client, id: u64) -> Result<pexels::V
         montage_secrets::accounts::PEXELS_API_KEY,
     )
     .map_err(|e| format!("use_broll: keychain access failed: {e}"))?
-    .ok_or_else(|| "use_broll: PEXELS_API_KEY not set in env or keychain.".to_string())?;
+    .ok_or_else(|| {
+        "use_broll: Pexels is needed for stock b-roll. Add your Pexels key \
+         in Settings -> Advanced -> Provider Keys."
+            .to_string()
+    })?;
 
     // Use the embedded reqwest by way of constructing a fresh client.
     // We can't reach into `pexels::Client`'s private http member, but
@@ -256,8 +260,8 @@ fn build_edl_fragment(
 fn map_pexels_err(err: pexels::PexelsError) -> String {
     match err {
         pexels::PexelsError::MissingApiKey => {
-            "use_broll: PEXELS_API_KEY not set. Set the env var or store via OS keychain \
-             (service 'montage', account 'pexels_api_key')."
+            "use_broll: Pexels is needed for stock b-roll. Add your Pexels key \
+             in Settings -> Advanced -> Provider Keys, then retry."
                 .to_string()
         }
         pexels::PexelsError::Api { status: 404, .. } => {

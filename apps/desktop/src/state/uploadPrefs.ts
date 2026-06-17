@@ -20,8 +20,6 @@ import type { DeliveryTargetKey } from "../shell/delivery/types";
  *  `TargetsList.tsx`. */
 const SUPPORTED: ReadonlySet<DeliveryTargetKey> = new Set([
   "youtube",
-  "tiktok",
-  "instagram",
   "twitter_x",
 ]);
 

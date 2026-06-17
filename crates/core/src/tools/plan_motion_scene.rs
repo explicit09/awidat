@@ -41,41 +41,123 @@ struct PlanMotionSceneArgs {
     fps: Option<f64>,
     #[serde(default)]
     image_asset: Option<String>,
+    #[serde(default)]
+    headline: Option<String>,
+    #[serde(default)]
+    step_labels: Vec<String>,
+    #[serde(default)]
+    evidence_text: Option<String>,
+    #[serde(default)]
+    backdrop: Option<String>,
 }
 
-/// Build a minimal native MotionScene plan from a freeform request.
-pub fn plan_motion_scene_request(
-    request: &str,
-    scene_id: Option<&str>,
-    duration_s: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    fps: Option<f64>,
-    image_asset: Option<&str>,
-) -> Result<MotionScenePlan, String> {
-    let request = request.trim();
+/// Inputs for a MotionScene plan.
+///
+/// On-screen copy comes from the content fields — `headline`,
+/// `step_labels`, and `evidence_text` (a transcript window) — never
+/// from the `request` prompt. The planner used to truncate the request
+/// into the headline and emit generic "Step 1/2/3" labels, which put
+/// the editor's instructions on screen instead of the episode's words.
+#[derive(Debug, Clone, Default)]
+pub struct MotionScenePlanRequest {
+    /// Freeform animated visual need; drives layer selection only.
+    pub request: String,
+    /// Optional stable scene id. Defaults to a slug derived from request.
+    pub scene_id: Option<String>,
+    /// Scene duration in seconds. Default 4.
+    pub duration_s: Option<f64>,
+    /// Canvas width. Default 1920.
+    pub width: Option<u32>,
+    /// Canvas height. Default 1080.
+    pub height: Option<u32>,
+    /// Frame rate. Default 30.
+    pub fps: Option<f64>,
+    /// Optional project-relative still asset path.
+    pub image_asset: Option<String>,
+    /// Exact on-screen headline, drawn from transcript evidence.
+    pub headline: Option<String>,
+    /// Exact on-screen labels for step/process scenes, in order.
+    pub step_labels: Vec<String>,
+    /// Transcript window backing the scene; used to derive a headline
+    /// when `headline` is not given and recorded in the scene rationale.
+    pub evidence_text: Option<String>,
+    /// Backdrop mode: `"full"` (true full-bleed cover of the whole
+    /// frame), `"panel"` (inset card), or `"none"`. Default: panel
+    /// when the request implies a card/diagram or an image is used.
+    pub backdrop: Option<String>,
+}
+
+/// Backdrop behavior for a planned scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackdropMode {
+    /// Solid spanning exactly the whole canvas (0,0 → 1,1).
+    Full,
+    /// Inset panel card (legacy default for cards/diagrams/images).
+    Panel,
+    /// No backdrop layer.
+    None,
+    /// Heuristic: panel when the request implies one.
+    Auto,
+}
+
+impl BackdropMode {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value.map(str::trim) {
+            Option::None | Some("") => Ok(Self::Auto),
+            Some("full") => Ok(Self::Full),
+            Some("panel") => Ok(Self::Panel),
+            Some("none") => Ok(Self::None),
+            Some(other) => Err(format!(
+                "backdrop '{other}' not recognized. Use 'full', 'panel', or 'none'."
+            )),
+        }
+    }
+}
+
+/// Build a minimal native MotionScene plan from a freeform request and
+/// explicit on-screen content.
+pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<MotionScenePlan, String> {
+    let request = args.request.trim();
     if request.is_empty() {
         return Err("request must be non-empty".into());
     }
 
-    let duration_s = duration_s.unwrap_or(4.0);
+    let duration_s = args.duration_s.unwrap_or(4.0);
     if !duration_s.is_finite() || duration_s <= 0.0 {
         return Err("duration_s must be positive".into());
     }
-    let fps = fps.unwrap_or(30.0);
+    let fps = args.fps.unwrap_or(30.0);
     if !fps.is_finite() || fps <= 0.0 {
         return Err("fps must be positive".into());
     }
-    let width = width.unwrap_or(1920);
-    let height = height.unwrap_or(1080);
+    let width = args.width.unwrap_or(1920);
+    let height = args.height.unwrap_or(1080);
     if width == 0 || height == 0 {
         return Err("width and height must be positive".into());
     }
 
-    let layers = planned_layers(request, duration_s, image_asset);
+    let evidence_text = args
+        .evidence_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let headline = resolve_headline(args, evidence_text)?;
+    let step_labels = resolve_step_labels(args, request)?;
+    let backdrop = BackdropMode::parse(args.backdrop.as_deref())?;
 
-    let scene = MotionScene {
-        id: scene_id
+    let layers = planned_layers(
+        request,
+        duration_s,
+        args.image_asset.as_deref(),
+        &headline,
+        &step_labels,
+        backdrop,
+    );
+
+    let mut scene = MotionScene {
+        id: args
+            .scene_id
+            .as_deref()
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| stable_scene_id(request)),
@@ -85,8 +167,16 @@ pub fn plan_motion_scene_request(
         width,
         height,
         layers,
-        rationale: Some("planned as a native layered motion scene".into()),
+        rationale: Some(match evidence_text {
+            Some(evidence) => format!(
+                "planned from transcript evidence: {}",
+                truncate_at_word(evidence, 120)
+            ),
+            None => "planned as a native layered motion scene".into(),
+        }),
     };
+
+    fit_scene_text_layers(&mut scene);
 
     if let Some(diagnostic) = scene.validate().into_iter().next() {
         return Err(diagnostic.message);
@@ -103,6 +193,88 @@ pub fn plan_motion_scene_request(
         render_support: "native preview/render supports text, rectangle/solid, project-asset image layers, shared transforms, and layer-local overlay transform animations; video/media layers stay stored with explicit limitations and should use B-roll/PiP for footage".into(),
         rationale: "Use MotionScene for freeform animated explainers, diagrams, kinetic text, charts, and callouts that are not footage-like b-roll.".into(),
     })
+}
+
+/// Resolve the on-screen headline: an explicit `headline` arg wins,
+/// then the first sentence of the transcript evidence. Without either,
+/// hard-fail — the planner must not invent or truncate on-screen copy.
+fn resolve_headline(
+    args: &MotionScenePlanRequest,
+    evidence_text: Option<&str>,
+) -> Result<String, String> {
+    if let Some(headline) = args
+        .headline
+        .as_deref()
+        .map(str::trim)
+        .filter(|headline| !headline.is_empty())
+    {
+        return Ok(headline.to_string());
+    }
+    if let Some(evidence) = evidence_text {
+        return Ok(headline_from_evidence(evidence));
+    }
+    Err(
+        "on-screen text must come from the edit's transcript evidence, not from this tool. \
+Pass `headline` (the exact on-screen headline) or `evidence_text` (the transcript window to \
+derive it from), plus `step_labels` for step/process scenes. The planner no longer truncates \
+the request prompt into a headline or invents placeholder labels."
+            .into(),
+    )
+}
+
+/// Resolve step/panel labels. Explicit `step_labels` win; a request
+/// that implies steps without labels hard-fails instead of inventing
+/// "Step 1/2/3" placeholders.
+fn resolve_step_labels(
+    args: &MotionScenePlanRequest,
+    request: &str,
+) -> Result<Vec<String>, String> {
+    let labels: Vec<String> = args
+        .step_labels
+        .iter()
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())
+        .collect();
+    if !labels.is_empty() {
+        return Ok(labels);
+    }
+    let implied = planned_step_count(request);
+    if implied > 0 {
+        return Err(format!(
+            "the request implies {implied} step/process labels but none were provided. Pass \
+`step_labels` with the exact on-screen text for each step, drawn from the transcript evidence \
+(see `evidence_text`). Generic \"Step N\" placeholders are no longer generated."
+        ));
+    }
+    Ok(Vec::new())
+}
+
+/// First sentence of the evidence window, capped at a headline-sized
+/// length on a word boundary.
+fn headline_from_evidence(evidence: &str) -> String {
+    let first_sentence = evidence
+        .split_inclusive(['.', '!', '?', '\n'])
+        .next()
+        .unwrap_or(evidence)
+        .trim()
+        .trim_end_matches(['.', '\n'])
+        .trim();
+    truncate_at_word(first_sentence, 80)
+}
+
+/// Truncate `text` to at most `max_chars`, cutting on a word boundary
+/// and appending an ellipsis when shortened.
+fn truncate_at_word(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    let cut = match cut.rfind(char::is_whitespace) {
+        Some(boundary) if boundary > 0 => &cut[..boundary],
+        _ => cut.as_str(),
+    };
+    format!("{}…", cut.trim_end())
 }
 
 fn wants_panel_layer(request: &str) -> bool {
@@ -148,13 +320,20 @@ fn planned_layers(
     request: &str,
     duration_s: f64,
     image_asset: Option<&str>,
+    headline: &str,
+    step_labels: &[String],
+    backdrop: BackdropMode,
 ) -> Vec<MotionSceneLayer> {
     let mut layers = Vec::new();
-    let step_count = planned_step_count(request);
     let has_image = wants_image_layer(request) || image_asset.is_some();
 
-    if wants_panel_layer(request) || has_image {
-        layers.push(background_panel_layer(duration_s));
+    match backdrop {
+        BackdropMode::Full => layers.push(full_bleed_backdrop_layer(duration_s)),
+        BackdropMode::Panel => layers.push(background_panel_layer(duration_s)),
+        BackdropMode::Auto if wants_panel_layer(request) || has_image => {
+            layers.push(background_panel_layer(duration_s));
+        }
+        BackdropMode::Auto | BackdropMode::None => {}
     }
     if has_image {
         layers.push(image_layer(request, duration_s, image_asset));
@@ -163,9 +342,13 @@ fn planned_layers(
         layers.push(callout_accent_layer(duration_s));
     }
 
-    layers.push(headline_layer(request, duration_s));
-    for index in 0..step_count {
-        layers.push(step_text_layer(index, duration_s));
+    layers.push(headline_layer(
+        headline,
+        duration_s,
+        !step_labels.is_empty(),
+    ));
+    for (index, label) in step_labels.iter().enumerate() {
+        layers.push(step_text_layer(index, label, duration_s));
     }
     layers
 }
@@ -182,6 +365,27 @@ fn planned_step_count(request: &str) -> usize {
         return 3;
     }
     0
+}
+
+/// Solid spanning exactly the whole canvas — no inset margins — for
+/// scenes meant to fully cover the program frame. Enter/exit fades
+/// come from the shared scene-fade defaults at preview/render time.
+fn full_bleed_backdrop_layer(duration_s: f64) -> MotionSceneLayer {
+    MotionSceneLayer {
+        id: "backdrop-full".into(),
+        kind: MotionSceneLayerKind::Solid,
+        from_s: 0.0,
+        duration_s,
+        z_index: 0,
+        params: BTreeMap::from([
+            ("x".into(), serde_json::json!(0.0)),
+            ("y".into(), serde_json::json!(0.0)),
+            ("width".into(), serde_json::json!(1.0)),
+            ("height".into(), serde_json::json!(1.0)),
+            ("color".into(), serde_json::json!("#070D17")),
+            ("opacity".into(), serde_json::json!(0.92)),
+        ]),
+    }
 }
 
 fn background_panel_layer(duration_s: f64) -> MotionSceneLayer {
@@ -296,7 +500,10 @@ fn callout_accent_layer(duration_s: f64) -> MotionSceneLayer {
     }
 }
 
-fn headline_layer(request: &str, duration_s: f64) -> MotionSceneLayer {
+/// Headline text box. `x`/`y` are the box CENTER (preview/render
+/// place the text block centered on that point); the headline sits at
+/// frame center, or in the upper third when step rows follow below.
+fn headline_layer(headline: &str, duration_s: f64, has_steps: bool) -> MotionSceneLayer {
     MotionSceneLayer {
         id: "headline".into(),
         kind: MotionSceneLayerKind::Text,
@@ -304,16 +511,26 @@ fn headline_layer(request: &str, duration_s: f64) -> MotionSceneLayer {
         duration_s,
         z_index: 10,
         params: BTreeMap::from([
-            ("text".into(), serde_json::json!(headline_text(request))),
-            ("layout".into(), serde_json::json!("center_safe")),
-            ("animation".into(), serde_json::json!("fade_slide_in")),
+            ("text".into(), serde_json::json!(headline)),
+            ("font_size".into(), serde_json::json!(64)),
+            ("font_weight".into(), serde_json::json!("bold")),
+            ("align".into(), serde_json::json!("center")),
+            ("x".into(), serde_json::json!(0.5)),
+            (
+                "y".into(),
+                serde_json::json!(if has_steps { 0.26 } else { 0.5 }),
+            ),
+            ("width".into(), serde_json::json!(0.76)),
+            ("height".into(), serde_json::json!(0.2)),
         ]),
     }
 }
 
-fn step_text_layer(index: usize, duration_s: f64) -> MotionSceneLayer {
+/// One step/process label box, stacked below the headline. `x` is the
+/// box center of a left-aligned 0.36-wide column starting at 0.14.
+fn step_text_layer(index: usize, label: &str, duration_s: f64) -> MotionSceneLayer {
     let step_number = index + 1;
-    let y = 0.34 + (index as f64 * 0.11);
+    let y = 0.4 + (index as f64 * 0.12);
     MotionSceneLayer {
         id: format!("step-{step_number}-label"),
         kind: MotionSceneLayerKind::Text,
@@ -321,17 +538,95 @@ fn step_text_layer(index: usize, duration_s: f64) -> MotionSceneLayer {
         duration_s: (duration_s - (0.2 + (index as f64 * 0.16))).max(0.01),
         z_index: 12 + i32::try_from(index).unwrap_or(0),
         params: BTreeMap::from([
-            (
-                "text".into(),
-                serde_json::json!(format!("Step {step_number}")),
-            ),
-            ("layout".into(), serde_json::json!("left_safe")),
-            ("x".into(), serde_json::json!(0.14)),
+            ("text".into(), serde_json::json!(label)),
+            ("font_size".into(), serde_json::json!(40)),
+            ("align".into(), serde_json::json!("left")),
+            ("x".into(), serde_json::json!(0.32)),
             ("y".into(), serde_json::json!(y)),
             ("width".into(), serde_json::json!(0.36)),
-            ("height".into(), serde_json::json!(0.08)),
-            ("animation".into(), serde_json::json!("fade_slide_in")),
+            ("height".into(), serde_json::json!(0.1)),
         ]),
+    }
+}
+
+/// Reference line-height multiplier for fitted text.
+const TEXT_LINE_HEIGHT: f64 = 1.2;
+
+/// Smallest font size the fitter will shrink to (matches the render).
+const MIN_TEXT_FONT_SIZE: u32 = 24;
+
+/// Auto-fit every text layer to its box: the box is authoritative.
+///
+/// Uses the same estimate as the render's drawtext lowering
+/// ([`montage_render::fit_text_to_width_px`]) to wrap the text into
+/// the layer's width and steps `font_size` down until the wrapped
+/// block also fits the box height (or 90% of the canvas when the
+/// layer has no height). The fitted size is written back into the
+/// layer params; wrapping itself stays a render/preview concern.
+fn fit_scene_text_layers(scene: &mut MotionScene) {
+    let canvas_width = f64::from(scene.width.max(1));
+    let canvas_height = f64::from(scene.height.max(1));
+    for layer in &mut scene.layers {
+        if layer.kind != MotionSceneLayerKind::Text {
+            continue;
+        }
+        let Some(text) = layer
+            .params
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let font_size = layer
+            .params
+            .get("font_size")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(64);
+        let width_frac = normalized_fraction(layer.params.get("width"), canvas_width)
+            .filter(|width| *width > 0.0)
+            .or_else(|| {
+                normalized_fraction(layer.params.get("x"), canvas_width)
+                    .map(|x| (2.0 * x.min(1.0 - x)).clamp(0.05, 0.92))
+            })
+            .unwrap_or(0.78);
+        let max_width_px = width_frac * canvas_width;
+        let max_height_px = normalized_fraction(layer.params.get("height"), canvas_height)
+            .filter(|height| *height > 0.0)
+            .map(|height| height * canvas_height)
+            .unwrap_or(canvas_height * 0.9);
+
+        let mut fitted = font_size;
+        loop {
+            let (wrapped, size) = montage_render::fit_text_to_width_px(&text, fitted, max_width_px);
+            fitted = size;
+            let lines = wrapped.split('\n').count();
+            let block_height = lines as f64 * f64::from(fitted) * TEXT_LINE_HEIGHT;
+            if block_height <= max_height_px || fitted <= MIN_TEXT_FONT_SIZE {
+                break;
+            }
+            fitted = fitted.saturating_sub(4).max(MIN_TEXT_FONT_SIZE);
+        }
+        if fitted != font_size {
+            layer
+                .params
+                .insert("font_size".into(), serde_json::json!(fitted));
+        }
+    }
+}
+
+/// Numeric layer param normalized to a `[0, 1]` fraction of `extent`
+/// (values above 1 are scene-space pixels).
+fn normalized_fraction(value: Option<&serde_json::Value>, extent: f64) -> Option<f64> {
+    let value = value.and_then(serde_json::Value::as_f64)?;
+    if !value.is_finite() {
+        return None;
+    }
+    if value.abs() > 1.0 && extent > 0.0 {
+        Some(value / extent)
+    } else {
+        Some(value)
     }
 }
 
@@ -351,16 +646,6 @@ fn stable_scene_id(request: &str) -> String {
     } else {
         format!("motion-scene-{slug}")
     }
-}
-
-fn headline_text(request: &str) -> String {
-    let trimmed = request.trim();
-    if trimmed.len() <= 80 {
-        return trimmed.to_string();
-    }
-    let mut text = trimmed.chars().take(77).collect::<String>();
-    text.push_str("...");
-    text
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -411,6 +696,24 @@ impl ToolHandler for PlanMotionSceneTool {
                     "image_asset": {
                         "type": "string",
                         "description": "Optional project-relative still asset path for logo, screenshot, chart, diagram, or generated PNG image layers."
+                    },
+                    "headline": {
+                        "type": "string",
+                        "description": "Exact on-screen headline text, drawn from the transcript evidence. Required unless evidence_text is provided to derive it from."
+                    },
+                    "step_labels": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Exact on-screen labels for step/process scenes, in order. Required when the request implies steps; generic 'Step N' placeholders are never generated."
+                    },
+                    "evidence_text": {
+                        "type": "string",
+                        "description": "Transcript window backing the scene's content; derives the headline when headline is omitted and is recorded in the scene rationale."
+                    },
+                    "backdrop": {
+                        "type": "string",
+                        "enum": ["full", "panel", "none"],
+                        "description": "Backdrop mode: 'full' covers the entire frame edge-to-edge (use for full-frame cards), 'panel' is an inset card, 'none' skips the backdrop. Default: panel when the request implies a card/diagram or an image is used."
                     }
                 },
                 "required": ["request"]
@@ -433,15 +736,19 @@ impl ToolHandler for PlanMotionSceneTool {
                 "plan_motion_scene: invalid args ({e}). Required: request."
             ))
         })?;
-        let plan = plan_motion_scene_request(
-            &args.request,
-            args.scene_id.as_deref(),
-            args.duration_s,
-            args.width,
-            args.height,
-            args.fps,
-            args.image_asset.as_deref(),
-        )
+        let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+            request: args.request,
+            scene_id: args.scene_id,
+            duration_s: args.duration_s,
+            width: args.width,
+            height: args.height,
+            fps: args.fps,
+            image_asset: args.image_asset,
+            headline: args.headline,
+            step_labels: args.step_labels,
+            evidence_text: args.evidence_text,
+            backdrop: args.backdrop,
+        })
         .map_err(|message| {
             FunctionCallError::RespondToModel(format!("plan_motion_scene: {message}"))
         })?;
@@ -457,8 +764,14 @@ impl ToolHandler for PlanMotionSceneTool {
 const DESCRIPTION: &str = "\
 Read-only planner for native procedural MotionScene documents. Use after \
 plan_visual_support chooses the motion_scene lane. It returns a valid \
-MotionScene plus a Set Motion Scene EDL snippet for apply_edl. Text layers \
-text, rectangle/solid, and project-asset image layers are preview/render \
-supported; video/media layers are stored with explicit limitations and \
-footage should use B-roll/PiP.\
+MotionScene plus a Set Motion Scene EDL snippet for apply_edl. On-screen \
+copy must come from transcript evidence: pass headline (and step_labels for \
+step/process scenes) or evidence_text — the planner never puts the request \
+prompt on screen or invents placeholder labels. Text layers, rectangle/solid, \
+and project-asset image layers are preview/render supported; video/media \
+layers are stored with explicit limitations and footage should use B-roll/PiP. \
+Pass backdrop='full' for scenes that must cover the whole frame (the default \
+panel backdrop is inset). Text boxes are authoritative: the planner wraps and \
+shrinks font sizes so text cannot overflow its box, and every layer gets a \
+default 0.4s enter/exit fade.\
 ";

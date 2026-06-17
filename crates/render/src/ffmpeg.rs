@@ -3,8 +3,8 @@
 //!
 //! Discovery order (matches what every Rust ffmpeg wrapper does in
 //! 2026): the `MONTAGE_FFMPEG` / `MONTAGE_FFPROBE` env overrides first,
-//! then `which ffmpeg` / `which ffprobe`. We do not bundle a static
-//! ffmpeg binary — that's a v2 packaging concern.
+//! then packaged sidecars beside the current executable, then `which
+//! ffmpeg` / `which ffprobe`.
 //!
 //! Frame extraction uses `-ss` before `-i` for fast keyframe seek; for
 //! sub-frame accuracy `-ss` lands after `-i` (slower). We choose the
@@ -104,27 +104,93 @@ pub fn ffprobe_path() -> Result<PathBuf, FfmpegError> {
 }
 
 fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
-    if let Ok(p) = std::env::var(env_var)
-        && !p.is_empty()
-    {
+    let override_path = std::env::var(env_var).ok();
+    let current_exe = std::env::current_exe().ok();
+    let path_env = std::env::var_os("PATH");
+    resolve_binary_in(
+        name,
+        override_path.as_deref(),
+        current_exe.as_deref(),
+        path_env.as_deref(),
+    )
+}
+
+/// Pure resolution logic, factored out so it can be unit-tested without
+/// mutating the process environment (which is `unsafe` and races the
+/// parallel test harness). `override_path` is the env-var value (if
+/// any); `current_exe` is the running desktop executable (if known);
+/// `path_env` is the raw `PATH` (if any).
+fn resolve_binary_in(
+    name: &str,
+    override_path: Option<&str>,
+    current_exe: Option<&Path>,
+    path_env: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, ()> {
+    if let Some(p) = override_path.filter(|p| !p.is_empty()) {
         let pb = PathBuf::from(p);
         if pb.exists() {
             return Ok(pb);
         }
     }
-    // Walk PATH ourselves so we don't pull in `which`.
-    let path_env = std::env::var_os("PATH").ok_or(())?;
-    for dir in std::env::split_paths(&path_env) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
+
+    if let Some(exe) = current_exe
+        && let Some(dir) = exe.parent()
+    {
+        for file_name in binary_file_names(name) {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
-        // On macOS ffmpeg often lives in /opt/homebrew/bin/ even when
-        // PATH wasn't propagated (e.g. non-login shells); the env-var
-        // override is the documented escape hatch in that case.
     }
+
+    // Walk PATH ourselves so we don't pull in `which`.
+    if let Some(path_env) = path_env {
+        for dir in std::env::split_paths(path_env) {
+            for file_name in binary_file_names(name) {
+                let candidate = dir.join(file_name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+    // PATH miss. A macOS .app launched from Finder/Dock (or any GUI
+    // launch) inherits a minimal PATH that excludes the usual package
+    // manager bin dirs, so a Homebrew/MacPorts ffmpeg is invisible even
+    // though it works from the user's shell. Fall back to the common
+    // install locations before giving up — the env-var override stays
+    // as the escape hatch for non-standard installs.
+    for dir in COMMON_BIN_DIRS {
+        for file_name in binary_file_names(name) {
+            let candidate = Path::new(dir).join(file_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
     Err(())
 }
+
+fn binary_file_names(name: &str) -> [String; 2] {
+    if name.ends_with(".exe") {
+        [name.to_string(), name.to_string()]
+    } else {
+        [name.to_string(), format!("{name}.exe")]
+    }
+}
+
+/// Well-known package-manager bin dirs to probe when `PATH` doesn't
+/// carry them (the GUI-launch case). Homebrew on Apple Silicon
+/// (`/opt/homebrew`) and Intel (`/usr/local`), MacPorts (`/opt/local`),
+/// and the standard system dirs.
+const COMMON_BIN_DIRS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/local/bin",
+    "/usr/bin",
+];
 
 /// Extract a single frame at time `t_s` from `asset_path`. Returns the
 /// raw image bytes in the requested format (`png` or `jpeg`).
@@ -666,28 +732,37 @@ pub type TranscodeProgressCallback =
 
 /// Proxy resolution + codec quality.
 ///
-/// **Why 1440p, not 1080p?** Modern displays are 2x DPR (Retina,
-/// 4K, HDR monitors). A 1080p proxy rendered into a CSS-540 box on a
-/// 2x display only fills ~540 physical pixels — the browser then
-/// upscales for the actual screen, producing visible blur. 1440p
-/// gives us enough source pixels that even a half-width preview pane
-/// on a Retina screen shows crisp detail.
+/// Distribution-era schema (2026-06): 1080p, CRF 23, GOP 12. The
+/// previous 1440p all-keyframe CRF-20 scheme produced proxies larger
+/// than many sources (measured: ~21 GB per 86-min hour of dense 1080p
+/// at all-I CRF 20 vs ~0.8 GB at this schema) — unacceptable disk
+/// cost for end-user machines with 256 GB SSDs.
 ///
-/// **Why CRF 20, not 26?** CRF 26 trades ~5 dB of PSNR for file size.
-/// On a still frame that's the visual difference between "looks good"
-/// and "looks soft". DaVinci's preview proxies are typically CRF
-/// 18-20. Bumped to 20 — file size grows ~50% but the all-keyframe
-/// path was already inflating size 5-10x over a normal GOP, so the
-/// absolute hit is modest.
-const PROXY_TARGET_HEIGHT: u32 = 1440;
-const PROXY_CRF: &str = "20";
+/// **Why GOP 12, not all-keyframe?** A seek decodes from the previous
+/// keyframe: at most 11 frames of hardware H.264 decode (~15-40 ms),
+/// imperceptible against pipeline seek latency. Empirically validated:
+/// `.mov` sources took the remux path for months, giving editors
+/// ~75-frame GOPs whose transcript-click seeks felt fine — GOP 12 is
+/// 6x denser than that. All-I inflated files 5-10x for headroom the
+/// UX never needed. (`-sc_threshold 0` keeps the cadence exact so the
+/// player's frame-step shuttle has a bounded decode cost per step.)
+///
+/// **Why 1080p, not 1440p?** The scale filter never upscales small
+/// sources in practice, and pro NLE defaults (Premiere H.264 720p,
+/// Resolve half-res) sit far below source resolution. 1080p in a
+/// half-width Retina pane loses little; the disk/decode win is large.
+const PROXY_TARGET_HEIGHT: u32 = 1080;
+const PROXY_CRF: &str = "23";
+/// Keyframe interval in frames. ~0.4 s at 30 fps — every seek decodes
+/// at most `PROXY_GOP - 1` frames past a keyframe.
+const PROXY_GOP: &str = "12";
 /// Schema tag embedded in proxy filenames. Bumping this string
 /// invalidates every existing proxy at the next project-load orphan
-/// scan, forcing a clean re-transcode under the new height/CRF
-/// targets. Older `*-1080p-*` files become orphans on the next scan
-/// and get cleaned up. Format: `<height>q<crf>` so a future bump
-/// (e.g. `2160q18`) is self-describing in the filename.
-pub const PROXY_SCHEMA_TAG: &str = "1440q20";
+/// scan, forcing a clean re-transcode under the new targets. Older
+/// tags become orphans on the next scan and get cleaned up. Format:
+/// `<height>g<gop>q<crf>` so a future bump is self-describing in the
+/// filename.
+pub const PROXY_SCHEMA_TAG: &str = "1080g12q23";
 
 fn proxy_scale_filter() -> String {
     format!("scale=-2:{PROXY_TARGET_HEIGHT}")
@@ -729,7 +804,9 @@ pub async fn transcode_proxy(
         cb(TranscodeProgress::Started { total_duration_s });
     }
 
-    if should_try_lossless_mp4_remux(asset_path) {
+    if should_try_lossless_mp4_remux(asset_path)
+        && remux_within_bitrate_budget(asset_path, total_duration_s.unwrap_or(0.0))
+    {
         let mut remux = Command::new(&bin);
         remux
             .arg("-loglevel")
@@ -792,9 +869,9 @@ pub async fn transcode_proxy(
         .arg("-crf")
         .arg(PROXY_CRF)
         .arg("-g")
-        .arg("1")
+        .arg(PROXY_GOP)
         .arg("-keyint_min")
-        .arg("1")
+        .arg(PROXY_GOP)
         .arg("-sc_threshold")
         .arg("0")
         .arg("-pix_fmt")
@@ -916,6 +993,31 @@ fn should_try_lossless_mp4_remux(asset_path: &Path) -> bool {
             .as_deref(),
         Some("mov" | "m4v")
     )
+}
+
+/// Remux ceiling in megabits per second. A remux copies the source's
+/// bits verbatim — instant import, original quality — so it stays the
+/// right call while the source is already proxy-class. Measured on an
+/// 86-min 7.6 Mbps OBS recording: transcoding under the proxy schema
+/// saved only ~14% (4.5 vs 5.2 GB) at a ~23-minute import cost, so
+/// efficient screen/podcast recordings up to ~10 Mbps remux. Heavy
+/// camera/phone sources (commonly 50-100 Mbps) blow past the ceiling
+/// and take the transcode's 5-10x disk savings instead.
+const REMUX_MAX_MBPS: f64 = 10.0;
+
+/// Whether a lossless remux is acceptable disk-wise: source average
+/// bitrate at or under [`REMUX_MAX_MBPS`]. Unknown duration or size
+/// errs toward remux (the historical behavior) rather than a
+/// surprise transcode.
+fn remux_within_bitrate_budget(asset_path: &Path, total_duration_s: f64) -> bool {
+    if !total_duration_s.is_finite() || total_duration_s <= 1.0 {
+        return true;
+    }
+    let Ok(meta) = std::fs::metadata(asset_path) else {
+        return true;
+    };
+    let mbps = (meta.len() as f64 * 8.0) / total_duration_s / 1_000_000.0;
+    mbps <= REMUX_MAX_MBPS
 }
 
 async fn run_short_ffmpeg(
@@ -1863,13 +1965,31 @@ mod tests {
 
     #[test]
     fn proxy_scale_filter_targets_current_viewer_grade() {
-        // Schema bumped from 1080p to 1440p so DPR-2 displays see
-        // crisp detail in the preview pane.
+        // Distribution schema: 1080p GOP-12 CRF-23 — see the
+        // PROXY_TARGET_HEIGHT doc comment for the size/seek research
+        // behind the move off 1440p all-keyframe.
         assert_eq!(
             proxy_scale_filter(),
             format!("scale=-2:{PROXY_TARGET_HEIGHT}")
         );
-        assert_eq!(PROXY_TARGET_HEIGHT, 1440);
+        assert_eq!(PROXY_TARGET_HEIGHT, 1080);
+        assert_eq!(PROXY_SCHEMA_TAG, "1080g12q23");
+    }
+
+    #[test]
+    fn remux_budget_rejects_heavy_sources() {
+        // A file whose average bitrate exceeds the ceiling must
+        // transcode (the 86-min 4.9 GB OBS recording measured
+        // ~7.6 Mbps and duplicated itself into the proxy cache).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("heavy.mov");
+        std::fs::write(&path, vec![0u8; 2_000_000]).unwrap(); // 2 MB
+        // 2 MB over 1.143s ≈ 14 Mbps > 10 Mbps ceiling → transcode.
+        assert!(!remux_within_bitrate_budget(&path, 16.0 / 14.0));
+        // Proxy-class bitrate (2 MB over 2s = 8 Mbps) remuxes.
+        assert!(remux_within_bitrate_budget(&path, 2.0));
+        // Unknown duration errs toward the historical remux path.
+        assert!(remux_within_bitrate_budget(&path, 0.0));
     }
 
     #[test]
@@ -1914,6 +2034,59 @@ mod tests {
     }
 
     #[test]
+    fn resolve_binary_candidate_prefers_env_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_bin = dir.path().join("custom-ffmpeg");
+        let sidecar_bin = dir.path().join("ffmpeg");
+        std::fs::write(&env_bin, b"").unwrap();
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffmpeg",
+            env_bin.to_str(),
+            Some(&dir.path().join("montage-desktop")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(env_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_falls_back_to_exe_sibling_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffprobe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffprobe",
+            None,
+            Some(&dir.path().join("montage-desktop")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_binary_candidate_accepts_windows_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar_bin = dir.path().join("ffmpeg.exe");
+        std::fs::write(&sidecar_bin, b"").unwrap();
+
+        let resolved = resolve_binary_in(
+            "ffmpeg",
+            None,
+            Some(&dir.path().join("montage-desktop.exe")),
+            None,
+        )
+        .ok();
+
+        assert_eq!(resolved.as_deref(), Some(sidecar_bin.as_path()));
+    }
+
+    #[test]
     fn bucket_peaks_picks_max_abs_per_bucket() {
         let samples = [0.1, -0.5, 0.2, 0.9, -0.3, 0.0, 0.4, -0.8];
         let buckets = bucket_peaks(&samples, 4);
@@ -1931,6 +2104,40 @@ mod tests {
         let samples = [3.5_f32, -2.7, 1.001];
         let buckets = bucket_peaks(&samples, 1);
         assert_eq!(buckets, vec![1.0]);
+    }
+
+    #[test]
+    fn resolve_binary_honors_override() {
+        // An existing absolute path in the override wins over any
+        // PATH/common-dir lookup. Uses the pure helper so it never
+        // touches the process env (which would race the parallel test
+        // harness). `/bin/sh` always exists.
+        let resolved = resolve_binary_in(
+            "definitely-not-a-real-binary-xyz",
+            Some("/bin/sh"),
+            None,
+            None,
+        );
+        assert_eq!(resolved, Ok(PathBuf::from("/bin/sh")));
+    }
+
+    #[test]
+    fn resolve_binary_empty_override_is_ignored() {
+        // Empty override string must not be treated as a path; with no
+        // PATH and a bogus name, resolution falls through to Err.
+        let resolved = resolve_binary_in("definitely-not-a-real-binary-xyz", Some(""), None, None);
+        assert_eq!(resolved, Err(()));
+    }
+
+    #[test]
+    fn common_bin_dirs_cover_homebrew_and_system() {
+        // The GUI-launch fallback must include the package-manager dirs
+        // a Finder-launched .app won't have on PATH.
+        assert!(COMMON_BIN_DIRS.contains(&"/opt/homebrew/bin"));
+        assert!(COMMON_BIN_DIRS.contains(&"/usr/local/bin"));
+        // And every entry should be absolute so the join is unambiguous
+        // regardless of cwd.
+        assert!(COMMON_BIN_DIRS.iter().all(|d| d.starts_with('/')));
     }
 
     #[test]

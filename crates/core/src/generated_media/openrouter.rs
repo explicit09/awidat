@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::generated_media::registry::{
     GeneratedArtifactKind, GeneratedMediaRecord, GeneratedMediaState, GeneratedMode,
@@ -13,14 +14,16 @@ pub const DEFAULT_VIDEO_MODEL: &str = "bytedance/seedance-2.0";
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 /// OpenRouter video-generation request settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpenRouterVideoConfig {
-    /// Bearer token from `OPENROUTER_API_KEY`.
+    /// Bearer token from the configured OpenRouter provider key.
     pub api_key: String,
     /// Model id sent to OpenRouter.
     pub model: String,
     /// Optional base URL override for tests.
     pub base_url: String,
+    /// Optional conservative user-configured estimate shown before submission.
+    pub cost_estimate_usd: Option<f64>,
 }
 
 impl OpenRouterVideoConfig {
@@ -41,10 +44,14 @@ impl OpenRouterVideoConfig {
         let model = model
             .or_else(|| std::env::var("OPENROUTER_VIDEO_MODEL").ok())
             .unwrap_or_else(|| DEFAULT_VIDEO_MODEL.into());
+        let cost_estimate_usd = std::env::var("OPENROUTER_VIDEO_COST_ESTIMATE_USD")
+            .ok()
+            .and_then(|value| parse_cost_estimate_usd(&value));
         Ok(Self {
             api_key,
             model,
             base_url: DEFAULT_BASE_URL.into(),
+            cost_estimate_usd,
         })
     }
 
@@ -57,10 +64,14 @@ impl OpenRouterVideoConfig {
         let model = model
             .or_else(|| get("OPENROUTER_VIDEO_MODEL"))
             .unwrap_or_else(|| DEFAULT_VIDEO_MODEL.into());
+        let cost_estimate_usd = get("OPENROUTER_VIDEO_COST_ESTIMATE_USD")
+            .as_deref()
+            .and_then(parse_cost_estimate_usd);
         Ok(Self {
             api_key,
             model,
             base_url: DEFAULT_BASE_URL.into(),
+            cost_estimate_usd,
         })
     }
 }
@@ -115,7 +126,13 @@ pub async fn submit_video_job(
         return Err(OpenRouterError::Api(response.text().await?));
     }
     let submitted: OpenRouterSubmitResponse = response.json().await?;
-    Ok(record_from_submit(job_id, prompt, &config.model, submitted))
+    Ok(record_from_submit(
+        job_id,
+        prompt,
+        &config.model,
+        config.cost_estimate_usd,
+        submitted,
+    ))
 }
 
 /// Poll an OpenRouter video job status URL.
@@ -190,6 +207,9 @@ pub fn apply_status_to_record(
                 .insert("video".into(), output_video_path);
         }
     }
+    if let Some(cost_actual_usd) = actual_cost_usd(status) {
+        record.cost_actual_usd = Some(cost_actual_usd);
+    }
     Ok(())
 }
 
@@ -202,6 +222,7 @@ fn record_from_submit(
     job_id: &str,
     prompt: &str,
     model: &str,
+    cost_estimate_usd: Option<f64>,
     submitted: OpenRouterSubmitResponse,
 ) -> GeneratedMediaRecord {
     let now = Utc::now();
@@ -229,12 +250,30 @@ fn record_from_submit(
         updated_at: now,
         completed_at: None,
         output_paths: Default::default(),
-        cost_estimate_usd: None,
+        cost_estimate_usd,
         cost_actual_usd: None,
         uses_likeness: false,
         requires_disclosure: true,
         failure_message,
     }
+}
+
+fn parse_cost_estimate_usd(value: &str) -> Option<f64> {
+    let parsed = value.trim().parse::<f64>().ok()?;
+    parsed.is_finite().then_some(parsed).filter(|v| *v >= 0.0)
+}
+
+fn actual_cost_usd(status: &OpenRouterStatusResponse) -> Option<f64> {
+    status
+        .cost
+        .or_else(|| numeric_usage_field(status, "cost"))
+        .or_else(|| numeric_usage_field(status, "cost_usd"))
+        .or_else(|| numeric_usage_field(status, "total_cost"))
+        .or_else(|| numeric_usage_field(status, "total_cost_usd"))
+}
+
+fn numeric_usage_field(status: &OpenRouterStatusResponse, field: &str) -> Option<f64> {
+    status.usage.as_ref()?.get(field)?.as_f64()
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -261,6 +300,12 @@ pub struct OpenRouterStatusResponse {
     /// Authenticated content URLs returned after completion.
     #[serde(default)]
     pub unsigned_urls: Vec<String>,
+    /// Provider-reported actual cost when OpenRouter returns it at top level.
+    #[serde(default)]
+    pub cost: Option<f64>,
+    /// Provider usage payload. OpenRouter model providers vary field names.
+    #[serde(default)]
+    pub usage: Option<Value>,
     /// Provider failure message when present.
     #[serde(default)]
     pub error: Option<String>,
@@ -269,8 +314,10 @@ pub struct OpenRouterStatusResponse {
 /// OpenRouter provider errors.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenRouterError {
-    /// API key is not available in the process environment.
-    #[error("OPENROUTER_API_KEY is not set")]
+    /// API key is not available in the provider key store.
+    #[error(
+        "OpenRouter is needed for generated media. Add your OpenRouter key in Settings -> Advanced -> Provider Keys."
+    )]
     MissingApiKey,
     /// OpenRouter returned a non-success response.
     #[error("OpenRouter video request failed: {0}")]
@@ -307,6 +354,7 @@ mod tests {
             "local-job",
             "office b-roll",
             DEFAULT_VIDEO_MODEL,
+            None,
             OpenRouterSubmitResponse {
                 id: "provider-job".into(),
                 polling_url: Some("https://openrouter.ai/api/v1/videos/provider-job".into()),
@@ -343,11 +391,24 @@ mod tests {
     }
 
     #[test]
+    fn config_reads_user_configured_cost_estimate() {
+        let config = OpenRouterVideoConfig::from_env_with(None, |key| match key {
+            "OPENROUTER_API_KEY" => Some("secret".into()),
+            "OPENROUTER_VIDEO_COST_ESTIMATE_USD" => Some("0.42".into()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(config.cost_estimate_usd, Some(0.42));
+    }
+
+    #[test]
     fn completed_status_updates_record_with_local_video_output() {
         let mut record = record_from_submit(
             "local-job",
             "office b-roll",
             DEFAULT_VIDEO_MODEL,
+            Some(0.42),
             OpenRouterSubmitResponse {
                 id: "provider-job".into(),
                 polling_url: Some("https://openrouter.ai/api/v1/videos/provider-job".into()),
@@ -362,6 +423,8 @@ mod tests {
             unsigned_urls: vec![
                 "https://openrouter.ai/api/v1/videos/provider-job/content?index=0".into(),
             ],
+            cost: Some(0.37),
+            usage: None,
             error: None,
         };
 
@@ -378,5 +441,36 @@ mod tests {
             Some("raw/generated/openrouter/local-job.mp4")
         );
         assert!(record.completed_at.is_some());
+        assert_eq!(record.cost_estimate_usd, Some(0.42));
+        assert_eq!(record.cost_actual_usd, Some(0.37));
+    }
+
+    #[test]
+    fn status_updates_record_with_actual_cost_from_usage_payload() {
+        let mut record = record_from_submit(
+            "local-job",
+            "office b-roll",
+            DEFAULT_VIDEO_MODEL,
+            None,
+            OpenRouterSubmitResponse {
+                id: "provider-job".into(),
+                polling_url: Some("https://openrouter.ai/api/v1/videos/provider-job".into()),
+                status: Some("pending".into()),
+                error: None,
+            },
+        );
+        let status = OpenRouterStatusResponse {
+            id: "provider-job".into(),
+            status: "processing".into(),
+            polling_url: Some("https://openrouter.ai/api/v1/videos/provider-job".into()),
+            unsigned_urls: vec![],
+            cost: None,
+            usage: Some(serde_json::json!({ "cost_usd": 0.37 })),
+            error: None,
+        };
+
+        apply_status_to_record(&mut record, &status, None).unwrap();
+
+        assert_eq!(record.cost_actual_usd, Some(0.37));
     }
 }

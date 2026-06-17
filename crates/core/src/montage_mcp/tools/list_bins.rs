@@ -2,7 +2,7 @@
 //! Ported in step 5 from `crates/core/src/tools/list_bins.rs`.
 //!
 //! Returns the union of:
-//!   - User-defined bins from [`AssetCatalog::bins`] (kind=user).
+//!   - User-defined bins from `AssetCatalog::bins` (kind=user).
 //!   - Built-in role buckets keyed by [`AssetRole`] (kind=role), with
 //!     synthetic ids of the form `role:<snake_case>`. These mirror
 //!     Kdenlive's "Audio Clips" / "Video Clips" sidebar buckets so the

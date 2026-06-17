@@ -145,7 +145,7 @@ pub struct Keyframe {
 /// "amount": 0.5
 /// ```
 ///
-/// becomes [`ParamCurve::Const(0.5)`]. A keyframed parameter is an
+/// becomes `ParamCurve::Const(0.5)`. A keyframed parameter is an
 /// array of keyframe objects:
 ///
 /// ```json

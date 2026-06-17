@@ -3,7 +3,7 @@
 //! server as a stub returning an unsupported error.
 //!
 //! In the old harness this tool suspended the in-flight tool call until
-//! the user replied, by pushing a [`UserInputRequest`] onto the
+//! the user replied, by pushing a `UserInputRequest` onto the
 //! runtime's user-input channel and awaiting an embedded oneshot. The
 //! MCP server has no enclosing `Session`, no `user_input_tx` channel,
 //! and no per-call await context. The clean long-term mapping is MCP's

@@ -18,6 +18,7 @@
 
 import { create } from "zustand";
 import type { Item, ItemLifecycle } from "../protocol";
+import { useColorPreviewOverride } from "../properties/store.ts";
 import {
   usePendingProposals,
   type PendingProposal,
@@ -347,11 +348,13 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
   async reject(id, reason) {
     const state = get();
     const snapshot = snapshotProposal(state, id);
+    const clearOverride = useColorPreviewOverride.getState().clearOverride;
     const trimmedReason = reason?.trim();
     const rejectReason =
       trimmedReason && trimmedReason.length > 0 ? trimmedReason : undefined;
     if (state.approvals.has(id)) {
       await state.dispatch.respondApproval(id, "deny");
+      clearOverride();
       set((s) => removeApproval(s, id));
       logDecision(snapshot, "rejected", undefined, rejectReason);
       logFeedback(state, snapshot, rejectReason);
@@ -359,12 +362,14 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
     }
     if (state.brollProposals.has(id)) {
       await state.dispatch.rejectBroll(id);
+      clearOverride();
       set((s) => decideBroll(s, id));
       logDecision(snapshot, "rejected", undefined, rejectReason);
       logFeedback(state, snapshot, rejectReason);
       return;
     }
     await state.dispatch.rejectProposal(id);
+    clearOverride();
     logDecision(snapshot, "rejected", undefined, rejectReason);
     logFeedback(state, snapshot, rejectReason);
   },

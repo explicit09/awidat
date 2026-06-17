@@ -12,18 +12,26 @@ binaries_dir="${RELEASE_BINARIES_DIR:-$root_dir/apps/desktop/src-tauri/binaries}
 
 case "$target" in
   aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu)
-    codex="$binaries_dir/codex-$target"
-    yt_dlp="$binaries_dir/yt-dlp-$target"
+    suffix="-$target"
     ;;
   x86_64-pc-windows-msvc)
-    codex="$binaries_dir/codex-$target.exe"
-    yt_dlp="$binaries_dir/yt-dlp-$target.exe"
+    suffix="-$target.exe"
     ;;
   *)
     echo "unsupported target triple: $target" >&2
     exit 2
     ;;
 esac
+
+required_sidecars=(
+  codex
+  ffmpeg
+  ffprobe
+  montage-mcp-server
+  rg
+  uv
+  yt-dlp
+)
 
 check_sidecar() {
   local path="$1"
@@ -41,7 +49,8 @@ check_sidecar() {
   fi
 }
 
-check_sidecar "$codex"
-check_sidecar "$yt_dlp"
+for sidecar in "${required_sidecars[@]}"; do
+  check_sidecar "$binaries_dir/$sidecar$suffix"
+done
 
 echo "release sidecars verified for $target"

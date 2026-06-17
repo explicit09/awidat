@@ -54,6 +54,7 @@ fn caption_fixture() -> TitlePlan {
         font_path: None,
         font_family: None,
         caption_style: None,
+        layout_box: None,
     }
 }
 

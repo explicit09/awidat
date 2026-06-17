@@ -1,0 +1,23 @@
+{
+  "name": "montage-motion-canvas-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "vite --host 127.0.0.1 --port 9000",
+    "start": "npm run serve",
+    "build": "vite build",
+    "export:frames": "node scripts/frames-to-prores.mjs"
+  },
+  "dependencies": {
+    "@motion-canvas/2d": "^3.17.2",
+    "@motion-canvas/core": "^3.17.2",
+    "@motion-canvas/ffmpeg": "^3.17.2",
+    "@motion-canvas/ui": "^3.17.2"
+  },
+  "devDependencies": {
+    "@motion-canvas/vite-plugin": "^3.17.2",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.21"
+  }
+}

@@ -48,9 +48,43 @@ assert.equal(
     itemCount: 0,
     mediaSourceCount: 1,
     mediaProxyCount: 0,
+    authReady: true,
+    welcomeConsentReady: false,
   }),
   false,
   "opening a media project must not start a hidden chat turn",
+);
+
+assert.equal(
+  shouldStartDeferredIntro({
+    scheduledProject: "/p",
+    currentProject: "/p",
+    introduced: false,
+    running: false,
+    itemCount: 0,
+    mediaSourceCount: 1,
+    mediaProxyCount: 0,
+    authReady: false,
+    welcomeConsentReady: true,
+  }),
+  false,
+  "intro must wait until auth is ready",
+);
+
+assert.equal(
+  shouldStartDeferredIntro({
+    scheduledProject: "/p",
+    currentProject: "/p",
+    introduced: false,
+    running: false,
+    itemCount: 0,
+    mediaSourceCount: 1,
+    mediaProxyCount: 0,
+    authReady: true,
+    welcomeConsentReady: true,
+  }),
+  true,
+  "eligible project should start the deferred intro",
 );
 
 assert.equal(
@@ -62,6 +96,8 @@ assert.equal(
     itemCount: 0,
     mediaSourceCount: 1,
     mediaProxyCount: 0,
+    authReady: true,
+    welcomeConsentReady: true,
   }),
   false,
   "user-started turn must block deferred intro",
@@ -76,6 +112,8 @@ assert.equal(
     itemCount: 1,
     mediaSourceCount: 1,
     mediaProxyCount: 0,
+    authReady: true,
+    welcomeConsentReady: true,
   }),
   false,
   "new user-visible items must block deferred intro",

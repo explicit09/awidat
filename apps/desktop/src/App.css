@@ -3047,6 +3047,25 @@ button {
   min-height: 0;
 }
 
+/* Fitted program monitor shell. Shrink-wraps to the media aspect
+   (--monitor-aspect set inline from the active video's dimensions)
+   instead of stretching to fill the pane — stretching painted huge
+   dead areas above/below the picture that read as letterbox matte.
+   Transparent: dead space belongs to the stage backdrop, not the
+   monitor. When the pane is shorter than the aspect wants, flex
+   shrink + max-height clamp the box and the inner fitted .video-stack
+   still letterboxes precisely via containedProgramFrame(). */
+.video-monitor-shell {
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  aspect-ratio: var(--monitor-aspect, 16 / 9);
+  max-height: 100%;
+  margin-block: auto;
+  background: transparent;
+}
+
 .video-el {
   width: 100%;
   height: 100%;
@@ -3065,7 +3084,6 @@ button {
    decoder stays warm during preroll). */
 .video-stack {
   position: relative;
-  flex: 1;
   min-height: 0;
   border-radius: 8px;
   overflow: hidden;
@@ -3077,6 +3095,43 @@ button {
 .video-stack > .video-el {
   outline: none;
   border-radius: 0;
+}
+
+/* Empty state mounts .video-stack directly under .video-wrap (no
+   monitor shell); it has no intrinsic height there, so stretch it. */
+.video-wrap > .video-stack {
+  flex: 1;
+}
+
+/* Program monitor box inside PreviewSurface. Sized to the media
+   aspect via the :root --monitor-aspect-num published by
+   SegmentedVideoView so the picture fills it exactly; shrinks (flex
+   basis from the aspect, shrink allowed) when the column is short,
+   in which case the inner fitted .video-stack letterboxes precisely.
+   The review queue below absorbs whatever height this box gives up. */
+.preview-monitor-box {
+  flex: 0 1 auto;
+  width: 100%;
+  min-height: 120px;
+  aspect-ratio: var(--monitor-aspect-num, 1.77778);
+  /* Layout container only — no black of its own. When the column is
+     height-limited (ultrawide windows) the box clamps WIDER than the
+     picture; the fitted .video-stack inside carries the monitor
+     chrome so the clamped sides show backdrop, not black bars. */
+  background: transparent;
+}
+
+.preview-monitor-box .video-stack {
+  border-radius: 12px;
+  outline: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.timeline-program-frame {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .timeline-video-overlay-layer {
@@ -3100,6 +3155,7 @@ button {
   pointer-events: none;
   overflow: hidden;
   container-type: inline-size;
+  --broadcast-preview-scale: 1;
   font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", Inter, ui-sans-serif, system-ui, sans-serif;
   color: white;
   letter-spacing: 0;
@@ -3183,7 +3239,7 @@ button {
   min-width: 0;
   display: flex;
   align-items: baseline;
-  gap: 0.42cqw;
+  gap: calc(0.42cqw * var(--broadcast-preview-scale));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
@@ -3195,20 +3251,28 @@ button {
 }
 
 .broadcast-name strong {
-  font-size: clamp(13px, 1.67cqw, 34px);
+  font-size: clamp(
+    calc(13px * var(--broadcast-preview-scale)),
+    calc(1.67cqw * var(--broadcast-preview-scale)),
+    calc(34px * var(--broadcast-preview-scale))
+  );
   line-height: 1;
   font-weight: 900;
 }
 
 .broadcast-name span {
   color: var(--broadcast-gold);
-  font-size: clamp(10px, 1.2cqw, 23px);
-  font-weight: 900;
+  font-size: clamp(
+    calc(10px * var(--broadcast-preview-scale)),
+    calc(1.2cqw * var(--broadcast-preview-scale)),
+    calc(23px * var(--broadcast-preview-scale))
+  );
+  font-weight: 850;
 }
 
 .broadcast-name-divider {
   width: 1px;
-  height: 2.96cqw;
+  height: calc(2.96cqw * var(--broadcast-preview-scale));
   background: color-mix(in srgb, var(--broadcast-gold) 35%, transparent);
 }
 
@@ -3230,11 +3294,15 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 1.67%;
+  padding: 0 calc(1.67% * var(--broadcast-preview-scale));
   background: var(--broadcast-gold);
   color: var(--broadcast-navy);
   font-weight: 900;
-  font-size: clamp(12px, 1.35cqw, 28px);
+  font-size: clamp(
+    calc(12px * var(--broadcast-preview-scale)),
+    calc(1.35cqw * var(--broadcast-preview-scale)),
+    calc(28px * var(--broadcast-preview-scale))
+  );
   white-space: nowrap;
 }
 
@@ -3243,9 +3311,13 @@ button {
   inset: 0;
   overflow: hidden;
   white-space: nowrap;
-  color: #cbd5e1;
+  color: #e5e7eb;
   font-weight: 850;
-  font-size: clamp(14px, 1.67cqw, 34px);
+  font-size: clamp(
+    calc(14px * var(--broadcast-preview-scale)),
+    calc(1.67cqw * var(--broadcast-preview-scale)),
+    calc(34px * var(--broadcast-preview-scale))
+  );
   transition: opacity 160ms linear;
 }
 
@@ -3259,7 +3331,7 @@ button {
 .broadcast-sponsor-segment {
   display: inline-block;
   flex: 0 0 auto;
-  padding-right: 1.4cqw;
+  padding-right: calc(1.4cqw * var(--broadcast-preview-scale));
 }
 
 .broadcast-topic {
@@ -3267,9 +3339,9 @@ button {
   inset: 0;
   display: flex;
   align-items: center;
-  gap: 0.73cqw;
+  gap: calc(0.73cqw * var(--broadcast-preview-scale));
   min-width: 0;
-  padding: 0 1.46%;
+  padding: 0 calc(1.46% * var(--broadcast-preview-scale));
   white-space: nowrap;
   overflow: hidden;
   transition: opacity 160ms linear;
@@ -3277,10 +3349,16 @@ button {
 
 .broadcast-topic span {
   flex: 0 0 auto;
-  padding: 0.37cqw 0.63cqw;
+  padding:
+    calc(0.37cqw * var(--broadcast-preview-scale))
+    calc(0.63cqw * var(--broadcast-preview-scale));
   background: var(--broadcast-cyan);
   color: var(--broadcast-navy);
-  font-size: clamp(10px, 1.2cqw, 23px);
+  font-size: clamp(
+    calc(10px * var(--broadcast-preview-scale)),
+    calc(1.2cqw * var(--broadcast-preview-scale)),
+    calc(23px * var(--broadcast-preview-scale))
+  );
   font-weight: 900;
 }
 
@@ -3288,7 +3366,11 @@ button {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: clamp(16px, 1.72cqw, 34px);
+  font-size: clamp(
+    calc(16px * var(--broadcast-preview-scale)),
+    calc(1.72cqw * var(--broadcast-preview-scale)),
+    calc(34px * var(--broadcast-preview-scale))
+  );
   font-family: "Helvetica Neue", Inter, ui-sans-serif, system-ui, sans-serif;
   font-weight: 400;
 }
@@ -3376,10 +3458,14 @@ button {
   left: 50%;
   top: 38%;
   height: 4.63%;
-  min-width: min(50%, 780px);
+  /* Hug the text: a fixed min-width centers the BAR, leaving the
+     text visually off-center. fit-content + translate centers the
+     words themselves. */
+  width: fit-content;
+  max-width: min(72%, 1000px);
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: 4.17cqw minmax(0, 1fr);
+  grid-template-columns: 4.17cqw auto;
   align-items: center;
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.4);
 }
@@ -3450,7 +3536,7 @@ button {
   overflow: hidden;
 }
 
-.timeline-motion-shape-layer {
+.timeline-motion-scene-layer {
   position: absolute;
   inset: 0;
   z-index: 4;
@@ -3460,14 +3546,6 @@ button {
 
 .timeline-motion-shape-rect {
   position: absolute;
-}
-
-.timeline-motion-image-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-  overflow: hidden;
 }
 
 .timeline-motion-image {
@@ -3484,7 +3562,10 @@ button {
   text-align: center;
   line-height: 1.08;
   letter-spacing: 0;
-  white-space: nowrap;
+  /* pre-line keeps authored "\n" breaks AND wraps long lines inside
+     max-width — nowrap let long titles run off the frame edge. */
+  white-space: pre-line;
+  overflow-wrap: break-word;
   text-shadow:
     0 2px 8px rgba(0, 0, 0, 0.95),
     0 0 2px rgba(0, 0, 0, 0.95);
@@ -7318,7 +7399,6 @@ button {
 .montage-chat-rail [aria-expanded][title="Chat history"]:hover {
   background: var(--color-surface-card) !important;
 }
-
 /* Body — generous line-height and 18px gap between assistant
    replies so the eye has room to breathe. Tool-call rows (the
    `• view timeline  Read timeline` lines) drop their card chrome
@@ -7449,43 +7529,61 @@ button {
 }
 
 .montage-chat-rail .montage-permission-menu {
-  position: relative;
-  z-index: 1;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 24px;
   min-width: 0;
-  padding: 0 8px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  padding: 0 9px;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.055);
+  background: var(--color-surface-input);
   color: var(--color-text-secondary);
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  user-select: none;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
 }
 .montage-chat-rail .montage-permission-menu:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-.montage-chat-rail .montage-permission-glyph {
+.montage-chat-rail .montage-permission-icon {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-family: var(--font-sans, inherit);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
 }
 .montage-chat-rail .montage-permission-menu select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
   appearance: none;
+  -webkit-appearance: none;
+  width: auto;
+  min-width: 42px;
+  max-width: 72px;
+  padding: 0 11px 0 0;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-family: var(--font-sans, inherit);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 24px;
+  outline: none;
+  cursor: pointer;
+}
+.montage-chat-rail .montage-permission-menu::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-left: -12px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  opacity: 0.58;
+  pointer-events: none;
+  transform: translateY(-1px) rotate(45deg);
+}
+.montage-chat-rail .montage-permission-menu:has(select:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* ─── Focused / full-chat mode sidebar ─────────────────────────────

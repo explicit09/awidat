@@ -10042,6 +10042,7 @@ dependencies = [
  "montage-core",
  "montage-desktop-protocol",
  "montage-index",
+ "montage-lut",
  "montage-mcp",
  "montage-proto",
  "montage-render",
@@ -10093,6 +10094,7 @@ dependencies = [
  "montage-config",
  "montage-mcp",
  "montage-proto",
+ "montage-secrets",
  "montage-test-support",
  "serde",
  "serde_json",
@@ -10182,6 +10184,8 @@ name = "montage-secrets"
 version = "0.1.0"
 dependencies = [
  "keyring",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

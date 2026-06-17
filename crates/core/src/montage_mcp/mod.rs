@@ -94,6 +94,7 @@ use crate::montage_mcp::tools::list_episodes::{self, ListEpisodesArgs};
 use crate::montage_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::montage_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::montage_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::montage_mcp::tools::load_project_instructions::{self, LoadProjectInstructionsArgs};
 use crate::montage_mcp::tools::load_skill::{self, LoadSkillArgs};
 use crate::montage_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::montage_mcp::tools::manage_assets::{
@@ -177,6 +178,7 @@ use crate::montage_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::montage_mcp::tools::verify_render::{self, VerifyRenderArgs};
 use crate::montage_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::montage_mcp::tools::view_frame::{self, ViewFrameArgs};
+use crate::montage_mcp::tools::view_program_frame::{self, ViewProgramFrameArgs};
 use crate::montage_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
 /// The Montage MCP server. One short-lived struct per child-process
@@ -884,10 +886,12 @@ fragment. Use it when the job is emphasis inside a clip, not a cut boundary.",
         description = "\
 Read-only planner for native procedural MotionScene documents. Use after \
 plan_visual_support chooses the motion_scene lane. It returns a valid \
-MotionScene plus a Set Motion Scene EDL snippet for apply_edl. Text layers \
-text, rectangle/solid, and project-asset image layers are preview/render \
-supported; video/media layers are stored with explicit limitations and \
-footage should use B-roll/PiP.",
+MotionScene plus a Set Motion Scene EDL snippet for apply_edl. On-screen copy \
+must come from transcript evidence: pass headline (and step_labels for \
+step/process scenes) or evidence_text — the planner never puts the request \
+prompt on screen or invents placeholder labels. Text layers, rectangle/solid, \
+and project-asset image layers are preview/render supported; video/media \
+layers are stored with explicit limitations and footage should use B-roll/PiP.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_motion_scene(
@@ -1223,9 +1227,9 @@ Never burns captions into the picture.",
     #[tool(
         description = "\
 Fetch current X trend signals for one or more episode-topic queries and return \
-a trend_context payload suitable for `plan_short_form_review`. Uses \
-X_BEARER_TOKEN or keychain account x_bearer_token for read access. If \
-credentials are missing, returns a setup/status payload instead of failing. \
+a trend_context payload suitable for `plan_short_form_review`. Uses the \
+configured X bearer token for read access. If credentials are missing, \
+returns a setup/status payload instead of failing. \
 Publishing is not performed here; Twitter/X posting remains handled by the \
 social publishing provider.",
         annotations(destructive_hint = true, read_only_hint = false)
@@ -1346,6 +1350,28 @@ detail='original' returns source resolution. format='png' (default) | \
     )]
     pub async fn view_frame(&self, args: Parameters<ViewFrameArgs>) -> Result<String, ErrorData> {
         view_frame::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_program_frame` — render one composed timeline frame and
+    /// return it as a JSON payload with a base64-encoded image.
+    #[tool(
+        description = "\
+Render one composed program frame at timeline-local `t_s` and return a JSON \
+payload carrying base64-encoded image bytes plus cache paths. Use this after \
+applying visual changes to inspect what the rendered program frame actually \
+looks like: MotionScene layers, titles, B-roll/PiP, annotations, and broadcast \
+overlays are captured together. detail='preview' (default, <=768px longest \
+edge) keeps the image cheap; detail='original' returns source resolution. \
+format='png' (default) | 'jpeg'.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_program_frame(
+        &self,
+        args: Parameters<ViewProgramFrameArgs>,
+    ) -> Result<String, ErrorData> {
+        view_program_frame::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1549,7 +1575,9 @@ Read-only Proposal-to-Visual-Support planner. Given selected transcript/topic \
 text and an editor request, returns visual artifact proposals with evidence, \
 missing-information prompts, apply_edl payloads, preview expectations, and \
 render-verification steps. Use before apply_edl for quote highlights, animated \
-lists, title cards, search bars, counters, maps, and B-roll packages.",
+lists, title cards, search bars, counters, maps, and B-roll packages. Pass \
+lane=\"motion_scene\" or lane=\"broll\" to constrain proposals to one lane; the \
+planner honors the constraint instead of switching lanes.",
         annotations(read_only_hint = true)
     )]
     pub async fn plan_visual_support_proposals(
@@ -1756,7 +1784,7 @@ surfaced by `find_broll_opportunities` (or any other moment you think \
 wants b-roll). Tell the user the previews; they pick. Then call \
 `use_broll(pexels_id, ...)` to download + place. Be specific in your \
 query: \"empty city street at dawn\" beats \"loneliness\". Default \
-per_page=5; cap 30. Requires PEXELS_API_KEY in env or the OS keychain.",
+per_page=5; cap 30. Requires a Pexels key in Provider Keys.",
         annotations(read_only_hint = true)
     )]
     pub async fn search_broll(
@@ -2392,6 +2420,23 @@ their domains (e.g. tighten THEN suggest b-roll).\
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
+    /// `load_project_instructions` — read project docs (AGENTS.md) on demand.
+    #[tool(
+        description = "\
+Read the project's instructions/docs (AGENTS.md and similar) on demand as plain \
+text. Montage keeps the first turn lean instead of auto-injecting these, so call \
+this when you need the project's editorial conventions or constraints. Pass \
+`max_bytes` to cap the returned size.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn load_project_instructions(
+        &self,
+        args: Parameters<LoadProjectInstructionsArgs>,
+    ) -> Result<String, ErrorData> {
+        load_project_instructions::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     /// `start_render` — run ffmpeg to render a preview/segment/full
     /// asset or the edited timeline. Mutating: writes a render
     /// manifest under `<project>/renders/` and an ffmpeg output file.
@@ -2476,7 +2521,10 @@ view_episode shows they're missing.",
 Start a generated-media job and write the local generated-media \
 registry. Provider 'mock' creates an offline completed placeholder \
 record suitable for tests. Provider 'openrouter' submits an \
-asynchronous OpenRouter video generation job using OPENROUTER_API_KEY. \
+asynchronous OpenRouter video generation job using the configured OpenRouter key. \
+For provider 'openrouter', include \
+cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\" \
+so the desktop approval text shows the paid-provider warning. \
 Provider 'seedance' is not direct; use OpenRouter or a future \
 dedicated adapter.",
         annotations(destructive_hint = true, read_only_hint = false)

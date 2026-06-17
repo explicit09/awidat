@@ -1,6 +1,9 @@
 //! `podcast_qc_report` tool — pre-render timeline QC gate.
 
 use async_trait::async_trait;
+use montage_proto::montage_meta::{
+    AudioRelation, CutType, MontageTimelineMetadata, SemanticCutSpec,
+};
 use montage_proto::otio::{MediaReference, Stack, StackChild, Track, TrackChild};
 use montage_proto::project::Project;
 
@@ -95,6 +98,14 @@ pub(crate) fn build_podcast_qc_report(
             "message": "No cut-boundary intent metadata found; suspicious cuts may be harder to audit."
         }));
     }
+    let transition_keys = transition_boundary_keys(&project.timeline.tracks);
+    let workflow_sections =
+        workflow_section_receipt(project.timeline.metadata.montage.as_ref(), &transition_keys);
+    collect_workflow_guardrail_issues(
+        project.timeline.metadata.montage.as_ref(),
+        &transition_keys,
+        &mut issues,
+    );
     let status = if issues.iter().any(|issue| issue["severity"] == "error") {
         "blocked"
     } else if issues.iter().any(|issue| issue["severity"] == "warning") {
@@ -108,8 +119,227 @@ pub(crate) fn build_podcast_qc_report(
         "issues": issues,
         "caption_summary": caption_summary,
         "audio_meter_count": audio_finishing.meters.len(),
+        "workflow_sections": workflow_sections,
         "required_before_render": true,
     })
+}
+
+fn workflow_section_receipt(
+    meta: Option<&MontageTimelineMetadata>,
+    transition_keys: &std::collections::HashSet<String>,
+) -> serde_json::Value {
+    let Some(meta) = meta else {
+        return serde_json::json!([]);
+    };
+    let cleanup_cut_count = meta
+        .cut_boundaries
+        .values()
+        .filter(|spec| is_cleanup_cut(spec))
+        .count();
+    let unresolved_cleanup_cut_count = meta
+        .cut_boundaries
+        .iter()
+        .filter(|(boundary, spec)| is_unverified_cleanup_hard_cut(boundary, spec, transition_keys))
+        .count();
+    serde_json::json!([
+        {
+            "id": "brand_overlay",
+            "label": "Brand overlay / lower thirds",
+            "status": if meta.broadcast_overlay.is_some() { "done" } else { "missing" },
+            "evidence_count": usize::from(meta.broadcast_overlay.is_some())
+        },
+        {
+            "id": "reviewable_proposals",
+            "label": "Reviewable proposal package",
+            "status": if meta.proposal_packages.is_empty() { "missing" } else { "done" },
+            "evidence_count": meta.proposal_packages.len()
+        },
+        {
+            "id": "cleanup_cut_smoothing",
+            "label": "Cleanup cut smoothing / quality gate",
+            "status": if cleanup_cut_count == 0 {
+                "not_applicable"
+            } else if unresolved_cleanup_cut_count == 0 {
+                "done"
+            } else {
+                "blocked"
+            },
+            "evidence_count": cleanup_cut_count.saturating_sub(unresolved_cleanup_cut_count),
+            "unresolved_count": unresolved_cleanup_cut_count
+        },
+        {
+            "id": "visual_polish",
+            "label": "Visual support / polish pass",
+            "status": if has_visual_polish_evidence(meta) { "done" } else { "missing" },
+            "evidence_count": visual_polish_evidence_count(meta)
+        },
+        {
+            "id": "audio_polish",
+            "label": "Audio polish / loudness pass",
+            "status": if meta.audio_finishing.is_some() { "done" } else { "missing" },
+            "evidence_count": usize::from(meta.audio_finishing.is_some())
+        },
+        {
+            "id": "preflight",
+            "label": "Pre-render preflight",
+            "status": if meta.preflight_reports.is_empty() { "missing" } else { "done" },
+            "evidence_count": meta.preflight_reports.len()
+        }
+    ])
+}
+
+fn collect_workflow_guardrail_issues(
+    meta: Option<&MontageTimelineMetadata>,
+    transition_keys: &std::collections::HashSet<String>,
+    issues: &mut Vec<serde_json::Value>,
+) {
+    let Some(meta) = meta else {
+        return;
+    };
+    for (boundary, spec) in &meta.cut_boundaries {
+        if is_unverified_cleanup_hard_cut(boundary, spec, transition_keys) {
+            issues.push(serde_json::json!({
+                "kind": "cleanup_hard_cut_smoothing_missing",
+                "severity": "error",
+                "boundary": boundary,
+                "cut_type": "hard_cut",
+                "intent": spec.intent,
+                "reason": spec.reason,
+                "message": "Cleanup/transcript-removal hard cut has no smoothing or assess_edit_quality evidence. Run podcast_smooth_cut_boundaries, assess_edit_quality for this boundary, then recut, Set Audio Lead/Trail, cover with b-roll/cutaway, insert a transition at the boundary, or stamp verified hard-cut evidence."
+            }));
+        }
+    }
+}
+
+fn is_unverified_cleanup_hard_cut(
+    boundary: &str,
+    spec: &SemanticCutSpec,
+    transition_keys: &std::collections::HashSet<String>,
+) -> bool {
+    is_cleanup_cut(spec)
+        && spec.cut_type == CutType::HardCut
+        && spec.audio_relation == AudioRelation::Sync
+        && !has_cut_quality_evidence(spec)
+        // A transition physically spanning this clip pair IS the
+        // smoothing — the playbook sanctions plan_transition as a
+        // repair, so QC must not keep flagging a covered boundary.
+        && !transition_keys.contains(boundary)
+}
+
+/// Collect `{from}::{to}` boundary keys for every transition that sits
+/// between two clips, matching `montage_proto::montage_meta::cut_boundary_key`.
+fn transition_boundary_keys(stack: &Stack) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    collect_transition_keys_from_stack(stack, &mut keys);
+    keys
+}
+
+fn collect_transition_keys_from_stack(stack: &Stack, keys: &mut std::collections::HashSet<String>) {
+    for stack_child in &stack.children {
+        match stack_child {
+            StackChild::Track(track) => {
+                for (index, child) in track.children.iter().enumerate() {
+                    if !matches!(child, TrackChild::Transition(_)) {
+                        continue;
+                    }
+                    let from = track.children[..index].iter().rev().find_map(qc_clip_id);
+                    let to = track.children[index + 1..].iter().find_map(qc_clip_id);
+                    if let (Some(from), Some(to)) = (from, to) {
+                        keys.insert(montage_proto::montage_meta::cut_boundary_key(from, to));
+                    }
+                }
+            }
+            StackChild::Stack(inner) => collect_transition_keys_from_stack(inner, keys),
+            _ => {}
+        }
+    }
+}
+
+fn qc_clip_id(child: &TrackChild) -> Option<&str> {
+    let TrackChild::Clip(clip) = child else {
+        return None;
+    };
+    Some(
+        clip.metadata
+            .montage
+            .as_ref()
+            .and_then(|meta| meta.extra.get("clip_uuid"))
+            .and_then(|value| value.as_str())
+            .unwrap_or(clip.name.as_str()),
+    )
+}
+
+fn is_cleanup_cut(spec: &SemanticCutSpec) -> bool {
+    let haystack = format!(
+        "{} {}",
+        spec.intent,
+        spec.reason.as_deref().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    [
+        "transcript",
+        "removal",
+        "removed",
+        "cleanup",
+        "dead air",
+        "silence",
+        "filler",
+        "false start",
+        "planning",
+        "chatter",
+        "aside",
+        "production",
+        "pause",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+fn has_cut_quality_evidence(spec: &SemanticCutSpec) -> bool {
+    if spec
+        .reason
+        .as_deref()
+        .is_some_and(text_mentions_quality_evidence)
+    {
+        return true;
+    }
+    [
+        "assess_edit_quality",
+        "quality_evidence",
+        "smoothing_checked",
+        "smoothing_verified",
+        "post_cut_smoothing",
+        "podcast_smooth_cut_boundaries",
+    ]
+    .iter()
+    .any(|key| spec.extra.contains_key(*key))
+}
+
+fn text_mentions_quality_evidence(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "assess_edit_quality",
+        "smoothing checked",
+        "smoothing verified",
+        "verified hard cut",
+        "reviewed hard cut",
+        "post-cut smoothing",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+fn has_visual_polish_evidence(meta: &MontageTimelineMetadata) -> bool {
+    visual_polish_evidence_count(meta) > 0
+}
+
+fn visual_polish_evidence_count(meta: &MontageTimelineMetadata) -> usize {
+    meta.motion_packages.len()
+        + meta.motion_scenes.len()
+        + meta.composition_graphs.len()
+        + meta.parameter_animations.len()
+        + meta.timeline_markers.len()
+        + usize::from(meta.broll_recommendations.is_some())
 }
 
 fn collect_timeline_issues(
@@ -263,6 +493,7 @@ fn collect_track_issues(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use montage_proto::montage_meta::{AudioRelation, SemanticCutSpec, cut_boundary_key};
     use montage_proto::otio::{
         Clip, ExternalReference, Gap, MediaReference, RationalTime, Stack, StackChild, TimeRange,
         Timeline, Track, TrackChild, TrackKind,
@@ -304,6 +535,56 @@ mod tests {
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
         timeline.tracks = stack;
+        project.timeline = timeline;
+        project.write(root).unwrap();
+    }
+
+    fn write_cleanup_cut_project(root: &std::path::Path, verified: bool) {
+        let mut project = Project::init(root).unwrap();
+        let asset = root.join("raw/episode.mov");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"fake").unwrap();
+        let mut track = Track::empty("Video 1", TrackKind::Video);
+        for (id, start_s, duration_s) in [("from", 0.0, 10.0), ("to", 15.0, 10.0)] {
+            let mut clip = Clip::empty(id);
+            clip.media_reference =
+                MediaReference::External(ExternalReference::new("raw/episode.mov"));
+            clip.source_range = Some(TimeRange::new(
+                RationalTime::new(start_s * 24.0, 24.0),
+                RationalTime::new(duration_s * 24.0, 24.0),
+            ));
+            clip.metadata
+                .montage
+                .get_or_insert_with(Default::default)
+                .extra
+                .insert("clip_uuid".into(), serde_json::Value::String(id.into()));
+            track.children.push(TrackChild::Clip(clip));
+        }
+        let mut timeline = Timeline::empty("podcast");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        timeline.tracks = stack;
+        let meta = timeline
+            .metadata
+            .montage
+            .get_or_insert_with(Default::default);
+        let mut spec = SemanticCutSpec {
+            cut_type: CutType::HardCut,
+            intent: "clean_story_rhythm".into(),
+            energy: None,
+            audio_relation: AudioRelation::Sync,
+            confidence: Some(0.95),
+            reason: Some("planning aside removed at a clean boundary".into()),
+            extra: Default::default(),
+        };
+        if verified {
+            spec.extra.insert(
+                "assess_edit_quality".into(),
+                serde_json::json!({"action": "hard_cut"}),
+            );
+        }
+        meta.cut_boundaries
+            .insert(cut_boundary_key("from", "to"), spec);
         project.timeline = timeline;
         project.write(root).unwrap();
     }
@@ -391,6 +672,128 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|issue| issue["kind"] == "primary_av_duration_mismatch")
+        );
+    }
+
+    #[tokio::test]
+    async fn blocks_unverified_cleanup_hard_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        write_cleanup_cut_project(dir.path(), false);
+        let out = PodcastQcReportTool
+            .handle(
+                ToolInvocation {
+                    call_id: "q3".into(),
+                    name: "podcast_qc_report".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(value["status"], "blocked");
+        assert!(
+            value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "cleanup_hard_cut_smoothing_missing")
+        );
+        assert!(
+            value["workflow_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|section| {
+                    section["id"] == "cleanup_cut_smoothing" && section["status"] == "blocked"
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn transition_at_boundary_satisfies_smoothing_gate() {
+        // The agent covered the cleanup boundary with a transition
+        // (e.g. montage.motion_blur via Insert Transition) — QC must
+        // count that as smoothing instead of staying blocked.
+        let dir = tempfile::tempdir().unwrap();
+        write_cleanup_cut_project(dir.path(), false);
+        let mut project = Project::read(dir.path()).unwrap();
+        let StackChild::Track(track) = &mut project.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let transition = montage_proto::otio::Transition {
+            name: "motion blur".into(),
+            transition_type: "montage.motion_blur".into(),
+            in_offset: RationalTime::new(0.09 * 24.0, 24.0),
+            out_offset: RationalTime::new(0.09 * 24.0, 24.0),
+            metadata: Default::default(),
+        };
+        track.children.insert(1, TrackChild::Transition(transition));
+        project.write(dir.path()).unwrap();
+
+        let out = PodcastQcReportTool
+            .handle(
+                ToolInvocation {
+                    call_id: "q5".into(),
+                    name: "podcast_qc_report".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert!(
+            !value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "cleanup_hard_cut_smoothing_missing"),
+            "transition spanning the boundary must satisfy the smoothing gate; got {}",
+            value["issues"]
+        );
+        assert!(
+            value["workflow_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|section| {
+                    section["id"] == "cleanup_cut_smoothing" && section["status"] == "done"
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_cleanup_hard_cut_satisfies_smoothing_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        write_cleanup_cut_project(dir.path(), true);
+        let out = PodcastQcReportTool
+            .handle(
+                ToolInvocation {
+                    call_id: "q4".into(),
+                    name: "podcast_qc_report".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert!(
+            !value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "cleanup_hard_cut_smoothing_missing")
+        );
+        assert!(
+            value["workflow_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|section| {
+                    section["id"] == "cleanup_cut_smoothing" && section["status"] == "done"
+                })
         );
     }
 }

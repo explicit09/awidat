@@ -99,12 +99,26 @@ impl ToolHandler for StartGeneratedMediaJobTool {
             .and_then(|v| v.as_str())
             .map(crate::generated_media::registry::prompt_hash)
             .unwrap_or_else(|| "<missing-prompt>".to_string());
+        let cost_confirmation = if provider == "openrouter" {
+            "; cost unknown; explicit confirmation required"
+        } else {
+            ""
+        };
         vec![ApprovalKey::new(
             self.name(),
             format!(
-                "generated_media:{artifact_kind}:{workflow_purpose}:{provider}:{model}:{prompt_hash}:dest=raw/generated"
+                "generated_media:{artifact_kind}:{workflow_purpose}:{provider}:{model}:{prompt_hash}:dest=raw/generated{cost_confirmation}"
             ),
         )]
+    }
+
+    fn approval_summary(&self, invocation: &ToolInvocation) -> String {
+        let mut summary = crate::tool::summarize_args(&invocation.args);
+        let provider = invocation.args.get("provider").and_then(|v| v.as_str());
+        if provider == Some("openrouter") {
+            summary.push_str("; OpenRouter cost unknown; explicit confirmation required");
+        }
+        summary
     }
 
     async fn handle(
@@ -253,7 +267,7 @@ const DESCRIPTION: &str = "\
 Start a generated-media job and write the local generated-media registry. \
 Provider 'mock' creates an offline completed placeholder record suitable \
 for tests. Provider 'openrouter' submits an asynchronous OpenRouter video \
-generation job using OPENROUTER_API_KEY. Provider 'seedance' is not direct; \
+generation job using the configured OpenRouter key. Provider 'seedance' is not direct; \
 use OpenRouter or a future dedicated adapter.";
 
 #[cfg(test)]
@@ -387,5 +401,44 @@ mod tests {
                     "quiet street"
                 ))
         );
+    }
+
+    #[test]
+    fn openrouter_approval_key_requires_cost_confirmation() {
+        let invocation = crate::tool::ToolInvocation {
+            call_id: "c1".into(),
+            name: "start_generated_media_job".into(),
+            args: serde_json::json!({
+                "provider": "openrouter",
+                "artifact_kind": "video",
+                "workflow_purpose": "broll",
+                "prompt": "quiet street",
+                "model": "bytedance/seedance-2.0"
+            }),
+        };
+
+        let keys = StartGeneratedMediaJobTool.approval_keys(&invocation);
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].operation.contains("cost unknown"));
+        assert!(keys[0].operation.contains("explicit confirmation required"));
+    }
+
+    #[test]
+    fn openrouter_approval_summary_includes_visible_cost_warning() {
+        let invocation = crate::tool::ToolInvocation {
+            call_id: "c1".into(),
+            name: "start_generated_media_job".into(),
+            args: serde_json::json!({
+                "provider": "openrouter",
+                "artifact_kind": "video",
+                "workflow_purpose": "broll",
+                "prompt": "quiet street",
+                "model": "bytedance/seedance-2.0"
+            }),
+        };
+
+        let summary = StartGeneratedMediaJobTool.approval_summary(&invocation);
+        assert!(summary.contains("OpenRouter cost unknown"));
+        assert!(summary.contains("explicit confirmation required"));
     }
 }

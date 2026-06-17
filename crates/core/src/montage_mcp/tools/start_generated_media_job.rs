@@ -16,6 +16,9 @@ use crate::generated_media::provider::{
 use crate::generated_media::registry::{Registry, write_generated_description_sidecar};
 use crate::montage_mcp::context::McpToolCtx;
 
+pub const OPENROUTER_COST_CONFIRMATION: &str =
+    "OpenRouter cost unknown; explicit confirmation required";
+
 /// Arguments to `start_generated_media_job`.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct StartGeneratedMediaJobArgs {
@@ -34,6 +37,10 @@ pub struct StartGeneratedMediaJobArgs {
     pub aspect_ratio: Option<String>,
     #[serde(default)]
     pub generate_audio: Option<bool>,
+    /// Required for provider=openrouter so the desktop approval text visibly
+    /// includes the paid-provider warning before the network request starts.
+    #[serde(default)]
+    pub cost_confirmation: Option<String>,
 }
 
 pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<String, String> {
@@ -66,6 +73,7 @@ pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<St
     }
 
     if args.provider == "openrouter" {
+        validate_openrouter_cost_confirmation(&args)?;
         let job_id = next_job_id(&args.prompt);
         let config =
             crate::generated_media::openrouter::OpenRouterVideoConfig::from_env(args.model.clone())
@@ -135,6 +143,21 @@ pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<St
     .to_string())
 }
 
+pub fn validate_openrouter_cost_confirmation(
+    args: &StartGeneratedMediaJobArgs,
+) -> Result<(), String> {
+    if args.provider != "openrouter" {
+        return Ok(());
+    }
+    let provided = args.cost_confirmation.as_deref().unwrap_or("").trim();
+    if provided == OPENROUTER_COST_CONFIRMATION {
+        return Ok(());
+    }
+    Err(format!(
+        "start_generated_media_job: provider=openrouter requires cost_confirmation=\"{OPENROUTER_COST_CONFIRMATION}\" so the desktop approval request visibly includes the cost warning."
+    ))
+}
+
 fn next_job_id(prompt: &str) -> String {
     let digest = crate::generated_media::registry::prompt_hash(prompt);
     let stamp = chrono::Utc::now()
@@ -158,5 +181,7 @@ pub const DESCRIPTION: &str = "\
 Start a generated-media job and write the local generated-media registry. \
 Provider 'mock' creates an offline completed placeholder record suitable \
 for tests. Provider 'openrouter' submits an asynchronous OpenRouter video \
-generation job using OPENROUTER_API_KEY. Provider 'seedance' is not direct; \
+generation job using the configured OpenRouter key. For provider 'openrouter', \
+include cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\" \
+so the desktop approval text shows the paid-provider warning. Provider 'seedance' is not direct; \
 use OpenRouter or a future dedicated adapter.";

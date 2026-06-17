@@ -84,12 +84,12 @@ await ensureAppServer();
 
 const browser = await chromium.launch();
 
-// Pre-seed the first-run welcome flag so `WelcomeCard` stays dismissed.
+// Pre-seed the first-run consent flag so `WelcomeCard` stays dismissed.
 // Without this every smoke page boots with the welcome modal covering
 // the screen, so text assertions miss and clicks hit the backdrop.
 const SUPPRESS_WELCOME = `
   try {
-    localStorage.setItem("montage:welcome:shown", new Date().toISOString());
+    localStorage.setItem("montage:welcome:consent", new Date().toISOString());
   } catch {}
 `;
 

@@ -1,0 +1,5 @@
+# The dev watcher must not watch the bundled sidecar binaries: the
+# build itself regenerates `binaries/montage-mcp-server-*`, which
+# re-triggers the watcher and loops `tauri dev` through 3-4 redundant
+# rebuild/relaunch cycles on every start.
+binaries/

@@ -11,7 +11,7 @@
 //!     to the unsandboxed path with user approval.
 //!   - **Windows**: out of scope.
 //!
-//! Single public type — [`Sandbox`] — with one method, [`run`].
+//! Single public type — [`Sandbox`] — with one method, `run`.
 //! Callers compose policies via [`Policy`]. The `try-sandboxed-
 //! then-escalate` orchestrator pattern lives in `montage-core`,
 //! NOT here; this crate is a thin platform wrapper.

@@ -8,6 +8,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState, type ReactNode } from "react";
+import { ProviderKeysSettings } from "./ProviderKeysSettings";
 import { PublishingSettings } from "./PublishingSettings";
 import { useProjectStore } from "./state";
 import { useAgentsMdEditor } from "../state/agentsMdEditor";
@@ -46,6 +47,7 @@ type SettingsSectionId =
   | "publishing"
   | "agent"
   | "workspace"
+  | "advanced"
   | "indexers"
   | "about";
 
@@ -55,6 +57,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string; d
   { id: "publishing", label: "Publishing", detail: "Social targets" },
   { id: "agent", label: "Agent", detail: "Runtime info" },
   { id: "workspace", label: "Workspace", detail: "Mode and shortcuts" },
+  { id: "advanced", label: "Advanced", detail: "Provider keys" },
   { id: "indexers", label: "Indexers", detail: "Config paths" },
   { id: "about", label: "About", detail: "Version" },
 ];
@@ -141,6 +144,19 @@ export function SettingsModal() {
     }
     try {
       await revealItemInDir(path);
+    } catch (e) {
+      setActionError(String(e));
+    }
+  }
+
+  async function revealLogs() {
+    setActionError(null);
+    if (!isTauri()) {
+      setActionError("Log folder actions are only available in the desktop app.");
+      return;
+    }
+    try {
+      await invoke("reveal_app_log_dir");
     } catch (e) {
       setActionError(String(e));
     }
@@ -311,11 +327,26 @@ export function SettingsModal() {
             </SettingsRow>
           </SettingsCard>
         );
+      case "advanced":
+        return (
+          <SettingsCard
+            title="Provider keys"
+            description="Local provider keys for advanced bring-your-own workflows."
+          >
+            <ProviderKeysSettings />
+          </SettingsCard>
+        );
       case "about":
         return (
           <SettingsCard title="About Montage" description="Desktop build details.">
             <SettingsRow label="Version" mono value={APP_VERSION} />
             <SettingsRow label="Montage" value="Studio for agent-driven editing" />
+            <SettingsRow label="Logs" value="Use this when reporting crashes, failed indexers, or export errors.">
+              <GlassButton variant="ghost" onClick={() => void revealLogs()}>
+                Open logs
+              </GlassButton>
+            </SettingsRow>
+            {actionError ? <SettingsError message={actionError} /> : null}
           </SettingsCard>
         );
     }

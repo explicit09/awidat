@@ -34,7 +34,7 @@
 //! - [`Repo`] — opaque wrapper around `vedit_core::repo::Repo`.
 //! - [`open_or_init`] — idempotent constructor. Opens the existing
 //!   `.vedit/` if present, initializes a fresh repo otherwise.
-//! - [`commit`] — write a timeline + commit it with an montage-shaped
+//! - `commit` — write a timeline + commit it with an montage-shaped
 //!   message. The agent reasoning string is mandatory; this is the
 //!   load-bearing audit trail.
 //! - [`diff_refs`] — structured diff between two refs (default
@@ -187,7 +187,7 @@ pub fn ensure_session_tag(repo: &Repo) -> Result<(), VcError> {
 /// Multi-seat editing, user-authored notes, and meaningful blame all
 /// rely on this carrying a real person's name when one is available.
 /// When `None` is passed to a `*_as` commit entry point, the default
-/// resolver kicks in — see [`resolve_commit_author`].
+/// resolver kicks in — see `resolve_commit_author`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitAuthor {
     /// Display name, e.g. "Alice".
@@ -261,7 +261,7 @@ impl CommitAuthor {
 /// no-op commits.
 ///
 /// This shim preserves the pre-author-override signature for existing
-/// call sites. The author is resolved by [`resolve_commit_author`]
+/// call sites. The author is resolved by `resolve_commit_author`
 /// (env vars `MONTAGE_USER_NAME` / `MONTAGE_USER_EMAIL`, falling back
 /// to the "montage agent" default). To stamp an explicit identity,
 /// call [`commit_current_timeline_as`].
@@ -1130,7 +1130,7 @@ pub fn merge_refs(
 }
 
 /// Same as [`merge_refs`] but stamps an explicit identity on the merge
-/// commit. Passing `None` falls back to [`resolve_commit_author`]
+/// commit. Passing `None` falls back to `resolve_commit_author`
 /// (env vars, then the "montage agent" default).
 pub fn merge_refs_as(
     repo: &Repo,

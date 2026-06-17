@@ -98,7 +98,7 @@ impl UploadService {
     /// Execute a claimed upload with the default retry policy.
     ///
     /// Preserved verbatim for existing callers (incl. the desktop mock path);
-    /// delegates to [`execute_claimed_job_with_policy`].
+    /// delegates to [`Self::execute_claimed_job_with_policy`].
     pub fn execute_claimed_job(
         store: &mut impl SocialStore,
         adapter: &impl UploadAdapter,

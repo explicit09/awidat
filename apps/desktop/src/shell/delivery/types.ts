@@ -38,8 +38,6 @@ export type DeliveryRenderSummary = {
 
 export const ALL_TARGETS: DeliveryTargetKey[] = [
   "youtube",
-  "tiktok",
-  "instagram",
   "twitter_x",
   "captions",
   "cover",

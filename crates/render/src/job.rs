@@ -101,7 +101,7 @@ pub struct JobStatus {
     /// ffmpeg's stderr, never the middle.
     pub log_excerpt: String,
     /// Full command argv used to launch ffmpeg, including the ffmpeg
-    /// binary path as argv[0]. Exposed for reproducible render evidence.
+    /// binary path as `argv[0]`. Exposed for reproducible render evidence.
     pub command_argv: Vec<String>,
     /// Small planner metadata values for render diagnostics.
     pub metadata: BTreeMap<String, String>,
