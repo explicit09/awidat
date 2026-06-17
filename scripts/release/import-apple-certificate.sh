@@ -19,7 +19,26 @@ else
 fi
 cert_path="$work_dir/montage-release-certificate.p12"
 
+restore_keychain_settings=0
+previous_default_keychain=""
+previous_keychains=()
+if [[ -z "${GITHUB_ENV:-}" ]]; then
+  restore_keychain_settings=1
+  previous_default_keychain="$(security default-keychain | sed 's/^ *"//; s/"$//')"
+  while IFS= read -r keychain; do
+    previous_keychains+=("$keychain")
+  done < <(security list-keychains -d user | sed 's/^ *"//; s/"$//')
+fi
+
 cleanup() {
+  if [[ "$restore_keychain_settings" -eq 1 ]]; then
+    if [[ -n "$previous_default_keychain" ]]; then
+      security default-keychain -s "$previous_default_keychain" || true
+    fi
+    if [[ "${#previous_keychains[@]}" -gt 0 ]]; then
+      security list-keychains -d user -s "${previous_keychains[@]}" || true
+    fi
+  fi
   rm -f "$cert_path"
   if [[ "$cleanup_work_dir" -eq 1 ]]; then
     rm -rf "$work_dir"
