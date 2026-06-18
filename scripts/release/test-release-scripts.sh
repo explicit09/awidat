@@ -308,7 +308,11 @@ test_import_certificate_imports_identity_with_fake_security() {
   cat > "$fake_bin/security" <<EOF
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >> "$security_log"
-if [[ "\$1" == "find-identity" ]]; then
+if [[ "\$1" == "default-keychain" && "\$#" -eq 1 ]]; then
+  printf '    "/Users/test/Library/Keychains/login.keychain-db"\\n'
+elif [[ "\$1" == "list-keychains" && "\$#" -eq 3 ]]; then
+  printf '    "/Users/test/Library/Keychains/login.keychain-db"\\n'
+elif [[ "\$1" == "find-identity" ]]; then
   printf '  1) ABCDEF1234567890 "Developer ID Application: Montage Test (TEAMID)"\\n'
 fi
 EOF
@@ -345,7 +349,11 @@ test_import_certificate_prints_local_exports_without_github_env() {
   cat > "$fake_bin/security" <<EOF
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >> "$security_log"
-if [[ "\$1" == "find-identity" ]]; then
+if [[ "\$1" == "default-keychain" && "\$#" -eq 1 ]]; then
+  printf '    "/Users/test/Library/Keychains/login.keychain-db"\\n'
+elif [[ "\$1" == "list-keychains" && "\$#" -eq 3 ]]; then
+  printf '    "/Users/test/Library/Keychains/login.keychain-db"\\n'
+elif [[ "\$1" == "find-identity" ]]; then
   printf '  1) ABCDEF1234567890 "Developer ID Application: Montage Test (TEAMID)"\\n'
 fi
 EOF
@@ -363,6 +371,7 @@ EOF
   assert_contains "$output" "export APPLE_SIGNING_IDENTITY=Developer\\ ID\\ Application:\\ Montage\\ Test\\ \\(TEAMID\\)" "certificate import prints local signing identity export"
   assert_contains "$output" "export APPLE_KEYCHAIN_PATH=" "certificate import prints local keychain export"
   assert_contains "$output" "Developer ID Application signing identity imported" "certificate import still prints status"
+  assert_contains "$(cat "$security_log")" "list-keychains -d user -s /Users/test/Library/Keychains/login.keychain-db $runner_temp/montage-release." "certificate import leaves local signing keychain discoverable"
   pass "certificate import prints local exports"
 }
 

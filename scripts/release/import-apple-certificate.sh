@@ -36,7 +36,9 @@ cleanup() {
       security default-keychain -s "$previous_default_keychain" || true
     fi
     if [[ "${#previous_keychains[@]}" -gt 0 ]]; then
-      security list-keychains -d user -s "${previous_keychains[@]}" || true
+      security list-keychains -d user -s "${previous_keychains[@]}" "$keychain_path" || true
+    else
+      security list-keychains -d user -s "$keychain_path" || true
     fi
   fi
   rm -f "$cert_path"

@@ -292,9 +292,13 @@ fn stack_summary(stack: &Stack) -> TimelineSummary {
                 summary.duration_s = summary.duration_s.max(stack_summary.duration_s);
             }
             StackChild::Clip(clip) => {
-                summary.add_clip(clip, clip_timeline_end_s(clip, 0.0));
+                summary.add_clip(clip, clip_duration_s(clip));
             }
-            StackChild::Gap(_) => {}
+            StackChild::Gap(gap) => {
+                summary.duration_s = summary
+                    .duration_s
+                    .max(gap.source_range.duration.to_seconds());
+            }
         }
     }
     summary
@@ -309,11 +313,13 @@ fn track_summary(track: &Track) -> TimelineSummary {
         match child {
             TrackChild::Clip(clip) => {
                 let end_s = if sparse_overlay {
-                    clip_timeline_end_s(clip, cursor_s)
+                    clip_sparse_timeline_end_s(clip)
                 } else {
                     cursor_s + clip_duration_s(clip)
                 };
-                cursor_s += clip_duration_s(clip);
+                if !sparse_overlay {
+                    cursor_s += clip_duration_s(clip);
+                }
                 summary.add_clip(clip, end_s);
             }
             TrackChild::Gap(gap) => {
@@ -339,11 +345,11 @@ fn is_sparse_overlay_track(track: &Track) -> bool {
         .is_some_and(|role| matches!(role, "titles" | "captions" | "annotations"))
 }
 
-fn clip_timeline_end_s(clip: &montage_proto::otio::Clip, cursor_s: f64) -> f64 {
+fn clip_sparse_timeline_end_s(clip: &montage_proto::otio::Clip) -> f64 {
     clip.source_range
         .as_ref()
-        .map(|range| range.start_time.to_seconds().max(cursor_s) + range.duration.to_seconds())
-        .unwrap_or(cursor_s)
+        .map(|range| range.start_time.to_seconds() + range.duration.to_seconds())
+        .unwrap_or(0.0)
 }
 
 fn clip_duration_s(clip: &montage_proto::otio::Clip) -> f64 {
@@ -530,6 +536,88 @@ mod tests {
         assert!(map.contains("3 clip(s)"));
         assert!(map.contains("15.00s total"), "{map}");
         assert!(map.contains("3 clip(s) trimmed"), "{map}");
+    }
+
+    #[test]
+    fn render_keeps_overlapping_sparse_overlays_position_based() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = dummy_project(dir.path(), 10.0);
+        let mut title_track = Track::empty("Titles", TrackKind::Video);
+        title_track.metadata.insert(
+            "montage_track_role".to_string(),
+            serde_json::json!("titles"),
+        );
+
+        for (name, start_s) in [("title-a", 0.0), ("title-b", 5.0)] {
+            let mut title = Clip::empty(name.to_string());
+            title.source_range = Some(TimeRange::new(
+                RationalTime::new(start_s * 24.0, 24.0),
+                RationalTime::new(10.0 * 24.0, 24.0),
+            ));
+            title_track.children.push(TrackChild::Clip(title));
+        }
+
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(title_track));
+
+        let map = render(&project, dir.path());
+
+        assert!(map.contains("3 clip(s)"));
+        assert!(map.contains("15.00s total"), "{map}");
+        assert!(!map.contains("20.00s total"), "{map}");
+    }
+
+    #[test]
+    fn render_preserves_direct_stack_gap_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut timeline = Timeline::empty("direct-stack-gap");
+        let mut stack = Stack::empty("nested-stack");
+        stack
+            .children
+            .push(StackChild::Gap(Gap::of_duration(30.0, 24.0)));
+        let mut outer_track = Track::empty("V1", TrackKind::Video);
+        outer_track.children.push(TrackChild::Stack(stack));
+        timeline
+            .tracks
+            .children
+            .push(StackChild::Track(outer_track));
+        project.timeline = timeline;
+
+        let map = render(&project, dir.path());
+
+        assert!(map.contains("0 clip(s)"));
+        assert!(map.contains("30.00s total"), "{map}");
+    }
+
+    #[test]
+    fn render_uses_duration_for_direct_stack_clip_source_inpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut timeline = Timeline::empty("direct-stack-clip");
+        let mut clip = Clip::empty("trimmed-stack-clip".to_string());
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(60.0 * 24.0, 24.0),
+            RationalTime::new(5.0 * 24.0, 24.0),
+        ));
+        let mut stack = Stack::empty("nested-stack");
+        stack.children.push(StackChild::Clip(clip));
+        let mut outer_track = Track::empty("V1", TrackKind::Video);
+        outer_track.children.push(TrackChild::Stack(stack));
+        timeline
+            .tracks
+            .children
+            .push(StackChild::Track(outer_track));
+        project.timeline = timeline;
+
+        let map = render(&project, dir.path());
+
+        assert!(map.contains("1 clip(s)"));
+        assert!(map.contains("5.00s total"), "{map}");
+        assert!(!map.contains("65.00s total"), "{map}");
     }
 
     #[test]
