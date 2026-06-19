@@ -611,7 +611,7 @@ fn l1_catalog_exposes_metadata_without_l2_or_l3_content() {
         .render();
 
     assert!(catalog.contains("viral-clip-extractor"));
-    assert!(catalog.contains("Find and build 30-90 second social clips"));
+    assert!(catalog.contains("Find and build 30-59 second social clips"));
     assert!(
         !catalog.contains("This is an montage advantage"),
         "L1 catalog must not include SKILL.md body text"
