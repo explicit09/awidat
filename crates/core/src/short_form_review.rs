@@ -348,6 +348,7 @@ struct Moment {
     cluster_id: Option<String>,
     variant_kind: String,
     primary_moment_id: Option<String>,
+    overlap_ratio: f64,
 }
 
 pub fn build_short_form_review(
@@ -468,17 +469,7 @@ fn build_candidate(
         .cluster_id
         .clone()
         .unwrap_or_else(|| cluster_id_for_moment(input, &moment));
-    let candidate_id = if moment.variant_kind == "primary" {
-        format!(
-            "short_{:06}_{:06}",
-            range.start_s as u32, range.end_s as u32
-        )
-    } else {
-        format!(
-            "short_{}_{:06}_{:06}",
-            moment.variant_kind, range.start_s as u32, range.end_s as u32
-        )
-    };
+    let candidate_id = candidate_id_for_variant(&moment.variant_kind, range.start_s, range.end_s);
     let why_ai_picked_it = why_picked(&score, &clip_type, broll_plan.needed, &trend_alignment);
     let evidence = evidence(&moment, topic.as_deref(), input);
     let confidence = round2((score.total / 7.0).clamp(0.2, 0.98));
@@ -511,7 +502,7 @@ fn build_candidate(
             "Complete, standalone moment suitable for a reviewable short-form draft.".to_string(),
         cluster_id,
         variant_kind: moment.variant_kind,
-        overlap_ratio: 0.0,
+        overlap_ratio: moment.overlap_ratio,
         primary_candidate_id: moment.primary_moment_id,
         score,
         trend_alignment,
@@ -592,6 +583,7 @@ fn moment_from_value(value: &serde_json::Value, default_kind: Option<&str>) -> O
         cluster_id: string_field(value, &["cluster_id"]),
         variant_kind: string_field(value, &["variant_kind"]).unwrap_or_else(|| "primary".into()),
         primary_moment_id: string_field(value, &["primary_moment_id", "primary_candidate_id"]),
+        overlap_ratio: number_field(value, &["overlap_ratio"]).unwrap_or(0.0),
     })
 }
 
@@ -619,12 +611,13 @@ fn harvest_moments_from_input(input: &ShortFormReviewInput) -> Vec<Moment> {
     let mut harvested = Vec::new();
     for moment in base_moments {
         let cluster_id = cluster_id_for_moment(input, &moment);
-        let primary_id = moment.id.clone().unwrap_or_else(|| cluster_id.clone());
+        let primary_id = candidate_id_for_variant("primary", moment.start_s, moment.end_s);
         let mut primary = moment.clone();
         primary.cluster_id = Some(cluster_id.clone());
         primary.variant_kind = "primary".to_string();
+        primary.overlap_ratio = 0.0;
         harvested.push(primary);
-        harvested.extend(harvest_variants(&moment, &cluster_id, &primary_id));
+        harvested.extend(harvest_variants(input, &moment, &cluster_id, &primary_id));
     }
     dedup_moments(harvested)
 }
@@ -647,7 +640,12 @@ fn dedup_moments(moments: Vec<Moment>) -> Vec<Moment> {
     deduped
 }
 
-fn harvest_variants(moment: &Moment, cluster_id: &str, primary_id: &str) -> Vec<Moment> {
+fn harvest_variants(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    cluster_id: &str,
+    primary_id: &str,
+) -> Vec<Moment> {
     let duration_s = moment.end_s - moment.start_s;
     if duration_s < 50.0 {
         return Vec::new();
@@ -657,6 +655,7 @@ fn harvest_variants(moment: &Moment, cluster_id: &str, primary_id: &str) -> Vec<
     let standard_end = (moment.start_s + 60.0).min(moment.end_s);
     if standard_end - moment.start_s >= 30.0 {
         variants.push(moment_variant(
+            input,
             moment,
             cluster_id,
             primary_id,
@@ -669,6 +668,7 @@ fn harvest_variants(moment: &Moment, cluster_id: &str, primary_id: &str) -> Vec<
     let payoff_start = (moment.end_s - 60.0).max(moment.start_s);
     if moment.end_s - payoff_start >= 30.0 && (payoff_start - moment.start_s).abs() > 1.0 {
         variants.push(moment_variant(
+            input,
             moment,
             cluster_id,
             primary_id,
@@ -682,6 +682,7 @@ fn harvest_variants(moment: &Moment, cluster_id: &str, primary_id: &str) -> Vec<
 }
 
 fn moment_variant(
+    input: &ShortFormReviewInput,
     moment: &Moment,
     cluster_id: &str,
     primary_id: &str,
@@ -692,10 +693,51 @@ fn moment_variant(
     let mut variant = moment.clone();
     variant.start_s = start_s;
     variant.end_s = end_s;
+    variant.text = text_for_range(input, moment, start_s, end_s);
     variant.cluster_id = Some(cluster_id.to_string());
     variant.variant_kind = variant_kind.to_string();
     variant.primary_moment_id = Some(primary_id.to_string());
+    variant.overlap_ratio = overlap_ratio(moment.start_s, moment.end_s, start_s, end_s);
     variant
+}
+
+fn candidate_id_for_variant(variant_kind: &str, start_s: f64, end_s: f64) -> String {
+    if variant_kind == "primary" {
+        format!("short_{:06}_{:06}", start_s as u32, end_s as u32)
+    } else {
+        format!(
+            "short_{}_{:06}_{:06}",
+            variant_kind, start_s as u32, end_s as u32
+        )
+    }
+}
+
+fn text_for_range(
+    input: &ShortFormReviewInput,
+    fallback: &Moment,
+    start_s: f64,
+    end_s: f64,
+) -> String {
+    let text = transcript_segments_for_range(input, start_s, end_s)
+        .into_iter()
+        .filter_map(|segment| string_field(segment, &["text", "summary"]))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.trim().is_empty() {
+        fallback.text.clone()
+    } else {
+        text
+    }
+}
+
+fn overlap_ratio(parent_start_s: f64, parent_end_s: f64, start_s: f64, end_s: f64) -> f64 {
+    let parent_duration = parent_end_s - parent_start_s;
+    if parent_duration <= 0.0 {
+        return 0.0;
+    }
+    let overlap_start = parent_start_s.max(start_s);
+    let overlap_end = parent_end_s.min(end_s);
+    round2(((overlap_end - overlap_start).max(0.0) / parent_duration).clamp(0.0, 1.0))
 }
 
 fn cluster_id_for_moment(input: &ShortFormReviewInput, moment: &Moment) -> String {
@@ -752,6 +794,7 @@ fn topic_windows_from_transcript(
                 cluster_id: None,
                 variant_kind: "primary".to_string(),
                 primary_moment_id: None,
+                overlap_ratio: 0.0,
             })
         })
         .collect()
@@ -1147,6 +1190,8 @@ fn composition_mode(
     let active_speakers = active_speakers_for_range(input, moment.start_s, moment.end_s);
     if active_speakers.len() > 1 {
         ShortFormCompositionMode::DynamicSwitching
+    } else if active_speakers.is_empty() {
+        ShortFormCompositionMode::SplitStacked
     } else {
         ShortFormCompositionMode::ActiveSpeakerFill
     }
@@ -1214,7 +1259,19 @@ fn dynamic_layout_segments(
     }
 
     let mut segments = Vec::new();
+    let mut cursor_s = moment.start_s;
     for turn in turns {
+        if turn.start_s > cursor_s {
+            append_layout_segment(
+                &mut segments,
+                split_segment(
+                    cursor_s,
+                    turn.start_s,
+                    "non-speech gap keeps both speakers visible",
+                ),
+                MIN_LAYOUT_S,
+            );
+        }
         let duration = turn.end_s - turn.start_s;
         let segment = if duration >= MIN_FILL_S {
             fill_segment(turn.start_s, turn.end_s, Some(&turn.speaker_id))
@@ -1227,6 +1284,18 @@ fn dynamic_layout_segments(
             }
         };
         append_layout_segment(&mut segments, segment, MIN_LAYOUT_S);
+        cursor_s = turn.end_s;
+    }
+    if cursor_s < moment.end_s {
+        append_layout_segment(
+            &mut segments,
+            split_segment(
+                cursor_s,
+                moment.end_s,
+                "tail gap keeps both speakers visible",
+            ),
+            MIN_LAYOUT_S,
+        );
     }
     segments
 }
@@ -1331,6 +1400,15 @@ fn fill_segment(start_s: f64, end_s: f64, speaker_id: Option<&str>) -> ShortForm
             .unwrap_or(ShortFormLayoutMode::ActiveSpeakerCenter),
         reason: "one speaker carries this beat; fill the vertical frame with that speaker"
             .to_string(),
+    }
+}
+
+fn split_segment(start_s: f64, end_s: f64, reason: &str) -> ShortFormLayoutSegment {
+    ShortFormLayoutSegment {
+        start_s: round2(start_s),
+        end_s: round2(end_s),
+        layout: ShortFormLayoutMode::SplitStacked,
+        reason: reason.to_string(),
     }
 }
 

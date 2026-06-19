@@ -60,6 +60,23 @@ pub fn run(args: PodcastFlowShapeArgs, ctx: McpToolCtx) -> Result<String, String
                 .unwrap_or(false)
         })
         .count();
+    let missing_transcript_count = reports
+        .iter()
+        .filter(|report| {
+            report.get("status").and_then(|value| value.as_str()) == Some("missing_transcript")
+        })
+        .count();
+    if missing_transcript_count > 0 {
+        let report = FlowShapeReport {
+            status: "missing_transcript",
+            summary_for_agent: format!(
+                "{missing_transcript_count} asset(s) have whisper sidecars without transcript segments; rerun or repair transcript indexing before semantic review."
+            ),
+            assets: reports,
+            missing_evidence: vec!["whisper transcript segments".into()],
+        };
+        return serialize_report(&report);
+    }
     let report = FlowShapeReport {
         status: "needs_semantic_review",
         summary_for_agent: format!(

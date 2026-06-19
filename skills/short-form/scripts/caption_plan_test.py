@@ -115,6 +115,51 @@ class TranscriptPhraseTests(unittest.TestCase):
         self.assertIn(r"YOU END\N{\c&H18F037&}UP{\c&HFFFFFF&} RETURNING", ass)
         self.assertIn(r"UP {\c&H18F037&}RETURNING{\c&HFFFFFF&}", ass)
 
+    def test_ass_karaoke_defaults_to_bottom_caption_rail(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {
+                "text": "bottom rail",
+                "start_s": 1.0,
+                "end_s": 1.6,
+                "word_timings": [
+                    {"word": "bottom", "start_s": 1.0, "end_s": 1.3},
+                    {"word": "rail", "start_s": 1.3, "end_s": 1.6},
+                ],
+            }
+        ]
+
+        ass = caption_plan.build_ass_karaoke(phrases)
+
+        self.assertIn(r"{\an5\pos(540,1536)}", ass)
+
+    def test_ass_karaoke_rejects_synthetic_word_timings(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {
+                "text": "guessed timing",
+                "start_s": 10.0,
+                "end_s": 12.0,
+                "word_timings": [
+                    {
+                        "text": "guessed",
+                        "start_s": 10.0,
+                        "end_s": 11.0,
+                        "timing_source": "segment_interpolation",
+                    },
+                    {
+                        "text": "timing",
+                        "start_s": 11.0,
+                        "end_s": 12.0,
+                        "timing_source": "segment_interpolation",
+                    },
+                ],
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "requires real word timings"):
+            caption_plan.build_ass_karaoke(phrases)
+
     def test_caption_hot_range_overrides_preserve_style_contract(self) -> None:
         caption_plan = load_script("caption_plan")
         items = [

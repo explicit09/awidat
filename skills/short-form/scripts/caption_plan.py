@@ -185,7 +185,7 @@ def build_ass_karaoke(
     font_name: str = "Arial",
     font_size: int = 82,
     position_x: int = 540,
-    position_y: int = 960,
+    position_y: int = 1536,
 ) -> str:
     if play_res_x <= 0 or play_res_y <= 0:
         raise ValueError("ASS play resolution must be positive")
@@ -202,6 +202,10 @@ def build_ass_karaoke(
         words_for_phrase = [word for word in timings if _caption_word_text(word)]
         if not words_for_phrase:
             raise ValueError(f"phrase {phrase_index} has no caption words")
+        if any(word.get("timing_source") == "segment_interpolation" for word in words_for_phrase):
+            raise ValueError(
+                f"phrase {phrase_index} requires real word timings for karaoke captions"
+            )
         phrase_start = float(phrase.get("start_s", words_for_phrase[0].get("start_s", 0.0)))
         phrase_end = float(phrase.get("end_s", words_for_phrase[-1].get("end_s", phrase_start)))
         if phrase_start < previous_start:
