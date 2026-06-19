@@ -66,7 +66,12 @@ def boundary_hints(segs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def excerpt_for_review(segs: list[dict[str, Any]], hints: list[dict[str, Any]]) -> str:
     if not hints:
-        selected = segs[:20]
+        selected_indexes = set(range(min(len(segs), 8)))
+        if len(segs) > 8:
+            midpoint = len(segs) // 2
+            selected_indexes.update(range(max(0, midpoint - 4), min(len(segs), midpoint + 4)))
+            selected_indexes.update(range(max(0, len(segs) - 8), len(segs)))
+        selected = [segs[idx] for idx in sorted(selected_indexes)]
     else:
         selected_indexes = set()
         for hint in hints:

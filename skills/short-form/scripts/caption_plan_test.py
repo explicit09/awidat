@@ -133,6 +133,27 @@ class TranscriptPhraseTests(unittest.TestCase):
 
         self.assertIn(r"{\an5\pos(540,1536)}", ass)
 
+    def test_ass_karaoke_keeps_caption_visible_between_word_timings(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {
+                "text": "mind the gap",
+                "start_s": 1.0,
+                "end_s": 2.4,
+                "word_timings": [
+                    {"word": "mind", "start_s": 1.0, "end_s": 1.2},
+                    {"word": "the", "start_s": 1.5, "end_s": 1.7},
+                    {"word": "gap", "start_s": 2.0, "end_s": 2.2},
+                ],
+            }
+        ]
+
+        ass = caption_plan.build_ass_karaoke(phrases)
+
+        self.assertIn("Dialogue: 1,0:00:01.00,0:00:01.50", ass)
+        self.assertIn("Dialogue: 1,0:00:01.50,0:00:02.00", ass)
+        self.assertIn("Dialogue: 1,0:00:02.00,0:00:02.40", ass)
+
     def test_ass_karaoke_rejects_synthetic_word_timings(self) -> None:
         caption_plan = load_script("caption_plan")
         phrases = [

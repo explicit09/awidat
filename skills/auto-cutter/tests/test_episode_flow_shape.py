@@ -52,6 +52,19 @@ class EpisodeFlowShapeTests(unittest.TestCase):
         self.assertIn("Are you ready for agent loop", report["llm_review_packet"]["transcript_excerpt"])
         self.assertIn("episode_spans", report["llm_review_contract"]["required_fields"])
 
+    def test_no_hint_excerpt_samples_opening_middle_and_tail(self):
+        segments = [
+            segment(float(index * 10), float(index * 10 + 5), f"neutral transcript segment {index}")
+            for index in range(60)
+        ]
+
+        report = self.run_shape(segments)
+        excerpt = report["llm_review_packet"]["transcript_excerpt"]
+
+        self.assertIn("neutral transcript segment 0", excerpt)
+        self.assertIn("neutral transcript segment 30", excerpt)
+        self.assertIn("neutral transcript segment 59", excerpt)
+
 
 if __name__ == "__main__":
     unittest.main()

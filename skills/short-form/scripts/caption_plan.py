@@ -214,7 +214,12 @@ def build_ass_karaoke(
 
         for active_index, active_word in enumerate(words_for_phrase):
             start = float(active_word.get("start_s", phrase_start))
-            end = float(active_word.get("end_s", start))
+            if active_index + 1 < len(words_for_phrase):
+                end = float(words_for_phrase[active_index + 1].get("start_s", phrase_end))
+            else:
+                end = phrase_end
+            if end <= start:
+                end = float(active_word.get("end_s", start))
             if end <= start:
                 end = min(phrase_end, start + 0.2)
             if start < phrase_start:

@@ -72,7 +72,7 @@ and ask which one to produce.
 
 Once the user chooses a span, or once the semantic flow review confirms a
 single accepted span, immediately call `apply_episode_spans` with
-`status="accepted"` and `create_stringouts=true`, then call
+`episodes=[{..., "status": "accepted"}]` and `create_stringouts=true`, then call
 `list_episodes` to verify the stored metadata before applying extraction
 or cleanup edits. If the recording is split into multiple episode
 projects/timelines, each resulting project must store its own accepted

@@ -10,15 +10,18 @@ from typing import Any
 
 
 def _speaker_key(value: object) -> str:
-    text = str(value or "unknown").strip()
+    text = str(value or "").strip()
     if not text:
         return "unknown"
     match = re.search(r"\d+", text)
     return match.group(0) if match else text
 
 
-def _segment_speaker(segment: dict[str, Any]) -> str:
-    return _speaker_key(segment.get("speaker_id", segment.get("speaker", "unknown")))
+def _segment_speaker(segment: dict[str, Any]) -> str | None:
+    speaker = segment.get("speaker_id", segment.get("speaker"))
+    if speaker is None or not str(speaker).strip():
+        return None
+    return _speaker_key(speaker)
 
 
 def _segment_start(segment: dict[str, Any]) -> float:
@@ -35,12 +38,15 @@ def normalize_speaker_segments(body: dict[str, Any]) -> list[dict[str, Any]]:
     for segment in data.get("segments", []):
         start = _segment_start(segment)
         end = _segment_end(segment)
+        speaker = _segment_speaker(segment)
         if end <= start:
+            continue
+        if speaker is None:
             continue
         out.append({
             "start_s": start,
             "end_s": end,
-            "speaker": _segment_speaker(segment),
+            "speaker": speaker,
         })
     return sorted(out, key=lambda item: item["start_s"])
 
@@ -134,6 +140,15 @@ def _append_layout(
     layouts.append(layout)
 
 
+def _split_layout(start_s: float, end_s: float, reason: str) -> dict[str, Any]:
+    return {
+        "start_s": round(start_s, 3),
+        "end_s": round(end_s, 3),
+        "mode": "split_stacked",
+        "reason": reason,
+    }
+
+
 def plan_short_form_layout(
     segments: list[dict[str, Any]],
     *,
@@ -210,7 +225,14 @@ def plan_short_form_layout(
             }
 
     layouts: list[dict[str, Any]] = []
+    cursor_s = 0.0
     for turn in turns:
+        if turn["start_s"] > cursor_s:
+            _append_layout(
+                layouts,
+                _split_layout(cursor_s, turn["start_s"], "non-speech gap keeps both people visible"),
+                min_layout_s=min_layout_s,
+            )
         duration = turn["end_s"] - turn["start_s"]
         active = turn["speaker"]
         other = _other_speaker(active, speaker_order)
@@ -235,6 +257,14 @@ def plan_short_form_layout(
                 "reason": "dialogue or short turn keeps both people visible with active speaker on top",
             }
         _append_layout(layouts, layout, min_layout_s=min_layout_s)
+        cursor_s = turn["end_s"]
+    clip_duration_s = clip_end_s - clip_start_s
+    if cursor_s < clip_duration_s:
+        _append_layout(
+            layouts,
+            _split_layout(cursor_s, clip_duration_s, "tail gap keeps both people visible"),
+            min_layout_s=min_layout_s,
+        )
     return {
         "version": 2,
         "status": "needs_review" if warnings else "ready",

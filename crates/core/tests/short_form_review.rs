@@ -481,6 +481,52 @@ fn harvest_variants_keep_primary_candidate_links_overlap_and_range_text() {
 }
 
 #[test]
+fn harvest_candidate_ids_stay_unique_for_same_range_sources() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {
+                "start_s": 10.0,
+                "end_s": 100.0,
+                "speaker_id": "guest",
+                "text": "A complete explanation spans the exact same range as an editorial moment."
+            }
+        ],
+        "speakers": [{"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "id": "moment:same-range",
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 100.0,
+            "score": 0.92,
+            "text": "A complete explanation spans the exact same range as an editorial moment.",
+            "reason": "same range as transcript segment"
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Harvest,
+        },
+    );
+
+    let mut ids = std::collections::BTreeSet::new();
+    for candidate in &review.candidates {
+        assert!(
+            ids.insert(candidate.candidate_id.clone()),
+            "duplicate candidate id: {}",
+            candidate.candidate_id
+        );
+    }
+}
+
+#[test]
 fn dynamic_layout_keeps_split_fallback_and_covers_gaps() {
     let mut input = transcript_only_input();
     input.transcript = serde_json::json!({
@@ -556,6 +602,58 @@ fn dynamic_layout_keeps_split_fallback_and_covers_gaps() {
     assert_eq!(
         packet.vertical_layout.segments[0].layout,
         ShortFormLayoutMode::SplitStacked
+    );
+}
+
+#[test]
+fn active_speaker_fill_targets_single_speaker_from_transcript() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {"start_s": 10.0, "end_s": 50.0, "speaker_id": "guest", "text": "The guest carries this full selected moment."}
+        ],
+        "speakers": [{"id": "host"}, {"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 50.0,
+            "score": 0.85,
+            "text": "The guest carries this full selected moment.",
+            "reason": "single diarized speaker in a two-person source"
+        }]
+    });
+    input.face = serde_json::json!({
+        "per_frame": [{
+            "t_s": 12.0,
+            "faces": [
+                {"confidence": 0.98, "x": 0.22, "y": 0.42, "w": 0.18, "h": 0.28},
+                {"confidence": 0.97, "x": 0.62, "y": 0.42, "w": 0.18, "h": 0.28}
+            ]
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 90.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
+        },
+    );
+    let packet = review.candidates.first().expect("single speaker candidate");
+
+    assert_eq!(
+        packet.vertical_layout.composition_mode,
+        ShortFormCompositionMode::ActiveSpeakerFill
+    );
+    assert_eq!(
+        packet.vertical_layout.segments[0].layout,
+        ShortFormLayoutMode::FillSpeaker {
+            speaker_id: "guest".to_string()
+        }
     );
 }
 

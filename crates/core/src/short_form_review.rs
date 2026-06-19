@@ -349,6 +349,7 @@ struct Moment {
     variant_kind: String,
     primary_moment_id: Option<String>,
     overlap_ratio: f64,
+    candidate_id_key: Option<String>,
 }
 
 pub fn build_short_form_review(
@@ -469,7 +470,12 @@ fn build_candidate(
         .cluster_id
         .clone()
         .unwrap_or_else(|| cluster_id_for_moment(input, &moment));
-    let candidate_id = candidate_id_for_variant(&moment.variant_kind, range.start_s, range.end_s);
+    let candidate_id = candidate_id_for_variant(
+        &moment.variant_kind,
+        range.start_s,
+        range.end_s,
+        moment.candidate_id_key.as_deref(),
+    );
     let why_ai_picked_it = why_picked(&score, &clip_type, broll_plan.needed, &trend_alignment);
     let evidence = evidence(&moment, topic.as_deref(), input);
     let confidence = round2((score.total / 7.0).clamp(0.2, 0.98));
@@ -584,6 +590,7 @@ fn moment_from_value(value: &serde_json::Value, default_kind: Option<&str>) -> O
         variant_kind: string_field(value, &["variant_kind"]).unwrap_or_else(|| "primary".into()),
         primary_moment_id: string_field(value, &["primary_moment_id", "primary_candidate_id"]),
         overlap_ratio: number_field(value, &["overlap_ratio"]).unwrap_or(0.0),
+        candidate_id_key: None,
     })
 }
 
@@ -611,13 +618,26 @@ fn harvest_moments_from_input(input: &ShortFormReviewInput) -> Vec<Moment> {
     let mut harvested = Vec::new();
     for moment in base_moments {
         let cluster_id = cluster_id_for_moment(input, &moment);
-        let primary_id = candidate_id_for_variant("primary", moment.start_s, moment.end_s);
+        let candidate_id_key = Some(candidate_id_key_for_moment(&moment));
+        let primary_id = candidate_id_for_variant(
+            "primary",
+            moment.start_s,
+            moment.end_s,
+            candidate_id_key.as_deref(),
+        );
         let mut primary = moment.clone();
         primary.cluster_id = Some(cluster_id.clone());
         primary.variant_kind = "primary".to_string();
         primary.overlap_ratio = 0.0;
+        primary.candidate_id_key = candidate_id_key.clone();
         harvested.push(primary);
-        harvested.extend(harvest_variants(input, &moment, &cluster_id, &primary_id));
+        harvested.extend(harvest_variants(
+            input,
+            &moment,
+            &cluster_id,
+            &primary_id,
+            candidate_id_key.as_deref(),
+        ));
     }
     dedup_moments(harvested)
 }
@@ -645,6 +665,7 @@ fn harvest_variants(
     moment: &Moment,
     cluster_id: &str,
     primary_id: &str,
+    candidate_id_key: Option<&str>,
 ) -> Vec<Moment> {
     let duration_s = moment.end_s - moment.start_s;
     if duration_s < 50.0 {
@@ -662,6 +683,7 @@ fn harvest_variants(
             "standard",
             moment.start_s,
             standard_end,
+            candidate_id_key,
         ));
     }
 
@@ -675,6 +697,7 @@ fn harvest_variants(
             "payoff",
             payoff_start,
             moment.end_s,
+            candidate_id_key,
         ));
     }
 
@@ -689,6 +712,7 @@ fn moment_variant(
     variant_kind: &str,
     start_s: f64,
     end_s: f64,
+    candidate_id_key: Option<&str>,
 ) -> Moment {
     let mut variant = moment.clone();
     variant.start_s = start_s;
@@ -698,18 +722,32 @@ fn moment_variant(
     variant.variant_kind = variant_kind.to_string();
     variant.primary_moment_id = Some(primary_id.to_string());
     variant.overlap_ratio = overlap_ratio(moment.start_s, moment.end_s, start_s, end_s);
+    variant.candidate_id_key = candidate_id_key.map(str::to_string);
     variant
 }
 
-fn candidate_id_for_variant(variant_kind: &str, start_s: f64, end_s: f64) -> String {
-    if variant_kind == "primary" {
-        format!("short_{:06}_{:06}", start_s as u32, end_s as u32)
-    } else {
-        format!(
-            "short_{}_{:06}_{:06}",
-            variant_kind, start_s as u32, end_s as u32
-        )
-    }
+fn candidate_id_for_variant(
+    variant_kind: &str,
+    start_s: f64,
+    end_s: f64,
+    candidate_id_key: Option<&str>,
+) -> String {
+    let prefix = match (variant_kind, candidate_id_key) {
+        ("primary", Some(key)) => format!("short_{}", slug(key)),
+        ("primary", None) => "short".to_string(),
+        (variant_kind, Some(key)) => format!("short_{}_{}", variant_kind, slug(key)),
+        (variant_kind, None) => format!("short_{variant_kind}"),
+    };
+    format!("{prefix}_{:06}_{:06}", start_s as u32, end_s as u32)
+}
+
+fn candidate_id_key_for_moment(moment: &Moment) -> String {
+    moment
+        .id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(&moment.kind)
+        .to_string()
 }
 
 fn text_for_range(
@@ -795,6 +833,7 @@ fn topic_windows_from_transcript(
                 variant_kind: "primary".to_string(),
                 primary_moment_id: None,
                 overlap_ratio: 0.0,
+                candidate_id_key: None,
             })
         })
         .collect()
@@ -1210,11 +1249,15 @@ fn layout_segments(
             reason: "source is already vertical; preserve native framing".to_string(),
         }],
         ShortFormCompositionMode::ActiveSpeakerFill => {
-            vec![fill_segment(
-                moment.start_s,
-                moment.end_s,
-                moment.speaker_id.as_deref(),
-            )]
+            let active_speakers = active_speakers_for_range(input, moment.start_s, moment.end_s);
+            let speaker_id = moment.speaker_id.as_deref().or_else(|| {
+                if active_speakers.len() == 1 {
+                    Some(active_speakers[0].as_str())
+                } else {
+                    None
+                }
+            });
+            vec![fill_segment(moment.start_s, moment.end_s, speaker_id)]
         }
         ShortFormCompositionMode::SplitStacked => vec![ShortFormLayoutSegment {
             start_s: moment.start_s,

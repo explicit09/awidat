@@ -112,6 +112,44 @@ class ShortFormLayoutPlanTests(unittest.TestCase):
         self.assertEqual(plan["status"], "needs_review")
         self.assertIn("speaker_slot_mapping_needs_visual_verification", plan["warnings"])
 
+    def test_missing_speakers_use_no_speaker_fallback(self) -> None:
+        planner = load_script("short_form_layout_plan")
+        segments = [
+            {"start_s": 0.0, "end_s": 8.0, "text": "No diarized speaker."},
+            {"start_s": 8.5, "end_s": 16.0, "text": "Still no diarized speaker."},
+        ]
+
+        plan = planner.plan_short_form_layout(
+            planner.normalize_speaker_segments({"segments": segments}),
+            clip_start_s=0.0,
+            clip_end_s=16.0,
+        )
+
+        self.assertEqual(plan["status"], "needs_review")
+        self.assertIn("no_speaker_segments", plan["warnings"])
+        self.assertEqual(plan["layouts"], [{"start_s": 0.0, "end_s": 16.0, "mode": "split_stacked"}])
+
+    def test_layout_plan_covers_clip_gaps(self) -> None:
+        planner = load_script("short_form_layout_plan")
+        segments = [
+            {"start_s": 15.0, "end_s": 20.0, "speaker": "Speaker 0"},
+            {"start_s": 30.0, "end_s": 35.0, "speaker": "Speaker 1"},
+        ]
+
+        plan = planner.plan_short_form_layout(
+            planner.normalize_speaker_segments({"segments": segments}),
+            clip_start_s=10.0,
+            clip_end_s=40.0,
+            speaker_to_slot={"0": "left", "1": "right"},
+            min_layout_s=1.0,
+        )
+
+        layouts = plan["layouts"]
+        self.assertEqual(layouts[0]["start_s"], 0.0)
+        self.assertEqual(layouts[-1]["end_s"], 30.0)
+        for previous, current in zip(layouts, layouts[1:]):
+            self.assertEqual(previous["end_s"], current["start_s"])
+
 
 if __name__ == "__main__":
     unittest.main()
