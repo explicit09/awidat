@@ -138,6 +138,110 @@ def build_vtt(phrases: list[dict]) -> str:
     )
 
 
+def format_ass_timestamp(seconds: float) -> str:
+    if seconds < 0 or not isinstance(seconds, int | float):
+        raise ValueError("ASS timestamp seconds must be a non-negative number")
+    centiseconds = round(float(seconds) * 100.0)
+    hours = centiseconds // 360_000
+    centiseconds -= hours * 360_000
+    minutes = centiseconds // 6_000
+    centiseconds -= minutes * 6_000
+    whole_seconds = centiseconds // 100
+    centiseconds -= whole_seconds * 100
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centiseconds:02d}"
+
+
+def _escape_ass_text(text: object) -> str:
+    return str(text).replace("{", "").replace("}", "").replace("\n", " ").strip()
+
+
+def _caption_word_text(word: dict) -> str:
+    return _escape_ass_text(word.get("word", word.get("text", ""))).upper()
+
+
+def _format_karaoke_line(words_for_phrase: list[dict], active_index: int) -> str:
+    parts = []
+    for index, word in enumerate(words_for_phrase):
+        text = _caption_word_text(word)
+        if not text:
+            continue
+        if index == active_index:
+            parts.append(r"{\c&H18F037&}" + text + r"{\c&HFFFFFF&}")
+        else:
+            parts.append(text)
+    if not parts:
+        raise ValueError("karaoke caption phrase has no text")
+    if len(parts) >= 4:
+        split_at = (len(parts) + 1) // 2
+        return " ".join(parts[:split_at]) + r"\N" + " ".join(parts[split_at:])
+    return " ".join(parts)
+
+
+def build_ass_karaoke(
+    phrases: list[dict],
+    *,
+    play_res_x: int = 1080,
+    play_res_y: int = 1920,
+    font_name: str = "Arial",
+    font_size: int = 82,
+    position_x: int = 540,
+    position_y: int = 960,
+) -> str:
+    if play_res_x <= 0 or play_res_y <= 0:
+        raise ValueError("ASS play resolution must be positive")
+    if font_size <= 0:
+        raise ValueError("ASS font size must be positive")
+    events = []
+    previous_start = -1.0
+    for phrase_index, phrase in enumerate(phrases, start=1):
+        timings = phrase.get("word_timings", [])
+        if not timings:
+            raise ValueError(f"phrase {phrase_index} is missing word_timings for karaoke captions")
+        if not isinstance(timings, list):
+            raise ValueError(f"phrase {phrase_index} word_timings must be a list")
+        words_for_phrase = [word for word in timings if _caption_word_text(word)]
+        if not words_for_phrase:
+            raise ValueError(f"phrase {phrase_index} has no caption words")
+        phrase_start = float(phrase.get("start_s", words_for_phrase[0].get("start_s", 0.0)))
+        phrase_end = float(phrase.get("end_s", words_for_phrase[-1].get("end_s", phrase_start)))
+        if phrase_start < previous_start:
+            raise ValueError("ASS karaoke phrases must be sorted by start_s")
+        previous_start = phrase_start
+
+        for active_index, active_word in enumerate(words_for_phrase):
+            start = float(active_word.get("start_s", phrase_start))
+            end = float(active_word.get("end_s", start))
+            if end <= start:
+                end = min(phrase_end, start + 0.2)
+            if start < phrase_start:
+                start = phrase_start
+            if end > phrase_end:
+                end = phrase_end
+            if end <= start:
+                continue
+            text = _format_karaoke_line(words_for_phrase, active_index)
+            events.append(
+                "Dialogue: 1,"
+                f"{format_ass_timestamp(start)},{format_ass_timestamp(end)},"
+                "OpusKaraoke,,0,0,0,,"
+                rf"{{\an5\pos({position_x},{position_y})}}{text}"
+            )
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: OpusKaraoke,{font_name},{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,6,3,5,45,45,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    return header + "\n".join(events) + ("\n" if events else "")
+
+
 def wrap_caption_text(text: str, *, max_chars_per_line: int | None = None) -> str:
     normalized = " ".join(str(text).strip().split())
     if max_chars_per_line is None:
@@ -469,6 +573,9 @@ def main() -> None:
     p.add_argument("--hot-end-s", type=float)
     p.add_argument("--max-chars-per-line", type=int)
     p.add_argument("--style", choices=sorted(CAPTION_STYLES), default="classic")
+    p.add_argument("--ass-font-size", type=int, default=82)
+    p.add_argument("--ass-position-x", type=int, default=540)
+    p.add_argument("--ass-position-y", type=int, default=960)
     p.add_argument("--readability-max-cps", type=float, default=READABILITY_DEFAULTS["max_cps"])
     p.add_argument(
         "--readability-min-duration-s",
@@ -492,7 +599,15 @@ def main() -> None:
     p.add_argument("--geometry-overlay-z-index", type=int, default=GEOMETRY_DEFAULTS["overlay_z_index"])
     p.add_argument(
         "--output-format",
-        choices=("json", "srt", "vtt", "scorecard", "geometry-scorecard", "adaptive-layout"),
+        choices=(
+            "json",
+            "srt",
+            "vtt",
+            "ass-karaoke",
+            "scorecard",
+            "geometry-scorecard",
+            "adaptive-layout",
+        ),
         default="json",
     )
     args = p.parse_args()
@@ -512,6 +627,15 @@ def main() -> None:
         print(build_srt(phrases), end="")
     elif args.output_format == "vtt":
         print(build_vtt(phrases), end="")
+    elif args.output_format == "ass-karaoke":
+        print(build_ass_karaoke(
+            phrases,
+            play_res_x=args.geometry_frame_width,
+            play_res_y=args.geometry_frame_height,
+            font_size=args.ass_font_size,
+            position_x=args.ass_position_x,
+            position_y=args.ass_position_y,
+        ), end="")
     elif args.output_format == "scorecard":
         print(json.dumps(
             build_readability_scorecard(

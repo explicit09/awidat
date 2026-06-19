@@ -91,6 +91,30 @@ class TranscriptPhraseTests(unittest.TestCase):
         self.assertEqual(phrases[0]["animation"], "pop_in")
         self.assertEqual(phrases[0]["background"], "transparent")
 
+    def test_ass_karaoke_highlights_current_word_only(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {
+                "text": "you end up returning",
+                "start_s": 1.0,
+                "end_s": 2.0,
+                "word_timings": [
+                    {"word": "you", "start_s": 1.0, "end_s": 1.2},
+                    {"word": "end", "start_s": 1.2, "end_s": 1.4},
+                    {"word": "up", "start_s": 1.4, "end_s": 1.6},
+                    {"word": "returning", "start_s": 1.6, "end_s": 2.0},
+                ],
+            }
+        ]
+
+        ass = caption_plan.build_ass_karaoke(phrases)
+
+        self.assertIn("Dialogue: 1,0:00:01.00,0:00:01.20", ass)
+        self.assertIn(r"{\c&H18F037&}YOU{\c&HFFFFFF&} END", ass)
+        self.assertIn(r"YOU {\c&H18F037&}END{\c&HFFFFFF&}\NUP", ass)
+        self.assertIn(r"YOU END\N{\c&H18F037&}UP{\c&HFFFFFF&} RETURNING", ass)
+        self.assertIn(r"UP {\c&H18F037&}RETURNING{\c&HFFFFFF&}", ass)
+
     def test_caption_hot_range_overrides_preserve_style_contract(self) -> None:
         caption_plan = load_script("caption_plan")
         items = [

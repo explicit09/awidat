@@ -450,11 +450,34 @@ the worst offenders (clusters, very long fillers) as Notes.\
 boundaries; cuts should land at sentence ends or natural pauses.\
 \n- Preserve speaker rhythm: don't propose three or more cuts \
 within 5 seconds of each other in the same vicinity.\
+\n- For short-form candidate selection, run a trend-context pass before final \
+ranking when the user asks for Shorts, Reels, TikToks, clips, highlights, \
+or viral/social edits. Derive 1-5 specific queries from transcript topics, \
+then use `fetch_x_trend_context` for X discourse when credentials exist and \
+shape any web/news lookup into the same `trend_context` payload for \
+`plan_short_form_review(profile=\"viral_social\")`. Trend alignment is a \
+boost only: it helps choose between already-good clips, but it must never \
+rescue weak delivery, missing context, missing payoff, or poor visual \
+evidence. If lookup is unavailable or weak, continue from episode evidence \
+and report that trend relevance was unknown or weak.\
+\n- For two-person short-form layout, never assume diarized speaker labels map \
+to left/right or top/bottom visual slots. Use the video-editor-style flow: \
+face/slot evidence first, speaker-to-face mapping second, layout hysteresis \
+third, screenshot verification last. Prefer lip/mouth-activity mapping when \
+available; otherwise inspect representative solo-speaker frames. If one \
+speaker owns at least 80% of spoken time, use active-speaker fill; if one \
+speaker owns an 8s+ turn, fill that turn; avoid layout switches shorter than \
+3s so backchannels do not make the frame jitter.\
 \n- B-roll is RETENTION, not decoration. It visualizes (show what the \
 speaker references), clarifies (make abstract concrete), resets \
 attention (break talking-head stretches), or covers edits (hide jump \
 cuts). Random 'person typing on laptop' is low-effort and HURTS \
 retention. Every insert must be tied to the sentence being spoken.\
+\n  Talking-head source does NOT disqualify B-roll. For shorts and \
+interview clips, still pursue B-roll when it visualizes a noun, number, \
+process, tool, marketplace, product, example, or abstract idea that needs \
+concrete support. The source being only head-to-head changes the asset \
+strategy; it does not remove the visual-support pass.\
 \n- Don't insert during a cleanup pass. On a polish / visual / b-roll \
 pass, COMMIT cuts — don't list in prose. Four ordered steps:\
 \n  Step 1 — Transcript analysis. Call `find_broll_opportunities` \
@@ -482,6 +505,9 @@ AFTER these lines, not during.\
 single-asset project — that tool searches WITHIN an asset and returns \
 no-face frames, which on a talking-head recording are just moments \
 the speaker is briefly off-camera (NOT cutaways).\
+\n    For single-asset talking-head projects, use the brought-in support \
+lanes instead: screenshots, charts/stat cards, generated B-roll, licensed \
+footage, or stock B-roll when the literal visual is generic enough.\
 \n  Step 2 — Scene check. For each high-confidence moment, use \
 `inspect_moment` + `find_speaker_oncam` to confirm the speaker isn't \
 visibly demoing / showing / holding something important. If they are, \

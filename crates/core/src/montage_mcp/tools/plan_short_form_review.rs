@@ -14,7 +14,8 @@ use crate::short_form_intelligence::{
     apply_to_short_form_review_input, build_short_form_intelligence,
 };
 use crate::short_form_review::{
-    ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
+    ShortFormDiscoveryMode, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
+    build_short_form_review,
 };
 
 /// Arguments to `plan_short_form_review`.
@@ -39,6 +40,10 @@ pub struct PlanShortFormReviewArgs {
     /// pacing.
     #[serde(default)]
     pub profile: Option<ShortFormProfileArg>,
+    /// Discovery breadth. `review` keeps existing review-ready behavior;
+    /// `harvest` returns broader overlapping opportunity candidates.
+    #[serde(default)]
+    pub discovery_mode: Option<ShortFormDiscoveryModeArg>,
     /// Optional X/web/news trend context gathered before planning. Shape:
     /// `{signals:[{source,label,keywords,weight,reason}]}`.
     #[serde(default)]
@@ -54,11 +59,31 @@ pub enum ShortFormProfileArg {
     ViralSocial,
 }
 
+/// Local mirror of `crate::short_form_review::ShortFormDiscoveryMode` that
+/// derives `JsonSchema`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortFormDiscoveryModeArg {
+    Review,
+    Harvest,
+    Publish,
+}
+
 impl From<ShortFormProfileArg> for ShortFormProfile {
     fn from(value: ShortFormProfileArg) -> Self {
         match value {
             ShortFormProfileArg::EditorialReview => ShortFormProfile::EditorialReview,
             ShortFormProfileArg::ViralSocial => ShortFormProfile::ViralSocial,
+        }
+    }
+}
+
+impl From<ShortFormDiscoveryModeArg> for ShortFormDiscoveryMode {
+    fn from(value: ShortFormDiscoveryModeArg) -> Self {
+        match value {
+            ShortFormDiscoveryModeArg::Review => ShortFormDiscoveryMode::Review,
+            ShortFormDiscoveryModeArg::Harvest => ShortFormDiscoveryMode::Harvest,
+            ShortFormDiscoveryModeArg::Publish => ShortFormDiscoveryMode::Publish,
         }
     }
 }
@@ -98,6 +123,10 @@ pub fn run(args: PlanShortFormReviewArgs, ctx: McpToolCtx) -> Result<String, Str
                 .profile
                 .map(ShortFormProfile::from)
                 .unwrap_or(ShortFormProfile::EditorialReview),
+            discovery_mode: args
+                .discovery_mode
+                .map(ShortFormDiscoveryMode::from)
+                .unwrap_or(ShortFormDiscoveryMode::Review),
         },
     );
     serde_json::to_string_pretty(&review)
@@ -123,7 +152,9 @@ fn sidecar_data(
 
 pub const DESCRIPTION: &str = "\
 Build a read-only long-form to short-form review plan for one asset. \
-The tool ranks complete standalone candidate moments, allows extended \
+The tool can run in review mode for complete standalone candidates or \
+harvest mode for broad overlapping clip opportunities. It ranks candidate \
+moments, allows extended \
 short-form up to five minutes when the idea earns it, recommends B-roll \
 by default when support visuals clarify the idea, returns a speaker-aware \
 9:16 composition contract with split/fill/dynamic layout segments, \

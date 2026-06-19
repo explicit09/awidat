@@ -6,8 +6,12 @@ tier: editorial
 tools_allowlist:
   - list_assets
   - view_episode
+  - list_episodes
   - read_index
   - find_episode_start
+  - podcast_flow_shape
+  - podcast_episode_spans
+  - apply_episode_spans
   - assess_continuity
   - assess_edit_quality
   - shot_summary
@@ -89,10 +93,26 @@ rendering.
   podcast recordings often begin with real transcript text that is
   still pre-roll, off-camera setup, or a rehearsed intro; do not infer
   the start from `read_index(offset=0)` or from the first dead-air gap.
-- Run `auto-cutter/scripts/episode_span_plan.py` when the source may
-  contain multiple episodes, repeated intros, long breaks, or topic
-  resets. If it returns multiple high-confidence spans, stop and ask the
-  user which episode to produce before trimming.
+- Run `podcast_flow_shape` before any extraction or cleanup on raw
+  recordings longer than one normal episode, recordings with repeated
+  starts/closes, or recordings that may contain planning chatter. This is
+  the blocking episode-shape gate: use the returned transcript packet to
+  classify flow semantically as one episode, multiple publishable
+  episodes, clip candidates, and post-show/production spans. Literal
+  boundary phrases are recall evidence only.
+- Run `podcast_episode_spans` or `auto-cutter/scripts/episode_span_plan.py`
+  as a secondary hint pass, not as the source of editorial truth. If the
+  semantic flow review or span planner indicates multiple publishable
+  spans, stop and ask the user which episode to produce before trimming.
+- Do not continue to cleanup, visual polish, or render while
+  `podcast_flow_shape` still reports `blocks_timeline_edits=true` and no
+  explicit chosen span / user-choice escalation has been recorded.
+- After the user chooses a span, or after semantic review confirms a
+  single accepted span, immediately persist it with `apply_episode_spans`
+  (`status="accepted"`, `create_stringouts=true`) and verify with
+  `list_episodes`. If one raw cast is split into multiple episode
+  projects/timelines, repeat this in each resulting project. Timeline
+  clips alone are not sufficient episode-scope metadata.
 - Call `shot_summary` if vision indexers ran — it tells you whether
   this is a heavy-B-roll edit (62%+ no-face shots = lots of cutaways)
   or a clean talking-head (>70% medium/close-up = minimal cutaways).

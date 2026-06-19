@@ -3,8 +3,8 @@
 
 use montage_core::edl::parser;
 use montage_core::short_form_review::{
-    DurationClass, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
-    build_short_form_review,
+    DurationClass, ShortFormDiscoveryMode, ShortFormProfile, ShortFormReviewInput,
+    ShortFormReviewOptions, build_short_form_review,
 };
 use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use montage_core::tools::apply_edl::ApplyEdlTool;
@@ -227,6 +227,7 @@ fn ranks_complete_extended_candidates_and_prefers_quality_over_duration() {
             max_candidates: 3,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -255,6 +256,7 @@ fn transcript_only_discovery_builds_complete_topic_windows() {
             max_candidates: 3,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -317,6 +319,7 @@ fn fused_clip_and_broll_recommendations_drive_review_packets() {
             max_candidates: 1,
             max_duration_s: 60.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -344,6 +347,65 @@ fn fused_clip_and_broll_recommendations_drive_review_packets() {
 }
 
 #[test]
+fn harvest_mode_merges_clip_candidates_moments_and_transcript_windows() {
+    let mut input = transcript_only_input();
+    input.editorial_moments = serde_json::json!({
+        "source": "fused_understanding",
+        "moments": [{
+            "id": "moment:space-data-centers",
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 156.0,
+            "score": 0.82,
+            "text": "Here is why data centers are misunderstood. People compare the power draw to one building, but the useful comparison is the full infrastructure behind streaming, banking, and AI. That changes the debate from outrage to measurement.",
+            "reason": "complete educational topic window"
+        }],
+        "clip_candidates": [{
+            "id": "clip-candidate:space-data-centers:short",
+            "kind": "clip_candidate",
+            "start_s": 42.0,
+            "end_s": 86.0,
+            "score": 0.91,
+            "text": "People compare the power draw to one building, but the useful comparison is the full infrastructure behind streaming, banking, and AI.",
+            "reason": "shorter high-retention excerpt"
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Harvest,
+        },
+    );
+
+    assert_eq!(review.discovery_mode, ShortFormDiscoveryMode::Harvest);
+    assert!(
+        review.candidates.iter().any(|candidate| candidate
+            .evidence
+            .iter()
+            .any(|line| { line.contains("clip-candidate:space-data-centers:short") })),
+        "harvest should retain fused clip candidates"
+    );
+    assert!(
+        review.candidates.iter().any(|candidate| candidate
+            .evidence
+            .iter()
+            .any(|line| { line.contains("moment:space-data-centers") })),
+        "harvest should also include broader editorial moments"
+    );
+    assert!(
+        review
+            .candidates
+            .iter()
+            .any(|candidate| candidate.variant_kind != "primary"),
+        "harvest should expose alternate cuts instead of only final picks"
+    );
+}
+
+#[test]
 fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
     let review = build_short_form_review(
         review_input(),
@@ -351,6 +413,7 @@ fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -425,6 +488,7 @@ fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_comman
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -525,6 +589,7 @@ fn viral_social_profile_coexists_with_editorial_review_and_changes_packet_genera
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
     let viral = build_short_form_review(
@@ -533,6 +598,7 @@ fn viral_social_profile_coexists_with_editorial_review_and_changes_packet_genera
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -573,6 +639,7 @@ fn viral_social_packet_contains_aggressive_pacing_overlay_sound_and_parseable_ed
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -631,6 +698,7 @@ fn ranked_sets_expose_top_five_candidate_packets_per_bucket() {
             max_candidates: 10,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -663,6 +731,7 @@ fn review_tool_is_read_only_but_apply_edl_proposals_are_permission_gated() {
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
     let Some(packet) = review.candidates.first() else {
@@ -745,5 +814,51 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
     assert_eq!(
         review.pointer("/proposal_policy/apply_tool"),
         Some(&serde_json::json!("apply_edl"))
+    );
+}
+
+#[tokio::test]
+async fn plan_short_form_review_tool_accepts_harvest_discovery_mode() {
+    let dir = tempfile::tempdir().unwrap_or_else(|err| {
+        panic!("failed to create temp dir: {err}");
+    });
+    let asset = "raw/transcript-only.mp4";
+    let input = transcript_only_input();
+    write_sidecar(dir.path(), "whisper", asset, input.transcript);
+    write_sidecar(dir.path(), "topic", asset, input.topics);
+    write_sidecar(dir.path(), "face", asset, input.face);
+    write_sidecar(dir.path(), "broll-candidates", asset, input.broll_assets);
+
+    let output = PlanShortFormReviewTool
+        .handle(
+            ToolInvocation {
+                call_id: "call-harvest".to_string(),
+                name: "plan_short_form_review".to_string(),
+                args: serde_json::json!({
+                    "asset_id": asset,
+                    "max_candidates": 50,
+                    "profile": "viral_social",
+                    "discovery_mode": "harvest"
+                }),
+            },
+            ctx_at(dir.path()),
+        )
+        .await
+        .unwrap_or_else(|err| {
+            panic!("tool should return harvest review packets: {err}");
+        });
+
+    let review: serde_json::Value = serde_json::from_str(&output.content).unwrap_or_else(|err| {
+        panic!("tool output should be JSON: {err}");
+    });
+    assert_eq!(
+        review.pointer("/discovery_mode"),
+        Some(&serde_json::json!("harvest"))
+    );
+    assert!(
+        review
+            .get("candidates")
+            .and_then(|value| value.as_array())
+            .is_some_and(|candidates| !candidates.is_empty())
     );
 }

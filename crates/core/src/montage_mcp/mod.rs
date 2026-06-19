@@ -130,6 +130,7 @@ use crate::montage_mcp::tools::podcast_editorial_review_pack::{
     self, PodcastEditorialReviewPackArgs,
 };
 use crate::montage_mcp::tools::podcast_episode_spans::{self, PodcastEpisodeSpansArgs};
+use crate::montage_mcp::tools::podcast_flow_shape::{self, PodcastFlowShapeArgs};
 use crate::montage_mcp::tools::podcast_post_draft_check::{self, PodcastPostDraftCheckArgs};
 use crate::montage_mcp::tools::podcast_qc_report::{self, PodcastQcReportArgs};
 use crate::montage_mcp::tools::podcast_smooth_cut_boundaries::{
@@ -1432,6 +1433,25 @@ require the user to choose before extraction or cleanup.",
         args: Parameters<PodcastEpisodeSpansArgs>,
     ) -> Result<String, ErrorData> {
         podcast_episode_spans::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_flow_shape` — build the blocking semantic episode
+    /// flow review packet.
+    #[tool(
+        description = "\
+Build a semantic episode-flow review packet from whisper transcript sidecars. \
+Returns boundary hints, a transcript excerpt, and a required LLM/agent review \
+contract. Treats regex-like matches as recall evidence only and blocks \
+extraction, cleanup, or render until one chosen episode span is identified \
+or multiple publishable spans are escalated to the user.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_flow_shape(
+        &self,
+        args: Parameters<PodcastFlowShapeArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_flow_shape::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
