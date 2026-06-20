@@ -6,6 +6,10 @@ tier: editorial
 tools_allowlist:
   - view_episode
   - find_episode_start
+  - list_episodes
+  - podcast_flow_shape
+  - podcast_episode_spans
+  - apply_episode_spans
   - assess_continuity
   - assess_edit_quality
   - find_dead_air
@@ -40,7 +44,19 @@ recommendation as a hypothesis, not a blind timestamp: inspect the
 surrounding moment if there are rehearsals, pre-roll, or multiple
 welcome phrases.
 
-Then run the episode-span planner before making extraction edits:
+Then run the flow-shape gate before making extraction edits:
+
+```
+podcast_flow_shape(asset_id="<asset>")
+```
+
+Use the returned packet to classify the transcript flow semantically:
+one publishable episode, multiple publishable episodes, clip candidates,
+and post-show/production spans. This decision belongs to the active
+editor/LLM. Regex-like boundary hints are recall evidence only and must
+not decide the edit by themselves.
+
+Also run the episode-span planner as a secondary hint source:
 
 ```bash
 python3 <skill-root>/scripts/episode_span_plan.py \
@@ -49,8 +65,19 @@ python3 <skill-root>/scripts/episode_span_plan.py \
   --topic index/topic/raw/<asset>.json
 ```
 
-If `requires_user_choice` is true, do not cut yet. Present the candidate
-episode spans and ask which one to produce.
+If `podcast_flow_shape` still blocks timeline edits, or if either the
+semantic flow review or `requires_user_choice` identifies multiple
+publishable spans, do not cut yet. Present the candidate episode spans
+and ask which one to produce.
+
+Once the user chooses a span, or once the semantic flow review confirms a
+single accepted span, immediately call `apply_episode_spans` with
+`episodes=[{..., "status": "accepted"}]` and `create_stringouts=true`, then call
+`list_episodes` to verify the stored metadata before applying extraction
+or cleanup edits. If the recording is split into multiple episode
+projects/timelines, each resulting project must store its own accepted
+episode span. Do not treat an EDL/timeline shape as the only record of
+episode scope.
 
 ### 2. Build the extraction cut
 
@@ -124,7 +151,11 @@ the audit shows only the intended extraction and cleanup edits.
 - Never use energy alone to find the episode start.
 - Never use scanner labels alone as editorial truth; classify the
   transcript context with `podcast_editorial_review_pack` first.
-- Never run mechanical cleanup before episode-span and retake review.
+- Never split, extract, or clean a chosen raw-cast episode without first
+  persisting the accepted span through `apply_episode_spans` and
+  verifying it with `list_episodes`.
+- Never run mechanical cleanup before flow-shape, episode-span, and
+  retake review.
 - Never remove conditional fillers ("like", "you know") unless the
   surrounding transcript still reads naturally.
 - Preserve 200-500ms of breathing room after strong statements.
@@ -133,7 +164,10 @@ the audit shows only the intended extraction and cleanup edits.
 ## Done when
 
 - The episode start was chosen with `find_episode_start`.
-- `episode_span_plan.py` and `retake_plan.py` were run before mechanical cleanup.
+- `podcast_flow_shape`, `episode_span_plan.py`, and `retake_plan.py`
+  were run before mechanical cleanup.
+- Accepted episode scope was persisted with `apply_episode_spans`
+  (`create_stringouts=true`) and verified with `list_episodes`.
 - `podcast_editorial_review_pack` was used before cleanup cuts from
   transcript/audio recall signals.
 - Medium/high-risk retake cuts were checked with `assess_edit_quality`

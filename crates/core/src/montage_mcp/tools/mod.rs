@@ -80,6 +80,7 @@ pub mod podcast_cleanup_candidates;
 pub mod podcast_edit_proposal;
 pub mod podcast_editorial_review_pack;
 pub mod podcast_episode_spans;
+pub mod podcast_flow_shape;
 pub mod podcast_post_draft_check;
 pub mod podcast_qc_report;
 pub mod podcast_smooth_cut_boundaries;

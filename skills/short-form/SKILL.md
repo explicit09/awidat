@@ -25,31 +25,76 @@ tools_allowlist:
 
 # Short-form vertical (TikTok / Reels / Shorts)
 
-You're cutting a long-form recording down to a 60-second vertical
-short. The audience scrolls; you have **3 seconds** to earn the next
-30. Visual variety, fast cadence, and captions are the format —
-they're not options.
+You're cutting a long-form recording down to a vertical short. The
+audience scrolls; you have **3 seconds** to earn the next 30. Visual
+variety, fast cadence, and captions are the format — they're not options.
 
 ## Editorial defaults
 
-- **Length**: target 60s, hard ceiling 90s. If the input is 60 minutes,
-  your job is to cut, not to summarize verbally.
+- **Length**: target 30–45s for YouTube Shorts, hard ceiling 59s. Allow
+  60–90s only for non-Shorts platforms where the story breaks without it.
+  If the input is 60 minutes, your job is to cut, not to summarize verbally.
+- **Energy gate**: check audio-energy before trusting the transcript. Warn
+  or reject clips with low speech ratio, dead zones, or flat delivery even
+  when the text looks interesting.
 - **Hook**: lands in the first 3 seconds. The strongest single
   punchline / question / claim in the source goes at position 0.
 - **Cut cadence**: a static shot held > 1.5s reads slow. Propose cuts
   at every natural pause, even shorter than the podcast threshold.
 - **Filler words**: cut aggressively. Use `find_filler_words(aggressive=true)`
   and propose trimming all matches by default.
-- **Captions**: burned-in, bottom-third, high-contrast. Required —
-  silent-autoplay is the dominant viewing mode.
+- **Captions**: burned-in, high-contrast, and treated as information
+  design. Required — silent-autoplay is the dominant viewing mode. Move
+  captions away from faces, mouths, hands, products, and busy regions.
+  Captions should now live at the bottom of the short, including two-person
+  split layouts. Do not place captions on the speaker seam. If a speaker,
+  product, hands, or important action occupies the bottom region, reserve a
+  dedicated bottom caption rail, reduce caption size, shorten phrases, or
+  adjust the crop/layout so captions do not overwrite the person.
+  Default to word-level karaoke when transcript word timings exist: the word
+  currently being spoken is the green highlighted word. Do not use static
+  keyword emphasis as a substitute for timed word highlighting, and report any
+  fallback caused by missing or unusable word timings.
 - **B-roll cadence**: proactive, every 2–4 seconds. Visual variety
-  is what keeps the scroll-stop.
+  is what keeps the scroll-stop. Talking-head source is still eligible
+  for B-roll; the question is whether the sentence creates a visual need,
+  not whether the source already contains cutaways. Use generated B-roll,
+  stock B-roll, screenshots, charts, stat cards, or simple diagrams when
+  they make the spoken point clearer or more watchable.
+- **Visual reset**: talking-head footage held > 6s needs a motivated reset:
+  punch-in, active-speaker switch, split view, B-roll, stat card, diagram,
+  quote card, or text emphasis.
 - **Aspect**: 9:16. When source is 16:9, use `find_speaker_oncam`
   or face/gaze evidence to identify the subject, then call `plan_reframe`
   and apply its `montage.reframe` EDL fragment. If a future reviewed
   `reframe_path` is available, prefer that path over a static crop and
   preserve its smoothing, safe-area, and evidence-track metadata through
   render handoff.
+- **Two-person vertical**: do not default to a lazy center crop. When both
+  people matter, use a split-stacked vertical composition with one speaker
+  above the other and no black caption gap. When one person carries the beat,
+  fill the frame with that active speaker. For mixed clips, open/reset with
+  split context, then switch to active-speaker fill on timed segments. In
+  split-stacked dialogue, put the currently active speaker on top and the
+  listener/reactor on bottom; swap top/bottom when the active speaker changes
+  and the hold is long enough to avoid jitter.
+  Follow the video-editor-style evidence chain: face/slot evidence first,
+  speaker-to-slot mapping second, layout hysteresis third, screenshot
+  verification last. Diarized speaker labels are not proof that a speaker maps
+  to left/right correctly. For two-person side-by-side podcast source, split
+  the source into exact non-overlapping left/right halves before scaling into
+  stacked tiles. Do not use overlapping crops that leak part of one speaker
+  into the other speaker's tile. Preserve each half's aspect ratio while
+  filling the destination tile; never stretch or squeeze a speaker to fit.
+- **Video-editor layout contract**: build a short-form layout config instead
+  of hand-tuning one-off crops. The config must include speaker-to-slot/face
+  mapping, clip-relative layout segments, source-time offsets, divider width,
+  and caption region. Render split layouts by cropping each speaker from their
+  exact source half into stacked 1080-wide regions with only a thin divider
+  between them; render fill layouts by cropping within the active speaker's
+  exact half. If rendering outside Montage for a proof sample, keep the same
+  layout contract and verification artifacts. Verify representative
+  screenshots before render handoff.
 
 ## The 5-step playbook
 
@@ -99,7 +144,12 @@ Pick 3–5 beats total (including the hook). Order:
 1. Hook (0:00–0:03)
 2. Setup or pivot (0:03–0:15)
 3. Main moment (0:15–0:45)
-4. Payoff or call-to-action (0:45–0:60)
+4. Payoff or call-to-action (0:30–0:45, or before 0:59 for YouTube)
+
+If the selected source starts with setup instead of a bold claim, question,
+or surprise, pull the strongest 2–4s sentence to the front as a cold open.
+Reset visibly into the context with a hard cut or fast wipe; do not use a
+soft cross-dissolve for this jump.
 
 Use `apply_edl` `*** Move Clip` and `*** Insert Clip` to assemble
 the spine BEFORE doing any cleanup. Cuts within an unfinished spine
@@ -118,12 +168,14 @@ confidence unless the user explicitly approves manual review.
 ### 4. Tighten
 
 ```
-find_dead_air(max_silence_s=1.0)         # tighter than podcast threshold
+find_dead_air(max_silence_s=0.5)         # use 0.3s for YouTube Shorts
 find_filler_words(aggressive=true, max_results=50)
 ```
 
-Bundle every silence ≥ 1.0s and every filler into a single `apply_edl`
-envelope. The user reviews one ghost overlay covering the whole pass.
+Bundle every silence ≥ 0.5s, every YouTube Shorts silence ≥ 0.3s, and every
+filler into a single `apply_edl` envelope. The user reviews one ghost overlay
+covering the whole pass. If speech delivery is slow, use 1.08–1.15x speed;
+do not exceed 1.15x for natural speech.
 
 ### 5. B-roll pass
 
@@ -131,9 +183,18 @@ envelope. The user reviews one ghost overlay covering the whole pass.
 find_broll_opportunities(duration_s=2.5, max_results=15)
 ```
 
-Surface candidates as Notes. For shorts, **be greedy** — propose b-roll
+Surface candidates as Notes. For shorts, **be greedy** — propose B-roll
 at every visual reference the speaker makes. The user culls; you don't
-self-censor.
+self-censor. A talking-head-only source is not a reason to skip this pass.
+It only means in-footage cutaway discovery may not apply; use stock,
+generated, screenshot, chart, or card support instead.
+
+Do not cluster B-roll just because multiple triggers are close together.
+Before placing, check the transcript and planned layout so each insert has
+room to read, does not collide with captions or split/fill speaker changes,
+and does not duplicate a nearby visual support beat. Keep the face on-screen
+for punchlines, emotional reactions, direct-address lines, and the strongest
+human proof moments.
 
 For each accepted b-roll Note, consult the `stock-broll` skill if the
 user wants Pexels-fetched cutaways.
@@ -240,6 +301,59 @@ python3 <skill-root>/scripts/caption_plan.py \
   --output-format scorecard > caption-readability.json
 ```
 
+For Opus-style stacked shorts, generate ASS captions directly from word
+timings so the active spoken word turns green at the exact moment it is said:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
+  --max-words 4 \
+  --max-gap-s 0.35 \
+  --style impact \
+  --output-format ass-karaoke > captions.ass
+```
+
+Use `--ass-position-x` and `--ass-position-y` when the vertical layout places
+the caption seam somewhere other than the center. If `word_timings` are not
+available, do not fake karaoke captions; regenerate/repair word timing or fall
+back to non-karaoke captions and report the limitation.
+
+For two-person shorts, produce a dynamic layout plan before rendering:
+
+```bash
+python3 <skill-root>/scripts/short_form_layout_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --clip-start-s <source-start> \
+  --clip-end-s <source-end> \
+  --speaker-slot-evidence-json '{"0":{"slot":"left","confidence":0.9,"method":"lip_activity_or_frame_check"},"1":{"slot":"right","confidence":0.9,"method":"lip_activity_or_frame_check"}}'
+```
+
+Use the returned `layouts[]` as the composition contract. `fill` means show
+only `active_speaker`; `split_stacked` means show both people with
+`top_speaker` above `bottom_speaker`. Apply the same hysteresis idea as
+video-editor/Opus: do not swap for tiny backchannels, but do swap or punch in
+for a real speaker handoff or an extended monologue.
+
+If one speaker owns at least 80% of spoken time in the selected range, prefer
+active-speaker fill for the whole clip instead of forcing a two-person split.
+If a single speaker owns an 8s+ turn, fill that speaker for the turn. Merge
+same-speaker turns through gaps up to 2s and avoid layout switches shorter
+than 3s.
+
+The `speaker-slot-evidence-json` should come from lip/mouth activity when
+available, or from explicit frame checks when not. If the plan returns
+`status: "needs_review"` or the warning
+`speaker_slot_mapping_needs_visual_verification`, inspect frames and correct
+the mapping before render.
+
+Caption placement follows the bottom-only rule. Default to karaoke captions
+when word timings exist. In `split_stacked`, keep karaoke captions in a bottom
+caption rail instead of the speaker seam. In `fill`, keep captions in the
+lower third/bottom rail. If the bottom speaker would be covered, reduce font
+size, wrap to shorter phrases, or reserve extra bottom space before rendering.
+Do not solve this by moving captions to the middle of the frame.
+
 Treat `status: "needs_review"` as evidence to revise phrase length,
 line wrapping, cue duration, or caption density before render handoff.
 
@@ -316,7 +430,8 @@ For each returned phrase, emit `*** Insert Caption` ops with:
   speaker changes, and breath-length silence gaps
 - `position`: from adaptive layout `edl_hint.position`; bottom-third only
   when the planner says it is safe
-- `font_size`: 48–64 (large enough on a phone)
+- `font_size`: 42–56 by default for bottom captions, large enough on a phone
+  but smaller than center/seam captions so the bottom speaker is not overwritten
 - `color`: white with 80%-alpha background OR black-on-yellow for
   the highest-energy beats
 - `safe_area`: mobile

@@ -78,6 +78,7 @@ def normalize_words(body_or_words: dict | Iterable[dict]) -> list[dict]:
                         "start_s": start + span * index / max(1, len(tokens)),
                         "end_s": start + span * (index + 1) / max(1, len(tokens)),
                         "speaker": seg.get("speaker"),
+                        "timing_source": "segment_interpolation",
                     })
     else:
         raw_words = list(body_or_words)
@@ -89,12 +90,15 @@ def normalize_words(body_or_words: dict | Iterable[dict]) -> list[dict]:
             continue
         start = _float_value(item, "start_s", "start")
         end = _float_value(item, "end_s", "end", default=start)
-        words.append({
+        word = {
             "word": text,
             "start_s": start,
             "end_s": max(end, start),
             "speaker": item.get("speaker"),
-        })
+        }
+        if item.get("timing_source"):
+            word["timing_source"] = item["timing_source"]
+        words.append(word)
     return sorted(words, key=lambda word: (word["start_s"], word["end_s"]))
 
 
@@ -126,6 +130,11 @@ def group_words_into_phrases(
                     "text": str(word["word"]).strip(),
                     "start_s": round(float(word["start_s"]), 3),
                     "end_s": round(float(word["end_s"]), 3),
+                    **(
+                        {"timing_source": word["timing_source"]}
+                        if word.get("timing_source")
+                        else {}
+                    ),
                 }
                 for word in current
             ],

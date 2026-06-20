@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opus vs Montage Short-Form Discovery</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f4;
+      --fg: #1d1d1b;
+      --muted: #66665f;
+      --line: #d8d6cd;
+      --panel: #ffffff;
+      --accent: #136f63;
+      --warn: #9a5b00;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #151514;
+        --fg: #f0efe7;
+        --muted: #aaa79a;
+        --line: #38362f;
+        --panel: #1f1f1d;
+        --accent: #63c7b2;
+        --warn: #f0b35b;
+      }
+    }
+    body {
+      margin: 0;
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+    h1, h2, h3 {
+      line-height: 1.15;
+      margin: 0 0 12px;
+    }
+    h1 {
+      font-size: 32px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin-top: 32px;
+      font-size: 22px;
+    }
+    h3 {
+      margin-top: 20px;
+      font-size: 17px;
+    }
+    p {
+      max-width: 860px;
+      margin: 0 0 12px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .metric {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 24px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      font-size: 13px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--panel) 82%, var(--line));
+    }
+    tr:last-child td {
+      border-bottom: 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .tag {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 1px 8px;
+      margin: 1px 2px 1px 0;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Opus vs Montage Short-Form Discovery</h1>
+    <p class="muted">Source checked in browser: <strong>The AI IPO Gold Rush: Should You Buy SpaceX, OpenAI &amp; Anthropic?</strong>, YouTube duration 30:33. Opus project showed <strong>Original clips (30)</strong>.</p>
+
+    <section class="grid" aria-label="Summary metrics">
+      <div class="card">
+        <div class="metric">30</div>
+        <p>Opus clips generated for this source. The list includes overlapping variants and extended cuts.</p>
+      </div>
+      <div class="card">
+        <div class="metric">15</div>
+        <p>Montage default maximum for <code>plan_short_form_review</code> candidates.</p>
+      </div>
+      <div class="card">
+        <div class="metric">8</div>
+        <p>Viral extractor script example limit before overlap suppression.</p>
+      </div>
+      <div class="card">
+        <div class="metric">50</div>
+        <p>Current hard maximum accepted by the Montage review tool API.</p>
+      </div>
+    </section>
+
+    <h2>What Opus Is Doing</h2>
+    <p>Opus behaves like a broad opportunity harvester first and a ranking surface second. It shows a virality score with subgrades for Hook, Flow, Value, and Trend, then returns many possible posting cuts. On this episode, it repeatedly mined the same high-value source zones with different durations and framings.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Cluster</th>
+          <th>Opus ranks observed</th>
+          <th>Source windows</th>
+          <th>Interpretation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Buy the dip / IPO strategy</td>
+          <td>#1, #2, #19</td>
+          <td>11:53-15:48</td>
+          <td>Multiple overlapping variants around the same core argument.</td>
+        </tr>
+        <tr>
+          <td>Pump-and-dump / Elon conviction</td>
+          <td>#11, #15, #20, #21, #22, #25</td>
+          <td>03:46-11:53</td>
+          <td>One theme split into short, medium, and extended clips.</td>
+        </tr>
+        <tr>
+          <td>SpaceX compute / data centers</td>
+          <td>#13, #16, #17, #18, #26, #28</td>
+          <td>15:19-20:48</td>
+          <td>Topic variants with separate titles and hook angles.</td>
+        </tr>
+        <tr>
+          <td>AI IPO intro / Gen Z angle</td>
+          <td>#4, #6, #14, #24</td>
+          <td>00:00-03:39</td>
+          <td>Intro material reused as several candidate posts.</td>
+        </tr>
+        <tr>
+          <td>AI tokens / Uber / productivity</td>
+          <td>#23, #29</td>
+          <td>22:43-24:35</td>
+          <td>Secondary topic still surfaced, even below the main clusters.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>What Montage Does Today</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>Current behavior</th>
+          <th>Effect on clip count</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Editorial moments</td>
+          <td>Claude-backed indexer asks for 2-6 useful beats per topic: hooks, stories, punchlines, setups, questions, answers, CTAs, emotional peaks, dead-air, tangents, explanations.</td>
+          <td>Good for quality, but recall depends on topic segmentation and can miss variant windows.</td>
+        </tr>
+        <tr>
+          <td>Fused understanding</td>
+          <td>Builds fused moments from editorial-moments plus transcript, scene, topic, and audio evidence.</td>
+          <td>Only as broad as the input moments; it does not independently sweep every possible 45-90s window.</td>
+        </tr>
+        <tr>
+          <td>Clip candidates</td>
+          <td>Creates one expanded candidate per fused moment when average score is at least 0.45.</td>
+          <td>Produces reviewable candidates, not Opus-style variants.</td>
+        </tr>
+        <tr>
+          <td>Short-form review</td>
+          <td>Ranks candidates by hook strength, standalone clarity, emotional intensity, educational value, completeness, visual potential, trend relevance, retention prediction, and penalties.</td>
+          <td>Default truncates to 15; tool API can return up to 50.</td>
+        </tr>
+        <tr>
+          <td>Viral extractor skill</td>
+          <td>Script example uses <code>--limit 8</code> and <code>--max-overlap-ratio 0.5</code>.</td>
+          <td>Explicitly suppresses the kind of overlapping variants Opus exposes.</td>
+        </tr>
+        <tr>
+          <td>Production package</td>
+          <td>Returns draft EDL, captions, B-roll plan, vertical layout, platform variants, and render/export workflow.</td>
+          <td>Stronger than Opus for controlled production once the candidate is chosen.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Gap Summary</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Recall</h3>
+        <p><span class="warn">Montage is too conservative by default.</span> It optimizes for review-ready clips, while Opus gives a large opportunity inventory.</p>
+      </div>
+      <div class="card">
+        <h3>Variants</h3>
+        <p>Opus creates alternate lengths and titles for the same zone. Montage generally creates one candidate from one moment.</p>
+      </div>
+      <div class="card">
+        <h3>Scores</h3>
+        <p>Opus exposes creator-friendly Hook/Flow/Value/Trend grades. Montage has richer internals but does not present them in that simple decision language.</p>
+      </div>
+      <div class="card">
+        <h3>Quality Control</h3>
+        <p>Montage has stronger downstream controls: EDL, visual support, captions, layout, render, and verification receipts.</p>
+      </div>
+    </div>
+
+    <h2>Recommended Product Change</h2>
+    <p>Add a separate <strong>Clip Harvest</strong> mode before the existing review-ready short-form planner.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th>Purpose</th>
+          <th>Defaults</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>harvest</code></td>
+          <td>Find everything that could become a post, including variants and borderline clips.</td>
+          <td>Return up to 50, allow overlap, group by source cluster, label variants.</td>
+        </tr>
+        <tr>
+          <td><code>review</code></td>
+          <td>Pick the best candidates to actually edit/export.</td>
+          <td>Return 10-15, suppress overlap, require hook/context/payoff clarity.</td>
+        </tr>
+        <tr>
+          <td><code>publish</code></td>
+          <td>Turn selected candidates into finished shorts.</td>
+          <td>Apply EDL, reframe, captions, B-roll, render, verify.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Implementation Priority</h2>
+    <ol>
+      <li>Add <code>discovery_mode</code> to <code>plan_short_form_review</code>: <span class="tag">harvest</span><span class="tag">review</span><span class="tag">publish</span>.</li>
+      <li>In harvest mode, merge <code>clip_candidates</code>, <code>moments</code>, transcript topic windows, and sliding phrase windows instead of returning early from the first non-empty source.</li>
+      <li>Add cluster metadata: <code>cluster_id</code>, <code>variant_kind</code>, <code>overlap_ratio</code>, <code>primary_candidate_id</code>.</li>
+      <li>Expose Opus-like display grades mapped from current internals: Hook, Flow, Value, Trend, Technical.</li>
+      <li>Update the viral-clip-extractor workflow to run harvest first, then review the top clusters, then publish selected clips.</li>
+    </ol>
+  </main>
+</body>
+</html>

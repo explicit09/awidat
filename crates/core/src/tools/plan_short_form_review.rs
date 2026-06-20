@@ -13,7 +13,8 @@ use crate::short_form_intelligence::{
     apply_to_short_form_review_input, build_short_form_intelligence,
 };
 use crate::short_form_review::{
-    ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
+    ShortFormDiscoveryMode, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
+    build_short_form_review,
 };
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
@@ -34,6 +35,8 @@ struct Args {
     max_duration_s: Option<f64>,
     #[serde(default)]
     profile: Option<ShortFormProfile>,
+    #[serde(default)]
+    discovery_mode: Option<ShortFormDiscoveryMode>,
     #[serde(default)]
     trend_context: serde_json::Value,
 }
@@ -81,6 +84,11 @@ impl ToolHandler for PlanShortFormReviewTool {
                         "type": "string",
                         "enum": ["editorial_review", "viral_social"],
                         "description": "Editing profile. editorial_review is cleaner and complete; viral_social optimizes TikTok/Reels retention with aggressive pacing."
+                    },
+                    "discovery_mode": {
+                        "type": "string",
+                        "enum": ["review", "harvest", "publish"],
+                        "description": "Discovery breadth. review keeps the existing review-ready default, harvest returns broader overlapping opportunity candidates, publish is reserved for final selected clips."
                     },
                     "trend_context": {
                         "type": "object",
@@ -139,6 +147,9 @@ impl ToolHandler for PlanShortFormReviewTool {
                 max_candidates: args.max_candidates.unwrap_or(15).min(50),
                 max_duration_s: args.max_duration_s.unwrap_or(300.0).min(300.0),
                 profile: args.profile.unwrap_or(ShortFormProfile::EditorialReview),
+                discovery_mode: args
+                    .discovery_mode
+                    .unwrap_or(ShortFormDiscoveryMode::Review),
             },
         );
         let body = serde_json::to_string_pretty(&review).map_err(|e| {
@@ -167,7 +178,9 @@ fn sidecar_data(
 
 const DESCRIPTION: &str = "\
 Build a read-only long-form to short-form review plan for one asset. \
-The tool ranks complete standalone candidate moments, allows extended \
+The tool can run in review mode for complete standalone candidates or \
+harvest mode for broad overlapping clip opportunities. It ranks candidate \
+moments, allows extended \
     short-form up to five minutes when the idea earns it, recommends B-roll \
     by default when support visuals clarify the idea, returns a speaker-aware \
     9:16 composition contract with split/fill/dynamic layout segments, \

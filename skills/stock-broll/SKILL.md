@@ -28,6 +28,9 @@ footage and you need to bring some in.
 
 - The user asks for "b-roll" or "cutaways" and the project's source
   material is mostly talking-head (no suitable in-footage cutaways).
+- A short-form talking-head clip needs visual variety, proof, or a concrete
+  illustration. Talking-head footage does not block B-roll; it only changes
+  the source strategy from in-footage cutaways to brought-in support.
 - `b-roll-suggester` already ran and returned "no good in-footage
   match exists for this passage."
 - The user asks for "stock footage" or "Pexels b-roll" by name.
@@ -151,6 +154,11 @@ summary. Run `view_timeline` around each anchor and confirm:
   examples, stats, products, complex explanations, jump-cut covers).
   Short-form clip targets 15–25% B-roll coverage; explainer clip
   25–35%; cold open / trailer 35–60%.
+- **Talking-head shorts**: actively look for B-roll opportunities even when
+  the only source asset is a head-to-head interview. Use B-roll to visualize
+  nouns, numbers, processes, tools, domains, marketplaces, products, and
+  examples; stay on the speaker for emotion, punchlines, direct address, and
+  the strongest facial reactions.
 - **Match the visual to the literal noun.** "Skyline" → search for
   "skyline at dusk" or "city skyline morning", not "urban energy".
   Pexels' relevance ranker is concrete-friendly.

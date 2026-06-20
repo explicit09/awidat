@@ -2,9 +2,11 @@
 #![allow(missing_docs)]
 
 use montage_core::edl::parser;
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::podcast_flow_shape::{PodcastFlowShapeArgs, run};
 use montage_core::short_form_review::{
-    DurationClass, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
-    build_short_form_review,
+    DurationClass, ShortFormCompositionMode, ShortFormDiscoveryMode, ShortFormLayoutMode,
+    ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
 };
 use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use montage_core::tools::apply_edl::ApplyEdlTool;
@@ -227,6 +229,7 @@ fn ranks_complete_extended_candidates_and_prefers_quality_over_duration() {
             max_candidates: 3,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -255,6 +258,7 @@ fn transcript_only_discovery_builds_complete_topic_windows() {
             max_candidates: 3,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -317,6 +321,7 @@ fn fused_clip_and_broll_recommendations_drive_review_packets() {
             max_candidates: 1,
             max_duration_s: 60.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -344,6 +349,346 @@ fn fused_clip_and_broll_recommendations_drive_review_packets() {
 }
 
 #[test]
+fn harvest_mode_merges_clip_candidates_moments_and_transcript_windows() {
+    let mut input = transcript_only_input();
+    input.editorial_moments = serde_json::json!({
+        "source": "fused_understanding",
+        "moments": [{
+            "id": "moment:space-data-centers",
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 156.0,
+            "score": 0.82,
+            "text": "Here is why data centers are misunderstood. People compare the power draw to one building, but the useful comparison is the full infrastructure behind streaming, banking, and AI. That changes the debate from outrage to measurement.",
+            "reason": "complete educational topic window"
+        }],
+        "clip_candidates": [{
+            "id": "clip-candidate:space-data-centers:short",
+            "kind": "clip_candidate",
+            "start_s": 42.0,
+            "end_s": 86.0,
+            "score": 0.91,
+            "text": "People compare the power draw to one building, but the useful comparison is the full infrastructure behind streaming, banking, and AI.",
+            "reason": "shorter high-retention excerpt"
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Harvest,
+        },
+    );
+
+    assert_eq!(review.discovery_mode, ShortFormDiscoveryMode::Harvest);
+    assert!(
+        review.candidates.iter().any(|candidate| candidate
+            .evidence
+            .iter()
+            .any(|line| { line.contains("clip-candidate:space-data-centers:short") })),
+        "harvest should retain fused clip candidates"
+    );
+    assert!(
+        review.candidates.iter().any(|candidate| candidate
+            .evidence
+            .iter()
+            .any(|line| { line.contains("moment:space-data-centers") })),
+        "harvest should also include broader editorial moments"
+    );
+    assert!(
+        review
+            .candidates
+            .iter()
+            .any(|candidate| candidate.variant_kind != "primary"),
+        "harvest should expose alternate cuts instead of only final picks"
+    );
+}
+
+#[test]
+fn harvest_variants_keep_primary_candidate_links_overlap_and_range_text() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {
+                "start_s": 10.0,
+                "end_s": 40.0,
+                "speaker_id": "guest",
+                "text": "Opening setup explains why the old comparison is misleading."
+            },
+            {
+                "start_s": 40.0,
+                "end_s": 70.0,
+                "speaker_id": "guest",
+                "text": "Middle detail explains the infrastructure behind every digital product."
+            },
+            {
+                "start_s": 70.0,
+                "end_s": 100.0,
+                "speaker_id": "guest",
+                "text": "Payoff reframes the argument around value and measurement."
+            }
+        ],
+        "speakers": [{"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "id": "moment:comparison",
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 100.0,
+            "score": 0.92,
+            "text": "Opening setup explains why the old comparison is misleading. Middle detail explains the infrastructure behind every digital product. Payoff reframes the argument around value and measurement.",
+            "reason": "complete educational topic window"
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Harvest,
+        },
+    );
+
+    let standard = review
+        .candidates
+        .iter()
+        .find(|candidate| candidate.variant_kind == "standard")
+        .expect("standard harvested variant");
+    let primary = review
+        .candidates
+        .iter()
+        .find(|candidate| {
+            candidate.variant_kind == "primary" && candidate.cluster_id == standard.cluster_id
+        })
+        .expect("primary candidate for harvested cluster");
+
+    assert_eq!(
+        standard.primary_candidate_id.as_deref(),
+        Some(primary.candidate_id.as_str())
+    );
+    assert!(standard.overlap_ratio > 0.0);
+    assert!(standard.hook.contains("Opening setup"));
+    assert!(
+        !standard.hook.contains("Payoff reframes"),
+        "standard variant text should be limited to the selected range"
+    );
+}
+
+#[test]
+fn harvest_candidate_ids_stay_unique_for_same_range_sources() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {
+                "start_s": 10.0,
+                "end_s": 100.0,
+                "speaker_id": "guest",
+                "text": "A complete explanation spans the exact same range as an editorial moment."
+            }
+        ],
+        "speakers": [{"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "id": "moment:same-range",
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 100.0,
+            "score": 0.92,
+            "text": "A complete explanation spans the exact same range as an editorial moment.",
+            "reason": "same range as transcript segment"
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Harvest,
+        },
+    );
+
+    let mut ids = std::collections::BTreeSet::new();
+    for candidate in &review.candidates {
+        assert!(
+            ids.insert(candidate.candidate_id.clone()),
+            "duplicate candidate id: {}",
+            candidate.candidate_id
+        );
+    }
+}
+
+#[test]
+fn dynamic_layout_keeps_split_fallback_and_covers_gaps() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {"start_s": 15.0, "end_s": 25.0, "speaker_id": "host", "text": "Host explains the setup."},
+            {"start_s": 35.0, "end_s": 45.0, "speaker_id": "guest", "text": "Guest lands the reply."}
+        ],
+        "speakers": [{"id": "host"}, {"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "kind": "dialogue",
+            "start_s": 10.0,
+            "end_s": 50.0,
+            "score": 0.85,
+            "text": "Host explains the setup. Guest lands the reply.",
+            "reason": "two-speaker exchange"
+        }]
+    });
+    input.face = serde_json::json!({
+        "per_frame": [{
+            "t_s": 12.0,
+            "faces": [
+                {"confidence": 0.98, "x": 0.22, "y": 0.42, "w": 0.18, "h": 0.28},
+                {"confidence": 0.97, "x": 0.62, "y": 0.42, "w": 0.18, "h": 0.28}
+            ]
+        }]
+    });
+
+    let review = build_short_form_review(
+        input.clone(),
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 90.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
+        },
+    );
+    let packet = review.candidates.first().expect("dialogue candidate");
+    assert_eq!(
+        packet.vertical_layout.composition_mode,
+        ShortFormCompositionMode::DynamicSwitching
+    );
+    assert_eq!(
+        packet.vertical_layout.segments.first().unwrap().start_s,
+        10.0
+    );
+    assert_eq!(packet.vertical_layout.segments.last().unwrap().end_s, 50.0);
+    for pair in packet.vertical_layout.segments.windows(2) {
+        assert_eq!(pair[0].end_s, pair[1].start_s);
+    }
+
+    input.transcript = serde_json::json!({
+        "segments": [
+            {"start_s": 10.0, "end_s": 50.0, "text": "Two people are visible, but diarized speaker timing is unavailable."}
+        ],
+        "speakers": [{"id": "host"}, {"id": "guest"}]
+    });
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 90.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
+        },
+    );
+    let packet = review.candidates.first().expect("fallback candidate");
+    assert_eq!(
+        packet.vertical_layout.composition_mode,
+        ShortFormCompositionMode::SplitStacked
+    );
+    assert_eq!(
+        packet.vertical_layout.segments[0].layout,
+        ShortFormLayoutMode::SplitStacked
+    );
+}
+
+#[test]
+fn active_speaker_fill_targets_single_speaker_from_transcript() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({
+        "segments": [
+            {"start_s": 10.0, "end_s": 50.0, "speaker_id": "guest", "text": "The guest carries this full selected moment."}
+        ],
+        "speakers": [{"id": "host"}, {"id": "guest"}]
+    });
+    input.editorial_moments = serde_json::json!({
+        "moments": [{
+            "kind": "explanation",
+            "start_s": 10.0,
+            "end_s": 50.0,
+            "score": 0.85,
+            "text": "The guest carries this full selected moment.",
+            "reason": "single diarized speaker in a two-person source"
+        }]
+    });
+    input.face = serde_json::json!({
+        "per_frame": [{
+            "t_s": 12.0,
+            "faces": [
+                {"confidence": 0.98, "x": 0.22, "y": 0.42, "w": 0.18, "h": 0.28},
+                {"confidence": 0.97, "x": 0.62, "y": 0.42, "w": 0.18, "h": 0.28}
+            ]
+        }]
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 90.0,
+            profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
+        },
+    );
+    let packet = review.candidates.first().expect("single speaker candidate");
+
+    assert_eq!(
+        packet.vertical_layout.composition_mode,
+        ShortFormCompositionMode::ActiveSpeakerFill
+    );
+    assert_eq!(
+        packet.vertical_layout.segments[0].layout,
+        ShortFormLayoutMode::FillSpeaker {
+            speaker_id: "guest".to_string()
+        }
+    );
+}
+
+#[test]
+fn podcast_flow_shape_preserves_missing_transcript_status() {
+    let temp = tempfile::tempdir().expect("temp project");
+    write_sidecar(
+        temp.path(),
+        "whisper",
+        "raw/empty.mp4",
+        serde_json::json!({"segments": []}),
+    );
+
+    let output = run(
+        PodcastFlowShapeArgs {
+            asset_id: Some("raw/empty.mp4".to_string()),
+        },
+        McpToolCtx {
+            project_root: temp.path().to_path_buf(),
+        },
+    )
+    .expect("podcast flow shape output");
+    let report: serde_json::Value = serde_json::from_str(&output).expect("json report");
+
+    assert_eq!(report["status"], "missing_transcript");
+    assert!(
+        report["missing_evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "whisper transcript segments")
+    );
+}
+
+#[test]
 fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
     let review = build_short_form_review(
         review_input(),
@@ -351,6 +696,7 @@ fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -425,6 +771,7 @@ fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_comman
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -525,6 +872,7 @@ fn viral_social_profile_coexists_with_editorial_review_and_changes_packet_genera
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
     let viral = build_short_form_review(
@@ -533,6 +881,7 @@ fn viral_social_profile_coexists_with_editorial_review_and_changes_packet_genera
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -573,6 +922,7 @@ fn viral_social_packet_contains_aggressive_pacing_overlay_sound_and_parseable_ed
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::ViralSocial,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -631,6 +981,7 @@ fn ranked_sets_expose_top_five_candidate_packets_per_bucket() {
             max_candidates: 10,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
 
@@ -663,6 +1014,7 @@ fn review_tool_is_read_only_but_apply_edl_proposals_are_permission_gated() {
             max_candidates: 1,
             max_duration_s: 300.0,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         },
     );
     let Some(packet) = review.candidates.first() else {
@@ -745,5 +1097,51 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
     assert_eq!(
         review.pointer("/proposal_policy/apply_tool"),
         Some(&serde_json::json!("apply_edl"))
+    );
+}
+
+#[tokio::test]
+async fn plan_short_form_review_tool_accepts_harvest_discovery_mode() {
+    let dir = tempfile::tempdir().unwrap_or_else(|err| {
+        panic!("failed to create temp dir: {err}");
+    });
+    let asset = "raw/transcript-only.mp4";
+    let input = transcript_only_input();
+    write_sidecar(dir.path(), "whisper", asset, input.transcript);
+    write_sidecar(dir.path(), "topic", asset, input.topics);
+    write_sidecar(dir.path(), "face", asset, input.face);
+    write_sidecar(dir.path(), "broll-candidates", asset, input.broll_assets);
+
+    let output = PlanShortFormReviewTool
+        .handle(
+            ToolInvocation {
+                call_id: "call-harvest".to_string(),
+                name: "plan_short_form_review".to_string(),
+                args: serde_json::json!({
+                    "asset_id": asset,
+                    "max_candidates": 50,
+                    "profile": "viral_social",
+                    "discovery_mode": "harvest"
+                }),
+            },
+            ctx_at(dir.path()),
+        )
+        .await
+        .unwrap_or_else(|err| {
+            panic!("tool should return harvest review packets: {err}");
+        });
+
+    let review: serde_json::Value = serde_json::from_str(&output.content).unwrap_or_else(|err| {
+        panic!("tool output should be JSON: {err}");
+    });
+    assert_eq!(
+        review.pointer("/discovery_mode"),
+        Some(&serde_json::json!("harvest"))
+    );
+    assert!(
+        review
+            .get("candidates")
+            .and_then(|value| value.as_array())
+            .is_some_and(|candidates| !candidates.is_empty())
     );
 }

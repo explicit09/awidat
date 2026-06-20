@@ -40,6 +40,7 @@ pub struct ShortFormReviewOptions {
     pub max_candidates: usize,
     pub max_duration_s: f64,
     pub profile: ShortFormProfile,
+    pub discovery_mode: ShortFormDiscoveryMode,
 }
 
 impl Default for ShortFormReviewOptions {
@@ -48,6 +49,7 @@ impl Default for ShortFormReviewOptions {
             max_candidates: DEFAULT_MAX_CANDIDATES,
             max_duration_s: DEFAULT_MAX_DURATION_S,
             profile: ShortFormProfile::EditorialReview,
+            discovery_mode: ShortFormDiscoveryMode::Review,
         }
     }
 }
@@ -59,10 +61,19 @@ pub enum ShortFormProfile {
     ViralSocial,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortFormDiscoveryMode {
+    Review,
+    Harvest,
+    Publish,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortFormReview {
     pub asset_id: String,
     pub profile: ShortFormProfile,
+    pub discovery_mode: ShortFormDiscoveryMode,
     pub source_format: SourceFormat,
     pub candidates: Vec<ShortFormCandidate>,
     pub ranked_sets: RankedSets,
@@ -88,6 +99,11 @@ pub struct ShortFormCandidate {
     pub hook: String,
     pub story_arc: StoryArc,
     pub short_form_qualification: String,
+    pub cluster_id: String,
+    pub variant_kind: String,
+    pub overlap_ratio: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_candidate_id: Option<String>,
     pub score: ScoreBreakdown,
     pub trend_alignment: TrendAlignment,
     pub why_ai_picked_it: Vec<String>,
@@ -329,6 +345,11 @@ struct Moment {
     reason: String,
     model_score: f64,
     speaker_id: Option<String>,
+    cluster_id: Option<String>,
+    variant_kind: String,
+    primary_moment_id: Option<String>,
+    overlap_ratio: f64,
+    candidate_id_key: Option<String>,
 }
 
 pub fn build_short_form_review(
@@ -347,7 +368,8 @@ pub fn build_short_form_review(
     };
 
     let profile = options.profile;
-    let mut candidates: Vec<ShortFormCandidate> = moments_from_input(&input)
+    let discovery_mode = options.discovery_mode;
+    let mut candidates: Vec<ShortFormCandidate> = moments_from_input(&input, discovery_mode)
         .into_iter()
         .filter(|moment| {
             let duration_s = moment.end_s - moment.start_s;
@@ -366,6 +388,7 @@ pub fn build_short_form_review(
     ShortFormReview {
         asset_id: input.asset_id.clone(),
         profile,
+        discovery_mode,
         source_format: SourceFormat {
             width: input.source_width,
             height: input.source_height,
@@ -443,9 +466,15 @@ fn build_candidate(
     let suggested_caption = suggested_caption(&moment.text);
     let platform_variants = platform_variants(profile, duration_class, range.duration_s);
     let story_arc = story_arc(&moment.text, &hook);
-    let candidate_id = format!(
-        "short_{:06}_{:06}",
-        range.start_s as u32, range.end_s as u32
+    let cluster_id = moment
+        .cluster_id
+        .clone()
+        .unwrap_or_else(|| cluster_id_for_moment(input, &moment));
+    let candidate_id = candidate_id_for_variant(
+        &moment.variant_kind,
+        range.start_s,
+        range.end_s,
+        moment.candidate_id_key.as_deref(),
     );
     let why_ai_picked_it = why_picked(&score, &clip_type, broll_plan.needed, &trend_alignment);
     let evidence = evidence(&moment, topic.as_deref(), input);
@@ -477,6 +506,10 @@ fn build_candidate(
         story_arc,
         short_form_qualification:
             "Complete, standalone moment suitable for a reviewable short-form draft.".to_string(),
+        cluster_id,
+        variant_kind: moment.variant_kind,
+        overlap_ratio: moment.overlap_ratio,
+        primary_candidate_id: moment.primary_moment_id,
         score,
         trend_alignment,
         why_ai_picked_it,
@@ -505,7 +538,14 @@ fn build_candidate(
     }
 }
 
-fn moments_from_input(input: &ShortFormReviewInput) -> Vec<Moment> {
+fn moments_from_input(
+    input: &ShortFormReviewInput,
+    discovery_mode: ShortFormDiscoveryMode,
+) -> Vec<Moment> {
+    if matches!(discovery_mode, ShortFormDiscoveryMode::Harvest) {
+        return harvest_moments_from_input(input);
+    }
+
     let clip_candidates = array_at(&input.editorial_moments, "/clip_candidates");
     if !clip_candidates.is_empty() {
         return clip_candidates
@@ -546,7 +586,203 @@ fn moment_from_value(value: &serde_json::Value, default_kind: Option<&str>) -> O
         reason: string_field(value, &["reason", "rationale"]).unwrap_or_default(),
         model_score: number_field(value, &["score", "confidence"]).unwrap_or(0.5),
         speaker_id: string_field(value, &["speaker_id", "speaker"]),
+        cluster_id: string_field(value, &["cluster_id"]),
+        variant_kind: string_field(value, &["variant_kind"]).unwrap_or_else(|| "primary".into()),
+        primary_moment_id: string_field(value, &["primary_moment_id", "primary_candidate_id"]),
+        overlap_ratio: number_field(value, &["overlap_ratio"]).unwrap_or(0.0),
+        candidate_id_key: None,
     })
+}
+
+fn harvest_moments_from_input(input: &ShortFormReviewInput) -> Vec<Moment> {
+    let mut moments = Vec::new();
+    moments.extend(
+        array_at(&input.editorial_moments, "/clip_candidates")
+            .into_iter()
+            .filter_map(|value| moment_from_value(value, Some("clip_candidate"))),
+    );
+    moments.extend(
+        array_at(&input.editorial_moments, "/moments")
+            .into_iter()
+            .filter_map(|value| moment_from_value(value, None)),
+    );
+
+    let transcript_moments: Vec<Moment> = array_at(&input.transcript, "/segments")
+        .into_iter()
+        .filter_map(|value| moment_from_value(value, Some("transcript_segment")))
+        .collect();
+    moments.extend(topic_windows_from_transcript(input, &transcript_moments));
+    moments.extend(transcript_moments);
+
+    let base_moments = dedup_moments(moments);
+    let mut harvested = Vec::new();
+    for moment in base_moments {
+        let cluster_id = cluster_id_for_moment(input, &moment);
+        let candidate_id_key = Some(candidate_id_key_for_moment(&moment));
+        let primary_id = candidate_id_for_variant(
+            "primary",
+            moment.start_s,
+            moment.end_s,
+            candidate_id_key.as_deref(),
+        );
+        let mut primary = moment.clone();
+        primary.cluster_id = Some(cluster_id.clone());
+        primary.variant_kind = "primary".to_string();
+        primary.overlap_ratio = 0.0;
+        primary.candidate_id_key = candidate_id_key.clone();
+        harvested.push(primary);
+        harvested.extend(harvest_variants(
+            input,
+            &moment,
+            &cluster_id,
+            &primary_id,
+            candidate_id_key.as_deref(),
+        ));
+    }
+    dedup_moments(harvested)
+}
+
+fn dedup_moments(moments: Vec<Moment>) -> Vec<Moment> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut deduped = Vec::new();
+    for moment in moments {
+        let key = format!(
+            "{}:{}:{}:{}",
+            moment.kind,
+            (moment.start_s * 10.0).round() as i64,
+            (moment.end_s * 10.0).round() as i64,
+            moment.variant_kind
+        );
+        if seen.insert(key) {
+            deduped.push(moment);
+        }
+    }
+    deduped
+}
+
+fn harvest_variants(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    cluster_id: &str,
+    primary_id: &str,
+    candidate_id_key: Option<&str>,
+) -> Vec<Moment> {
+    let duration_s = moment.end_s - moment.start_s;
+    if duration_s < 50.0 {
+        return Vec::new();
+    }
+
+    let mut variants = Vec::new();
+    let standard_end = (moment.start_s + 60.0).min(moment.end_s);
+    if standard_end - moment.start_s >= 30.0 {
+        variants.push(moment_variant(
+            input,
+            moment,
+            cluster_id,
+            primary_id,
+            "standard",
+            moment.start_s,
+            standard_end,
+            candidate_id_key,
+        ));
+    }
+
+    let payoff_start = (moment.end_s - 60.0).max(moment.start_s);
+    if moment.end_s - payoff_start >= 30.0 && (payoff_start - moment.start_s).abs() > 1.0 {
+        variants.push(moment_variant(
+            input,
+            moment,
+            cluster_id,
+            primary_id,
+            "payoff",
+            payoff_start,
+            moment.end_s,
+            candidate_id_key,
+        ));
+    }
+
+    variants
+}
+
+fn moment_variant(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    cluster_id: &str,
+    primary_id: &str,
+    variant_kind: &str,
+    start_s: f64,
+    end_s: f64,
+    candidate_id_key: Option<&str>,
+) -> Moment {
+    let mut variant = moment.clone();
+    variant.start_s = start_s;
+    variant.end_s = end_s;
+    variant.text = text_for_range(input, moment, start_s, end_s);
+    variant.cluster_id = Some(cluster_id.to_string());
+    variant.variant_kind = variant_kind.to_string();
+    variant.primary_moment_id = Some(primary_id.to_string());
+    variant.overlap_ratio = overlap_ratio(moment.start_s, moment.end_s, start_s, end_s);
+    variant.candidate_id_key = candidate_id_key.map(str::to_string);
+    variant
+}
+
+fn candidate_id_for_variant(
+    variant_kind: &str,
+    start_s: f64,
+    end_s: f64,
+    candidate_id_key: Option<&str>,
+) -> String {
+    let prefix = match (variant_kind, candidate_id_key) {
+        ("primary", Some(key)) => format!("short_{}", slug(key)),
+        ("primary", None) => "short".to_string(),
+        (variant_kind, Some(key)) => format!("short_{}_{}", variant_kind, slug(key)),
+        (variant_kind, None) => format!("short_{variant_kind}"),
+    };
+    format!("{prefix}_{:06}_{:06}", start_s as u32, end_s as u32)
+}
+
+fn candidate_id_key_for_moment(moment: &Moment) -> String {
+    moment
+        .id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(&moment.kind)
+        .to_string()
+}
+
+fn text_for_range(
+    input: &ShortFormReviewInput,
+    fallback: &Moment,
+    start_s: f64,
+    end_s: f64,
+) -> String {
+    let text = transcript_segments_for_range(input, start_s, end_s)
+        .into_iter()
+        .filter_map(|segment| string_field(segment, &["text", "summary"]))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.trim().is_empty() {
+        fallback.text.clone()
+    } else {
+        text
+    }
+}
+
+fn overlap_ratio(parent_start_s: f64, parent_end_s: f64, start_s: f64, end_s: f64) -> f64 {
+    let parent_duration = parent_end_s - parent_start_s;
+    if parent_duration <= 0.0 {
+        return 0.0;
+    }
+    let overlap_start = parent_start_s.max(start_s);
+    let overlap_end = parent_end_s.min(end_s);
+    round2(((overlap_end - overlap_start).max(0.0) / parent_duration).clamp(0.0, 1.0))
+}
+
+fn cluster_id_for_moment(input: &ShortFormReviewInput, moment: &Moment) -> String {
+    if let Some(topic) = topic_for_range(&input.topics, moment.start_s, moment.end_s) {
+        return format!("cluster:{}", slug(&topic));
+    }
+    format!("cluster:{:06}", moment.start_s as u32)
 }
 
 fn topic_windows_from_transcript(
@@ -593,6 +829,11 @@ fn topic_windows_from_transcript(
                 ),
                 model_score: 0.62,
                 speaker_id,
+                cluster_id: None,
+                variant_kind: "primary".to_string(),
+                primary_moment_id: None,
+                overlap_ratio: 0.0,
+                candidate_id_key: None,
             })
         })
         .collect()
@@ -985,10 +1226,13 @@ fn composition_mode(
     if !multi_speaker {
         return ShortFormCompositionMode::ActiveSpeakerFill;
     }
-    if active_speakers_for_range(input, moment.start_s, moment.end_s).len() > 1 {
+    let active_speakers = active_speakers_for_range(input, moment.start_s, moment.end_s);
+    if active_speakers.len() > 1 {
         ShortFormCompositionMode::DynamicSwitching
-    } else {
+    } else if active_speakers.is_empty() {
         ShortFormCompositionMode::SplitStacked
+    } else {
+        ShortFormCompositionMode::ActiveSpeakerFill
     }
 }
 
@@ -1005,11 +1249,15 @@ fn layout_segments(
             reason: "source is already vertical; preserve native framing".to_string(),
         }],
         ShortFormCompositionMode::ActiveSpeakerFill => {
-            vec![fill_segment(
-                moment.start_s,
-                moment.end_s,
-                moment.speaker_id.as_deref(),
-            )]
+            let active_speakers = active_speakers_for_range(input, moment.start_s, moment.end_s);
+            let speaker_id = moment.speaker_id.as_deref().or_else(|| {
+                if active_speakers.len() == 1 {
+                    Some(active_speakers[0].as_str())
+                } else {
+                    None
+                }
+            });
+            vec![fill_segment(moment.start_s, moment.end_s, speaker_id)]
         }
         ShortFormCompositionMode::SplitStacked => vec![ShortFormLayoutSegment {
             start_s: moment.start_s,
@@ -1025,34 +1273,162 @@ fn dynamic_layout_segments(
     input: &ShortFormReviewInput,
     moment: &Moment,
 ) -> Vec<ShortFormLayoutSegment> {
-    let mut segments = vec![ShortFormLayoutSegment {
-        start_s: moment.start_s,
-        end_s: (moment.start_s + 3.0).min(moment.end_s),
-        layout: ShortFormLayoutMode::SplitStacked,
-        reason: "open in split/stacked view so the viewer understands the speaker relationship"
-            .to_string(),
-    }];
+    const MIN_FILL_S: f64 = 8.0;
+    const MIN_LAYOUT_S: f64 = 3.0;
+    const MAX_SAME_SPEAKER_GAP_S: f64 = 2.0;
+    const DOMINANT_FILL_RATIO: f64 = 0.8;
 
-    for segment in transcript_segments_for_range(input, moment.start_s, moment.end_s) {
-        let start_s = number_field(segment, &["start_s", "start"]).unwrap_or(moment.start_s);
-        let end_s = number_field(segment, &["end_s", "end"]).unwrap_or(start_s + 2.0);
-        let speaker = string_field(segment, &["speaker_id", "speaker"]);
-        segments.push(fill_segment(
-            start_s.max(moment.start_s),
-            end_s.min(moment.end_s),
-            speaker.as_deref(),
-        ));
-    }
-
-    if segments.len() == 1 {
-        segments.push(ShortFormLayoutSegment {
-            start_s: (moment.start_s + 3.0).min(moment.end_s),
+    let turns =
+        speaker_turns_for_range(input, moment.start_s, moment.end_s, MAX_SAME_SPEAKER_GAP_S);
+    if turns.is_empty() {
+        return vec![ShortFormLayoutSegment {
+            start_s: moment.start_s,
             end_s: moment.end_s,
             layout: ShortFormLayoutMode::SplitStacked,
             reason: "speaker timing unavailable; keep both speakers visible".to_string(),
-        });
+        }];
+    }
+
+    if let Some(dominant) = dominant_speaker(&turns, DOMINANT_FILL_RATIO) {
+        return vec![ShortFormLayoutSegment {
+            start_s: moment.start_s,
+            end_s: moment.end_s,
+            layout: ShortFormLayoutMode::FillSpeaker {
+                speaker_id: dominant,
+            },
+            reason: "one speaker owns at least 80 percent of spoken time; fill that speaker"
+                .to_string(),
+        }];
+    }
+
+    let mut segments = Vec::new();
+    let mut cursor_s = moment.start_s;
+    for turn in turns {
+        if turn.start_s > cursor_s {
+            append_layout_segment(
+                &mut segments,
+                split_segment(
+                    cursor_s,
+                    turn.start_s,
+                    "non-speech gap keeps both speakers visible",
+                ),
+                MIN_LAYOUT_S,
+            );
+        }
+        let duration = turn.end_s - turn.start_s;
+        let segment = if duration >= MIN_FILL_S {
+            fill_segment(turn.start_s, turn.end_s, Some(&turn.speaker_id))
+        } else {
+            ShortFormLayoutSegment {
+                start_s: round2(turn.start_s),
+                end_s: round2(turn.end_s),
+                layout: ShortFormLayoutMode::SplitStacked,
+                reason: "dialogue or short turn keeps both speakers visible".to_string(),
+            }
+        };
+        append_layout_segment(&mut segments, segment, MIN_LAYOUT_S);
+        cursor_s = turn.end_s;
+    }
+    if cursor_s < moment.end_s {
+        append_layout_segment(
+            &mut segments,
+            split_segment(
+                cursor_s,
+                moment.end_s,
+                "tail gap keeps both speakers visible",
+            ),
+            MIN_LAYOUT_S,
+        );
     }
     segments
+}
+
+#[derive(Debug, Clone)]
+struct SpeakerTurn {
+    start_s: f64,
+    end_s: f64,
+    speaker_id: String,
+}
+
+fn speaker_turns_for_range(
+    input: &ShortFormReviewInput,
+    start_s: f64,
+    end_s: f64,
+    max_same_speaker_gap_s: f64,
+) -> Vec<SpeakerTurn> {
+    let mut turns: Vec<SpeakerTurn> = Vec::new();
+    for segment in transcript_segments_for_range(input, start_s, end_s) {
+        let Some(speaker_id) = string_field(segment, &["speaker_id", "speaker"]) else {
+            continue;
+        };
+        if speaker_id.trim().is_empty() {
+            continue;
+        }
+        let segment_start = number_field(segment, &["start_s", "start"])
+            .unwrap_or(start_s)
+            .max(start_s);
+        let segment_end = number_field(segment, &["end_s", "end"])
+            .unwrap_or(segment_start)
+            .min(end_s);
+        if segment_end <= segment_start {
+            continue;
+        }
+        if let Some(previous) = turns.last_mut()
+            && previous.speaker_id == speaker_id
+            && segment_start - previous.end_s <= max_same_speaker_gap_s
+        {
+            previous.end_s = previous.end_s.max(segment_end);
+            continue;
+        }
+        turns.push(SpeakerTurn {
+            start_s: segment_start,
+            end_s: segment_end,
+            speaker_id,
+        });
+    }
+    turns
+}
+
+fn dominant_speaker(turns: &[SpeakerTurn], threshold: f64) -> Option<String> {
+    let mut durations = std::collections::BTreeMap::<&str, f64>::new();
+    for turn in turns {
+        *durations.entry(turn.speaker_id.as_str()).or_default() += turn.end_s - turn.start_s;
+    }
+    let total: f64 = durations.values().sum();
+    if total <= 0.0 {
+        return None;
+    }
+    durations
+        .into_iter()
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .and_then(|(speaker, duration)| {
+            if duration / total >= threshold {
+                Some(speaker.to_string())
+            } else {
+                None
+            }
+        })
+}
+
+fn append_layout_segment(
+    segments: &mut Vec<ShortFormLayoutSegment>,
+    segment: ShortFormLayoutSegment,
+    min_layout_s: f64,
+) {
+    let Some(previous) = segments.last_mut() else {
+        segments.push(segment);
+        return;
+    };
+    if previous.layout == segment.layout {
+        previous.end_s = segment.end_s;
+        return;
+    }
+    if segment.end_s - segment.start_s < min_layout_s {
+        previous.end_s = segment.end_s;
+        previous.reason.push_str("; absorbed short layout switch");
+        return;
+    }
+    segments.push(segment);
 }
 
 fn fill_segment(start_s: f64, end_s: f64, speaker_id: Option<&str>) -> ShortFormLayoutSegment {
@@ -1067,6 +1443,15 @@ fn fill_segment(start_s: f64, end_s: f64, speaker_id: Option<&str>) -> ShortForm
             .unwrap_or(ShortFormLayoutMode::ActiveSpeakerCenter),
         reason: "one speaker carries this beat; fill the vertical frame with that speaker"
             .to_string(),
+    }
+}
+
+fn split_segment(start_s: f64, end_s: f64, reason: &str) -> ShortFormLayoutSegment {
+    ShortFormLayoutSegment {
+        start_s: round2(start_s),
+        end_s: round2(end_s),
+        layout: ShortFormLayoutMode::SplitStacked,
+        reason: reason.to_string(),
     }
 }
 
@@ -2032,6 +2417,28 @@ fn title_case(text: &str) -> String {
         .join(" ")
 }
 
+fn slug(text: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_dash = false;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash && !out.is_empty() {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "untitled".to_string()
+    } else {
+        out
+    }
+}
+
 fn edl_string(text: &str) -> String {
     text.replace('"', "'")
 }
@@ -2265,8 +2672,9 @@ mod tests {
             "speakers": ["founder_a", "founder_b"],
             "segments": [
                 {"start_s": 12.0, "end_s": 20.0, "speaker_id": "founder_a"},
-                {"start_s": 20.0, "end_s": 31.0, "speaker_id": "founder_b"},
-                {"start_s": 31.0, "end_s": 52.0, "speaker_id": "founder_a"}
+                {"start_s": 20.0, "end_s": 26.0, "speaker_id": "founder_b"},
+                {"start_s": 26.0, "end_s": 36.0, "speaker_id": "founder_a"},
+                {"start_s": 36.0, "end_s": 52.0, "speaker_id": "founder_b"}
             ]
         });
         input.face = serde_json::json!({
@@ -2353,5 +2761,47 @@ mod tests {
                 .iter()
                 .all(|segment| !matches!(segment.layout, ShortFormLayoutMode::SplitStacked))
         );
+    }
+
+    #[test]
+    fn dominant_speaker_layout_prefers_fill() {
+        let mut input = input_with_moments(
+            serde_json::json!([
+                {
+                    "id": "dominant-founder",
+                    "start_s": 0.0,
+                    "end_s": 20.0,
+                    "kind": "lesson",
+                    "text": "One founder explains the lesson while the other only gives a short backchannel.",
+                    "score": 0.82
+                }
+            ]),
+            serde_json::Value::Null,
+        );
+        input.transcript = serde_json::json!({
+            "speakers": ["founder_a", "founder_b"],
+            "segments": [
+                {"start_s": 0.0, "end_s": 17.0, "speaker_id": "founder_a"},
+                {"start_s": 17.2, "end_s": 19.0, "speaker_id": "founder_b"}
+            ]
+        });
+        input.face = serde_json::json!({
+            "per_frame": [
+                {"t_s": 0.0, "faces": [{"speaker_id": "founder_a"}, {"speaker_id": "founder_b"}]}
+            ]
+        });
+
+        let review = build_short_form_review(input, ShortFormReviewOptions::default());
+
+        let candidate = review.candidates.first().expect("expected candidate");
+        assert_eq!(
+            candidate.vertical_layout.composition_mode,
+            ShortFormCompositionMode::DynamicSwitching
+        );
+        assert_eq!(candidate.vertical_layout.segments.len(), 1);
+        assert!(matches!(
+            candidate.vertical_layout.segments[0].layout,
+            ShortFormLayoutMode::FillSpeaker { .. }
+        ));
     }
 }
