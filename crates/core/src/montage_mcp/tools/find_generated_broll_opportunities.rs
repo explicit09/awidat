@@ -1,6 +1,7 @@
-//! `find_generated_broll_opportunities` — surface podcast moments
-//! where AI-generated B-roll would help explain, pace, or reinforce
-//! the transcript. Ported from
+//! `find_generated_broll_opportunities` — scout podcast moments where
+//! AI-generated B-roll might help explain, pace, or reinforce the
+//! transcript. This heuristic helper is not the editorial selector; agents
+//! must choose final moments from transcript flow. Ported from
 //! `crates/core/src/tools/find_generated_broll_opportunities.rs` to
 //! the in-process MCP server.
 
@@ -240,7 +241,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let body = serde_json::json!({
         "findings": findings,
         "more_available": findings.len() == max_results,
-        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to round(duration_s), and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same duration_s."
+        "next_step": "Treat these findings as scouting only. First choose the B-roll moment from transcript flow and confirm the exact anchor, rationale, prompt, duration_s, and overlap/cancellation safety. If a finding still makes editorial sense, call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to round(duration_s), and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same duration_s."
     });
     Ok(body.to_string())
 }

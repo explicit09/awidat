@@ -2039,7 +2039,7 @@ fn broll_package_proposal(
             "kind": "broll_asset_or_generation_approval",
             "question": "Which source or generated B-roll asset should support this transcript moment?",
             "reason": "An accepted B-roll package needs a project-relative video asset before it can become a timeline object.",
-            "fallback": "Call find_generated_broll_opportunities, start_generated_media_job, poll_generated_media_job, then use_generated_media."
+            "fallback": "Choose the moment from transcript flow first. Use find_generated_broll_opportunities only as optional scouting or coverage review, then start_generated_media_job, poll_generated_media_job, and use_generated_media for an accepted anchor."
         })]
     };
     let edl = args.broll_asset.as_ref().map(|asset| {
@@ -2074,8 +2074,9 @@ fn broll_package_proposal(
         "style_defaults": style_defaults_contract(args),
         "missing_information": missing_information,
         "generation_plan": {
-            "tool": "find_generated_broll_opportunities",
+            "tool": "llm_editorial_transcript_pass",
             "prompt_seed": selection,
+            "coverage_tool": "find_generated_broll_opportunities",
             "next_tools": ["start_generated_media_job", "poll_generated_media_job", "use_generated_media"]
         },
         "source_provenance": broll_source_provenance(args, anchor),
@@ -4761,6 +4762,35 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|check| check["id"] == "proposal_has_apply_edl" && check["status"] == "fail")
+        );
+    }
+
+    #[test]
+    fn broll_generation_plan_requires_editorial_transcript_pass_first() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "The founder describes a crowded market.".into(),
+            request: "add a b-roll package here".into(),
+            anchor_transcript: Some("crowded market".into()),
+            broll_asset: None,
+            duration_s: Some(6.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "broll_package");
+        assert_eq!(
+            proposal["generation_plan"]["tool"],
+            "llm_editorial_transcript_pass"
+        );
+        assert_eq!(
+            proposal["generation_plan"]["coverage_tool"],
+            "find_generated_broll_opportunities"
+        );
+        assert!(
+            proposal["missing_information"][0]["fallback"]
+                .as_str()
+                .unwrap()
+                .contains("Choose the moment from transcript flow first")
         );
     }
 
