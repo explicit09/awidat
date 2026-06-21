@@ -48,7 +48,8 @@ Run the Proposal-to-Visual-Support workflow:
    coverage sanity check; it is not the editorial selector and its output must
    be rejected when the transcript flow says the moment is wrong. Execute the
    accepted plan through `start_generated_media_job`, `poll_generated_media_job`,
-   and `use_generated_media`.
+   and `use_generated_media`; OpenRouter submissions must include
+   `cost_confirmation="OpenRouter cost unknown; explicit confirmation required"`.
    Choose the shortest generated-video duration that makes the visual readable,
    then clamp the generation `duration` to the 4-15 seconds accepted by
    `start_generated_media_job`. Use `max(4, ceil(duration_s))` for moments under

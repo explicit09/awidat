@@ -179,6 +179,7 @@ fn source_backed_broll_contract_matches_generated_media_tools() {
         "4-15 seconds",
         "clamp",
         "same clamped duration",
+        "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\"",
         "do not require manual registry state edits",
     ] {
         assert!(
