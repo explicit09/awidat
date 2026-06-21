@@ -287,11 +287,13 @@ impl ToolHandler for FindGeneratedBrollOpportunitiesTool {
         let body = serde_json::json!({
             "findings": findings,
             "more_available": findings.len() == max_results,
-            "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, and duration set to round(duration_s). After the job succeeds, call use_generated_media with the same duration_s."
+            "next_step": NEXT_STEP
         });
         Ok(ToolOutput::text(body.to_string()))
     }
 }
+
+const NEXT_STEP: &str = "Treat these findings as scouting only. First choose the B-roll moment from transcript flow and confirm the exact anchor, rationale, prompt, duration_s, and overlap/cancellation safety. If a finding still makes editorial sense, call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to max(4, ceil(duration_s)) capped at 15, and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same clamped duration.";
 
 /// Scan the timeline's transcript sidecars for generated B-roll opportunities.
 pub fn scan_generated_broll_opportunities(
@@ -757,6 +759,17 @@ mod tests {
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
     };
+
+    #[test]
+    fn next_step_uses_generated_media_duration_contract() {
+        assert!(NEXT_STEP.contains("max(4, ceil(duration_s))"));
+        assert!(NEXT_STEP.contains("capped at 15"));
+        assert!(NEXT_STEP.contains("same clamped duration"));
+        assert!(NEXT_STEP.contains(
+            "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\""
+        ));
+        assert!(!NEXT_STEP.contains("round(duration_s)"));
+    }
 
     fn timeline_with_clip(asset_id: &str, source_start_s: f64, duration_s: f64) -> Timeline {
         let mut clip = Clip::empty("c1");
