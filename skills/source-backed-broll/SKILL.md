@@ -4,6 +4,10 @@ description: Plan B-roll packages from transcript context with source/provenance
 version: 0.1.0
 tier: editorial
 tools_allowlist:
+  - view_episode
+  - transcript_pack
+  - transcript_search
+  - read_index
   - plan_visual_support_proposals
   - revise_visual_support_proposal
   - verify_visual_support_artifact
@@ -45,10 +49,12 @@ Run the Proposal-to-Visual-Support workflow:
    be rejected when the transcript flow says the moment is wrong. Execute the
    accepted plan through `start_generated_media_job`, `poll_generated_media_job`,
    and `use_generated_media`.
-   Choose the shortest generated-video duration that makes the visual readable.
-   Use the accepted moment's `duration_s` as the generation `duration` and pass
-   the same `duration_s` into `use_generated_media`; do not fall back to a fixed
-   four-second insert when the moment needs more time.
+   Choose the shortest generated-video duration that makes the visual readable,
+   then clamp the generation `duration` to the 4-15 seconds accepted by
+   `start_generated_media_job`. Use `max(4, ceil(duration_s))` for moments under
+   four seconds, cap longer requests at 15 seconds, and pass the same clamped
+   duration into `use_generated_media`; do not fall back to a fixed four-second
+   insert when the moment needs more time.
    Prompt like a director: specify what the shot shows, composition, camera
    motion, lighting, pacing, duration, aspect ratio, and what must be avoided.
    Keep generated B-roll on-demand and editorially grounded in the transcript.
@@ -58,10 +64,12 @@ Run the Proposal-to-Visual-Support workflow:
 8. Inspect with `view_timeline`, run `verify_visual_support_artifact` on the
    accepted proposal, render with `start_render`, and confirm the output with
    `verify_render`.
-9. If a generated-media batch is interrupted, cancelled, or superseded, mark the
-   registry records accordingly and remove any timeline references to cancelled,
-   pending, or failed jobs before continuing. Final QC must confirm the timeline
-   references only accepted media.
+9. If a generated-media batch is interrupted, cancelled, or superseded, do not
+   require manual registry state edits. Use `poll_generated_media_job` for
+   provider-reported terminal states, leave unresolved pending records out of the
+   timeline, and remove any timeline references to cancelled, pending, or failed
+   jobs before continuing. Final QC must confirm the timeline references only
+   accepted media.
 
 B-roll must support the sentence. Preserve source/provenance/disclosure details
 and do not use random footage when the transcript evidence calls for a specific
