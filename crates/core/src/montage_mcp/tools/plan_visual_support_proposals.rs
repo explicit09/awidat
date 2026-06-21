@@ -2039,7 +2039,7 @@ fn broll_package_proposal(
             "kind": "broll_asset_or_generation_approval",
             "question": "Which source or generated B-roll asset should support this transcript moment?",
             "reason": "An accepted B-roll package needs a project-relative video asset before it can become a timeline object.",
-            "fallback": "Choose the moment from transcript flow first. Use find_generated_broll_opportunities only as optional scouting or coverage review, then start_generated_media_job, poll_generated_media_job, and use_generated_media for an accepted anchor."
+            "fallback": "Choose the moment from transcript flow first. Use find_generated_broll_opportunities only as optional scouting or coverage review. For accepted generated B-roll, call start_generated_media_job with duration set to max(4, ceil(duration_s)) capped at 15 and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\", then poll_generated_media_job and use_generated_media with the same clamped duration."
         })]
     };
     let edl = args.broll_asset.as_ref().map(|asset| {
@@ -2078,6 +2078,8 @@ fn broll_package_proposal(
             "prompt_seed": selection,
             "editorial_selection_strategy": "llm_editorial_transcript_pass",
             "coverage_role": "optional_scouting_or_sanity_check",
+            "duration_contract": "Use max(4, ceil(duration_s)) capped at 15 for start_generated_media_job and use_generated_media.",
+            "cost_confirmation": "OpenRouter cost unknown; explicit confirmation required",
             "next_tools": ["start_generated_media_job", "poll_generated_media_job", "use_generated_media"]
         },
         "source_provenance": broll_source_provenance(args, anchor),
@@ -4791,11 +4793,27 @@ mod tests {
             proposal["generation_plan"]["coverage_role"],
             "optional_scouting_or_sanity_check"
         );
+        assert_eq!(
+            proposal["generation_plan"]["duration_contract"],
+            "Use max(4, ceil(duration_s)) capped at 15 for start_generated_media_job and use_generated_media."
+        );
+        assert_eq!(
+            proposal["generation_plan"]["cost_confirmation"],
+            "OpenRouter cost unknown; explicit confirmation required"
+        );
         assert!(
             proposal["missing_information"][0]["fallback"]
                 .as_str()
                 .unwrap()
                 .contains("Choose the moment from transcript flow first")
+        );
+        assert!(
+            proposal["missing_information"][0]["fallback"]
+                .as_str()
+                .unwrap()
+                .contains(
+                    "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\""
+                )
         );
     }
 
