@@ -37,6 +37,10 @@ tools_allowlist:
   - verify_visual_support_artifact
   - plan_motion_scene
   - find_broll_opportunities
+  - find_generated_broll_opportunities
+  - start_generated_media_job
+  - poll_generated_media_job
+  - use_generated_media
   - inspect_clip
   - view_timeline
   - view_frame

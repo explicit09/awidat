@@ -246,6 +246,10 @@ fn podcast_episode_producer_routes_visual_polish_through_proposals() {
     for tool in [
         "plan_visual_support_proposals",
         "revise_visual_support_proposal",
+        "find_generated_broll_opportunities",
+        "start_generated_media_job",
+        "poll_generated_media_job",
+        "use_generated_media",
         "apply_edl",
         "start_render",
         "verify_render",

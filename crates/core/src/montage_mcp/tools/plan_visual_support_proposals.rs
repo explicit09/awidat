@@ -2074,9 +2074,10 @@ fn broll_package_proposal(
         "style_defaults": style_defaults_contract(args),
         "missing_information": missing_information,
         "generation_plan": {
-            "tool": "llm_editorial_transcript_pass",
+            "tool": "find_generated_broll_opportunities",
             "prompt_seed": selection,
-            "coverage_tool": "find_generated_broll_opportunities",
+            "editorial_selection_strategy": "llm_editorial_transcript_pass",
+            "coverage_role": "optional_scouting_or_sanity_check",
             "next_tools": ["start_generated_media_job", "poll_generated_media_job", "use_generated_media"]
         },
         "source_provenance": broll_source_provenance(args, anchor),
@@ -4766,7 +4767,7 @@ mod tests {
     }
 
     #[test]
-    fn broll_generation_plan_requires_editorial_transcript_pass_first() {
+    fn broll_generation_plan_keeps_tool_callable_and_requires_transcript_pass_first() {
         let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
             selection_text: "The founder describes a crowded market.".into(),
             request: "add a b-roll package here".into(),
@@ -4780,11 +4781,15 @@ mod tests {
         let proposal = proposal_by_type(&value, "broll_package");
         assert_eq!(
             proposal["generation_plan"]["tool"],
+            "find_generated_broll_opportunities"
+        );
+        assert_eq!(
+            proposal["generation_plan"]["editorial_selection_strategy"],
             "llm_editorial_transcript_pass"
         );
         assert_eq!(
-            proposal["generation_plan"]["coverage_tool"],
-            "find_generated_broll_opportunities"
+            proposal["generation_plan"]["coverage_role"],
+            "optional_scouting_or_sanity_check"
         );
         assert!(
             proposal["missing_information"][0]["fallback"]
