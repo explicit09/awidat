@@ -197,7 +197,7 @@ fn chunk_timeline_segments(
     let chunk_size = chunk_size.max(1);
     segments
         .chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
+        .map(<[montage_render::TimelineSegment]>::to_vec)
         .collect()
 }
 
