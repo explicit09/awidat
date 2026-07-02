@@ -1021,7 +1021,7 @@ fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
         }
     });
     let mut env = server.env.clone();
-    hydrate_provider_env(&mut env);
+    hydrate_provider_env_for_server(server, &mut env);
     ServerConfig {
         name: server.name.clone(),
         command: server.command.clone(),
@@ -1050,17 +1050,29 @@ const PROVIDER_CHILD_ENV: &[(&str, &str)] = &[
     ),
 ];
 
-fn hydrate_provider_env(env: &mut std::collections::HashMap<String, String>) {
-    hydrate_provider_env_with(env, |env_name, account| {
+fn hydrate_provider_env_for_server(
+    server: &McpServer,
+    env: &mut std::collections::HashMap<String, String>,
+) {
+    hydrate_provider_env_for_server_with(server, env, |env_name, account| {
         montage_secrets::get(env_name, account).ok().flatten()
     });
 }
 
-fn hydrate_provider_env_with(
+fn hydrate_provider_env_for_server_with(
+    server: &McpServer,
+    env: &mut std::collections::HashMap<String, String>,
+    resolve: impl FnMut(&str, &str) -> Option<String>,
+) {
+    hydrate_provider_env_from(provider_child_env_for_server(server), env, resolve);
+}
+
+fn hydrate_provider_env_from(
+    providers: &[(&str, &str)],
     env: &mut std::collections::HashMap<String, String>,
     mut resolve: impl FnMut(&str, &str) -> Option<String>,
 ) {
-    for (env_name, account) in PROVIDER_CHILD_ENV {
+    for (env_name, account) in providers {
         if env.contains_key(*env_name) {
             continue;
         }
@@ -1068,6 +1080,27 @@ fn hydrate_provider_env_with(
             continue;
         };
         env.insert((*env_name).to_string(), value);
+    }
+}
+
+fn provider_child_env_for_server(server: &McpServer) -> &'static [(&'static str, &'static str)] {
+    match server.name.as_str() {
+        "whisper" => &[
+            (
+                montage_secrets::env_vars::DEEPGRAM_API_KEY,
+                montage_secrets::accounts::DEEPGRAM_API_KEY,
+            ),
+            (
+                montage_secrets::env_vars::HF_TOKEN,
+                montage_secrets::accounts::HF_TOKEN,
+            ),
+        ],
+        "topic" | "editorial-moments" => &[(
+            montage_secrets::env_vars::ANTHROPIC_API_KEY,
+            montage_secrets::accounts::ANTHROPIC_API_KEY,
+        )],
+        _ if server.resource_class == IndexerResourceClass::Network => PROVIDER_CHILD_ENV,
+        _ => &[],
     }
 }
 
@@ -1275,13 +1308,23 @@ mod tests {
 
     #[test]
     fn provider_env_hydration_includes_transcription_keys() {
+        let whisper = server(
+            "whisper",
+            IndexerResourceClass::Exclusive,
+            vec![],
+            "/bin/false",
+        );
         let mut env = HashMap::new();
 
-        hydrate_provider_env_with(&mut env, |env_name, _account| match env_name {
-            montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("dg-vault".to_string()),
-            montage_secrets::env_vars::HF_TOKEN => Some("hf-vault".to_string()),
-            _ => None,
-        });
+        hydrate_provider_env_for_server_with(
+            &whisper,
+            &mut env,
+            |env_name, _account| match env_name {
+                montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("dg-vault".to_string()),
+                montage_secrets::env_vars::HF_TOKEN => Some("hf-vault".to_string()),
+                _ => None,
+            },
+        );
 
         assert_eq!(
             env.get(montage_secrets::env_vars::DEEPGRAM_API_KEY)
@@ -1297,21 +1340,48 @@ mod tests {
 
     #[test]
     fn provider_env_hydration_preserves_explicit_server_env() {
+        let whisper = server(
+            "whisper",
+            IndexerResourceClass::Exclusive,
+            vec![],
+            "/bin/false",
+        );
         let mut env = HashMap::from([(
             montage_secrets::env_vars::DEEPGRAM_API_KEY.to_string(),
             "configured-deepgram".to_string(),
         )]);
 
-        hydrate_provider_env_with(&mut env, |env_name, _account| match env_name {
-            montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("vault-deepgram".to_string()),
-            _ => None,
-        });
+        hydrate_provider_env_for_server_with(
+            &whisper,
+            &mut env,
+            |env_name, _account| match env_name {
+                montage_secrets::env_vars::DEEPGRAM_API_KEY => Some("vault-deepgram".to_string()),
+                _ => None,
+            },
+        );
 
         assert_eq!(
             env.get(montage_secrets::env_vars::DEEPGRAM_API_KEY)
                 .map(String::as_str),
             Some("configured-deepgram")
         );
+    }
+
+    #[test]
+    fn local_quality_indexers_do_not_read_provider_secrets() {
+        let frame_quality = server(
+            "frame-quality",
+            IndexerResourceClass::Light,
+            vec![],
+            "/bin/false",
+        );
+        let mut env = HashMap::new();
+
+        hydrate_provider_env_for_server_with(&frame_quality, &mut env, |env_name, _account| {
+            panic!("unexpected provider secret lookup for {env_name}");
+        });
+
+        assert!(env.is_empty());
     }
 
     #[test]
