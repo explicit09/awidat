@@ -42,6 +42,7 @@ INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
 
 DEFAULT_MODEL = os.environ.get("EDITORIAL_MOMENTS_MODEL", "claude-haiku-4-5-20251001")
+FALLBACK_MODEL = "deterministic-topic-fallback-v1"
 
 server = IndexerServer(
     name=INDEXER_NAME,
@@ -158,6 +159,131 @@ def _build_segment_context(
     return "\n".join(lines)
 
 
+def _segments_for_topic(
+    transcript: dict[str, Any],
+    start_s: float,
+    end_s: float,
+) -> list[dict[str, Any]]:
+    body = transcript.get("data", transcript)
+    segments = body.get("segments", [])
+    if not isinstance(segments, list):
+        return []
+    return [
+        s
+        for s in segments
+        if isinstance(s, dict) and start_s <= float(s.get("start_s", 0)) < end_s
+    ]
+
+
+def _topic_text(topic: dict[str, Any], segments: list[dict[str, Any]]) -> str:
+    parts = [str(topic.get("label", ""))]
+    parts.extend(str(segment.get("text", "")) for segment in segments)
+    return " ".join(part.strip() for part in parts if part.strip()).lower()
+
+
+def _fallback_kind(topic_seq: int, text: str, energy: EnergyLevel) -> MomentKind:
+    if topic_seq == 0:
+        return MomentKind.HOOK
+    if "?" in text or text.startswith(("why ", "how ", "what ")):
+        return MomentKind.QUESTION
+    if any(token in text for token in ("story", "remember", "when we", "i was", "we were")):
+        return MomentKind.STORY
+    if energy == EnergyLevel.HIGH:
+        return MomentKind.EMOTIONAL_PEAK
+    return MomentKind.EXPLANATION
+
+
+def _fallback_broll_need(kind: MomentKind, text: str) -> BRollNeed:
+    visual_terms = (
+        "app",
+        "dashboard",
+        "data",
+        "chart",
+        "screen",
+        "website",
+        "workflow",
+        "product",
+        "company",
+        "market",
+        "ai",
+        "model",
+        "phone",
+        "camera",
+    )
+    if any(term in text for term in visual_terms):
+        return BRollNeed.HIGH
+    if kind in (MomentKind.EXPLANATION, MomentKind.STORY, MomentKind.HOOK):
+        return BRollNeed.MEDIUM
+    return BRollNeed.NONE
+
+
+def _fallback_score(kind: MomentKind, energy: EnergyLevel) -> float:
+    base = {
+        MomentKind.HOOK: 0.78,
+        MomentKind.EMOTIONAL_PEAK: 0.72,
+        MomentKind.STORY: 0.68,
+        MomentKind.EXPLANATION: 0.62,
+        MomentKind.QUESTION: 0.58,
+    }.get(kind, 0.52)
+    if energy == EnergyLevel.HIGH:
+        return min(base + 0.08, 0.9)
+    if energy == EnergyLevel.LOW:
+        return max(base - 0.12, 0.35)
+    return base
+
+
+def _fallback_moments(
+    transcript: dict[str, Any],
+    audio_energy: dict[str, Any] | None,
+    topics: list[dict[str, Any]],
+    topic_start_seq: int = 0,
+) -> list[EditorialMoment]:
+    moments: list[EditorialMoment] = []
+    for offset, topic in enumerate(topics):
+        topic_seq = topic_start_seq + offset
+        start_s = float(topic["start_s"])
+        end_s = float(topic["end_s"])
+        segments = _segments_for_topic(transcript, start_s, end_s)
+        if segments:
+            moment_start = float(segments[0].get("start_s", start_s))
+            moment_end = float(segments[-1].get("end_s", end_s))
+            speaker = segments[0].get("speaker_id")
+        else:
+            moment_start = start_s
+            moment_end = end_s
+            speaker = None
+        if moment_end <= moment_start:
+            moment_end = min(end_s, moment_start + 1.0)
+        text = _topic_text(topic, segments)
+        energy = _energy_for_window(
+            audio_energy.get("data") if audio_energy else None,
+            start_s,
+            end_s,
+        )
+        kind = _fallback_kind(topic_seq, text, energy)
+        broll_need = _fallback_broll_need(kind, text)
+        moments.append(
+            EditorialMoment(
+                moment_id=f"m_{topic_seq:03d}_00",
+                kind=kind,
+                start_s=moment_start,
+                end_s=moment_end,
+                speaker=str(speaker) if speaker else None,
+                energy=energy,
+                score=_fallback_score(kind, energy),
+                broll_need=broll_need,
+                cut_in_suggestion="Use the first clean phrase in this topic.",
+                cut_out_suggestion="Cut after the last complete thought in this topic.",
+                dependencies=[],
+                note=(
+                    "Deterministic fallback from topic and transcript evidence; "
+                    "rerun with a valid Anthropic key for richer editorial labeling."
+                ),
+            )
+        )
+    return moments
+
+
 _SYSTEM_PROMPT = """\
 You are an editorial-moments tagger for montage, a video editing
 agent.  Given a topic-segment of a recorded conversation, identify
@@ -227,6 +353,15 @@ def _llm_pass(client: Any, segment_text: str, topic_seq: int) -> list[dict]:
     if not isinstance(moments, list):
         raise ValueError(f"expected 'moments' to be a list, got {type(moments)}")
     return moments
+
+
+def _is_auth_failure(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "authentication_error" in message
+        or "invalid x-api-key" in message
+        or "401 unauthorized" in message
+    )
 
 
 def _resolve_dependencies(moments: list[EditorialMoment]) -> None:
@@ -358,51 +493,80 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         json.loads(audio_path.read_text()) if audio_path is not None else None
     )
 
-    # Lazy import — anthropic SDK isn't tiny.
-    import anthropic
+    client = None
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        # Lazy import — anthropic SDK isn't tiny.
+        import anthropic
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "editorial-moments needs ANTHROPIC_API_KEY in env. The "
-            "indexer pass calls Claude Haiku ~1× per topic-segment to "
-            "produce typed editorial beats. ~$0.05 per hour of footage."
+        client = anthropic.Anthropic()
+    else:
+        print(
+            "editorial-moments: ANTHROPIC_API_KEY is unset; using deterministic "
+            "topic fallback.",
+            file=sys.stderr,
         )
-    client = anthropic.Anthropic()
 
     all_moments: list[EditorialMoment] = []
+    fallback_topics = 0
     for i, topic in enumerate(topics):
-        ctx = _build_segment_context(transcript, audio_energy, topic)
-        try:
-            raw_moments = _llm_pass(client, ctx, i)
-        except Exception as e:  # noqa: BLE001
-            print(
-                f"editorial-moments: topic #{i} failed ({e}); skipping",
-                file=sys.stderr,
-            )
-            continue
-        # Stamp moment_ids consistently so dependencies are resolvable.
-        for j, m in enumerate(raw_moments):
-            m.setdefault("moment_id", f"m_{i:03d}_{j:02d}")
+        topic_moments: list[EditorialMoment] = []
+        if client is not None:
+            ctx = _build_segment_context(transcript, audio_energy, topic)
             try:
-                all_moments.append(EditorialMoment.model_validate(_normalize_moment_dict(m)))
+                raw_moments = _llm_pass(client, ctx, i)
             except Exception as e:  # noqa: BLE001
                 print(
-                    f"editorial-moments: schema-invalid moment in topic #{i}: {e}",
+                    f"editorial-moments: topic #{i} failed ({e}); using fallback",
                     file=sys.stderr,
                 )
+                if _is_auth_failure(e):
+                    print(
+                        "editorial-moments: Anthropic authentication failed; "
+                        "using deterministic fallback for remaining topics.",
+                        file=sys.stderr,
+                    )
+                    client = None
+            else:
+                # Stamp moment_ids consistently so dependencies are resolvable.
+                for j, m in enumerate(raw_moments):
+                    m.setdefault("moment_id", f"m_{i:03d}_{j:02d}")
+                    try:
+                        topic_moments.append(
+                            EditorialMoment.model_validate(
+                                _normalize_moment_dict(m)
+                            )
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        print(
+                            f"editorial-moments: schema-invalid moment in topic #{i}: {e}",
+                            file=sys.stderr,
+                        )
+        if not topic_moments:
+            topic_moments = _fallback_moments(
+                transcript,
+                audio_energy,
+                [topic],
+                topic_start_seq=i,
+            )
+            fallback_topics += 1
+        all_moments.extend(topic_moments)
 
     if not all_moments:
         raise RuntimeError(
-            "editorial-moments produced zero valid moments — every "
-            "topic-segment LLM pass either failed or returned bad JSON. "
-            "Check ANTHROPIC_API_KEY and the editorial-moments-mcp logs."
+            "editorial-moments produced zero valid moments from both LLM and "
+            "deterministic fallback passes. Check transcript/topic sidecars."
         )
 
     _resolve_dependencies(all_moments)
+    labeler_model = DEFAULT_MODEL
+    if fallback_topics == len(topics):
+        labeler_model = FALLBACK_MODEL
+    elif fallback_topics:
+        labeler_model = f"{DEFAULT_MODEL}+{FALLBACK_MODEL}"
 
     body = EditorialMomentsBody(
         moments=all_moments,
-        labeler_model=DEFAULT_MODEL,
+        labeler_model=labeler_model,
         topic_segments_processed=len(topics),
     )
     return body.model_dump(mode="json")
