@@ -65,30 +65,54 @@ pub fn build_kept_ranges_edl(
     inserted_name_prefix: &str,
 ) -> String {
     let mut edl = String::from("*** Begin EDL\n");
+    append_kept_ranges_edl_ops(&mut edl, clip, kept_ranges, inserted_name_prefix);
+    edl.push_str("*** End EDL\n");
+    edl
+}
+
+/// Append Trim + Insert Clip EDL operations for changed kept ranges.
+pub fn append_kept_ranges_edl_ops(
+    edl: &mut String,
+    clip: &SelectedClip,
+    kept_ranges: &[SourceRange],
+    inserted_name_prefix: &str,
+) -> usize {
+    append_kept_ranges_edl_ops_with_position_offset(edl, clip, kept_ranges, inserted_name_prefix, 0)
+}
+
+/// Append Trim + Insert Clip EDL operations, offsetting absolute insert positions.
+pub fn append_kept_ranges_edl_ops_with_position_offset(
+    edl: &mut String,
+    clip: &SelectedClip,
+    kept_ranges: &[SourceRange],
+    inserted_name_prefix: &str,
+    position_offset: usize,
+) -> usize {
     if kept_ranges_match_original(clip, kept_ranges) {
-        edl.push_str("*** End EDL\n");
-        return edl;
+        return 0;
     }
+    let mut inserted_count = 0;
     if let Some(first) = kept_ranges.first() {
         edl.push_str("*** Trim Clip\n");
         edl.push_str(&format!("@@ anchor: clip_uuid={}\n", clip.clip_uuid));
         edl.push_str(&format!("+ start: {:.3}\n", first.start_s));
         edl.push_str(&format!("+ end: {:.3}\n", first.end_s));
         for (index, range) in kept_ranges.iter().enumerate().skip(1) {
+            let at_position = clip.track_position + position_offset + index;
             edl.push_str("*** Insert Clip\n");
             edl.push_str(&format!("+ asset: {}\n", clip.asset));
             edl.push_str(&format!("+ track: {}\n", clip.track_name));
-            edl.push_str(&format!("+ at_position: {index}\n"));
+            edl.push_str(&format!("+ at_position: {at_position}\n"));
             edl.push_str(&format!("+ start: {:.3}\n", range.start_s));
             edl.push_str(&format!("+ end: {:.3}\n", range.end_s));
             edl.push_str(&format!(
                 "+ name: {}-{inserted_name_prefix}-{index}\n",
                 clip.clip_uuid
             ));
+            inserted_count += 1;
         }
     }
-    edl.push_str("*** End EDL\n");
-    edl
+    inserted_count
 }
 
 fn kept_ranges_match_original(clip: &SelectedClip, kept_ranges: &[SourceRange]) -> bool {

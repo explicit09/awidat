@@ -14,6 +14,8 @@ pub struct SelectedClip {
     pub asset: String,
     /// Owning track name.
     pub track_name: String,
+    /// Original child index in the owning track.
+    pub track_position: usize,
     /// Source range start in media seconds.
     pub source_start_s: f64,
     /// Source range end in media seconds.
@@ -22,7 +24,16 @@ pub struct SelectedClip {
 
 /// Select the first active external video clip, or the clip matching `selector`.
 pub fn select_clip(root: &Stack, selector: Option<&str>) -> Result<SelectedClip> {
-    let mut first_candidate = None;
+    let clips = select_clips(root, selector)?;
+    clips
+        .into_iter()
+        .next()
+        .context("no active external video clip found on the timeline")
+}
+
+/// Select all active external video clips, or all clips matching `selector`.
+pub fn select_clips(root: &Stack, selector: Option<&str>) -> Result<Vec<SelectedClip>> {
+    let mut candidates = Vec::new();
     for child in &root.children {
         let StackChild::Track(track) = child else {
             continue;
@@ -30,26 +41,26 @@ pub fn select_clip(root: &Stack, selector: Option<&str>) -> Result<SelectedClip>
         if track.kind != TrackKind::Video {
             continue;
         }
-        for track_child in &track.children {
+        for (track_position, track_child) in track.children.iter().enumerate() {
             let TrackChild::Clip(clip) = track_child else {
                 continue;
             };
-            let Some(candidate) = clip_candidate(track, clip) else {
+            let Some(candidate) = clip_candidate(track, track_position, clip) else {
                 continue;
             };
-            if selector.is_some_and(|wanted| candidate.matches(wanted)) {
-                return Ok(candidate);
-            }
-            if first_candidate.is_none() {
-                first_candidate = Some(candidate);
+            if selector.is_none_or(|wanted| candidate.matches(wanted)) {
+                candidates.push(candidate);
             }
         }
     }
 
-    if let Some(selector) = selector {
-        bail!("no active external video clip matched {selector:?}");
+    if candidates.is_empty() {
+        if let Some(selector) = selector {
+            bail!("no active external video clip matched {selector:?}");
+        }
+        bail!("no active external video clip found on the timeline");
     }
-    first_candidate.context("no active external video clip found on the timeline")
+    Ok(candidates)
 }
 
 /// Resolve a selected asset relative to a project root.
@@ -62,7 +73,7 @@ pub fn resolve_asset_path(project_root: &Path, asset: &str) -> PathBuf {
     }
 }
 
-fn clip_candidate(track: &Track, clip: &Clip) -> Option<SelectedClip> {
+fn clip_candidate(track: &Track, track_position: usize, clip: &Clip) -> Option<SelectedClip> {
     if !clip.active {
         return None;
     }
@@ -79,6 +90,7 @@ fn clip_candidate(track: &Track, clip: &Clip) -> Option<SelectedClip> {
         clip_uuid: clip_uuid(clip).unwrap_or(&clip.name).to_string(),
         asset: reference.target_url.clone(),
         track_name: track.name.clone(),
+        track_position,
         source_start_s,
         source_end_s,
     })

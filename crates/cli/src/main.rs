@@ -171,6 +171,9 @@ enum Command {
         /// Seconds to preserve at each side of a detected silence.
         #[arg(long, default_value_t = 0.0)]
         keep_padding_s: f64,
+        /// Maximum allowed gap between transcript words before cutting dead air.
+        #[arg(long)]
+        max_transcript_gap_s: Option<f64>,
     },
     /// Find a transcript phrase in the primary source clip and emit a trim EDL.
     PlanTranscriptTrimEdl {
@@ -531,12 +534,14 @@ fn main() -> ExitCode {
             min_duration_s,
             silence_threshold_db,
             keep_padding_s,
+            max_transcript_gap_s,
         } => plan_dead_air_edl_cmd::run(plan_dead_air_edl_cmd::PlanDeadAirEdlArgs {
             project_root: path,
             asset,
             min_duration_s,
             silence_threshold_db,
             keep_padding_s,
+            max_transcript_gap_s,
         }),
         Command::PlanTranscriptTrimEdl {
             path,
