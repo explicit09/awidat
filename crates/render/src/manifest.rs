@@ -844,6 +844,7 @@ pub fn validate_replay_manifest(
     manifest_path: &Path,
 ) -> Result<(), RenderReplayError> {
     let path = manifest_path.to_string_lossy().into_owned();
+    let project_root = resolve_manifest_relative_path(&manifest.project_root, manifest_path);
     if manifest.schema_version != RENDER_MANIFEST_SCHEMA_VERSION {
         return Err(RenderReplayError::UnsupportedSchema {
             path,
@@ -860,27 +861,19 @@ pub fn validate_replay_manifest(
                 return Err(RenderReplayError::EmptyArgv { path });
             }
             if let Some(cwd) = cwd
-                && !Path::new(cwd).is_dir()
+                && !resolve_manifest_relative_path(cwd, manifest_path).is_dir()
             {
                 return Err(RenderReplayError::MissingCwd {
                     path,
                     cwd: cwd.clone(),
                 });
             }
-            validate_required_fingerprints(
-                &path,
-                Path::new(&manifest.project_root),
-                &manifest.inputs,
-            )?;
-            validate_required_sidecars(
-                &path,
-                Path::new(&manifest.project_root),
-                &manifest.sidecars,
-            )?;
+            validate_required_fingerprints(&path, &project_root, &manifest.inputs)?;
+            validate_required_sidecars(&path, &project_root, &manifest.sidecars)?;
             for output in &manifest.outputs {
                 if output.required {
                     validate_render_output_path(
-                        Path::new(&manifest.project_root),
+                        &project_root,
                         Path::new(&output.path),
                         &[],
                         &[],
@@ -911,7 +904,7 @@ pub fn replay_render_manifest(
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
     if let Some(cwd) = cwd {
-        command.current_dir(cwd);
+        command.current_dir(resolve_manifest_relative_path(cwd, manifest_path));
     }
     let status = command
         .status()
@@ -958,6 +951,18 @@ fn resolve_manifest_artifact_path(project_root: &Path, path: &str) -> PathBuf {
         artifact_path.to_path_buf()
     } else {
         project_root.join(artifact_path)
+    }
+}
+
+fn resolve_manifest_relative_path(path: &str, manifest_path: &Path) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path)
     }
 }
 
@@ -1276,6 +1281,27 @@ mod tests {
             cwd: Some(dir.path().to_string_lossy().into_owned()),
         };
         let manifest_path = dir.path().join("out.render-manifest.json");
+
+        validate_replay_manifest(&manifest, &manifest_path).unwrap();
+    }
+
+    #[test]
+    fn replay_validation_resolves_relative_project_root_from_manifest_parent() {
+        let dir = tempdir().unwrap();
+        let attempt_dir = dir.path().join("attempt");
+        let output = attempt_dir.join("relative-output/out.mp4");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&output, b"old output").unwrap();
+
+        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
+        manifest.project_root = ".".into();
+        manifest.inputs = Vec::new();
+        manifest.outputs = vec![output_artifact(Path::new("relative-output/out.mp4"), true)];
+        manifest.replay = RenderReplayPlan::FfmpegArgv {
+            argv: vec!["ffmpeg".into(), "-version".into()],
+            cwd: Some(".".into()),
+        };
+        let manifest_path = attempt_dir.join("render.manifest.json");
 
         validate_replay_manifest(&manifest, &manifest_path).unwrap();
     }

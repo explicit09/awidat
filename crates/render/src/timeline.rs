@@ -118,14 +118,16 @@ fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderC
 /// so the conform `fps=` filter is what actually pins the cadence.
 const TIMELINE_RENDER_FPS: u32 = 30;
 const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
+const CONCAT_DEMUXER_MIN_SEGMENTS: usize = 64;
 
 /// Append a resolution/SAR/fps/pixfmt conform chain to `video_label`,
 /// returning the new label. `concat` (demuxer and filter) requires every
 /// input to share width/height/SAR/fps/pixel-format; mixed-resolution or
 /// mixed-fps sources otherwise crash ffmpeg with "Error reinitializing
-/// filters! / Could not open encoder before EOF". The chain letterboxes
-/// (scale + centered pad) so aspect ratio is preserved, then pins SAR,
-/// fps, and pixel format to the timeline output canvas.
+/// filters! / Could not open encoder before EOF". Legacy 16:9 output
+/// letterboxes (scale + centered pad). Short-form/non-default canvases
+/// cover-crop so portrait delivery fills the requested frame instead of
+/// embedding a landscape frame in vertical padding.
 ///
 /// Idempotent: the emitted label is `[cf<i>]`; if `video_label` is
 /// already a conform output we return it untouched so callers that stage
@@ -143,10 +145,17 @@ fn append_segment_conform_filter(
     let w = canvas.width;
     let h = canvas.height;
     let fps = TIMELINE_RENDER_FPS;
-    filter.push_str(&format!(
-        "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
+    if canvas == RenderCanvas::default() {
+        filter.push_str(&format!(
+            "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
 pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p{conform_label};"
-    ));
+        ));
+    } else {
+        filter.push_str(&format!(
+            "{video_label}scale={w}:{h}:force_original_aspect_ratio=increase,\
+crop={w}:{h},setsar=1,fps={fps},format=yuv420p{conform_label};"
+        ));
+    }
     conform_label
 }
 
@@ -267,6 +276,9 @@ pub enum RenderTimelineError {
         /// Marker id inside the guide track.
         marker_id: String,
     },
+    /// Requested smoke/head render duration is invalid.
+    #[error("head render duration needs a positive finite duration")]
+    HeadRenderMissingDuration,
 }
 
 #[derive(Debug, Clone)]
@@ -11106,6 +11118,25 @@ pub fn build_timeline_section_render_spec(
     build_timeline_render_spec_inner(project_root, Some(section), None)
 }
 
+/// Build a timeline render spec clipped to the first `duration_s` seconds.
+pub fn build_timeline_head_render_spec(
+    project_root: &Path,
+    duration_s: f64,
+) -> Result<RenderJobSpec, RenderTimelineError> {
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(RenderTimelineError::HeadRenderMissingDuration);
+    }
+    build_timeline_render_spec_inner(
+        project_root,
+        Some(TimelineSectionRange {
+            marker_id: "head".into(),
+            start_s: 0.0,
+            duration_s,
+        }),
+        None,
+    )
+}
+
 /// Render window for the browser broadcast overlay, in timeline seconds.
 #[derive(Debug, Clone, Copy)]
 struct OverlayRenderWindow {
@@ -11116,6 +11147,25 @@ struct OverlayRenderWindow {
 /// Floor for an overlay window so a degenerate duration still yields at least
 /// one rendered frame.
 const MIN_OVERLAY_WINDOW_S: f64 = 0.05;
+
+fn broadcast_overlay_render_window(
+    section: Option<&TimelineSectionRange>,
+    overlay_window: Option<OverlayRenderWindow>,
+    total_duration_s: f64,
+) -> OverlayRenderWindow {
+    overlay_window.unwrap_or_else(|| {
+        section.map_or(
+            OverlayRenderWindow {
+                start_s: 0.0,
+                duration_s: total_duration_s,
+            },
+            |section| OverlayRenderWindow {
+                start_s: section.start_s,
+                duration_s: section.duration_s,
+            },
+        )
+    })
+}
 
 fn build_timeline_render_spec_inner(
     project_root: &Path,
@@ -11154,6 +11204,18 @@ fn build_timeline_render_spec_inner(
             leveled,
             "dialogue leveling: filled per-clip loudnorm targets"
         );
+    }
+    let head_section_pruned = if let Some(section) = section.as_ref() {
+        can_prune_section_to_head_inputs(section, &segs, &transitions, &audio_tracks)
+    } else {
+        false
+    };
+    if head_section_pruned {
+        let duration_s = section
+            .as_ref()
+            .map(|section| section.duration_s)
+            .unwrap_or_default();
+        segs = prune_plain_segments_to_head(segs, duration_s);
     }
     // Total duration is the sum of each segment's visible effective
     // duration. Centered transitions extend source handles before
@@ -11225,6 +11287,58 @@ fn build_timeline_render_spec_inner(
         });
     }
     let stream_copy_blockers = stream_copy_eligibility.blockers.clone();
+    if single_asset_concat_demuxer_eligible(SingleAssetConcatDemuxerInput {
+        section: section.as_ref(),
+        segments: &segs,
+        transitions: &transitions,
+        video_overlays: &video_overlays,
+        motion_images: &motion_images,
+        titles: &titles,
+        editable_subtitle_tracks: &editable_subtitle_tracks,
+        annotations: &annotations,
+        broadcast_overlay: broadcast_overlay.as_ref(),
+        audio_tracks: &audio_tracks,
+        loudness_target,
+        render_limitations: &render_limitations,
+        canvas,
+    }) {
+        let concat_list_path = renders_dir.join(format!("timeline-concat-{timestamp}.ffconcat"));
+        write_single_asset_concat_demuxer_list(&concat_list_path, &segs)?;
+        let mut metadata = std::collections::BTreeMap::from([
+            ("timeline_backend".into(), "timeline_ffmpeg_reencode".into()),
+            (
+                "timeline_backend_reason".into(),
+                "single_asset_concat_demuxer".into(),
+            ),
+            (
+                "timeline_input_segment_count".into(),
+                segs.len().to_string(),
+            ),
+            ("timeline_render_segment_count".into(), "1".into()),
+            (
+                "timeline_concat_demuxer_segment_count".into(),
+                segs.len().to_string(),
+            ),
+        ]);
+        insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_blockers);
+        tag_unapplied_master_loudnorm(project_root, &mut metadata);
+        return Ok(RenderJobSpec {
+            args: build_single_asset_concat_demuxer_reencode_argv(
+                &concat_list_path,
+                &segs,
+                &output_path,
+                canvas,
+            ),
+            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
+            total_duration_s: Some(total_duration_s),
+            cwd: Some(project_root.to_path_buf()),
+            output_path,
+            input_paths,
+            manifest_path: None,
+            limitations: render_limitations,
+            metadata,
+        });
+    }
     let original_segment_count = segs.len();
     let (coalesced_segs, coalesced_segment_count) = if transitions.is_empty() {
         coalesce_adjacent_plain_segments_for_reencode(segs)
@@ -11236,14 +11350,12 @@ fn build_timeline_render_spec_inner(
         && overlay.config.enabled
         && !overlay.config.short_form_mode
     {
-        let (overlay_duration_s, overlay_offset_s) = match overlay_window {
-            Some(window) => (window.duration_s, window.start_s),
-            None => (total_duration_s, 0.0),
-        };
+        let overlay_window =
+            broadcast_overlay_render_window(section.as_ref(), overlay_window, total_duration_s);
         Some(prepare_browser_broadcast_overlay_video(
             overlay,
-            overlay_duration_s,
-            overlay_offset_s,
+            overlay_window.duration_s,
+            overlay_window.start_s,
             &renders_dir,
             &timestamp.to_string(),
         )?)
@@ -11331,7 +11443,9 @@ fn build_timeline_render_spec_inner(
     insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_blockers);
     tag_unapplied_master_loudnorm(project_root, &mut metadata);
     if let Some(section) = section {
-        trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
+        if !head_section_pruned {
+            trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
+        }
         return Ok(RenderJobSpec {
             args: argv,
             backend,
@@ -11355,6 +11469,42 @@ fn build_timeline_render_spec_inner(
         limitations: render_limitations,
         metadata,
     })
+}
+
+fn can_prune_section_to_head_inputs(
+    section: &TimelineSectionRange,
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    audio_tracks: &[AudioTrackPlan],
+) -> bool {
+    const EPSILON_S: f64 = 1e-6;
+    section.start_s.abs() <= EPSILON_S
+        && transitions.is_empty()
+        && audio_tracks.is_empty()
+        && segs
+            .iter()
+            .all(|segment| !segment_has_render_transform(segment))
+}
+
+fn prune_plain_segments_to_head(
+    segments: Vec<TimelineSegment>,
+    duration_s: f64,
+) -> Vec<TimelineSegment> {
+    let mut remaining_s = duration_s.max(0.0);
+    let mut pruned = Vec::new();
+
+    for mut segment in segments {
+        if remaining_s <= 0.0 {
+            break;
+        }
+        if segment.duration_s > remaining_s {
+            segment.duration_s = remaining_s;
+        }
+        remaining_s -= segment.duration_s;
+        pruned.push(segment);
+    }
+
+    pruned
 }
 
 fn tag_unapplied_master_loudnorm(
@@ -11392,6 +11542,22 @@ struct TimelineStreamCopyFastPathInput<'a> {
 struct TimelineStreamCopyEligibility<'a> {
     segment: Option<&'a TimelineSegment>,
     blockers: Vec<&'static str>,
+}
+
+struct SingleAssetConcatDemuxerInput<'a> {
+    section: Option<&'a TimelineSectionRange>,
+    segments: &'a [TimelineSegment],
+    transitions: &'a [TransitionPlan],
+    video_overlays: &'a [VideoOverlayPlan],
+    motion_images: &'a [MotionImagePlan],
+    titles: &'a [TitlePlan],
+    editable_subtitle_tracks: &'a [SubtitleTrack],
+    annotations: &'a [AnnotationPlan],
+    broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
+    audio_tracks: &'a [AudioTrackPlan],
+    loudness_target: Option<LoudnessTargetPlan>,
+    render_limitations: &'a [RenderPlanLimitation],
+    canvas: RenderCanvas,
 }
 
 fn analyze_timeline_stream_copy_eligibility(
@@ -11463,6 +11629,124 @@ fn segment_container_can_copy_to_mp4(segment: &TimelineSegment) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4v")
         })
+}
+
+fn single_asset_concat_demuxer_eligible(input: SingleAssetConcatDemuxerInput<'_>) -> bool {
+    input.section.is_none()
+        && input.segments.len() >= CONCAT_DEMUXER_MIN_SEGMENTS
+        && input.segments.first().is_some_and(|first| {
+            input
+                .segments
+                .iter()
+                .all(|s| s.asset_path == first.asset_path)
+        })
+        && input.transitions.is_empty()
+        && input.video_overlays.is_empty()
+        && input.motion_images.is_empty()
+        && input.titles.is_empty()
+        && input.editable_subtitle_tracks.is_empty()
+        && input.annotations.is_empty()
+        && input.broadcast_overlay.is_none()
+        && input.audio_tracks.is_empty()
+        && input.loudness_target.is_none()
+        && input.render_limitations.is_empty()
+        && input.canvas == RenderCanvas::default()
+        && input.segments.iter().all(segment_can_use_concat_demuxer)
+}
+
+fn segment_can_use_concat_demuxer(segment: &TimelineSegment) -> bool {
+    segment.duration_s.is_finite()
+        && segment.duration_s > 0.0
+        && segment.start_s.is_finite()
+        && segment.start_s >= 0.0
+        && !segment_has_render_transform(segment)
+        && !segment.audio_muted
+        && segment.audio_removed_ranges.is_empty()
+}
+
+fn write_single_asset_concat_demuxer_list(
+    list_path: &Path,
+    segments: &[TimelineSegment],
+) -> Result<(), RenderTimelineError> {
+    let mut body = String::from("ffconcat version 1.0\n");
+    for segment in segments {
+        body.push_str("file ");
+        body.push_str(&ffconcat_quoted_path(&segment.asset_path)?);
+        body.push('\n');
+        body.push_str("inpoint ");
+        body.push_str(&fmt_filter_num(segment.start_s));
+        body.push('\n');
+        body.push_str("outpoint ");
+        body.push_str(&fmt_filter_num(segment.start_s + segment.duration_s));
+        body.push('\n');
+    }
+    fs::write(list_path, body).map_err(|err| {
+        RenderTimelineError::BroadcastOverlayRender(format!(
+            "write concat demuxer list {}: {err}",
+            list_path.display()
+        ))
+    })
+}
+
+fn ffconcat_quoted_path(path: &Path) -> Result<String, RenderTimelineError> {
+    let path = path.to_string_lossy();
+    if path.contains('\n') || path.contains('\r') {
+        return Err(RenderTimelineError::BroadcastOverlayRender(format!(
+            "concat demuxer path contains a newline: {path}"
+        )));
+    }
+    Ok(format!("'{}'", path.replace('\'', "'\\''")))
+}
+
+fn build_single_asset_concat_demuxer_reencode_argv(
+    concat_list_path: &Path,
+    segments: &[TimelineSegment],
+    output_path: &Path,
+    canvas: RenderCanvas,
+) -> Vec<String> {
+    let mut argv = vec![
+        "-y".into(),
+        "-loglevel".into(),
+        "info".into(),
+        "-f".into(),
+        "concat".into(),
+        "-safe".into(),
+        "0".into(),
+        "-segment_time_metadata".into(),
+        "1".into(),
+        "-i".into(),
+        concat_list_path.to_string_lossy().into_owned(),
+        "-map".into(),
+        "0:v:0".into(),
+        "-map".into(),
+        "0:a:0?".into(),
+        "-vf".into(),
+        format!(
+            "select=concatdec_select,setpts=PTS-STARTPTS,\
+scale={}:{}:force_original_aspect_ratio=decrease,\
+pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={},format=yuv420p",
+            canvas.width, canvas.height, canvas.width, canvas.height, TIMELINE_RENDER_FPS
+        ),
+        "-af".into(),
+        "aselect=concatdec_select,asetpts=N/SR/TB,aresample=async=1:first_pts=0".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "veryfast".into(),
+        "-crf".into(),
+        "20".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+    ];
+    argv.extend(output_color_tag_argv(segments));
+    argv.extend([
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        output_path.to_string_lossy().into_owned(),
+    ]);
+    argv
 }
 
 fn coalesce_adjacent_plain_segments_for_reencode(
@@ -11907,6 +12191,67 @@ mod tests {
         second.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
         second.source_range = Some(OtioRange::new(
             RationalTime::new(2.0 * 24.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(first));
+        track.children.push(TrackChild::Clip(second));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_sparse_same_asset_source_ranges(
+        dir: &Path,
+        clip_count: usize,
+    ) -> PathBuf {
+        let asset_rel = "raw/x.mov";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+
+        let mut track = Track::empty("V1", TrackKind::Video);
+        for index in 0..clip_count {
+            let mut clip = Clip::empty(format!("c{index}"));
+            clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+            clip.source_range = Some(OtioRange::new(
+                RationalTime::new(index as f64 * 2.0 * 24.0, 24.0),
+                RationalTime::new(24.0, 24.0),
+            ));
+            track.children.push(TrackChild::Clip(clip));
+        }
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_two_assets(dir: &Path) -> PathBuf {
+        let first_asset_rel = "raw/a.mp4";
+        let second_asset_rel = "raw/b.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(first_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(second_asset_rel), b"stub").unwrap();
+
+        let mut first = Clip::empty("c1".to_string());
+        first.media_reference = MediaReference::External(ExternalReference::new(first_asset_rel));
+        first.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut second = Clip::empty("c2".to_string());
+        second.media_reference = MediaReference::External(ExternalReference::new(second_asset_rel));
+        second.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
         ));
 
@@ -12711,6 +13056,63 @@ mod tests {
             "coalescing should not turn the multi-clip timeline into stream-copy: {cmd}"
         );
         assert_eq!(spec.input_paths, vec![dir.path().join("raw/x.mp4")]);
+    }
+
+    #[test]
+    fn sparse_plain_same_asset_ranges_use_concat_demuxer_reencode() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_sparse_same_asset_source_ranges(dir.path(), 80);
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+        let input_count = spec.args.windows(2).filter(|w| w[0] == "-i").count();
+
+        assert_eq!(
+            spec.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(input_count, 1, "argv should open one concat list: {cmd}");
+        assert!(
+            cmd.contains("-f concat"),
+            "sparse same-asset ranges should use concat demuxer: {cmd}"
+        );
+        assert!(
+            !cmd.contains("-filter_complex"),
+            "concat demuxer path should avoid the high-input filter graph: {cmd}"
+        );
+        assert!(
+            cmd.contains("-segment_time_metadata 1"),
+            "concat demuxer path should expose segment timing metadata: {cmd}"
+        );
+        assert!(
+            cmd.contains("select=concatdec_select"),
+            "concat demuxer path should drop packets outside in/out points: {cmd}"
+        );
+        assert!(
+            cmd.contains("aselect=concatdec_select"),
+            "concat demuxer path should drop audio outside in/out points: {cmd}"
+        );
+        assert!(
+            cmd.contains("libx264"),
+            "concat demuxer path still re-encodes for edit-boundary safety: {cmd}"
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_backend_reason")
+                .map(String::as_str),
+            Some("single_asset_concat_demuxer")
+        );
+        let list_path = spec
+            .args
+            .windows(2)
+            .find_map(|w| (w[0] == "-i").then(|| PathBuf::from(&w[1])))
+            .expect("concat list input");
+        let list = fs::read_to_string(&list_path).unwrap();
+        assert!(list.contains("file "));
+        assert!(list.contains("inpoint 0"));
+        assert!(list.contains("outpoint 1"));
+        assert!(list.contains("inpoint 158"));
+        assert!(list.contains("outpoint 159"));
     }
 
     #[test]
@@ -13756,6 +14158,65 @@ mod tests {
         assert!(cmd.contains("-ss 0.5"));
         assert!(cmd.contains("-t 1.25"));
         assert!(cmd.contains("concat=n=1:v=1:a=1"));
+    }
+
+    #[test]
+    fn head_render_spec_trims_timeline_output_to_requested_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project(dir.path());
+
+        let spec = build_timeline_head_render_spec(dir.path(), 1.5).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert_eq!(spec.total_duration_s, Some(1.5));
+        assert!(spec.output_path.starts_with(dir.path().join("renders")));
+        assert!(
+            spec.output_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("timeline-section-head-")
+        );
+        assert!(cmd.contains("-ss 0"));
+        assert!(cmd.contains("-t 1.5"));
+    }
+
+    #[test]
+    fn head_render_spec_prunes_inputs_after_requested_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_two_assets(dir.path());
+
+        let spec = build_timeline_head_render_spec(dir.path(), 1.25).unwrap();
+        let input_count = spec.args.iter().filter(|arg| arg.as_str() == "-i").count();
+        let cmd = spec.args.join(" ");
+
+        assert_eq!(
+            input_count, 1,
+            "head render should not open later clips: {cmd}"
+        );
+        assert!(cmd.contains("raw/a.mp4"), "first clip should remain: {cmd}");
+        assert!(
+            !cmd.contains("raw/b.mp4"),
+            "later clip should be pruned: {cmd}"
+        );
+        assert!(
+            cmd.contains("-ss 0 -t 1.25"),
+            "first clip should be clipped to requested head duration: {cmd}"
+        );
+    }
+
+    #[test]
+    fn section_render_uses_section_window_for_broadcast_overlay() {
+        let section = TimelineSectionRange {
+            marker_id: "head".into(),
+            start_s: 7.0,
+            duration_s: 3.0,
+        };
+
+        let window = broadcast_overlay_render_window(Some(&section), None, 120.0);
+
+        assert_eq!(window.start_s, 7.0);
+        assert_eq!(window.duration_s, 3.0);
     }
 
     #[test]

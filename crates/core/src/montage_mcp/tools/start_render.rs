@@ -185,6 +185,9 @@ pub async fn run(args: StartRenderArgs, ctx: McpToolCtx) -> Result<String, Strin
                 } => format!(
                     "start_render: guide section {guide_track_id}/{marker_id} needs a positive duration"
                 ),
+                RenderTimelineError::HeadRenderMissingDuration => {
+                    "start_render: head render needs a positive duration".to_string()
+                }
             }
         })?;
         if let Some(slug) = args.preset.as_deref() {

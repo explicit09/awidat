@@ -149,6 +149,9 @@ enum Command {
     Render {
         /// Project directory.
         path: PathBuf,
+        /// Render only the first N seconds of the timeline.
+        #[arg(long)]
+        duration_s: Option<f64>,
     },
     /// Replay an FFmpeg render execution manifest.
     ReplayRender {
@@ -526,7 +529,9 @@ fn main() -> ExitCode {
             concurrency,
         }),
         Command::ApplyEdl { path, edl } => apply_edl_cmd::run(&path, &edl),
-        Command::Render { path } => render_cmd::run(&path),
+        Command::Render { path, duration_s } => {
+            render_cmd::run(&path, render_cmd::RenderArgs { duration_s })
+        }
         Command::ReplayRender { manifest } => cmd_replay_render(&manifest),
         Command::PlanDeadAirEdl {
             path,

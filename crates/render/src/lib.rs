@@ -108,10 +108,10 @@ pub use timeline::{
     analyze_timeline_render_preflight, build_clip_grade_chain, build_clip_preview_filtergraph,
     build_timeline_argv, build_timeline_argv_full, build_timeline_argv_full_with_annotations,
     build_timeline_argv_with_audio_tracks, build_timeline_argv_with_audio_tracks_and_annotations,
-    build_timeline_argv_with_transitions, build_timeline_render_spec,
-    build_timeline_render_spec_overlay_windowed, build_timeline_section_render_spec,
-    collect_timeline_full_plan, collect_timeline_plan, collect_timeline_segments,
-    fit_text_to_width_px,
+    build_timeline_argv_with_transitions, build_timeline_head_render_spec,
+    build_timeline_render_spec, build_timeline_render_spec_overlay_windowed,
+    build_timeline_section_render_spec, collect_timeline_full_plan, collect_timeline_plan,
+    collect_timeline_segments, fit_text_to_width_px,
 };
 
 #[cfg(test)]

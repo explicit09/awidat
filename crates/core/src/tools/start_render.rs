@@ -313,6 +313,9 @@ impl ToolHandler for StartRenderTool {
                         } => format!(
                             "start_render: guide section {guide_track_id}/{marker_id} needs a positive duration"
                         ),
+                        RenderTimelineError::HeadRenderMissingDuration => {
+                            "start_render: head render needs a positive duration".to_string()
+                        }
                     };
                     FunctionCallError::RespondToModel(msg)
                 })?;

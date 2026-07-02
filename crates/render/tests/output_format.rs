@@ -75,8 +75,8 @@ fn vertical_output_format_yields_portrait_conform_canvas() {
     let spec = build_timeline_render_spec(dir.path()).unwrap();
     let cmd = spec.args.join(" ");
     assert!(
-        cmd.contains("scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920"),
-        "expected a 1080x1920 vertical conform canvas, got: {cmd}",
+        cmd.contains("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"),
+        "expected a 1080x1920 cover-cropped vertical conform canvas, got: {cmd}",
     );
     assert!(
         !cmd.contains("scale=1920:1080"),

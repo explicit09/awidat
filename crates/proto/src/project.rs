@@ -380,6 +380,14 @@ pub fn read_otio_timeline(
     }
 }
 
+/// Read and validate a standalone OTIO timeline file.
+pub fn read_validated_otio_timeline(path: &Path) -> Result<Timeline, ProtoError> {
+    let mut warnings = Vec::new();
+    let timeline = read_otio_timeline(path, &mut warnings)?;
+    timeline.validate(&path.display().to_string(), &JsonPath::root())?;
+    Ok(timeline)
+}
+
 /// Best-effort quarantine of malformed entries under `metadata.montage`.
 /// Returns `Some(rewritten_value)` if at least one array was sanitized
 /// (so the caller can retry deserialization), or `None` if there was
