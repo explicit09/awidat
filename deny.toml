@@ -42,6 +42,7 @@ ignore = [
   { id = "RUSTSEC-2026-0118", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
   { id = "RUSTSEC-2026-0119", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
   { id = "RUSTSEC-2026-0173", reason = "Transitive unmaintained proc-macro-error2 in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2026-0189", reason = "rmcp 0.15 is deliberately pinned to match vendored Codex; advisory affects Streamable HTTP server transport and is tracked for the planned rmcp/codex-rmcp-client migration." },
 ]
 
 [sources]
