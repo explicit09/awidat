@@ -2,6 +2,7 @@ target/
 .build-log/
 .DS_Store
 .claude/
+.vedit/
 
 # Local document artifacts.
 *.pptx
