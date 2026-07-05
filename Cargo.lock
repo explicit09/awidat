@@ -10006,7 +10006,6 @@ dependencies = [
  "montage-mcp",
  "montage-proto",
  "montage-render",
- "montage-sandboxing",
  "montage-secrets",
  "pretty_assertions",
  "reqwest 0.12.28",
@@ -10169,14 +10168,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "wgpu",
-]
-
-[[package]]
-name = "montage-sandboxing"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
