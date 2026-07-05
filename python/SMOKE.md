@@ -46,6 +46,33 @@ The model-backed indexers have nontrivial install and warm-up costs
 (model downloads, GPU detection, HuggingFace gates). Run these manually
 before committing changes that touch their code.
 
+## Parakeet local transcript backend (Apple Silicon)
+
+On macOS arm64 the whisper indexer's `auto` chain prefers the
+`parakeet-mlx` ASR + `senko` diarization backend over whisper.cpp/WhisperX
+whenever both packages and ffmpeg/ffprobe are present (they install with
+`uv sync` on that platform; no HF token or gated models). Force it with
+`WHISPER_BACKEND=parakeet`. Benchmarked 2026-07-05 on an M4/16GB: a 1h50m
+session transcribes in ~4m45s + ~45s diarization versus ~2h for WhisperX,
+with no decoder collapse on long music/silence stretches.
+
+The wire-path smoke spawns the real stdio server and calls `index_asset`
+over MCP, exactly as the engine does:
+
+```bash
+.venv/bin/python scripts/smoke_whisper_wire.py /abs/path/to/asset.mp4
+```
+
+It asserts the tool surface, boundary rejection of relative paths, and a
+well-formed sidecar (monotonic word timestamps, header echo). Verified
+2026-07-05 against real assets of all three input classes:
+
+| Asset | Result |
+|---|---|
+| 60s WAV probe | 188 words, 14 segments, 2 speakers |
+| 15m M4A session excerpt | 1417 words (benchmark ref: 1411), 98% speaker-labeled, 5.6× realtime incl. model load |
+| 3m13s MP4 podcast clip | 502 words, 43 segments, 2 speakers, transcript matches content |
+
 ## Fast whisper.cpp transcript backend
 
 The whisper indexer defaults to `WHISPER_BACKEND=auto`. When `whisper-cli`,
