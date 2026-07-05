@@ -7,6 +7,11 @@ dependencies = [
     "montage-mcp",
     "whisperx>=3.8.5,<4",
     "torch>=2.3,<3",
+    # Fast local backend (benchmarked 2026-07-05: ~24× faster than the
+    # WhisperX path on Apple Silicon, no hallucination on long silences).
+    # Only resolvable on macOS arm64 — mlx has no other wheels.
+    "parakeet-mlx>=0.5.2,<0.6; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "senko>=0.1.0,<0.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.scripts]
