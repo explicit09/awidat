@@ -10,6 +10,7 @@ use montage_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
+use crate::generated_media::broll::NEXT_STEP;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 
@@ -292,8 +293,6 @@ impl ToolHandler for FindGeneratedBrollOpportunitiesTool {
         Ok(ToolOutput::text(body.to_string()))
     }
 }
-
-const NEXT_STEP: &str = "Treat these findings as scouting only. First choose the B-roll moment from transcript flow and confirm the exact anchor, rationale, prompt, duration_s, and overlap/cancellation safety. If a finding still makes editorial sense, call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to max(4, ceil(duration_s)) capped at 15, and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same clamped duration.";
 
 /// Scan the timeline's transcript sidecars for generated B-roll opportunities.
 pub fn scan_generated_broll_opportunities(
@@ -769,14 +768,14 @@ mod tests {
     };
 
     #[test]
-    fn next_step_uses_generated_media_duration_contract() {
-        assert!(NEXT_STEP.contains("max(4, ceil(duration_s))"));
-        assert!(NEXT_STEP.contains("capped at 15"));
-        assert!(NEXT_STEP.contains("same clamped duration"));
-        assert!(NEXT_STEP.contains(
-            "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\""
-        ));
-        assert!(!NEXT_STEP.contains("round(duration_s)"));
+    fn next_step_is_the_shared_broll_contract() {
+        // The finder emits the shared constant verbatim; its wording is
+        // asserted in generated_media::broll.
+        assert_eq!(
+            NEXT_STEP,
+            crate::generated_media::broll::NEXT_STEP,
+            "finder must emit the shared B-roll next-step contract"
+        );
     }
 
     fn timeline_with_clip(asset_id: &str, source_start_s: f64, duration_s: f64) -> Timeline {

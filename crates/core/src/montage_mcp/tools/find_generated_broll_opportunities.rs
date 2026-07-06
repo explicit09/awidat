@@ -12,6 +12,7 @@ use montage_proto::project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::generated_media::broll::NEXT_STEP;
 use crate::montage_mcp::context::McpToolCtx;
 
 const DEFAULT_MAX_RESULTS: usize = 12;
@@ -702,30 +703,31 @@ fn whisper_sidecar_path(project_root: &Path, asset_id: &str) -> PathBuf {
         .join(format!("{asset_id}.json"))
 }
 
+/// Tool description. Mirrors the `#[tool(description = ...)]` literal on
+/// `MontageMcpServer::find_generated_broll_opportunities` (the macro only
+/// accepts a string literal, so the two must be kept in sync by hand): a
+/// read-only coverage helper, not the editorial selector.
 pub const DESCRIPTION: &str = "\
-Find transcript moments where AI-generated podcast B-roll would help: \
+Scout transcript moments where AI-generated podcast B-roll might help: \
 visual concepts, explanations, abstract-to-concrete moments, emotional \
-spikes, story reconstruction, and statistics. This is read-only and \
-does not call a generation provider. It returns scored candidates with \
-OpenRouter/Seedance-ready prompts so the agent can review the moment \
-before calling `start_generated_media_job`; OpenRouter calls must include \
-cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\".\
+spikes, story reconstruction, and statistics. This is a read-only \
+coverage helper, not the editorial selector. The agent must choose \
+moments from transcript flow and reject candidates that do not make \
+editorial sense before calling `start_generated_media_job`.\
 ";
-
-const NEXT_STEP: &str = "Treat these findings as scouting only. First choose the B-roll moment from transcript flow and confirm the exact anchor, rationale, prompt, duration_s, and overlap/cancellation safety. If a finding still makes editorial sense, call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to max(4, ceil(duration_s)) capped at 15, and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same clamped duration.";
 
 #[cfg(test)]
 mod tests {
     use super::NEXT_STEP;
 
     #[test]
-    fn next_step_uses_generated_media_duration_contract() {
-        assert!(NEXT_STEP.contains("max(4, ceil(duration_s))"));
-        assert!(NEXT_STEP.contains("capped at 15"));
-        assert!(NEXT_STEP.contains("same clamped duration"));
-        assert!(NEXT_STEP.contains(
-            "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\""
-        ));
-        assert!(!NEXT_STEP.contains("round(duration_s)"));
+    fn next_step_is_the_shared_broll_contract() {
+        // The finder emits the shared constant verbatim; its wording is
+        // asserted in generated_media::broll.
+        assert_eq!(
+            NEXT_STEP,
+            crate::generated_media::broll::NEXT_STEP,
+            "finder must emit the shared B-roll next-step contract"
+        );
     }
 }
