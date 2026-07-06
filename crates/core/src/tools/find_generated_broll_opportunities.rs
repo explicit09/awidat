@@ -354,6 +354,10 @@ pub fn scan_generated_broll_opportunities(
                             let timeline_end = (timeline_start + duration_s)
                                 .min(clip_track_start + range.duration.to_seconds());
                             let output_duration_s = timeline_end - timeline_start;
+                            // Reconcile the emitted duration_s, the prompt cue, and the
+                            // NEXT_STEP contract to one value: the exact clip the agent
+                            // requests and places (max(4, ceil(duration_s)) capped at 15).
+                            let job_duration_s = job_duration_s(output_duration_s);
                             let asset_requests =
                                 asset_requests_for_moment(&item.text, &signal.subject);
                             out.push(GeneratedBrollFinding {
@@ -364,7 +368,7 @@ pub fn scan_generated_broll_opportunities(
                                     .min(clip_source_end),
                                 timeline_start_s: timeline_start,
                                 timeline_end_s: timeline_end,
-                                duration_s: output_duration_s,
+                                duration_s: job_duration_s,
                                 category: signal.category,
                                 score: signal.score,
                                 reason: signal.reason,
@@ -568,7 +572,7 @@ fn reason_for(category: GeneratedBrollCategory, subject: &str) -> String {
 }
 
 fn build_prompt(subject: &str, duration_s: f64) -> String {
-    let duration_s = prompt_duration_s(duration_s);
+    let duration_s = job_duration_s(duration_s);
     format!(
         "Editorial documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that visually explains the spoken idea without adding new claims. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion, no whip pans. Lighting: natural soft light, grounded documentary color, not glossy advertising. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: unidentifiable people if present, no famous likeness, no logos, no readable text, no brand UI unless explicitly supplied as an approved reference.",
         duration_s,
@@ -576,17 +580,21 @@ fn build_prompt(subject: &str, duration_s: f64) -> String {
 }
 
 fn build_fallback_prompt(subject: &str, duration_s: f64) -> String {
-    let duration_s = prompt_duration_s(duration_s);
+    let duration_s = job_duration_s(duration_s);
     format!(
         "Generic unbranded documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that supports the moment without implying a specific real company or product. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion. Lighting: natural soft light, grounded documentary color. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: use fictional interface details if needed, unidentifiable people if present, no famous likeness, no logos, no readable text.",
         duration_s,
     )
 }
 
-fn prompt_duration_s(duration_s: f64) -> f64 {
+/// Duration the agent must actually request and place: `max(4, ceil(duration_s))`
+/// capped at 15. This is the single source of truth for the emitted `duration_s`
+/// field, the prompt's pacing cue, and the `NEXT_STEP` contract, so all three
+/// describe the same clip length.
+fn job_duration_s(duration_s: f64) -> f64 {
     duration_s
+        .ceil()
         .clamp(MIN_BROLL_DURATION_S, MAX_BROLL_DURATION_S)
-        .round()
 }
 
 /// Return reference-asset/context requests implied by a planned generated B-roll moment.
@@ -871,6 +879,43 @@ mod tests {
             9.0
         );
         assert!(findings[0].prompt.contains("9 seconds"));
+    }
+
+    #[test]
+    fn fractional_moment_reconciles_field_prompt_and_job_duration() {
+        // A moment whose slot is clamped by the clip boundary produces a
+        // fractional timeline length (16.4 - 10.0 = 6.4s). The emitted
+        // duration_s field, the prompt's pacing cue, and the NEXT_STEP job
+        // contract must all describe the same clip: max(4, ceil(6.4)) = 7s.
+        // Regression for the round()/ceil()/raw-float three-way mismatch.
+        let dir = tempfile::tempdir().unwrap();
+        let asset_id = "raw/episode.mp4";
+        write_segments(
+            dir.path(),
+            asset_id,
+            vec![(
+                "So the way AI compute is exploding is these GPU data centers need massive cooling systems",
+                10.0,
+                20.0,
+            )],
+        );
+
+        let findings = scan_generated_broll_opportunities(
+            dir.path(),
+            &timeline_with_clip(asset_id, 0.0, 16.4),
+            None,
+            9.0,
+            12,
+        );
+
+        assert_eq!(findings.len(), 1);
+        // Timeline geometry keeps the true (fractional) slot.
+        let slot = findings[0].timeline_end_s - findings[0].timeline_start_s;
+        assert!((slot - 6.4).abs() < 1e-9, "slot was {slot}");
+        // ...but the agent-facing duration_s and prompt round *up* together.
+        assert_eq!(findings[0].duration_s, 7.0);
+        assert!(findings[0].prompt.contains("7 seconds"));
+        assert!(findings[0].fallback_prompt.contains("7 seconds"));
     }
 
     #[test]
