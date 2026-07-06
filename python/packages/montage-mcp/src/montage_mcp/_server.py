@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -61,6 +62,25 @@ class IndexAssetRequest(BaseModel):
 # Type alias for the user-supplied work function. Returns the *body* of
 # the sidecar (a JSON-shaped dict); the wrapper builds the full Sidecar.
 HandlerFn = Callable[[IndexAssetRequest], dict[str, Any]]
+
+
+def validate_index_asset_request(req: IndexAssetRequest) -> None:
+    """Reject malformed paths before any indexer touches the filesystem.
+
+    `asset_path` must be an absolute path to an existing regular file, and
+    the roots (when given) must be absolute. We deliberately do NOT confine
+    `asset_path` under `project_root`: source media legitimately lives on
+    external volumes, and the trust boundary is the stdio parent (the engine
+    is the only client of this server).
+    """
+    asset = Path(req.asset_path)
+    if not asset.is_absolute():
+        raise ValueError(f"asset_path must be absolute: {req.asset_path!r}")
+    if not asset.is_file():
+        raise ValueError(f"asset_path is not a regular file: {req.asset_path!r}")
+    for name, value in (("project_root", req.project_root), ("index_root", req.index_root)):
+        if value is not None and not Path(value).is_absolute():
+            raise ValueError(f"{name} must be absolute: {value!r}")
 
 
 class IndexerServer:
@@ -110,6 +130,7 @@ class IndexerServer:
                 asset_id=asset_id,
                 asset_sha256=asset_sha256,
             )
+            validate_index_asset_request(req)
             if self._handler is None:
                 raise RuntimeError(
                     f"{self._name}: no handler registered. "

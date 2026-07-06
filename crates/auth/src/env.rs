@@ -77,8 +77,11 @@ struct Policy {
 /// Best-effort read of the auth-relevant keys from `$CODEX_HOME/config.toml`.
 ///
 /// A missing file, unreadable file, parse error, or absent keys all fall back to
-/// safe defaults (store = `file`, no forced policy), correct for ~all users. We
-/// deliberately model only the keys we use so unrelated config can't break us.
+/// safe defaults (store = `auto`, no forced policy). `auto` prefers the OS
+/// keychain and falls back to `auth.json`, so tokens are not written in
+/// plaintext by default while pre-existing file credentials keep working.
+/// Users can pin `cli_auth_credentials_store = "file"` for codex-CLI interop.
+/// We deliberately model only the keys we use so unrelated config can't break us.
 fn read_policy(codex_home: &Path) -> Policy {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -97,14 +100,14 @@ fn read_policy(codex_home: &Path) -> Policy {
     let path = codex_home.join("config.toml");
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Policy {
-            store_mode: AuthCredentialsStoreMode::default(),
+            store_mode: AuthCredentialsStoreMode::Auto,
             forced_login_method: None,
             forced_workspace_ids: None,
         };
     };
     let Ok(config) = toml::from_str::<AuthConfig>(&text) else {
         return Policy {
-            store_mode: AuthCredentialsStoreMode::default(),
+            store_mode: AuthCredentialsStoreMode::Auto,
             forced_login_method: None,
             forced_workspace_ids: None,
         };
@@ -123,7 +126,9 @@ fn read_policy(codex_home: &Path) -> Policy {
     });
 
     Policy {
-        store_mode: config.cli_auth_credentials_store.unwrap_or_default(),
+        store_mode: config
+            .cli_auth_credentials_store
+            .unwrap_or(AuthCredentialsStoreMode::Auto),
         forced_login_method,
         forced_workspace_ids,
     }
@@ -140,18 +145,28 @@ mod tests {
     }
 
     #[test]
-    fn missing_config_defaults_to_file_and_no_policy() {
+    fn missing_config_defaults_to_auto_and_no_policy() {
         let home = TempDir::new().unwrap();
         let policy = read_policy(home.path());
-        assert_eq!(policy.store_mode, AuthCredentialsStoreMode::File);
+        assert_eq!(policy.store_mode, AuthCredentialsStoreMode::Auto);
         assert_eq!(policy.forced_login_method, None);
         assert_eq!(policy.forced_workspace_ids, None);
     }
 
     #[test]
-    fn config_without_key_defaults_to_file() {
+    fn config_without_key_defaults_to_auto() {
         let home = TempDir::new().unwrap();
         write_config(home.path(), "model = \"gpt-5.5\"\n");
+        assert_eq!(
+            read_policy(home.path()).store_mode,
+            AuthCredentialsStoreMode::Auto
+        );
+    }
+
+    #[test]
+    fn explicit_file_mode_is_honored() {
+        let home = TempDir::new().unwrap();
+        write_config(home.path(), "cli_auth_credentials_store = \"file\"\n");
         assert_eq!(
             read_policy(home.path()).store_mode,
             AuthCredentialsStoreMode::File

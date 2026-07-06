@@ -126,7 +126,7 @@ jobs:
       # --all-targets also compile-checks examples). macOS bills 10x, so it
       # runs tests plus a targeted clippy over the crates that actually have
       # #[cfg(target_os = "macos")] code or are macOS-first (the desktop app,
-      # seatbelt sandboxing, keychain secrets, AVFoundation index/render paths)
+      # keychain secrets, AVFoundation index/render paths)
       # — workspace-wide lint duplication stays off macOS. No `cargo clean`
       # anywhere — one warm target/ per job.
       - name: Clippy
@@ -139,7 +139,6 @@ jobs:
             -p montage-desktop \
             -p montage-index \
             -p montage-render \
-            -p montage-sandboxing \
             -p montage-secrets \
             --all-targets -- -D warnings
       - name: Test

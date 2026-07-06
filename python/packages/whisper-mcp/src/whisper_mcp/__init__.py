@@ -176,6 +176,8 @@ def _transcribe(req: IndexAssetRequest) -> dict[str, Any]:
         return _handle_deepgram(req)
     if BACKEND == "whisperx":
         return _handle_whisperx(req)
+    if BACKEND == "parakeet":
+        return _handle_parakeet(req)
     if BACKEND in ("auto", "whispercpp-aligned", "whispercpp_aligned"):
         if DEEPGRAM_API_KEY:
             try:
@@ -184,6 +186,15 @@ def _transcribe(req: IndexAssetRequest) -> dict[str, Any]:
                 print(
                     f"whisper-mcp: Deepgram backend failed ({e}); "
                     "falling back to local backend",
+                    file=sys.stderr,
+                )
+        if BACKEND == "auto" and _can_use_parakeet_backend():
+            try:
+                return _handle_parakeet(req)
+            except Exception as e:  # noqa: BLE001
+                print(
+                    f"whisper-mcp: parakeet backend failed ({e}); "
+                    "falling back to whisper.cpp/WhisperX",
                     file=sys.stderr,
                 )
         if _can_use_whispercpp_backend():
@@ -597,6 +608,18 @@ def _handle_whisperx(req: IndexAssetRequest) -> dict[str, Any]:
         "speakers": speakers,
         "diarized": speakers_used,
     }
+
+
+def _can_use_parakeet_backend() -> bool:
+    from whisper_mcp import parakeet_backend
+
+    return parakeet_backend.available()
+
+
+def _handle_parakeet(req: IndexAssetRequest) -> dict[str, Any]:
+    from whisper_mcp import parakeet_backend
+
+    return parakeet_backend.handle(req.asset_path)
 
 
 def _can_use_whispercpp_backend() -> bool:

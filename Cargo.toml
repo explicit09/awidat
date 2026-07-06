@@ -6,7 +6,6 @@ members = [
     "crates/core",
     "crates/tools",
     "crates/mcp",
-    "crates/sandboxing",
     "crates/cli",
     "crates/render",
     "crates/render-gpu",
@@ -209,7 +208,6 @@ montage-proto = { path = "crates/proto" }
 montage-core = { path = "crates/core" }
 montage-tools = { path = "crates/tools" }
 montage-mcp = { path = "crates/mcp" }
-montage-sandboxing = { path = "crates/sandboxing" }
 montage-render = { path = "crates/render" }
 montage-render-gpu = { path = "crates/render-gpu" }
 montage-effects = { path = "crates/effects" }
@@ -483,7 +481,7 @@ pathdiff = "0.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pulldown-cmark = "0.10"
-quick-xml = "0.38.4"
+quick-xml = "0.41.0"
 rand = "0.9"
 rcgen = { version = "0.14.7", default-features = false, features = [
     "aws_lc_rs",

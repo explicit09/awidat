@@ -46,3 +46,26 @@ python/**/*.egg-info/
 python/**/.pytest_cache/
 skills/**/__pycache__/
 video_editing_transcripts/
+
+# Internal working documents — never publish (plans, audits, reports).
+docs/superpowers/
+docs/production-readiness-audit.md
+docs/consumer-release-proof.*
+docs/desktop-ux-performance-*.md
+docs/indexing-performance.md
+docs/ai-assisted-gap-remediation.md
+docs/pro-editing-gap-*.md
+docs/proposal-to-visual-support-gap-analysis.md
+docs/editorial-grammar-upgrade-plan.md
+docs/branded-motion-graphics-plan.md
+docs/opus-vs-montage-short-form-comparison.html
+docs/research/
+
+# Local perf run outputs (montage-index-perf / perf-full.mjs write here).
+artifacts/perf/
+apps/desktop/tests/perf-results/
+
+# Office documents and stray local artifacts.
+*.pptx
+*.docx
+*.xlsx

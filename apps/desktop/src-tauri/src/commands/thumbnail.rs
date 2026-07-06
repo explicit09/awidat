@@ -86,6 +86,26 @@ async fn run_one(
     }
 }
 
+/// Resolve an untrusted, project-relative asset id against the project
+/// root. Rejects ids that could escape the root (absolute paths, `..`,
+/// backslashes, empty segments) before any filesystem access.
+fn resolve_asset_in_root(project_root: &Path, asset_id: &str) -> Result<PathBuf, String> {
+    if !montage_proto::index::is_safe_relative_asset_path(asset_id) {
+        return Err(format!("invalid asset id: {asset_id:?}"));
+    }
+    Ok(project_root.join(asset_id))
+}
+
+/// True iff `dir` resolves inside `root` after symlink resolution. False
+/// when either path can't be canonicalized (missing dir → caller already
+/// handled; treat as outside).
+fn dir_is_within_root(root: &Path, dir: &Path) -> bool {
+    match (root.canonicalize(), dir.canonicalize()) {
+        (Ok(root), Ok(dir)) => dir.starts_with(&root),
+        _ => false,
+    }
+}
+
 /// True iff `dir` exists, contains at least one `frame-*.jpg`, AND that
 /// frame's mtime is at-or-after the source's. Inversely: false on
 /// missing-dir, empty-dir, or stale-strip.
@@ -124,15 +144,27 @@ fn thumbnails_are_fresh(asset: &Path, dir: &Path) -> bool {
 /// on the frontend. Empty list when the dir doesn't exist or is empty.
 ///
 /// `dir` MUST be a path the frontend already has from the protocol
-/// (e.g. `TimelineItem::Clip.thumbnail_dir`). We don't validate that
-/// it lives under the project — the asset-protocol scope is the real
-/// gate; this command exists only to save the frontend from having
-/// to walk a directory through the (locked-down) asset protocol.
+/// (e.g. `TimelineItem::Clip.thumbnail_dir`). Thumbnail dirs always live
+/// under `<project>/.montage/thumbnails/`, so we confine `dir` to the
+/// loaded project root (post-symlink-resolution) as defense in depth on
+/// top of the asset-protocol scope.
 #[tauri::command]
-pub async fn list_thumbnail_frames(dir: String) -> Result<Vec<String>, String> {
+pub async fn list_thumbnail_frames(
+    state: State<'_, MontageState>,
+    dir: String,
+) -> Result<Vec<String>, String> {
     let path = std::path::Path::new(&dir);
     if !path.is_dir() {
         return Ok(Vec::new());
+    }
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    if !dir_is_within_root(&project_root, path) {
+        return Err(format!("thumbnails dir outside project root: {dir:?}"));
     }
     let mut out = Vec::new();
     let mut entries = tokio::fs::read_dir(path)
@@ -171,12 +203,67 @@ pub async fn generate_thumbnails_for_asset(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let abs = project_root.join(&asset_id);
+    let abs = resolve_asset_in_root(&project_root, &asset_id)?;
     if !abs.is_file() {
         return Ok(None);
     }
     let dir = generate_thumbnails_for_asset_in_project(&app, &state, &project_root, &abs).await?;
     Ok(Some(dir.to_string_lossy().into_owned()))
+}
+
+#[cfg(test)]
+mod confinement_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_asset_in_root_accepts_plain_relative_ids() {
+        let root = Path::new("/proj");
+        assert_eq!(
+            resolve_asset_in_root(root, "media/clip.mp4").unwrap(),
+            PathBuf::from("/proj/media/clip.mp4")
+        );
+    }
+
+    #[test]
+    fn resolve_asset_in_root_rejects_parent_traversal() {
+        assert!(resolve_asset_in_root(Path::new("/proj"), "../secret").is_err());
+        assert!(resolve_asset_in_root(Path::new("/proj"), "a/../../secret").is_err());
+    }
+
+    #[test]
+    fn resolve_asset_in_root_rejects_absolute_paths() {
+        assert!(resolve_asset_in_root(Path::new("/proj"), "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn resolve_asset_in_root_rejects_backslashes_and_empty() {
+        assert!(resolve_asset_in_root(Path::new("/proj"), "a\\b").is_err());
+        assert!(resolve_asset_in_root(Path::new("/proj"), "").is_err());
+    }
+
+    #[test]
+    fn dir_is_within_root_accepts_subdir() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join(".montage/thumbnails/x");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(dir_is_within_root(root.path(), &sub));
+    }
+
+    #[test]
+    fn dir_is_within_root_rejects_outside_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert!(!dir_is_within_root(root.path(), other.path()));
+    }
+
+    #[test]
+    fn dir_is_within_root_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = root.path().join("escape");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        assert!(!dir_is_within_root(root.path(), &link));
+    }
 }
 
 async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {

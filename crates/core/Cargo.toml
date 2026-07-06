@@ -18,7 +18,6 @@ montage-effects = { workspace = true }
 montage-lut = { workspace = true }
 montage-config = { workspace = true }
 montage-mcp = { workspace = true }
-montage-sandboxing = { workspace = true }
 # Server-side rmcp for the in-process Montage MCP server (codex
 # registers it via [mcp_servers.montage] and spawns it as a child
 # process over stdio). Features mirror crates/mcp's client features;

@@ -137,7 +137,12 @@ pub fn is_valid_indexer_id(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn is_safe_relative_asset_path(s: &str) -> bool {
+/// True iff `s` is a safe project-relative path: non-empty, forward-slash
+/// separated, and every component a plain name (no `..`/`.`, no absolute or
+/// prefixed paths, no backslashes, NULs, or empty segments). The single
+/// authoritative check for untrusted asset-id-shaped inputs before joining
+/// them onto a project root.
+pub fn is_safe_relative_asset_path(s: &str) -> bool {
     if s.is_empty() || s.contains('\\') || s.contains('\0') || s.contains("//") {
         return false;
     }
