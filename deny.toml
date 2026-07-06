@@ -42,6 +42,9 @@ ignore = [
   { id = "RUSTSEC-2026-0118", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
   { id = "RUSTSEC-2026-0119", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
   { id = "RUSTSEC-2026-0173", reason = "Transitive unmaintained proc-macro-error2 in current dependency graph; tracked as follow-up dependency cleanup." },
+  { id = "RUSTSEC-2026-0189", reason = "rmcp 0.15 is deliberately pinned to match vendored Codex; advisory affects Streamable HTTP server transport and is tracked for the planned rmcp/codex-rmcp-client migration." },
+  { id = "RUSTSEC-2026-0194", reason = "Direct quick-xml usage (codex-protocol) is on patched >=0.41.0; the remaining 0.39.4 copy is a Linux-only build-time proc-macro (wayland-scanner via arboard) parsing local protocol XML, not attacker-controlled input, and is pinned to ^0.39 upstream. Tracked until wayland-scanner moves to quick-xml >=0.41." },
+  { id = "RUSTSEC-2026-0195", reason = "Direct quick-xml usage (codex-protocol) is on patched >=0.41.0; the remaining 0.39.4 copy is a Linux-only build-time proc-macro (wayland-scanner via arboard) parsing local protocol XML, not attacker-controlled input, and is pinned to ^0.39 upstream. Tracked until wayland-scanner moves to quick-xml >=0.41." },
 ]
 
 [sources]

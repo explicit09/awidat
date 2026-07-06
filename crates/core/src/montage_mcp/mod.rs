@@ -759,16 +759,16 @@ haven't landed yet.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
-    /// `find_generated_broll_opportunities` — transcript moments
-    /// suited for AI-generated B-roll.
+    /// `find_generated_broll_opportunities` — scout transcript moments
+    /// that might suit AI-generated B-roll.
     #[tool(
         description = "\
-Find transcript moments where AI-generated podcast B-roll would help: \
+Scout transcript moments where AI-generated podcast B-roll might help: \
 visual concepts, explanations, abstract-to-concrete moments, emotional \
-spikes, story reconstruction, and statistics. This is read-only and \
-does not call a generation provider. Returns scored candidates with \
-OpenRouter/Seedance-ready prompts so the agent can review the moment \
-before calling `start_generated_media_job`.",
+spikes, story reconstruction, and statistics. This is a read-only \
+coverage helper, not the editorial selector. The agent must choose \
+moments from transcript flow and reject candidates that do not make \
+editorial sense before calling `start_generated_media_job`.",
         annotations(read_only_hint = true)
     )]
     pub async fn find_generated_broll_opportunities(

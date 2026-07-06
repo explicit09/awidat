@@ -155,6 +155,41 @@ fn visual_support_editorial_skills_are_loadable_and_proposal_driven() {
 }
 
 #[test]
+fn source_backed_broll_contract_matches_generated_media_tools() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("source-backed-broll")
+        .expect("source-backed-broll exists");
+    for tool in [
+        "view_episode",
+        "transcript_pack",
+        "transcript_search",
+        "read_index",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "source-backed-broll must allow transcript context tool {tool}"
+        );
+    }
+    let normalized_body = skill.body.split_whitespace().collect::<Vec<_>>().join(" ");
+    for required in [
+        "4-15 seconds",
+        "clamp",
+        "same clamped duration",
+        "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\"",
+        "do not require manual registry state edits",
+    ] {
+        assert!(
+            normalized_body.contains(required),
+            "source-backed-broll must mention {required:?}"
+        );
+    }
+}
+
+#[test]
 fn visual_support_editorial_skills_ship_inspectable_examples() {
     let root = workspace_root().join("skills");
     for (name, artifact_type) in [
@@ -212,6 +247,10 @@ fn podcast_episode_producer_routes_visual_polish_through_proposals() {
     for tool in [
         "plan_visual_support_proposals",
         "revise_visual_support_proposal",
+        "find_generated_broll_opportunities",
+        "start_generated_media_job",
+        "poll_generated_media_job",
+        "use_generated_media",
         "apply_edl",
         "start_render",
         "verify_render",

@@ -1,5 +1,6 @@
 //! Provider-neutral generated-media records and local registry support.
 
+pub mod broll;
 pub mod openrouter;
 pub mod provider;
 pub mod registry;

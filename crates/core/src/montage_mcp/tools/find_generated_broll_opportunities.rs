@@ -1,6 +1,7 @@
-//! `find_generated_broll_opportunities` — surface podcast moments
-//! where AI-generated B-roll would help explain, pace, or reinforce
-//! the transcript. Ported from
+//! `find_generated_broll_opportunities` — scout podcast moments where
+//! AI-generated B-roll might help explain, pace, or reinforce the
+//! transcript. This heuristic helper is not the editorial selector; agents
+//! must choose final moments from transcript flow. Ported from
 //! `crates/core/src/tools/find_generated_broll_opportunities.rs` to
 //! the in-process MCP server.
 
@@ -11,6 +12,7 @@ use montage_proto::project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::generated_media::broll::NEXT_STEP;
 use crate::montage_mcp::context::McpToolCtx;
 
 const DEFAULT_MAX_RESULTS: usize = 12;
@@ -240,7 +242,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let body = serde_json::json!({
         "findings": findings,
         "more_available": findings.len() == max_results,
-        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to round(duration_s), and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same duration_s."
+        "next_step": NEXT_STEP
     });
     Ok(body.to_string())
 }
@@ -304,6 +306,10 @@ pub fn scan_generated_broll_opportunities(
                             let timeline_end = (timeline_start + duration_s)
                                 .min(clip_track_start + range.duration.to_seconds());
                             let output_duration_s = timeline_end - timeline_start;
+                            // Reconcile the emitted duration_s, the prompt cue, and the
+                            // NEXT_STEP contract to one value: the exact clip the agent
+                            // requests and places (max(4, ceil(duration_s)) capped at 15).
+                            let job_duration_s = job_duration_s(output_duration_s);
                             let asset_requests =
                                 asset_requests_for_moment(&item.text, &signal.subject);
                             out.push(GeneratedBrollFinding {
@@ -314,7 +320,7 @@ pub fn scan_generated_broll_opportunities(
                                     .min(clip_source_end),
                                 timeline_start_s: timeline_start,
                                 timeline_end_s: timeline_end,
-                                duration_s: output_duration_s,
+                                duration_s: job_duration_s,
                                 category: signal.category,
                                 score: signal.score,
                                 reason: signal.reason,
@@ -518,7 +524,7 @@ fn reason_for(category: GeneratedBrollCategory, subject: &str) -> String {
 }
 
 fn build_prompt(subject: &str, duration_s: f64) -> String {
-    let duration_s = prompt_duration_s(duration_s);
+    let duration_s = job_duration_s(duration_s);
     format!(
         "Editorial documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that visually explains the spoken idea without adding new claims. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion, no whip pans. Lighting: natural soft light, grounded documentary color, not glossy advertising. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: unidentifiable people if present, no famous likeness, no logos, no readable text, no brand UI unless explicitly supplied as an approved reference.",
         duration_s,
@@ -526,17 +532,21 @@ fn build_prompt(subject: &str, duration_s: f64) -> String {
 }
 
 fn build_fallback_prompt(subject: &str, duration_s: f64) -> String {
-    let duration_s = prompt_duration_s(duration_s);
+    let duration_s = job_duration_s(duration_s);
     format!(
         "Generic unbranded documentary B-roll for a tech podcast. Subject: {subject}. Shot: realistic cutaway that supports the moment without implying a specific real company or product. Composition: clear foreground subject, useful negative space, no clutter, no on-screen captions. Camera: slow controlled push-in or lateral move, stable natural motion. Lighting: natural soft light, grounded documentary color. Pacing: hold the idea long enough to read in {:.0} seconds. Format: 16:9 video. Constraints: use fictional interface details if needed, unidentifiable people if present, no famous likeness, no logos, no readable text.",
         duration_s,
     )
 }
 
-fn prompt_duration_s(duration_s: f64) -> f64 {
+/// Duration the agent must actually request and place: `max(4, ceil(duration_s))`
+/// capped at 15. This is the single source of truth for the emitted `duration_s`
+/// field, the prompt's pacing cue, and the `NEXT_STEP` contract, so all three
+/// describe the same clip length.
+fn job_duration_s(duration_s: f64) -> f64 {
     duration_s
+        .ceil()
         .clamp(MIN_BROLL_DURATION_S, MAX_BROLL_DURATION_S)
-        .round()
 }
 
 /// Return reference-asset/context requests implied by a planned generated B-roll moment.
@@ -693,12 +703,31 @@ fn whisper_sidecar_path(project_root: &Path, asset_id: &str) -> PathBuf {
         .join(format!("{asset_id}.json"))
 }
 
+/// Tool description. Mirrors the `#[tool(description = ...)]` literal on
+/// `MontageMcpServer::find_generated_broll_opportunities` (the macro only
+/// accepts a string literal, so the two must be kept in sync by hand): a
+/// read-only coverage helper, not the editorial selector.
 pub const DESCRIPTION: &str = "\
-Find transcript moments where AI-generated podcast B-roll would help: \
+Scout transcript moments where AI-generated podcast B-roll might help: \
 visual concepts, explanations, abstract-to-concrete moments, emotional \
-spikes, story reconstruction, and statistics. This is read-only and \
-does not call a generation provider. It returns scored candidates with \
-OpenRouter/Seedance-ready prompts so the agent can review the moment \
-before calling `start_generated_media_job`; OpenRouter calls must include \
-cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\".\
+spikes, story reconstruction, and statistics. This is a read-only \
+coverage helper, not the editorial selector. The agent must choose \
+moments from transcript flow and reject candidates that do not make \
+editorial sense before calling `start_generated_media_job`.\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::NEXT_STEP;
+
+    #[test]
+    fn next_step_is_the_shared_broll_contract() {
+        // The finder emits the shared constant verbatim; its wording is
+        // asserted in generated_media::broll.
+        assert_eq!(
+            NEXT_STEP,
+            crate::generated_media::broll::NEXT_STEP,
+            "finder must emit the shared B-roll next-step contract"
+        );
+    }
+}

@@ -11,6 +11,7 @@ use crate::editorial_skills::{
     instance_json,
 };
 use crate::edl::{EdlOp, parse};
+use crate::generated_media::broll::{DURATION_CONTRACT, OPENROUTER_COST_CONFIRMATION};
 use crate::montage_mcp::context::McpToolCtx;
 use montage_proto::professional::{CapabilityArea, EvidenceTrace, ProposalPackage, ReviewStatus};
 
@@ -2039,7 +2040,9 @@ fn broll_package_proposal(
             "kind": "broll_asset_or_generation_approval",
             "question": "Which source or generated B-roll asset should support this transcript moment?",
             "reason": "An accepted B-roll package needs a project-relative video asset before it can become a timeline object.",
-            "fallback": "Call find_generated_broll_opportunities, start_generated_media_job, poll_generated_media_job, then use_generated_media."
+            "fallback": format!(
+                "Choose the moment from transcript flow first. Use find_generated_broll_opportunities only as optional scouting or coverage review. For accepted generated B-roll, call start_generated_media_job with duration set to max(4, ceil(duration_s)) capped at 15 and cost_confirmation=\"{OPENROUTER_COST_CONFIRMATION}\", then poll_generated_media_job and use_generated_media with the same clamped duration."
+            )
         })]
     };
     let edl = args.broll_asset.as_ref().map(|asset| {
@@ -2076,6 +2079,10 @@ fn broll_package_proposal(
         "generation_plan": {
             "tool": "find_generated_broll_opportunities",
             "prompt_seed": selection,
+            "editorial_selection_strategy": "llm_editorial_transcript_pass",
+            "coverage_role": "optional_scouting_or_sanity_check",
+            "duration_contract": DURATION_CONTRACT,
+            "cost_confirmation": OPENROUTER_COST_CONFIRMATION,
             "next_tools": ["start_generated_media_job", "poll_generated_media_job", "use_generated_media"]
         },
         "source_provenance": broll_source_provenance(args, anchor),
@@ -4761,6 +4768,55 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|check| check["id"] == "proposal_has_apply_edl" && check["status"] == "fail")
+        );
+    }
+
+    #[test]
+    fn broll_generation_plan_keeps_tool_callable_and_requires_transcript_pass_first() {
+        let value = plan_visual_support_proposals(PlanVisualSupportProposalArgs {
+            selection_text: "The founder describes a crowded market.".into(),
+            request: "add a b-roll package here".into(),
+            anchor_transcript: Some("crowded market".into()),
+            broll_asset: None,
+            duration_s: Some(6.0),
+            ..PlanVisualSupportProposalArgs::default()
+        })
+        .unwrap();
+
+        let proposal = proposal_by_type(&value, "broll_package");
+        assert_eq!(
+            proposal["generation_plan"]["tool"],
+            "find_generated_broll_opportunities"
+        );
+        assert_eq!(
+            proposal["generation_plan"]["editorial_selection_strategy"],
+            "llm_editorial_transcript_pass"
+        );
+        assert_eq!(
+            proposal["generation_plan"]["coverage_role"],
+            "optional_scouting_or_sanity_check"
+        );
+        assert_eq!(
+            proposal["generation_plan"]["duration_contract"],
+            "Use max(4, ceil(duration_s)) capped at 15 for start_generated_media_job and use_generated_media."
+        );
+        assert_eq!(
+            proposal["generation_plan"]["cost_confirmation"],
+            "OpenRouter cost unknown; explicit confirmation required"
+        );
+        assert!(
+            proposal["missing_information"][0]["fallback"]
+                .as_str()
+                .unwrap()
+                .contains("Choose the moment from transcript flow first")
+        );
+        assert!(
+            proposal["missing_information"][0]["fallback"]
+                .as_str()
+                .unwrap()
+                .contains(
+                    "cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\""
+                )
         );
     }
 
