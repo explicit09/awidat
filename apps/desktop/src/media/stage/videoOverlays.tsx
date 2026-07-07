@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "../mediaStreamUrl";
 import { videoOverlayStyle as buildVideoOverlayStyle } from "../videoOverlayStyle";
-import { tryAssignCurrentTime } from "../SegmentedVideoView";
+import { tryAssignCurrentTime } from "../videoElement";
 import {
   safeSegmentSpeed,
   sourceTimeForTimelineTime,

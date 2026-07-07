@@ -7,7 +7,7 @@ import {
   safeSegmentSpeed,
   sourceTimeForTimelineTime,
 } from "../../timeline/usePlaySegments";
-import { tryAssignCurrentTime } from "../SegmentedVideoView";
+import { tryAssignCurrentTime } from "../videoElement";
 
 export function TimelineTransitionOverlay({
   transition,
