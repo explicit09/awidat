@@ -169,7 +169,8 @@ fn map_keyframe(raw: &RawKeyframe) -> Keyframe {
 }
 
 fn load_fixture() -> VectorFixture {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/animation-vectors.json");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/animation-vectors.json");
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
     serde_json::from_str(&json)
