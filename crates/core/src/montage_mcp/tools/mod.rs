@@ -98,6 +98,7 @@ pub mod read_understanding;
 pub mod relink_media;
 pub mod render_preflight;
 pub mod request_user_input;
+pub mod run_picture_gates;
 pub mod run_preview_cache_refresh;
 pub mod search_broll;
 pub mod shot_summary;

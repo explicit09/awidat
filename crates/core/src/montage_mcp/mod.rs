@@ -150,6 +150,7 @@ use crate::montage_mcp::tools::read_understanding::{self, ReadUnderstandingArgs}
 use crate::montage_mcp::tools::relink_media::{self, RelinkMediaArgs};
 use crate::montage_mcp::tools::render_preflight::{self, RenderPreflightArgs};
 use crate::montage_mcp::tools::request_user_input::{self, RequestUserInputArgs};
+use crate::montage_mcp::tools::run_picture_gates::{self, RunPictureGatesArgs};
 use crate::montage_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
 use crate::montage_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::montage_mcp::tools::shot_summary::{self, ShotSummaryArgs};
@@ -1394,6 +1395,27 @@ render by itself.",
         args: Parameters<PodcastQcReportArgs>,
     ) -> Result<String, ErrorData> {
         podcast_qc_report::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `run_picture_gates` — deterministic picture-pass gates vs a house
+    /// style profile.
+    #[tool(
+        description = "\
+Run deterministic picture-pass gates over the current timeline, scored \
+against a house style profile (doac, tbpn, technologia): cold_open \
+(peak-density minute early plus a blitz opening window), floor (no dead \
+editorial zone — catches shipping a raw composite), and body_pacing \
+(cuts/min inside the archetype band). Returns per-gate reports with \
+measured values and an overall `passed`. Read-only; run before \
+export/publish and after major picture changes.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn run_picture_gates(
+        &self,
+        args: Parameters<RunPictureGatesArgs>,
+    ) -> Result<String, ErrorData> {
+        run_picture_gates::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 

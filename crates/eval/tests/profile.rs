@@ -45,3 +45,25 @@ fn unknown_archetype_is_none() {
     let p = load("doac");
     assert!(p.archetype("does-not-exist").is_none());
 }
+
+#[test]
+fn builtin_profiles_match_the_fixture_documents() {
+    // Prod callers (the MCP tool) use builtins — they must stay in sync
+    // with the canonical fixture documents.
+    for name in ["doac", "tbpn", "technologia"] {
+        let builtin =
+            HouseProfile::builtin(name).unwrap_or_else(|| panic!("builtin profile {name} missing"));
+        let fixture = load(name);
+        assert_eq!(builtin.name, fixture.name);
+        assert_eq!(builtin.version, fixture.version);
+        assert_eq!(
+            builtin.archetypes.keys().collect::<Vec<_>>(),
+            fixture.archetypes.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn builtin_unknown_name_is_none() {
+    assert!(HouseProfile::builtin("nope").is_none());
+}

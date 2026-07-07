@@ -71,6 +71,22 @@ impl HouseProfile {
         Ok(serde_json::from_str(&content)?)
     }
 
+    /// A built-in profile by name (`doac`, `tbpn`, `technologia`).
+    ///
+    /// Builtins are compiled from the canonical fixture documents so prod
+    /// callers need no filesystem access; `None` for unknown names.
+    pub fn builtin(name: &str) -> Option<Self> {
+        let content = match name {
+            "doac" => include_str!("../fixtures/profiles/doac.json"),
+            "tbpn" => include_str!("../fixtures/profiles/tbpn.json"),
+            "technologia" => include_str!("../fixtures/profiles/technologia.json"),
+            _ => return None,
+        };
+        // Compile-time-included canonical documents; a parse failure is a
+        // build defect caught by the sync test, not a runtime condition.
+        serde_json::from_str(content).ok()
+    }
+
     /// Targets for `archetype`, if the profile defines it.
     pub fn archetype(&self, archetype: &str) -> Option<&ArchetypeTargets> {
         self.archetypes.get(archetype)

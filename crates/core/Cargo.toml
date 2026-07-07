@@ -10,6 +10,7 @@ name = "montage_core"
 path = "src/lib.rs"
 
 [dependencies]
+montage-eval = { workspace = true }
 montage-proto = { workspace = true }
 montage-secrets = { workspace = true }
 montage-index = { workspace = true }
