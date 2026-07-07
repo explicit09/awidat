@@ -10001,6 +10001,7 @@ dependencies = [
  "futures",
  "montage-config",
  "montage-effects",
+ "montage-eval",
  "montage-index",
  "montage-lut",
  "montage-mcp",
