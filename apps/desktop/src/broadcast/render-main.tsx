@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../App.css";
-import { TimelineBroadcastOverlay } from "../media/SegmentedVideoView";
+import { TimelineBroadcastOverlay } from "../media/stage/broadcast";
 import type { BroadcastOverlayConfig } from "../protocol";
 
 type RenderPayload = {
