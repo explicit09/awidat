@@ -274,12 +274,23 @@ export function StageHarness() {
     if (!video) return;
     setVideoSeeked(false);
     const onSeeked = () => setVideoSeeked(true);
-    video.addEventListener("seeked", onSeeked);
-    const onLoadedMetadata = () => {
-      video.currentTime = t;
+
+    const seekTo = (target: number) => {
+      // If the target time is already current and we're not seeking, fire onSeeked immediately
+      if (Math.abs(video.currentTime - target) < 0.001 && !video.seeking) {
+        onSeeked();
+        return;
+      }
+      video.addEventListener("seeked", onSeeked, { once: true });
+      video.currentTime = target;
     };
+
+    const onLoadedMetadata = () => {
+      seekTo(t);
+    };
+
     if (video.readyState >= 1) {
-      video.currentTime = t;
+      seekTo(t);
     } else {
       video.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
     }
