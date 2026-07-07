@@ -231,11 +231,7 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
         if !args.step_labels.is_empty() {
             ignored_inputs.push("step_labels");
         }
-        if args
-            .evidence_text
-            .as_deref()
-            .is_some_and(|s| !s.is_empty())
-        {
+        if args.evidence_text.as_deref().is_some_and(|s| !s.is_empty()) {
             ignored_inputs.push("evidence_text");
         }
 

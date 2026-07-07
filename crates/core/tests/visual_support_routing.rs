@@ -1,6 +1,7 @@
 //! Visual-support routing policy tests.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use montage_core::montage_mcp::tools::plan_visual_support::route_visual_support_request as mcp_route_visual_support_request;
 use montage_core::tools::plan_visual_support::{
     VisualSupportIntent, VisualSupportLane, VisualSupportNeedKind, route_visual_support_request,
 };
@@ -256,4 +257,65 @@ fn motion_scene_plan_step_names_required_content_args() {
         "step/process MotionScenes must pass exact labels: {}",
         step.action
     );
+}
+
+/// Tripwire against future drift between the two `route_visual_support_request`
+/// implementations: the freestanding core router (`montage_core::tools::
+/// plan_visual_support`) and the duplicate that ships inside the in-process
+/// MCP server (`montage_core::montage_mcp::tools::plan_visual_support`), which
+/// is the copy production agents actually call. Both must agree on the primary
+/// lane and on any `plan_motion_scene` template hint for the same request.
+#[test]
+fn mcp_router_agrees_with_core_router_on_template_phrases() {
+    let requests = [
+        "animated lower third",
+        "kinetic text of the key quote",
+        "progress bar for the steps",
+        "highlight box on the chart",
+        "lower third for Jane",
+    ];
+
+    for request in requests {
+        let core_route = route_visual_support_request(request);
+        let mcp_route = mcp_route_visual_support_request(request);
+
+        assert_eq!(
+            format!("{:?}", core_route.primary_lane),
+            format!("{:?}", mcp_route.primary_lane),
+            "primary lane diverged for {request:?}: core={:?} mcp={:?}",
+            core_route.primary_lane,
+            mcp_route.primary_lane
+        );
+
+        let core_template = core_route
+            .plan_steps
+            .iter()
+            .find(|step| {
+                step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+            })
+            .and_then(|step| extract_template_hint(&step.action));
+        let mcp_template = mcp_route
+            .plan_steps
+            .iter()
+            .find(|step| {
+                format!("{:?}", step.lane) == "MotionScene" && step.tool == "plan_motion_scene"
+            })
+            .and_then(|step| extract_template_hint(&step.action));
+
+        assert_eq!(
+            core_template, mcp_template,
+            "template hint diverged for {request:?}: core={core_template:?} mcp={mcp_template:?}"
+        );
+    }
+}
+
+/// Pull the `template=<x>` token out of a `plan_motion_scene` plan-step
+/// action string, if present.
+fn extract_template_hint(action: &str) -> Option<String> {
+    let (_, after) = action.split_once("template=")?;
+    let token: String = after
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if token.is_empty() { None } else { Some(token) }
 }
