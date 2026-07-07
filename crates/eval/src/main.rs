@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let fixtures = format!("{}/fixtures/cuts", env!("CARGO_MANIFEST_DIR"));
+    let fixtures = format!("{}/fixtures", env!("CARGO_MANIFEST_DIR"));
     let golden = if has("--golden") {
         match montage_eval::suite::run_golden(&fixtures) {
             Ok(results) => Some(results),
