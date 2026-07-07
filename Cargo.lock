@@ -10090,6 +10090,8 @@ dependencies = [
 name = "montage-eval"
 version = "0.1.0"
 dependencies = [
+ "montage-proto",
+ "montage-render",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
