@@ -65,20 +65,11 @@ import {
   useTimelineStore,
   type TimelineSnapshot,
 } from "../timeline/store";
-import {
-  baseTransitionOpacity,
-  GpuTransitionPreview,
-  TimelineTransitionColorOverlay,
-  TimelineTransitionOverlay,
-  transitionProgress,
-} from "./stage/transitions";
-import { activeTitleOverlays, TimelineTitleOverlays } from "./stage/titles";
-import {
-  activeMotionSceneOverlays,
-  TimelineMotionSceneOverlays,
-} from "./stage/motionScene";
-import { TimelineVideoOverlays } from "./stage/videoOverlays";
-import { TimelineBroadcastOverlay } from "./stage/broadcast";
+import { baseTransitionOpacity, transitionProgress } from "./stage/transitions";
+import { activeTitleOverlays } from "./stage/titles";
+import { activeMotionSceneOverlays } from "./stage/motionScene";
+import { livePreviewClock } from "./stage/stageClock";
+import { Stage } from "./stage/Stage";
 import {
   findActiveSegment,
   findNextSegmentAfter,
@@ -892,6 +883,25 @@ function SegmentedPlayer({
   );
   const programFrameSize = stackSize;
 
+  // Stage's clock shim: no ready-made PreviewClock accessor object
+  // exists, so we build one that delegates to the exact same sources
+  // the rest of this component already reads — timelineTime from the
+  // media store, isPlaying from the media store, rate from the prop.
+  // Latest values live in a ref (updated every render) so a stale
+  // closure from an earlier render can never leak into Stage's frame
+  // math, even though Stage itself is reconstructed on every render.
+  const stageLiveValuesRef = useRef({ timelineTime, isPlaying, rate });
+  stageLiveValuesRef.current = { timelineTime, isPlaying, rate };
+  const stageClock = useMemo(
+    () =>
+      livePreviewClock({
+        now: () => stageLiveValuesRef.current.timelineTime,
+        isPlaying: () => stageLiveValuesRef.current.isPlaying,
+        rate: () => stageLiveValuesRef.current.rate,
+      }),
+    [],
+  );
+
   const monitorShellStyle = useMemo(
     () =>
       ({
@@ -975,44 +985,19 @@ function SegmentedPlayer({
             suspended={activeTransition !== null}
             availabilityRef={gradePassActiveRef}
           />
-          <div className="timeline-program-frame" style={programFrameCss}>
-            <TimelineVideoOverlays
-              overlays={activeVideoOverlays}
-              timelineTime={timelineTime}
-              isPlaying={isPlaying}
-            />
-            {previewGap && <TimelineGapOverlay />}
-            <TimelineTransitionOverlay
-              transition={
-                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-              }
-              timelineTime={timelineTime}
-              isPlaying={isPlaying}
-            />
-            <TimelineTransitionColorOverlay
-              transition={
-                shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
-              }
-              timelineTime={timelineTime}
-            />
-            <GpuTransitionPreview
-              transition={activeTransition}
-              timelineTime={timelineTime}
-              width={programFrameSize.width}
-              height={programFrameSize.height}
-            />
-            <TimelineTitleOverlays overlays={activeTitles} timelineTime={timelineTime} />
-            <TimelineMotionSceneOverlays
-              overlays={activeMotionSceneLayers}
-              timelineTime={timelineTime}
-            />
-            <TimelineBroadcastOverlay
-              overlay={timelineSnapshot.broadcast_overlay}
-              timelineTime={timelineTime}
-              projectRoot={projectRoot}
-              previewFrameSize={programFrameSize}
-            />
-          </div>
+          <Stage
+            clock={stageClock}
+            programFrameCss={programFrameCss}
+            programFrameSize={programFrameSize}
+            projectRoot={projectRoot}
+            videoOverlays={activeVideoOverlays}
+            transition={activeTransition}
+            renderTransitionOnGpu={shouldRenderTransitionOnGpu(activeTransition)}
+            titles={activeTitles}
+            motionSceneLayers={activeMotionSceneLayers}
+            broadcastOverlay={timelineSnapshot.broadcast_overlay}
+            showGap={previewGap}
+          />
         </div>
       </div>
       {chrome ? (
@@ -1105,21 +1090,6 @@ function MediaErrorOverlay({ message }: { message: string }) {
       <p className="media-error-title">Preview unavailable</p>
       <p className="media-error-message">{message}</p>
     </div>
-  );
-}
-
-function TimelineGapOverlay() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        background: "#000",
-        pointerEvents: "none",
-        zIndex: 2,
-      }}
-      aria-hidden="true"
-    />
   );
 }
 
