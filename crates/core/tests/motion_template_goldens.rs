@@ -226,3 +226,223 @@ fn kinetic_text_word_boxes_are_non_overlapping() {
         );
     }
 }
+
+fn highlight_box_pulse_spec() -> MotionTemplateSpec {
+    MotionTemplateSpec::HighlightBox {
+        x: 0.2,
+        y: 0.25,
+        width: 0.35,
+        height: 0.3,
+        pulse: true,
+    }
+}
+
+#[test]
+fn highlight_box_matches_golden() {
+    let spec = highlight_box_pulse_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("highlight box should expand");
+    let actual =
+        serde_json::to_string_pretty(&expansion.layers).expect("serialize expansion layers");
+    assert_matches_golden("highlight_box.json", &actual);
+}
+
+#[test]
+fn highlight_box_no_pulse_matches_golden() {
+    let spec = MotionTemplateSpec::HighlightBox {
+        x: 0.2,
+        y: 0.25,
+        width: 0.35,
+        height: 0.3,
+        pulse: false,
+    };
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("highlight box should expand");
+    let actual =
+        serde_json::to_string_pretty(&expansion.layers).expect("serialize expansion layers");
+    assert_matches_golden("highlight_box_no_pulse.json", &actual);
+}
+
+#[test]
+fn highlight_box_rejects_out_of_range_fractions() {
+    let spec = MotionTemplateSpec::HighlightBox {
+        x: 1.2,
+        y: 0.25,
+        width: 0.35,
+        height: 0.3,
+        pulse: false,
+    };
+    let result = expand_template(&spec, 3.0, 30.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn highlight_box_rejects_non_positive_width_or_height() {
+    let spec = MotionTemplateSpec::HighlightBox {
+        x: 0.2,
+        y: 0.25,
+        width: 0.0,
+        height: 0.3,
+        pulse: false,
+    };
+    let result = expand_template(&spec, 3.0, 30.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn highlight_box_pulse_uses_deterministic_scale_keyframes() {
+    let spec = highlight_box_pulse_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("highlight box should expand");
+    let layer = &expansion.layers[0];
+    let animations = layer.motion_animations();
+
+    let scale = animations
+        .iter()
+        .find(|a| a.parameter == "overlay.scale")
+        .expect("pulsing box has an overlay.scale animation");
+    assert_eq!(
+        scale.keyframes.len(),
+        5,
+        "expected 5 explicit pulse keyframes (1.0 -> 1.04 -> 1.0 -> 1.04 -> 1.0), got {}",
+        scale.keyframes.len()
+    );
+    let values: Vec<f64> = scale.keyframes.iter().map(|kf| kf.value).collect();
+    assert_eq!(values, vec![1.0, 1.04, 1.0, 1.04, 1.0]);
+    for window in scale.keyframes.windows(2) {
+        assert!(
+            window[1].time_s > window[0].time_s,
+            "pulse keyframe times must be strictly increasing, got {:?}",
+            scale
+                .keyframes
+                .iter()
+                .map(|kf| kf.time_s)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let opacity = animations
+        .iter()
+        .find(|a| a.parameter == "overlay.opacity")
+        .expect("box has an overlay.opacity animation");
+    assert_eq!(opacity.keyframes.first().unwrap().value, 0.0);
+    let pop_in_end = opacity
+        .keyframes
+        .iter()
+        .find(|kf| kf.time_s > 0.0)
+        .expect("opacity has a pop-in end keyframe");
+    assert_eq!(pop_in_end.value, 0.85);
+    assert_eq!(pop_in_end.time_s, 0.15);
+}
+
+#[test]
+fn highlight_box_no_pulse_has_no_scale_animation() {
+    let spec = MotionTemplateSpec::HighlightBox {
+        x: 0.2,
+        y: 0.25,
+        width: 0.35,
+        height: 0.3,
+        pulse: false,
+    };
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("highlight box should expand");
+    let animations = expansion.layers[0].motion_animations();
+    assert!(
+        animations.iter().all(|a| a.parameter != "overlay.scale"),
+        "non-pulsing box should not have an overlay.scale animation"
+    );
+}
+
+fn progress_bar_spec() -> MotionTemplateSpec {
+    MotionTemplateSpec::ProgressBar {
+        from: 0.1,
+        to: 0.75,
+        y: 0.9,
+        color: None,
+    }
+}
+
+#[test]
+fn progress_bar_matches_golden() {
+    let spec = progress_bar_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("progress bar should expand");
+    let actual =
+        serde_json::to_string_pretty(&expansion.layers).expect("serialize expansion layers");
+    assert_matches_golden("progress_bar.json", &actual);
+}
+
+#[test]
+fn progress_bar_custom_color_matches_golden() {
+    let spec = MotionTemplateSpec::ProgressBar {
+        from: 0.0,
+        to: 0.6,
+        y: 0.9,
+        color: Some("#00FF00".to_string()),
+    };
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("progress bar should expand");
+    let actual =
+        serde_json::to_string_pretty(&expansion.layers).expect("serialize expansion layers");
+    assert_matches_golden("progress_bar_custom_color.json", &actual);
+}
+
+#[test]
+fn progress_bar_rejects_from_not_less_than_to() {
+    let spec = MotionTemplateSpec::ProgressBar {
+        from: 0.75,
+        to: 0.75,
+        y: 0.9,
+        color: None,
+    };
+    let result = expand_template(&spec, 3.0, 30.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn progress_bar_rejects_out_of_range_to() {
+    let spec = MotionTemplateSpec::ProgressBar {
+        from: 0.1,
+        to: 1.2,
+        y: 0.9,
+        color: None,
+    };
+    let result = expand_template(&spec, 3.0, 30.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn progress_bar_is_left_anchored_with_static_width_and_linear_scale() {
+    let spec = progress_bar_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("progress bar should expand");
+    let layer = &expansion.layers[0];
+
+    let anchor_x = layer
+        .params
+        .get("anchor_x")
+        .and_then(serde_json::Value::as_f64)
+        .expect("progress bar has anchor_x");
+    assert_eq!(anchor_x, 0.0, "progress bar must be left-anchored");
+
+    let width = layer
+        .params
+        .get("width")
+        .and_then(serde_json::Value::as_f64)
+        .expect("progress bar has width");
+    assert_eq!(width, 0.75, "static width should equal `to`");
+
+    let height = layer
+        .params
+        .get("height")
+        .and_then(serde_json::Value::as_f64)
+        .expect("progress bar has height");
+    assert_eq!(height, 0.012, "progress bar should be thin");
+
+    let animations = layer.motion_animations();
+    let scale = animations
+        .iter()
+        .find(|a| a.parameter == "overlay.scale")
+        .expect("progress bar has an overlay.scale animation");
+    assert_eq!(
+        scale.keyframes.len(),
+        2,
+        "linear scale is a two-keyframe ramp"
+    );
+    assert_eq!(scale.keyframes[0].time_s, 0.0);
+    assert_eq!(scale.keyframes[0].value, 0.1 / 0.75);
+    assert_eq!(scale.keyframes[1].value, 1.0);
+}

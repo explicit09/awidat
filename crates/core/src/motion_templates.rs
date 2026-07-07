@@ -9,9 +9,10 @@
 //! `apply_edl`'s replace-by-id contract instead of accumulating
 //! duplicate layers.
 //!
-//! Only [`MotionTemplateSpec::LowerThird`] is expanded so far; the
-//! remaining variants are wired into the enum ahead of their expanders
-//! landing in later tasks.
+//! All four variants ([`MotionTemplateSpec::LowerThird`],
+//! [`MotionTemplateSpec::KineticText`],
+//! [`MotionTemplateSpec::HighlightBox`], and
+//! [`MotionTemplateSpec::ProgressBar`]) are expanded.
 
 use std::collections::BTreeMap;
 
@@ -123,11 +124,15 @@ pub fn expand_template(
         MotionTemplateSpec::KineticText { words, anchor } => {
             expand_kinetic_text(words, *anchor, scene_duration_s)
         }
-        MotionTemplateSpec::HighlightBox { .. } => {
-            Err("expand_template: HighlightBox is not implemented yet (Task 2+)".to_string())
-        }
-        MotionTemplateSpec::ProgressBar { .. } => {
-            Err("expand_template: ProgressBar is not implemented yet (Task 2+)".to_string())
+        MotionTemplateSpec::HighlightBox {
+            x,
+            y,
+            width,
+            height,
+            pulse,
+        } => expand_highlight_box(*x, *y, *width, *height, *pulse, scene_duration_s),
+        MotionTemplateSpec::ProgressBar { from, to, y, color } => {
+            expand_progress_bar(*from, *to, *y, color.as_deref(), scene_duration_s)
         }
     }
 }
@@ -534,6 +539,280 @@ fn fade_opacity_animation(
             Keyframe::linear(slide_s, 1.0),
             Keyframe::linear(duration_s - slide_s, 1.0),
             Keyframe::linear(duration_s, 0.0),
+        ],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
+}
+
+/// Pop-in duration for a highlight box: `overlay.opacity` fades 0→0.85
+/// over this window before the box settles (and, when pulsing, starts
+/// its scale loop).
+const HIGHLIGHT_BOX_POP_IN_S: f64 = 0.15;
+
+/// Peak opacity a highlight box settles to after its pop-in.
+const HIGHLIGHT_BOX_OPACITY: f64 = 0.85;
+
+/// Scale a pulsing highlight box grows to at each pulse peak.
+const HIGHLIGHT_BOX_PULSE_SCALE: f64 = 1.04;
+
+/// Duration of one pulse half-cycle (rest→peak or peak→rest), in
+/// seconds. Two full pulses (rest→peak→rest→peak→rest, 4 half-cycles)
+/// are spread across the layer window starting after the pop-in.
+const HIGHLIGHT_BOX_PULSE_HALF_CYCLE_S: f64 = 0.5;
+
+/// Accent color for highlight-box/progress-bar shape layers, mirroring
+/// `plan_motion_scene`'s `callout_accent_layer` accent
+/// (`crates/core/src/tools/plan_motion_scene.rs`). Not imported
+/// directly: that constant is inlined in the callout layer builder
+/// rather than exposed, so the value is mirrored here instead of
+/// duplicating a cross-crate dependency for one color literal.
+const TEMPLATE_ACCENT_COLOR: &str = "#F6C85F";
+
+/// Highlight box: a `Shape` rectangle at the given box, with an
+/// `overlay.opacity` 0→[`HIGHLIGHT_BOX_OPACITY`] pop over
+/// [`HIGHLIGHT_BOX_POP_IN_S`]. When `pulse` is set, an `overlay.scale`
+/// animation plays two full rest→peak→rest cycles as five explicit
+/// keyframes (1.0 → 1.04 → 1.0 → 1.04 → 1.0) spread across the layer
+/// window after the pop-in — deterministic keyframes rather than an
+/// infinite/looping animation, since neither keyframe evaluator
+/// supports loop playback.
+fn expand_highlight_box(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    pulse: bool,
+    scene_duration_s: f64,
+) -> Result<TemplateExpansion, String> {
+    if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+        return Err(format!(
+            "expand_template: HighlightBox x must be within [0, 1], got {x}"
+        ));
+    }
+    if !y.is_finite() || !(0.0..=1.0).contains(&y) {
+        return Err(format!(
+            "expand_template: HighlightBox y must be within [0, 1], got {y}"
+        ));
+    }
+    if !width.is_finite() || width <= 0.0 || width > 1.0 {
+        return Err(format!(
+            "expand_template: HighlightBox width must be within (0, 1], got {width}"
+        ));
+    }
+    if !height.is_finite() || height <= 0.0 || height > 1.0 {
+        return Err(format!(
+            "expand_template: HighlightBox height must be within (0, 1], got {height}"
+        ));
+    }
+
+    let mut animations = vec![highlight_box_opacity_animation()];
+    if pulse {
+        animations.push(highlight_box_pulse_scale_animation(scene_duration_s));
+    }
+
+    let layer = MotionSceneLayer {
+        id: "highlight-box".into(),
+        kind: MotionSceneLayerKind::Shape,
+        from_s: 0.0,
+        duration_s: scene_duration_s,
+        z_index: 8,
+        params: BTreeMap::from([
+            ("shape".into(), serde_json::json!("rectangle")),
+            ("x".into(), serde_json::json!(x)),
+            ("y".into(), serde_json::json!(y)),
+            ("width".into(), serde_json::json!(width)),
+            ("height".into(), serde_json::json!(height)),
+            ("color".into(), serde_json::json!(TEMPLATE_ACCENT_COLOR)),
+            ("opacity".into(), serde_json::json!(HIGHLIGHT_BOX_OPACITY)),
+            ("animations".into(), serde_json::json!(animations)),
+        ]),
+    };
+
+    let rationale = if pulse {
+        format!("Pulsing highlight box at ({x:.2}, {y:.2}), {width:.2}x{height:.2}.")
+    } else {
+        format!("Highlight box at ({x:.2}, {y:.2}), {width:.2}x{height:.2}.")
+    };
+
+    Ok(TemplateExpansion {
+        layers: vec![layer],
+        rationale,
+    })
+}
+
+/// `overlay.opacity` pop-in keyframes: 0→[`HIGHLIGHT_BOX_OPACITY`] over
+/// [`HIGHLIGHT_BOX_POP_IN_S`]. The last keyframe value is > 0, so
+/// `motion_animations_with_scene_fade` appends the scene-default exit
+/// fade at render/preview time.
+fn highlight_box_opacity_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::Keyframe;
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.opacity".into(),
+        keyframes: vec![
+            Keyframe::linear(0.0, 0.0),
+            Keyframe::linear(HIGHLIGHT_BOX_POP_IN_S, HIGHLIGHT_BOX_OPACITY),
+        ],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
+}
+
+/// `overlay.scale` pulse keyframes: five explicit rest/peak samples
+/// (1.0 → 1.04 → 1.0 → 1.04 → 1.0) starting after the opacity pop-in
+/// and spaced [`HIGHLIGHT_BOX_PULSE_HALF_CYCLE_S`] apart, clamped so
+/// the last keyframe never exceeds `duration_s`. This reads as two
+/// pulses without an infinite/looping animation, which the keyframe
+/// evaluators do not support.
+fn highlight_box_pulse_scale_animation(
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::Keyframe;
+
+    let pop_in_end_s = HIGHLIGHT_BOX_POP_IN_S.min(duration_s);
+    // Four half-cycle steps after the pop-in settle, compressed to fit
+    // when the layer window is shorter than the default pulse pacing.
+    let remaining_s = (duration_s - pop_in_end_s).max(0.0);
+    let half_cycle_s = HIGHLIGHT_BOX_PULSE_HALF_CYCLE_S.min((remaining_s / 4.0).max(0.001));
+
+    let values = [
+        1.0,
+        HIGHLIGHT_BOX_PULSE_SCALE,
+        1.0,
+        HIGHLIGHT_BOX_PULSE_SCALE,
+        1.0,
+    ];
+    let mut keyframes = Vec::with_capacity(values.len());
+    for (i, value) in values.into_iter().enumerate() {
+        let time_s = (pop_in_end_s + half_cycle_s * i as f64).min(duration_s);
+        keyframes.push(Keyframe::linear(time_s, value));
+    }
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.scale".into(),
+        keyframes,
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
+}
+
+/// Thin bar height, as a fraction of canvas height.
+const PROGRESS_BAR_HEIGHT: f64 = 0.012;
+
+/// Growth animation duration for a progress bar, in seconds (clamped
+/// to the layer window when the scene is shorter).
+const PROGRESS_BAR_GROW_S: f64 = 0.6;
+
+/// Progress bar: a thin, left-anchored `Shape` rectangle whose visual
+/// width grows via a uniform `overlay.scale` ramp rather than an
+/// animated `width` parameter.
+///
+/// The trick: the layer's static box `width` is set to the *final*
+/// fraction (`to`), `anchor_x` is pinned to `0.0` (left edge), and
+/// `overlay.scale` ramps linearly from `from / to` to `1.0`. Because
+/// the scale multiplies around the left anchor, the bar's visible
+/// right edge grows from `from` to `to` while its left edge stays
+/// fixed — the same left-anchored-scale technique
+/// [`slide_x_animation`] pairs with for lower-third slides.
+///
+/// The scale is uniform, so it also scales `height` by the same
+/// factor; kept thin at [`PROGRESS_BAR_HEIGHT`], this vertical
+/// squash/stretch is visually negligible. The clean fix is an
+/// animatable `overlay.width` parameter (grow the box's width
+/// directly, independent of height) — deferred; today's `width` param
+/// is a static per-layer number, not a keyframed one, so this scale
+/// trick is the only way to grow this shape's width over time with the
+/// current MotionScene animation surface.
+fn expand_progress_bar(
+    from: f64,
+    to: f64,
+    y: f64,
+    color: Option<&str>,
+    scene_duration_s: f64,
+) -> Result<TemplateExpansion, String> {
+    if !from.is_finite() || !to.is_finite() {
+        return Err(format!(
+            "expand_template: ProgressBar from ({from}) and to ({to}) must be finite"
+        ));
+    }
+    if !(0.0..1.0).contains(&from) {
+        return Err(format!(
+            "expand_template: ProgressBar from must be within [0, 1), got {from}"
+        ));
+    }
+    if to <= from {
+        return Err(format!(
+            "expand_template: ProgressBar to ({to}) must be greater than from ({from})"
+        ));
+    }
+    if to > 1.0 {
+        return Err(format!(
+            "expand_template: ProgressBar to must be within (0, 1], got {to}"
+        ));
+    }
+    if !y.is_finite() || !(0.0..=1.0).contains(&y) {
+        return Err(format!(
+            "expand_template: ProgressBar y must be within [0, 1], got {y}"
+        ));
+    }
+    let color = color
+        .map(str::trim)
+        .filter(|color| !color.is_empty())
+        .unwrap_or(TEMPLATE_ACCENT_COLOR);
+
+    let layer = MotionSceneLayer {
+        id: "progress-bar".into(),
+        kind: MotionSceneLayerKind::Shape,
+        from_s: 0.0,
+        duration_s: scene_duration_s,
+        z_index: 8,
+        params: BTreeMap::from([
+            ("shape".into(), serde_json::json!("rectangle")),
+            ("x".into(), serde_json::json!(0.0)),
+            ("y".into(), serde_json::json!(y)),
+            ("width".into(), serde_json::json!(to)),
+            ("height".into(), serde_json::json!(PROGRESS_BAR_HEIGHT)),
+            ("anchor_x".into(), serde_json::json!(0.0)),
+            ("color".into(), serde_json::json!(color)),
+            ("opacity".into(), serde_json::json!(1.0)),
+            (
+                "animations".into(),
+                serde_json::json!([progress_bar_scale_animation(from, to, scene_duration_s)]),
+            ),
+        ]),
+    };
+
+    let rationale = format!("Progress bar from {from:.2} to {to:.2}.");
+
+    Ok(TemplateExpansion {
+        layers: vec![layer],
+        rationale,
+    })
+}
+
+/// `overlay.scale` linear ramp from `from / to` (the fraction of the
+/// static `to`-sized box that represents the starting value) to `1.0`
+/// (full `to`-sized box), across the layer duration (clamped to
+/// [`PROGRESS_BAR_GROW_S`]).
+fn progress_bar_scale_animation(
+    from: f64,
+    to: f64,
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::Keyframe;
+
+    let grow_s = PROGRESS_BAR_GROW_S.min(duration_s);
+    let start_scale = from / to;
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.scale".into(),
+        keyframes: vec![
+            Keyframe::linear(0.0, start_scale),
+            Keyframe::linear(grow_s, 1.0),
         ],
         pre_extrapolation: Default::default(),
         post_extrapolation: Default::default(),
@@ -981,5 +1260,207 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn highlight_box_expands_to_valid_shape_layer() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            pulse: true,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("highlight box should expand");
+        assert_eq!(expansion.layers.len(), 1);
+        let layer = &expansion.layers[0];
+        assert_eq!(layer.id, "highlight-box");
+        assert_eq!(layer.kind, MotionSceneLayerKind::Shape);
+
+        let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_box_rejects_x_out_of_range() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: -0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_rejects_y_out_of_range() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 1.5,
+            width: 0.3,
+            height: 0.25,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_rejects_zero_width() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 0.2,
+            width: 0.0,
+            height: 0.25,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_rejects_negative_height() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: -0.1,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_pulse_keyframes_stay_within_layer_duration() {
+        // Short scene: the pulse cycle must compress to fit instead of
+        // overrunning `scene.validate()`'s duration bound.
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            pulse: true,
+        };
+
+        let expansion = expand_template(&spec, 0.3, 30.0).expect("highlight box should expand");
+        let scene = wrap_in_scene(expansion.layers, 0.3, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn progress_bar_expands_to_valid_shape_layer() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.2,
+            to: 0.8,
+            y: 0.9,
+            color: None,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("progress bar should expand");
+        assert_eq!(expansion.layers.len(), 1);
+        let layer = &expansion.layers[0];
+        assert_eq!(layer.id, "progress-bar");
+        assert_eq!(layer.kind, MotionSceneLayerKind::Shape);
+
+        let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn progress_bar_rejects_from_equal_to_to() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.5,
+            to: 0.5,
+            y: 0.9,
+            color: None,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn progress_bar_rejects_from_greater_than_to() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.9,
+            to: 0.5,
+            y: 0.9,
+            color: None,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn progress_bar_rejects_negative_from() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: -0.1,
+            to: 0.5,
+            y: 0.9,
+            color: None,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn progress_bar_rejects_to_greater_than_one() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.1,
+            to: 1.5,
+            y: 0.9,
+            color: None,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn progress_bar_custom_color_overrides_default_accent() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.1,
+            to: 0.5,
+            y: 0.9,
+            color: Some("#00FF00".to_string()),
+        };
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("progress bar should expand");
+        let color = expansion.layers[0]
+            .params
+            .get("color")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert_eq!(color, "#00FF00");
+    }
+
+    #[test]
+    fn progress_bar_defaults_to_template_accent_color() {
+        let spec = MotionTemplateSpec::ProgressBar {
+            from: 0.1,
+            to: 0.5,
+            y: 0.9,
+            color: None,
+        };
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("progress bar should expand");
+        let color = expansion.layers[0]
+            .params
+            .get("color")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert_eq!(color, TEMPLATE_ACCENT_COLOR);
     }
 }
