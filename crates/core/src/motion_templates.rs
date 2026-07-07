@@ -68,7 +68,12 @@ pub struct KineticWord {
     pub text: String,
     /// Time the word appears, in scene-local seconds.
     pub at_s: f64,
-    /// How long the word holds on screen, in seconds.
+    /// How long the word holds on screen, in seconds, after its pop-in.
+    /// `0.0` means "run to the end of the scene" (the word never gets
+    /// its own exit before the scene does); a positive value caps the
+    /// layer's `duration_s` at `at_s + hold_s`, clamped to the scene
+    /// duration, so the word can exit before the scene ends. Must be
+    /// non-negative.
     pub hold_s: f64,
 }
 
@@ -294,11 +299,13 @@ const KINETIC_WORD_GAP: f64 = 0.012;
 const KINETIC_WORD_HEIGHT: f64 = 0.08;
 
 /// Word-by-word kinetic-text cascade: one Text layer per word,
-/// `kinetic-word-<i>`, appearing at its own `at_s` and holding through
-/// the rest of the scene (the scene-default exit fade handles the
-/// out). Words lay out on a single line with cumulative x offsets
-/// estimated via [`montage_render::fit_text_to_width_px`] character
-/// metrics, anchored per `anchor`.
+/// `kinetic-word-<i>`, appearing at its own `at_s`. A word with
+/// `hold_s == 0.0` holds through the rest of the scene (the
+/// scene-default exit fade handles the out); a word with a positive
+/// `hold_s` exits after `at_s + hold_s` (clamped to the scene
+/// duration) instead. Words lay out on a single line with cumulative
+/// x offsets estimated via [`montage_render::fit_text_to_width_px`]
+/// character metrics, anchored per `anchor`.
 fn expand_kinetic_text(
     words: &[KineticWord],
     anchor: TextAnchor,
@@ -323,6 +330,12 @@ fn expand_kinetic_text(
             return Err(format!(
                 "expand_template: KineticText word {i} at_s ({}) must be before scene_duration_s ({scene_duration_s})",
                 word.at_s
+            ));
+        }
+        if !word.hold_s.is_finite() || word.hold_s < 0.0 {
+            return Err(format!(
+                "expand_template: KineticText word {i} hold_s must be non-negative, got {}",
+                word.hold_s
             ));
         }
     }
@@ -358,7 +371,12 @@ fn expand_kinetic_text(
     for (i, word) in words.iter().enumerate() {
         let width_frac = word_widths_frac[i];
         let from_s = word.at_s;
-        let duration_s = (scene_duration_s - from_s).max(0.01);
+        let run_to_scene_end_s = (scene_duration_s - from_s).max(0.01);
+        let duration_s = if word.hold_s > 0.0 {
+            word.hold_s.min(run_to_scene_end_s)
+        } else {
+            run_to_scene_end_s
+        };
 
         let layer = MotionSceneLayer {
             id: format!("kinetic-word-{i}"),
@@ -434,22 +452,25 @@ fn pop_in_opacity_animation() -> montage_proto::professional::MotionSceneLayerAn
 
 /// `overlay.scale` pop-in keyframes: starts overshot at
 /// [`KINETIC_POP_IN_SCALE`] and springs to its 1.0 settle target over
-/// [`KINETIC_POP_IN_S`] using [`KINETIC_SPRING`] parameters. The
-/// spring keyframe's `value` is the settle target the spring resolves
-/// to, matching how `Keyframe::spring` segments are conventionally
-/// emitted elsewhere (see `KeyframeInterpolation::Spring` docs).
+/// [`KINETIC_POP_IN_S`] using [`KINETIC_SPRING`] parameters. Both
+/// keyframe evaluators (desktop `evaluateAnimationValue` and
+/// `montage_render::animation::evaluate_keyframes_with_extrapolation`)
+/// read `interpolation`/`spring` off the segment-*start* keyframe to
+/// drive the segment ending at the next keyframe, so the spring params
+/// live on the overshoot start keyframe (`time_s` 0.0); the end
+/// keyframe (`time_s` [`KINETIC_POP_IN_S`]) is the plain settle target.
 fn pop_in_scale_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
     use montage_proto::professional::{Keyframe, KeyframeInterpolation};
 
-    let settle = Keyframe {
+    let overshoot_start = Keyframe {
         spring: Some(KINETIC_SPRING),
         interpolation: KeyframeInterpolation::Spring,
-        ..Keyframe::linear(KINETIC_POP_IN_S, 1.0)
+        ..Keyframe::linear(0.0, KINETIC_POP_IN_SCALE)
     };
 
     montage_proto::professional::MotionSceneLayerAnimation {
         parameter: "overlay.scale".into(),
-        keyframes: vec![Keyframe::linear(0.0, KINETIC_POP_IN_SCALE), settle],
+        keyframes: vec![overshoot_start, Keyframe::linear(KINETIC_POP_IN_S, 1.0)],
         pre_extrapolation: Default::default(),
         post_extrapolation: Default::default(),
         motion_path: None,
@@ -677,12 +698,12 @@ mod tests {
                 KineticWord {
                     text: "hello".to_string(),
                     at_s: 0.0,
-                    hold_s: 0.5,
+                    hold_s: 0.0,
                 },
                 KineticWord {
                     text: "world".to_string(),
                     at_s: 0.3,
-                    hold_s: 0.5,
+                    hold_s: 0.0,
                 },
             ],
             anchor: TextAnchor::Center,
@@ -694,6 +715,60 @@ mod tests {
         assert_eq!(expansion.layers[1].from_s, 0.3);
         assert_eq!(expansion.layers[0].duration_s, 4.0);
         assert_eq!(expansion.layers[1].duration_s, 4.0 - 0.3);
+    }
+
+    #[test]
+    fn kinetic_text_positive_hold_s_caps_duration_before_scene_end() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "hello".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "world".to_string(),
+                    at_s: 0.3,
+                    // hold_s would run past the scene end from at_s, so
+                    // it must clamp to the remaining scene duration.
+                    hold_s: 10.0,
+                },
+            ],
+            anchor: TextAnchor::Center,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        assert_eq!(
+            expansion.layers[0].duration_s, 0.5,
+            "positive hold_s should cap duration_s instead of running to scene end"
+        );
+        assert_eq!(
+            expansion.layers[1].duration_s,
+            4.0 - 0.3,
+            "hold_s exceeding the remaining scene duration should clamp to the scene end"
+        );
+
+        let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn kinetic_text_rejects_negative_hold_s() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![KineticWord {
+                text: "hello".to_string(),
+                at_s: 0.0,
+                hold_s: -0.1,
+            }],
+            anchor: TextAnchor::Center,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -842,19 +917,36 @@ mod tests {
             .iter()
             .find(|a| a.parameter == "overlay.scale")
             .expect("word has an overlay.scale animation");
-        assert_eq!(scale.keyframes.first().unwrap().value, 1.15);
-        let settle = scale.keyframes.get(1).expect("scale has a settle keyframe");
-        assert_eq!(settle.value, 1.0);
+
+        // Both keyframe evaluators (desktop and render) read
+        // interpolation/spring off the segment-start keyframe, so the
+        // spring must be on keyframes[0] (time_s 0.0) for it to fire at
+        // all; putting it on the end keyframe silently renders linear.
+        let overshoot_start = scale
+            .keyframes
+            .first()
+            .expect("scale has an overshoot start keyframe");
+        assert_eq!(overshoot_start.time_s, 0.0);
+        assert_eq!(overshoot_start.value, 1.15);
         assert_eq!(
-            settle.interpolation,
+            overshoot_start.interpolation,
             montage_proto::professional::KeyframeInterpolation::Spring
         );
-        let spring = settle
+        let spring = overshoot_start
             .spring
-            .expect("settle keyframe carries spring params");
+            .expect("overshoot start keyframe carries spring params");
         assert_eq!(spring.mass, 1.0);
         assert_eq!(spring.stiffness, 180.0);
         assert_eq!(spring.damping, 12.0);
+
+        let settle = scale.keyframes.get(1).expect("scale has a settle keyframe");
+        assert_eq!(settle.time_s, 0.12);
+        assert_eq!(settle.value, 1.0);
+        assert_eq!(
+            settle.interpolation,
+            montage_proto::professional::KeyframeInterpolation::Linear,
+            "settle keyframe should be the plain target, not carry its own interpolation"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
     "id": "kinetic-word-0",
     "kind": "text",
     "from_s": 0.0,
-    "duration_s": 3.0,
+    "duration_s": 0.4,
     "z_index": 12,
     "params": {
       "align": "left",
@@ -31,18 +31,18 @@
           "keyframes": [
             {
               "easing": "linear",
-              "interpolation": "linear",
-              "time_s": 0.0,
-              "value": 1.15
-            },
-            {
-              "easing": "linear",
               "interpolation": "spring",
               "spring": {
                 "damping": 12.0,
                 "mass": 1.0,
                 "stiffness": 180.0
               },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
               "time_s": 0.12,
               "value": 1.0
             }
@@ -65,7 +65,7 @@
     "id": "kinetic-word-1",
     "kind": "text",
     "from_s": 0.25,
-    "duration_s": 2.75,
+    "duration_s": 0.4,
     "z_index": 12,
     "params": {
       "align": "left",
@@ -93,18 +93,18 @@
           "keyframes": [
             {
               "easing": "linear",
-              "interpolation": "linear",
-              "time_s": 0.0,
-              "value": 1.15
-            },
-            {
-              "easing": "linear",
               "interpolation": "spring",
               "spring": {
                 "damping": 12.0,
                 "mass": 1.0,
                 "stiffness": 180.0
               },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
               "time_s": 0.12,
               "value": 1.0
             }
@@ -127,7 +127,7 @@
     "id": "kinetic-word-2",
     "kind": "text",
     "from_s": 0.5,
-    "duration_s": 2.5,
+    "duration_s": 0.4,
     "z_index": 12,
     "params": {
       "align": "left",
@@ -155,18 +155,18 @@
           "keyframes": [
             {
               "easing": "linear",
-              "interpolation": "linear",
-              "time_s": 0.0,
-              "value": 1.15
-            },
-            {
-              "easing": "linear",
               "interpolation": "spring",
               "spring": {
                 "damping": 12.0,
                 "mass": 1.0,
                 "stiffness": 180.0
               },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
               "time_s": 0.12,
               "value": 1.0
             }
