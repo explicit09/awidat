@@ -27,14 +27,12 @@ The main repo owns the stable product contract:
 
 ## Decision Layer
 
-Transition execution is separate from transition taste. The strategy for
-choosing whether a cut should stay hard, use a built-in transition, or
-use an on-the-spot `montage.composite` recipe lives in
-[`transition-decision-layer.md`](transition-decision-layer.md).
-
-That layer defines the cut context packet, signal sources, decision
-policy, implementation phases, and evaluation fixtures for agent
-transition judgment.
+Transition execution is separate from transition taste. The decision layer
+is implemented as the `transition_context` and `plan_transition` tools
+(`crates/core/src/tools/`), with `validate_transition_choice` for
+post-application checks and the `skills/transition-director` workflow
+gluing them together: build the cut context packet, plan a hard cut or a
+motivated transition, apply via EDL, then verify.
 
 ## Phase Two
 

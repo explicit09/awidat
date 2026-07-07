@@ -29,6 +29,28 @@ a RELOCATED line (not written copy), and the cold open is the short.
 
 ## Editorial principles
 
+- **Every beat must survive decontextualization.** A viewer with zero
+  context must either understand the claim or feel a *specific* question —
+  never "what's going on?". Four failure classes to avoid (from real
+  review, 2026-07-07):
+  1. *Mid-clause entry* — starting on a word boundary that isn't a clause
+     boundary ("...that say they're CEOs is way too much").
+  2. *Orphaned pronouns* — "it/that/this" with no antecedent in the beat.
+     (Exception: a person-mystery can hook — "she still hasn't signed the
+     papers" works *because* you want to know who/what.)
+  3. *Trailing truncation* — ending on "if/for/so we". End on a content
+     word; truncate only as a deliberate cliffhanger.
+  4. *Setup without payoff* — "we talked to them and we're like," …and?
+- **Cut on clauses, not just words.** Word-boundary alignment is the
+  mechanical floor; the editorial unit is the complete clause.
+- **Word-accurate transcript only.** Segment-level or synthesized timings
+  drift seconds; align beats against word timestamps (parakeet/whisper
+  word level). If the index lacks word accuracy, request re-indexing
+  before cutting.
+- **Every video beat needs its audio twin.** Insert linked audio (A1)
+  with identical source ranges — a silent cold open fails the loudness
+  gate.
+
 - **The hook is transplanted, not written.** Find the single most
   provocative line of the episode — a claim, a confession, a number, a
   contradiction — and place it at 0:00. It should recur naturally in the
