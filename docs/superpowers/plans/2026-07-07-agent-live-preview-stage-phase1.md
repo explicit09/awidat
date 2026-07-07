@@ -1,6 +1,6 @@
 # Agent Live-Preview Stage — Phase 1 Implementation Plan (Stage extraction + verification harness)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Extract the preview overlay stack into a `Stage` compositor and build the deterministic
 harness + gates that let an autonomous loop judge its own preview changes.
@@ -47,7 +47,7 @@ surface the failure. Task 10 is a mandatory STOP.
 - Produces: `scripts/loop-cargo.sh <cargo-args…>` (runs cargo with external target dir, mount-guarded);
   `scripts/stage-verify.sh` (Phase-1 cumulative gate: desktop `npm test`; later tasks append).
 
-- [ ] **Step 1: Write `scripts/loop-cargo.sh`**
+- [x] **Step 1: Write `scripts/loop-cargo.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -71,7 +71,7 @@ fi
 exit $status
 ```
 
-- [ ] **Step 2: Write `scripts/stage-verify.sh`**
+- [x] **Step 2: Write `scripts/stage-verify.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -82,12 +82,12 @@ cd "$(git rev-parse --show-toplevel)"
 ( cd apps/desktop && npm test )
 ```
 
-- [ ] **Step 3: Make both executable, run stage-verify to confirm green baseline**
+- [x] **Step 3: Make both executable, run stage-verify to confirm green baseline**
 
 Run: `chmod +x scripts/loop-cargo.sh scripts/stage-verify.sh && ./scripts/stage-verify.sh; echo EXIT=$?`
 Expected: `EXIT=0` (baseline: 22 suites pass as of plan time)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/loop-cargo.sh scripts/stage-verify.sh
@@ -120,7 +120,7 @@ git commit -m "loop: cargo mount-guard wrapper + cumulative stage verify gate"
   this is what the harness mounts. `livePreviewClock` adapts the existing `PreviewClock`
   accessors in `SegmentedVideoView.tsx` (see `previewClockNow`, lines ~156-190).
 
-- [ ] **Step 1: Write the failing test** (`apps/desktop/tests/stage-clock.test.ts`)
+- [x] **Step 1: Write the failing test** (`apps/desktop/tests/stage-clock.test.ts`)
 
 ```ts
 import { strict as assert } from "node:assert";
@@ -142,20 +142,20 @@ assert.equal(live.rate(), 1.5);
 console.log("stage-clock: OK");
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd apps/desktop && node --experimental-strip-types tests/stage-clock.test.ts`
 Expected: FAIL (module not found)
 
-- [ ] **Step 3: Implement `stageClock.ts`** (types + two constructors exactly as in Interfaces; `livePreviewClock` returns the accessors pass-through)
+- [x] **Step 3: Implement `stageClock.ts`** (types + two constructors exactly as in Interfaces; `livePreviewClock` returns the accessors pass-through)
 
-- [ ] **Step 4: Register + chain script, run test**
+- [x] **Step 4: Register + chain script, run test**
 
 In `apps/desktop/package.json`: add `"test:stage-clock": "node --experimental-strip-types tests/stage-clock.test.ts"`, append `&& npm run test:stage-clock` to the `test` chain (before the smoke test entry).
 Run: `cd apps/desktop && npm run test:stage-clock`
 Expected: `stage-clock: OK`
 
-- [ ] **Step 5: Verify + commit**
+- [x] **Step 5: Verify + commit**
 
 Run: `./scripts/stage-verify.sh`
 ```bash
@@ -179,14 +179,14 @@ git commit -m "stage: StageClock interface with frozen mode for the harness"
   `isDissolveTransition` … `isPixelize`). Props unchanged.
 - Consumes: `useGpuTransitionPreview` import moves with `GpuTransitionPreview`.
 
-- [ ] **Step 1: Move lines 1058-1361 verbatim into `stage/transitions.tsx`; export the three components; move the imports they need; import them back into `SegmentedVideoView.tsx`**
+- [x] **Step 1: Move lines 1058-1361 verbatim into `stage/transitions.tsx`; export the three components; move the imports they need; import them back into `SegmentedVideoView.tsx`**
 
-- [ ] **Step 2: Typecheck + full verify**
+- [x] **Step 2: Typecheck + full verify**
 
 Run: `cd apps/desktop && npx tsc --noEmit` then, from repo root, `./scripts/stage-verify.sh`
 Expected: clean tsc, all suites green
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add apps/desktop/src/media/stage/transitions.tsx apps/desktop/src/media/SegmentedVideoView.tsx
@@ -213,9 +213,9 @@ git commit -m "stage: extract transition overlay layers (pure move)"
 - Shared helper `projectAssetUrl` (line 1914) moves to `motionScene.tsx` and is re-exported
   if titles/broadcast need it.
 
-- [ ] **Step 1: Move title pieces to `stage/titles.tsx`, motion-scene pieces to `stage/motionScene.tsx`; fix imports both directions**
-- [ ] **Step 2: Typecheck + full verify** — Run: `cd apps/desktop && npx tsc --noEmit` then `./scripts/stage-verify.sh` from root. Expected: green.
-- [ ] **Step 3: Commit** — `git commit -m "stage: extract title and motion-scene layers (pure move)"`
+- [x] **Step 1: Move title pieces to `stage/titles.tsx`, motion-scene pieces to `stage/motionScene.tsx`; fix imports both directions**
+- [x] **Step 2: Typecheck + full verify** — Run: `cd apps/desktop && npx tsc --noEmit` then `./scripts/stage-verify.sh` from root. Expected: green.
+- [x] **Step 3: Commit** — `git commit -m "stage: extract title and motion-scene layers (pure move)"`
 
 ---
 
@@ -229,9 +229,9 @@ git commit -m "stage: extract transition overlay layers (pure move)"
   `TimelineBroadcastOverlay`; update its external importers)
 - Modify: `apps/desktop/src/media/SegmentedVideoView.tsx`
 
-- [ ] **Step 1: Move both groups; `grep -rn "TimelineBroadcastOverlay" apps/desktop/src` and update all import sites**
-- [ ] **Step 2: Typecheck + full verify** — expected green.
-- [ ] **Step 3: Commit** — `git commit -m "stage: extract video-overlay and broadcast layers (pure move)"`
+- [x] **Step 1: Move both groups; `grep -rn "TimelineBroadcastOverlay" apps/desktop/src` and update all import sites**
+- [x] **Step 2: Typecheck + full verify** — expected green.
+- [x] **Step 3: Commit** — `git commit -m "stage: extract video-overlay and broadcast layers (pure move)"`
 
 ---
 
@@ -264,9 +264,9 @@ git commit -m "stage: extract transition overlay layers (pure move)"
   titles → motion scenes → broadcast), deriving `timelineTime`/`isPlaying` from `clock`.
 - Consumes: everything Tasks 3-5 exported; `StageClock` from Task 2.
 
-- [ ] **Step 1: Write `Stage.tsx`; replace the inline block in `SegmentedPlayer` with `<Stage …/>` passing `livePreviewClock(...)`**
-- [ ] **Step 2: Typecheck + full verify + smoke** — `npx tsc --noEmit`, `./scripts/stage-verify.sh` (chain ends in `tests/desktop-ui-smoke.mjs`, which exercises the real page). Expected green.
-- [ ] **Step 3: Commit** — `git commit -m "stage: Stage compositor owns the program-frame layer stack"`
+- [x] **Step 1: Write `Stage.tsx`; replace the inline block in `SegmentedPlayer` with `<Stage …/>` passing `livePreviewClock(...)`**
+- [x] **Step 2: Typecheck + full verify + smoke** — `npx tsc --noEmit`, `./scripts/stage-verify.sh` (chain ends in `tests/desktop-ui-smoke.mjs`, which exercises the real page). Expected green.
+- [x] **Step 3: Commit** — `git commit -m "stage: Stage compositor owns the program-frame layer stack"`
 
 ---
 
@@ -280,15 +280,15 @@ git commit -m "stage: extract transition overlay layers (pure move)"
 
 **Steps:**
 
-- [ ] **Step 1: Cut the fixture clip.** Editorial corpus proxies live on the Passport drive; if mounted, cut 3 s: `ffmpeg -ss <t> -t 3 -i <corpus-proxy> -vf scale=1280:720 -c:v libx264 -g 1 -crf 28 -an apps/desktop/public/fixtures/stage/clip.mp4`. If NOT mounted, fall back to deterministic synthetic: `ffmpeg -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=3" -c:v libx264 -g 1 -crf 28 -an clip.mp4` and note in the commit that a corpus clip should replace it. Confirm size `< 2MB`.
+- [x] **Step 1: Cut the fixture clip.** Editorial corpus proxies live on the Passport drive; if mounted, cut 3 s: `ffmpeg -ss <t> -t 3 -i <corpus-proxy> -vf scale=1280:720 -c:v libx264 -g 1 -crf 28 -an apps/desktop/public/fixtures/stage/clip.mp4`. If NOT mounted, fall back to deterministic synthetic: `ffmpeg -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=3" -c:v libx264 -g 1 -crf 28 -an clip.mp4` and note in the commit that a corpus clip should replace it. Confirm size `< 2MB`.
 
-- [ ] **Step 2: Write `scene-basic.json`** — one title, one rect, one image layer with keyframed opacity/position exercising today's vocabulary (shape mirrors the `PreviewTitleOverlay` / `PreviewMotionShapeOverlay` / `PreviewMotionImageOverlay` types from Task 4).
+- [x] **Step 2: Write `scene-basic.json`** — one title, one rect, one image layer with keyframed opacity/position exercising today's vocabulary (shape mirrors the `PreviewTitleOverlay` / `PreviewMotionShapeOverlay` / `PreviewMotionImageOverlay` types from Task 4).
 
-- [ ] **Step 3: Write `StageHarness.tsx`.** Reads `?t=<seconds>&scene=<url>` from `location.search`; renders a fixed 1280×720 `.timeline-program-frame` containing a paused `<video src="/fixtures/stage/clip.mp4">` seeked to `t`, and `<Stage clock={frozenClock(t)} …/>` with overlay models parsed from the scene JSON; sets `document.title = "stage-harness-ready"` only after the video `seeked` event AND fonts ready (`document.fonts.ready`) — Playwright waits on the title.
+- [x] **Step 3: Write `StageHarness.tsx`.** Reads `?t=<seconds>&scene=<url>` from `location.search`; renders a fixed 1280×720 `.timeline-program-frame` containing a paused `<video src="/fixtures/stage/clip.mp4">` seeked to `t`, and `<Stage clock={frozenClock(t)} …/>` with overlay models parsed from the scene JSON; sets `document.title = "stage-harness-ready"` only after the video `seeked` event AND fonts ready (`document.fonts.ready`) — Playwright waits on the title.
 
-- [ ] **Step 4: Manual check** — `cd apps/desktop && npx vite --port 1420` then fetch `http://127.0.0.1:1420/stage-harness?t=1.0&scene=/fixtures/stage/scene-basic.json` — expect harness DOM (verify via curl for 200 + Playwright in Task 8).
+- [x] **Step 4: Manual check** — `cd apps/desktop && npx vite --port 1420` then fetch `http://127.0.0.1:1420/stage-harness?t=1.0&scene=/fixtures/stage/scene-basic.json` — expect harness DOM (verify via curl for 200 + Playwright in Task 8).
 
-- [ ] **Step 5: Verify + commit** — `./scripts/stage-verify.sh`; `git commit -m "stage: deterministic harness route with checked-in fixture clip"`
+- [x] **Step 5: Verify + commit** — `./scripts/stage-verify.sh`; `git commit -m "stage: deterministic harness route with checked-in fixture clip"`
 
 ---
 
@@ -302,7 +302,7 @@ git commit -m "stage: extract transition overlay layers (pure move)"
 
 **Steps:**
 
-- [ ] **Step 1: Write `scripts/ssim-compare.sh`**
+- [x] **Step 1: Write `scripts/ssim-compare.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -314,13 +314,13 @@ echo "SSIM=$score (min $3)"
 awk -v s="$score" -v m="$3" 'BEGIN { exit (s+0 >= m+0) ? 0 : 1 }'
 ```
 
-- [ ] **Step 2: Write `tests/stage-harness.mjs`** — boot/reuse dev server (smoke-test pattern), `chromium.launch()`, viewport 1280×720, `deviceScaleFactor: 1`, load `/stage-harness?t=1.0&scene=/fixtures/stage/scene-basic.json`, wait for title `stage-harness-ready`, screenshot to `tests/smoke/stage-harness-t1.0.png`; assert expected overlay DOM (title text node, one shape div, one img) via selectors; if a golden for this platform exists, run `scripts/ssim-compare.sh <shot> <golden> 0.98`; if absent, write the shot AS the golden and print `golden bootstrapped` (first run self-seeds).
+- [x] **Step 2: Write `tests/stage-harness.mjs`** — boot/reuse dev server (smoke-test pattern), `chromium.launch()`, viewport 1280×720, `deviceScaleFactor: 1`, load `/stage-harness?t=1.0&scene=/fixtures/stage/scene-basic.json`, wait for title `stage-harness-ready`, screenshot to `tests/smoke/stage-harness-t1.0.png`; assert expected overlay DOM (title text node, one shape div, one img) via selectors; if a golden for this platform exists, run `scripts/ssim-compare.sh <shot> <golden> 0.98`; if absent, write the shot AS the golden and print `golden bootstrapped` (first run self-seeds).
 
-- [ ] **Step 3: Run twice** — first run bootstraps golden, second must pass compare. Expected: `SSIM=1.000000` on identical config.
+- [x] **Step 3: Run twice** — first run bootstraps golden, second must pass compare. Expected: `SSIM=1.000000` on identical config.
 
-- [ ] **Step 4: Chain it** — package.json `test:stage-harness` + append `&& npm run test:stage-harness` to `test`; append to `scripts/stage-verify.sh`.
+- [x] **Step 4: Chain it** — package.json `test:stage-harness` + append `&& npm run test:stage-harness` to `test`; append to `scripts/stage-verify.sh`.
 
-- [ ] **Step 5: Verify + commit** — `./scripts/stage-verify.sh`; commit goldens too: `git commit -m "stage: harness screenshot gate with SSIM compare"`
+- [x] **Step 5: Verify + commit** — `./scripts/stage-verify.sh`; commit goldens too: `git commit -m "stage: harness screenshot gate with SSIM compare"`
 
 ---
 
@@ -334,10 +334,10 @@ awk -v s="$score" -v m="$3" 'BEGIN { exit (s+0 >= m+0) ? 0 : 1 }'
 
 **Steps:**
 
-- [ ] **Step 1: Generate vectors FROM the TS evaluator** — script evaluates `evaluateAnimations` (`apps/desktop/src/timeline/animation.ts`) across the parameter list at `animation.ts:30-49`: for each of ~20 cases (param, keyframes incl. bezier + spring + extrapolation, sample times) record `{param, keyframes, t, expected}` to `crates/eval/fixtures/animation-vectors.json` with 1e-6 precision.
-- [ ] **Step 2: TS test** replays every vector through `evaluateAnimations`, asserts `|actual-expected| < 1e-6`. Run; expected trivially green (self-generated) — this pins today's behavior.
-- [ ] **Step 3: Rust test** in `crates/eval/tests/animation_vectors.rs` parses the same JSON and replays through the Rust evaluator (`crates/render/src/animation.rs`; add `montage-render` as dev-dependency of `crates/eval` if absent). Assert within 1e-4. Run: `./scripts/loop-cargo.sh test -p montage-eval --test animation_vectors`. Expected: PASS — **any mismatch is a real preview/export divergence: fix the RUST side only if it's provably wrong, otherwise record the divergence in the task notes and STOP for review (do not silently loosen tolerances).**
-- [ ] **Step 4: Hygiene** — `./scripts/loop-cargo.sh fmt --check` + `./scripts/loop-cargo.sh clippy -p montage-eval`; chain TS side; verify; commit `"eval: shared animation vectors pin TS↔Rust evaluator parity"`.
+- [x] **Step 1: Generate vectors FROM the TS evaluator** — script evaluates `evaluateAnimations` (`apps/desktop/src/timeline/animation.ts`) across the parameter list at `animation.ts:30-49`: for each of ~20 cases (param, keyframes incl. bezier + spring + extrapolation, sample times) record `{param, keyframes, t, expected}` to `crates/eval/fixtures/animation-vectors.json` with 1e-6 precision.
+- [x] **Step 2: TS test** replays every vector through `evaluateAnimations`, asserts `|actual-expected| < 1e-6`. Run; expected trivially green (self-generated) — this pins today's behavior.
+- [x] **Step 3: Rust test** in `crates/eval/tests/animation_vectors.rs` parses the same JSON and replays through the Rust evaluator (`crates/render/src/animation.rs`; add `montage-render` as dev-dependency of `crates/eval` if absent). Assert within 1e-4. Run: `./scripts/loop-cargo.sh test -p montage-eval --test animation_vectors`. Expected: PASS — **any mismatch is a real preview/export divergence: fix the RUST side only if it's provably wrong, otherwise record the divergence in the task notes and STOP for review (do not silently loosen tolerances).**
+- [x] **Step 4: Hygiene** — `./scripts/loop-cargo.sh fmt --check` + `./scripts/loop-cargo.sh clippy -p montage-eval`; chain TS side; verify; commit `"eval: shared animation vectors pin TS↔Rust evaluator parity"`.
 
 ---
 
