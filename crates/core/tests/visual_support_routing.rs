@@ -110,6 +110,129 @@ fn exposes_visual_reasoning_for_explainer_hybrid_requests() {
 }
 
 #[test]
+fn routes_plain_lower_third_to_title_annotation() {
+    let route = route_visual_support_request("add a lower third with the guest name and title");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::TitleAnnotation);
+    assert!(route.next_tools.contains(&"apply_edl".to_string()));
+}
+
+#[test]
+fn routes_animated_lower_third_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("add an animated lower third for the guest");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("plan_motion_scene") && step.action.contains("template=lower_third"),
+        "action should point at the template call: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_lower_third_template_request_to_motion_scene() {
+    let route = route_visual_support_request("use the lower third template for the host name");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=lower_third"),
+        "action should name the lower_third template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_kinetic_text_request_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("do a kinetic text callout for the tagline");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=kinetic_text"),
+        "action should name the kinetic_text template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_progress_bar_request_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("show a progress bar as they go through the steps");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=progress_bar"),
+        "action should name the progress_bar template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_highlight_box_request_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("highlight the signup button on screen");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=highlight_box"),
+        "action should name the highlight_box template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_highlight_box_phrase_variant_to_motion_scene() {
+    let route = route_visual_support_request("add a highlight box around the price");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=highlight_box"),
+        "action should name the highlight_box template: {}",
+        step.action
+    );
+}
+
+#[test]
 fn motion_scene_plan_step_names_required_content_args() {
     let route = route_visual_support_request(
         "turn this into a three-step animated card with a product screenshot",

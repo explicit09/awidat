@@ -108,6 +108,33 @@ pub struct VisualSupportRoute {
     pub rationale: String,
 }
 
+impl VisualSupportRoute {
+    /// When a specific `plan_motion_scene` template was matched from the
+    /// request's vocabulary, rewrite the MotionScene lane's `plan_motion_scene`
+    /// plan step (and the rationale) to name it explicitly as
+    /// `template=<x>`, so the agent's next call is obvious instead of falling
+    /// back to the freeform heuristic planner.
+    fn with_template_hint(mut self, template: Option<&'static str>) -> Self {
+        let Some(template) = template else {
+            return self;
+        };
+        for step in &mut self.plan_steps {
+            if step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene" {
+                step.action = format!(
+                    "Call `plan_motion_scene` with `template={template}` and its typed fields \
+                     for that template (see plan_motion_scene's schema); this replaces the \
+                     freeform heuristic layer builder."
+                );
+            }
+        }
+        self.rationale = format!(
+            "{} Use plan_motion_scene with template={template}.",
+            self.rationale
+        );
+        self
+    }
+}
+
 /// Read-only tool wrapper.
 pub struct PlanVisualSupportTool;
 
@@ -116,12 +143,47 @@ struct PlanVisualSupportArgs {
     request: String,
 }
 
+/// Read-only match for `plan_motion_scene`'s `template=<x>` field, drawn from
+/// the request's own vocabulary. `None` means the freeform heuristic planner
+/// applies instead of a specific prebuilt template.
+fn motion_template_hint_for_request(lower: &str) -> Option<&'static str> {
+    if contains_any(lower, &["kinetic text", "kinetic-text"]) {
+        return Some("kinetic_text");
+    }
+    if contains_any(lower, &["progress bar", "progress-bar"]) {
+        return Some("progress_bar");
+    }
+    if contains_any(lower, &["highlight box", "highlight-box"]) || lower.contains("highlight the") {
+        return Some("highlight_box");
+    }
+    if contains_any(lower, &["lower third", "lower-third"]) && wants_lower_third_template(lower) {
+        return Some("lower_third");
+    }
+    None
+}
+
+/// Whether a "lower third" request implies the animated/template lane rather
+/// than a single static title-annotation overlay.
+fn wants_lower_third_template(lower: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "animated",
+            "animate",
+            "template",
+            "name and role",
+            "name/role",
+        ],
+    )
+}
+
 /// Route a natural-language visual-support request to the smallest useful lane.
 pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
     let lower = request.to_lowercase();
     let needs = visual_needs_for_request(&lower);
     let intents = visual_intents_for_request(&lower, &needs);
     let supporting_lanes = supporting_lanes_for_request(&lower);
+    let template_hint = motion_template_hint_for_request(&lower);
 
     if contains_any(
         &lower,
@@ -188,6 +250,7 @@ pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
             "annotation",
         ],
     ) && !contains_any(&lower, &["animated", "animate", "diagram", "explainer"])
+        && template_hint != Some("lower_third")
     {
         return route(
             VisualSupportLane::TitleAnnotation,
@@ -199,26 +262,32 @@ pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
         );
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "visualize",
-            "explainer",
-            "diagram",
-            "animated",
-            "animate",
-            "kinetic",
-            "motion graphic",
-            "framework",
-            "step-by-step",
-            "three-step",
-            "chart",
-            "timeline graphic",
-            "process",
-            "callout",
-            "callouts",
-        ],
-    ) || wants_still_graphic_motion_scene(&lower)
+    if template_hint.is_some()
+        || contains_any(
+            &lower,
+            &[
+                "visualize",
+                "explainer",
+                "diagram",
+                "animated",
+                "animate",
+                "kinetic",
+                "kinetic text",
+                "motion graphic",
+                "framework",
+                "step-by-step",
+                "three-step",
+                "chart",
+                "timeline graphic",
+                "process",
+                "callout",
+                "callouts",
+                "progress bar",
+                "highlight box",
+                "highlight the",
+            ],
+        )
+        || wants_still_graphic_motion_scene(&lower)
     {
         return route(
             VisualSupportLane::MotionScene,
@@ -227,7 +296,8 @@ pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
             needs,
             intents,
             "The request is best answered with designed, timed, layered graphics.",
-        );
+        )
+        .with_template_hint(template_hint);
     }
 
     if contains_any(
