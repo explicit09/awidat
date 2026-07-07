@@ -1,0 +1,15 @@
+{
+  "name": "tbpn",
+  "version": 1,
+  "cold_open": null,
+  "archetypes": {
+    "digest": {
+      "body_band": [7.0, 12.0],
+      "floor": { "window_secs": 300.0, "min_rate": 0.5 }
+    },
+    "interview": {
+      "body_band": [2.0, 4.5],
+      "floor": { "window_secs": 300.0, "min_rate": 0.5 }
+    }
+  }
+}

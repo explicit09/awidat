@@ -8,7 +8,9 @@
 mod cuts_io;
 pub mod gates;
 mod pacing;
+mod profile;
 pub mod suite;
 
 pub use cuts_io::{CutsIoError, load_cut_times};
 pub use pacing::{PacingError, PacingStats};
+pub use profile::{ArchetypeTargets, ColdOpenSpec, FloorSpec, HouseProfile, ProfileError};
