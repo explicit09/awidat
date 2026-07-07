@@ -102,6 +102,7 @@ use crate::montage_mcp::tools::manage_assets::{
     TagAssetArgs,
 };
 use crate::montage_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
+use crate::montage_mcp::tools::plan_cold_open::{self, PlanColdOpenArgs};
 use crate::montage_mcp::tools::plan_color_grade::{self, PlanColorGradeArgs};
 use crate::montage_mcp::tools::plan_delivery_export::{self, PlanDeliveryExportArgs};
 use crate::montage_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
@@ -1395,6 +1396,27 @@ render by itself.",
         args: Parameters<PodcastQcReportArgs>,
     ) -> Result<String, ErrorData> {
         podcast_qc_report::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_cold_open` — deterministic cold-open blitz-montage assembler.
+    #[tool(
+        description = "\
+Assemble a cold-open blitz montage plan: supply the hook (the single most \
+provocative line, transplanted to 0:00) and the ordered blitz beats; the \
+tool validates pacing against the house profile's cold-open spec, projects \
+the picture.cold_open gate verdict for the whole program, and returns an \
+apply_edl-ready fragment inserting the montage at the head of the timeline \
+plus warnings. Read-only planner — nothing mutates until you pass \
+edl_fragment to apply_edl. The applied cold open doubles as the 9:16 short \
+(reuse via short-form-reframing).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_cold_open(
+        &self,
+        args: Parameters<PlanColdOpenArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_cold_open::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 

@@ -26,8 +26,9 @@ pub struct RunPictureGatesArgs {
 /// Cut boundary times (seconds) and total duration of the first video
 /// track: boundaries between consecutive duration-bearing children
 /// (clips and gaps), excluding the program end. Transitions decorate an
-/// existing boundary and are skipped.
-fn first_video_track_cuts(stack: &Stack) -> Option<(Vec<f64>, f64)> {
+/// existing boundary and are skipped. Shared with `plan_cold_open` for
+/// gate projections.
+pub(crate) fn first_video_track_cuts(stack: &Stack) -> Option<(Vec<f64>, f64)> {
     for child in &stack.children {
         match child {
             StackChild::Track(track) if track.kind == TrackKind::Video => {

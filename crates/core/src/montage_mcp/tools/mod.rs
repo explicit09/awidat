@@ -58,6 +58,7 @@ pub mod load_skill;
 pub mod local_review_package;
 pub mod manage_assets;
 pub mod plan_captions;
+pub mod plan_cold_open;
 pub mod plan_color_grade;
 pub mod plan_color_grade_edl;
 pub mod plan_delivery_export;
