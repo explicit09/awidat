@@ -115,22 +115,52 @@ pub fn expand_template(
         MotionTemplateSpec::LowerThird { name, role } => {
             expand_lower_third(name, role.as_deref(), scene_duration_s)
         }
-        MotionTemplateSpec::KineticText { .. } => Err(
-            "expand_template: KineticText is not implemented yet (Task 2+)".to_string(),
-        ),
-        MotionTemplateSpec::HighlightBox { .. } => Err(
-            "expand_template: HighlightBox is not implemented yet (Task 2+)".to_string(),
-        ),
-        MotionTemplateSpec::ProgressBar { .. } => Err(
-            "expand_template: ProgressBar is not implemented yet (Task 2+)".to_string(),
-        ),
+        MotionTemplateSpec::KineticText { .. } => {
+            Err("expand_template: KineticText is not implemented yet (Task 2+)".to_string())
+        }
+        MotionTemplateSpec::HighlightBox { .. } => {
+            Err("expand_template: HighlightBox is not implemented yet (Task 2+)".to_string())
+        }
+        MotionTemplateSpec::ProgressBar { .. } => {
+            Err("expand_template: ProgressBar is not implemented yet (Task 2+)".to_string())
+        }
     }
 }
 
-/// Lower-third stub: a solid accent bar plus a name text layer, both
-/// spanning the full scene duration. The role line (when present) is
-/// left for a follow-up task; for now it is folded into the rationale
-/// so callers know it was accepted but not yet rendered.
+/// Slide-in/out duration for lower-third layers, in seconds. Mirrors
+/// the scene-default fade window (see
+/// [`montage_proto::professional::MOTION_SCENE_DEFAULT_FADE_S`]) so
+/// the motion reads at a familiar pace.
+const LOWER_THIRD_SLIDE_S: f64 = 0.55;
+
+/// Per-layer entrance stagger for the lower-third card: bar, then
+/// name (+0.08s), then role (+0.16s).
+const LOWER_THIRD_STAGGER_S: f64 = 0.08;
+
+/// Bar geometry, mirroring `plan_motion_scene`'s panel/callout
+/// conventions: `x`/`y` are the Solid/Shape top-left corner as a
+/// fraction of the canvas (see `background_panel_layer`).
+const BAR_X: f64 = 0.04;
+const BAR_Y: f64 = 0.82;
+const BAR_WIDTH: f64 = 0.40;
+const BAR_HEIGHT: f64 = 0.10;
+
+/// Text layer geometry: `x`/`y` are the box center (see
+/// `plan_motion_scene::headline_layer`).
+const NAME_X: f64 = 0.06 + (0.36 / 2.0);
+const NAME_Y: f64 = 0.85;
+const NAME_WIDTH: f64 = 0.36;
+const NAME_HEIGHT: f64 = 0.06;
+
+const ROLE_Y: f64 = NAME_Y + 0.055;
+const ROLE_HEIGHT: f64 = 0.045;
+
+/// Lower-third: a solid accent bar that slides in from off-canvas
+/// left, a name text layer staggered `LOWER_THIRD_STAGGER_S` behind
+/// it, and (when `role` is present) a role text layer staggered
+/// `2 * LOWER_THIRD_STAGGER_S` behind the bar. All three slide back
+/// out in the final [`LOWER_THIRD_SLIDE_S`] of their own layer
+/// window.
 fn expand_lower_third(
     name: &str,
     role: Option<&str>,
@@ -140,53 +170,160 @@ fn expand_lower_third(
     if name.is_empty() {
         return Err("expand_template: LowerThird name must not be empty".to_string());
     }
+    let role = role.map(str::trim).filter(|role| !role.is_empty());
+
+    let bar_from_s = 0.0;
+    let bar_duration_s = scene_duration_s;
+    let name_from_s = LOWER_THIRD_STAGGER_S.min(scene_duration_s);
+    let name_duration_s = (scene_duration_s - name_from_s).max(0.01);
+    let role_from_s = (2.0 * LOWER_THIRD_STAGGER_S).min(scene_duration_s);
+    let role_duration_s = (scene_duration_s - role_from_s).max(0.01);
 
     let bar = MotionSceneLayer {
         id: "lower-third-bar".into(),
         kind: MotionSceneLayerKind::Solid,
-        from_s: 0.0,
-        duration_s: scene_duration_s,
+        from_s: bar_from_s,
+        duration_s: bar_duration_s,
         z_index: 10,
         params: BTreeMap::from([
-            ("x".into(), serde_json::json!(0.04)),
-            ("y".into(), serde_json::json!(0.82)),
-            ("width".into(), serde_json::json!(0.40)),
-            ("height".into(), serde_json::json!(0.10)),
+            ("x".into(), serde_json::json!(BAR_X)),
+            ("y".into(), serde_json::json!(BAR_Y)),
+            ("width".into(), serde_json::json!(BAR_WIDTH)),
+            ("height".into(), serde_json::json!(BAR_HEIGHT)),
             ("color".into(), serde_json::json!("#111111")),
             ("opacity".into(), serde_json::json!(0.82)),
+            (
+                "animations".into(),
+                serde_json::json!([slide_x_animation(BAR_X, BAR_WIDTH, bar_duration_s)]),
+            ),
         ]),
     };
 
     let name_layer = MotionSceneLayer {
         id: "lower-third-name".into(),
         kind: MotionSceneLayerKind::Text,
-        from_s: 0.0,
-        duration_s: scene_duration_s,
+        from_s: name_from_s,
+        duration_s: name_duration_s,
         z_index: 11,
         params: BTreeMap::from([
             ("text".into(), serde_json::json!(name)),
             ("font_size".into(), serde_json::json!(36)),
             ("font_weight".into(), serde_json::json!("bold")),
             ("align".into(), serde_json::json!("left")),
-            ("x".into(), serde_json::json!(0.06)),
-            ("y".into(), serde_json::json!(0.85)),
-            ("width".into(), serde_json::json!(0.36)),
-            ("height".into(), serde_json::json!(0.06)),
+            ("x".into(), serde_json::json!(NAME_X)),
+            ("y".into(), serde_json::json!(NAME_Y)),
+            ("width".into(), serde_json::json!(NAME_WIDTH)),
+            ("height".into(), serde_json::json!(NAME_HEIGHT)),
+            (
+                "animations".into(),
+                serde_json::json!([
+                    slide_x_animation(NAME_X, NAME_WIDTH, name_duration_s),
+                    fade_opacity_animation(name_duration_s),
+                ]),
+            ),
         ]),
     };
 
+    let mut layers = vec![bar, name_layer];
+
+    if let Some(role) = role {
+        let role_layer = MotionSceneLayer {
+            id: "lower-third-role".into(),
+            kind: MotionSceneLayerKind::Text,
+            from_s: role_from_s,
+            duration_s: role_duration_s,
+            z_index: 11,
+            params: BTreeMap::from([
+                ("text".into(), serde_json::json!(role)),
+                ("font_size".into(), serde_json::json!(24)),
+                ("font_weight".into(), serde_json::json!("normal")),
+                ("align".into(), serde_json::json!("left")),
+                ("x".into(), serde_json::json!(NAME_X)),
+                ("y".into(), serde_json::json!(ROLE_Y)),
+                ("width".into(), serde_json::json!(NAME_WIDTH)),
+                ("height".into(), serde_json::json!(ROLE_HEIGHT)),
+                (
+                    "animations".into(),
+                    serde_json::json!([
+                        slide_x_animation(NAME_X, NAME_WIDTH, role_duration_s),
+                        fade_opacity_animation(role_duration_s),
+                    ]),
+                ),
+            ]),
+        };
+        layers.push(role_layer);
+    }
+
     let rationale = match role {
-        Some(role) if !role.trim().is_empty() => format!(
-            "Lower third for {name}; role '{}' captured but not yet rendered (role line lands in a follow-up task).",
-            role.trim()
-        ),
-        _ => format!("Lower third for {name}."),
+        Some(role) => format!("Lower third for {name}, role '{role}'."),
+        None => format!("Lower third for {name}."),
     };
 
-    Ok(TemplateExpansion {
-        layers: vec![bar, name_layer],
-        rationale,
-    })
+    Ok(TemplateExpansion { layers, rationale })
+}
+
+/// `overlay.x` slide-in/slide-out keyframes for a layer whose resting
+/// left edge is `final_x` and whose width is `width`. The off-canvas
+/// start position clears the frame entirely (`final_x - width`) so
+/// the layer is fully hidden before it enters. When the layer window
+/// is too short to fit both a slide-in and slide-out without
+/// overlapping, the two slides are compressed to share the midpoint
+/// instead of reversing order.
+fn slide_x_animation(
+    final_x: f64,
+    width: f64,
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::{Easing, Keyframe};
+
+    let off_canvas_x = final_x - width;
+    let slide_s = LOWER_THIRD_SLIDE_S.min(duration_s / 2.0);
+
+    // `KeyframeInterpolation::Linear` + a named `Easing` curve (not
+    // `Bezier` interpolation, which expects explicit control-point
+    // handles) — matches `plan_emphasis::keyframe`'s convention for
+    // eased motion without authored Bezier handles.
+    let ease_out_cubic = |time_s: f64, value: f64| Keyframe {
+        easing: Easing::EaseOutCubic,
+        ..Keyframe::linear(time_s, value)
+    };
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.x".into(),
+        keyframes: vec![
+            ease_out_cubic(0.0, off_canvas_x),
+            Keyframe::linear(slide_s, final_x),
+            Keyframe::linear(duration_s - slide_s, final_x),
+            ease_out_cubic(duration_s, off_canvas_x),
+        ],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
+}
+
+/// `overlay.opacity` fade-in/fade-out keyframes over the same
+/// [`LOWER_THIRD_SLIDE_S`] window as the slide, so the card fades and
+/// slides in together rather than popping visible mid-slide.
+fn fade_opacity_animation(
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::Keyframe;
+
+    let slide_s = LOWER_THIRD_SLIDE_S.min(duration_s / 2.0);
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.opacity".into(),
+        keyframes: vec![
+            Keyframe::linear(0.0, 0.0),
+            Keyframe::linear(slide_s, 1.0),
+            Keyframe::linear(duration_s - slide_s, 1.0),
+            Keyframe::linear(duration_s, 0.0),
+        ],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
 }
 
 #[cfg(test)]
@@ -215,8 +352,7 @@ mod tests {
             role: Some("Mathematician".to_string()),
         };
 
-        let expansion =
-            expand_template(&spec, 4.0, 30.0).expect("lower third should expand");
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("lower third should expand");
 
         assert!(
             expansion.layers.len() >= 2,
@@ -241,6 +377,38 @@ mod tests {
             .find(|l| l.id == "lower-third-name")
             .unwrap();
         assert_eq!(name_layer.kind, MotionSceneLayerKind::Text);
+
+        let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lower_third_without_role_omits_role_layer() {
+        let spec = MotionTemplateSpec::LowerThird {
+            name: "Ada Lovelace".to_string(),
+            role: None,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("lower third should expand");
+
+        assert_eq!(
+            expansion.layers.len(),
+            2,
+            "expected exactly bar + name layers without a role, got {:?}",
+            expansion
+                .layers
+                .iter()
+                .map(|l| l.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            expansion.layers.iter().all(|l| l.id != "lower-third-role"),
+            "role layer should not be emitted when role is None"
+        );
 
         let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
         let diagnostics = scene.validate();
