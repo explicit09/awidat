@@ -115,8 +115,8 @@ pub fn expand_template(
         MotionTemplateSpec::LowerThird { name, role } => {
             expand_lower_third(name, role.as_deref(), scene_duration_s)
         }
-        MotionTemplateSpec::KineticText { .. } => {
-            Err("expand_template: KineticText is not implemented yet (Task 2+)".to_string())
+        MotionTemplateSpec::KineticText { words, anchor } => {
+            expand_kinetic_text(words, *anchor, scene_duration_s)
         }
         MotionTemplateSpec::HighlightBox { .. } => {
             Err("expand_template: HighlightBox is not implemented yet (Task 2+)".to_string())
@@ -260,6 +260,200 @@ fn expand_lower_third(
     };
 
     Ok(TemplateExpansion { layers, rationale })
+}
+
+/// Pop-in duration for each kinetic-text word: `overlay.opacity` fades
+/// 0→1 and `overlay.scale` springs 1.15→1.0 over this window.
+const KINETIC_POP_IN_S: f64 = 0.12;
+
+/// Overshoot scale a word pops in from before settling to 1.0.
+const KINETIC_POP_IN_SCALE: f64 = 1.15;
+
+/// Spring parameters for the pop-in scale settle (per task brief).
+const KINETIC_SPRING: montage_proto::professional::SpringParameters =
+    montage_proto::professional::SpringParameters {
+        mass: 1.0,
+        stiffness: 180.0,
+        damping: 12.0,
+    };
+
+/// Font size for kinetic-text words, in reference px (mirrors
+/// `plan_motion_scene`'s headline sizing).
+const KINETIC_FONT_SIZE: u32 = 48;
+
+/// Reference canvas width kinetic-text layout is computed against
+/// (matches the 1080p reference `fit_text_to_width_px` and
+/// `plan_motion_scene` already assume).
+const KINETIC_CANVAS_WIDTH_PX: f64 = 1920.0;
+
+/// Horizontal gap between adjacent kinetic-text words, as a fraction
+/// of canvas width.
+const KINETIC_WORD_GAP: f64 = 0.012;
+
+/// Text layer height, as a fraction of canvas height (single line).
+const KINETIC_WORD_HEIGHT: f64 = 0.08;
+
+/// Word-by-word kinetic-text cascade: one Text layer per word,
+/// `kinetic-word-<i>`, appearing at its own `at_s` and holding through
+/// the rest of the scene (the scene-default exit fade handles the
+/// out). Words lay out on a single line with cumulative x offsets
+/// estimated via [`montage_render::fit_text_to_width_px`] character
+/// metrics, anchored per `anchor`.
+fn expand_kinetic_text(
+    words: &[KineticWord],
+    anchor: TextAnchor,
+    scene_duration_s: f64,
+) -> Result<TemplateExpansion, String> {
+    if words.is_empty() {
+        return Err("expand_template: KineticText words must not be empty".to_string());
+    }
+    for (i, word) in words.iter().enumerate() {
+        if word.text.trim().is_empty() {
+            return Err(format!(
+                "expand_template: KineticText word {i} text must not be empty"
+            ));
+        }
+        if !word.at_s.is_finite() || word.at_s < 0.0 {
+            return Err(format!(
+                "expand_template: KineticText word {i} at_s must be non-negative, got {}",
+                word.at_s
+            ));
+        }
+        if word.at_s >= scene_duration_s {
+            return Err(format!(
+                "expand_template: KineticText word {i} at_s ({}) must be before scene_duration_s ({scene_duration_s})",
+                word.at_s
+            ));
+        }
+    }
+
+    // Per-word pixel width (unwrapped: a huge max width guarantees
+    // `fit_text_to_width_px` never wraps or shrinks a single word) and
+    // its normalized-to-canvas-width equivalent, laid out left to
+    // right with a fixed gap between words.
+    let word_widths_px: Vec<f64> = words
+        .iter()
+        .map(|word| {
+            let (wrapped, font_size) =
+                montage_render::fit_text_to_width_px(word.text.trim(), KINETIC_FONT_SIZE, f64::MAX);
+            estimate_text_width_px(&wrapped, font_size)
+        })
+        .collect();
+    let word_widths_frac: Vec<f64> = word_widths_px
+        .iter()
+        .map(|width_px| width_px / KINETIC_CANVAS_WIDTH_PX)
+        .collect();
+
+    let total_width_frac: f64 = word_widths_frac.iter().sum::<f64>()
+        + KINETIC_WORD_GAP * (word_widths_frac.len().saturating_sub(1) as f64);
+
+    let (start_x, y) = match anchor {
+        TextAnchor::LowerLeft => (0.06, 0.82),
+        TextAnchor::Center => (((1.0 - total_width_frac) / 2.0).max(0.02), 0.46),
+        TextAnchor::LowerCenter => (((1.0 - total_width_frac) / 2.0).max(0.02), 0.82),
+    };
+
+    let mut layers = Vec::with_capacity(words.len());
+    let mut cursor_x = start_x;
+    for (i, word) in words.iter().enumerate() {
+        let width_frac = word_widths_frac[i];
+        let from_s = word.at_s;
+        let duration_s = (scene_duration_s - from_s).max(0.01);
+
+        let layer = MotionSceneLayer {
+            id: format!("kinetic-word-{i}"),
+            kind: MotionSceneLayerKind::Text,
+            from_s,
+            duration_s,
+            z_index: 12,
+            params: BTreeMap::from([
+                ("text".into(), serde_json::json!(word.text.trim())),
+                ("font_size".into(), serde_json::json!(KINETIC_FONT_SIZE)),
+                ("font_weight".into(), serde_json::json!("bold")),
+                ("align".into(), serde_json::json!("left")),
+                ("x".into(), serde_json::json!(cursor_x)),
+                ("y".into(), serde_json::json!(y)),
+                ("width".into(), serde_json::json!(width_frac)),
+                ("height".into(), serde_json::json!(KINETIC_WORD_HEIGHT)),
+                (
+                    "animations".into(),
+                    serde_json::json!([pop_in_opacity_animation(), pop_in_scale_animation(),]),
+                ),
+            ]),
+        };
+        layers.push(layer);
+
+        cursor_x += width_frac + KINETIC_WORD_GAP;
+    }
+
+    let rationale = format!(
+        "Kinetic text: {} word{} cascading from {:.2}s.",
+        words.len(),
+        if words.len() == 1 { "" } else { "s" },
+        words[0].at_s
+    );
+
+    Ok(TemplateExpansion { layers, rationale })
+}
+
+/// Rough per-character pixel-width estimate consistent with the
+/// render's average-glyph-width heuristic
+/// (`title_wrap_max_chars`'s `font_size * 0.55`), scaled by the
+/// wrapped word's grapheme count. `fit_text_to_width_px` only exposes
+/// wrapped text + a (possibly shrunk) font size, not a pixel width, so
+/// this mirrors that internal constant rather than re-deriving it.
+fn estimate_text_width_px(wrapped_text: &str, font_size: u32) -> f64 {
+    const AVERAGE_GLYPH_WIDTH_FACTOR: f64 = 0.55;
+    let longest_line_chars = wrapped_text
+        .split('\n')
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    longest_line_chars as f64 * f64::from(font_size) * AVERAGE_GLYPH_WIDTH_FACTOR
+}
+
+/// `overlay.opacity` pop-in keyframes: 0→1 over
+/// [`KINETIC_POP_IN_S`]. `motion_animations_with_scene_fade` appends
+/// the scene-default exit fade since this ends at a visible value
+/// before the layer's duration — the desired behavior for a word that
+/// should fade with the scene's exit.
+fn pop_in_opacity_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::Keyframe;
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.opacity".into(),
+        keyframes: vec![
+            Keyframe::linear(0.0, 0.0),
+            Keyframe::linear(KINETIC_POP_IN_S, 1.0),
+        ],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
+}
+
+/// `overlay.scale` pop-in keyframes: starts overshot at
+/// [`KINETIC_POP_IN_SCALE`] and springs to its 1.0 settle target over
+/// [`KINETIC_POP_IN_S`] using [`KINETIC_SPRING`] parameters. The
+/// spring keyframe's `value` is the settle target the spring resolves
+/// to, matching how `Keyframe::spring` segments are conventionally
+/// emitted elsewhere (see `KeyframeInterpolation::Spring` docs).
+fn pop_in_scale_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
+    use montage_proto::professional::{Keyframe, KeyframeInterpolation};
+
+    let settle = Keyframe {
+        spring: Some(KINETIC_SPRING),
+        interpolation: KeyframeInterpolation::Spring,
+        ..Keyframe::linear(KINETIC_POP_IN_S, 1.0)
+    };
+
+    montage_proto::professional::MotionSceneLayerAnimation {
+        parameter: "overlay.scale".into(),
+        keyframes: vec![Keyframe::linear(0.0, KINETIC_POP_IN_SCALE), settle],
+        pre_extrapolation: Default::default(),
+        post_extrapolation: Default::default(),
+        motion_path: None,
+    }
 }
 
 /// `overlay.x` slide-in/slide-out keyframes for a layer whose resting
@@ -439,7 +633,184 @@ mod tests {
     }
 
     #[test]
-    fn kinetic_text_is_not_yet_implemented() {
+    fn kinetic_text_expands_one_layer_per_word() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "hello".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "world".to_string(),
+                    at_s: 0.3,
+                    hold_s: 0.5,
+                },
+            ],
+            anchor: TextAnchor::Center,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        assert_eq!(expansion.layers.len(), 2);
+        assert_eq!(expansion.layers[0].id, "kinetic-word-0");
+        assert_eq!(expansion.layers[1].id, "kinetic-word-1");
+        assert!(
+            expansion
+                .layers
+                .iter()
+                .all(|layer| layer.kind == MotionSceneLayerKind::Text)
+        );
+
+        let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
+        let diagnostics = scene.validate();
+        assert!(
+            diagnostics.is_empty(),
+            "expected a valid scene, got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn kinetic_text_from_s_matches_at_s_and_runs_to_scene_end() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "hello".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "world".to_string(),
+                    at_s: 0.3,
+                    hold_s: 0.5,
+                },
+            ],
+            anchor: TextAnchor::Center,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        assert_eq!(expansion.layers[0].from_s, 0.0);
+        assert_eq!(expansion.layers[1].from_s, 0.3);
+        assert_eq!(expansion.layers[0].duration_s, 4.0);
+        assert_eq!(expansion.layers[1].duration_s, 4.0 - 0.3);
+    }
+
+    #[test]
+    fn kinetic_text_per_word_from_s_strictly_increasing() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "one".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "two".to_string(),
+                    at_s: 0.2,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "three".to_string(),
+                    at_s: 0.4,
+                    hold_s: 0.5,
+                },
+            ],
+            anchor: TextAnchor::LowerLeft,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        let from_times: Vec<f64> = expansion.layers.iter().map(|l| l.from_s).collect();
+        for window in from_times.windows(2) {
+            assert!(
+                window[1] > window[0],
+                "expected strictly increasing from_s, got {from_times:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kinetic_text_word_boxes_do_not_overlap() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "one".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "two".to_string(),
+                    at_s: 0.2,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "three".to_string(),
+                    at_s: 0.4,
+                    hold_s: 0.5,
+                },
+            ],
+            anchor: TextAnchor::LowerLeft,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        let boxes: Vec<(f64, f64)> = expansion
+            .layers
+            .iter()
+            .map(|layer| {
+                let x = layer
+                    .params
+                    .get("x")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap();
+                let width = layer
+                    .params
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap();
+                (x, width)
+            })
+            .collect();
+
+        for window in boxes.windows(2) {
+            let (x0, width0) = window[0];
+            let (x1, _width1) = window[1];
+            assert!(
+                x0 + width0 <= x1,
+                "expected word boxes to not overlap: word 0 ends at {}, word 1 starts at {}",
+                x0 + width0,
+                x1
+            );
+        }
+    }
+
+    #[test]
+    fn kinetic_text_rejects_empty_words() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![],
+            anchor: TextAnchor::Center,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn kinetic_text_rejects_at_s_beyond_scene_duration() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![KineticWord {
+                text: "hello".to_string(),
+                at_s: 5.0,
+                hold_s: 0.5,
+            }],
+            anchor: TextAnchor::Center,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn kinetic_text_pop_in_uses_spring_scale_and_opacity_fade() {
         let spec = MotionTemplateSpec::KineticText {
             words: vec![KineticWord {
                 text: "hello".to_string(),
@@ -448,7 +819,75 @@ mod tests {
             }],
             anchor: TextAnchor::Center,
         };
-        let result = expand_template(&spec, 4.0, 30.0);
-        assert!(result.is_err());
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+        let word = &expansion.layers[0];
+        let animations = word.motion_animations();
+
+        let opacity = animations
+            .iter()
+            .find(|a| a.parameter == "overlay.opacity")
+            .expect("word has an overlay.opacity animation");
+        assert_eq!(opacity.keyframes.first().unwrap().value, 0.0);
+        assert_eq!(opacity.keyframes.first().unwrap().time_s, 0.0);
+        let pop_in_end = opacity
+            .keyframes
+            .iter()
+            .find(|kf| kf.time_s > 0.0)
+            .expect("opacity has a pop-in end keyframe");
+        assert_eq!(pop_in_end.time_s, 0.12);
+        assert_eq!(pop_in_end.value, 1.0);
+
+        let scale = animations
+            .iter()
+            .find(|a| a.parameter == "overlay.scale")
+            .expect("word has an overlay.scale animation");
+        assert_eq!(scale.keyframes.first().unwrap().value, 1.15);
+        let settle = scale.keyframes.get(1).expect("scale has a settle keyframe");
+        assert_eq!(settle.value, 1.0);
+        assert_eq!(
+            settle.interpolation,
+            montage_proto::professional::KeyframeInterpolation::Spring
+        );
+        let spring = settle
+            .spring
+            .expect("settle keyframe carries spring params");
+        assert_eq!(spring.mass, 1.0);
+        assert_eq!(spring.stiffness, 180.0);
+        assert_eq!(spring.damping, 12.0);
+    }
+
+    #[test]
+    fn kinetic_text_on_screen_copy_matches_words_text() {
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![
+                KineticWord {
+                    text: "hello".to_string(),
+                    at_s: 0.0,
+                    hold_s: 0.5,
+                },
+                KineticWord {
+                    text: "world".to_string(),
+                    at_s: 0.3,
+                    hold_s: 0.5,
+                },
+            ],
+            anchor: TextAnchor::Center,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+
+        let texts: Vec<&str> = expansion
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .params
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(texts, vec!["hello", "world"]);
     }
 }

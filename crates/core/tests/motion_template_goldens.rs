@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use montage_core::motion_templates::{MotionTemplateSpec, expand_template};
+use montage_core::motion_templates::{
+    KineticWord, MotionTemplateSpec, TextAnchor, expand_template,
+};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/motion-templates")
@@ -142,4 +144,85 @@ fn lower_third_name_stagger_starts_after_bar_slide_in() {
         name_slide_start_scene_s > bar_slide_start_scene_s,
         "name layer slide-in ({name_slide_start_scene_s}) should start after the bar's ({bar_slide_start_scene_s})"
     );
+}
+
+fn kinetic_text_spec() -> MotionTemplateSpec {
+    MotionTemplateSpec::KineticText {
+        words: vec![
+            KineticWord {
+                text: "Ship".to_string(),
+                at_s: 0.0,
+                hold_s: 0.4,
+            },
+            KineticWord {
+                text: "it".to_string(),
+                at_s: 0.25,
+                hold_s: 0.4,
+            },
+            KineticWord {
+                text: "today".to_string(),
+                at_s: 0.5,
+                hold_s: 0.4,
+            },
+        ],
+        anchor: TextAnchor::LowerCenter,
+    }
+}
+
+#[test]
+fn kinetic_text_matches_golden() {
+    let spec = kinetic_text_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("kinetic text should expand");
+    let actual =
+        serde_json::to_string_pretty(&expansion.layers).expect("serialize expansion layers");
+    assert_matches_golden("kinetic_text.json", &actual);
+}
+
+#[test]
+fn kinetic_text_from_s_strictly_increasing_per_word() {
+    let spec = kinetic_text_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("kinetic text should expand");
+
+    let from_times: Vec<f64> = expansion.layers.iter().map(|layer| layer.from_s).collect();
+    for window in from_times.windows(2) {
+        assert!(
+            window[1] > window[0],
+            "expected strictly increasing from_s across words, got {from_times:?}"
+        );
+    }
+}
+
+#[test]
+fn kinetic_text_word_boxes_are_non_overlapping() {
+    let spec = kinetic_text_spec();
+    let expansion = expand_template(&spec, 3.0, 30.0).expect("kinetic text should expand");
+
+    let boxes: Vec<(f64, f64)> = expansion
+        .layers
+        .iter()
+        .map(|layer| {
+            let x = layer
+                .params
+                .get("x")
+                .and_then(serde_json::Value::as_f64)
+                .expect("word layer has x");
+            let width = layer
+                .params
+                .get("width")
+                .and_then(serde_json::Value::as_f64)
+                .expect("word layer has width");
+            (x, width)
+        })
+        .collect();
+
+    for window in boxes.windows(2) {
+        let (x0, width0) = window[0];
+        let (x1, _width1) = window[1];
+        assert!(
+            x0 + width0 <= x1,
+            "expected word boxes to not overlap: word ends at {}, next word starts at {}",
+            x0 + width0,
+            x1
+        );
+    }
 }
