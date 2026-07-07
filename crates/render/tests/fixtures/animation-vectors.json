@@ -1,0 +1,1204 @@
+{
+  "precision": 0.000001,
+  "cases": [
+    {
+      "name": "title.opacity linear fade in",
+      "param": "title.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": -0.5,
+          "expected": 0
+        },
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.25,
+          "expected": 0.25
+        },
+        {
+          "t": 0.5,
+          "expected": 0.5
+        },
+        {
+          "t": 0.75,
+          "expected": 0.75
+        },
+        {
+          "t": 1,
+          "expected": 1
+        },
+        {
+          "t": 1.5,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "title.x linear pan",
+      "param": "title.x",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": -0.2,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 2,
+          "value": 0.2,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": -0.19999999999999998
+        },
+        {
+          "t": 1,
+          "expected": 0
+        },
+        {
+          "t": 2,
+          "expected": 0.19999999999999998
+        }
+      ]
+    },
+    {
+      "name": "title.y linear pan",
+      "param": "title.y",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0.1,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1.5,
+          "value": -0.1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0.09999999999999999
+        },
+        {
+          "t": 0.75,
+          "expected": 0
+        },
+        {
+          "t": 1.5,
+          "expected": -0.09999999999999999
+        }
+      ]
+    },
+    {
+      "name": "title.font_size linear grow",
+      "param": "title.font_size",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 32,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 64,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 32
+        },
+        {
+          "t": 0.5,
+          "expected": 48
+        },
+        {
+          "t": 1,
+          "expected": 64
+        }
+      ]
+    },
+    {
+      "name": "overlay.opacity linear fade",
+      "param": "overlay.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 1
+        },
+        {
+          "t": 0.3,
+          "expected": 0.7
+        },
+        {
+          "t": 1,
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "name": "overlay.x linear slide",
+      "param": "overlay.x",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 0.5
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.y linear slide",
+      "param": "overlay.y",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": -1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": -0.5
+        },
+        {
+          "t": 1,
+          "expected": -1
+        }
+      ]
+    },
+    {
+      "name": "overlay.scale linear zoom",
+      "param": "overlay.scale",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 2,
+          "value": 1.5,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 1
+        },
+        {
+          "t": 1,
+          "expected": 1.25
+        },
+        {
+          "t": 2,
+          "expected": 1.5
+        }
+      ]
+    },
+    {
+      "name": "overlay.rotation_deg linear spin",
+      "param": "overlay.rotation_deg",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 45,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 22.5
+        },
+        {
+          "t": 1,
+          "expected": 45
+        }
+      ]
+    },
+    {
+      "name": "overlay.blur linear settle",
+      "param": "overlay.blur",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 8,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 8
+        },
+        {
+          "t": 0.25,
+          "expected": 6
+        },
+        {
+          "t": 1,
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "name": "montage.blur.radius_px linear",
+      "param": "montage.blur.radius_px",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 12,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 4,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 12
+        },
+        {
+          "t": 0.5,
+          "expected": 8
+        },
+        {
+          "t": 1,
+          "expected": 4
+        }
+      ]
+    },
+    {
+      "name": "montage.shake.intensity_px linear",
+      "param": "montage.shake.intensity_px",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 0.5,
+          "value": 6,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.25,
+          "expected": 3
+        },
+        {
+          "t": 0.5,
+          "expected": 6
+        }
+      ]
+    },
+    {
+      "name": "montage.shake.frequency_hz linear",
+      "param": "montage.shake.frequency_hz",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 2,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 0.5,
+          "value": 10,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 2
+        },
+        {
+          "t": 0.25,
+          "expected": 6
+        },
+        {
+          "t": 0.5,
+          "expected": 10
+        }
+      ]
+    },
+    {
+      "name": "montage.warp.k1 linear",
+      "param": "montage.warp.k1",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": -0.1,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0.1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": -0.09999999999999999
+        },
+        {
+          "t": 0.5,
+          "expected": 0
+        },
+        {
+          "t": 1,
+          "expected": 0.09999999999999999
+        }
+      ]
+    },
+    {
+      "name": "montage.warp.k2 linear",
+      "param": "montage.warp.k2",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0.05,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 0.024999999999999998
+        },
+        {
+          "t": 1,
+          "expected": 0.049999999999999996
+        }
+      ]
+    },
+    {
+      "name": "montage.warp.center_x linear",
+      "param": "montage.warp.center_x",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0.4,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0.6,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0.39999999999999997
+        },
+        {
+          "t": 0.5,
+          "expected": 0.5
+        },
+        {
+          "t": 1,
+          "expected": 0.6
+        }
+      ]
+    },
+    {
+      "name": "montage.warp.center_y linear",
+      "param": "montage.warp.center_y",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0.4,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 0.6,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0.39999999999999997
+        },
+        {
+          "t": 0.5,
+          "expected": 0.5
+        },
+        {
+          "t": 1,
+          "expected": 0.6
+        }
+      ]
+    },
+    {
+      "name": "overlay.opacity hold interpolation",
+      "param": "overlay.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0.2,
+          "interpolation": "hold",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0.19999999999999998
+        },
+        {
+          "t": 0.5,
+          "expected": 0.19999999999999998
+        },
+        {
+          "t": 0.999,
+          "expected": 0.19999999999999998
+        }
+      ]
+    },
+    {
+      "name": "title.opacity step interpolation",
+      "param": "title.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "step",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.25,
+          "expected": 0
+        },
+        {
+          "t": 0.49,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 1
+        },
+        {
+          "t": 0.75,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.scale bezier ease",
+      "param": "overlay.scale",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 1,
+          "interpolation": "bezier",
+          "easing": "linear",
+          "bezier": {
+            "out_x": 0.25,
+            "out_y": 0.1,
+            "in_x": 0.75,
+            "in_y": 0.9
+          }
+        },
+        {
+          "time_s": 1,
+          "value": 1.4,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 1
+        },
+        {
+          "t": 0.25,
+          "expected": 1.0837649999999999
+        },
+        {
+          "t": 0.5,
+          "expected": 1.2
+        },
+        {
+          "t": 0.75,
+          "expected": 1.316235
+        },
+        {
+          "t": 1,
+          "expected": 1.4
+        }
+      ]
+    },
+    {
+      "name": "overlay.rotation_deg bezier with flat tangent",
+      "param": "overlay.rotation_deg",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "bezier",
+          "easing": "linear",
+          "bezier": {
+            "out_x": 0.25,
+            "out_y": 0.9,
+            "in_x": 0.75,
+            "in_y": 0.1
+          },
+          "tangent_mode": "flat"
+        },
+        {
+          "time_s": 1,
+          "value": 90,
+          "interpolation": "linear",
+          "easing": "linear",
+          "tangent_mode": "flat"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.01,
+          "expected": 0.046361
+        },
+        {
+          "t": 0.5,
+          "expected": 45
+        },
+        {
+          "t": 0.99,
+          "expected": 89.953639
+        },
+        {
+          "t": 1,
+          "expected": 90
+        }
+      ]
+    },
+    {
+      "name": "overlay.x spring interpolation (underdamped)",
+      "param": "overlay.x",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "spring",
+          "easing": "linear",
+          "spring": {
+            "mass": 1,
+            "stiffness": 100,
+            "damping": 8
+          }
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.25,
+          "expected": 1.122055
+        },
+        {
+          "t": 0.5,
+          "expected": 1.076087
+        },
+        {
+          "t": 0.75,
+          "expected": 0.9465469999999999
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.y spring interpolation (near-critical)",
+      "param": "overlay.y",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "spring",
+          "easing": "linear",
+          "spring": {
+            "mass": 1,
+            "stiffness": 100,
+            "damping": 19.99999
+          }
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 0.959572
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "montage.blur.radius_px spring interpolation (overdamped)",
+      "param": "montage.blur.radius_px",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 10,
+          "interpolation": "spring",
+          "easing": "linear",
+          "spring": {
+            "mass": 1,
+            "stiffness": 60,
+            "damping": 40
+          }
+        },
+        {
+          "time_s": 1,
+          "value": 2,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 10
+        },
+        {
+          "t": 0.5,
+          "expected": 2.810718
+        },
+        {
+          "t": 1,
+          "expected": 2
+        }
+      ]
+    },
+    {
+      "name": "title.opacity ease_out_back",
+      "param": "title.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "ease_out_back"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.5,
+          "expected": 1.087698
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "title.opacity ease_in_bounce",
+      "param": "title.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "ease_in_bounce"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.25,
+          "expected": 0.027344
+        },
+        {
+          "t": 0.5,
+          "expected": 0.234375
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.opacity ease_in_out_elastic",
+      "param": "overlay.opacity",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 0,
+          "interpolation": "linear",
+          "easing": "ease_in_out_elastic"
+        },
+        {
+          "time_s": 1,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 0
+        },
+        {
+          "t": 0.3,
+          "expected": 0.023939
+        },
+        {
+          "t": 0.5,
+          "expected": 0.5
+        },
+        {
+          "t": 0.7,
+          "expected": 0.976061
+        },
+        {
+          "t": 1,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.scale ease_in_out_cubic multi-segment",
+      "param": "overlay.scale",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "ease_in_out_cubic"
+        },
+        {
+          "time_s": 1,
+          "value": 1.5,
+          "interpolation": "linear",
+          "easing": "ease_in_out_cubic"
+        },
+        {
+          "time_s": 2,
+          "value": 1,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 1
+        },
+        {
+          "t": 0.5,
+          "expected": 1.25
+        },
+        {
+          "t": 1,
+          "expected": 1.5
+        },
+        {
+          "t": 1.5,
+          "expected": 1.25
+        },
+        {
+          "t": 2,
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "name": "overlay.x hold extrapolation (default)",
+      "param": "overlay.x",
+      "keyframes": [
+        {
+          "time_s": 1,
+          "value": 10,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 3,
+          "value": 20,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 10
+        },
+        {
+          "t": 1,
+          "expected": 10
+        },
+        {
+          "t": 3,
+          "expected": 20
+        },
+        {
+          "t": 4,
+          "expected": 20
+        }
+      ]
+    },
+    {
+      "name": "overlay.x linear extrapolation both ends",
+      "param": "overlay.x",
+      "keyframes": [
+        {
+          "time_s": 1,
+          "value": 10,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 3,
+          "value": 20,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": "linear",
+      "post_extrapolation": "linear",
+      "samples": [
+        {
+          "t": 0,
+          "expected": 5
+        },
+        {
+          "t": 1,
+          "expected": 10
+        },
+        {
+          "t": 3,
+          "expected": 20
+        },
+        {
+          "t": 4,
+          "expected": 25
+        }
+      ]
+    },
+    {
+      "name": "title.font_size linear pre-extrapolation only",
+      "param": "title.font_size",
+      "keyframes": [
+        {
+          "time_s": 1,
+          "value": 32,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 2,
+          "value": 48,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": "linear",
+      "post_extrapolation": null,
+      "samples": [
+        {
+          "t": 0,
+          "expected": 16
+        },
+        {
+          "t": 0.5,
+          "expected": 24
+        },
+        {
+          "t": 1,
+          "expected": 32
+        }
+      ]
+    },
+    {
+      "name": "overlay.blur linear post-extrapolation only",
+      "param": "overlay.blur",
+      "keyframes": [
+        {
+          "time_s": 0,
+          "value": 8,
+          "interpolation": "linear",
+          "easing": "linear"
+        },
+        {
+          "time_s": 1,
+          "value": 2,
+          "interpolation": "linear",
+          "easing": "linear"
+        }
+      ],
+      "pre_extrapolation": null,
+      "post_extrapolation": "linear",
+      "samples": [
+        {
+          "t": 1,
+          "expected": 2
+        },
+        {
+          "t": 1.5,
+          "expected": -1
+        },
+        {
+          "t": 2,
+          "expected": -4
+        }
+      ]
+    }
+  ]
+}
