@@ -40,6 +40,8 @@ type SceneKeyframe = {
   value: number;
   interpolation: string;
   easing: string;
+  /** Spring parameters for `interpolation: "spring"` segments. */
+  spring?: { mass: number; stiffness: number; damping: number } | null;
 };
 
 type SceneAnimation = {
@@ -101,10 +103,45 @@ type SceneImage = {
   animations?: SceneAnimation[];
 };
 
+/**
+ * MotionScene text layer as lowered by the Tauri snapshot (role
+ * "motion_scene"): rendered inside `.timeline-motion-scene-layer`
+ * via `TimelineMotionSceneOverlays`, unlike the legacy `title`
+ * band overlay in `.timeline-title-layer`. Mirrors
+ * `PreviewTitleOverlay` minus `isMotionScene` (always true here).
+ */
+type SceneMotionTitle = {
+  key: string;
+  startS: number;
+  endS: number;
+  text: string;
+  position: "top" | "center" | "bottom";
+  fontSize: number;
+  color: string;
+  fontWeight: "normal" | "bold";
+  animation: PreviewTitleOverlay["animation"];
+  reveal: PreviewTitleOverlay["reveal"];
+  box: PreviewTitleOverlay["box"];
+  animations?: SceneAnimation[];
+};
+
+/**
+ * One entry of the scene's ordered MotionScene layer list — the
+ * snapshot-level mirror of what `activeMotionSceneOverlays` builds
+ * from a Tauri `TimelineSnapshot`. Draw order follows array order
+ * (the Rust sync test emits layers sorted by z_index).
+ */
+type SceneMotionLayer =
+  | ({ kind: "title" } & SceneMotionTitle)
+  | ({ kind: "shape" } & SceneShape)
+  | ({ kind: "image" } & SceneImage);
+
 type SceneDocument = {
   title?: SceneTitle;
   shape?: SceneShape;
   image?: SceneImage;
+  /** Ordered MotionScene layers (template harness scenes). */
+  layers?: SceneMotionLayer[];
 };
 
 /** Maps the hand-authored `SceneAnimation` shape onto the runtime
@@ -126,7 +163,7 @@ function toTimelineParameterAnimation(
       easing: kf.easing,
       bezier: null,
       tangent_mode: "auto",
-      spring: null,
+      spring: kf.spring ?? null,
     })),
     pre_extrapolation: "hold",
     post_extrapolation: "hold",
@@ -165,6 +202,25 @@ function titleOverlayFromScene(scene: SceneTitle): PreviewTitleOverlay {
     reveal: scene.reveal,
     animations: timelineAnimationsFor(scene.key, scene.animations),
     isMotionScene: false,
+    box: scene.box,
+  };
+}
+
+/** MotionScene text layer → PreviewTitleOverlay (role motion_scene). */
+function motionTitleOverlayFromScene(scene: SceneMotionTitle): PreviewTitleOverlay {
+  return {
+    key: scene.key,
+    startS: scene.startS,
+    endS: scene.endS,
+    text: scene.text,
+    position: scene.position,
+    fontSize: scene.fontSize,
+    color: scene.color,
+    fontWeight: scene.fontWeight,
+    animation: scene.animation,
+    reveal: scene.reveal,
+    animations: timelineAnimationsFor(scene.key, scene.animations),
+    isMotionScene: true,
     box: scene.box,
   };
 }
@@ -227,6 +283,7 @@ export function StageHarness() {
   const [scene, setScene] = useState<SceneDocument | null>(null);
   const [sceneError, setSceneError] = useState<string | null>(null);
   const [videoSeeked, setVideoSeeked] = useState(false);
+  const [videoFramePresented, setVideoFramePresented] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
 
   // Fetch + parse the scene JSON once. A fetch failure surfaces as
@@ -300,11 +357,54 @@ export function StageHarness() {
     };
   }, [t, clipUrl]);
 
+  // The `seeked` event fires when the seek completes internally, but the
+  // seeked frame is only PRESENTED for composition on a later rendering
+  // step — a screenshot taken between the two captures the pre-seek
+  // frame (observed as a real flake: kinetic-text golden showed the
+  // t=0 frame). Gate readiness on `requestVideoFrameCallback` reporting
+  // a presented frame whose mediaTime matches the target `t`. All
+  // harness `t` values are frame-aligned for the 30fps fixture clip, so
+  // a half-frame-at-60fps tolerance can never accept a neighbor frame.
   useEffect(() => {
-    if (videoSeeked && fontsReady) {
+    const video = videoRef.current;
+    if (!video) return;
+    setVideoFramePresented(false);
+    type VideoFrameMetadata = { mediaTime: number };
+    const rvfcVideo = video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        callback: (now: number, metadata: VideoFrameMetadata) => void,
+      ) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
+    if (typeof rvfcVideo.requestVideoFrameCallback !== "function") {
+      // No presentation signal available — fall back to the seeked
+      // event alone (pre-rVFC engines; the harness runs Chromium).
+      setVideoFramePresented(true);
+      return;
+    }
+    let cancelled = false;
+    let handle = 0;
+    const toleranceS = 1 / 60;
+    const onFrame = (_now: number, metadata: VideoFrameMetadata) => {
+      if (cancelled) return;
+      if (Math.abs(metadata.mediaTime - t) <= toleranceS) {
+        setVideoFramePresented(true);
+        return;
+      }
+      handle = rvfcVideo.requestVideoFrameCallback!(onFrame);
+    };
+    handle = rvfcVideo.requestVideoFrameCallback(onFrame);
+    return () => {
+      cancelled = true;
+      rvfcVideo.cancelVideoFrameCallback?.(handle);
+    };
+  }, [t, clipUrl]);
+
+  useEffect(() => {
+    if (videoSeeked && videoFramePresented && fontsReady) {
       document.title = "stage-harness-ready";
     }
-  }, [videoSeeked, fontsReady]);
+  }, [videoSeeked, videoFramePresented, fontsReady]);
 
   const clock = useMemo(() => frozenClock(t), [t]);
 
@@ -315,6 +415,15 @@ export function StageHarness() {
 
   const motionSceneLayers: PreviewMotionSceneOverlay[] = useMemo(() => {
     const layers: PreviewMotionSceneOverlay[] = [];
+    for (const layer of scene?.layers ?? []) {
+      if (layer.kind === "title") {
+        layers.push({ kind: "title", overlay: motionTitleOverlayFromScene(layer) });
+      } else if (layer.kind === "shape") {
+        layers.push({ kind: "shape", overlay: shapeOverlayFromScene(layer) });
+      } else {
+        layers.push({ kind: "image", overlay: imageOverlayFromScene(layer) });
+      }
+    }
     if (scene?.shape) {
       layers.push({ kind: "shape", overlay: shapeOverlayFromScene(scene.shape) });
     }

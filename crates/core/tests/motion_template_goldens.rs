@@ -446,3 +446,405 @@ fn progress_bar_is_left_anchored_with_static_width_and_linear_scale() {
     assert_eq!(scale.keyframes[0].value, 0.1 / 0.75);
     assert_eq!(scale.keyframes[1].value, 1.0);
 }
+
+// =====================================================================
+// Stage-harness scene sync tests (Phase-2 Task 7)
+//
+// The Playwright stage harness (`apps/desktop/tests/stage-harness.mjs`)
+// renders committed scene fixtures in
+// `apps/desktop/public/fixtures/stage/scene-*.json` — the
+// SNAPSHOT-LEVEL mirror of expander output, i.e. the `Preview*`
+// overlay shapes `StageHarness.tsx` consumes. These tests re-derive
+// each harness scene from `expand_template` plus the same field
+// mapping the Tauri snapshot lowering applies, serialize, and
+// byte-compare against the committed fixture so the harness scenes
+// cannot silently drift from the expander. `UPDATE_GOLDENS=1`
+// regenerates the fixtures.
+//
+// SOURCE OF TRUTH for the field mapping is the Tauri snapshot
+// lowering in `apps/desktop/src-tauri/src/commands/timeline.rs`
+// (`motion_scene_title_for_protocol`, `motion_scene_shape_for_protocol`,
+// `motion_scene_layer_animations_for_protocol`,
+// `motion_scene_preview_track`) composed with the desktop preview
+// overlay construction in
+// `apps/desktop/src/media/stage/motionScene.tsx`
+// (`activeMotionSceneOverlays`) and `titles.tsx` (`titleOverlayBox`,
+// `titlePosition`, `titleAlign`, `titleReveal`). The mapping code
+// below is a TEST-ONLY mirror of that lowering; if it and
+// `timeline.rs` disagree, `timeline.rs` wins and this file must be
+// updated.
+//
+// TIME BASE: expander keyframe times are LAYER-LOCAL seconds
+// (relative to the layer's own `from_s`), and the Stage preview
+// evaluates overlay animations at `timelineTime - overlay.startS`
+// (see `motionScene.tsx` / `titles.tsx` `evaluateAnimations` call
+// sites), so keyframe times are copied VERBATIM — no conversion.
+// Overlay windows are timeline seconds:
+// `startS = scene.start_s + layer.from_s` and
+// `endS = startS + layer.duration_s` (mirroring
+// `motion_scene_preview_track`'s `track_start_s`); harness scenes
+// anchor at `scene.start_s = 0`, so `startS = from_s`.
+//
+// Field mapping table (expander layer -> harness scene JSON):
+//   Text layer   -> {"kind":"title"}:
+//     params.text                        -> text (required)
+//     params.position (default "center") -> position, then
+//                                           titlePosition(): top|bottom else center
+//     params.font_size (default 64)      -> fontSize
+//     params.color (default "#FFFFFF")   -> color
+//     params.font_weight|weight
+//       (default "normal")               -> fontWeight ("bold" else "normal")
+//     params.animation slide_in|slide_out
+//       else "none"                      -> animation
+//     params.reveal (default "none")     -> reveal (typewriter|word|line else none)
+//     params.{x,y,width} + params.align  -> box {x, y, width, align}
+//       (scene_normalized_param: |v| <= 1 passes through — template
+//        params are normalized fractions, so passthrough; align via
+//        titleAlign(): left|right else center)
+//   Solid/Shape layer -> {"kind":"shape"}:
+//     MotionSceneTransform::from_layer_params -> x, y, width, height,
+//       opacity (clamped 0..=1), scale, anchorX, anchorY, rotationDeg
+//     params.color (default "#FFFFFF")   -> color; shape is "rect"
+//   Both kinds:
+//     motion_animations_with_scene_fade(peak_opacity) filtered by
+//       is_runtime_clip_parameter        -> animations[] (peak_opacity:
+//       Text -> 1.0, else transform.opacity; this is what synthesizes
+//       the default enter/exit opacity fade on the lower-third bar)
+//     animation id                       -> "<sceneId>:<layerId>:<parameter>"
+//       (mirrors the lowering's "{clip_uuid}:{parameter}")
+//     keyframes: time_s -> timeS (layer-local, verbatim), value,
+//       interpolation + easing (serde snake_case names — identical to
+//       timeline.rs interpolation_name/easing_name), spring passthrough
+//   Layer order: sorted by z_index, stable (sorted_motion_scene_layers)
+// =====================================================================
+
+use montage_proto::professional::{
+    MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform, is_runtime_clip_parameter,
+};
+
+#[derive(serde::Serialize)]
+struct HarnessSpring {
+    mass: f64,
+    stiffness: f64,
+    damping: f64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HarnessKeyframe {
+    time_s: f64,
+    value: f64,
+    interpolation: String,
+    easing: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spring: Option<HarnessSpring>,
+}
+
+#[derive(serde::Serialize)]
+struct HarnessAnimation {
+    id: String,
+    parameter: String,
+    keyframes: Vec<HarnessKeyframe>,
+}
+
+#[derive(serde::Serialize)]
+struct HarnessTitleBox {
+    x: f64,
+    y: f64,
+    width: Option<f64>,
+    align: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind")]
+enum HarnessLayer {
+    #[serde(rename = "title", rename_all = "camelCase")]
+    Title {
+        key: String,
+        start_s: f64,
+        end_s: f64,
+        text: String,
+        position: String,
+        font_size: u32,
+        color: String,
+        font_weight: String,
+        animation: String,
+        reveal: String,
+        #[serde(rename = "box")]
+        title_box: HarnessTitleBox,
+        animations: Vec<HarnessAnimation>,
+    },
+    #[serde(rename = "shape", rename_all = "camelCase")]
+    Shape {
+        key: String,
+        start_s: f64,
+        end_s: f64,
+        shape: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        color: String,
+        opacity: f64,
+        scale: f64,
+        anchor_x: f64,
+        anchor_y: f64,
+        rotation_deg: f64,
+        animations: Vec<HarnessAnimation>,
+    },
+}
+
+#[derive(serde::Serialize)]
+struct HarnessScene {
+    layers: Vec<HarnessLayer>,
+}
+
+fn layer_str<'a>(layer: &'a MotionSceneLayer, key: &str) -> Option<&'a str> {
+    layer.params.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn layer_f64(layer: &MotionSceneLayer, key: &str) -> Option<f64> {
+    layer.params.get(key).and_then(serde_json::Value::as_f64)
+}
+
+fn layer_u32(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
+    layer
+        .params
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+/// serde snake_case name of a proto enum value — identical strings to
+/// `timeline.rs` `interpolation_name`/`easing_name`.
+fn enum_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .expect("serialize proto enum")
+        .as_str()
+        .expect("proto enum serializes as a string")
+        .to_string()
+}
+
+/// Mirror of `motion_scene_layer_animations_for_protocol` (timeline.rs):
+/// scene-fade-augmented layer animations, runtime-parameter filtered,
+/// keyframe times layer-local verbatim.
+fn harness_animations(layer: &MotionSceneLayer, layer_key: &str) -> Vec<HarnessAnimation> {
+    let peak_opacity = match layer.kind {
+        MotionSceneLayerKind::Text => 1.0,
+        _ => MotionSceneTransform::from_layer_params(&layer.params).opacity,
+    };
+    layer
+        .motion_animations_with_scene_fade(peak_opacity)
+        .into_iter()
+        .filter(|animation| is_runtime_clip_parameter(&animation.parameter))
+        .map(|animation| HarnessAnimation {
+            id: format!("{layer_key}:{}", animation.parameter),
+            keyframes: animation
+                .keyframes
+                .iter()
+                .map(|kf| HarnessKeyframe {
+                    time_s: kf.time_s,
+                    value: kf.value,
+                    interpolation: enum_name(&kf.interpolation),
+                    easing: enum_name(&kf.easing),
+                    spring: kf.spring.map(|spring| HarnessSpring {
+                        mass: spring.mass,
+                        stiffness: spring.stiffness,
+                        damping: spring.damping,
+                    }),
+                })
+                .collect(),
+            parameter: animation.parameter,
+        })
+        .collect()
+}
+
+/// Mirror of `motion_scene_title_for_protocol` (timeline.rs) composed
+/// with `activeMotionSceneOverlays`/`titleOverlayBox`/`titlePosition`/
+/// `titleAlign`/`titleReveal` (desktop preview).
+fn harness_title_layer(
+    layer: &MotionSceneLayer,
+    key: String,
+    start_s: f64,
+    end_s: f64,
+) -> HarnessLayer {
+    let animations = harness_animations(layer, &key);
+    let position = layer_str(layer, "position").unwrap_or("center");
+    let position = if position == "top" || position == "bottom" {
+        position
+    } else {
+        "center"
+    };
+    let font_weight = layer_str(layer, "font_weight")
+        .or_else(|| layer_str(layer, "weight"))
+        .unwrap_or("normal");
+    let animation = layer_str(layer, "animation")
+        .filter(|name| matches!(*name, "slide_in" | "slide_out"))
+        .unwrap_or("none");
+    let reveal = layer_str(layer, "reveal")
+        .filter(|name| matches!(*name, "typewriter" | "word" | "line"))
+        .unwrap_or("none");
+    let align = layer_str(layer, "align")
+        .filter(|name| matches!(*name, "left" | "right"))
+        .unwrap_or("center");
+    // scene_normalized_param: template params are normalized fractions
+    // (|v| <= 1), so they pass through undivided.
+    HarnessLayer::Title {
+        text: layer_str(layer, "text")
+            .expect("text layer has text")
+            .to_string(),
+        position: position.to_string(),
+        font_size: layer_u32(layer, "font_size").unwrap_or(64),
+        color: layer_str(layer, "color").unwrap_or("#FFFFFF").to_string(),
+        font_weight: if font_weight == "bold" {
+            "bold"
+        } else {
+            "normal"
+        }
+        .to_string(),
+        animation: animation.to_string(),
+        reveal: reveal.to_string(),
+        title_box: HarnessTitleBox {
+            x: layer_f64(layer, "x").expect("text layer has x"),
+            y: layer_f64(layer, "y").expect("text layer has y"),
+            width: layer_f64(layer, "width").filter(|width| *width > 0.0),
+            align: align.to_string(),
+        },
+        key,
+        start_s,
+        end_s,
+        animations,
+    }
+}
+
+/// Mirror of `motion_scene_shape_for_protocol` (timeline.rs) composed
+/// with `activeMotionSceneOverlays`' shape branch (clampOpacity is a
+/// no-op here — `MotionSceneTransform` already clamps to 0..=1).
+fn harness_shape_layer(
+    layer: &MotionSceneLayer,
+    key: String,
+    start_s: f64,
+    end_s: f64,
+) -> HarnessLayer {
+    let animations = harness_animations(layer, &key);
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+    HarnessLayer::Shape {
+        shape: "rect".to_string(),
+        x: transform.x,
+        y: transform.y,
+        width: transform.width,
+        height: transform.height,
+        color: layer_str(layer, "color").unwrap_or("#FFFFFF").to_string(),
+        opacity: transform.opacity,
+        scale: transform.scale,
+        anchor_x: transform.anchor_x,
+        anchor_y: transform.anchor_y,
+        rotation_deg: transform.rotation_deg,
+        key,
+        start_s,
+        end_s,
+        animations,
+    }
+}
+
+/// Lower an expansion's layers into the harness scene document.
+/// Mirrors `motion_scene_preview_track`: layers sorted by z_index
+/// (stable), `clip_uuid = "<sceneId>:<layerId>"`, window at
+/// `scene.start_s (= 0 in the harness) + from_s`.
+fn harness_scene(scene_id: &str, layers: &[MotionSceneLayer]) -> HarnessScene {
+    let mut sorted: Vec<&MotionSceneLayer> = layers.iter().collect();
+    sorted.sort_by_key(|layer| layer.z_index);
+    let layers = sorted
+        .into_iter()
+        .map(|layer| {
+            let key = format!("{scene_id}:{}", layer.id);
+            let start_s = layer.from_s;
+            let end_s = layer.from_s + layer.duration_s;
+            match layer.kind {
+                MotionSceneLayerKind::Text => harness_title_layer(layer, key, start_s, end_s),
+                MotionSceneLayerKind::Solid | MotionSceneLayerKind::Shape => {
+                    harness_shape_layer(layer, key, start_s, end_s)
+                }
+                other => panic!("harness scenes do not lower {other:?} layers"),
+            }
+        })
+        .collect();
+    HarnessScene { layers }
+}
+
+fn harness_fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/public/fixtures/stage")
+}
+
+/// Compare `actual` (pretty JSON) against the committed harness scene
+/// fixture. `UPDATE_GOLDENS=1` writes/overwrites the fixture instead.
+fn assert_matches_harness_golden(fixture_name: &str, actual: &str) {
+    let path = harness_fixture_dir().join(fixture_name);
+    if std::env::var("UPDATE_GOLDENS").is_ok() {
+        std::fs::write(&path, actual).expect("write harness scene fixture");
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!(
+            "harness scene fixture missing: {}\n\
+             Bootstrap it by running this test with UPDATE_GOLDENS=1, e.g.:\n\
+             UPDATE_GOLDENS=1 ./scripts/loop-cargo.sh test -p montage-core --test motion_template_goldens\n\
+             then review the generated fixture and commit it.",
+            path.display()
+        )
+    });
+    assert_eq!(
+        actual, expected,
+        "harness scene {fixture_name} no longer matches the expander + snapshot lowering.\n\
+         If the expander change is intentional, regenerate with UPDATE_GOLDENS=1, re-bootstrap \n\
+         the SSIM goldens (delete the fixture's apps/desktop/tests/fixtures/stage-golden/*.png \n\
+         and rerun the harness), and review both diffs before committing."
+    );
+}
+
+/// Lower-third harness scene: same spec as `lower_third_matches_golden`
+/// (Ada Lovelace / Mathematician, 5s scene). Harness screenshots at
+/// t=0.4 (bar+text slide-in mid-flight) and t=2.0 (settled).
+#[test]
+fn harness_scene_lower_third_matches_expander() {
+    let spec = MotionTemplateSpec::LowerThird {
+        name: "Ada Lovelace".to_string(),
+        role: Some("Mathematician".to_string()),
+    };
+    let expansion = expand_template(&spec, 5.0, 30.0).expect("lower third should expand");
+    let scene = harness_scene("lower-third", &expansion.layers);
+    let actual = serde_json::to_string_pretty(&scene).expect("serialize harness scene");
+    assert_matches_harness_golden("scene-lower-third.json", &actual);
+}
+
+/// Kinetic-text harness scene: words staggered so the harness catches
+/// distinct states at its two screenshot times — at t=0.5 "Ship" is
+/// mid-exit-fade and "it" is mid-pop-in ("today" not yet started); at
+/// t=1.5 only "today" remains (settled, holds to scene end).
+#[test]
+fn harness_scene_kinetic_text_matches_expander() {
+    let spec = MotionTemplateSpec::KineticText {
+        words: vec![
+            KineticWord {
+                text: "Ship".to_string(),
+                at_s: 0.0,
+                hold_s: 0.6,
+            },
+            KineticWord {
+                text: "it".to_string(),
+                at_s: 0.4,
+                hold_s: 0.6,
+            },
+            KineticWord {
+                text: "today".to_string(),
+                at_s: 0.9,
+                hold_s: 0.0,
+            },
+        ],
+        anchor: TextAnchor::LowerCenter,
+    };
+    let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+    let scene = harness_scene("kinetic-text", &expansion.layers);
+    let actual = serde_json::to_string_pretty(&scene).expect("serialize harness scene");
+    assert_matches_harness_golden("scene-kinetic-text.json", &actual);
+}
