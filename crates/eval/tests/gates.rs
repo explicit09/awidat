@@ -34,6 +34,7 @@ fn test_profile() -> HouseProfile {
             last_peak_minute: 1,
         }),
         archetypes,
+        sound: None,
     }
 }
 

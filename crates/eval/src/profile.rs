@@ -50,6 +50,17 @@ pub struct ArchetypeTargets {
     pub floor: Option<FloorSpec>,
 }
 
+/// Delivery loudness requirement for the sound pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoundSpec {
+    /// Integrated loudness target, LUFS (e.g. -14 for YouTube delivery).
+    pub target_lufs: f64,
+    /// Allowed deviation from the target, LU.
+    pub tolerance_lu: f64,
+    /// Maximum true peak, dBFS.
+    pub max_true_peak_db: f64,
+}
+
 /// A house's editorial targets. Serialized as a versioned JSON document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HouseProfile {
@@ -62,6 +73,9 @@ pub struct HouseProfile {
     pub cold_open: Option<ColdOpenSpec>,
     /// Pacing targets keyed by archetype name.
     pub archetypes: BTreeMap<String, ArchetypeTargets>,
+    /// Delivery loudness requirement; `None` skips the sound loudness gate.
+    #[serde(default)]
+    pub sound: Option<SoundSpec>,
 }
 
 impl HouseProfile {

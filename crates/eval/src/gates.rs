@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::{HouseProfile, PacingStats};
+use crate::{HouseProfile, LoudnessStats, PacingStats};
 
 /// Body pacing is measured after the cold-open window (fixed structural
 /// boundary; the requirement itself lives in the profile).
@@ -88,6 +88,35 @@ pub fn cold_open(stats: &PacingStats, profile: &HouseProfile) -> GateReport {
             "first {:.0}s runs {opening_rate:.1} cuts/min (target ≥ {}), peak minute {peak:?} \
              (target ≤ {})",
             spec.window_secs, spec.min_rate, spec.last_peak_minute
+        ),
+    }
+}
+
+/// Delivery loudness: integrated LUFS within the profile's tolerance and
+/// true peak under the ceiling. Profiles without a sound spec pass as
+/// skipped.
+pub fn loudness(stats: &LoudnessStats, profile: &HouseProfile) -> GateReport {
+    let Some(spec) = &profile.sound else {
+        return GateReport {
+            gate: "sound.loudness",
+            passed: true,
+            measured: f64::NAN,
+            detail: format!("profile {:?} has no sound spec — skipped", profile.name),
+        };
+    };
+    let deviation = (stats.integrated_lufs - spec.target_lufs).abs();
+    let passed = deviation <= spec.tolerance_lu && stats.true_peak_db <= spec.max_true_peak_db;
+    GateReport {
+        gate: "sound.loudness",
+        passed,
+        measured: stats.integrated_lufs,
+        detail: format!(
+            "integrated {:.1} LUFS (target {} ±{} LU), true peak {:.1} dBFS (max {})",
+            stats.integrated_lufs,
+            spec.target_lufs,
+            spec.tolerance_lu,
+            stats.true_peak_db,
+            spec.max_true_peak_db
         ),
     }
 }

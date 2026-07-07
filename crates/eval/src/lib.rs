@@ -9,8 +9,12 @@ mod cuts_io;
 pub mod gates;
 mod pacing;
 mod profile;
+mod sound;
 pub mod suite;
 
 pub use cuts_io::{CutsIoError, load_cut_times};
 pub use pacing::{PacingError, PacingStats};
-pub use profile::{ArchetypeTargets, ColdOpenSpec, FloorSpec, HouseProfile, ProfileError};
+pub use profile::{
+    ArchetypeTargets, ColdOpenSpec, FloorSpec, HouseProfile, ProfileError, SoundSpec,
+};
+pub use sound::{LoudnessStats, parse_ebur128};

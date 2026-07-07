@@ -15,5 +15,10 @@
       "body_band": [1.5, 3.5],
       "floor": null
     }
+  },
+  "sound": {
+    "target_lufs": -14.0,
+    "tolerance_lu": 1.0,
+    "max_true_peak_db": -1.0
   }
 }
