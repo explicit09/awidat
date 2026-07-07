@@ -1,4 +1,4 @@
-//! Replays `crates/eval/fixtures/animation-vectors.json` through the Rust
+//! Replays `crates/render/tests/fixtures/animation-vectors.json` through the Rust
 //! keyframe evaluator (`montage_render::animation::evaluate_keyframes_with_modes`).
 //!
 //! The same JSON is replayed on the TypeScript side by
@@ -169,7 +169,7 @@ fn map_keyframe(raw: &RawKeyframe) -> Keyframe {
 }
 
 fn load_fixture() -> VectorFixture {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/animation-vectors.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/animation-vectors.json");
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
     serde_json::from_str(&json)

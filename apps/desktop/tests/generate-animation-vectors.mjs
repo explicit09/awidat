@@ -1,4 +1,4 @@
-// Generates crates/eval/fixtures/animation-vectors.json from the TypeScript
+// Generates crates/render/tests/fixtures/animation-vectors.json from the TypeScript
 // animation evaluator (apps/desktop/src/timeline/animation.ts). Both the TS
 // test (test:animation-vectors) and the Rust test
 // (crates/eval/tests/animation_vectors.rs) replay these vectors so that
@@ -9,7 +9,7 @@
 //
 //   node tests/generate-animation-vectors.mjs
 //
-// This OVERWRITES crates/eval/fixtures/animation-vectors.json. Only re-run it
+// This OVERWRITES crates/render/tests/fixtures/animation-vectors.json. Only re-run it
 // deliberately -- if TS and Rust disagree, regenerating hides the divergence
 // instead of surfacing it.
 
@@ -21,7 +21,7 @@ import { evaluateAnimationValueForTest } from "../dist-test/timeline/animation.j
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_PATH = path.resolve(
   __dirname,
-  "../../../crates/eval/fixtures/animation-vectors.json",
+  "../../../crates/render/tests/fixtures/animation-vectors.json",
 );
 const PRECISION = 1e-6;
 

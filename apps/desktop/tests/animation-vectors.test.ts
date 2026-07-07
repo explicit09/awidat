@@ -1,4 +1,4 @@
-// Replays crates/eval/fixtures/animation-vectors.json through the TS
+// Replays crates/render/tests/fixtures/animation-vectors.json through the TS
 // animation evaluator. This is the TS half of Task 9's TS<->Rust parity
 // pin: crates/eval/tests/animation_vectors.rs replays the same JSON through
 // the Rust evaluator (crates/render/src/animation.rs). Any future edit to
@@ -19,7 +19,7 @@ import { evaluateAnimationValueForTest } from "../dist-test/timeline/animation.j
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(
   __dirname,
-  "../../../crates/eval/fixtures/animation-vectors.json",
+  "../../../crates/render/tests/fixtures/animation-vectors.json",
 );
 const TOLERANCE = 1e-6;
 
