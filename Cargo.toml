@@ -10,6 +10,7 @@ members = [
     "crates/render",
     "crates/render-gpu",
     "crates/effects",
+    "crates/eval",
     "crates/lut",
     "crates/test-support",
     "crates/config",

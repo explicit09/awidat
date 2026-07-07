@@ -1,0 +1,22 @@
+[package]
+name = "montage-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "montage_eval"
+path = "src/lib.rs"
+
+[[bin]]
+name = "montage-eval"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
