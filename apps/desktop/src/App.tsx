@@ -134,6 +134,7 @@ import {
   screen2Suggestions,
 } from "./shell/screen2Demo";
 import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
+import { StageHarness } from "./media/stage/StageHarness";
 import "./ui/tokens.css";
 import "./App.css";
 import "./ui/glass.css";
@@ -154,6 +155,18 @@ const HELP_DOCS_URL = "https://tadiwa.co/montage/setup";
 const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
 
 function App() {
+  // Dev-only, Tauri-free harness route for the Stage compositor
+  // (Task 8 screenshots this from Playwright). Must short-circuit
+  // BEFORE useAppGlue/useRenderQueueWorker or any other Tauri-
+  // dependent hook runs, so the route also works in plain Chromium
+  // with no Tauri runtime present. The pathname is fixed for the
+  // lifetime of a page load, so this is a stable branch — it never
+  // flips mid-session and so never changes the hook-call order for
+  // a given mount.
+  if (typeof window !== "undefined" && window.location.pathname === "/stage-harness") {
+    return <StageHarness />;
+  }
+
   // Side effects (Tauri channels, menu routing, project lifecycle).
   useAppGlue();
   // Drive the Deliver-page render queue: drains pending entries one
