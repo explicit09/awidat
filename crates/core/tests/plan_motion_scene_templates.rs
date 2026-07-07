@@ -274,3 +274,62 @@ fn unknown_template_value_errors_clearly() {
         "error should name the offending value: {error}"
     );
 }
+
+#[test]
+fn template_mode_surfaces_ignored_inputs_in_rationale() {
+    // template mode with image_asset and backdrop provided: they should be
+    // silently ignored (not error), but their names should appear in the
+    // plan's rationale so the agent knows they were discarded.
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "lower third for the guest".into(),
+        scene_id: Some("scene-ignored-inputs".into()),
+        duration_s: Some(4.0),
+        template: Some("lower_third".into()),
+        name: Some("Ada Lovelace".into()),
+        // These five inputs should be ignored in template mode:
+        image_asset: Some("assets/diagram.png".into()),
+        backdrop: Some("full".into()),
+        headline: Some("This should be ignored".into()),
+        step_labels: vec!["Step 1".into(), "Step 2".into()],
+        evidence_text: Some("Transcript text that should be ignored".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan lower third template with ignored inputs");
+
+    // Scene must validate and have correct template layers.
+    assert_eq!(plan.scene.id, "scene-ignored-inputs");
+    assert!(plan.scene.validate().is_empty());
+    let ids: Vec<&str> = plan.scene.layers.iter().map(|l| l.id.as_str()).collect();
+    assert!(ids.contains(&"lower-third-bar"));
+    assert!(ids.contains(&"lower-third-name"));
+
+    // Rationale must mention the ignored inputs by name.
+    let rationale_lower = plan
+        .scene
+        .rationale
+        .as_ref()
+        .unwrap_or(&"".to_string())
+        .to_lowercase();
+    assert!(
+        rationale_lower.contains("ignored")
+            && rationale_lower.contains("image_asset")
+            && rationale_lower.contains("backdrop")
+            && rationale_lower.contains("headline")
+            && rationale_lower.contains("step_labels")
+            && rationale_lower.contains("evidence_text"),
+        "rationale should list all five ignored inputs: {:?}",
+        plan.scene.rationale
+    );
+
+    // Verify that no image or backdrop layers made it into the scene.
+    assert!(
+        !ids.iter()
+            .any(|id| id.contains("image") || id.contains("panel") || id.contains("backdrop")),
+        "scene should contain no image or backdrop layers when template mode is active"
+    );
+
+    // Apply the EDL and verify the stored scene has the same structure.
+    let stored =
+        apply_plan_to_scratch_timeline(&plan.edl, "scene-ignored-inputs", "ignored-inputs-e2e");
+    assert_eq!(stored.layers.len(), plan.scene.layers.len());
+}

@@ -31,28 +31,30 @@ pub struct PlanMotionSceneArgs {
     /// Frame rate. Default 30.
     #[serde(default)]
     pub fps: Option<f64>,
-    /// Optional project-relative still asset path.
+    /// Optional project-relative still asset path. Ignored when `template`
+    /// is set.
     #[serde(default)]
     pub image_asset: Option<String>,
     /// Exact on-screen headline text, drawn from the transcript
     /// evidence. Required unless `evidence_text` is provided to derive
-    /// it from.
+    /// it from. Ignored when `template` is set.
     #[serde(default)]
     pub headline: Option<String>,
     /// Exact on-screen labels for step/process scenes, in order.
     /// Required when the request implies steps; generic "Step N"
-    /// placeholders are never generated.
+    /// placeholders are never generated. Ignored when `template` is set.
     #[serde(default)]
     pub step_labels: Vec<String>,
     /// Transcript window backing the scene's content; derives the
     /// headline when `headline` is omitted and is recorded in the
-    /// scene rationale.
+    /// scene rationale. Ignored when `template` is set.
     #[serde(default)]
     pub evidence_text: Option<String>,
     /// Backdrop mode: `"full"` covers the entire frame edge-to-edge
     /// (use for full-frame cards), `"panel"` is an inset card,
     /// `"none"` skips the backdrop. Default: panel when the request
-    /// implies a card/diagram or an image is used.
+    /// implies a card/diagram or an image is used. Ignored when
+    /// `template` is set.
     #[serde(default)]
     pub backdrop: Option<String>,
     /// Optional motion-template name: `"lower_third"`, `"kinetic_text"`,

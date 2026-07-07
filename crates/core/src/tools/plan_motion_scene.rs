@@ -217,7 +217,36 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
     };
 
     let (layers, scene_rationale) = if let Some(expansion) = template_expansion {
-        (expansion.layers, expansion.rationale)
+        // Detect which of the five heuristic inputs were provided in template mode.
+        let mut ignored_inputs = Vec::new();
+        if args.image_asset.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("image_asset");
+        }
+        if args.backdrop.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("backdrop");
+        }
+        if args.headline.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("headline");
+        }
+        if !args.step_labels.is_empty() {
+            ignored_inputs.push("step_labels");
+        }
+        if args
+            .evidence_text
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+        {
+            ignored_inputs.push("evidence_text");
+        }
+
+        let mut rationale = expansion.rationale;
+        if !ignored_inputs.is_empty() {
+            rationale.push_str(&format!(
+                " Ignored inputs not used by template mode: {}.",
+                ignored_inputs.join(", ")
+            ));
+        }
+        (expansion.layers, rationale)
     } else {
         let evidence_text = args
             .evidence_text
@@ -875,25 +904,25 @@ impl ToolHandler for PlanMotionSceneTool {
                     },
                     "image_asset": {
                         "type": "string",
-                        "description": "Optional project-relative still asset path for logo, screenshot, chart, diagram, or generated PNG image layers."
+                        "description": "Optional project-relative still asset path for logo, screenshot, chart, diagram, or generated PNG image layers. Ignored when `template` is set."
                     },
                     "headline": {
                         "type": "string",
-                        "description": "Exact on-screen headline text, drawn from the transcript evidence. Required unless evidence_text is provided to derive it from."
+                        "description": "Exact on-screen headline text, drawn from the transcript evidence. Required unless evidence_text is provided to derive it from. Ignored when `template` is set."
                     },
                     "step_labels": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Exact on-screen labels for step/process scenes, in order. Required when the request implies steps; generic 'Step N' placeholders are never generated."
+                        "description": "Exact on-screen labels for step/process scenes, in order. Required when the request implies steps; generic 'Step N' placeholders are never generated. Ignored when `template` is set."
                     },
                     "evidence_text": {
                         "type": "string",
-                        "description": "Transcript window backing the scene's content; derives the headline when headline is omitted and is recorded in the scene rationale."
+                        "description": "Transcript window backing the scene's content; derives the headline when headline is omitted and is recorded in the scene rationale. Ignored when `template` is set."
                     },
                     "backdrop": {
                         "type": "string",
                         "enum": ["full", "panel", "none"],
-                        "description": "Backdrop mode: 'full' covers the entire frame edge-to-edge (use for full-frame cards), 'panel' is an inset card, 'none' skips the backdrop. Default: panel when the request implies a card/diagram or an image is used."
+                        "description": "Backdrop mode: 'full' covers the entire frame edge-to-edge (use for full-frame cards), 'panel' is an inset card, 'none' skips the backdrop. Default: panel when the request implies a card/diagram or an image is used. Ignored when `template` is set."
                     },
                     "template": {
                         "type": "string",
