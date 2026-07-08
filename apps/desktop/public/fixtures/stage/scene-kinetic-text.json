@@ -4,7 +4,7 @@
       "kind": "title",
       "key": "kinetic-text:kinetic-word-0",
       "startS": 0.0,
-      "endS": 0.6,
+      "endS": 0.72,
       "text": "Ship",
       "position": "center",
       "fontSize": 48,
@@ -36,13 +36,13 @@
               "easing": "linear"
             },
             {
-              "timeS": 0.44999999999999996,
+              "timeS": 0.54,
               "value": 1.0,
               "interpolation": "linear",
               "easing": "linear"
             },
             {
-              "timeS": 0.6,
+              "timeS": 0.72,
               "value": 0.0,
               "interpolation": "linear",
               "easing": "linear"
@@ -78,7 +78,7 @@
       "kind": "title",
       "key": "kinetic-text:kinetic-word-1",
       "startS": 0.4,
-      "endS": 1.0,
+      "endS": 1.12,
       "text": "it",
       "position": "center",
       "fontSize": 48,
@@ -110,13 +110,13 @@
               "easing": "linear"
             },
             {
-              "timeS": 0.44999999999999996,
+              "timeS": 0.54,
               "value": 1.0,
               "interpolation": "linear",
               "easing": "linear"
             },
             {
-              "timeS": 0.6,
+              "timeS": 0.72,
               "value": 0.0,
               "interpolation": "linear",
               "easing": "linear"
