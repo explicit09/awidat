@@ -66,6 +66,39 @@ fn routes_direct_footage_polish_to_effects() {
 }
 
 #[test]
+fn temporal_highlight_request_does_not_route_to_motion_scene() {
+    // "highlight the funniest moment" is editorial moment-selection,
+    // not a visual highlight-box overlay — it must not hit MotionScene.
+    let route = route_visual_support_request("highlight the funniest moment in this clip");
+    assert_ne!(route.primary_lane, VisualSupportLane::MotionScene);
+
+    // The MCP router has its own `VisualSupportLane` type; compare via
+    // Debug names like the drift tripwire below does.
+    let mcp_route = mcp_route_visual_support_request("highlight the funniest moment in this clip");
+    assert_ne!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
+fn highlight_box_phrase_routes_to_motion_scene() {
+    let route = route_visual_support_request("highlight box on the chart");
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+
+    let mcp_route = mcp_route_visual_support_request("highlight box on the chart");
+    assert_eq!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
+fn highlight_the_spatial_noun_routes_to_motion_scene() {
+    let route = route_visual_support_request("highlight the area around the price");
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+
+    let mcp_route = mcp_route_visual_support_request("highlight the area around the price");
+    assert_eq!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
 fn exposes_supporting_lanes_for_hybrid_visual_requests() {
     let route = route_visual_support_request(
         "make this podcast segment more energetic with b-roll, captions, and animated callouts",
@@ -197,7 +230,11 @@ fn routes_progress_bar_request_to_motion_scene_with_template_hint() {
 
 #[test]
 fn routes_highlight_box_request_to_motion_scene_with_template_hint() {
-    let route = route_visual_support_request("highlight the signup button on screen");
+    // "highlight the <spatial-noun>" phrasing: "region" is one of the
+    // spatial nouns the tightened rule accepts (a bare "highlight the
+    // signup button" no longer routes here — see
+    // temporal_highlight_request_does_not_route_to_motion_scene).
+    let route = route_visual_support_request("highlight the region around the signup button");
 
     assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
     let step = route

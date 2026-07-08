@@ -143,6 +143,29 @@ struct PlanVisualSupportArgs {
     request: String,
 }
 
+/// Spatial nouns that turn a "highlight the/a <noun>" phrase into a
+/// visual highlight-box overlay request rather than a purely temporal
+/// "highlight the funniest moment" (moment-selection) request.
+const HIGHLIGHT_SPATIAL_NOUNS: &[&str] = &[
+    "box", "area", "region", "chart", "graph", "corner", "section",
+];
+
+/// Whether a request wants a `highlight_box` MotionScene overlay. True
+/// for an explicit "highlight box"/"highlight-box", or for "highlight
+/// the <spatial-noun>" / "highlight a <spatial-noun>" where the noun
+/// names a region of the frame. Deliberately NOT triggered by bare
+/// "highlight the ..." (e.g. "highlight the funniest moment"), which is
+/// an editorial moment-selection request, not a visual overlay.
+fn wants_highlight_box(lower: &str) -> bool {
+    if contains_any(lower, &["highlight box", "highlight-box"]) {
+        return true;
+    }
+    HIGHLIGHT_SPATIAL_NOUNS.iter().any(|noun| {
+        lower.contains(&format!("highlight the {noun}"))
+            || lower.contains(&format!("highlight a {noun}"))
+    })
+}
+
 /// Read-only match for `plan_motion_scene`'s `template=<x>` field, drawn from
 /// the request's own vocabulary. `None` means the freeform heuristic planner
 /// applies instead of a specific prebuilt template.
@@ -153,7 +176,7 @@ fn motion_template_hint_for_request(lower: &str) -> Option<&'static str> {
     if contains_any(lower, &["progress bar", "progress-bar"]) {
         return Some("progress_bar");
     }
-    if contains_any(lower, &["highlight box", "highlight-box"]) || lower.contains("highlight the") {
+    if wants_highlight_box(lower) {
         return Some("highlight_box");
     }
     if contains_any(lower, &["lower third", "lower-third"]) && wants_lower_third_template(lower) {
@@ -283,10 +306,9 @@ pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
                 "callout",
                 "callouts",
                 "progress bar",
-                "highlight box",
-                "highlight the",
             ],
         )
+        || wants_highlight_box(&lower)
         || wants_still_graphic_motion_scene(&lower)
     {
         return route(
