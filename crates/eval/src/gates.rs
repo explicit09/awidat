@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::{HouseProfile, LoudnessStats, PacingStats};
+use crate::{HouseProfile, LoudnessStats, PacingStats, SplitEditStats};
 
 /// Body pacing is measured after the cold-open window (fixed structural
 /// boundary; the requirement itself lives in the profile).
@@ -117,6 +117,47 @@ pub fn loudness(stats: &LoudnessStats, profile: &HouseProfile) -> GateReport {
             spec.tolerance_lu,
             stats.true_peak_db,
             spec.max_true_peak_db
+        ),
+    }
+}
+
+/// J/L-cut coverage at speaker turns must meet the profile's minimum.
+/// Skips when the profile has no sound spec / no coverage requirement, or
+/// when the program has no speaker-turn boundaries to judge.
+pub fn split_edit_coverage(stats: &SplitEditStats, profile: &HouseProfile) -> GateReport {
+    let spec = profile
+        .sound
+        .as_ref()
+        .and_then(|s| s.min_split_edit_coverage);
+    let Some(min) = spec else {
+        return GateReport {
+            gate: "sound.split_edit_coverage",
+            passed: true,
+            measured: f64::NAN,
+            detail: format!(
+                "profile {:?} has no split-edit requirement — skipped",
+                profile.name
+            ),
+        };
+    };
+    if stats.total() == 0 {
+        return GateReport {
+            gate: "sound.split_edit_coverage",
+            passed: true,
+            measured: f64::NAN,
+            detail: "no speaker-turn boundaries — skipped".to_string(),
+        };
+    }
+    let measured = stats.coverage();
+    GateReport {
+        gate: "sound.split_edit_coverage",
+        passed: measured >= min,
+        measured,
+        detail: format!(
+            "{:.0}% of {} speaker turns carry a J/L-cut (minimum {:.0}%)",
+            measured * 100.0,
+            stats.total(),
+            min * 100.0
         ),
     }
 }

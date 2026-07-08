@@ -71,6 +71,47 @@ fn loudness_gate_fails_quiet_masters_and_hot_peaks() {
 }
 
 #[test]
+fn split_edit_coverage_counts_boundaries_with_audio_leads() {
+    // 4 speaker-turn boundaries, 2 carry a J/L-cut -> coverage 0.5.
+    use montage_eval::SplitEditStats;
+    let stats = SplitEditStats::from_boundaries(&[
+        (10.0, true),
+        (20.0, false),
+        (30.0, true),
+        (40.0, false),
+    ]);
+    assert!((stats.coverage() - 0.5).abs() < 1e-9);
+    assert_eq!(stats.total(), 4);
+}
+
+#[test]
+fn split_edit_gate_enforces_profile_minimum() {
+    use montage_eval::SplitEditStats;
+    let house = profile("technologia");
+    // technologia demands >= 0.4 J/L coverage at speaker turns.
+    let low = SplitEditStats::from_boundaries(&[(10.0, true), (20.0, false), (30.0, false)]);
+    let report = gates::split_edit_coverage(&low, &house);
+    assert!(!report.passed, "{}", report.detail);
+
+    let ok = SplitEditStats::from_boundaries(&[(10.0, true), (20.0, true), (30.0, false)]);
+    let report = gates::split_edit_coverage(&ok, &house);
+    assert!(report.passed, "{}", report.detail);
+}
+
+#[test]
+fn split_edit_gate_skips_with_no_boundaries_or_no_spec() {
+    use montage_eval::SplitEditStats;
+    // No speaker turns at all -> nothing to judge, pass as skipped.
+    let empty = SplitEditStats::from_boundaries(&[]);
+    let report = gates::split_edit_coverage(&empty, &profile("technologia"));
+    assert!(report.passed, "{}", report.detail);
+    // Profile without a sound spec (tbpn) -> skipped.
+    let some = SplitEditStats::from_boundaries(&[(10.0, false)]);
+    let report = gates::split_edit_coverage(&some, &profile("tbpn"));
+    assert!(report.passed, "{}", report.detail);
+}
+
+#[test]
 fn loudness_gate_skips_when_profile_has_no_sound_spec() {
     // tbpn profile carries no sound spec yet — gate passes as skipped.
     let house = profile("tbpn");

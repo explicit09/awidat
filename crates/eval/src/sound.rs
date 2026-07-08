@@ -11,6 +11,41 @@ pub struct LoudnessStats {
     pub true_peak_db: f64,
 }
 
+/// J/L-cut coverage at speaker-turn boundaries: how much of the dialogue
+/// grammar carries an audio lead or trail (the split-edit polish that
+/// distinguishes professional cuts from hard butt-cuts).
+#[derive(Debug, Clone)]
+pub struct SplitEditStats {
+    covered: usize,
+    total: usize,
+}
+
+impl SplitEditStats {
+    /// Build from `(boundary_time_secs, has_audio_lead_or_trail)` pairs —
+    /// one entry per speaker-turn boundary on the timeline.
+    pub fn from_boundaries(boundaries: &[(f64, bool)]) -> Self {
+        Self {
+            covered: boundaries.iter().filter(|(_, c)| *c).count(),
+            total: boundaries.len(),
+        }
+    }
+
+    /// Fraction of speaker-turn boundaries carrying a J/L-cut (0 when
+    /// there are no boundaries).
+    pub fn coverage(&self) -> f64 {
+        if self.total == 0 {
+            0.0
+        } else {
+            self.covered as f64 / self.total as f64
+        }
+    }
+
+    /// Number of speaker-turn boundaries considered.
+    pub fn total(&self) -> usize {
+        self.total
+    }
+}
+
 /// Parse the trailing summary block of
 /// `ffmpeg -af ebur128=peak=true -f null -` stderr output.
 pub fn parse_ebur128(text: &str) -> Option<LoudnessStats> {

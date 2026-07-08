@@ -59,6 +59,10 @@ pub struct SoundSpec {
     pub tolerance_lu: f64,
     /// Maximum true peak, dBFS.
     pub max_true_peak_db: f64,
+    /// Minimum J/L-cut coverage at speaker-turn boundaries (0.0–1.0);
+    /// `None` disables the split-edit gate.
+    #[serde(default)]
+    pub min_split_edit_coverage: Option<f64>,
 }
 
 /// A house's editorial targets. Serialized as a versioned JSON document.

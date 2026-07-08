@@ -8,17 +8,27 @@
   },
   "archetypes": {
     "informational": {
-      "body_band": [3.0, 9.0],
-      "floor": { "window_secs": 300.0, "min_rate": 0.5 }
+      "body_band": [
+        3.0,
+        9.0
+      ],
+      "floor": {
+        "window_secs": 300.0,
+        "min_rate": 0.5
+      }
     },
     "emotional": {
-      "body_band": [1.5, 3.5],
+      "body_band": [
+        1.5,
+        3.5
+      ],
       "floor": null
     }
   },
   "sound": {
     "target_lufs": -14.0,
     "tolerance_lu": 1.0,
-    "max_true_peak_db": -1.0
+    "max_true_peak_db": -1.0,
+    "min_split_edit_coverage": 0.4
   }
 }

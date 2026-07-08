@@ -17,4 +17,4 @@ pub use pacing::{PacingError, PacingStats};
 pub use profile::{
     ArchetypeTargets, ColdOpenSpec, FloorSpec, HouseProfile, ProfileError, SoundSpec,
 };
-pub use sound::{LoudnessStats, parse_ebur128};
+pub use sound::{LoudnessStats, SplitEditStats, parse_ebur128};
