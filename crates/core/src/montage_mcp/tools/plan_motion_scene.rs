@@ -75,6 +75,11 @@ pub struct PlanMotionSceneArgs {
     /// when `template` is `"kinetic_text"`.
     #[serde(default)]
     pub words: Vec<PlanMotionSceneWord>,
+    /// `kinetic_text`: optional screen anchor for the text block —
+    /// `"lower_left"`, `"center"`, or `"lower_center"`. Defaults to
+    /// `"center"` when omitted.
+    #[serde(default)]
+    pub anchor: Option<String>,
     /// `highlight_box`: region as fractions of the canvas. Required
     /// when `template` is `"highlight_box"`.
     #[serde(default, rename = "box")]
@@ -100,8 +105,10 @@ pub struct PlanMotionSceneWord {
     pub text: String,
     /// Time the word appears, in scene-local seconds.
     pub at_s: f64,
-    /// How long the word holds on screen after its pop-in, in
-    /// seconds. `0` (default) holds through the rest of the scene.
+    /// How long the word holds at full opacity AFTER its pop-in, in
+    /// seconds. The layer lives for pop_in (~0.12s) + hold_s, clamped
+    /// to the scene end. `0` (default) holds through the rest of the
+    /// scene.
     #[serde(default)]
     pub hold_s: f64,
 }
@@ -155,6 +162,7 @@ pub fn run(args: PlanMotionSceneArgs, _ctx: McpToolCtx) -> Result<String, String
             .into_iter()
             .map(|word| (word.text, word.at_s, word.hold_s))
             .collect(),
+        anchor: args.anchor,
         box_region: args
             .box_region
             .map(|region| (region.x, region.y, region.width, region.height)),

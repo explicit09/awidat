@@ -125,6 +125,70 @@ fn kinetic_text_template_end_to_end() {
 }
 
 #[test]
+fn kinetic_text_anchor_lower_center_places_words_near_bottom() {
+    // `anchor` is now a real production input; "lower_center" pins the
+    // words near the bottom (y ~ 0.82) instead of the default center
+    // (y ~ 0.46).
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "kinetic text cascade".into(),
+        scene_id: Some("scene-kinetic-anchor".into()),
+        duration_s: Some(3.0),
+        template: Some("kinetic_text".into()),
+        words: vec![("Ship".into(), 0.0, 0.4)],
+        anchor: Some("lower_center".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan kinetic text with lower_center anchor");
+
+    let y = plan
+        .scene
+        .layers
+        .iter()
+        .find(|l| l.id == "kinetic-word-0")
+        .and_then(|l| l.params.get("y"))
+        .and_then(serde_json::Value::as_f64);
+    assert_eq!(y, Some(0.82));
+}
+
+#[test]
+fn kinetic_text_default_anchor_is_center() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "kinetic text cascade".into(),
+        scene_id: Some("scene-kinetic-default-anchor".into()),
+        duration_s: Some(3.0),
+        template: Some("kinetic_text".into()),
+        words: vec![("Ship".into(), 0.0, 0.4)],
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan kinetic text with default anchor");
+
+    let y = plan
+        .scene
+        .layers
+        .iter()
+        .find(|l| l.id == "kinetic-word-0")
+        .and_then(|l| l.params.get("y"))
+        .and_then(serde_json::Value::as_f64);
+    assert_eq!(y, Some(0.46));
+}
+
+#[test]
+fn kinetic_text_invalid_anchor_errors_clearly() {
+    let error = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "kinetic text cascade".into(),
+        template: Some("kinetic_text".into()),
+        words: vec![("Ship".into(), 0.0, 0.4)],
+        anchor: Some("top_right".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect_err("invalid anchor must hard-fail");
+    assert!(
+        error.contains("anchor") && error.contains("top_right"),
+        "error should name the anchor field and offending value: {error}"
+    );
+}
+
+#[test]
 fn highlight_box_template_end_to_end() {
     let plan = plan_motion_scene_request(&MotionScenePlanRequest {
         request: "highlight the pricing card".into(),
@@ -180,6 +244,104 @@ fn progress_bar_template_end_to_end() {
 
     let stored = apply_plan_to_scratch_timeline(&plan.edl, "scene-progress", "progress-bar-e2e");
     assert_eq!(stored.layers.len(), plan.scene.layers.len());
+}
+
+fn render_support_mentions_preview_only(render_support: &str) -> bool {
+    // Normalize the wrapped-string whitespace before matching.
+    let normalized: String = render_support
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized.contains("live preview only")
+        && normalized
+            .contains("export/render lowering for scale-driven motion lands in a later phase")
+}
+
+#[test]
+fn progress_bar_render_support_discloses_preview_only_scale_motion() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "progress bar for the upload".into(),
+        duration_s: Some(3.0),
+        template: Some("progress_bar".into()),
+        progress: Some((0.1, 0.75, 0.9)),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan progress bar template");
+    assert!(
+        render_support_mentions_preview_only(&plan.render_support),
+        "progress_bar render_support should disclose preview-only scale motion: {}",
+        plan.render_support
+    );
+}
+
+#[test]
+fn highlight_box_pulse_render_support_discloses_preview_only_scale_motion() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "highlight the pricing card".into(),
+        duration_s: Some(3.0),
+        template: Some("highlight_box".into()),
+        box_region: Some((0.2, 0.25, 0.35, 0.3)),
+        pulse: Some(true),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan pulsing highlight box template");
+    assert!(
+        render_support_mentions_preview_only(&plan.render_support),
+        "pulsing highlight_box render_support should disclose preview-only scale motion: {}",
+        plan.render_support
+    );
+}
+
+#[test]
+fn highlight_box_without_pulse_render_support_omits_preview_only_disclosure() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "highlight the pricing card".into(),
+        duration_s: Some(3.0),
+        template: Some("highlight_box".into()),
+        box_region: Some((0.2, 0.25, 0.35, 0.3)),
+        pulse: Some(false),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan non-pulsing highlight box template");
+    assert!(
+        !render_support_mentions_preview_only(&plan.render_support),
+        "non-pulsing highlight_box must not disclose preview-only scale motion: {}",
+        plan.render_support
+    );
+}
+
+#[test]
+fn lower_third_render_support_omits_preview_only_disclosure() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "lower third for the guest".into(),
+        duration_s: Some(4.0),
+        template: Some("lower_third".into()),
+        name: Some("Ada Lovelace".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan lower third template");
+    assert!(
+        !render_support_mentions_preview_only(&plan.render_support),
+        "lower_third must not disclose preview-only scale motion: {}",
+        plan.render_support
+    );
+}
+
+#[test]
+fn kinetic_text_render_support_omits_preview_only_disclosure() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "kinetic text cascade".into(),
+        duration_s: Some(3.0),
+        template: Some("kinetic_text".into()),
+        words: vec![("Ship".into(), 0.0, 0.4)],
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("plan kinetic text template");
+    assert!(
+        !render_support_mentions_preview_only(&plan.render_support),
+        "kinetic_text must not disclose preview-only scale motion: {}",
+        plan.render_support
+    );
 }
 
 #[test]

@@ -5,9 +5,13 @@
 //! word cascade", ...) that expand into the same `MotionScene`/
 //! `MotionSceneLayer` primitives `plan_motion_scene` produces by hand.
 //! Layer ids are deterministic (`lower-third-bar`, `kinetic-word-<i>`,
-//! ...) so replanning the same scene id is idempotent through
-//! `apply_edl`'s replace-by-id contract instead of accumulating
-//! duplicate layers.
+//! ...), but replan idempotence does NOT ride on per-layer replacement:
+//! `apply_edl`'s "Set Motion Scene" op replaces the WHOLE scene keyed by
+//! `scene.id` (`replace_by_id(&mut meta.motion_scenes, ...)` in
+//! `edl::apply`), swapping the entire layer set at once rather than
+//! reconciling layers individually. Replanning the same scene id thus
+//! overwrites in place instead of accumulating duplicates; the stable
+//! layer ids keep the replacement's contents deterministic.
 //!
 //! All four variants ([`MotionTemplateSpec::LowerThird`],
 //! [`MotionTemplateSpec::KineticText`],
@@ -69,12 +73,13 @@ pub struct KineticWord {
     pub text: String,
     /// Time the word appears, in scene-local seconds.
     pub at_s: f64,
-    /// How long the word holds on screen, in seconds, after its pop-in.
-    /// `0.0` means "run to the end of the scene" (the word never gets
-    /// its own exit before the scene does); a positive value caps the
-    /// layer's `duration_s` at `at_s + hold_s`, clamped to the scene
-    /// duration, so the word can exit before the scene ends. Must be
-    /// non-negative.
+    /// How long the word holds at full opacity, in seconds, AFTER its
+    /// pop-in completes. The layer's `duration_s` is
+    /// `KINETIC_POP_IN_S + hold_s` (the pop-in window plus the hold),
+    /// clamped so the layer never extends past the scene's end.
+    /// `hold_s == 0.0` is a sentinel meaning "run to the end of the
+    /// scene" (the word never gets its own exit before the scene does).
+    /// Must be non-negative.
     pub hold_s: f64,
 }
 
@@ -307,8 +312,9 @@ const KINETIC_WORD_HEIGHT: f64 = 0.08;
 /// `kinetic-word-<i>`, appearing at its own `at_s`. A word with
 /// `hold_s == 0.0` holds through the rest of the scene (the
 /// scene-default exit fade handles the out); a word with a positive
-/// `hold_s` exits after `at_s + hold_s` (clamped to the scene
-/// duration) instead. Words lay out on a single line with cumulative
+/// `hold_s` lives for `KINETIC_POP_IN_S + hold_s` (the pop-in plus the
+/// requested hold, clamped to the scene end) and exits before the
+/// scene does. Words lay out on a single line with cumulative
 /// x offsets estimated via [`montage_render::fit_text_to_width_px`]
 /// character metrics, anchored per `anchor`.
 fn expand_kinetic_text(
@@ -377,8 +383,13 @@ fn expand_kinetic_text(
         let width_frac = word_widths_frac[i];
         let from_s = word.at_s;
         let run_to_scene_end_s = (scene_duration_s - from_s).max(0.01);
+        // `hold_s` is the time at full opacity AFTER the pop-in, so the
+        // layer lives for `KINETIC_POP_IN_S + hold_s`, clamped so it
+        // never runs past the scene end. `hold_s == 0.0` is the sentinel
+        // for "run to the scene's end" (the scene-default exit fade
+        // handles the out).
         let duration_s = if word.hold_s > 0.0 {
-            word.hold_s.min(run_to_scene_end_s)
+            (KINETIC_POP_IN_S + word.hold_s).min(run_to_scene_end_s)
         } else {
             run_to_scene_end_s
         };
@@ -400,7 +411,10 @@ fn expand_kinetic_text(
                 ("height".into(), serde_json::json!(KINETIC_WORD_HEIGHT)),
                 (
                     "animations".into(),
-                    serde_json::json!([pop_in_opacity_animation(), pop_in_scale_animation(),]),
+                    serde_json::json!([
+                        pop_in_opacity_animation(duration_s),
+                        pop_in_scale_animation(duration_s),
+                    ]),
                 ),
             ]),
         };
@@ -436,18 +450,24 @@ fn estimate_text_width_px(wrapped_text: &str, font_size: u32) -> f64 {
 }
 
 /// `overlay.opacity` pop-in keyframes: 0→1 over
-/// [`KINETIC_POP_IN_S`]. `motion_animations_with_scene_fade` appends
-/// the scene-default exit fade since this ends at a visible value
-/// before the layer's duration — the desired behavior for a word that
-/// should fade with the scene's exit.
-fn pop_in_opacity_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
+/// [`KINETIC_POP_IN_S`], clamped so the pop-in end never exceeds the
+/// layer's own `duration_s` (a word with a tiny `hold_s` gets a
+/// proportionally shorter pop-in rather than a keyframe past its layer
+/// end). `motion_animations_with_scene_fade` appends the scene-default
+/// exit fade since this ends at a visible value before the layer's
+/// duration — the desired behavior for a word that should fade with the
+/// scene's exit.
+fn pop_in_opacity_animation(
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
     use montage_proto::professional::Keyframe;
 
+    let pop_in_end_s = KINETIC_POP_IN_S.min(duration_s);
     montage_proto::professional::MotionSceneLayerAnimation {
         parameter: "overlay.opacity".into(),
         keyframes: vec![
             Keyframe::linear(0.0, 0.0),
-            Keyframe::linear(KINETIC_POP_IN_S, 1.0),
+            Keyframe::linear(pop_in_end_s, 1.0),
         ],
         pre_extrapolation: Default::default(),
         post_extrapolation: Default::default(),
@@ -457,16 +477,22 @@ fn pop_in_opacity_animation() -> montage_proto::professional::MotionSceneLayerAn
 
 /// `overlay.scale` pop-in keyframes: starts overshot at
 /// [`KINETIC_POP_IN_SCALE`] and springs to its 1.0 settle target over
-/// [`KINETIC_POP_IN_S`] using [`KINETIC_SPRING`] parameters. Both
-/// keyframe evaluators (desktop `evaluateAnimationValue` and
+/// [`KINETIC_POP_IN_S`] (clamped to the layer's own `duration_s` so the
+/// settle keyframe never lands past the layer end) using
+/// [`KINETIC_SPRING`] parameters. Both keyframe evaluators (desktop
+/// `evaluateAnimationValue` and
 /// `montage_render::animation::evaluate_keyframes_with_extrapolation`)
 /// read `interpolation`/`spring` off the segment-*start* keyframe to
 /// drive the segment ending at the next keyframe, so the spring params
 /// live on the overshoot start keyframe (`time_s` 0.0); the end
-/// keyframe (`time_s` [`KINETIC_POP_IN_S`]) is the plain settle target.
-fn pop_in_scale_animation() -> montage_proto::professional::MotionSceneLayerAnimation {
+/// keyframe (`time_s` min([`KINETIC_POP_IN_S`], `duration_s`)) is the
+/// plain settle target.
+fn pop_in_scale_animation(
+    duration_s: f64,
+) -> montage_proto::professional::MotionSceneLayerAnimation {
     use montage_proto::professional::{Keyframe, KeyframeInterpolation};
 
+    let pop_in_end_s = KINETIC_POP_IN_S.min(duration_s);
     let overshoot_start = Keyframe {
         spring: Some(KINETIC_SPRING),
         interpolation: KeyframeInterpolation::Spring,
@@ -475,7 +501,7 @@ fn pop_in_scale_animation() -> montage_proto::professional::MotionSceneLayerAnim
 
     montage_proto::professional::MotionSceneLayerAnimation {
         parameter: "overlay.scale".into(),
-        keyframes: vec![overshoot_start, Keyframe::linear(KINETIC_POP_IN_S, 1.0)],
+        keyframes: vec![overshoot_start, Keyframe::linear(pop_in_end_s, 1.0)],
         pre_extrapolation: Default::default(),
         post_extrapolation: Default::default(),
         motion_path: None,
@@ -483,12 +509,15 @@ fn pop_in_scale_animation() -> montage_proto::professional::MotionSceneLayerAnim
 }
 
 /// `overlay.x` slide-in/slide-out keyframes for a layer whose resting
-/// left edge is `final_x` and whose width is `width`. The off-canvas
-/// start position clears the frame entirely (`final_x - width`) so
-/// the layer is fully hidden before it enters. When the layer window
-/// is too short to fit both a slide-in and slide-out without
-/// overlapping, the two slides are compressed to share the midpoint
-/// instead of reversing order.
+/// left edge is `final_x` and whose width is `width`. The start
+/// position is offset one full `width` to the left of the resting spot
+/// (`final_x - width`), so the layer's right edge begins where its left
+/// edge will settle — a one-width leftward slide, paired with the
+/// `fade_opacity_animation` that hides it until it lands (the offset
+/// alone only fully clears the frame when `final_x <= 0`). When the
+/// layer window is too short to fit both a slide-in and slide-out
+/// without overlapping, the two slides are compressed to share the
+/// midpoint instead of reversing order.
 fn slide_x_animation(
     final_x: f64,
     width: f64,
@@ -562,13 +591,12 @@ const HIGHLIGHT_BOX_PULSE_SCALE: f64 = 1.04;
 /// are spread across the layer window starting after the pop-in.
 const HIGHLIGHT_BOX_PULSE_HALF_CYCLE_S: f64 = 0.5;
 
-/// Accent color for highlight-box/progress-bar shape layers, mirroring
-/// `plan_motion_scene`'s `callout_accent_layer` accent
-/// (`crates/core/src/tools/plan_motion_scene.rs`). Not imported
-/// directly: that constant is inlined in the callout layer builder
-/// rather than exposed, so the value is mirrored here instead of
-/// duplicating a cross-crate dependency for one color literal.
-const TEMPLATE_ACCENT_COLOR: &str = "#F6C85F";
+/// Accent color for highlight-box/progress-bar shape layers, shared
+/// with `plan_motion_scene`'s `callout_accent_layer`
+/// (`crates/core/src/tools/plan_motion_scene.rs`). Both live in this
+/// crate, so the callout builder imports this one definition rather
+/// than inlining its own copy of the literal.
+pub(crate) const TEMPLATE_ACCENT_COLOR: &str = "#F6C85F";
 
 /// Highlight box: a `Shape` rectangle at the given box, with an
 /// `overlay.opacity` 0→[`HIGHLIGHT_BOX_OPACITY`] pop over
@@ -604,6 +632,18 @@ fn expand_highlight_box(
     if !height.is_finite() || height <= 0.0 || height > 1.0 {
         return Err(format!(
             "expand_template: HighlightBox height must be within (0, 1], got {height}"
+        ));
+    }
+    if x + width > 1.0 {
+        return Err(format!(
+            "expand_template: HighlightBox x + width must be <= 1.0 (box must not spill off the canvas), got {}",
+            x + width
+        ));
+    }
+    if y + height > 1.0 {
+        return Err(format!(
+            "expand_template: HighlightBox y + height must be <= 1.0 (box must not spill off the canvas), got {}",
+            y + height
         ));
     }
 
@@ -1019,13 +1059,14 @@ mod tests {
         let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
 
         assert_eq!(
-            expansion.layers[0].duration_s, 0.5,
-            "positive hold_s should cap duration_s instead of running to scene end"
+            expansion.layers[0].duration_s,
+            KINETIC_POP_IN_S + 0.5,
+            "positive hold_s should make duration_s = pop_in + hold_s instead of running to scene end"
         );
         assert_eq!(
             expansion.layers[1].duration_s,
             4.0 - 0.3,
-            "hold_s exceeding the remaining scene duration should clamp to the scene end"
+            "pop_in + hold_s exceeding the remaining scene duration should clamp to the scene end"
         );
 
         let scene = wrap_in_scene(expansion.layers, 4.0, 30.0);
@@ -1034,6 +1075,35 @@ mod tests {
             diagnostics.is_empty(),
             "expected a valid scene, got diagnostics: {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn kinetic_text_tiny_hold_s_clamps_pop_in_keyframes_within_duration() {
+        // hold_s smaller than the pop-in window: duration_s is
+        // pop_in + hold_s, and no pop-in keyframe may land past it.
+        let spec = MotionTemplateSpec::KineticText {
+            words: vec![KineticWord {
+                text: "hi".to_string(),
+                at_s: 0.0,
+                hold_s: 0.05,
+            }],
+            anchor: TextAnchor::Center,
+        };
+
+        let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
+        let layer = &expansion.layers[0];
+        let duration_s = layer.duration_s;
+        assert_eq!(duration_s, KINETIC_POP_IN_S + 0.05);
+
+        for animation in layer.motion_animations() {
+            for kf in &animation.keyframes {
+                assert!(
+                    kf.time_s <= duration_s,
+                    "keyframe time {} exceeds layer duration {duration_s}",
+                    kf.time_s
+                );
+            }
+        }
     }
 
     #[test]
@@ -1332,6 +1402,32 @@ mod tests {
             y: 0.2,
             width: 0.3,
             height: -0.1,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_rejects_x_plus_width_spilling_off_canvas() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.8,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            pulse: false,
+        };
+        let result = expand_template(&spec, 4.0, 30.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn highlight_box_rejects_y_plus_height_spilling_off_canvas() {
+        let spec = MotionTemplateSpec::HighlightBox {
+            x: 0.1,
+            y: 0.85,
+            width: 0.3,
+            height: 0.25,
             pulse: false,
         };
         let result = expand_template(&spec, 4.0, 30.0);

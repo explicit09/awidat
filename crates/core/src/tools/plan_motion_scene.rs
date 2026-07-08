@@ -7,7 +7,9 @@ use montage_proto::professional::{MotionScene, MotionSceneLayer, MotionSceneLaye
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::motion_templates::{KineticWord, MotionTemplateSpec, TextAnchor, expand_template};
+use crate::motion_templates::{
+    KineticWord, MotionTemplateSpec, TEMPLATE_ACCENT_COLOR, TextAnchor, expand_template,
+};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 
@@ -58,6 +60,8 @@ struct PlanMotionSceneArgs {
     role: Option<String>,
     #[serde(default)]
     words: Vec<TemplateWordArg>,
+    #[serde(default)]
+    anchor: Option<String>,
     #[serde(default, rename = "box")]
     box_region: Option<TemplateBoxArg>,
     #[serde(default)]
@@ -147,6 +151,10 @@ pub struct MotionScenePlanRequest {
     /// hold_s)`. Required (non-empty) when `template` is
     /// `"kinetic_text"`.
     pub words: Vec<(String, f64, f64)>,
+    /// `kinetic_text`: optional screen anchor for the text block —
+    /// `"lower_left"`, `"center"`, or `"lower_center"`. Defaults to
+    /// `"center"` when omitted.
+    pub anchor: Option<String>,
     /// `highlight_box`: region as `(x, y, width, height)`, each a
     /// fraction of the canvas. Required when `template` is
     /// `"highlight_box"`.
@@ -298,12 +306,40 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
     let edl =
         format!("*** Begin EDL\n*** Set Motion Scene\n+ scene_json: {scene_json}\n*** End EDL\n");
 
+    let mut render_support = "native preview/render supports text, rectangle/solid, project-asset image layers, shared transforms, and layer-local overlay transform animations; video/media layers stay stored with explicit limitations and should use B-roll/PiP for footage".to_string();
+    if let Some(note) = scale_motion_preview_only_disclosure(args) {
+        render_support.push(' ');
+        render_support.push_str(note);
+    }
+
     Ok(MotionScenePlan {
         scene,
         edl,
-        render_support: "native preview/render supports text, rectangle/solid, project-asset image layers, shared transforms, and layer-local overlay transform animations; video/media layers stay stored with explicit limitations and should use B-roll/PiP for footage".into(),
+        render_support,
         rationale: "Use MotionScene for freeform animated explainers, diagrams, kinetic text, charts, and callouts that are not footage-like b-roll.".into(),
     })
+}
+
+/// Disclosure for templates whose motion is driven by an `overlay.scale`
+/// ramp/pulse that the export/render lowering does not yet honor — the
+/// `progress_bar` bar growth and the `highlight_box` pulse. These animate
+/// in the LIVE PREVIEW ONLY today; export lowering for scale-driven
+/// motion lands in a later phase. Returns `None` for templates whose
+/// motion is already fully supported (`lower_third`, `kinetic_text`, and
+/// `highlight_box` without pulse), and for the heuristic (non-template)
+/// path.
+fn scale_motion_preview_only_disclosure(args: &MotionScenePlanRequest) -> Option<&'static str> {
+    match args.template.as_deref() {
+        Some("progress_bar") => Some(
+            "The progress bar's growth is scale-driven and currently animates in the live \
+             preview only; export/render lowering for scale-driven motion lands in a later phase.",
+        ),
+        Some("highlight_box") if args.pulse.unwrap_or(false) => Some(
+            "The highlight box's pulse is scale-driven and currently animates in the live \
+             preview only; export/render lowering for scale-driven motion lands in a later phase.",
+        ),
+        _ => None,
+    }
 }
 
 /// Parse `template` and this request's typed fields into a
@@ -358,7 +394,7 @@ fn parse_and_expand_template(
                 .collect();
             MotionTemplateSpec::KineticText {
                 words,
-                anchor: TextAnchor::Center,
+                anchor: parse_text_anchor(args.anchor.as_deref())?,
             }
         }
         "highlight_box" => {
@@ -398,6 +434,22 @@ fn parse_and_expand_template(
     };
 
     expand_template(&spec, duration_s, fps)
+}
+
+/// Parse the optional `kinetic_text` `anchor` string into a
+/// [`TextAnchor`]. Defaults to [`TextAnchor::Center`] when omitted or
+/// empty, matching the historically hardcoded behavior. An unrecognized
+/// value fails with an error naming the accepted values.
+fn parse_text_anchor(anchor: Option<&str>) -> Result<TextAnchor, String> {
+    match anchor.map(str::trim) {
+        None | Some("") => Ok(TextAnchor::Center),
+        Some("lower_left") => Ok(TextAnchor::LowerLeft),
+        Some("center") => Ok(TextAnchor::Center),
+        Some("lower_center") => Ok(TextAnchor::LowerCenter),
+        Some(other) => Err(format!(
+            "kinetic_text `anchor` '{other}' not recognized. Use 'lower_left', 'center', or 'lower_center'."
+        )),
+    }
 }
 
 /// Resolve the on-screen headline: an explicit `headline` arg wins,
@@ -686,7 +738,7 @@ fn callout_accent_layer(duration_s: f64) -> MotionSceneLayer {
             ("y".into(), serde_json::json!(0.29)),
             ("width".into(), serde_json::json!(0.025)),
             ("height".into(), serde_json::json!(0.18)),
-            ("color".into(), serde_json::json!("#F6C85F")),
+            ("color".into(), serde_json::json!(TEMPLATE_ACCENT_COLOR)),
             ("opacity".into(), serde_json::json!(0.92)),
             ("rotation_deg".into(), serde_json::json!(0.0)),
             (
@@ -944,7 +996,12 @@ impl ToolHandler for PlanMotionSceneTool {
                             },
                             "required": ["text", "at_s"]
                         },
-                        "description": "kinetic_text: words in display order, each with its own timing. `at_s` is when the word appears (scene-local seconds, must be before duration_s); `hold_s` is how long it holds after pop-in (0 = holds to the scene's end). Required (non-empty) when template is 'kinetic_text'."
+                        "description": "kinetic_text: words in display order, each with its own timing. `at_s` is when the word appears (scene-local seconds, must be before duration_s); `hold_s` is how long it holds at full opacity AFTER its pop-in — the layer lives for pop_in (~0.12s) + hold_s, clamped to the scene end (0 = holds to the scene's end). Required (non-empty) when template is 'kinetic_text'."
+                    },
+                    "anchor": {
+                        "type": "string",
+                        "enum": ["lower_left", "center", "lower_center"],
+                        "description": "kinetic_text: optional screen anchor for the text block. Defaults to 'center' when omitted."
                     },
                     "box": {
                         "type": "object",
@@ -1016,6 +1073,7 @@ impl ToolHandler for PlanMotionSceneTool {
                 .into_iter()
                 .map(|word| (word.text, word.at_s, word.hold_s))
                 .collect(),
+            anchor: args.anchor,
             box_region: args
                 .box_region
                 .map(|region| (region.x, region.y, region.width, region.height)),

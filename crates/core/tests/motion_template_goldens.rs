@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use montage_core::motion_templates::{
     KineticWord, MotionTemplateSpec, TextAnchor, expand_template,
 };
+use montage_core::tools::plan_motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/motion-templates")
@@ -24,7 +25,7 @@ fn assert_matches_golden(fixture_name: &str, actual: &str) {
     let path = fixtures_dir().join(fixture_name);
     if std::env::var("UPDATE_GOLDENS").is_ok() {
         std::fs::create_dir_all(fixtures_dir()).expect("create fixtures dir");
-        std::fs::write(&path, actual).expect("write golden fixture");
+        std::fs::write(&path, with_trailing_newline(actual)).expect("write golden fixture");
         return;
     }
     let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
@@ -37,11 +38,25 @@ fn assert_matches_golden(fixture_name: &str, actual: &str) {
         )
     });
     assert_eq!(
-        actual, expected,
+        with_trailing_newline(actual),
+        expected,
         "expansion for {fixture_name} no longer matches the committed golden.\n\
          If this change is intentional, regenerate with UPDATE_GOLDENS=1 and \
          review the diff before committing."
     );
+}
+
+/// Golden files are written with a single trailing newline so they are
+/// POSIX-clean and diff/editor-friendly. `serde_json::to_string_pretty`
+/// output has no trailing newline, so both the writer and the byte
+/// comparison append one here to keep file-on-disk and in-memory bytes
+/// in agreement.
+fn with_trailing_newline(text: &str) -> String {
+    if text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
 }
 
 #[test]
@@ -781,7 +796,7 @@ fn harness_fixture_dir() -> PathBuf {
 fn assert_matches_harness_golden(fixture_name: &str, actual: &str) {
     let path = harness_fixture_dir().join(fixture_name);
     if std::env::var("UPDATE_GOLDENS").is_ok() {
-        std::fs::write(&path, actual).expect("write harness scene fixture");
+        std::fs::write(&path, with_trailing_newline(actual)).expect("write harness scene fixture");
         return;
     }
     let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
@@ -794,7 +809,8 @@ fn assert_matches_harness_golden(fixture_name: &str, actual: &str) {
         )
     });
     assert_eq!(
-        actual, expected,
+        with_trailing_newline(actual),
+        expected,
         "harness scene {fixture_name} no longer matches the expander + snapshot lowering.\n\
          If the expander change is intentional, regenerate with UPDATE_GOLDENS=1, re-bootstrap \n\
          the SSIM goldens (delete the fixture's apps/desktop/tests/fixtures/stage-golden/*.png \n\
@@ -805,14 +821,26 @@ fn assert_matches_harness_golden(fixture_name: &str, actual: &str) {
 /// Lower-third harness scene: same spec as `lower_third_matches_golden`
 /// (Ada Lovelace / Mathematician, 5s scene). Harness screenshots at
 /// t=0.4 (bar+text slide-in mid-flight) and t=2.0 (settled).
+///
+/// Built via `plan_motion_scene_request` in template mode — the SAME
+/// production entry point agents call — so the harness scene tracks
+/// everything production emits, including `fit_scene_text_layers`
+/// auto-shrinking font sizes to fit their boxes. Deriving it from the
+/// raw `expand_template` output would silently skip that fitter step.
 #[test]
 fn harness_scene_lower_third_matches_expander() {
-    let spec = MotionTemplateSpec::LowerThird {
-        name: "Ada Lovelace".to_string(),
-        role: Some("Mathematician".to_string()),
-    };
-    let expansion = expand_template(&spec, 5.0, 30.0).expect("lower third should expand");
-    let scene = harness_scene("lower-third", &expansion.layers);
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "lower third for the guest".into(),
+        scene_id: Some("lower-third".into()),
+        duration_s: Some(5.0),
+        fps: Some(30.0),
+        template: Some("lower_third".into()),
+        name: Some("Ada Lovelace".into()),
+        role: Some("Mathematician".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("lower third should plan");
+    let scene = harness_scene(&plan.scene.id, &plan.scene.layers);
     let actual = serde_json::to_string_pretty(&scene).expect("serialize harness scene");
     assert_matches_harness_golden("scene-lower-third.json", &actual);
 }
@@ -821,30 +849,32 @@ fn harness_scene_lower_third_matches_expander() {
 /// distinct states at its two screenshot times — at t=0.5 "Ship" is
 /// mid-exit-fade and "it" is mid-pop-in ("today" not yet started); at
 /// t=1.5 only "today" remains (settled, holds to scene end).
+///
+/// Built via `plan_motion_scene_request` in template mode (the
+/// production entry point) so the harness scene tracks the fitter and
+/// the production defaults. `anchor` is passed explicitly as
+/// `"lower_center"` — the value the committed SSIM goldens pin — so
+/// that pinned behavior stays reachable now that `anchor` is a real
+/// input (it was previously unreachable from production, which
+/// hardcoded `Center`).
 #[test]
 fn harness_scene_kinetic_text_matches_expander() {
-    let spec = MotionTemplateSpec::KineticText {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "kinetic text of the key phrase".into(),
+        scene_id: Some("kinetic-text".into()),
+        duration_s: Some(4.0),
+        fps: Some(30.0),
+        template: Some("kinetic_text".into()),
         words: vec![
-            KineticWord {
-                text: "Ship".to_string(),
-                at_s: 0.0,
-                hold_s: 0.6,
-            },
-            KineticWord {
-                text: "it".to_string(),
-                at_s: 0.4,
-                hold_s: 0.6,
-            },
-            KineticWord {
-                text: "today".to_string(),
-                at_s: 0.9,
-                hold_s: 0.0,
-            },
+            ("Ship".to_string(), 0.0, 0.6),
+            ("it".to_string(), 0.4, 0.6),
+            ("today".to_string(), 0.9, 0.0),
         ],
-        anchor: TextAnchor::LowerCenter,
-    };
-    let expansion = expand_template(&spec, 4.0, 30.0).expect("kinetic text should expand");
-    let scene = harness_scene("kinetic-text", &expansion.layers);
+        anchor: Some("lower_center".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("kinetic text should plan");
+    let scene = harness_scene(&plan.scene.id, &plan.scene.layers);
     let actual = serde_json::to_string_pretty(&scene).expect("serialize harness scene");
     assert_matches_harness_golden("scene-kinetic-text.json", &actual);
 }
