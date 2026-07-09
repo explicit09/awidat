@@ -153,6 +153,7 @@ use crate::montage_mcp::tools::render_preflight::{self, RenderPreflightArgs};
 use crate::montage_mcp::tools::request_user_input::{self, RequestUserInputArgs};
 use crate::montage_mcp::tools::run_picture_gates::{self, RunPictureGatesArgs};
 use crate::montage_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
+use crate::montage_mcp::tools::run_sound_gates::{self, RunSoundGatesArgs};
 use crate::montage_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::montage_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::montage_mcp::tools::start_generated_media_job::{self, StartGeneratedMediaJobArgs};
@@ -1438,6 +1439,29 @@ export/publish and after major picture changes.",
         args: Parameters<RunPictureGatesArgs>,
     ) -> Result<String, ErrorData> {
         run_picture_gates::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `run_sound_gates` — deterministic sound-pass gates vs a house
+    /// style profile.
+    #[tool(
+        description = "\
+Run deterministic sound-pass gates against a house style profile (doac, \
+tbpn, technologia): loudness (integrated LUFS within the delivery target \
+±tolerance and true peak under the ceiling, measured with ffmpeg ebur128 \
+on the newest MP4 under renders/ — fails closed when no render exists) \
+and split_edit_coverage (fraction of speaker-turn boundaries carrying a \
+J/L-cut, from clip split_edit metadata and whisper speaker labels; skips \
+when the program has no speaker turns). Returns per-gate reports with \
+measured values and an overall `passed`. Read-only; run after the sound \
+pass and before export/publish.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn run_sound_gates(
+        &self,
+        args: Parameters<RunSoundGatesArgs>,
+    ) -> Result<String, ErrorData> {
+        run_sound_gates::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
