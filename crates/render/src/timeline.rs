@@ -2359,9 +2359,34 @@ fn scene_normalized_layer_param(layer: &MotionSceneLayer, key: &str, extent: u32
 /// The preview drives title fades from `overlay.opacity` keyframes;
 /// the render title path evaluates `title.*` parameters, so
 /// `overlay.opacity` is remapped to `title.opacity` for parity.
+///
+/// `overlay.scale` is remapped to `title.font_size`: the preview scales
+/// the text block geometrically (CSS `transform: scale`), while drawtext
+/// has no transform channel and instead animates `fontsize`. We convert
+/// each scale keyframe into an absolute font size (`base_font_size *
+/// scale`), reading the base the same way the drawtext plan does
+/// ([`layer_u32_param`] `font_size`, default 64), so the emitted
+/// `fontsize=<expr>` grows/shrinks the glyphs by the same factor the
+/// preview scales the block.
+///
+/// Parity nuance: geometric scale (preview) scales the block around its
+/// anchor without reflowing, whereas fontsize scaling re-lays-out glyphs
+/// and can shift wrap points. For single-line template text (e.g. the
+/// kinetic_text spring pop) the two are near-equivalent; the residual
+/// difference is quantified by the Task-5 parity gate.
+///
+/// Precedence: if the layer ALSO carries an explicit `title.font_size`
+/// animation, that authored channel wins and `overlay.scale` is ignored
+/// for text (drawtext can only animate one fontsize expr).
 fn motion_scene_text_layer_animations(layer: &MotionSceneLayer) -> Vec<RenderParameterAnimation> {
-    layer
-        .motion_animations_with_scene_fade(1.0)
+    let base_font_size = f64::from(layer_u32_param(layer, "font_size").unwrap_or(64));
+    let animations = layer.motion_animations_with_scene_fade(1.0);
+    // An explicit title.font_size animation takes precedence over any
+    // scale-derived one; when present we drop overlay.scale entirely.
+    let has_explicit_font_size = animations
+        .iter()
+        .any(|animation| animation.parameter == "title.font_size");
+    animations
         .into_iter()
         .filter_map(|animation| {
             let parameter = match animation.parameter.as_str() {
@@ -2369,6 +2394,26 @@ fn motion_scene_text_layer_animations(layer: &MotionSceneLayer) -> Vec<RenderPar
                 "overlay.x" | "title.x" => "title.x".to_string(),
                 "overlay.y" | "title.y" => "title.y".to_string(),
                 "overlay.position" | "title.position" => "title.position".to_string(),
+                "overlay.scale" => {
+                    if has_explicit_font_size {
+                        return None;
+                    }
+                    let keyframes = animation
+                        .keyframes
+                        .into_iter()
+                        .map(|mut keyframe| {
+                            keyframe.value *= base_font_size;
+                            keyframe
+                        })
+                        .collect();
+                    return Some(RenderParameterAnimation {
+                        parameter: "title.font_size".to_string(),
+                        keyframes,
+                        pre_extrapolation: animation.pre_extrapolation,
+                        post_extrapolation: animation.post_extrapolation,
+                        motion_path: animation.motion_path,
+                    });
+                }
                 other if other.starts_with("title.") && is_phase_3a_parameter(other) => {
                     other.to_string()
                 }
@@ -18317,6 +18362,78 @@ layout_box: None,
         assert!(spec.output_path.exists());
     }
 
+    #[test]
+    fn ffmpeg_smoke_renders_text_scale_animated_font_size() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let probe = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-filters"])
+            .output();
+        let has_drawtext = probe
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("drawtext"))
+            .unwrap_or(false);
+        if !has_drawtext {
+            eprintln!(
+                "skipping ffmpeg_smoke_renders_text_scale_animated_font_size: drawtext filter unavailable"
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 1.0,
+                z_index: 10,
+                params: [
+                    ("text".to_string(), serde_json::json!("Pop")),
+                    ("font_size".to_string(), serde_json::json!(64)),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([
+                            {
+                                "parameter": "overlay.scale",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": 1.15, "interpolation": "linear" },
+                                    { "time_s": 0.4, "value": 1.0, "interpolation": "linear" }
+                                ]
+                            }
+                        ]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+        write_synthetic_video(&ffmpeg, &dir.path().join("raw/x.mp4"), "blue");
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        // The emitted drawtext must carry an animated fontsize expression,
+        // not a static number, proving overlay.scale drove title.font_size.
+        assert!(
+            spec.args.iter().any(|arg| arg.contains("fontsize=if(")),
+            "expected an animated fontsize expr in argv: {}",
+            spec.args.join(" ")
+        );
+        let output = std::process::Command::new(ffmpeg)
+            .args(&spec.args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            spec.args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(spec.output_path.exists());
+    }
+
     fn write_synthetic_video(ffmpeg: &Path, path: &Path, color: &str) {
         let output = std::process::Command::new(ffmpeg)
             .args([
@@ -18732,6 +18849,164 @@ layout_box: None,
         assert!(params.contains(&"title.x".to_string()));
         assert!(params.contains(&"title.y".to_string()));
         assert!(params.contains(&"title.position".to_string()));
+    }
+
+    #[test]
+    fn motion_scene_text_layer_remaps_overlay_scale_to_font_size() {
+        // Kinetic spring pop: scale 1.15 -> 1.0 over the layer.
+        let mut layer = MotionSceneLayer {
+            kind: MotionSceneLayerKind::Text,
+            duration_s: 2.0,
+            ..MotionSceneLayer::default()
+        };
+        layer
+            .params
+            .insert("font_size".to_string(), serde_json::json!(64));
+        layer.params.insert(
+            "animations".to_string(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.scale",
+                    "keyframes": [
+                        { "time_s": 0.0, "value": 1.15, "interpolation": "linear" },
+                        { "time_s": 0.4, "value": 1.0, "interpolation": "linear" }
+                    ]
+                }
+            ]),
+        );
+
+        let animations = motion_scene_text_layer_animations(&layer);
+        let font_size = animations
+            .iter()
+            .find(|animation| animation.parameter == "title.font_size")
+            .expect("overlay.scale should remap to title.font_size");
+
+        // Values become base_font_size * scale.
+        let values: Vec<f64> = font_size.keyframes.iter().map(|kf| kf.value).collect();
+        assert!(
+            (values[0] - 64.0 * 1.15).abs() < 1e-6,
+            "first keyframe should be 64 * 1.15, got {}",
+            values[0]
+        );
+        assert!(
+            (values[1] - 64.0).abs() < 1e-6,
+            "second keyframe should be 64 * 1.0, got {}",
+            values[1]
+        );
+        // The overlay.scale channel must not also leak through untouched.
+        assert!(
+            !animations
+                .iter()
+                .any(|animation| animation.parameter == "overlay.scale"),
+            "overlay.scale should not survive as a raw parameter"
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_scale_uses_layer_font_size_for_multiplier() {
+        let mut layer = MotionSceneLayer {
+            kind: MotionSceneLayerKind::Text,
+            duration_s: 2.0,
+            ..MotionSceneLayer::default()
+        };
+        layer
+            .params
+            .insert("font_size".to_string(), serde_json::json!(48));
+        layer.params.insert(
+            "animations".to_string(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.scale",
+                    "keyframes": [{ "time_s": 0.0, "value": 2.0, "interpolation": "linear" }]
+                }
+            ]),
+        );
+
+        let animations = motion_scene_text_layer_animations(&layer);
+        let font_size = animations
+            .iter()
+            .find(|animation| animation.parameter == "title.font_size")
+            .expect("overlay.scale should remap to title.font_size");
+
+        assert!(
+            (font_size.keyframes[0].value - 96.0).abs() < 1e-6,
+            "48 * 2.0 should be 96, got {}",
+            font_size.keyframes[0].value
+        );
+    }
+
+    #[test]
+    fn motion_scene_text_explicit_font_size_animation_beats_scale() {
+        // Explicit title.font_size animation wins; overlay.scale is ignored.
+        let mut layer = MotionSceneLayer {
+            kind: MotionSceneLayerKind::Text,
+            duration_s: 2.0,
+            ..MotionSceneLayer::default()
+        };
+        layer
+            .params
+            .insert("font_size".to_string(), serde_json::json!(64));
+        layer.params.insert(
+            "animations".to_string(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.scale",
+                    "keyframes": [{ "time_s": 0.0, "value": 1.5, "interpolation": "linear" }]
+                },
+                {
+                    "parameter": "title.font_size",
+                    "keyframes": [
+                        { "time_s": 0.0, "value": 40.0, "interpolation": "linear" },
+                        { "time_s": 1.0, "value": 80.0, "interpolation": "linear" }
+                    ]
+                }
+            ]),
+        );
+
+        let animations = motion_scene_text_layer_animations(&layer);
+        let font_size_animations: Vec<_> = animations
+            .iter()
+            .filter(|animation| animation.parameter == "title.font_size")
+            .collect();
+
+        assert_eq!(
+            font_size_animations.len(),
+            1,
+            "only the explicit title.font_size animation should survive"
+        );
+        // The explicit values (40 -> 80), not base * scale (96), win.
+        let values: Vec<f64> = font_size_animations[0]
+            .keyframes
+            .iter()
+            .map(|kf| kf.value)
+            .collect();
+        assert_eq!(values, vec![40.0, 80.0]);
+    }
+
+    #[test]
+    fn motion_scene_text_no_scale_leaves_font_size_unchanged() {
+        let mut layer = MotionSceneLayer {
+            kind: MotionSceneLayerKind::Text,
+            duration_s: 2.0,
+            ..MotionSceneLayer::default()
+        };
+        layer.params.insert(
+            "animations".to_string(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.opacity",
+                    "keyframes": [{ "time_s": 0.0, "value": 1.0, "interpolation": "linear" }]
+                }
+            ]),
+        );
+
+        let animations = motion_scene_text_layer_animations(&layer);
+        assert!(
+            !animations
+                .iter()
+                .any(|animation| animation.parameter == "title.font_size"),
+            "no overlay.scale means no title.font_size animation is synthesized"
+        );
     }
 
     #[test]
