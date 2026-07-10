@@ -10,8 +10,13 @@ use montage_proto::otio::{
 use montage_proto::project::Project;
 use serde::Deserialize;
 
+use std::path::Path;
+
 use crate::FunctionCallError;
-use crate::continuity::{ContinuityInputs, CutKind, WhisperWord, assess_continuity};
+use crate::continuity::{
+    ContinuityInputs, CutKind, WhisperSegment, WhisperWord, assess_continuity,
+    load_whisper_segments,
+};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 use crate::visual_signals::{BoundaryVisualSignals, SideSignals, load_boundary_signals};
@@ -179,6 +184,16 @@ impl ToolHandler for TransitionContextTool {
                 "after_s": round3(boundary.at_s + 0.05),
             },
             "visual_signals": visual_signals_packet(&signals),
+            "style_context": {
+                "transition_density_last_30s": count_recent_transitions(&project.timeline, boundary.at_s),
+            },
+            "dialogue": dialogue_packet(
+                &ctx.project_root,
+                &boundary.from.asset_id,
+                from_source_end_s,
+                &boundary.to.asset_id,
+                boundary.to.source_start_s,
+            ),
             "missing_signals": missing_signals(&inputs, &signals),
         });
         Ok(ToolOutput::text(body.to_string()))
@@ -389,6 +404,125 @@ fn word_packet(word: WhisperWord) -> serde_json::Value {
     })
 }
 
+/// Count visible transitions on the timeline in `[max(0, at_s - 30), at_s)`,
+/// matching the window `assess_edit_quality` uses. Each track carries its own
+/// cursor advanced by clip and gap durations; nested stacks are walked too.
+fn count_recent_transitions(timeline: &Timeline, at_s: f64) -> usize {
+    let window_start_s = (at_s - 30.0).max(0.0);
+    timeline
+        .tracks
+        .children
+        .iter()
+        .map(|stack_child| count_in_stack_child(stack_child, window_start_s, at_s))
+        .sum()
+}
+
+fn count_in_stack_child(stack_child: &StackChild, window_start_s: f64, at_s: f64) -> usize {
+    let StackChild::Track(track) = stack_child else {
+        return 0;
+    };
+    let mut count = 0_usize;
+    let mut cursor_s = 0.0_f64;
+    for child in &track.children {
+        match child {
+            TrackChild::Transition(_) => {
+                if window_start_s <= cursor_s && cursor_s < at_s {
+                    count += 1;
+                }
+            }
+            TrackChild::Stack(stack) => {
+                count += stack
+                    .children
+                    .iter()
+                    .map(|nested| count_in_stack_child(nested, window_start_s, at_s))
+                    .sum::<usize>();
+            }
+            TrackChild::Clip(_) | TrackChild::Gap(_) => cursor_s += child_duration_s(child),
+        }
+    }
+    count
+}
+
+/// Which side of the boundary a speaker lookup is for.
+#[derive(Clone, Copy)]
+enum BoundarySide {
+    Outgoing,
+    Incoming,
+}
+
+/// Resolve the speaker talking at `at_s` in source seconds.
+///
+/// A segment containing `at_s` wins outright. Otherwise the outgoing
+/// side reaches back up to one second for the latest segment that ended
+/// just before the cut, and the incoming side reaches forward up to one
+/// second for the earliest segment that starts just after it.
+fn speaker_near(segments: &[WhisperSegment], at_s: f64, side: BoundarySide) -> Option<&str> {
+    let speaker = |segment: &WhisperSegment| {
+        segment
+            .speaker_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .is_some()
+    };
+    if let Some(segment) = segments
+        .iter()
+        .find(|segment| segment.start_s <= at_s && at_s <= segment.end_s && speaker(segment))
+    {
+        return segment.speaker_id.as_deref();
+    }
+    let nearby = match side {
+        BoundarySide::Outgoing => segments
+            .iter()
+            .filter(|segment| {
+                speaker(segment) && segment.end_s >= at_s - 1.0 && segment.end_s <= at_s
+            })
+            .max_by(|a, b| a.end_s.total_cmp(&b.end_s)),
+        BoundarySide::Incoming => segments
+            .iter()
+            .filter(|segment| {
+                speaker(segment) && segment.start_s >= at_s && segment.start_s <= at_s + 1.0
+            })
+            .min_by(|a, b| a.start_s.total_cmp(&b.start_s)),
+    };
+    nearby.and_then(|segment| segment.speaker_id.as_deref())
+}
+
+/// Speaker relation across the boundary. Diarization labels are only
+/// meaningful within a single asset, so a cross-asset boundary is
+/// always `unknown` even when both sides carry the same label.
+fn dialogue_packet(
+    project_root: &Path,
+    from_asset: &str,
+    from_source_end_s: f64,
+    to_asset: &str,
+    to_source_start_s: f64,
+) -> serde_json::Value {
+    let outgoing_segments = load_whisper_segments(project_root, from_asset).unwrap_or_default();
+    let incoming_segments = load_whisper_segments(project_root, to_asset).unwrap_or_default();
+    let outgoing = speaker_near(
+        &outgoing_segments,
+        from_source_end_s,
+        BoundarySide::Outgoing,
+    );
+    let incoming = speaker_near(
+        &incoming_segments,
+        to_source_start_s,
+        BoundarySide::Incoming,
+    );
+    let same_asset = from_asset == to_asset;
+    let relation = match (same_asset, outgoing, incoming) {
+        (true, Some(outgoing), Some(incoming)) if outgoing == incoming => "same_speaker",
+        (true, Some(_), Some(_)) => "speaker_change",
+        _ => "unknown",
+    };
+    serde_json::json!({
+        "relation": relation,
+        "same_asset": same_asset,
+        "outgoing_speaker": outgoing,
+        "incoming_speaker": incoming,
+    })
+}
+
 fn missing_signals(
     inputs: &ContinuityInputs,
     signals: &BoundaryVisualSignals,
@@ -446,8 +580,8 @@ mod tests {
     use super::*;
     use montage_proto::montage_meta::MontageClipMetadata;
     use montage_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
-        TrackChild, TrackKind,
+        Clip, ExternalReference, Gap, MediaReference, RationalTime, StackChild, TimeRange, Track,
+        TrackChild, TrackKind, Transition,
     };
     use montage_proto::project::Project;
 
@@ -515,24 +649,41 @@ mod tests {
         std::fs::write(path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
     }
 
-    fn write_whisper(project_root: &std::path::Path, asset: &str, words: Vec<(&str, f64, f64)>) {
+    /// Write a whisper sidecar with words and optional speaker-labelled segments.
+    fn write_whisper(
+        project_root: &std::path::Path,
+        asset: &str,
+        words: Vec<(&str, f64, f64)>,
+        segments: Vec<(f64, f64, &str)>,
+    ) {
         let path = project_root
             .join("index")
             .join("whisper")
             .join(format!("{asset}.json"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let payload = serde_json::json!({
-            "data": {
-                "words": words
-                    .into_iter()
-                    .map(|(text, start_s, end_s)| serde_json::json!({
-                        "text": text,
+        let mut data = serde_json::json!({
+            "words": words
+                .into_iter()
+                .map(|(text, start_s, end_s)| serde_json::json!({
+                    "text": text,
+                    "start_s": start_s,
+                    "end_s": end_s,
+                }))
+                .collect::<Vec<_>>()
+        });
+        if !segments.is_empty() {
+            data["segments"] = segments
+                .into_iter()
+                .map(|(start_s, end_s, speaker_id)| {
+                    serde_json::json!({
                         "start_s": start_s,
                         "end_s": end_s,
-                    }))
-                    .collect::<Vec<_>>()
-            }
-        });
+                        "speaker_id": speaker_id,
+                    })
+                })
+                .collect();
+        }
+        let payload = serde_json::json!({ "data": data });
         std::fs::write(path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
     }
 
@@ -566,13 +717,165 @@ mod tests {
             dir.path(),
             "raw/a.mp4",
             vec![("outgoing", 5.9, 6.3), ("thought", 6.4, 6.9)],
+            vec![],
         );
         write_whisper(
             dir.path(),
             "raw/b.mp4",
             vec![("incoming", 1.1, 1.4), ("reply", 1.5, 1.9)],
+            vec![],
         );
         dir
+    }
+
+    /// Track V1 holds a within-asset boundary at 5s (source 7s); track
+    /// V2 holds a cross-asset boundary between two `SPEAKER_00` assets.
+    fn project_with_dialogue() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+
+        let mut same = Track::empty("V1", TrackKind::Video);
+        same.children.push(TrackChild::Clip(clip(
+            "a",
+            "same-a",
+            "raw/a.mp4",
+            2.0,
+            5.0,
+            20.0,
+        )));
+        same.children.push(TrackChild::Clip(clip(
+            "b",
+            "same-b",
+            "raw/a.mp4",
+            7.0,
+            4.0,
+            20.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(same));
+
+        let mut cross = Track::empty("V2", TrackKind::Video);
+        cross.children.push(TrackChild::Clip(clip(
+            "c",
+            "cross-c",
+            "raw/b.mp4",
+            2.0,
+            5.0,
+            20.0,
+        )));
+        cross.children.push(TrackChild::Clip(clip(
+            "d",
+            "cross-d",
+            "raw/c.mp4",
+            7.0,
+            4.0,
+            20.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(cross));
+
+        project.write(dir.path()).unwrap();
+
+        write_whisper(
+            dir.path(),
+            "raw/a.mp4",
+            vec![("outgoing", 6.4, 6.9), ("incoming", 7.1, 7.4)],
+            vec![(2.0, 11.0, "SPEAKER_00")],
+        );
+        write_whisper(
+            dir.path(),
+            "raw/b.mp4",
+            vec![("outgoing", 6.4, 6.9)],
+            vec![(2.0, 7.0, "SPEAKER_00")],
+        );
+        write_whisper(
+            dir.path(),
+            "raw/c.mp4",
+            vec![("incoming", 7.1, 7.4)],
+            vec![(7.0, 11.0, "SPEAKER_00")],
+        );
+        dir
+    }
+
+    /// `lead` (20s) T gap(5s) T gap(5s) T `clip-a` (5s) `clip-b`.
+    /// The tested boundary sits at 35s; the transitions land at track
+    /// cursors 20s, 25s and 30s — all inside `[5, 35)`.
+    fn project_with_transition_density() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip(
+            "lead",
+            "lead",
+            "raw/a.mp4",
+            0.0,
+            20.0,
+            60.0,
+        )));
+        for _ in 0..2 {
+            track
+                .children
+                .push(TrackChild::Transition(Transition::symmetric(
+                    "SMPTE_Dissolve",
+                    0.5,
+                    24.0,
+                )));
+            track
+                .children
+                .push(TrackChild::Gap(Gap::of_duration(5.0, 24.0)));
+        }
+        track
+            .children
+            .push(TrackChild::Transition(Transition::symmetric(
+                "SMPTE_Dissolve",
+                0.5,
+                24.0,
+            )));
+        track.children.push(TrackChild::Clip(clip(
+            "a",
+            "clip-a",
+            "raw/a.mp4",
+            30.0,
+            5.0,
+            60.0,
+        )));
+        track.children.push(TrackChild::Clip(clip(
+            "b",
+            "clip-b",
+            "raw/a.mp4",
+            35.0,
+            4.0,
+            60.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(dir.path()).unwrap();
+        dir
+    }
+
+    async fn body_for(project_root: &std::path::Path, from: &str, to: &str) -> serde_json::Value {
+        let out = TransitionContextTool
+            .handle(
+                invoke(serde_json::json!({
+                    "between": {
+                        "from": {"clip_uuid": from},
+                        "to": {"clip_uuid": to}
+                    }
+                })),
+                ctx_at(project_root),
+            )
+            .await
+            .unwrap();
+        serde_json::from_str(&out.content).unwrap()
     }
 
     #[test]
@@ -734,5 +1037,66 @@ mod tests {
             panic!("expected RespondToModel");
         };
         assert!(message.contains("not adjacent"));
+    }
+
+    #[tokio::test]
+    async fn reports_same_speaker_across_a_within_asset_boundary() {
+        let dir = project_with_dialogue();
+        let body = body_for(dir.path(), "same-a", "same-b").await;
+
+        assert_eq!(
+            body.pointer("/dialogue/relation")
+                .and_then(serde_json::Value::as_str),
+            Some("same_speaker")
+        );
+        assert_eq!(
+            body.pointer("/dialogue/same_asset")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            body.pointer("/dialogue/outgoing_speaker")
+                .and_then(serde_json::Value::as_str),
+            Some("SPEAKER_00")
+        );
+        assert_eq!(
+            body.pointer("/dialogue/incoming_speaker")
+                .and_then(serde_json::Value::as_str),
+            Some("SPEAKER_00")
+        );
+    }
+
+    #[tokio::test]
+    async fn speaker_labels_across_assets_are_not_comparable() {
+        let dir = project_with_dialogue();
+        let body = body_for(dir.path(), "cross-c", "cross-d").await;
+
+        assert_eq!(
+            body.pointer("/dialogue/relation")
+                .and_then(serde_json::Value::as_str),
+            Some("unknown")
+        );
+        assert_eq!(
+            body.pointer("/dialogue/same_asset")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn counts_visible_transitions_in_the_thirty_seconds_before_the_boundary() {
+        let dir = project_with_transition_density();
+        let body = body_for(dir.path(), "clip-a", "clip-b").await;
+
+        assert_eq!(
+            body.pointer("/boundary/at_s")
+                .and_then(serde_json::Value::as_f64),
+            Some(35.0)
+        );
+        assert_eq!(
+            body.pointer("/style_context/transition_density_last_30s")
+                .and_then(serde_json::Value::as_u64),
+            Some(3)
+        );
     }
 }
