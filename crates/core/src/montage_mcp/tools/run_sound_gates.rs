@@ -38,8 +38,21 @@ fn load_words(project_root: &Path, asset: &str) -> Option<Vec<Word>> {
     let words = doc.pointer("/data/words")?.as_array()?;
     let mut out = Vec::with_capacity(words.len());
     for w in words {
-        let start = w.get("start_s").or_else(|| w.get("start"))?.as_f64()?;
-        let end = w.get("end_s").or_else(|| w.get("end"))?.as_f64()?;
+        // A single malformed word must not discard the rest of the sidecar.
+        let Some(start) = w
+            .get("start_s")
+            .or_else(|| w.get("start"))
+            .and_then(serde_json::Value::as_f64)
+        else {
+            continue;
+        };
+        let Some(end) = w
+            .get("end_s")
+            .or_else(|| w.get("end"))
+            .and_then(serde_json::Value::as_f64)
+        else {
+            continue;
+        };
         let speaker = w
             .get("speaker")
             .or_else(|| w.get("speaker_id"))
@@ -72,8 +85,8 @@ fn first_video_track(stack: &Stack) -> Option<&montage_proto::otio::Track> {
 
 /// `(boundary_time, has_j_or_l_cut)` for each speaker-turn boundary on the
 /// first video track. A turn is a boundary between adjacent clips whose
-/// whisper speaker labels differ across the cut; gaps break adjacency,
-/// transitions are transparent.
+/// whisper speaker labels differ across the cut; gaps and nested stacks
+/// break adjacency, transitions are transparent.
 fn speaker_turn_boundaries(project_root: &Path, stack: &Stack) -> Option<Vec<(f64, bool)>> {
     let track = first_video_track(stack)?;
     let mut cache: HashMap<String, Option<Vec<Word>>> = HashMap::new();
@@ -99,8 +112,11 @@ fn speaker_turn_boundaries(project_root: &Path, stack: &Stack) -> Option<Vec<(f6
                 cursor += gap.source_range.duration.to_seconds();
                 prev = None; // no dialogue continuity across a gap
             }
+            // A nested stack interrupts the dialogue just as a gap does; its
+            // own duration is not modeled here.
+            TrackChild::Stack(_) => prev = None,
             // Transitions decorate the boundary; the clips stay adjacent.
-            _ => {}
+            TrackChild::Transition(_) => {}
         }
     }
     Some(boundaries)

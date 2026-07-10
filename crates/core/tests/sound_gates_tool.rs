@@ -7,10 +7,20 @@ use montage_core::montage_mcp::context::McpToolCtx;
 use montage_core::montage_mcp::tools::run_sound_gates::{self, RunSoundGatesArgs};
 use montage_proto::montage_meta::{MontageClipMetadata, SplitEditSpec};
 use montage_proto::otio::{
-    Clip, ClipMetadata, ExternalReference, Gap, MediaReference, RationalTime, StackChild,
-    TimeRange, Track, TrackChild, TrackKind,
+    Clip, ClipMetadata, ExternalReference, Gap, MediaReference, RationalTime, Stack, StackChild,
+    TimeRange, Track, TrackChild, TrackKind, Transition,
 };
 use montage_proto::project::Project;
+
+fn split_metadata(spec: SplitEditSpec) -> ClipMetadata {
+    ClipMetadata {
+        montage: Some(MontageClipMetadata {
+            split_edit: Some(spec),
+            ..MontageClipMetadata::default()
+        }),
+        ..ClipMetadata::default()
+    }
+}
 
 fn clip(name: &str, asset: &str, start_s: f64, dur_s: f64, lead: Option<f64>) -> Clip {
     let mut c = Clip::empty(name.to_string());
@@ -20,16 +30,10 @@ fn clip(name: &str, asset: &str, start_s: f64, dur_s: f64, lead: Option<f64>) ->
         RationalTime::new(dur_s * 24.0, 24.0),
     ));
     if let Some(v) = lead {
-        c.metadata = ClipMetadata {
-            montage: Some(MontageClipMetadata {
-                split_edit: Some(SplitEditSpec {
-                    audio_lead_s: Some(v),
-                    ..SplitEditSpec::default()
-                }),
-                ..MontageClipMetadata::default()
-            }),
-            ..ClipMetadata::default()
-        };
+        c.metadata = split_metadata(SplitEditSpec {
+            audio_lead_s: Some(v),
+            ..SplitEditSpec::default()
+        });
     }
     c
 }
@@ -191,6 +195,154 @@ fn gap_breaks_adjacency() {
     write_whisper(dir.path(), "raw/b.mp4", speaker_words("B"));
     let body = run(dir.path(), None).expect("tool runs");
     assert_eq!(body["speaker_turns"]["total"], 0);
+}
+
+#[test]
+fn nested_stack_breaks_adjacency() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(clip("c0", "raw/a.mp4", 0.0, 5.0, None)),
+            TrackChild::Stack(Stack::empty("multicam")),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, None)),
+        ],
+    );
+    write_whisper(dir.path(), "raw/a.mp4", speaker_words("A"));
+    write_whisper(dir.path(), "raw/b.mp4", speaker_words("B"));
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(body["speaker_turns"]["total"], 0, "{body}");
+}
+
+#[test]
+fn outgoing_audio_trail_covers_a_speaker_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut out_clip = clip("c0", "raw/a.mp4", 0.0, 5.0, None);
+    out_clip.metadata = split_metadata(SplitEditSpec {
+        audio_trail_s: Some(0.4),
+        ..SplitEditSpec::default()
+    });
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(out_clip),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, None)),
+        ],
+    );
+    write_whisper(dir.path(), "raw/a.mp4", speaker_words("A"));
+    write_whisper(dir.path(), "raw/b.mp4", speaker_words("B"));
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(body["speaker_turns"]["total"], 1, "{body}");
+    assert_eq!(
+        body["speaker_turns"]["covered"], 1,
+        "L-cut must count: {body}"
+    );
+}
+
+#[test]
+fn zero_audio_lead_is_not_coverage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(clip("c0", "raw/a.mp4", 0.0, 5.0, None)),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, Some(0.0))),
+        ],
+    );
+    write_whisper(dir.path(), "raw/a.mp4", speaker_words("A"));
+    write_whisper(dir.path(), "raw/b.mp4", speaker_words("B"));
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(body["speaker_turns"]["total"], 1, "{body}");
+    assert_eq!(body["speaker_turns"]["covered"], 0, "{body}");
+}
+
+#[test]
+fn transition_is_transparent_for_adjacency() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(clip("c0", "raw/a.mp4", 0.0, 5.0, None)),
+            TrackChild::Transition(Transition::symmetric("SMPTE_Dissolve", 1.0, 24.0)),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, Some(0.5))),
+        ],
+    );
+    write_whisper(dir.path(), "raw/a.mp4", speaker_words("A"));
+    write_whisper(dir.path(), "raw/b.mp4", speaker_words("B"));
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(body["speaker_turns"]["total"], 1, "{body}");
+    assert_eq!(body["speaker_turns"]["covered"], 1, "{body}");
+}
+
+#[test]
+fn fallback_word_keys_are_read_and_malformed_words_are_skipped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(clip("c0", "raw/a.mp4", 0.0, 5.0, None)),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, Some(0.5))),
+        ],
+    );
+    // Fallback keys `start`/`end`/`speaker_id`, with a malformed word first:
+    // it must be skipped without aborting the rest of the array.
+    write_whisper(
+        dir.path(),
+        "raw/a.mp4",
+        serde_json::json!([
+            {"text": "junk", "start": "not-a-number", "speaker_id": "A"},
+            {"text": "hello", "start": 0.0, "end": 30.0, "speaker_id": "A"},
+        ]),
+    );
+    write_whisper(
+        dir.path(),
+        "raw/b.mp4",
+        serde_json::json!([
+            {"text": "junk"},
+            {"text": "world", "start": 0.0, "end": 30.0, "speaker_id": "B"},
+        ]),
+    );
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(
+        body["speaker_turns"]["total"], 1,
+        "valid words after a malformed one must still be read: {body}"
+    );
+    assert_eq!(body["speaker_turns"]["covered"], 1, "{body}");
+}
+
+#[test]
+fn empty_speaker_labels_are_not_turns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    seed(
+        dir.path(),
+        vec![
+            TrackChild::Clip(clip("c0", "raw/a.mp4", 0.0, 5.0, None)),
+            TrackChild::Clip(clip("c1", "raw/b.mp4", 0.0, 5.0, None)),
+        ],
+    );
+    write_whisper(dir.path(), "raw/a.mp4", speaker_words(""));
+    write_whisper(dir.path(), "raw/b.mp4", speaker_words(""));
+    let body = run(dir.path(), None).expect("tool runs");
+    assert_eq!(body["speaker_turns"]["total"], 0, "{body}");
+}
+
+#[test]
+fn no_video_track_is_a_descriptive_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut project = Project::init(dir.path()).expect("Project::init");
+    let mut track = Track::empty("A1", TrackKind::Audio);
+    track
+        .children
+        .push(TrackChild::Clip(clip("a0", "raw/a.wav", 0.0, 5.0, None)));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
+    project.write(dir.path()).expect("project write");
+
+    let err = run(dir.path(), None).expect_err("must error");
+    assert!(err.contains("no video track"), "{err}");
 }
 
 #[test]

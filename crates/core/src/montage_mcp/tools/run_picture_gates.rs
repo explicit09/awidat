@@ -26,14 +26,16 @@ pub struct RunPictureGatesArgs {
 /// Cut boundary times (seconds) and total duration of the first video
 /// track: boundaries between consecutive duration-bearing children
 /// (clips and gaps), excluding the program end. Transitions decorate an
-/// existing boundary and are skipped. Shared with `plan_cold_open` for
-/// gate projections.
+/// existing boundary and are skipped; a nested stack breaks adjacency, so
+/// no cut is counted across it. Shared with `plan_cold_open` for gate
+/// projections.
 pub(crate) fn first_video_track_cuts(stack: &Stack) -> Option<(Vec<f64>, f64)> {
     for child in &stack.children {
         match child {
             StackChild::Track(track) if track.kind == TrackKind::Video => {
                 let mut cuts = Vec::new();
                 let mut cursor = 0.0;
+                let mut adjacent = false;
                 for item in &track.children {
                     let dur = match item {
                         TrackChild::Clip(clip) => clip
@@ -42,11 +44,18 @@ pub(crate) fn first_video_track_cuts(stack: &Stack) -> Option<(Vec<f64>, f64)> {
                             .map(|r| r.duration.to_seconds())
                             .unwrap_or(0.0),
                         TrackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
-                        _ => continue,
+                        // A nested stack interrupts the run of duration-bearing
+                        // children; its own duration is not modeled here.
+                        TrackChild::Stack(_) => {
+                            adjacent = false;
+                            continue;
+                        }
+                        TrackChild::Transition(_) => continue,
                     };
-                    if cursor > 0.0 {
+                    if adjacent && cursor > 0.0 {
                         cuts.push(cursor);
                     }
+                    adjacent = true;
                     cursor += dur;
                 }
                 return Some((cuts, cursor));
