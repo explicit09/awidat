@@ -1,0 +1,56 @@
+{
+  "title": {
+    "key": "harness-title-1",
+    "startS": 0,
+    "endS": 3,
+    "text": "STAGE HARNESS\nfixture scene",
+    "position": "bottom",
+    "fontSize": 42,
+    "color": "#FFFFFF",
+    "fontWeight": "bold",
+    "animation": "none",
+    "reveal": "none",
+    "box": null
+  },
+  "shape": {
+    "key": "harness-shape-1",
+    "startS": 0,
+    "endS": 3,
+    "shape": "rect",
+    "x": 0.72,
+    "y": 0.18,
+    "width": 0.22,
+    "height": 0.14,
+    "color": "#22D3EE",
+    "opacity": 0.5,
+    "scale": 1,
+    "anchorX": 0.5,
+    "anchorY": 0.5,
+    "rotationDeg": 0,
+    "animation": {
+      "id": "harness-shape-opacity",
+      "parameter": "overlay.opacity",
+      "keyframes": [
+        { "timeS": 0, "value": 0.2, "interpolation": "linear", "easing": "linear" },
+        { "timeS": 1, "value": 0.5, "interpolation": "linear", "easing": "linear" },
+        { "timeS": 3, "value": 0.5, "interpolation": "linear", "easing": "linear" }
+      ]
+    }
+  },
+  "image": {
+    "key": "harness-image-1",
+    "startS": 0,
+    "endS": 3,
+    "src": "/fixtures/stage/badge.png",
+    "x": 0.18,
+    "y": 0.82,
+    "width": 0.16,
+    "height": 0.12,
+    "opacity": 0.9,
+    "fit": "contain",
+    "scale": 1,
+    "anchorX": 0.5,
+    "anchorY": 0.5,
+    "rotationDeg": 0
+  }
+}
