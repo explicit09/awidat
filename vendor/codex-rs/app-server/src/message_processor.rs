@@ -910,7 +910,7 @@ impl MessageProcessor {
                 .remote_control_processor
                 .status_read()
                 .map(|response| Some(response.into())),
-            ClientRequest::ConfigRequirementsRead { params: _, .. } => self
+            ClientRequest::ConfigRequirementsRead { .. } => self
                 .config_processor
                 .config_requirements_read()
                 .await
@@ -963,7 +963,7 @@ impl MessageProcessor {
                 .unwatch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
+            ClientRequest::ModelProviderCapabilitiesRead { .. } => self
                 .config_processor
                 .model_provider_capabilities_read()
                 .await
@@ -1216,7 +1216,7 @@ impl MessageProcessor {
                     .thread_realtime_stop(&request_id, params)
                     .await
             }
-            ClientRequest::ThreadRealtimeListVoices { params: _, .. } => {
+            ClientRequest::ThreadRealtimeListVoices { .. } => {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
