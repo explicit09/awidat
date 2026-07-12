@@ -272,13 +272,13 @@ fn render_skills_catalog_from_roots(
     // Resolve each skill to its winning layer. Names are collected
     // from every layer; the loop picks the right `Skill` per name.
     let mut names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    for (name, _) in layers.bundled.iter() {
+    for name in layers.bundled.keys() {
         names.insert(name.as_str());
     }
-    for (name, _) in layers.user.iter() {
+    for name in layers.user.keys() {
         names.insert(name.as_str());
     }
-    for (name, _) in layers.project.iter() {
+    for name in layers.project.keys() {
         names.insert(name.as_str());
     }
 

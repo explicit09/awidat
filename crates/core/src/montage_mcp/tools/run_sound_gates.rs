@@ -142,13 +142,13 @@ fn judge_boundary(
             .entry(ext.target_url.clone())
             .or_insert_with(|| load_words(project_root, &ext.target_url))
             .as_ref()?;
-        let overlapping = words
+        let mut overlapping = words
             .iter()
             .filter(|w| w.end_s > start && w.start_s < end && !w.speaker.is_empty());
         let word = if last {
-            overlapping.last()
+            overlapping.next_back()
         } else {
-            overlapping.into_iter().next()
+            overlapping.next()
         }?;
         Some(word.speaker.clone())
     };
