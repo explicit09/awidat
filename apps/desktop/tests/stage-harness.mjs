@@ -171,7 +171,14 @@ try {
       );
       console.log(`stage-harness screenshot matches golden (>= ${MIN_SSIM})`);
     } catch (err) {
-      console.error(`stage-harness screenshot diverged from golden below ${MIN_SSIM}`);
+      // ssim-compare.sh exits 2 when ffmpeg is missing and 1 on a real
+      // divergence. Reporting a broken environment as "diverged" is how a
+      // gate that never actually compared anything still looks like it ran.
+      if (err.status === 2) {
+        console.error("stage-harness could not compare: ffmpeg is missing (see above)");
+      } else {
+        console.error(`stage-harness screenshot diverged from golden below ${MIN_SSIM}`);
+      }
       exitCode = 1;
     }
   }
