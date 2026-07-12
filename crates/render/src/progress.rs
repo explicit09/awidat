@@ -121,10 +121,8 @@ fn parse_size(s: &str) -> Option<u64> {
         (rest, 1024 * 1024)
     } else if let Some(rest) = lower.strip_suffix("gb") {
         (rest, 1024 * 1024 * 1024)
-    } else if let Some(rest) = lower.strip_suffix('b') {
-        (rest, 1)
     } else {
-        return None;
+        (lower.strip_suffix('b')?, 1)
     };
     let n: f64 = num.trim().parse().ok()?;
     Some((n * mult as f64) as u64)

@@ -3185,7 +3185,6 @@ mod tests {
                 color,
                 font_weight,
                 animation,
-                phases: _,
                 ..
             } => {
                 assert!((start_s - 0.0).abs() < 1e-9);
@@ -3330,7 +3329,6 @@ mod tests {
                 font_size,
                 color,
                 font_weight,
-                phases: _,
                 ..
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
