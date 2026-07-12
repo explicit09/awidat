@@ -10,13 +10,14 @@
  *  - video: `preload="auto"`, muted, paused, `currentTime = t`, no autoplay
  *  - `document.title = "stage-harness-ready"` only after ALL of: the
  *    video's `seeked` event has fired, the seeked frame has actually been
- *    PRESENTED (via `requestVideoFrameCallback`, since `seeked` alone can
- *    still screenshot the pre-seek frame), `document.fonts.ready` has
- *    resolved, the scene JSON has been fetched + parsed, and the scene's
- *    image layer (if any) has been decoded — Playwright waits on the
- *    title, not on a timeout. A scene fetch/decode failure also flips
- *    the title (with the error visible in the DOM) so the test fails
- *    fast on its DOM asserts instead of timing out.
+ *    PRESENTED (via `requestVideoFrameCallback` — `seeked` alone fires
+ *    before the frame is composited, so a screenshot can catch the
+ *    pre-seek frame), `document.fonts.ready` has resolved, the scene JSON
+ *    has been fetched + parsed, and the scene's image layer (if any) has
+ *    been decoded — Playwright waits on the title, not on a timeout. A
+ *    scene fetch/decode failure also flips the title (with the error
+ *    visible in the DOM) so the test fails fast on its DOM asserts
+ *    instead of timing out.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Stage } from "./Stage";
