@@ -10001,6 +10001,7 @@ dependencies = [
  "futures",
  "montage-config",
  "montage-effects",
+ "montage-eval",
  "montage-index",
  "montage-lut",
  "montage-mcp",
@@ -10081,6 +10082,20 @@ name = "montage-effects"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "montage-eval"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "montage-proto",
+ "montage-render",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

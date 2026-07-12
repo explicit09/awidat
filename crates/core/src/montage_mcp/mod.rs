@@ -102,6 +102,7 @@ use crate::montage_mcp::tools::manage_assets::{
     TagAssetArgs,
 };
 use crate::montage_mcp::tools::plan_captions::{self, PlanCaptionsArgs};
+use crate::montage_mcp::tools::plan_cold_open::{self, PlanColdOpenArgs};
 use crate::montage_mcp::tools::plan_color_grade::{self, PlanColorGradeArgs};
 use crate::montage_mcp::tools::plan_delivery_export::{self, PlanDeliveryExportArgs};
 use crate::montage_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
@@ -150,7 +151,9 @@ use crate::montage_mcp::tools::read_understanding::{self, ReadUnderstandingArgs}
 use crate::montage_mcp::tools::relink_media::{self, RelinkMediaArgs};
 use crate::montage_mcp::tools::render_preflight::{self, RenderPreflightArgs};
 use crate::montage_mcp::tools::request_user_input::{self, RequestUserInputArgs};
+use crate::montage_mcp::tools::run_picture_gates::{self, RunPictureGatesArgs};
 use crate::montage_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
+use crate::montage_mcp::tools::run_sound_gates::{self, RunSoundGatesArgs};
 use crate::montage_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::montage_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::montage_mcp::tools::start_generated_media_job::{self, StartGeneratedMediaJobArgs};
@@ -1394,6 +1397,71 @@ render by itself.",
         args: Parameters<PodcastQcReportArgs>,
     ) -> Result<String, ErrorData> {
         podcast_qc_report::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_cold_open` — deterministic cold-open blitz-montage assembler.
+    #[tool(
+        description = "\
+Assemble a cold-open blitz montage plan: supply the hook (the single most \
+provocative line, transplanted to 0:00) and the ordered blitz beats; the \
+tool validates pacing against the house profile's cold-open spec, projects \
+the picture.cold_open gate verdict for the whole program, and returns an \
+apply_edl-ready fragment inserting the montage at the head of the timeline \
+plus warnings. Read-only planner — nothing mutates until you pass \
+edl_fragment to apply_edl. The applied cold open doubles as the 9:16 short \
+(reuse via short-form-reframing).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_cold_open(
+        &self,
+        args: Parameters<PlanColdOpenArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_cold_open::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `run_picture_gates` — deterministic picture-pass gates vs a house
+    /// style profile.
+    #[tool(
+        description = "\
+Run deterministic picture-pass gates over the current timeline, scored \
+against a house style profile (doac, tbpn, technologia): cold_open \
+(peak-density minute early plus a blitz opening window), floor (no dead \
+editorial zone — catches shipping a raw composite), and body_pacing \
+(cuts/min inside the archetype band). Returns per-gate reports with \
+measured values and an overall `passed`. Read-only; run before \
+export/publish and after major picture changes.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn run_picture_gates(
+        &self,
+        args: Parameters<RunPictureGatesArgs>,
+    ) -> Result<String, ErrorData> {
+        run_picture_gates::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `run_sound_gates` — deterministic sound-pass gates vs a house
+    /// style profile.
+    #[tool(
+        description = "\
+Run deterministic sound-pass gates against a house style profile (doac, \
+tbpn, technologia): loudness (integrated LUFS within the delivery target \
+±tolerance and true peak under the ceiling, measured with ffmpeg ebur128 \
+on the newest MP4 under renders/ — fails closed when no render exists) \
+and split_edit_coverage (fraction of speaker-turn boundaries carrying a \
+J/L-cut, from clip split_edit metadata and whisper speaker labels; skips \
+when the program has no speaker turns). Returns per-gate reports with \
+measured values and an overall `passed`. Read-only; run after the sound \
+pass and before export/publish.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn run_sound_gates(
+        &self,
+        args: Parameters<RunSoundGatesArgs>,
+    ) -> Result<String, ErrorData> {
+        run_sound_gates::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
