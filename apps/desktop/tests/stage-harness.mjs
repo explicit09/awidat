@@ -242,20 +242,19 @@ async function runCase(ctx, testCase) {
     const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
     assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
 
-    // DIAGNOSTIC (temporary): at the moment we are about to screenshot, what
-    // frame does the engine say is presented, and does forcing another
-    // presentation change it?
-    const diag = await page.evaluate(async () => {
-      const v = document.querySelector("video");
-      const base = { currentTime: v.currentTime, readyState: v.readyState, seeking: v.seeking };
-      const nextFrame = await new Promise((res) => {
-        let done = false;
-        v.requestVideoFrameCallback?.((_n, m) => { done = true; res(m.mediaTime); });
-        setTimeout(() => { if (!done) res("NO_NEW_FRAME"); }, 1000);
-      });
-      return { ...base, presentedNow: nextFrame };
-    });
-    console.log(`[${caseLabel}] DIAG ${JSON.stringify(diag)}`);
+    // `stage-harness-ready` means the seeked frame has been PRESENTED
+    // (requestVideoFrameCallback), but presented is not painted: the
+    // compositor still has to draw it. Screenshotting in that window
+    // captures the pre-seek frame — which is what made kinetic-text
+    // diverge on the Linux runner while the same run's other cases
+    // passed. Its spring-animated word layers give the compositor more
+    // to do, widening the gap.
+    //
+    // Wait for two animation frames: rAF fires before paint, so the
+    // second one is only reached after the first has been painted.
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
 
     // Assert the expected overlay DOM landed before trusting the screenshot.
     const frame = page.locator('[data-testid="stage-harness-root"]');
