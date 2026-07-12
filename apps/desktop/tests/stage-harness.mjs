@@ -272,7 +272,13 @@ async function runCase(ctx, testCase) {
       { stdio: "inherit" },
     );
     console.log(`[${caseLabel}] screenshot matches golden (>= ${MIN_SSIM})`);
-  } catch {
+  } catch (err) {
+    // ssim-compare.sh exits 2 when ffmpeg is missing and 1 on a real
+    // divergence. Reporting a broken environment as "diverged" is how a
+    // gate that never actually compared anything still looks like it ran.
+    if (err.status === 2) {
+      throw new Error("could not compare: ffmpeg is missing (see above)");
+    }
     throw new Error(`screenshot diverged from golden below ${MIN_SSIM}: ${goldenPath}`);
   }
 }
