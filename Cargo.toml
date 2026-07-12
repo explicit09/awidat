@@ -10,6 +10,7 @@ members = [
     "crates/render",
     "crates/render-gpu",
     "crates/effects",
+    "crates/eval",
     "crates/lut",
     "crates/test-support",
     "crates/config",
@@ -219,6 +220,7 @@ montage-social = { path = "crates/social" }
 montage-social-server = { path = "crates/social-server" }
 montage-index = { path = "crates/index" }
 montage-desktop-protocol = { path = "crates/desktop-protocol" }
+montage-eval = { path = "crates/eval" }
 montage-codex-bridge = { path = "crates/codex-bridge" }
 montage-test-support = { path = "crates/test-support" }
 

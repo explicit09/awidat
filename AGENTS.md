@@ -41,7 +41,7 @@ especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 
 - Run the narrow relevant check first, then broader checks when the blast radius justifies it.
 - For desktop UI changes, run or build the desktop app when feasible.
-- Release packaging references may exist in Makefile or CI, but this checkout has no top-level `dist/`; do not rely on `make package` unless that path is restored.
+- Release packaging lives in `.github/workflows/release.yml` and `scripts/release/`; there is no top-level `dist/` and no `make package`.
 
 ## Operational Notes
 
