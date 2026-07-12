@@ -242,6 +242,21 @@ async function runCase(ctx, testCase) {
     const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
     assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
 
+    // DIAGNOSTIC (temporary): at the moment we are about to screenshot, what
+    // frame does the engine say is presented, and does forcing another
+    // presentation change it?
+    const diag = await page.evaluate(async () => {
+      const v = document.querySelector("video");
+      const base = { currentTime: v.currentTime, readyState: v.readyState, seeking: v.seeking };
+      const nextFrame = await new Promise((res) => {
+        let done = false;
+        v.requestVideoFrameCallback?.((_n, m) => { done = true; res(m.mediaTime); });
+        setTimeout(() => { if (!done) res("NO_NEW_FRAME"); }, 1000);
+      });
+      return { ...base, presentedNow: nextFrame };
+    });
+    console.log(`[${caseLabel}] DIAG ${JSON.stringify(diag)}`);
+
     // Assert the expected overlay DOM landed before trusting the screenshot.
     const frame = page.locator('[data-testid="stage-harness-root"]');
     await frame.waitFor({ state: "visible" });
