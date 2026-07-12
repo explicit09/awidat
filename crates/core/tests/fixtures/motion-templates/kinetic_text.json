@@ -1,0 +1,188 @@
+[
+  {
+    "id": "kinetic-word-0",
+    "kind": "text",
+    "from_s": 0.0,
+    "duration_s": 0.52,
+    "z_index": 12,
+    "params": {
+      "align": "left",
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        },
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "spring",
+              "spring": {
+                "damping": 12.0,
+                "mass": 1.0,
+                "stiffness": 180.0
+              },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.scale",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "font_size": 48,
+      "font_weight": "bold",
+      "height": 0.08,
+      "text": "Ship",
+      "width": 0.05500000000000001,
+      "x": 0.412375,
+      "y": 0.82
+    }
+  },
+  {
+    "id": "kinetic-word-1",
+    "kind": "text",
+    "from_s": 0.25,
+    "duration_s": 0.52,
+    "z_index": 12,
+    "params": {
+      "align": "left",
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        },
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "spring",
+              "spring": {
+                "damping": 12.0,
+                "mass": 1.0,
+                "stiffness": 180.0
+              },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.scale",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "font_size": 48,
+      "font_weight": "bold",
+      "height": 0.08,
+      "text": "it",
+      "width": 0.027500000000000004,
+      "x": 0.479375,
+      "y": 0.82
+    }
+  },
+  {
+    "id": "kinetic-word-2",
+    "kind": "text",
+    "from_s": 0.5,
+    "duration_s": 0.52,
+    "z_index": 12,
+    "params": {
+      "align": "left",
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        },
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "spring",
+              "spring": {
+                "damping": 12.0,
+                "mass": 1.0,
+                "stiffness": 180.0
+              },
+              "time_s": 0.0,
+              "value": 1.15
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.12,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.scale",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "font_size": 48,
+      "font_weight": "bold",
+      "height": 0.08,
+      "text": "today",
+      "width": 0.06875,
+      "x": 0.518875,
+      "y": 0.82
+    }
+  }
+]

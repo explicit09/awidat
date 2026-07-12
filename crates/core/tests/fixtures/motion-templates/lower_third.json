@@ -1,0 +1,212 @@
+[
+  {
+    "id": "lower-third-bar",
+    "kind": "solid",
+    "from_s": 0.0,
+    "duration_s": 5.0,
+    "z_index": 10,
+    "params": {
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": -0.36000000000000004
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.55,
+              "value": 0.04
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.45,
+              "value": 0.04
+            },
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 5.0,
+              "value": -0.36000000000000004
+            }
+          ],
+          "parameter": "overlay.x",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "color": "#111111",
+      "height": 0.1,
+      "opacity": 0.82,
+      "width": 0.4,
+      "x": 0.04,
+      "y": 0.82
+    }
+  },
+  {
+    "id": "lower-third-name",
+    "kind": "text",
+    "from_s": 0.08,
+    "duration_s": 4.92,
+    "z_index": 11,
+    "params": {
+      "align": "left",
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": -0.12
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.55,
+              "value": 0.24
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.37,
+              "value": 0.24
+            },
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 4.92,
+              "value": -0.12
+            }
+          ],
+          "parameter": "overlay.x",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        },
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.55,
+              "value": 1.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.37,
+              "value": 1.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.92,
+              "value": 0.0
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "font_size": 36,
+      "font_weight": "bold",
+      "height": 0.06,
+      "text": "Ada Lovelace",
+      "width": 0.36,
+      "x": 0.24,
+      "y": 0.85
+    }
+  },
+  {
+    "id": "lower-third-role",
+    "kind": "text",
+    "from_s": 0.16,
+    "duration_s": 4.84,
+    "z_index": 11,
+    "params": {
+      "align": "left",
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": -0.12
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.55,
+              "value": 0.24
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.29,
+              "value": 0.24
+            },
+            {
+              "easing": "ease_out_cubic",
+              "interpolation": "linear",
+              "time_s": 4.84,
+              "value": -0.12
+            }
+          ],
+          "parameter": "overlay.x",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        },
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.55,
+              "value": 1.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.29,
+              "value": 1.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 4.84,
+              "value": 0.0
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "font_size": 24,
+      "font_weight": "normal",
+      "height": 0.045,
+      "text": "Mathematician",
+      "width": 0.36,
+      "x": 0.24,
+      "y": 0.905
+    }
+  }
+]

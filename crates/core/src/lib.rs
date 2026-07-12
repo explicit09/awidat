@@ -68,6 +68,7 @@ pub mod mcp_host;
 pub mod media_catalog_mutation;
 pub mod media_intelligence;
 pub mod montage_mcp;
+pub mod motion_templates;
 pub mod notes;
 pub mod pexels;
 pub mod preview_cache;

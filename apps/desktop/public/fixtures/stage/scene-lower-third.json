@@ -1,0 +1,245 @@
+{
+  "layers": [
+    {
+      "kind": "shape",
+      "key": "lower-third:lower-third-bar",
+      "startS": 0.0,
+      "endS": 5.0,
+      "shape": "rect",
+      "x": 0.04,
+      "y": 0.82,
+      "width": 0.4,
+      "height": 0.1,
+      "color": "#111111",
+      "opacity": 0.82,
+      "scale": 1.0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "rotationDeg": 0.0,
+      "animations": [
+        {
+          "id": "lower-third:lower-third-bar:overlay.x",
+          "parameter": "overlay.x",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": -0.36000000000000004,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            },
+            {
+              "timeS": 0.55,
+              "value": 0.04,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.45,
+              "value": 0.04,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 5.0,
+              "value": -0.36000000000000004,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            }
+          ]
+        },
+        {
+          "id": "lower-third:lower-third-bar:overlay.opacity",
+          "parameter": "overlay.opacity",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 0.4,
+              "value": 0.82,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.6,
+              "value": 0.82,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 5.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "title",
+      "key": "lower-third:lower-third-name",
+      "startS": 0.08,
+      "endS": 5.0,
+      "text": "Ada Lovelace",
+      "position": "center",
+      "fontSize": 36,
+      "color": "#FFFFFF",
+      "fontWeight": "bold",
+      "animation": "none",
+      "reveal": "none",
+      "box": {
+        "x": 0.24,
+        "y": 0.85,
+        "width": 0.36,
+        "align": "left"
+      },
+      "animations": [
+        {
+          "id": "lower-third:lower-third-name:overlay.x",
+          "parameter": "overlay.x",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": -0.12,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            },
+            {
+              "timeS": 0.55,
+              "value": 0.24,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.37,
+              "value": 0.24,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.92,
+              "value": -0.12,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            }
+          ]
+        },
+        {
+          "id": "lower-third:lower-third-name:overlay.opacity",
+          "parameter": "overlay.opacity",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 0.55,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.37,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.92,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "title",
+      "key": "lower-third:lower-third-role",
+      "startS": 0.16,
+      "endS": 5.0,
+      "text": "Mathematician",
+      "position": "center",
+      "fontSize": 24,
+      "color": "#FFFFFF",
+      "fontWeight": "normal",
+      "animation": "none",
+      "reveal": "none",
+      "box": {
+        "x": 0.24,
+        "y": 0.905,
+        "width": 0.36,
+        "align": "left"
+      },
+      "animations": [
+        {
+          "id": "lower-third:lower-third-role:overlay.x",
+          "parameter": "overlay.x",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": -0.12,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            },
+            {
+              "timeS": 0.55,
+              "value": 0.24,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.29,
+              "value": 0.24,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.84,
+              "value": -0.12,
+              "interpolation": "linear",
+              "easing": "ease_out_cubic"
+            }
+          ]
+        },
+        {
+          "id": "lower-third:lower-third-role:overlay.opacity",
+          "parameter": "overlay.opacity",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 0.55,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.29,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 4.84,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+[
+  {
+    "id": "progress-bar",
+    "kind": "shape",
+    "from_s": 0.0,
+    "duration_s": 3.0,
+    "z_index": 8,
+    "params": {
+      "anchor_x": 0.0,
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.6,
+              "value": 1.0
+            }
+          ],
+          "parameter": "overlay.scale",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "color": "#00FF00",
+      "height": 0.012,
+      "opacity": 1.0,
+      "shape": "rectangle",
+      "width": 0.6,
+      "x": 0.0,
+      "y": 0.9
+    }
+  }
+]

@@ -1,6 +1,7 @@
 //! Visual-support routing policy tests.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use montage_core::montage_mcp::tools::plan_visual_support::route_visual_support_request as mcp_route_visual_support_request;
 use montage_core::tools::plan_visual_support::{
     VisualSupportIntent, VisualSupportLane, VisualSupportNeedKind, route_visual_support_request,
 };
@@ -65,6 +66,39 @@ fn routes_direct_footage_polish_to_effects() {
 }
 
 #[test]
+fn temporal_highlight_request_does_not_route_to_motion_scene() {
+    // "highlight the funniest moment" is editorial moment-selection,
+    // not a visual highlight-box overlay — it must not hit MotionScene.
+    let route = route_visual_support_request("highlight the funniest moment in this clip");
+    assert_ne!(route.primary_lane, VisualSupportLane::MotionScene);
+
+    // The MCP router has its own `VisualSupportLane` type; compare via
+    // Debug names like the drift tripwire below does.
+    let mcp_route = mcp_route_visual_support_request("highlight the funniest moment in this clip");
+    assert_ne!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
+fn highlight_box_phrase_routes_to_motion_scene() {
+    let route = route_visual_support_request("highlight box on the chart");
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+
+    let mcp_route = mcp_route_visual_support_request("highlight box on the chart");
+    assert_eq!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
+fn highlight_the_spatial_noun_routes_to_motion_scene() {
+    let route = route_visual_support_request("highlight the area around the price");
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+
+    let mcp_route = mcp_route_visual_support_request("highlight the area around the price");
+    assert_eq!(format!("{:?}", mcp_route.primary_lane), "MotionScene");
+}
+
+#[test]
 fn exposes_supporting_lanes_for_hybrid_visual_requests() {
     let route = route_visual_support_request(
         "make this podcast segment more energetic with b-roll, captions, and animated callouts",
@@ -110,6 +144,133 @@ fn exposes_visual_reasoning_for_explainer_hybrid_requests() {
 }
 
 #[test]
+fn routes_plain_lower_third_to_title_annotation() {
+    let route = route_visual_support_request("add a lower third with the guest name and title");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::TitleAnnotation);
+    assert!(route.next_tools.contains(&"apply_edl".to_string()));
+}
+
+#[test]
+fn routes_animated_lower_third_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("add an animated lower third for the guest");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.next_tools.contains(&"plan_motion_scene".to_string()));
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("plan_motion_scene") && step.action.contains("template=lower_third"),
+        "action should point at the template call: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_lower_third_template_request_to_motion_scene() {
+    let route = route_visual_support_request("use the lower third template for the host name");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=lower_third"),
+        "action should name the lower_third template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_kinetic_text_request_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("do a kinetic text callout for the tagline");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=kinetic_text"),
+        "action should name the kinetic_text template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_progress_bar_request_to_motion_scene_with_template_hint() {
+    let route = route_visual_support_request("show a progress bar as they go through the steps");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=progress_bar"),
+        "action should name the progress_bar template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_highlight_box_request_to_motion_scene_with_template_hint() {
+    // "highlight the <spatial-noun>" phrasing: "region" is one of the
+    // spatial nouns the tightened rule accepts (a bare "highlight the
+    // signup button" no longer routes here — see
+    // temporal_highlight_request_does_not_route_to_motion_scene).
+    let route = route_visual_support_request("highlight the region around the signup button");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=highlight_box"),
+        "action should name the highlight_box template: {}",
+        step.action
+    );
+}
+
+#[test]
+fn routes_highlight_box_phrase_variant_to_motion_scene() {
+    let route = route_visual_support_request("add a highlight box around the price");
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    let step = route
+        .plan_steps
+        .iter()
+        .find(|step| {
+            step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+        })
+        .expect("motion scene planning step");
+    assert!(
+        step.action.contains("template=highlight_box"),
+        "action should name the highlight_box template: {}",
+        step.action
+    );
+}
+
+#[test]
 fn motion_scene_plan_step_names_required_content_args() {
     let route = route_visual_support_request(
         "turn this into a three-step animated card with a product screenshot",
@@ -133,4 +294,65 @@ fn motion_scene_plan_step_names_required_content_args() {
         "step/process MotionScenes must pass exact labels: {}",
         step.action
     );
+}
+
+/// Tripwire against future drift between the two `route_visual_support_request`
+/// implementations: the freestanding core router (`montage_core::tools::
+/// plan_visual_support`) and the duplicate that ships inside the in-process
+/// MCP server (`montage_core::montage_mcp::tools::plan_visual_support`), which
+/// is the copy production agents actually call. Both must agree on the primary
+/// lane and on any `plan_motion_scene` template hint for the same request.
+#[test]
+fn mcp_router_agrees_with_core_router_on_template_phrases() {
+    let requests = [
+        "animated lower third",
+        "kinetic text of the key quote",
+        "progress bar for the steps",
+        "highlight box on the chart",
+        "lower third for Jane",
+    ];
+
+    for request in requests {
+        let core_route = route_visual_support_request(request);
+        let mcp_route = mcp_route_visual_support_request(request);
+
+        assert_eq!(
+            format!("{:?}", core_route.primary_lane),
+            format!("{:?}", mcp_route.primary_lane),
+            "primary lane diverged for {request:?}: core={:?} mcp={:?}",
+            core_route.primary_lane,
+            mcp_route.primary_lane
+        );
+
+        let core_template = core_route
+            .plan_steps
+            .iter()
+            .find(|step| {
+                step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+            })
+            .and_then(|step| extract_template_hint(&step.action));
+        let mcp_template = mcp_route
+            .plan_steps
+            .iter()
+            .find(|step| {
+                format!("{:?}", step.lane) == "MotionScene" && step.tool == "plan_motion_scene"
+            })
+            .and_then(|step| extract_template_hint(&step.action));
+
+        assert_eq!(
+            core_template, mcp_template,
+            "template hint diverged for {request:?}: core={core_template:?} mcp={mcp_template:?}"
+        );
+    }
+}
+
+/// Pull the `template=<x>` token out of a `plan_motion_scene` plan-step
+/// action string, if present.
+fn extract_template_hint(action: &str) -> Option<String> {
+    let (_, after) = action.split_once("template=")?;
+    let token: String = after
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if token.is_empty() { None } else { Some(token) }
 }
