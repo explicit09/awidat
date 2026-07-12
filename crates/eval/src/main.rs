@@ -9,7 +9,20 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct CliReport {
     golden: Option<Vec<montage_eval::suite::SuiteResult>>,
-    skipped_lanes: Vec<&'static str>,
+    lanes: Vec<LaneReport>,
+}
+
+#[derive(Serialize)]
+struct LaneReport {
+    lane: &'static str,
+    status: LaneStatus,
+    reason: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LaneStatus {
+    Skipped,
 }
 
 fn main() -> ExitCode {
@@ -17,10 +30,14 @@ fn main() -> ExitCode {
     let has = |flag: &str| args.iter().any(|a| a == flag);
     let json = has("--json");
 
-    let mut skipped_lanes = Vec::new();
+    let mut lanes = Vec::new();
     for lane in ["--product", "--stress", "--live"] {
         if has(lane) {
-            skipped_lanes.push(lane.trim_start_matches("--"));
+            lanes.push(LaneReport {
+                lane: lane.trim_start_matches("--"),
+                status: LaneStatus::Skipped,
+                reason: "lane runner is not implemented yet",
+            });
         }
     }
 
@@ -39,10 +56,7 @@ fn main() -> ExitCode {
 
     let regressed = golden.as_ref().is_some_and(|rs| rs.iter().any(|r| !r.ok));
 
-    let report = CliReport {
-        golden,
-        skipped_lanes,
-    };
+    let report = CliReport { golden, lanes };
     if json {
         match serde_json::to_string_pretty(&report) {
             Ok(s) => println!("{s}"),
@@ -58,7 +72,13 @@ fn main() -> ExitCode {
         }
     }
 
-    if regressed {
+    if !json {
+        for lane in &report.lanes {
+            println!("skipped   {} — {}", lane.lane, lane.reason);
+        }
+    }
+
+    if regressed || (has("--fail-on-skip") && !report.lanes.is_empty()) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

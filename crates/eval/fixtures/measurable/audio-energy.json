@@ -1,0 +1,8 @@
+{
+  "duration_s": 120.5,
+  "loudness_integrated_lufs": -14.2,
+  "true_peak_dbfs": -1.4,
+  "silences": [
+    {"start_s": 18.0, "end_s": 18.6}
+  ]
+}
