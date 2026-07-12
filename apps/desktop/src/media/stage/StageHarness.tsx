@@ -9,12 +9,15 @@
  *    animations; every layer derives its look from `clock.now()` alone.
  *  - video: `preload="auto"`, muted, paused, `currentTime = t`, no autoplay
  *  - `document.title = "stage-harness-ready"` only after ALL of: the
- *    video's `seeked` event has fired, `document.fonts.ready` has
- *    resolved, the scene JSON has been fetched + parsed, and the scene's
- *    image layer (if any) has been decoded — Playwright waits on the
- *    title, not on a timeout. A scene fetch/decode failure also flips
- *    the title (with the error visible in the DOM) so the test fails
- *    fast on its DOM asserts instead of timing out.
+ *    video's `seeked` event has fired, the seeked frame has actually been
+ *    PRESENTED (via `requestVideoFrameCallback` — `seeked` alone fires
+ *    before the frame is composited, so a screenshot can catch the
+ *    pre-seek frame), `document.fonts.ready` has resolved, the scene JSON
+ *    has been fetched + parsed, and the scene's image layer (if any) has
+ *    been decoded — Playwright waits on the title, not on a timeout. A
+ *    scene fetch/decode failure also flips the title (with the error
+ *    visible in the DOM) so the test fails fast on its DOM asserts
+ *    instead of timing out.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Stage } from "./Stage";
@@ -231,6 +234,7 @@ export function StageHarness() {
   const [scene, setScene] = useState<SceneDocument | null>(null);
   const [sceneError, setSceneError] = useState<string | null>(null);
   const [videoSeeked, setVideoSeeked] = useState(false);
+  const [videoFramePresented, setVideoFramePresented] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
   const [overlayAssetsReady, setOverlayAssetsReady] = useState(false);
 
@@ -305,6 +309,48 @@ export function StageHarness() {
     };
   }, [t, clipUrl]);
 
+  // The `seeked` event fires when the seek completes internally, but the
+  // seeked frame is only PRESENTED for composition on a later rendering
+  // step — a screenshot taken between the two captures the pre-seek
+  // frame. Gate readiness on `requestVideoFrameCallback` reporting a
+  // presented frame whose mediaTime matches the target `t`. All harness
+  // `t` values are frame-aligned for the 30fps fixture clip, so a
+  // half-frame-at-60fps tolerance can never accept a neighbor frame.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setVideoFramePresented(false);
+    type VideoFrameMetadata = { mediaTime: number };
+    const rvfcVideo = video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        callback: (now: number, metadata: VideoFrameMetadata) => void,
+      ) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
+    if (typeof rvfcVideo.requestVideoFrameCallback !== "function") {
+      // No presentation signal available — fall back to the seeked
+      // event alone (pre-rVFC engines; the harness runs Chromium).
+      setVideoFramePresented(true);
+      return;
+    }
+    let cancelled = false;
+    let handle = 0;
+    const toleranceS = 1 / 60;
+    const onFrame = (_now: number, metadata: VideoFrameMetadata) => {
+      if (cancelled) return;
+      if (Math.abs(metadata.mediaTime - t) <= toleranceS) {
+        setVideoFramePresented(true);
+        return;
+      }
+      handle = rvfcVideo.requestVideoFrameCallback!(onFrame);
+    };
+    handle = rvfcVideo.requestVideoFrameCallback(onFrame);
+    return () => {
+      cancelled = true;
+      rvfcVideo.cancelVideoFrameCallback?.(handle);
+    };
+  }, [t, clipUrl]);
+
   // Decode the scene's image layer (if any) before declaring the scene's
   // assets ready. The decoded image lands in the browser cache, so the
   // Stage's own <img> paints immediately rather than racing the
@@ -334,10 +380,17 @@ export function StageHarness() {
 
   useEffect(() => {
     const sceneReady = sceneError !== null || (scene !== null && overlayAssetsReady);
-    if (videoSeeked && fontsReady && sceneReady) {
+    if (videoSeeked && videoFramePresented && fontsReady && sceneReady) {
       document.title = "stage-harness-ready";
     }
-  }, [videoSeeked, fontsReady, scene, sceneError, overlayAssetsReady]);
+  }, [
+    videoSeeked,
+    videoFramePresented,
+    fontsReady,
+    scene,
+    sceneError,
+    overlayAssetsReady,
+  ]);
 
   const clock = useMemo(() => frozenClock(t), [t]);
 
