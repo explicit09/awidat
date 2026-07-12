@@ -203,5 +203,12 @@ jobs:
       - name: UI smoke
         timeout-minutes: 10
         run: pnpm --dir apps/desktop test
+      - name: Upload stage-harness screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-harness-screenshots
+          path: apps/desktop/tests/smoke/stage-harness-*.png
+          if-no-files-found: ignore
       - name: Python safe smoke
         run: python3 python/scripts/smoke_safe.py

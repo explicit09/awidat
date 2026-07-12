@@ -8,9 +8,15 @@
  *  - `frozenClock(t)` with `t` from `?t=` (default 1.0) — no free-running
  *    animations; every layer derives its look from `clock.now()` alone.
  *  - video: `preload="auto"`, muted, paused, `currentTime = t`, no autoplay
- *  - `document.title = "stage-harness-ready"` only after BOTH the video's
- *    `seeked` event has fired AND `document.fonts.ready` has resolved —
- *    Playwright waits on the title, not on a timeout.
+ *  - `document.title = "stage-harness-ready"` only after ALL of: the
+ *    video's `seeked` event has fired, the seeked frame has actually been
+ *    PRESENTED (via `requestVideoFrameCallback`, since `seeked` alone can
+ *    still screenshot the pre-seek frame), `document.fonts.ready` has
+ *    resolved, the scene JSON has been fetched + parsed, and the scene's
+ *    image layer (if any) has been decoded — Playwright waits on the
+ *    title, not on a timeout. A scene fetch/decode failure also flips
+ *    the title (with the error visible in the DOM) so the test fails
+ *    fast on its DOM asserts instead of timing out.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Stage } from "./Stage";
@@ -285,6 +291,7 @@ export function StageHarness() {
   const [videoSeeked, setVideoSeeked] = useState(false);
   const [videoFramePresented, setVideoFramePresented] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
+  const [overlayAssetsReady, setOverlayAssetsReady] = useState(false);
 
   // Fetch + parse the scene JSON once. A fetch failure surfaces as
   // `sceneError` (visible in the DOM) rather than throwing, so the
@@ -400,11 +407,46 @@ export function StageHarness() {
     };
   }, [t, clipUrl]);
 
+  // Decode the scene's image layer (if any) before declaring the scene's
+  // assets ready. The decoded image lands in the browser cache, so the
+  // Stage's own <img> paints immediately rather than racing the
+  // screenshot.
   useEffect(() => {
-    if (videoSeeked && videoFramePresented && fontsReady) {
+    if (!scene) return;
+    const src = scene.image?.src;
+    if (!src) {
+      setOverlayAssetsReady(true);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.src = src;
+    img.decode().then(
+      () => {
+        if (!cancelled) setOverlayAssetsReady(true);
+      },
+      (e) => {
+        if (!cancelled) setSceneError(`image decode failed for ${src}: ${e}`);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [scene]);
+
+  useEffect(() => {
+    const sceneReady = sceneError !== null || (scene !== null && overlayAssetsReady);
+    if (videoSeeked && videoFramePresented && fontsReady && sceneReady) {
       document.title = "stage-harness-ready";
     }
-  }, [videoSeeked, videoFramePresented, fontsReady]);
+  }, [
+    videoSeeked,
+    videoFramePresented,
+    fontsReady,
+    scene,
+    sceneError,
+    overlayAssetsReady,
+  ]);
 
   const clock = useMemo(() => frozenClock(t), [t]);
 
