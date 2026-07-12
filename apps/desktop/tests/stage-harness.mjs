@@ -242,18 +242,6 @@ async function runCase(ctx, testCase) {
     const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
     assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
 
-    // DIAGNOSTIC (temporary): report what the engine actually presented.
-    const diag = await page.evaluate(() => {
-      const v = document.querySelector("video");
-      return {
-        rvfc: typeof v.requestVideoFrameCallback === "function",
-        currentTime: v.currentTime,
-        readyState: v.readyState,
-        seeking: v.seeking,
-      };
-    });
-    console.log(`[${caseLabel}] DIAG ${JSON.stringify(diag)}`);
-
     // Assert the expected overlay DOM landed before trusting the screenshot.
     const frame = page.locator('[data-testid="stage-harness-root"]');
     await frame.waitFor({ state: "visible" });
