@@ -8,9 +8,10 @@
  * program-frame element, and compares it against a committed
  * per-platform golden via ffmpeg SSIM (see `scripts/ssim-compare.sh`).
  *
- * First run for a given platform has no golden yet: it writes the
- * screenshot AS the golden and prints "golden bootstrapped" so CI/dev
- * can self-seed once, then gate on every run after.
+ * A missing per-platform golden is a hard failure so the gate can never
+ * silently self-seed in CI. To seed a new platform, run once locally with
+ * STAGE_GOLDEN_BOOTSTRAP=1 (or commit the screenshot CI uploads as the
+ * `stage-harness-screenshots` artifact) and commit the golden.
  *
  * Follows the dev-server boot/reuse pattern of `tests/desktop-ui-smoke.mjs`
  * (canReachApp / ensureAppServer / stopAppServer), spawning
@@ -125,6 +126,9 @@ try {
 
   assert.deepEqual(errors, [], `harness console/page errors: ${errors.join("; ")}`);
 
+  const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
+  assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
+
   // Assert the expected overlay DOM landed before trusting the screenshot:
   // one title text node, one shape rect, one image.
   const frame = page.locator('[data-testid="stage-harness-root"]');
@@ -148,8 +152,16 @@ try {
   await page.close();
 
   if (!existsSync(GOLDEN_PATH)) {
-    copyFileSync(SHOT_PATH, GOLDEN_PATH);
-    console.log(`golden bootstrapped: ${GOLDEN_PATH}`);
+    if (process.env.STAGE_GOLDEN_BOOTSTRAP === "1") {
+      copyFileSync(SHOT_PATH, GOLDEN_PATH);
+      console.log(`golden bootstrapped: ${GOLDEN_PATH}`);
+    } else {
+      console.error(
+        `missing committed golden ${GOLDEN_PATH}; screenshot saved at ${SHOT_PATH} — ` +
+          `rerun with STAGE_GOLDEN_BOOTSTRAP=1 to seed it, then commit the golden`,
+      );
+      exitCode = 1;
+    }
   } else {
     try {
       execFileSync(
