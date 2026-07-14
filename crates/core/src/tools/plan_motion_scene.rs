@@ -7,6 +7,9 @@ use montage_proto::professional::{MotionScene, MotionSceneLayer, MotionSceneLaye
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
+use crate::motion_templates::{
+    KineticWord, MotionTemplateSpec, TEMPLATE_ACCENT_COLOR, TextAnchor, expand_template,
+};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::tool_schema::Tool as ToolSchema;
 
@@ -49,6 +52,50 @@ struct PlanMotionSceneArgs {
     evidence_text: Option<String>,
     #[serde(default)]
     backdrop: Option<String>,
+    #[serde(default)]
+    template: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    words: Vec<TemplateWordArg>,
+    #[serde(default)]
+    anchor: Option<String>,
+    #[serde(default, rename = "box")]
+    box_region: Option<TemplateBoxArg>,
+    #[serde(default)]
+    pulse: Option<bool>,
+    #[serde(default)]
+    progress: Option<TemplateProgressArg>,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+/// One word in a `kinetic_text` template's `words` array.
+#[derive(Debug, Deserialize)]
+struct TemplateWordArg {
+    text: String,
+    at_s: f64,
+    #[serde(default)]
+    hold_s: f64,
+}
+
+/// Region for a `highlight_box` template's `box` field.
+#[derive(Debug, Deserialize)]
+struct TemplateBoxArg {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// `from`/`to`/`y` for a `progress_bar` template's `progress` field.
+#[derive(Debug, Deserialize)]
+struct TemplateProgressArg {
+    from: f64,
+    to: f64,
+    y: f64,
 }
 
 /// Inputs for a MotionScene plan.
@@ -85,6 +132,42 @@ pub struct MotionScenePlanRequest {
     /// frame), `"panel"` (inset card), or `"none"`. Default: panel
     /// when the request implies a card/diagram or an image is used.
     pub backdrop: Option<String>,
+    /// Motion-template name: `"lower_third"`, `"kinetic_text"`,
+    /// `"highlight_box"`, or `"progress_bar"`. When set, the template's
+    /// typed fields below (`name`/`role`, `words`, `box_region`/`pulse`,
+    /// or `progress`/`color`) are parsed into a
+    /// [`crate::motion_templates::MotionTemplateSpec`] and expanded via
+    /// [`crate::motion_templates::expand_template`]; the expansion's
+    /// layers replace the heuristic layers entirely and its rationale
+    /// flows into the plan. When `None`, behavior is unchanged from the
+    /// heuristic planner.
+    pub template: Option<String>,
+    /// `lower_third`: name displayed in the primary line. Required
+    /// when `template` is `"lower_third"`.
+    pub name: Option<String>,
+    /// `lower_third`: optional role/title displayed below the name.
+    pub role: Option<String>,
+    /// `kinetic_text`: words in display order as `(text, at_s,
+    /// hold_s)`. Required (non-empty) when `template` is
+    /// `"kinetic_text"`.
+    pub words: Vec<(String, f64, f64)>,
+    /// `kinetic_text`: optional screen anchor for the text block —
+    /// `"lower_left"`, `"center"`, or `"lower_center"`. Defaults to
+    /// `"center"` when omitted.
+    pub anchor: Option<String>,
+    /// `highlight_box`: region as `(x, y, width, height)`, each a
+    /// fraction of the canvas. Required when `template` is
+    /// `"highlight_box"`.
+    pub box_region: Option<(f64, f64, f64, f64)>,
+    /// `highlight_box`: whether the box pulses to draw attention.
+    /// Default false.
+    pub pulse: Option<bool>,
+    /// `progress_bar`: `(from, to, y)`, each a fraction. Required when
+    /// `template` is `"progress_bar"`.
+    pub progress: Option<(f64, f64, f64)>,
+    /// `progress_bar`: optional bar color override; defaults to the
+    /// template's own accent color.
+    pub color: Option<String>,
 }
 
 /// Backdrop behavior for a planned scene.
@@ -136,23 +219,65 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
         return Err("width and height must be positive".into());
     }
 
-    let evidence_text = args
-        .evidence_text
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let headline = resolve_headline(args, evidence_text)?;
-    let step_labels = resolve_step_labels(args, request)?;
-    let backdrop = BackdropMode::parse(args.backdrop.as_deref())?;
+    let template_expansion = match args.template.as_deref() {
+        Some(template) => Some(parse_and_expand_template(template, args, duration_s, fps)?),
+        None => None,
+    };
 
-    let layers = planned_layers(
-        request,
-        duration_s,
-        args.image_asset.as_deref(),
-        &headline,
-        &step_labels,
-        backdrop,
-    );
+    let (layers, scene_rationale) = if let Some(expansion) = template_expansion {
+        // Detect which of the five heuristic inputs were provided in template mode.
+        let mut ignored_inputs = Vec::new();
+        if args.image_asset.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("image_asset");
+        }
+        if args.backdrop.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("backdrop");
+        }
+        if args.headline.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("headline");
+        }
+        if !args.step_labels.is_empty() {
+            ignored_inputs.push("step_labels");
+        }
+        if args.evidence_text.as_deref().is_some_and(|s| !s.is_empty()) {
+            ignored_inputs.push("evidence_text");
+        }
+
+        let mut rationale = expansion.rationale;
+        if !ignored_inputs.is_empty() {
+            rationale.push_str(&format!(
+                " Ignored inputs not used by template mode: {}.",
+                ignored_inputs.join(", ")
+            ));
+        }
+        (expansion.layers, rationale)
+    } else {
+        let evidence_text = args
+            .evidence_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        let headline = resolve_headline(args, evidence_text)?;
+        let step_labels = resolve_step_labels(args, request)?;
+        let backdrop = BackdropMode::parse(args.backdrop.as_deref())?;
+
+        let layers = planned_layers(
+            request,
+            duration_s,
+            args.image_asset.as_deref(),
+            &headline,
+            &step_labels,
+            backdrop,
+        );
+        let rationale = match evidence_text {
+            Some(evidence) => format!(
+                "planned from transcript evidence: {}",
+                truncate_at_word(evidence, 120)
+            ),
+            None => "planned as a native layered motion scene".into(),
+        };
+        (layers, rationale)
+    };
 
     let mut scene = MotionScene {
         id: args
@@ -167,13 +292,7 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
         width,
         height,
         layers,
-        rationale: Some(match evidence_text {
-            Some(evidence) => format!(
-                "planned from transcript evidence: {}",
-                truncate_at_word(evidence, 120)
-            ),
-            None => "planned as a native layered motion scene".into(),
-        }),
+        rationale: Some(scene_rationale),
     };
 
     fit_scene_text_layers(&mut scene);
@@ -187,12 +306,150 @@ pub fn plan_motion_scene_request(args: &MotionScenePlanRequest) -> Result<Motion
     let edl =
         format!("*** Begin EDL\n*** Set Motion Scene\n+ scene_json: {scene_json}\n*** End EDL\n");
 
+    let mut render_support = "native preview/render supports text, rectangle/solid, project-asset image layers, shared transforms, and layer-local overlay transform animations; video/media layers stay stored with explicit limitations and should use B-roll/PiP for footage".to_string();
+    if let Some(note) = scale_motion_preview_only_disclosure(args) {
+        render_support.push(' ');
+        render_support.push_str(note);
+    }
+
     Ok(MotionScenePlan {
         scene,
         edl,
-        render_support: "native preview/render supports text, rectangle/solid, project-asset image layers, shared transforms, and layer-local overlay transform animations; video/media layers stay stored with explicit limitations and should use B-roll/PiP for footage".into(),
+        render_support,
         rationale: "Use MotionScene for freeform animated explainers, diagrams, kinetic text, charts, and callouts that are not footage-like b-roll.".into(),
     })
+}
+
+/// Disclosure for templates whose motion is driven by an `overlay.scale`
+/// ramp/pulse that the export/render lowering does not yet honor — the
+/// `progress_bar` bar growth and the `highlight_box` pulse. These animate
+/// in the LIVE PREVIEW ONLY today; export lowering for scale-driven
+/// motion lands in a later phase. Returns `None` for templates whose
+/// motion is already fully supported (`lower_third`, `kinetic_text`, and
+/// `highlight_box` without pulse), and for the heuristic (non-template)
+/// path.
+fn scale_motion_preview_only_disclosure(args: &MotionScenePlanRequest) -> Option<&'static str> {
+    match args.template.as_deref() {
+        Some("progress_bar") => Some(
+            "The progress bar's growth is scale-driven and currently animates in the live \
+             preview only; export/render lowering for scale-driven motion lands in a later phase.",
+        ),
+        Some("highlight_box") if args.pulse.unwrap_or(false) => Some(
+            "The highlight box's pulse is scale-driven and currently animates in the live \
+             preview only; export/render lowering for scale-driven motion lands in a later phase.",
+        ),
+        _ => None,
+    }
+}
+
+/// Parse `template` and this request's typed fields into a
+/// [`MotionTemplateSpec`] and expand it. On-screen copy comes only
+/// from the typed fields (`name`/`role`, `words`, `color`) — never
+/// from `request` — matching the content-integrity rule the heuristic
+/// path enforces via `resolve_headline`/`resolve_step_labels`. Missing
+/// required fields for the selected template fail with an error naming
+/// the field.
+fn parse_and_expand_template(
+    template: &str,
+    args: &MotionScenePlanRequest,
+    duration_s: f64,
+    fps: f64,
+) -> Result<crate::motion_templates::TemplateExpansion, String> {
+    let spec = match template {
+        "lower_third" => {
+            let name = args
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| {
+                    "template 'lower_third' requires `name` (the on-screen name text)".to_string()
+                })?;
+            MotionTemplateSpec::LowerThird {
+                name: name.to_string(),
+                role: args
+                    .role
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|role| !role.is_empty())
+                    .map(str::to_string),
+            }
+        }
+        "kinetic_text" => {
+            if args.words.is_empty() {
+                return Err(
+                    "template 'kinetic_text' requires `words` (a non-empty array of \
+                     {text, at_s, hold_s})"
+                        .to_string(),
+                );
+            }
+            let words = args
+                .words
+                .iter()
+                .map(|(text, at_s, hold_s)| KineticWord {
+                    text: text.clone(),
+                    at_s: *at_s,
+                    hold_s: *hold_s,
+                })
+                .collect();
+            MotionTemplateSpec::KineticText {
+                words,
+                anchor: parse_text_anchor(args.anchor.as_deref())?,
+            }
+        }
+        "highlight_box" => {
+            let (x, y, width, height) = args.box_region.ok_or_else(|| {
+                "template 'highlight_box' requires `box` ({x, y, width, height})".to_string()
+            })?;
+            MotionTemplateSpec::HighlightBox {
+                x,
+                y,
+                width,
+                height,
+                pulse: args.pulse.unwrap_or(false),
+            }
+        }
+        "progress_bar" => {
+            let (from, to, y) = args.progress.ok_or_else(|| {
+                "template 'progress_bar' requires `progress` ({from, to, y})".to_string()
+            })?;
+            MotionTemplateSpec::ProgressBar {
+                from,
+                to,
+                y,
+                color: args
+                    .color
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|color| !color.is_empty())
+                    .map(str::to_string),
+            }
+        }
+        other => {
+            return Err(format!(
+                "template '{other}' not recognized. Use 'lower_third', 'kinetic_text', \
+                 'highlight_box', or 'progress_bar'."
+            ));
+        }
+    };
+
+    expand_template(&spec, duration_s, fps)
+}
+
+/// Parse the optional `kinetic_text` `anchor` string into a
+/// [`TextAnchor`]. Defaults to [`TextAnchor::Center`] when omitted or
+/// empty, matching the historically hardcoded behavior. An unrecognized
+/// value fails with an error naming the accepted values.
+fn parse_text_anchor(anchor: Option<&str>) -> Result<TextAnchor, String> {
+    match anchor.map(str::trim) {
+        None | Some("") => Ok(TextAnchor::Center),
+        Some("lower_left") => Ok(TextAnchor::LowerLeft),
+        Some("center") => Ok(TextAnchor::Center),
+        Some("lower_center") => Ok(TextAnchor::LowerCenter),
+        Some(other) => Err(format!(
+            "kinetic_text `anchor` '{other}' not recognized. Use 'lower_left', 'center', or 'lower_center'."
+        )),
+    }
 }
 
 /// Resolve the on-screen headline: an explicit `headline` arg wins,
@@ -481,7 +738,7 @@ fn callout_accent_layer(duration_s: f64) -> MotionSceneLayer {
             ("y".into(), serde_json::json!(0.29)),
             ("width".into(), serde_json::json!(0.025)),
             ("height".into(), serde_json::json!(0.18)),
-            ("color".into(), serde_json::json!("#F6C85F")),
+            ("color".into(), serde_json::json!(TEMPLATE_ACCENT_COLOR)),
             ("opacity".into(), serde_json::json!(0.92)),
             ("rotation_deg".into(), serde_json::json!(0.0)),
             (
@@ -695,25 +952,85 @@ impl ToolHandler for PlanMotionSceneTool {
                     },
                     "image_asset": {
                         "type": "string",
-                        "description": "Optional project-relative still asset path for logo, screenshot, chart, diagram, or generated PNG image layers."
+                        "description": "Optional project-relative still asset path for logo, screenshot, chart, diagram, or generated PNG image layers. Ignored when `template` is set."
                     },
                     "headline": {
                         "type": "string",
-                        "description": "Exact on-screen headline text, drawn from the transcript evidence. Required unless evidence_text is provided to derive it from."
+                        "description": "Exact on-screen headline text, drawn from the transcript evidence. Required unless evidence_text is provided to derive it from. Ignored when `template` is set."
                     },
                     "step_labels": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Exact on-screen labels for step/process scenes, in order. Required when the request implies steps; generic 'Step N' placeholders are never generated."
+                        "description": "Exact on-screen labels for step/process scenes, in order. Required when the request implies steps; generic 'Step N' placeholders are never generated. Ignored when `template` is set."
                     },
                     "evidence_text": {
                         "type": "string",
-                        "description": "Transcript window backing the scene's content; derives the headline when headline is omitted and is recorded in the scene rationale."
+                        "description": "Transcript window backing the scene's content; derives the headline when headline is omitted and is recorded in the scene rationale. Ignored when `template` is set."
                     },
                     "backdrop": {
                         "type": "string",
                         "enum": ["full", "panel", "none"],
-                        "description": "Backdrop mode: 'full' covers the entire frame edge-to-edge (use for full-frame cards), 'panel' is an inset card, 'none' skips the backdrop. Default: panel when the request implies a card/diagram or an image is used."
+                        "description": "Backdrop mode: 'full' covers the entire frame edge-to-edge (use for full-frame cards), 'panel' is an inset card, 'none' skips the backdrop. Default: panel when the request implies a card/diagram or an image is used. Ignored when `template` is set."
+                    },
+                    "template": {
+                        "type": "string",
+                        "enum": ["lower_third", "kinetic_text", "highlight_box", "progress_bar"],
+                        "description": "Optional motion-template name. When set, the template's typed fields below (name/role, words, box/pulse, or progress/color) replace the heuristic layer builder entirely — on-screen copy comes only from those typed fields, never from request. Omit for the freeform heuristic planner (unchanged behavior)."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "lower_third: name displayed in the primary line. Required when template is 'lower_third'."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "lower_third: optional role/title displayed below the name."
+                    },
+                    "words": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": { "type": "string" },
+                                "at_s": { "type": "number", "minimum": 0 },
+                                "hold_s": { "type": "number", "minimum": 0 }
+                            },
+                            "required": ["text", "at_s"]
+                        },
+                        "description": "kinetic_text: words in display order, each with its own timing. `at_s` is when the word appears (scene-local seconds, must be before duration_s); `hold_s` is how long it holds at full opacity AFTER its pop-in — the layer lives for pop_in (~0.12s) + hold_s, clamped to the scene end (0 = holds to the scene's end). Required (non-empty) when template is 'kinetic_text'."
+                    },
+                    "anchor": {
+                        "type": "string",
+                        "enum": ["lower_left", "center", "lower_center"],
+                        "description": "kinetic_text: optional screen anchor for the text block. Defaults to 'center' when omitted."
+                    },
+                    "box": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "width": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "height": { "type": "number", "minimum": 0, "maximum": 1 }
+                        },
+                        "required": ["x", "y", "width", "height"],
+                        "description": "highlight_box: region as fractions of the canvas. Required when template is 'highlight_box'."
+                    },
+                    "pulse": {
+                        "type": "boolean",
+                        "description": "highlight_box: whether the box pulses to draw attention. Default false."
+                    },
+                    "progress": {
+                        "type": "object",
+                        "properties": {
+                            "from": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "to": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "y": { "type": "number", "minimum": 0, "maximum": 1 }
+                        },
+                        "required": ["from", "to", "y"],
+                        "description": "progress_bar: starting fraction, ending fraction, and vertical position, each a fraction of the canvas. Required when template is 'progress_bar'."
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": "progress_bar: optional bar color override (e.g. '#00FF00'); defaults to the template's own accent color."
                     }
                 },
                 "required": ["request"]
@@ -748,6 +1065,23 @@ impl ToolHandler for PlanMotionSceneTool {
             step_labels: args.step_labels,
             evidence_text: args.evidence_text,
             backdrop: args.backdrop,
+            template: args.template,
+            name: args.name,
+            role: args.role,
+            words: args
+                .words
+                .into_iter()
+                .map(|word| (word.text, word.at_s, word.hold_s))
+                .collect(),
+            anchor: args.anchor,
+            box_region: args
+                .box_region
+                .map(|region| (region.x, region.y, region.width, region.height)),
+            pulse: args.pulse,
+            progress: args
+                .progress
+                .map(|progress| (progress.from, progress.to, progress.y)),
+            color: args.color,
         })
         .map_err(|message| {
             FunctionCallError::RespondToModel(format!("plan_motion_scene: {message}"))
@@ -773,5 +1107,13 @@ layers are stored with explicit limitations and footage should use B-roll/PiP. \
 Pass backdrop='full' for scenes that must cover the whole frame (the default \
 panel backdrop is inset). Text boxes are authoritative: the planner wraps and \
 shrinks font sizes so text cannot overflow its box, and every layer gets a \
-default 0.4s enter/exit fade.\
+default 0.4s enter/exit fade. Pass `template` to use one of four prebuilt \
+motion templates instead of the heuristic layer builder: 'lower_third' \
+(name/role card, needs `name` and optional `role`), 'kinetic_text' \
+(word-by-word cascade, needs `words`: [{text, at_s, hold_s}]), 'highlight_box' \
+(attention box, needs `box`: {x,y,width,height} and optional `pulse`), and \
+'progress_bar' (growing bar, needs `progress`: {from,to,y} and optional \
+`color`). Template mode's expanded layers replace the heuristic layers \
+entirely; on-screen copy still comes only from the typed fields (name, role, \
+words[].text), never from request.\
 ";

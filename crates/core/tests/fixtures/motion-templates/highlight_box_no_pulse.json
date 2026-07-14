@@ -1,0 +1,39 @@
+[
+  {
+    "id": "highlight-box",
+    "kind": "shape",
+    "from_s": 0.0,
+    "duration_s": 3.0,
+    "z_index": 8,
+    "params": {
+      "animations": [
+        {
+          "keyframes": [
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.0,
+              "value": 0.0
+            },
+            {
+              "easing": "linear",
+              "interpolation": "linear",
+              "time_s": 0.15,
+              "value": 0.85
+            }
+          ],
+          "parameter": "overlay.opacity",
+          "post_extrapolation": "hold",
+          "pre_extrapolation": "hold"
+        }
+      ],
+      "color": "#F6C85F",
+      "height": 0.3,
+      "opacity": 0.85,
+      "shape": "rectangle",
+      "width": 0.35,
+      "x": 0.2,
+      "y": 0.25
+    }
+  }
+]
