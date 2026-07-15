@@ -26,7 +26,6 @@ pub struct MotionScenePlan {
     pub rationale: String,
 }
 
-
 #[derive(Debug, Clone, Default)]
 pub struct MotionScenePlanRequest {
     /// Freeform animated visual need; drives layer selection only.
@@ -830,4 +829,3 @@ fn stable_scene_id(request: &str) -> String {
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
-

@@ -1446,7 +1446,7 @@ edl_fragment to apply_edl. The applied cold open doubles as the 9:16 short \
         &self,
         args: Parameters<PlanColdOpenArgs>,
     ) -> Result<String, ErrorData> {
-        plan_cold_open::run(args.0, McpToolCtx::resolve())
+        plan_cold_open::run(args.0, gated_ctx("plan_cold_open")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1467,7 +1467,7 @@ export/publish and after major picture changes.",
         &self,
         args: Parameters<RunPictureGatesArgs>,
     ) -> Result<String, ErrorData> {
-        run_picture_gates::run(args.0, McpToolCtx::resolve())
+        run_picture_gates::run(args.0, gated_ctx("run_picture_gates")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1490,7 +1490,7 @@ pass and before export/publish.",
         &self,
         args: Parameters<RunSoundGatesArgs>,
     ) -> Result<String, ErrorData> {
-        run_sound_gates::run(args.0, McpToolCtx::resolve())
+        run_sound_gates::run(args.0, gated_ctx("run_sound_gates")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
