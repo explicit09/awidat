@@ -249,6 +249,20 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 
 **Recommendation:** Once the apply_edl wrapper gets direct tests (finding #1), route at least one of them through the full montage_mcp dispatcher rather than calling apply_edl::run directly, closing both gaps with one test.
 
+### R24 — Config::overlay silently discards ALL editorial hooks config (pre/post_apply_edl are dead in production)
+
+**Severity:** high · **Lens:** correctness · **Fix cost:** hours · **Verification:** confirmed (found during Wave 1b test-writing, verified at crates/config/src/lib.rs:284-287)
+
+**Evidence:** `Config::overlay` unconditionally returns `hooks: HooksConfig::default()`, discarding both the global and the project `[hooks]` section. `apply_edl::run` reaches hooks via `Config::load()` → `overlay()`, so `pre_apply_edl`/`post_apply_edl` configured in `.montage/config.toml` never fire. The Wave 1b hook-blocking test is committed but `#[ignore]`d pending this fix (crates/core/tests/montage_mcp_apply_edl.rs).
+
+**Blast radius:** any project relying on a pre_apply_edl hook as a safety gate (lint, backup, validation) gets no protection and no error — the hook is silently skipped.
+
+**Recommendation:** merge hooks in overlay (project overrides global per-field), un-ignore the hook test, add an overlay unit test asserting hooks survive.
+
+## Status log
+
+- 2026-07-15: R22 done (WIP landed, 095de43e). R1 unblocked (cross-tree deps ported, b830aea8; legacy-tree deletion pending R-approval-hash decision). R5/R6/R7/R23 done (6a5fa802). R24 added.
+
 ## Corrections to prior beliefs (not risks)
 
 - **montage_social crate dependency in apps/desktop/src-tauri is legitimate (DTO reuse), not leftover legacy wiring — refutes the 'still depends on legacy' framing from prior-session memory** — apps/desktop/src-tauri/src/social_client.rs imports montage_social::api::* and montage_social::model::* purely as shared serde DTOs for its HTTPS client to montage-social-server (doc comment: 'sends/receives the re-exported montage_social::api DTOs so client and server agree on exactly one serde shape'). apps/desktop/src-tauri/src/commands/social.rs uses SocialApi::providers(&registry) at line 45,
