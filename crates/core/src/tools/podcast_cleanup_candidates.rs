@@ -112,7 +112,7 @@ impl ToolHandler for PodcastCleanupCandidatesTool {
         let risky_cuts = Vec::new();
         let mut missing_evidence = Vec::new();
 
-        let dead_air = crate::tools::find_dead_air::scan_dead_air(
+        let dead_air = crate::podcast_cleanup_scan::scan_dead_air(
             &ctx.project_root,
             &project.timeline,
             dead_air_min_duration_s,
@@ -155,7 +155,7 @@ impl ToolHandler for PodcastCleanupCandidatesTool {
         }
 
         let fillers = crate::transcript_cleanup::default_filler_tokens(args.aggressive_fillers);
-        let filler_words = crate::tools::find_filler_words::scan_filler_words(
+        let filler_words = crate::podcast_cleanup_scan::scan_filler_words(
             &ctx.project_root,
             &project.timeline,
             &fillers,
@@ -180,7 +180,7 @@ impl ToolHandler for PodcastCleanupCandidatesTool {
             });
         }
 
-        let false_starts = crate::tools::find_false_starts::scan_false_starts(
+        let false_starts = crate::podcast_cleanup_scan::scan_false_starts(
             &ctx.project_root,
             &project.timeline,
             max_results,

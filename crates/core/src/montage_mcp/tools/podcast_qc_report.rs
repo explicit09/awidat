@@ -18,8 +18,7 @@ pub struct PodcastQcReportArgs {}
 pub fn run(_args: PodcastQcReportArgs, ctx: McpToolCtx) -> Result<String, String> {
     let project = Project::read(&ctx.project_root)
         .map_err(|e| format!("podcast_qc_report: failed to read project: {e}"))?;
-    let body =
-        crate::tools::podcast_qc_report::build_podcast_qc_report(&ctx.project_root, &project);
+    let body = crate::podcast_analysis::build_podcast_qc_report(&ctx.project_root, &project);
     serde_json::to_string(&body).map_err(|e| format!("podcast_qc_report serialize: {e}"))
 }
 

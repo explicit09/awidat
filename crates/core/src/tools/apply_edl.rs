@@ -308,7 +308,7 @@ impl ToolHandler for ApplyEdlTool {
                  any skipped or failed stock/generated candidates explicitly.",
             );
         }
-        if !args.dry_run && crate::tools::podcast_qc_report::is_podcast_project(&project) {
+        if !args.dry_run && crate::podcast_analysis::is_podcast_project(&project) {
             summary.push_str(
                 "\n\nRequired podcast follow-up before claiming done or rendering: run \
                  podcast_smooth_cut_boundaries for cleanup cuts when applicable, then \

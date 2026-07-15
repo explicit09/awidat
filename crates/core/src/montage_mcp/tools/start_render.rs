@@ -76,11 +76,9 @@ pub async fn run(args: StartRenderArgs, ctx: McpToolCtx) -> Result<String, Strin
     ) = if args.scope == "timeline" {
         let project = Project::read(&ctx.project_root)
             .map_err(|e| format!("start_render: failed to read project metadata: {e}"))?;
-        if crate::tools::podcast_qc_report::is_podcast_project(&project) {
-            let qc_report = crate::tools::podcast_qc_report::build_podcast_qc_report(
-                &ctx.project_root,
-                &project,
-            );
+        if crate::podcast_analysis::is_podcast_project(&project) {
+            let qc_report =
+                crate::podcast_analysis::build_podcast_qc_report(&ctx.project_root, &project);
             if qc_report["status"] == "blocked" {
                 return Err(format!(
                     "start_render: podcast timeline render blocked by QC. Run \

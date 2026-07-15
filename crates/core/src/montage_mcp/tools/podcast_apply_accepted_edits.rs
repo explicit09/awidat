@@ -199,7 +199,7 @@ pub fn run(args: PodcastApplyAcceptedEditsArgs, ctx: McpToolCtx) -> Result<Strin
 fn collect_candidates(project_root: &std::path::Path, timeline: &Timeline) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for (index, finding) in
-        crate::tools::find_dead_air::scan_dead_air(project_root, timeline, 1.2, 200)
+        crate::podcast_cleanup_scan::scan_dead_air(project_root, timeline, 1.2, 200)
             .into_iter()
             .enumerate()
     {
@@ -227,7 +227,7 @@ fn collect_candidates(project_root: &std::path::Path, timeline: &Timeline) -> Ve
 
     let fillers = crate::transcript_cleanup::default_filler_tokens(false);
     for (index, finding) in
-        crate::tools::find_filler_words::scan_filler_words(project_root, timeline, &fillers, 200)
+        crate::podcast_cleanup_scan::scan_filler_words(project_root, timeline, &fillers, 200)
             .into_iter()
             .enumerate()
     {
@@ -246,7 +246,7 @@ fn collect_candidates(project_root: &std::path::Path, timeline: &Timeline) -> Ve
     }
 
     for (index, finding) in
-        crate::tools::find_false_starts::scan_false_starts(project_root, timeline, 200)
+        crate::podcast_cleanup_scan::scan_false_starts(project_root, timeline, 200)
             .into_iter()
             .enumerate()
     {

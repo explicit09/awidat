@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use montage_core::motion_templates::{
     KineticWord, MotionTemplateSpec, TextAnchor, expand_template,
 };
-use montage_core::tools::plan_motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
+use montage_core::motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/motion-templates")

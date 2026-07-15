@@ -51,7 +51,7 @@ pub fn run(args: RenderPreflightArgs, ctx: McpToolCtx) -> Result<String, String>
         .map_err(|error| format!("render_preflight: project read failed: {error}"))?;
     let caption_summary = crate::captions::summarize_captions(&project);
     let motion_scenes =
-        crate::tools::render_preflight::motion_scene_preflight_json(&project.timeline);
+        crate::render_preflight_core::motion_scene_preflight_json(&project.timeline);
     let motion_scene_count = motion_scenes["count"].as_u64().unwrap_or(0);
     let backend = render_backend_json_value(&preflight.backend);
     let mut backend_evidence = preflight.metadata.clone();

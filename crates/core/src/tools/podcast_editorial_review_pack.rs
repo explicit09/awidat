@@ -148,7 +148,7 @@ fn build_review_pack(
     let mut missing_evidence = Vec::new();
 
     let false_starts =
-        crate::tools::find_false_starts::scan_false_starts(project_root, timeline, max_results);
+        crate::podcast_cleanup_scan::scan_false_starts(project_root, timeline, max_results);
     if false_starts.is_empty() {
         missing_evidence.push("no false-start or production-aside recall signals".into());
     }
@@ -175,7 +175,7 @@ fn build_review_pack(
     }
 
     if include_dead_air && packets.len() < max_results {
-        let dead_air = crate::tools::find_dead_air::scan_dead_air(
+        let dead_air = crate::podcast_cleanup_scan::scan_dead_air(
             project_root,
             timeline,
             0.8,

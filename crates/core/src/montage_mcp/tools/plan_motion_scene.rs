@@ -1,13 +1,13 @@
 //! `plan_motion_scene` — read-only planner for native procedural motion
 //! scenes. Thin MCP wrapper over the shared planner in
-//! [`crate::tools::plan_motion_scene`], which owns the layer heuristics
-//! and the on-screen content contract.
+//! [`crate::motion_scene`], which owns the layer heuristics and the
+//! on-screen content contract.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::montage_mcp::context::McpToolCtx;
-use crate::tools::plan_motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
+use crate::motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
 
 /// Arguments to `plan_motion_scene`.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
