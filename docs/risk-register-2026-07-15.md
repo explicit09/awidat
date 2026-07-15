@@ -262,6 +262,7 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 ## Status log
 
 - 2026-07-15: Approval-hash decision (R1 prerequisite): legacy `approval_keys`/`normalize_edl_for_approval`/`short_sha256` served ONLY the legacy harness's session-approval cache (`crate::tool::approved_for_session`), which no binary reaches since the codex-engine cutover. Codex gates mutating tools pre-execution via MCP destructive_hint annotations. Verdict: SUPERSEDED — delete with the tree, do not port. Only delta is lost re-prompt memoization for identical retried EDLs (UX, not safety).
+- 2026-07-15: R1 DONE — legacy crates/core/src/tools/ deleted (104 files, ~47k lines); montage_mcp is the sole tool surface. R14 DONE — montage-tools stub removed. R24 DONE — hooks merge fixed, hook test live. Follow-up open: delete dead ToolRegistry/ToolHandler infra once lessons.rs drops ApprovalKey.
 - 2026-07-15: R22 done (WIP landed, 095de43e). R1 unblocked (cross-tree deps ported, b830aea8; legacy-tree deletion pending R-approval-hash decision). R5/R6/R7/R23 done (6a5fa802). R24 added.
 
 ## Corrections to prior beliefs (not risks)
