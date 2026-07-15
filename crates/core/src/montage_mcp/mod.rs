@@ -155,6 +155,7 @@ use crate::montage_mcp::tools::run_picture_gates::{self, RunPictureGatesArgs};
 use crate::montage_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
 use crate::montage_mcp::tools::run_sound_gates::{self, RunSoundGatesArgs};
 use crate::montage_mcp::tools::search_broll::{self, SearchBrollArgs};
+use crate::montage_mcp::tools::set_picture_lock::{self, SetPictureLockArgs};
 use crate::montage_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::montage_mcp::tools::start_generated_media_job::{self, StartGeneratedMediaJobArgs};
 use crate::montage_mcp::tools::start_indexing::{self, StartIndexingArgs};
@@ -208,6 +209,13 @@ impl Default for MontageMcpServer {
     }
 }
 
+fn gated_ctx(tool: &'static str) -> Result<McpToolCtx, ErrorData> {
+    let ctx = McpToolCtx::resolve();
+    crate::skill_session::check_tool_allowed(&ctx.project_root, tool)
+        .map_err(|msg| ErrorData::invalid_params(msg, None))?;
+    Ok(ctx)
+}
+
 #[tool_router]
 impl MontageMcpServer {
     /// `list_markers` — read-only marker inventory across clip,
@@ -228,7 +236,7 @@ EDL operations.",
         &self,
         args: Parameters<ListMarkersArgs>,
     ) -> Result<String, ErrorData> {
-        list_markers::run(args.0, McpToolCtx::resolve())
+        list_markers::run(args.0, gated_ctx("list_markers")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -247,7 +255,7 @@ and read-only.",
         &self,
         args: Parameters<ViewEpisodeArgs>,
     ) -> Result<String, ErrorData> {
-        view_episode::run(args.0, McpToolCtx::resolve())
+        view_episode::run(args.0, gated_ctx("view_episode")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -264,7 +272,7 @@ space and apply a sensible strength.",
         annotations(read_only_hint = true)
     )]
     pub async fn list_looks(&self, args: Parameters<ListLooksArgs>) -> Result<String, ErrorData> {
-        list_looks::run(args.0, McpToolCtx::resolve())
+        list_looks::run(args.0, gated_ctx("list_looks")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -282,7 +290,7 @@ stringouts in parallel (e.g. per arc, alt-cut, cold-open).",
         &self,
         args: Parameters<ListStringoutsArgs>,
     ) -> Result<String, ErrorData> {
-        list_stringouts::run(args.0, McpToolCtx::resolve())
+        list_stringouts::run(args.0, gated_ctx("list_stringouts")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -300,7 +308,7 @@ and rejected spans without mutating the project.",
         &self,
         args: Parameters<ListEpisodesArgs>,
     ) -> Result<String, ErrorData> {
-        list_episodes::run(args.0, McpToolCtx::resolve())
+        list_episodes::run(args.0, gated_ctx("list_episodes")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -318,7 +326,7 @@ when truncated.",
         annotations(read_only_hint = true)
     )]
     pub async fn read_index(&self, args: Parameters<ReadIndexArgs>) -> Result<String, ErrorData> {
-        read_index::run(args.0, McpToolCtx::resolve())
+        read_index::run(args.0, gated_ctx("read_index")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -342,7 +350,7 @@ calls — pass `start_s` to scroll.",
         &self,
         args: Parameters<ViewTimelineArgs>,
     ) -> Result<String, ErrorData> {
-        view_timeline::run(args.0, McpToolCtx::resolve())
+        view_timeline::run(args.0, gated_ctx("view_timeline")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -361,7 +369,7 @@ metadata.",
         &self,
         args: Parameters<ReadUnderstandingArgs>,
     ) -> Result<String, ErrorData> {
-        read_understanding::run(args.0, McpToolCtx::resolve())
+        read_understanding::run(args.0, gated_ctx("read_understanding")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -377,7 +385,7 @@ plan, rationale, score breakdown, and source evidence ids for review.",
         &self,
         args: Parameters<ReadBrollRecommendationsArgs>,
     ) -> Result<String, ErrorData> {
-        read_broll_recommendations::run(args.0, McpToolCtx::resolve())
+        read_broll_recommendations::run(args.0, gated_ctx("read_broll_recommendations")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -394,7 +402,7 @@ plus aggregate state and next actions.",
         &self,
         args: Parameters<ReadMediaIntelligenceArgs>,
     ) -> Result<String, ErrorData> {
-        read_media_intelligence::run(args.0, McpToolCtx::resolve())
+        read_media_intelligence::run(args.0, gated_ctx("read_media_intelligence")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -412,7 +420,7 @@ frame-level exposure, channel balance, and chroma distribution evidence.",
         &self,
         args: Parameters<ColorScopesArgs>,
     ) -> Result<String, ErrorData> {
-        color_scopes::run(args.0, McpToolCtx::resolve())
+        color_scopes::run(args.0, gated_ctx("color_scopes")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -433,7 +441,7 @@ this local-only flow.",
         &self,
         args: Parameters<LocalReviewPackageArgs>,
     ) -> Result<String, ErrorData> {
-        local_review_package::run(args.0, McpToolCtx::resolve())
+        local_review_package::run(args.0, gated_ctx("author_local_review_package")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -451,7 +459,7 @@ audio, visual evidence, or whether it should ask for repair/indexing first.",
         &self,
         args: Parameters<ReadMediaReadinessArgs>,
     ) -> Result<String, ErrorData> {
-        read_media_readiness::run(args.0, McpToolCtx::resolve())
+        read_media_readiness::run(args.0, gated_ctx("read_media_readiness")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -468,7 +476,7 @@ ranges with start_s, end_s, and duration_s.",
         &self,
         args: Parameters<FindBlackFramesArgs>,
     ) -> Result<String, ErrorData> {
-        find_black_frames::run(args.0, McpToolCtx::resolve())
+        find_black_frames::run(args.0, gated_ctx("find_black_frames")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -491,7 +499,7 @@ when no silence sidecars exist.",
         &self,
         args: Parameters<FindDeadAirArgs>,
     ) -> Result<String, ErrorData> {
-        find_dead_air::run(args.0, McpToolCtx::resolve())
+        find_dead_air::run(args.0, gated_ctx("find_dead_air")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -512,7 +520,7 @@ Treat findings as suggestions for user review — never auto-trim.",
         &self,
         args: Parameters<FindFalseStartsArgs>,
     ) -> Result<String, ErrorData> {
-        find_false_starts::run(args.0, McpToolCtx::resolve())
+        find_false_starts::run(args.0, gated_ctx("find_false_starts")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -529,7 +537,7 @@ to switch the working timeline to an existing branch.",
         &self,
         args: Parameters<VeditBranchArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_branch::run(args.0, McpToolCtx::resolve())
+        vedit_branch::run(args.0, gated_ctx("vedit_branch")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -546,7 +554,7 @@ does not checkout, merge, or modify refs.",
         &self,
         args: Parameters<VeditChangedClipIdsArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_changed_clip_ids::run(args.0, McpToolCtx::resolve())
+        vedit_changed_clip_ids::run(args.0, gated_ctx("vedit_changed_clip_ids")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -563,7 +571,7 @@ not create an audit commit by itself.",
         &self,
         args: Parameters<VeditCheckoutArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_checkout::run(args.0, McpToolCtx::resolve())
+        vedit_checkout::run(args.0, gated_ctx("vedit_checkout")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -581,7 +589,7 @@ the new commit hash + the timeline-content hash.",
         &self,
         args: Parameters<VeditCommitArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_commit::run(args.0, McpToolCtx::resolve())
+        vedit_commit::run(args.0, gated_ctx("vedit_commit")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -599,7 +607,7 @@ compare arbitrary points: branch names, full hashes, or short hashes \
         annotations(read_only_hint = true)
     )]
     pub async fn vedit_diff(&self, args: Parameters<VeditDiffArgs>) -> Result<String, ErrorData> {
-        vedit_diff::run(args.0, McpToolCtx::resolve())
+        vedit_diff::run(args.0, gated_ctx("vedit_diff")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -614,7 +622,7 @@ full_message is the body for deep dives. Default limit=30, hard cap \
         annotations(read_only_hint = true)
     )]
     pub async fn vedit_log(&self, args: Parameters<VeditLogArgs>) -> Result<String, ErrorData> {
-        vedit_log::run(args.0, McpToolCtx::resolve())
+        vedit_log::run(args.0, gated_ctx("vedit_log")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -627,7 +635,7 @@ history entry without listing the full log again.",
         annotations(read_only_hint = true)
     )]
     pub async fn vedit_show(&self, args: Parameters<VeditShowArgs>) -> Result<String, ErrorData> {
-        vedit_show::run(args.0, McpToolCtx::resolve())
+        vedit_show::run(args.0, gated_ctx("vedit_show")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -641,7 +649,7 @@ This is attribution, not a branch checkout or merge operation.",
         annotations(read_only_hint = true)
     )]
     pub async fn vedit_blame(&self, args: Parameters<VeditBlameArgs>) -> Result<String, ErrorData> {
-        vedit_blame::run(args.0, McpToolCtx::resolve())
+        vedit_blame::run(args.0, gated_ctx("vedit_blame")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -660,7 +668,7 @@ or modify refs.",
         &self,
         args: Parameters<VeditMergePreflightArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_merge_preflight::run(args.0, McpToolCtx::resolve())
+        vedit_merge_preflight::run(args.0, gated_ctx("vedit_merge_preflight")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -674,7 +682,25 @@ HEAD, create branches, or merge anything. Use this for names like \
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_tag(&self, args: Parameters<VeditTagArgs>) -> Result<String, ErrorData> {
-        vedit_tag::run(args.0, McpToolCtx::resolve())
+        vedit_tag::run(args.0, gated_ctx("vedit_tag")?)
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `set_picture_lock` — department handoff lock for picture.
+    #[tool(
+        description = "\
+Set or clear picture lock for the project. When locked, apply_edl rejects \
+ops that trim, split, move, retime, or otherwise restructure picture so \
+sound/color/graphics passes cannot silently reopen the cut. Call with \
+locked=true after the user confirms picture lock (or picture gates pass); \
+locked=false only when the user explicitly asks to reopen picture.",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn set_picture_lock(
+        &self,
+        args: Parameters<SetPictureLockArgs>,
+    ) -> Result<String, ErrorData> {
+        set_picture_lock::run(args.0, gated_ctx("set_picture_lock")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -691,7 +717,7 @@ sidecar instead. Read-only.",
         &self,
         args: Parameters<TranscriptPackArgs>,
     ) -> Result<String, ErrorData> {
-        transcript_pack::run(args.0, McpToolCtx::resolve())
+        transcript_pack::run(args.0, gated_ctx("transcript_pack")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -714,7 +740,7 @@ error).",
         &self,
         args: Parameters<FindAudioAssetArgs>,
     ) -> Result<String, ErrorData> {
-        find_audio_asset::run(args.0, McpToolCtx::resolve())
+        find_audio_asset::run(args.0, gated_ctx("find_audio_asset")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -734,7 +760,7 @@ yet.",
         annotations(read_only_hint = true)
     )]
     pub async fn find_beat(&self, args: Parameters<FindBeatArgs>) -> Result<String, ErrorData> {
-        find_beat::run(args.0, McpToolCtx::resolve())
+        find_beat::run(args.0, gated_ctx("find_beat")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -758,7 +784,7 @@ haven't landed yet.",
         &self,
         args: Parameters<FindFillerWordsArgs>,
     ) -> Result<String, ErrorData> {
-        find_filler_words::run(args.0, McpToolCtx::resolve())
+        find_filler_words::run(args.0, gated_ctx("find_filler_words")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -778,8 +804,11 @@ before calling `start_generated_media_job`.",
         &self,
         args: Parameters<FindGeneratedBrollOpportunitiesArgs>,
     ) -> Result<String, ErrorData> {
-        find_generated_broll_opportunities::run(args.0, McpToolCtx::resolve())
-            .map_err(|msg| ErrorData::invalid_params(msg, None))
+        find_generated_broll_opportunities::run(
+            args.0,
+            gated_ctx("find_generated_broll_opportunities")?,
+        )
+        .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
     /// `list_assets` — paginated listing of project assets.
@@ -793,7 +822,7 @@ calling `inspect_clip` or `read_index` on a specific asset.",
         annotations(read_only_hint = true)
     )]
     pub async fn list_assets(&self, args: Parameters<ListAssetsArgs>) -> Result<String, ErrorData> {
-        list_assets::run(args.0, McpToolCtx::resolve())
+        list_assets::run(args.0, gated_ctx("list_assets")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -807,7 +836,7 @@ user/agent-defined bins (kind=user). Pass any returned id as the \
         annotations(read_only_hint = true)
     )]
     pub async fn list_bins(&self, args: Parameters<ListBinsArgs>) -> Result<String, ErrorData> {
-        list_bins::run(args.0, McpToolCtx::resolve())
+        list_bins::run(args.0, gated_ctx("list_bins")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -825,7 +854,7 @@ via `read_index`.",
         &self,
         args: Parameters<InspectClipArgs>,
     ) -> Result<String, ErrorData> {
-        inspect_clip::run(args.0, McpToolCtx::resolve())
+        inspect_clip::run(args.0, gated_ctx("inspect_clip")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -845,7 +874,7 @@ what setup must stay intact when cutting this beat standalone.",
         &self,
         args: Parameters<InspectMomentArgs>,
     ) -> Result<String, ErrorData> {
-        inspect_moment::run(args.0, McpToolCtx::resolve())
+        inspect_moment::run(args.0, gated_ctx("inspect_moment")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -865,7 +894,7 @@ requirements. It never starts a render or writes files.",
         &self,
         args: Parameters<PlanDeliveryExportArgs>,
     ) -> Result<String, ErrorData> {
-        plan_delivery_export::run(args.0, McpToolCtx::resolve())
+        plan_delivery_export::run(args.0, gated_ctx("plan_delivery_export")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -881,7 +910,7 @@ fragment. Use it when the job is emphasis inside a clip, not a cut boundary.",
         &self,
         args: Parameters<PlanEmphasisArgs>,
     ) -> Result<String, ErrorData> {
-        plan_emphasis::run(args.0, McpToolCtx::resolve())
+        plan_emphasis::run(args.0, gated_ctx("plan_emphasis")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -902,7 +931,7 @@ layers are stored with explicit limitations and footage should use B-roll/PiP.",
         &self,
         args: Parameters<PlanMotionSceneArgs>,
     ) -> Result<String, ErrorData> {
-        plan_motion_scene::run(args.0, McpToolCtx::resolve())
+        plan_motion_scene::run(args.0, gated_ctx("plan_motion_scene")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -921,7 +950,7 @@ in frame.",
         &self,
         args: Parameters<PlanReframeArgs>,
     ) -> Result<String, ErrorData> {
-        plan_reframe::run(args.0, McpToolCtx::resolve())
+        plan_reframe::run(args.0, gated_ctx("plan_reframe")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -938,7 +967,7 @@ duration, reason, alternate, and EDL fragment. It never applies the edit.",
         &self,
         args: Parameters<PlanTransitionArgs>,
     ) -> Result<String, ErrorData> {
-        plan_transition::run(args.0, McpToolCtx::resolve())
+        plan_transition::run(args.0, gated_ctx("plan_transition")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -956,7 +985,7 @@ applies the edit.",
         &self,
         args: Parameters<PlanSplitEditArgs>,
     ) -> Result<String, ErrorData> {
-        plan_split_edit::run(args.0, McpToolCtx::resolve())
+        plan_split_edit::run(args.0, gated_ctx("plan_split_edit")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -975,7 +1004,7 @@ Target operations. It never applies the edit and never invents media.",
         &self,
         args: Parameters<PlanSoundDesignArgs>,
     ) -> Result<String, ErrorData> {
-        plan_sound_design::run(args.0, McpToolCtx::resolve())
+        plan_sound_design::run(args.0, gated_ctx("plan_sound_design")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -998,7 +1027,7 @@ phrases — neither is an error.",
         &self,
         args: Parameters<FindBrollOpportunitiesArgs>,
     ) -> Result<String, ErrorData> {
-        find_broll_opportunities::run(args.0, McpToolCtx::resolve())
+        find_broll_opportunities::run(args.0, gated_ctx("find_broll_opportunities")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1020,7 +1049,7 @@ candidates. Requires the whisper transcript index.",
         &self,
         args: Parameters<FindEpisodeStartArgs>,
     ) -> Result<String, ErrorData> {
-        find_episode_start::run(args.0, McpToolCtx::resolve())
+        find_episode_start::run(args.0, gated_ctx("find_episode_start")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1043,7 +1072,7 @@ indexer + whisper diarization.",
         &self,
         args: Parameters<FindEyeContactArgs>,
     ) -> Result<String, ErrorData> {
-        find_eye_contact::run(args.0, McpToolCtx::resolve())
+        find_eye_contact::run(args.0, gated_ctx("find_eye_contact")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1064,7 +1093,7 @@ English stopwords are filtered before ranking — use content words.",
         annotations(read_only_hint = true)
     )]
     pub async fn find_moment(&self, args: Parameters<FindMomentArgs>) -> Result<String, ErrorData> {
-        find_moment::run(args.0, McpToolCtx::resolve())
+        find_moment::run(args.0, gated_ctx("find_moment")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1085,7 +1114,7 @@ edit is a separate apply_edl step.",
         &self,
         args: Parameters<AssessContinuityArgs>,
     ) -> Result<String, ErrorData> {
-        assess_continuity::run(args.0, McpToolCtx::resolve())
+        assess_continuity::run(args.0, gated_ctx("assess_continuity")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1105,7 +1134,7 @@ are not the default repair.",
         &self,
         args: Parameters<AssessEditQualityArgs>,
     ) -> Result<String, ErrorData> {
-        assess_edit_quality::run(args.0, McpToolCtx::resolve())
+        assess_edit_quality::run(args.0, gated_ctx("assess_edit_quality")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1126,7 +1155,7 @@ diarization didn't run).",
         &self,
         args: Parameters<FindSpeakerOncamArgs>,
     ) -> Result<String, ErrorData> {
-        find_speaker_oncam::run(args.0, McpToolCtx::resolve())
+        find_speaker_oncam::run(args.0, gated_ctx("find_speaker_oncam")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1143,7 +1172,7 @@ preview. Read-only.",
         &self,
         args: Parameters<TranscriptSearchArgs>,
     ) -> Result<String, ErrorData> {
-        transcript_search::run(args.0, McpToolCtx::resolve())
+        transcript_search::run(args.0, gated_ctx("transcript_search")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1158,7 +1187,7 @@ candidates and provider/mode options without writing the registry.",
         &self,
         args: Parameters<PlanGeneratedMediaArgs>,
     ) -> Result<String, ErrorData> {
-        plan_generated_media::run(args.0, McpToolCtx::resolve())
+        plan_generated_media::run(args.0, gated_ctx("plan_generated_media")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1176,7 +1205,7 @@ multicam stacks.",
         &self,
         args: Parameters<PlanMulticamArgs>,
     ) -> Result<String, ErrorData> {
-        plan_multicam::run(args.0, McpToolCtx::resolve())
+        plan_multicam::run(args.0, gated_ctx("plan_multicam")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1199,7 +1228,7 @@ applied separately with apply_edl only after inspection.",
         &self,
         args: Parameters<PlanSceneAwareShortFormArgs>,
     ) -> Result<String, ErrorData> {
-        plan_scene_aware_short_form::run(args.0, McpToolCtx::resolve())
+        plan_scene_aware_short_form::run(args.0, gated_ctx("plan_scene_aware_short_form")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1222,7 +1251,7 @@ Never burns captions into the picture.",
         &self,
         args: Parameters<PlanCaptionsArgs>,
     ) -> Result<String, ErrorData> {
-        plan_captions::run(args.0, McpToolCtx::resolve())
+        plan_captions::run(args.0, gated_ctx("plan_captions")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1242,7 +1271,7 @@ social publishing provider.",
         &self,
         args: Parameters<FetchXTrendContextArgs>,
     ) -> Result<String, ErrorData> {
-        fetch_x_trend_context::run(args.0, McpToolCtx::resolve())
+        fetch_x_trend_context::run(args.0, gated_ctx("fetch_x_trend_context")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1268,7 +1297,7 @@ in control.",
         &self,
         args: Parameters<PlanShortFormReviewArgs>,
     ) -> Result<String, ErrorData> {
-        plan_short_form_review::run(args.0, McpToolCtx::resolve())
+        plan_short_form_review::run(args.0, gated_ctx("plan_short_form_review")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1289,7 +1318,7 @@ broll_candidates, find_speaker_oncam, or just inspect a few clips.",
         &self,
         args: Parameters<ShotSummaryArgs>,
     ) -> Result<String, ErrorData> {
-        shot_summary::run(args.0, McpToolCtx::resolve())
+        shot_summary::run(args.0, gated_ctx("shot_summary")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1312,7 +1341,7 @@ is warranted.",
         &self,
         args: Parameters<TransitionContextArgs>,
     ) -> Result<String, ErrorData> {
-        transition_context::run(args.0, McpToolCtx::resolve())
+        transition_context::run(args.0, gated_ctx("transition_context")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1334,7 +1363,7 @@ direction predictions more carefully.",
         &self,
         args: Parameters<ValidateTransitionChoiceArgs>,
     ) -> Result<String, ErrorData> {
-        validate_transition_choice::run(args.0, McpToolCtx::resolve())
+        validate_transition_choice::run(args.0, gated_ctx("validate_transition_choice")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1353,7 +1382,7 @@ detail='original' returns source resolution. format='png' (default) | \
         annotations(read_only_hint = true)
     )]
     pub async fn view_frame(&self, args: Parameters<ViewFrameArgs>) -> Result<String, ErrorData> {
-        view_frame::run(args.0, McpToolCtx::resolve())
+        view_frame::run(args.0, gated_ctx("view_frame")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1375,7 +1404,7 @@ format='png' (default) | 'jpeg'.",
         &self,
         args: Parameters<ViewProgramFrameArgs>,
     ) -> Result<String, ErrorData> {
-        view_program_frame::run(args.0, McpToolCtx::resolve())
+        view_program_frame::run(args.0, gated_ctx("view_program_frame")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1396,7 +1425,7 @@ render by itself.",
         &self,
         args: Parameters<PodcastQcReportArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_qc_report::run(args.0, McpToolCtx::resolve())
+        podcast_qc_report::run(args.0, gated_ctx("podcast_qc_report")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1482,7 +1511,7 @@ as cut/keep/review before calling proposal or mutation tools.",
         &self,
         args: Parameters<PodcastEditorialReviewPackArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_editorial_review_pack::run(args.0, McpToolCtx::resolve())
+        podcast_editorial_review_pack::run(args.0, gated_ctx("podcast_editorial_review_pack")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1500,7 +1529,7 @@ require the user to choose before extraction or cleanup.",
         &self,
         args: Parameters<PodcastEpisodeSpansArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_episode_spans::run(args.0, McpToolCtx::resolve())
+        podcast_episode_spans::run(args.0, gated_ctx("podcast_episode_spans")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1519,7 +1548,7 @@ or multiple publishable spans are escalated to the user.",
         &self,
         args: Parameters<PodcastFlowShapeArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_flow_shape::run(args.0, McpToolCtx::resolve())
+        podcast_flow_shape::run(args.0, gated_ctx("podcast_flow_shape")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1538,7 +1567,7 @@ missing indexes: it reports missing evidence instead of failing the workflow.",
         &self,
         args: Parameters<PodcastStoryMapArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_story_map::run(args.0, McpToolCtx::resolve())
+        podcast_story_map::run(args.0, gated_ctx("podcast_story_map")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1556,7 +1585,7 @@ metadata.",
         &self,
         args: Parameters<PodcastAudioPolishArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_audio_polish::run(args.0, McpToolCtx::resolve())
+        podcast_audio_polish::run(args.0, gated_ctx("podcast_audio_polish")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1574,7 +1603,7 @@ audio-analysis indexer.",
         &self,
         args: Parameters<PodcastCleanupCandidatesArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_cleanup_candidates::run(args.0, McpToolCtx::resolve())
+        podcast_cleanup_candidates::run(args.0, gated_ctx("podcast_cleanup_candidates")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1592,7 +1621,7 @@ does not mutate the timeline.",
         &self,
         args: Parameters<PodcastPostDraftCheckArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_post_draft_check::run(args.0, McpToolCtx::resolve())
+        podcast_post_draft_check::run(args.0, gated_ctx("podcast_post_draft_check")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1613,7 +1642,7 @@ or motivated transition may be needed.",
         &self,
         args: Parameters<PodcastSmoothCutBoundariesArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_smooth_cut_boundaries::run(args.0, McpToolCtx::resolve())
+        podcast_smooth_cut_boundaries::run(args.0, gated_ctx("podcast_smooth_cut_boundaries")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1631,7 +1660,7 @@ manual offset proposals instead of silently committing.",
         &self,
         args: Parameters<AnalyzeSyncArgs>,
     ) -> Result<String, ErrorData> {
-        analyze_sync::run(args.0, McpToolCtx::resolve())
+        analyze_sync::run(args.0, gated_ctx("analyze_sync")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1651,7 +1680,7 @@ FFmpeg/Rust render primitives.",
         &self,
         args: Parameters<PlanVisualSupportArgs>,
     ) -> Result<String, ErrorData> {
-        plan_visual_support::run(args.0, McpToolCtx::resolve())
+        plan_visual_support::run(args.0, gated_ctx("plan_visual_support")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1672,7 +1701,7 @@ planner honors the constraint instead of switching lanes.",
         &self,
         args: Parameters<PlanVisualSupportProposalArgs>,
     ) -> Result<String, ErrorData> {
-        plan_visual_support_proposals::run(args.0, McpToolCtx::resolve())
+        plan_visual_support_proposals::run(args.0, gated_ctx("plan_visual_support_proposals")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1690,8 +1719,11 @@ such as shorter, faster, transparent background, or alpha intent.",
         &self,
         args: Parameters<ReviseVisualSupportProposalArgs>,
     ) -> Result<String, ErrorData> {
-        plan_visual_support_proposals::run_revision(args.0, McpToolCtx::resolve())
-            .map_err(|msg| ErrorData::invalid_params(msg, None))
+        plan_visual_support_proposals::run_revision(
+            args.0,
+            gated_ctx("revise_visual_support_proposal")?,
+        )
+        .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
     /// `verify_visual_support_artifact` — run proposal-level
@@ -1709,8 +1741,11 @@ after rendering.",
         &self,
         args: Parameters<VerifyVisualSupportArtifactArgs>,
     ) -> Result<String, ErrorData> {
-        plan_visual_support_proposals::run_artifact_verification(args.0, McpToolCtx::resolve())
-            .map_err(|msg| ErrorData::invalid_params(msg, None))
+        plan_visual_support_proposals::run_artifact_verification(
+            args.0,
+            gated_ctx("verify_visual_support_artifact")?,
+        )
+        .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
     /// `save_visual_support_defaults` — persist project style/export defaults
@@ -1728,8 +1763,11 @@ them.",
         &self,
         args: Parameters<SaveVisualSupportDefaultsArgs>,
     ) -> Result<String, ErrorData> {
-        plan_visual_support_proposals::save_visual_support_defaults(args.0, McpToolCtx::resolve())
-            .map_err(|msg| ErrorData::invalid_params(msg, None))
+        plan_visual_support_proposals::save_visual_support_defaults(
+            args.0,
+            gated_ctx("save_visual_support_defaults")?,
+        )
+        .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
     /// `plan_look_regions` — generate a look-region/LUT plan and
@@ -1753,7 +1791,7 @@ timeline, then call review_look_regions on the render.",
         &self,
         args: Parameters<PlanLookRegionsArgs>,
     ) -> Result<String, ErrorData> {
-        plan_look_regions::run(args.0, McpToolCtx::resolve())
+        plan_look_regions::run(args.0, gated_ctx("plan_look_regions")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1777,7 +1815,7 @@ renders/<stem>.json. After this tool, call apply_edl with the returned \
         &self,
         args: Parameters<PlanColorGradeArgs>,
     ) -> Result<String, ErrorData> {
-        plan_color_grade::run(args.0, McpToolCtx::resolve())
+        plan_color_grade::run(args.0, gated_ctx("plan_color_grade")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1796,7 +1834,7 @@ actions an agent can propose before rendering.",
         &self,
         args: Parameters<DiagnoseProjectMediaArgs>,
     ) -> Result<String, ErrorData> {
-        diagnose_project_media::run(args.0, McpToolCtx::resolve())
+        diagnose_project_media::run(args.0, gated_ctx("diagnose_project_media")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1812,7 +1850,7 @@ starting a render job.",
         &self,
         args: Parameters<RenderPreflightArgs>,
     ) -> Result<String, ErrorData> {
-        render_preflight::run(args.0, McpToolCtx::resolve())
+        render_preflight::run(args.0, gated_ctx("render_preflight")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1834,7 +1872,7 @@ output_path here.",
         &self,
         args: Parameters<VerifyRenderArgs>,
     ) -> Result<String, ErrorData> {
-        verify_render::run(args.0, McpToolCtx::resolve())
+        verify_render::run(args.0, gated_ctx("verify_render")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1856,7 +1894,7 @@ need a frame that isn't a talking head.",
         &self,
         args: Parameters<BrollCandidatesArgs>,
     ) -> Result<String, ErrorData> {
-        broll_candidates::run(args.0, McpToolCtx::resolve())
+        broll_candidates::run(args.0, gated_ctx("broll_candidates")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1879,7 +1917,7 @@ per_page=5; cap 30. Requires a Pexels key in Provider Keys.",
         &self,
         args: Parameters<SearchBrollArgs>,
     ) -> Result<String, ErrorData> {
-        search_broll::run(args.0, McpToolCtx::resolve())
+        search_broll::run(args.0, gated_ctx("search_broll")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1900,7 +1938,7 @@ optional `link: true` to create a symlink instead of copying.",
         &self,
         args: Parameters<ImportLocalArgs>,
     ) -> Result<String, ErrorData> {
-        import_media::run_local(args.0, McpToolCtx::resolve())
+        import_media::run_local(args.0, gated_ctx("import_local")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1918,7 +1956,7 @@ it in the durable asset catalog. Pass an http(s) `url` and an optional \
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn import_url(&self, args: Parameters<ImportUrlArgs>) -> Result<String, ErrorData> {
-        import_media::run_url(args.0, McpToolCtx::resolve())
+        import_media::run_url(args.0, gated_ctx("import_url")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1946,7 +1984,7 @@ apply_edl.",
         &self,
         args: Parameters<DownloadYtClipArgs>,
     ) -> Result<String, ErrorData> {
-        download_yt_clip::run(args.0, McpToolCtx::resolve())
+        download_yt_clip::run(args.0, gated_ctx("download_yt_clip")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1969,7 +2007,7 @@ root.",
         &self,
         args: Parameters<RelinkMediaArgs>,
     ) -> Result<String, ErrorData> {
-        relink_media::run(args.0, McpToolCtx::resolve())
+        relink_media::run(args.0, gated_ctx("relink_media")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1992,7 +2030,7 @@ already fresh and `force` is false.",
         &self,
         args: Parameters<GenerateProxyArgs>,
     ) -> Result<String, ErrorData> {
-        proxy_media::run(args.0, McpToolCtx::resolve())
+        proxy_media::run(args.0, gated_ctx("generate_proxy")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2019,7 +2057,7 @@ trail.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn apply_edl(&self, args: Parameters<ApplyEdlArgs>) -> Result<String, ErrorData> {
-        apply_edl::run(args.0, McpToolCtx::resolve())
+        apply_edl::run(args.0, gated_ctx("apply_edl")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2038,7 +2076,7 @@ if a stringout with that id already exists.",
         &self,
         args: Parameters<CreateStringoutArgs>,
     ) -> Result<String, ErrorData> {
-        create_stringout::run(args.0, McpToolCtx::resolve())
+        create_stringout::run(args.0, gated_ctx("create_stringout")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2058,7 +2096,7 @@ ordered stringout for accepted episodes.",
         &self,
         args: Parameters<ApplyEpisodeSpansArgs>,
     ) -> Result<String, ErrorData> {
-        apply_episode_spans::run(args.0, McpToolCtx::resolve())
+        apply_episode_spans::run(args.0, gated_ctx("apply_episode_spans")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2070,7 +2108,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn create_bin(&self, args: Parameters<CreateBinArgs>) -> Result<String, ErrorData> {
-        manage_assets::run_create_bin(args.0, McpToolCtx::resolve())
+        manage_assets::run_create_bin(args.0, gated_ctx("create_bin")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2080,7 +2118,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn move_to_bin(&self, args: Parameters<MoveToBinArgs>) -> Result<String, ErrorData> {
-        manage_assets::run_move_to_bin(args.0, McpToolCtx::resolve())
+        manage_assets::run_move_to_bin(args.0, gated_ctx("move_to_bin")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2093,7 +2131,7 @@ ordered stringout for accepted episodes.",
         &self,
         args: Parameters<RenameAssetArgs>,
     ) -> Result<String, ErrorData> {
-        manage_assets::run_rename_asset(args.0, McpToolCtx::resolve())
+        manage_assets::run_rename_asset(args.0, gated_ctx("rename_asset")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2103,7 +2141,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn tag_asset(&self, args: Parameters<TagAssetArgs>) -> Result<String, ErrorData> {
-        manage_assets::run_tag_asset(args.0, McpToolCtx::resolve())
+        manage_assets::run_tag_asset(args.0, gated_ctx("tag_asset")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2113,7 +2151,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn rate_asset(&self, args: Parameters<RateAssetArgs>) -> Result<String, ErrorData> {
-        manage_assets::run_rate_asset(args.0, McpToolCtx::resolve())
+        manage_assets::run_rate_asset(args.0, gated_ctx("rate_asset")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2123,7 +2161,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn mark_select(&self, args: Parameters<MarkSelectArgs>) -> Result<String, ErrorData> {
-        manage_assets::run_mark_select(args.0, McpToolCtx::resolve())
+        manage_assets::run_mark_select(args.0, gated_ctx("mark_select")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2135,7 +2173,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn split_clip(&self, args: Parameters<SplitClipArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_split_clip(args.0, McpToolCtx::resolve())
+        granular_timeline::run_split_clip(args.0, gated_ctx("split_clip")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2145,7 +2183,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn trim_clip(&self, args: Parameters<TrimClipArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_trim_clip(args.0, McpToolCtx::resolve())
+        granular_timeline::run_trim_clip(args.0, gated_ctx("trim_clip")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2155,7 +2193,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn move_clip(&self, args: Parameters<MoveClipArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_move_clip(args.0, McpToolCtx::resolve())
+        granular_timeline::run_move_clip(args.0, gated_ctx("move_clip")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2168,7 +2206,7 @@ ordered stringout for accepted episodes.",
         &self,
         args: Parameters<DeleteClipsArgs>,
     ) -> Result<String, ErrorData> {
-        granular_timeline::run_delete_clips(args.0, McpToolCtx::resolve())
+        granular_timeline::run_delete_clips(args.0, gated_ctx("delete_clips")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2178,7 +2216,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn roll_trim(&self, args: Parameters<RollTrimArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_roll_trim(args.0, McpToolCtx::resolve())
+        granular_timeline::run_roll_trim(args.0, gated_ctx("roll_trim")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2188,7 +2226,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn slip_clip(&self, args: Parameters<SlipClipArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_slip_clip(args.0, McpToolCtx::resolve())
+        granular_timeline::run_slip_clip(args.0, gated_ctx("slip_clip")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2198,7 +2236,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn ripple_trim(&self, args: Parameters<RippleTrimArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_ripple_trim(args.0, McpToolCtx::resolve())
+        granular_timeline::run_ripple_trim(args.0, gated_ctx("ripple_trim")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2208,7 +2246,7 @@ ordered stringout for accepted episodes.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn set_marker(&self, args: Parameters<SetMarkerArgs>) -> Result<String, ErrorData> {
-        granular_timeline::run_set_marker(args.0, McpToolCtx::resolve())
+        granular_timeline::run_set_marker(args.0, gated_ctx("set_marker")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2221,7 +2259,7 @@ ordered stringout for accepted episodes.",
         &self,
         args: Parameters<SetClipPropertyArgs>,
     ) -> Result<String, ErrorData> {
-        granular_timeline::run_set_clip_property(args.0, McpToolCtx::resolve())
+        granular_timeline::run_set_clip_property(args.0, gated_ctx("set_clip_property")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2234,7 +2272,7 @@ ordered stringout for accepted episodes.",
         &self,
         args: Parameters<SetTrackPropertyArgs>,
     ) -> Result<String, ErrorData> {
-        granular_timeline::run_set_track_property(args.0, McpToolCtx::resolve())
+        granular_timeline::run_set_track_property(args.0, gated_ctx("set_track_property")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2254,7 +2292,7 @@ advances the target branch, and creates a two-parent merge commit.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_merge(&self, args: Parameters<VeditMergeArgs>) -> Result<String, ErrorData> {
-        vedit_merge::run(args.0, McpToolCtx::resolve())
+        vedit_merge::run(args.0, gated_ctx("vedit_merge")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2281,7 +2319,7 @@ merge.",
         &self,
         args: Parameters<VeditRevertArgs>,
     ) -> Result<String, ErrorData> {
-        vedit_revert::run(args.0, McpToolCtx::resolve())
+        vedit_revert::run(args.0, gated_ctx("vedit_revert")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2301,7 +2339,7 @@ Compile accepted podcast proposal item IDs into one ordered apply_edl batch.",
         &self,
         args: Parameters<PodcastApplyAcceptedEditsArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_apply_accepted_edits::run(args.0, McpToolCtx::resolve())
+        podcast_apply_accepted_edits::run(args.0, gated_ctx("podcast_apply_accepted_edits")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2325,7 +2363,7 @@ timeline.",
         &self,
         args: Parameters<PodcastEditProposalArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_edit_proposal::run(args.0, McpToolCtx::resolve())
+        podcast_edit_proposal::run(args.0, gated_ctx("podcast_edit_proposal")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2348,7 +2386,7 @@ to return an Insert PiP fragment instead.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn use_broll(&self, args: Parameters<UseBrollArgs>) -> Result<String, ErrorData> {
-        use_broll::run(args.0, McpToolCtx::resolve())
+        use_broll::run(args.0, gated_ctx("use_broll")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2370,7 +2408,7 @@ media asset. This does not call apply_edl or mutate the timeline.",
         &self,
         args: Parameters<UseGeneratedMediaArgs>,
     ) -> Result<String, ErrorData> {
-        use_generated_media::run(args.0, McpToolCtx::resolve())
+        use_generated_media::run(args.0, gated_ctx("use_generated_media")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2391,7 +2429,7 @@ mapping and can be replayed deterministically.",
         &self,
         args: Parameters<StreamRemuxArgs>,
     ) -> Result<String, ErrorData> {
-        stream_remux::run(args.0, McpToolCtx::resolve())
+        stream_remux::run(args.0, gated_ctx("stream_remux")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2413,7 +2451,7 @@ chapters, lower thirds, and captions.",
         &self,
         args: Parameters<PodcastVisualPolishArgs>,
     ) -> Result<String, ErrorData> {
-        podcast_visual_polish::run(args.0, McpToolCtx::resolve())
+        podcast_visual_polish::run(args.0, gated_ctx("podcast_visual_polish")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2427,7 +2465,7 @@ chapters, lower thirds, and captions.",
         &self,
         args: Parameters<PreviewCacheArgs>,
     ) -> Result<String, ErrorData> {
-        preview_cache::run(args.0, McpToolCtx::resolve())
+        preview_cache::run(args.0, gated_ctx("preview_cache_status")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2447,7 +2485,7 @@ chapters, lower thirds, and captions.",
         &self,
         args: Parameters<RunPreviewCacheRefreshArgs>,
     ) -> Result<String, ErrorData> {
-        run_preview_cache_refresh::run(args.0, McpToolCtx::resolve())
+        run_preview_cache_refresh::run(args.0, gated_ctx("run_preview_cache_refresh")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2475,7 +2513,7 @@ off, auto, or require.",
         &self,
         args: Parameters<ExportPackageArgs>,
     ) -> Result<String, ErrorData> {
-        export_package::run(args.0, McpToolCtx::resolve())
+        export_package::run(args.0, gated_ctx("export_package")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2504,7 +2542,7 @@ their domains (e.g. tighten THEN suggest b-roll).\
         annotations(read_only_hint = true)
     )]
     pub async fn load_skill(&self, args: Parameters<LoadSkillArgs>) -> Result<String, ErrorData> {
-        load_skill::run(args.0, McpToolCtx::resolve())
+        load_skill::run(args.0, gated_ctx("load_skill")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2521,7 +2559,7 @@ this when you need the project's editorial conventions or constraints. Pass \
         &self,
         args: Parameters<LoadProjectInstructionsArgs>,
     ) -> Result<String, ErrorData> {
-        load_project_instructions::run(args.0, McpToolCtx::resolve())
+        load_project_instructions::run(args.0, gated_ctx("load_project_instructions")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2550,7 +2588,7 @@ CLI instead.",
         &self,
         args: Parameters<StartRenderArgs>,
     ) -> Result<String, ErrorData> {
-        start_render::run(args.0, McpToolCtx::resolve())
+        start_render::run(args.0, gated_ctx("start_render")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2570,7 +2608,7 @@ instead.",
         annotations(read_only_hint = true)
     )]
     pub async fn poll_render(&self, args: Parameters<PollRenderArgs>) -> Result<String, ErrorData> {
-        poll_render::run(args.0, McpToolCtx::resolve())
+        poll_render::run(args.0, gated_ctx("poll_render")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2595,7 +2633,7 @@ view_episode shows they're missing.",
         &self,
         args: Parameters<StartIndexingArgs>,
     ) -> Result<String, ErrorData> {
-        start_indexing::run(args.0, McpToolCtx::resolve())
+        start_indexing::run(args.0, gated_ctx("start_indexing")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2621,7 +2659,7 @@ dedicated adapter.",
         &self,
         args: Parameters<StartGeneratedMediaJobArgs>,
     ) -> Result<String, ErrorData> {
-        start_generated_media_job::run(args.0, McpToolCtx::resolve())
+        start_generated_media_job::run(args.0, gated_ctx("start_generated_media_job")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2646,7 +2684,7 @@ out-of-process worker wired up.",
         &self,
         args: Parameters<PollGeneratedMediaJobArgs>,
     ) -> Result<String, ErrorData> {
-        poll_generated_media_job::run(args.0, McpToolCtx::resolve())
+        poll_generated_media_job::run(args.0, gated_ctx("poll_generated_media_job")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2667,7 +2705,7 @@ meaningfully (don't spam every micro-step).",
         annotations(read_only_hint = true)
     )]
     pub async fn update_plan(&self, args: Parameters<UpdatePlanArgs>) -> Result<String, ErrorData> {
-        update_plan::run(args.0, McpToolCtx::resolve())
+        update_plan::run(args.0, gated_ctx("update_plan")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2688,7 +2726,7 @@ result in addition to your free-form reply.",
         &self,
         args: Parameters<AttemptCompletionArgs>,
     ) -> Result<String, ErrorData> {
-        attempt_completion::run(args.0, McpToolCtx::resolve())
+        attempt_completion::run(args.0, gated_ctx("attempt_completion")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2709,7 +2747,7 @@ server bridges MCP's elicitation protocol to the client.",
         &self,
         args: Parameters<RequestUserInputArgs>,
     ) -> Result<String, ErrorData> {
-        request_user_input::run(args.0, McpToolCtx::resolve())
+        request_user_input::run(args.0, gated_ctx("request_user_input")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -2728,7 +2766,7 @@ functional once the MCP indexer pool lands.",
         annotations(read_only_hint = true)
     )]
     pub async fn clip_search(&self, args: Parameters<ClipSearchArgs>) -> Result<String, ErrorData> {
-        clip_search::run(args.0, McpToolCtx::resolve())
+        clip_search::run(args.0, gated_ctx("clip_search")?)
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }

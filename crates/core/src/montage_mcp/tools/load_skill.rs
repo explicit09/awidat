@@ -54,6 +54,15 @@ pub fn run(args: LoadSkillArgs, ctx: McpToolCtx) -> Result<String, String> {
         ));
     };
 
+    // Persist tools_allowlist so subsequent MCP calls in this project
+    // are hard-gated (not just prose instructions).
+    let allowlist = skill.meta.tools_allowlist.clone();
+    let active = crate::skill_session::set_active_skill(
+        &ctx.project_root,
+        skill.meta.name.clone(),
+        allowlist.clone(),
+    )?;
+
     // Return the full L2 body, with a frontmatter-stripped header so
     // the model sees the skill name + version up top before diving
     // into the body. We deliberately do NOT include the root path —
@@ -67,7 +76,7 @@ pub fn run(args: LoadSkillArgs, ctx: McpToolCtx) -> Result<String, String> {
         version = skill.meta.version,
         desc = skill.meta.description,
     );
-    let mut out = String::with_capacity(header.len() + skill.body.len());
+    let mut out = String::with_capacity(header.len() + skill.body.len() + 256);
     out.push_str(&header);
     out.push_str(&skill.body);
     out.push_str(&format!(
@@ -76,6 +85,24 @@ pub fn run(args: LoadSkillArgs, ctx: McpToolCtx) -> Result<String, String> {
          Reference them in `bash` calls via that absolute path.",
         skill.root.display()
     ));
+    match active {
+        Some(active) => {
+            out.push_str(&format!(
+                "\n\n--- Tool allowlist (enforced) ---\n\
+                 Active skill `{}` restricts tools to:\n  {}\n\
+                 Other tools will fail until you load a different skill \
+                 (or a skill without tools_allowlist).",
+                active.name,
+                active.tools_allowlist.join(", ")
+            ));
+        }
+        None => {
+            out.push_str(
+                "\n\n--- Tool allowlist ---\n\
+                 This skill has no tools_allowlist; full tool surface remains available.",
+            );
+        }
+    }
     Ok(out)
 }
 

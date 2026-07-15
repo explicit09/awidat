@@ -51,8 +51,13 @@ when_to_use: |                 # optional — when should the agent reach
   pinned to an older version.
 - **`montage_min_version`** — minimum Montage core required. Older hosts
   skip the skill with a warning rather than loading a broken playbook.
-- **`tools_allowlist`** — when present, the agent only sees these tools
-  during a skill turn. Empty or missing = no restriction.
+- **`tools_allowlist`** — when present, tools outside this list are
+  **hard-rejected** after `load_skill` (state in
+  `.montage/active_skill.json`). Meta tools `load_skill`,
+  `load_project_instructions`, `attempt_completion`, `update_plan`,
+  `request_user_input`, and `set_picture_lock` always remain available.
+  Empty or missing = no restriction. Escape hatch:
+  `MONTAGE_DISABLE_SKILL_ALLOWLIST=1`.
 - **`when_to_use`** — free-text trigger hint shown in the Skills tab
   detail pane. Use it to disambiguate skills with overlapping scope.
 

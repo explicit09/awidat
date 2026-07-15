@@ -103,6 +103,7 @@ pub mod run_picture_gates;
 pub mod run_preview_cache_refresh;
 pub mod run_sound_gates;
 pub mod search_broll;
+pub mod set_picture_lock;
 pub mod shot_summary;
 pub mod start_generated_media_job;
 pub mod start_indexing;

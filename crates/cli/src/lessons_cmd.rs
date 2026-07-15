@@ -1,37 +1,36 @@
-//! `montage lessons {learn,show}` — STUBBED during the codex-harness migration.
+//! `montage lessons {learn,show}` — distill editorial decisions into
+//! learned-style.md.
 //!
-//! The original implementation scanned legacy Montage rollout files via
-//! `montage_core::rollout::Recorder::collect_decisions` and distilled
-//! `EditorialDecision` events into `learned-style.md`. Codex stores its
-//! rollouts at `~/.codex/sessions/` in a different format; the
-//! `Recorder` API and the legacy rollout layout are scheduled for
-//! deletion in step 8e/W.
-//!
-//! This subcommand stays wired into the clap enum so `montage lessons …`
-//! prints a clear "not yet ported" message instead of failing with a
-//! linker error. The re-port onto codex's `RolloutRecorder` API is
-//! tracked alongside #60 (`history.rs` re-target).
-//!
-//! See `crates/core/src/lessons.rs` — the pattern extraction and
-//! markdown rendering helpers are still live and reusable once a
-//! codex-format reader replaces `Recorder::collect_decisions`.
+//! Decisions are appended by live MCP `apply_edl` commits into
+//! `editorial-decisions.jsonl` (see `montage_core::lessons`).
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 pub fn learn() -> Result<()> {
-    eprintln!(
-        "montage lessons learn: pending re-port onto codex rollouts \
-         (~/.codex/sessions/). Legacy Montage rollout reader was retired \
-         during the codex-harness migration."
+    let (path, decisions, patterns) = montage_core::lessons::learn_from_disk()
+        .map_err(|e| anyhow::anyhow!("montage lessons learn: {e}"))?;
+    println!(
+        "montage lessons learn: {decisions} decision(s) → {patterns} pattern(s) → {}",
+        path.display()
     );
     Ok(())
 }
 
 pub fn show() -> Result<()> {
-    eprintln!(
-        "montage lessons show: pending re-port onto codex rollouts \
-         (~/.codex/sessions/). Legacy Montage rollout reader was retired \
-         during the codex-harness migration."
-    );
-    Ok(())
+    let Some(path) = montage_core::lessons::default_output_path() else {
+        bail!("montage lessons show: no config directory available");
+    };
+    match montage_core::lessons::read_learned_style(&path) {
+        Some(md) => {
+            println!("{md}");
+            Ok(())
+        }
+        None => {
+            println!(
+                "montage lessons show: no learned-style at {} (run `montage lessons learn` first)",
+                path.display()
+            );
+            Ok(())
+        }
+    }
 }

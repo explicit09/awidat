@@ -23,7 +23,6 @@ use montage_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::edl::op::{BRollPosition, EdlOp};
 use crate::edl::{
     AnchorContext, ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse,
 };
@@ -117,7 +116,7 @@ impl ToolHandler for ApplyEdlTool {
             return Vec::new();
         };
         edl_parse(edl)
-            .map(|envelope| editorial_tags_for_envelope(&envelope))
+            .map(|envelope| crate::editorial_tags::editorial_tags_for_envelope(&envelope))
             .unwrap_or_default()
     }
 
@@ -140,6 +139,9 @@ impl ToolHandler for ApplyEdlTool {
                 "EDL parsed cleanly but contained zero ops; nothing applied.",
             ));
         }
+
+        crate::picture_lock::check_envelope(&ctx.project_root, &envelope)
+            .map_err(FunctionCallError::RespondToModel)?;
 
         // Tier-1 verification (PLAN.md §9.1): asset-existence check
         // for every Insert Clip op. Catches the common bug of
@@ -194,6 +196,15 @@ impl ToolHandler for ApplyEdlTool {
                     "apply_edl: timeline written-validate ok but disk write failed: {e}"
                 ))
             })?;
+
+            let tags = crate::editorial_tags::editorial_tags_for_envelope(&envelope);
+            let summary = args
+                .reasoning
+                .clone()
+                .unwrap_or_else(|| format!("apply_edl: {} op(s)", outcome.applied.len()));
+            if let Err(e) = crate::lessons::record_apply_edl_commit(summary, tags) {
+                tracing::debug!(error = %e, "lessons: failed to record apply_edl decision");
+            }
 
             // Phase B auto-commit. Snapshot the post-apply state
             // into vedit so every accepted envelope becomes a
@@ -343,143 +354,6 @@ fn normalize_edl_for_approval(edl: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn editorial_tags_for_envelope(envelope: &crate::edl::EdlEnvelope) -> Vec<String> {
-    let mut tags = Vec::new();
-    let mut transition_count = 0_usize;
-    for op in &envelope.ops {
-        match op {
-            EdlOp::SetCutIntent { spec, .. } => {
-                push_tag_owned(&mut tags, "cut_type", serde_tag(&spec.cut_type));
-                push_tag(&mut tags, "cut_intent", Some(spec.intent.as_str()));
-                push_tag_owned(&mut tags, "audio_relation", serde_tag(&spec.audio_relation));
-                if spec.intent == "thematic_montage" {
-                    tags.push("broll_mode:thematic_montage".into());
-                }
-            }
-            EdlOp::InsertTransition { kind, spec, .. } => {
-                transition_count += 1;
-                tags.push(format!("transition_id:{}", normalize_tag_value(kind)));
-                if let Some(family) = spec
-                    .as_ref()
-                    .and_then(|spec| spec.family.as_deref())
-                    .or_else(|| {
-                        montage_proto::transitions::lookup_builtin_transition(kind)
-                            .map(|transition| transition.family)
-                    })
-                {
-                    push_tag(&mut tags, "transition_family", Some(family));
-                }
-                if let Some(intent) = spec.as_ref().and_then(|spec| spec.intent.as_deref()) {
-                    push_tag(&mut tags, "transition_intent", Some(intent));
-                }
-            }
-            EdlOp::SetAudioLead { lead_s, .. } => {
-                tags.push("split_edit:j_cut".into());
-                tags.push(format!("audio_lead_range:{}", split_lead_bucket(*lead_s)));
-            }
-            EdlOp::SetAudioTrail { trail_s, .. } => {
-                tags.push("split_edit:l_cut".into());
-                tags.push(format!(
-                    "audio_trail_range:{}",
-                    split_trail_bucket(*trail_s)
-                ));
-            }
-            EdlOp::InsertBRoll { position, .. } => {
-                tags.push("broll_mode:literal_cover".into());
-                tags.push(format!(
-                    "broll_position:{}",
-                    match position {
-                        BRollPosition::Overlay => "overlay",
-                        BRollPosition::Replace => "replace",
-                    }
-                ));
-            }
-            EdlOp::SetOutputFormat {
-                aspect_ratio,
-                platform,
-                safe_area,
-            } => {
-                push_tag(&mut tags, "format_aspect", Some(aspect_ratio.as_str()));
-                push_tag(&mut tags, "format_platform", platform.as_deref());
-                push_tag(&mut tags, "format_safe_area", safe_area.as_deref());
-            }
-            _ => {}
-        }
-    }
-    if transition_count > 0 {
-        tags.push(format!(
-            "transition_density:{}",
-            transition_density_bucket(transition_count)
-        ));
-    }
-    tags.sort();
-    tags.dedup();
-    if tags.contains(&"broll_mode:thematic_montage".to_string()) {
-        tags.retain(|tag| tag != "broll_mode:literal_cover");
-    }
-    tags
-}
-
-fn transition_density_bucket(transition_count: usize) -> &'static str {
-    match transition_count {
-        0 => "none",
-        1 => "single",
-        2 => "moderate",
-        _ => "high",
-    }
-}
-
-fn push_tag(tags: &mut Vec<String>, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        let value = normalize_tag_value(value);
-        if !value.is_empty() {
-            tags.push(format!("{key}:{value}"));
-        }
-    }
-}
-
-fn push_tag_owned(tags: &mut Vec<String>, key: &str, value: Option<String>) {
-    if let Some(value) = value {
-        push_tag(tags, key, Some(&value));
-    }
-}
-
-fn serde_tag<T: serde::Serialize>(value: &T) -> Option<String> {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-}
-
-fn normalize_tag_value(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|c| if c == ':' { 'x' } else { c })
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-        .collect()
-}
-
-fn split_lead_bucket(seconds: f64) -> &'static str {
-    if seconds < 0.25 {
-        "under_0_25"
-    } else if seconds <= 0.60 {
-        "0_25_to_0_60"
-    } else {
-        "over_0_60"
-    }
-}
-
-fn split_trail_bucket(seconds: f64) -> &'static str {
-    if seconds < 0.25 {
-        "under_0_25"
-    } else if seconds <= 0.80 {
-        "0_25_to_0_80"
-    } else {
-        "over_0_80"
-    }
 }
 
 fn format_parse_error(e: &EdlParseError) -> String {

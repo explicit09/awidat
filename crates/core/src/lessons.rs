@@ -6,13 +6,12 @@
 //! ("you accepted 11 of 12 cases like this") so the user can audit and
 //! agree or override.
 //!
-//! **Step 8e/W:** the legacy `rollout::Recorder::collect_decisions`
-//! reader was retired with the legacy harness. `extract_from_decisions`
-//! and `render_markdown` are still useful — they're pure pattern
-//! extraction over the `EditorialDecision` shape — and will be re-wired
-//! to a codex-rollout-format reader in a follow-up. The `EditorialDecision`
-//! struct moved here from `rollout.rs` so the extraction layer survives
-//! independent of the rollout layer.
+//! Decisions are appended as JSONL by live MCP `apply_edl` commits
+//! (and any caller of [`append_decision`]). `montage lessons learn`
+//! reads that log, runs [`extract_from_decisions`], and writes
+//! `learned-style.md`. Codex session rollouts remain a future secondary
+//! source; the JSONL log is the production path after the harness
+//! migration.
 //!
 //! V1 patterns:
 //! - per-tool deny rate (which tools the user rejects most often)
@@ -413,6 +412,131 @@ pub fn default_output_path() -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     dirs::config_dir().map(|d| d.join("montage").join("learned-style.md"))
+}
+
+/// Default JSONL decision log path. Override with
+/// `MONTAGE_EDITORIAL_DECISIONS`.
+pub fn default_decisions_log_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("MONTAGE_EDITORIAL_DECISIONS")
+        && !p.is_empty()
+    {
+        return Some(PathBuf::from(p));
+    }
+    dirs::config_dir().map(|d| d.join("montage").join("editorial-decisions.jsonl"))
+}
+
+/// Append one decision to the JSONL log (best-effort parent mkdir).
+pub fn append_decision(decision: &EditorialDecision) -> Result<(), String> {
+    let Some(path) = default_decisions_log_path() else {
+        return Err("lessons: no config dir for editorial-decisions.jsonl".into());
+    };
+    append_decision_to_path(&path, decision)
+}
+
+/// Append one decision to an explicit path.
+pub fn append_decision_to_path(path: &Path, decision: &EditorialDecision) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("lessons: create {}: {e}", parent.display()))?;
+    }
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("lessons: open {}: {e}", path.display()))?;
+    let line =
+        serde_json::to_string(decision).map_err(|e| format!("lessons: serialize decision: {e}"))?;
+    writeln!(file, "{line}").map_err(|e| format!("lessons: write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// Load all decisions from the default JSONL log.
+pub fn load_decisions() -> Result<Vec<EditorialDecision>, String> {
+    let Some(path) = default_decisions_log_path() else {
+        return Ok(Vec::new());
+    };
+    load_decisions_from_path(&path)
+}
+
+/// Load decisions from a JSONL file. Missing file → empty vec.
+pub fn load_decisions_from_path(path: &Path) -> Result<Vec<EditorialDecision>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("lessons: read {}: {e}", path.display())),
+    };
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<EditorialDecision>(line) {
+            Ok(d) => out.push(d),
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    line = i + 1,
+                    error = %e,
+                    "lessons: skipping malformed decision line"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Record an agent-committed `apply_edl` as an Allow decision so tag
+/// patterns accumulate from real edits (user-approved via MCP when
+/// destructive tools require approval).
+pub fn record_apply_edl_commit(
+    args_summary: impl Into<String>,
+    editorial_tags: Vec<String>,
+) -> Result<(), String> {
+    let decision = EditorialDecision {
+        tool: "apply_edl".into(),
+        args_summary: args_summary.into(),
+        editorial_tags,
+        approval_keys: Vec::new(),
+        retry_reason: None,
+        decision: "Allow".into(),
+        timestamp: Utc::now(),
+    };
+    append_decision(&decision)
+}
+
+/// Run extraction over the on-disk decision log and write
+/// `learned-style.md`. Returns the output path and pattern count.
+pub fn learn_from_disk() -> Result<(PathBuf, usize, usize), String> {
+    let decisions = load_decisions()?;
+    let patterns = extract_from_decisions(&decisions);
+    let Some(out) = default_output_path() else {
+        return Err("lessons: no config dir for learned-style.md".into());
+    };
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("lessons: create {}: {e}", parent.display()))?;
+    }
+    match render_markdown(&patterns, decisions.len()) {
+        Some(md) => {
+            std::fs::write(&out, md)
+                .map_err(|e| format!("lessons: write {}: {e}", out.display()))?;
+        }
+        None => {
+            let stub = format!(
+                "# Learned editorial style\n\n\
+                 No strong patterns yet ({n} decision(s) logged; need ≥{min} \
+                 events and ≥{dev:.0}pp deviation).\n",
+                n = decisions.len(),
+                min = MIN_EVENTS,
+                dev = MIN_DEVIATION_PP,
+            );
+            std::fs::write(&out, stub)
+                .map_err(|e| format!("lessons: write {}: {e}", out.display()))?;
+        }
+    }
+    Ok((out, decisions.len(), patterns.len()))
 }
 
 /// Read the learned-style markdown if it exists. Used by `Session::new`

@@ -85,6 +85,15 @@ impl ToolHandler for LoadSkillTool {
                 args.name, suggestions
             )));
         };
+
+        let allowlist = skill.meta.tools_allowlist.clone();
+        let active = crate::skill_session::set_active_skill(
+            &ctx.project_root,
+            skill.meta.name.clone(),
+            allowlist,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
+
         // Return the full L2 body, with a frontmatter-stripped header
         // so the model sees the skill name + version up top before
         // diving into the body. We deliberately do NOT include the
@@ -99,7 +108,7 @@ impl ToolHandler for LoadSkillTool {
             version = skill.meta.version,
             desc = skill.meta.description,
         );
-        let mut out = String::with_capacity(header.len() + skill.body.len());
+        let mut out = String::with_capacity(header.len() + skill.body.len() + 256);
         out.push_str(&header);
         out.push_str(&skill.body);
         // Tell the agent where to find the skill's bundled scripts +
@@ -111,6 +120,19 @@ impl ToolHandler for LoadSkillTool {
              Reference them in `bash` calls via that absolute path.",
             skill.root.display()
         ));
+        match active {
+            Some(active) => out.push_str(&format!(
+                "\n\n--- Tool allowlist (enforced) ---\n\
+                 Active skill `{}` restricts tools to:\n  {}\n\
+                 Other tools will fail until you load a different skill.",
+                active.name,
+                active.tools_allowlist.join(", ")
+            )),
+            None => out.push_str(
+                "\n\n--- Tool allowlist ---\n\
+                 This skill has no tools_allowlist; full tool surface remains available.",
+            ),
+        }
         Ok(ToolOutput::text(out))
     }
 }

@@ -2,12 +2,9 @@
 //! `crates/core/src/tools/apply_edl.rs` to the in-process MCP server
 //! in step 5 of the codex-harness migration.
 //!
-//! The handler body of the original tool also captured editorial
-//! decision tags (via `editorial_decision_tags`) and ran approvals
-//! through `ToolContext.approval_tx`. Both behaviors are intentionally
-//! dropped in the port: codex performs the destructive-hint approval
-//! before dispatching the call, and the agent loop that consumed
-//! editorial tags is being removed in step 7.
+//! Approvals are handled by codex (`destructive_hint`). Editorial tags
+//! are recorded into the lessons decision log on successful commits so
+//! `montage lessons learn` can rebuild preference patterns.
 
 use montage_proto::project::Project;
 use schemars::JsonSchema;
@@ -44,6 +41,8 @@ pub fn run(args: ApplyEdlArgs, ctx: McpToolCtx) -> Result<String, String> {
     if envelope.is_empty() {
         return Ok("EDL parsed cleanly but contained zero ops; nothing applied.".to_string());
     }
+
+    crate::picture_lock::check_envelope(&ctx.project_root, &envelope)?;
 
     // Tier-1 verification: asset-existence check for Insert Clip ops.
     for (i, op) in envelope.ops.iter().enumerate() {
@@ -83,6 +82,15 @@ pub fn run(args: ApplyEdlArgs, ctx: McpToolCtx) -> Result<String, String> {
         updated.write(&ctx.project_root).map_err(|e| {
             format!("apply_edl: timeline written-validate ok but disk write failed: {e}")
         })?;
+
+        let tags = crate::editorial_tags::editorial_tags_for_envelope(&envelope);
+        let summary = args
+            .reasoning
+            .clone()
+            .unwrap_or_else(|| format!("apply_edl: {} op(s)", outcome.applied.len()));
+        if let Err(e) = crate::lessons::record_apply_edl_commit(summary, tags) {
+            tracing::debug!(error = %e, "lessons: failed to record apply_edl decision");
+        }
 
         // Phase B auto-commit — best-effort.
         match crate::vc::open_or_init(&ctx.project_root) {
