@@ -5,9 +5,13 @@
 //! - **Project**: `<project>/.montage/config.toml` (per-project overrides).
 //!   Existing `<project>/.awidat/config.toml` files are read as a fallback.
 //!
-//! The merge rule is "project entirely replaces global per top-level key."
-//! For `[[mcp.servers]]` (the only collection in v1), entries with matching
-//! `name` in the project override the global entry; new names append.
+//! The merge rule is "project entirely replaces global per top-level key,"
+//! except where a section defines its own finer-grained merge:
+//! - `[[mcp.servers]]`: entries with matching `name` in the project
+//!   override the global entry; new names append.
+//! - `[hooks]`: merged per field — a hook set in the project config
+//!   overrides the same hook set in the global config; a hook set in
+//!   only one layer is kept.
 //!
 //! See `crates/config/EXAMPLE.toml` for the canonical shape.
 
@@ -260,7 +264,9 @@ impl Config {
 
     /// Layer `project` on top of `self`. Per-server merge: project entries
     /// matching a global server `name` replace the global entry; project
-    /// entries with new names append.
+    /// entries with new names append. `[hooks]` merges per field: a hook
+    /// set in `project` overrides the same field from `self`; a hook set
+    /// in only one layer survives.
     #[must_use]
     pub fn overlay(self, project: Self) -> Self {
         let mut servers = self.mcp.servers;
@@ -283,7 +289,10 @@ impl Config {
         }
         Self {
             mcp: McpConfig { servers },
-            hooks: HooksConfig::default(),
+            hooks: HooksConfig {
+                pre_apply_edl: project.hooks.pre_apply_edl.or(self.hooks.pre_apply_edl),
+                post_apply_edl: project.hooks.post_apply_edl.or(self.hooks.post_apply_edl),
+            },
         }
     }
 
@@ -465,6 +474,89 @@ indexer_group = "vision"
             whisper.env.get("WHISPER_MODEL").map(String::as_str),
             Some("large-v3-turbo")
         );
+    }
+
+    #[test]
+    fn overlay_keeps_global_only_hook() {
+        let global = Config {
+            mcp: McpConfig::default(),
+            hooks: HooksConfig {
+                pre_apply_edl: Some("global-pre.sh".into()),
+                post_apply_edl: None,
+            },
+        };
+        let project = Config::default();
+        let merged = global.overlay(project);
+        assert_eq!(merged.hooks.pre_apply_edl.as_deref(), Some("global-pre.sh"));
+        assert_eq!(merged.hooks.post_apply_edl, None);
+    }
+
+    #[test]
+    fn overlay_keeps_project_only_hook() {
+        let global = Config::default();
+        let project = Config {
+            mcp: McpConfig::default(),
+            hooks: HooksConfig {
+                pre_apply_edl: None,
+                post_apply_edl: Some("project-post.sh".into()),
+            },
+        };
+        let merged = global.overlay(project);
+        assert_eq!(merged.hooks.pre_apply_edl, None);
+        assert_eq!(
+            merged.hooks.post_apply_edl.as_deref(),
+            Some("project-post.sh")
+        );
+    }
+
+    #[test]
+    fn overlay_project_hook_overrides_global_hook_for_same_field() {
+        let global = Config {
+            mcp: McpConfig::default(),
+            hooks: HooksConfig {
+                pre_apply_edl: Some("global-pre.sh".into()),
+                post_apply_edl: Some("global-post.sh".into()),
+            },
+        };
+        let project = Config {
+            mcp: McpConfig::default(),
+            hooks: HooksConfig {
+                pre_apply_edl: Some("project-pre.sh".into()),
+                post_apply_edl: None,
+            },
+        };
+        let merged = global.overlay(project);
+        // Project's pre_apply_edl wins for the field it set...
+        assert_eq!(
+            merged.hooks.pre_apply_edl.as_deref(),
+            Some("project-pre.sh")
+        );
+        // ...but post_apply_edl was unset in project, so global survives.
+        assert_eq!(
+            merged.hooks.post_apply_edl.as_deref(),
+            Some("global-post.sh")
+        );
+    }
+
+    #[test]
+    fn load_reads_hooks_from_project_config() {
+        // End-to-end: Config::load() must actually surface a project's
+        // [hooks] section (the bug this guards: overlay() used to drop
+        // hooks entirely, so pre_apply_edl/post_apply_edl never reached
+        // apply_edl::run in production).
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = project_config_path(dir.path());
+        write(
+            &cfg,
+            r#"
+[hooks]
+pre_apply_edl = "bash pre.sh"
+post_apply_edl = "bash post.sh"
+"#,
+        );
+        let c = Config::load(Some(dir.path())).unwrap();
+        assert_eq!(c.hooks.pre_apply_edl.as_deref(), Some("bash pre.sh"));
+        assert_eq!(c.hooks.post_apply_edl.as_deref(), Some("bash post.sh"));
     }
 
     #[test]

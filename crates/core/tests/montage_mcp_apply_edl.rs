@@ -172,18 +172,15 @@ fn insert_clip_with_missing_asset_errors_and_leaves_project_unchanged() {
 /// `[hooks] pre_apply_edl` from `<project>/.montage/config.toml`.
 /// A hook that exits nonzero should block the commit before any disk
 /// write. Fully hermetic setup (hook script + config.toml both live
-/// under the temp project dir) — but currently blocked by a bug in
-/// `montage_config::Config::overlay` (crates/config/src/lib.rs:265),
-/// which unconditionally returns `hooks: HooksConfig::default()`
-/// instead of threading through `project.hooks`. That means
-/// `Config::load()` — which `apply_edl::run` calls — can never see a
-/// project's `[hooks]` section, so `pre_apply_edl`/`post_apply_edl`
-/// are unreachable in production today, not just untestable here.
-/// Left `#[ignore]` with the intended assertions so it starts passing
-/// the moment that overlay bug is fixed elsewhere; do not delete.
+/// under the temp project dir); `Config::load()` also consults a
+/// user-global config at `~/.config/montage/config.toml`, but that
+/// layer is skipped entirely unless the file exists, so this test has
+/// no dependency on the machine's real global config as long as none
+/// is present. Previously blocked by a bug in
+/// `montage_config::Config::overlay` (crates/config/src/lib.rs) that
+/// unconditionally returned `hooks: HooksConfig::default()` instead of
+/// threading through `project.hooks`; now fixed with a per-field merge.
 #[test]
-#[ignore = "blocked: Config::overlay drops project.hooks (crates/config/src/lib.rs:265) \
-            so pre_apply_edl never reaches apply_edl::run — see doc comment"]
 fn failing_pre_apply_edl_hook_blocks_commit() {
     let dir = seed_project();
     let before = std::fs::read_to_string(dir.path().join("project.otio.json")).unwrap();
