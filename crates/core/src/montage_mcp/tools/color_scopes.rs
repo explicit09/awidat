@@ -15,6 +15,11 @@ use crate::montage_mcp::context::McpToolCtx;
 const DEFAULT_BINS: usize = 64;
 const DEFAULT_MAX_WIDTH: usize = 320;
 
+/// Default scope resolution per axis when the caller doesn't override.
+pub const DEFAULT_SCOPE_BINS: usize = DEFAULT_BINS;
+/// Default extracted-frame width cap when the caller doesn't override.
+pub const DEFAULT_SCOPE_MAX_WIDTH: usize = DEFAULT_MAX_WIDTH;
+
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct ColorScopesArgs {
     /// Project-relative asset id, OR an absolute path under the project.
@@ -234,6 +239,37 @@ fn chroma_coordinates(r: u8, g: u8, b: u8) -> (f64, f64) {
     let cb = 128.0 - 0.114_572 * r - 0.385_428 * g + 0.5 * b;
     let cr = 128.0 + 0.5 * r - 0.454_153 * g - 0.045_847 * b;
     (cb, cr)
+}
+
+/// Extract one frame from a local video asset at `t_s` and compute
+/// the full scope snapshot for it. Same pipeline the `color_scopes`
+/// agent tool uses internally — exposed so the desktop UI can drive
+/// scope rendering without going through the MCP dispatch indirection.
+///
+/// `asset_path` must be an absolute path that exists on disk. `bins`
+/// and `max_width` mirror the tool's validation ranges; values
+/// outside the supported range return `Err` rather than clamping
+/// silently. Returns the scope snapshot on success or a stringified
+/// failure (ffmpeg/ffprobe error, dimension mismatch, etc.).
+pub async fn extract_and_compute_color_scopes(
+    asset_path: &Path,
+    t_s: f64,
+    bins: usize,
+    max_width: usize,
+) -> Result<ColorScopeSnapshot, String> {
+    if !t_s.is_finite() || t_s < 0.0 {
+        return Err(format!("t_s ({t_s}) must be finite and >= 0"));
+    }
+    if !(8..=256).contains(&bins) {
+        return Err(format!("bins ({bins}) must be between 8 and 256"));
+    }
+    if !(32..=1920).contains(&max_width) {
+        return Err(format!(
+            "max_width ({max_width}) must be between 32 and 1920"
+        ));
+    }
+    let frame = extract_rgb_frame(asset_path, t_s, bins, max_width).await?;
+    compute_color_scopes(&frame)
 }
 
 pub(crate) async fn extract_rgb_frame(

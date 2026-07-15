@@ -11,37 +11,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use montage_core::media_catalog_mutation::{create_bin, ensure_montage_metadata};
-use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use montage_core::tools::create_stringout::CreateStringoutTool;
-use montage_core::tools::list_bins::ListBinsTool;
-use montage_core::tools::list_stringouts::ListStringoutsTool;
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::create_stringout::{self, CreateStringoutArgs};
+use montage_core::montage_mcp::tools::list_bins::{self, ListBinsArgs};
+use montage_core::montage_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use montage_proto::project::Project;
 use std::path::Path;
-use tokio::sync::broadcast;
 
-fn ctx_at(root: &Path) -> ToolContext {
-    let (tx, _) = broadcast::channel(8);
-    ToolContext {
+fn ctx_at(root: &Path) -> McpToolCtx {
+    McpToolCtx {
         project_root: root.to_path_buf(),
-        events_tx: tx,
-        user_input_tx: None,
-        job_manager: montage_render::JobManager::new(),
-        approval_tx: None,
-        sandbox_mode: SandboxMode::Default,
-        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-            name: "test".into(),
-            version: "0.0.0".into(),
-        }),
-        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
-        subagent_return: None,
-    }
-}
-
-fn invoke(name: &str, args: serde_json::Value) -> ToolInvocation {
-    ToolInvocation {
-        call_id: "c1".into(),
-        name: name.into(),
-        args,
     }
 }
 
@@ -53,163 +32,116 @@ fn init_project_with_bins(root: &Path) {
     project.write(root).unwrap();
 }
 
-#[tokio::test]
-async fn list_stringouts_empty_then_after_creation() {
+#[test]
+fn list_stringouts_empty_then_after_creation() {
     let dir = tempfile::tempdir().unwrap();
     init_project_with_bins(dir.path());
 
     // Empty up front.
-    let out = ListStringoutsTool
-        .handle(
-            invoke("list_stringouts", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    assert!(out.content.contains("total=0"));
+    let out = list_stringouts::run(ListStringoutsArgs {}, ctx_at(dir.path())).unwrap();
+    assert!(out.contains("total=0"));
 
     // Create two stringouts (multi-cardinality).
-    CreateStringoutTool
-        .handle(
-            invoke(
-                "create_stringout",
-                serde_json::json!({
-                    "id": "stringout-cold-open",
-                    "name": "Cold open",
-                    "items": ["select-a", "select-b"],
-                }),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    CreateStringoutTool
-        .handle(
-            invoke(
-                "create_stringout",
-                serde_json::json!({
-                    "id": "stringout-arc-2",
-                    "name": "Arc 2",
-                    "items": ["select-c"],
-                }),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    create_stringout::run(
+        CreateStringoutArgs {
+            id: "stringout-cold-open".to_string(),
+            name: Some("Cold open".to_string()),
+            items: vec!["select-a".to_string(), "select-b".to_string()],
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap();
+    create_stringout::run(
+        CreateStringoutArgs {
+            id: "stringout-arc-2".to_string(),
+            name: Some("Arc 2".to_string()),
+            items: vec!["select-c".to_string()],
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap();
 
-    let out = ListStringoutsTool
-        .handle(
-            invoke("list_stringouts", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    assert!(
-        out.content.contains("total=2"),
-        "expected total=2, got:\n{}",
-        out.content
-    );
-    assert!(out.content.contains("stringout-cold-open"));
-    assert!(out.content.contains("stringout-arc-2"));
+    let out = list_stringouts::run(ListStringoutsArgs {}, ctx_at(dir.path())).unwrap();
+    assert!(out.contains("total=2"), "expected total=2, got:\n{out}");
+    assert!(out.contains("stringout-cold-open"));
+    assert!(out.contains("stringout-arc-2"));
     // Items count surfaced
-    assert!(out.content.contains("items=2"));
-    assert!(out.content.contains("items=1"));
+    assert!(out.contains("items=2"));
+    assert!(out.contains("items=1"));
 }
 
-#[tokio::test]
-async fn create_stringout_rejects_duplicate_id() {
+#[test]
+fn create_stringout_rejects_duplicate_id() {
     let dir = tempfile::tempdir().unwrap();
     init_project_with_bins(dir.path());
-    CreateStringoutTool
-        .handle(
-            invoke(
-                "create_stringout",
-                serde_json::json!({"id": "stringout-x", "name": "X"}),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    let err = CreateStringoutTool
-        .handle(
-            invoke(
-                "create_stringout",
-                serde_json::json!({"id": "stringout-x", "name": "X again"}),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        montage_core::FunctionCallError::RespondToModel(msg) if msg.contains("already exists")
-    ));
+    create_stringout::run(
+        CreateStringoutArgs {
+            id: "stringout-x".to_string(),
+            name: Some("X".to_string()),
+            items: Vec::new(),
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap();
+    let err = create_stringout::run(
+        CreateStringoutArgs {
+            id: "stringout-x".to_string(),
+            name: Some("X again".to_string()),
+            items: Vec::new(),
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap_err();
+    assert!(err.contains("already exists"));
 }
 
-#[tokio::test]
-async fn create_stringout_requires_non_empty_id() {
+#[test]
+fn create_stringout_requires_non_empty_id() {
     let dir = tempfile::tempdir().unwrap();
     init_project_with_bins(dir.path());
-    let err = CreateStringoutTool
-        .handle(
-            invoke(
-                "create_stringout",
-                serde_json::json!({"id": "  ", "name": "Whitespace"}),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        montage_core::FunctionCallError::RespondToModel(_)
-    ));
+    let err = create_stringout::run(
+        CreateStringoutArgs {
+            id: "  ".to_string(),
+            name: Some("Whitespace".to_string()),
+            items: Vec::new(),
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap_err();
+    assert!(err.contains("empty"));
 }
 
-#[tokio::test]
-async fn list_bins_includes_user_defined_and_built_in_roles() {
+#[test]
+fn list_bins_includes_user_defined_and_built_in_roles() {
     let dir = tempfile::tempdir().unwrap();
     init_project_with_bins(dir.path());
 
-    let out = ListBinsTool
-        .handle(
-            invoke("list_bins", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    let out = list_bins::run(ListBinsArgs {}, ctx_at(dir.path())).unwrap();
     // User-defined.
-    assert!(out.content.contains("scene-1"));
-    assert!(out.content.contains("broll"));
+    assert!(out.contains("scene-1"));
+    assert!(out.contains("broll"));
     // Built-in role buckets. Kdenlive surfaces role buckets like
     // "Audio Clips" / "Video Clips" — we expose them as virtual bins
     // with stable ids "role:video", "role:audio", etc. so the agent can
     // filter on them without the user manually creating bins.
-    assert!(out.content.contains("role:video"));
-    assert!(out.content.contains("role:audio"));
-    assert!(out.content.contains("role:still"));
-    assert!(out.content.contains("role:graphic"));
-    assert!(out.content.contains("role:caption"));
-    assert!(out.content.contains("role:support"));
+    assert!(out.contains("role:video"));
+    assert!(out.contains("role:audio"));
+    assert!(out.contains("role:still"));
+    assert!(out.contains("role:graphic"));
+    assert!(out.contains("role:caption"));
+    assert!(out.contains("role:support"));
     // Marker that distinguishes built-in from user-defined.
-    assert!(out.content.contains("kind=user"));
-    assert!(out.content.contains("kind=role"));
+    assert!(out.contains("kind=user"));
+    assert!(out.contains("kind=role"));
 }
 
-#[tokio::test]
-async fn list_bins_on_empty_project_still_lists_role_buckets() {
+#[test]
+fn list_bins_on_empty_project_still_lists_role_buckets() {
     let dir = tempfile::tempdir().unwrap();
     Project::init(dir.path()).unwrap();
 
-    let out = ListBinsTool
-        .handle(
-            invoke("list_bins", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    let out = list_bins::run(ListBinsArgs {}, ctx_at(dir.path())).unwrap();
     // No user-defined bins yet but role buckets always appear.
-    assert!(out.content.contains("role:video"));
-    assert!(out.content.contains("kind=role"));
+    assert!(out.contains("role:video"));
+    assert!(out.contains("kind=role"));
 }

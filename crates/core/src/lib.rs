@@ -9,9 +9,9 @@
 //! What remains here:
 //! - [`error::FunctionCallError`] — tool dispatch result shape, copied
 //!   verbatim from `vendor/codex-rs/core/src/function_tool.rs`.
-//! - [`tools`] — in-process tool implementations the `montage_mcp` MCP
-//!   wrappers delegate into.
-//! - [`montage_mcp`] — MCP-server tool definitions codex invokes.
+//! - [`montage_mcp`] — MCP-server tool definitions codex invokes, plus
+//!   their in-process implementations (the legacy `tools` module was
+//!   deleted once this tree stopped depending on it).
 //! - [`events`] — `SessionEvent` / `SessionError` shape kept for forward
 //!   compatibility while consumers migrate to codex's event stream.
 
@@ -92,7 +92,6 @@ pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
 pub mod tool_schema;
-pub mod tools;
 pub mod transcript_alignment;
 pub mod transcript_cleanup;
 pub mod transcript_pack;

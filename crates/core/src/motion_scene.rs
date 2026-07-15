@@ -1,9 +1,9 @@
 //! Shared planner for native procedural motion scenes.
 //!
 //! Owns the layer heuristics, the motion-template expansion path, and
-//! the on-screen content contract. Consumed by both the legacy
-//! `ToolHandler` wrapper (`crate::tools::plan_motion_scene`) and the
-//! live MCP wrapper (`crate::montage_mcp::tools::plan_motion_scene`).
+//! the on-screen content contract. Consumed by the live MCP wrapper
+//! (`crate::montage_mcp::tools::plan_motion_scene`), the sole production
+//! caller.
 
 use std::collections::BTreeMap;
 

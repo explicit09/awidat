@@ -1,7 +1,7 @@
 //! Color-scopes IPC for the desktop UI.
 //!
 //! Thin wrapper around
-//! [`montage_core::tools::color_scopes::extract_and_compute_color_scopes`]
+//! [`montage_core::montage_mcp::tools::color_scopes::extract_and_compute_color_scopes`]
 //! — the same pipeline the `color_scopes` agent tool calls — so the
 //! human-facing scope dock and the agent's evidence reads stay in
 //! lockstep.
@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use montage_core::tools::color_scopes::{
+use montage_core::montage_mcp::tools::color_scopes::{
     self, ColorScopeSnapshot, DEFAULT_SCOPE_BINS, DEFAULT_SCOPE_MAX_WIDTH,
 };
 use serde::Deserialize;

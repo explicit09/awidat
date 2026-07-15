@@ -1,8 +1,8 @@
 //! Integration tests for the production `apply_edl` tool surface:
 //! `montage_core::montage_mcp::tools::apply_edl::run`. This is the
-//! path the real `montage-mcp-server` binary dispatches into — unlike
-//! `crates/core/tests/editorial_workflow.rs`, which only exercises the
-//! legacy `crate::tools::ToolHandler` tree that no binary reaches.
+//! path the real `montage-mcp-server` binary dispatches into — the
+//! legacy `crate::tools::ToolHandler` tree it once had to be
+//! distinguished from is gone (see `docs/risk-register-2026-07-15.md`).
 //!
 //! Mirrors editorial_workflow.rs's fixture-project shape but drives
 //! `montage_mcp::tools::apply_edl::run` directly with a hand-built

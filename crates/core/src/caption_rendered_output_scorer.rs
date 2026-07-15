@@ -4,7 +4,7 @@
 //! against PlayRes + style margins + a safe-area profile, asks a
 //! [`CaptionFrameSampler`] for a grayscale frame at the event midpoint, then
 //! decides safe-area and occlusion outcomes. Production wiring lives in
-//! [`crate::tools::verify_render`] which calls
+//! [`crate::montage_mcp::tools::verify_render`] which calls
 //! [`score_caption_rendered_output`] before its sync gate-builder and
 //! injects measured evidence into the render manifest's metadata view.
 

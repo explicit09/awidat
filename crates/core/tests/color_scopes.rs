@@ -1,6 +1,6 @@
 //! Color scope computation tests.
 
-use montage_core::tools::color_scopes::{ColorScopeInput, compute_color_scopes};
+use montage_core::montage_mcp::tools::color_scopes::{ColorScopeInput, compute_color_scopes};
 
 #[test]
 fn color_scopes_compute_histogram_waveform_parade_and_vectorscope() {

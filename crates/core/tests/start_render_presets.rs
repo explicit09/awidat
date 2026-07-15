@@ -9,14 +9,13 @@
 
 use std::path::Path;
 
-use montage_core::FunctionCallError;
-use montage_core::tools::start_render::build_render_argv;
+use montage_core::montage_mcp::tools::start_render::build_render_argv;
 
 fn argv_contains_pair(argv: &[String], a: &str, b: &str) -> bool {
     argv.windows(2).any(|w| w[0] == a && w[1] == b)
 }
 
-fn argv_or_panic(label: &str, result: Result<Vec<String>, FunctionCallError>) -> Vec<String> {
+fn argv_or_panic(label: &str, result: Result<Vec<String>, String>) -> Vec<String> {
     match result {
         Ok(argv) => argv,
         Err(err) => panic!("{label}: expected Ok argv, got error {err:?}"),

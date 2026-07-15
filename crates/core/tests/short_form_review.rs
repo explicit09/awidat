@@ -3,17 +3,14 @@
 
 use montage_core::edl::parser;
 use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::plan_short_form_review::{
+    self, PlanShortFormReviewArgs, ShortFormDiscoveryModeArg, ShortFormProfileArg,
+};
 use montage_core::montage_mcp::tools::podcast_flow_shape::{PodcastFlowShapeArgs, run};
 use montage_core::short_form_review::{
     DurationClass, ShortFormCompositionMode, ShortFormDiscoveryMode, ShortFormLayoutMode,
     ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
 };
-use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use montage_core::tools::apply_edl::ApplyEdlTool;
-use montage_core::tools::export_package::ExportPackageTool;
-use montage_core::tools::plan_short_form_review::PlanShortFormReviewTool;
-use montage_core::tools::start_render::StartRenderTool;
-use tokio::sync::broadcast;
 
 fn review_input() -> ShortFormReviewInput {
     ShortFormReviewInput {
@@ -179,21 +176,9 @@ fn transcript_only_input() -> ShortFormReviewInput {
     }
 }
 
-fn ctx_at(root: &std::path::Path) -> ToolContext {
-    let (tx, _) = broadcast::channel(8);
-    ToolContext {
+fn ctx_at(root: &std::path::Path) -> McpToolCtx {
+    McpToolCtx {
         project_root: root.to_path_buf(),
-        events_tx: tx,
-        user_input_tx: None,
-        job_manager: montage_render::JobManager::new(),
-        approval_tx: None,
-        sandbox_mode: SandboxMode::Default,
-        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-            name: "test".into(),
-            version: "0.0.0".into(),
-        }),
-        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
-        subagent_return: None,
     }
 }
 
@@ -1007,50 +992,7 @@ fn ranked_sets_expose_top_five_candidate_packets_per_bucket() {
 }
 
 #[test]
-fn review_tool_is_read_only_but_apply_edl_proposals_are_permission_gated() {
-    let review = build_short_form_review(
-        review_input(),
-        ShortFormReviewOptions {
-            max_candidates: 1,
-            max_duration_s: 300.0,
-            profile: ShortFormProfile::EditorialReview,
-            discovery_mode: ShortFormDiscoveryMode::Review,
-        },
-    );
-    let Some(packet) = review.candidates.first() else {
-        panic!("expected candidate packet");
-    };
-    let invocation = ToolInvocation {
-        call_id: "call-1".to_string(),
-        name: "plan_short_form_review".to_string(),
-        args: serde_json::json!({"asset_id": "raw/founder-interview.mp4"}),
-    };
-
-    assert!(!PlanShortFormReviewTool.is_mutating(&invocation));
-    assert!(ApplyEdlTool.is_mutating(&ToolInvocation {
-        call_id: "call-2".to_string(),
-        name: "apply_edl".to_string(),
-        args: serde_json::json!({"edl": packet.draft_edl}),
-    }));
-    assert!(!ApplyEdlTool.is_mutating(&ToolInvocation {
-        call_id: "call-3".to_string(),
-        name: "apply_edl".to_string(),
-        args: serde_json::json!({"edl": packet.draft_edl, "dry_run": true}),
-    }));
-    assert!(StartRenderTool.is_mutating(&ToolInvocation {
-        call_id: "call-4".to_string(),
-        name: "start_render".to_string(),
-        args: packet.workflow.render_preview.args.clone(),
-    }));
-    assert!(ExportPackageTool.is_mutating(&ToolInvocation {
-        call_id: "call-5".to_string(),
-        name: "export_package".to_string(),
-        args: packet.workflow.export.args.clone(),
-    }));
-}
-
-#[tokio::test]
-async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets() {
+fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets() {
     let dir = tempfile::tempdir().unwrap_or_else(|err| {
         panic!("failed to create temp dir: {err}");
     });
@@ -1061,26 +1003,24 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
     write_sidecar(dir.path(), "face", asset, input.face);
     write_sidecar(dir.path(), "broll-candidates", asset, input.broll_assets);
 
-    let output = PlanShortFormReviewTool
-        .handle(
-            ToolInvocation {
-                call_id: "call-4".to_string(),
-                name: "plan_short_form_review".to_string(),
-                args: serde_json::json!({
-                    "asset_id": asset,
-                    "source_width": 1920,
-                    "source_height": 1080,
-                    "max_candidates": 2
-                }),
-            },
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            panic!("tool should return review packets: {err}");
-        });
+    let output = plan_short_form_review::run(
+        PlanShortFormReviewArgs {
+            asset_id: asset.to_string(),
+            source_width: Some(1920),
+            source_height: Some(1080),
+            max_candidates: Some(2),
+            max_duration_s: None,
+            profile: None,
+            discovery_mode: None,
+            trend_context: serde_json::json!({}),
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap_or_else(|err| {
+        panic!("tool should return review packets: {err}");
+    });
 
-    let review: serde_json::Value = serde_json::from_str(&output.content).unwrap_or_else(|err| {
+    let review: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|err| {
         panic!("tool output should be JSON: {err}");
     });
     let candidates = review
@@ -1100,8 +1040,8 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
     );
 }
 
-#[tokio::test]
-async fn plan_short_form_review_tool_accepts_harvest_discovery_mode() {
+#[test]
+fn plan_short_form_review_tool_accepts_harvest_discovery_mode() {
     let dir = tempfile::tempdir().unwrap_or_else(|err| {
         panic!("failed to create temp dir: {err}");
     });
@@ -1112,26 +1052,24 @@ async fn plan_short_form_review_tool_accepts_harvest_discovery_mode() {
     write_sidecar(dir.path(), "face", asset, input.face);
     write_sidecar(dir.path(), "broll-candidates", asset, input.broll_assets);
 
-    let output = PlanShortFormReviewTool
-        .handle(
-            ToolInvocation {
-                call_id: "call-harvest".to_string(),
-                name: "plan_short_form_review".to_string(),
-                args: serde_json::json!({
-                    "asset_id": asset,
-                    "max_candidates": 50,
-                    "profile": "viral_social",
-                    "discovery_mode": "harvest"
-                }),
-            },
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            panic!("tool should return harvest review packets: {err}");
-        });
+    let output = plan_short_form_review::run(
+        PlanShortFormReviewArgs {
+            asset_id: asset.to_string(),
+            source_width: None,
+            source_height: None,
+            max_candidates: Some(50),
+            max_duration_s: None,
+            profile: Some(ShortFormProfileArg::ViralSocial),
+            discovery_mode: Some(ShortFormDiscoveryModeArg::Harvest),
+            trend_context: serde_json::json!({}),
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap_or_else(|err| {
+        panic!("tool should return harvest review packets: {err}");
+    });
 
-    let review: serde_json::Value = serde_json::from_str(&output.content).unwrap_or_else(|err| {
+    let review: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|err| {
         panic!("tool output should be JSON: {err}");
     });
     assert_eq!(

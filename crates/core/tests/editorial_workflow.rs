@@ -2,24 +2,25 @@
 //!
 //! Hand-dispatches the five tools an agent typically chains for an
 //! editing turn — find_moment, view_timeline, inspect_clip, read_index,
-//! apply_edl — against a seeded project. Validates that the plumbing
-//! (ToolContext, project I/O, sidecar reads, OTIO commit, manifest
-//! consistency) holds together without going through the live model.
+//! apply_edl — against a seeded project, calling straight into the
+//! production `montage_mcp::tools::*::run` functions the real
+//! `montage-mcp-server` binary dispatches into (see
+//! `docs/risk-register-2026-07-15.md` for why the legacy
+//! `crate::tools::ToolHandler` tree this used to exercise is gone).
 //!
-//! Runs in normal `cargo test` (no `#[ignore]`); no network, no ffmpeg.
-//! For a live-agent variant see `tests/live_agent.rs`.
+//! Runs in normal `cargo test`; no network, no ffmpeg.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::Path;
-use std::sync::Arc;
 
 use chrono::Utc;
-use montage_core::tools::{
-    apply_edl::ApplyEdlTool, find_moment::FindMomentTool, inspect_clip::InspectClipTool,
-    read_index::ReadIndexTool, view_timeline::ViewTimelineTool,
-};
-use montage_core::{ToolContext, ToolHandler, ToolInvocation, ToolRegistry};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::apply_edl::{self, ApplyEdlArgs};
+use montage_core::montage_mcp::tools::find_moment::{self, FindMomentArgs};
+use montage_core::montage_mcp::tools::inspect_clip::{self, InspectClipArgs};
+use montage_core::montage_mcp::tools::read_index::{self, ReadIndexArgs};
+use montage_core::montage_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 use montage_proto::index::{AssetId, IndexerEntry, Manifest};
 use montage_proto::montage_meta::{Anchor as AwAnchor, MontageClipMetadata};
 use montage_proto::otio::{
@@ -27,7 +28,6 @@ use montage_proto::otio::{
     Track, TrackChild, TrackKind,
 };
 use montage_proto::project::{Project, files};
-use tokio::sync::broadcast;
 
 /// Seeds a temp project with:
 /// - 3 clips on V1 with transcript snippets
@@ -129,133 +129,98 @@ fn seed_project() -> tempfile::TempDir {
     dir
 }
 
-fn ctx_at(root: &Path) -> ToolContext {
-    let (tx, _) = broadcast::channel(8);
-    ToolContext {
+fn ctx_at(root: &Path) -> McpToolCtx {
+    McpToolCtx {
         project_root: root.to_path_buf(),
-        events_tx: tx,
-        user_input_tx: None,
-        job_manager: montage_render::JobManager::new(),
-
-        approval_tx: None,
-        sandbox_mode: montage_core::tool::SandboxMode::Default,
-        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-            name: "test".into(),
-            version: "0.0.0".into(),
-        }),
-        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
-        subagent_return: None,
     }
 }
 
-fn invoke(name: &'static str, args: serde_json::Value) -> ToolInvocation {
-    ToolInvocation {
-        call_id: format!("call-{name}"),
-        name: name.into(),
-        args,
+fn apply_edl_args(edl: &str, dry_run: bool) -> ApplyEdlArgs {
+    ApplyEdlArgs {
+        edl: edl.to_string(),
+        dry_run,
+        reasoning: None,
     }
 }
 
-#[tokio::test]
-async fn editorial_workflow_find_view_inspect_read_apply() {
+#[test]
+fn editorial_workflow_find_view_inspect_read_apply() {
     let dir = seed_project();
 
-    // Step 1: Agent registers tools (mirrors what the REPL does).
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(FindMomentTool));
-    registry.register(Arc::new(ViewTimelineTool));
-    registry.register(Arc::new(InspectClipTool));
-    registry.register(Arc::new(ReadIndexTool));
-    registry.register(Arc::new(ApplyEdlTool));
-    assert_eq!(registry.len(), 5, "all five tools must register");
-
-    // Step 2: find_moment locates the Stripe segment.
-    let find = registry.get("find_moment").unwrap();
-    let result = find
-        .handle(
-            invoke("find_moment", serde_json::json!({"query": "Stripe"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("find_moment must succeed");
-    let body: serde_json::Value =
-        serde_json::from_str(&result.content).expect("find_moment returns JSON");
+    // Step 1: find_moment locates the Stripe segment.
+    let result = find_moment::run(
+        FindMomentArgs {
+            query: "Stripe".to_string(),
+            asset_id: None,
+            limit: None,
+        },
+        ctx_at(dir.path()),
+    )
+    .expect("find_moment must succeed");
+    let body: serde_json::Value = serde_json::from_str(&result).expect("find_moment returns JSON");
     let hits = body["results"].as_array().expect("results array");
     assert_eq!(hits.len(), 1, "exactly one Stripe match");
     assert_eq!(hits[0]["asset_id"], "raw/ep-0.mp4");
     assert!(hits[0]["snippet"].as_str().unwrap().contains("Stripe"));
 
-    // Step 3: view_timeline shows all three clips.
-    let view = registry.get("view_timeline").unwrap();
-    let result = view
-        .handle(
-            invoke("view_timeline", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("view_timeline must succeed");
-    assert!(result.content.contains("clip \"clip-0\""));
-    assert!(result.content.contains("clip \"clip-1\""));
-    assert!(result.content.contains("clip \"clip-2\""));
+    // Step 2: view_timeline shows all three clips.
+    let result = view_timeline::run(
+        ViewTimelineArgs {
+            start_s: None,
+            end_s: None,
+            lines: None,
+        },
+        ctx_at(dir.path()),
+    )
+    .expect("view_timeline must succeed");
+    assert!(result.contains("clip \"clip-0\""));
+    assert!(result.contains("clip \"clip-1\""));
+    assert!(result.contains("clip \"clip-2\""));
     assert!(
-        result.content.contains("total_duration=15.000s"),
+        result.contains("total_duration=15.000s"),
         "3 clips * 5s each = 15s total"
     );
 
-    // Step 4: inspect_clip fetches metadata for the matched asset.
-    let inspect = registry.get("inspect_clip").unwrap();
-    let result = inspect
-        .handle(
-            invoke(
-                "inspect_clip",
-                serde_json::json!({"asset_id": "raw/ep-0.mp4"}),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("inspect_clip must succeed");
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    // Step 3: inspect_clip fetches metadata for the matched asset.
+    let result = inspect_clip::run(
+        InspectClipArgs {
+            asset_id: "raw/ep-0.mp4".to_string(),
+        },
+        ctx_at(dir.path()),
+    )
+    .expect("inspect_clip must succeed");
+    let v: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(v["language"], "en");
     assert_eq!(v["segment_count"], 1);
 
-    // Step 5: read_index pages the transcript channel.
-    let read = registry.get("read_index").unwrap();
-    let result = read
-        .handle(
-            invoke(
-                "read_index",
-                serde_json::json!({
-                    "asset_id": "raw/ep-0.mp4",
-                    "channel": "transcript"
-                }),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("read_index must succeed");
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    // Step 4: read_index pages the transcript channel.
+    let result = read_index::run(
+        ReadIndexArgs {
+            asset_id: "raw/ep-0.mp4".to_string(),
+            channel: "transcript".to_string(),
+            offset: None,
+            limit: None,
+        },
+        ctx_at(dir.path()),
+    )
+    .expect("read_index must succeed");
+    let v: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(v["language"], "en");
     assert_eq!(v["total_segments"], 1);
     assert_eq!(v["segments"][0]["text"], snippet_for(0));
 
-    // Step 6: apply_edl lifts the kitchen clip via transcript anchor,
+    // Step 5: apply_edl lifts the kitchen clip via transcript anchor,
     // then verifies a timing-preserving gap replaced it on disk.
-    let apply = registry.get("apply_edl").unwrap();
     let edl = "\
 *** Begin EDL
 *** Delete Clip
 @@ anchor: transcript_snippet=\"kitchen\"
 *** End EDL
 ";
-    let result = apply
-        .handle(
-            invoke("apply_edl", serde_json::json!({"edl": edl})),
-            ctx_at(dir.path()),
-        )
-        .await
+    let result = apply_edl::run(apply_edl_args(edl, false), ctx_at(dir.path()))
         .expect("apply_edl must succeed");
-    assert!(result.content.contains("committed 1 op"));
-    assert!(result.content.contains("deleted clip \"clip-1\""));
+    assert!(result.contains("committed 1 op"));
+    assert!(result.contains("deleted clip \"clip-1\""));
 
     // Round-trip: re-read the project and confirm the clip is gone.
     let after = Project::read(dir.path()).expect("re-read");
@@ -276,25 +241,27 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
     assert!((gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9);
     assert_eq!(c1.name, "clip-2", "clip-1 (kitchen) was deleted");
 
-    // Step 7: re-running view_timeline reflects the new shape.
-    let result = view
-        .handle(
-            invoke("view_timeline", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("view_timeline post-edit");
-    assert!(result.content.contains("clip \"clip-0\""));
-    assert!(result.content.contains("clip \"clip-2\""));
+    // Step 6: re-running view_timeline reflects the new shape.
+    let result = view_timeline::run(
+        ViewTimelineArgs {
+            start_s: None,
+            end_s: None,
+            lines: None,
+        },
+        ctx_at(dir.path()),
+    )
+    .expect("view_timeline post-edit");
+    assert!(result.contains("clip \"clip-0\""));
+    assert!(result.contains("clip \"clip-2\""));
     assert!(
-        !result.content.contains("clip \"clip-1\""),
+        !result.contains("clip \"clip-1\""),
         "clip-1 must be gone after apply_edl"
     );
-    assert!(result.content.contains("total_duration=15.000s"));
+    assert!(result.contains("total_duration=15.000s"));
 }
 
-#[tokio::test]
-async fn apply_edl_dry_run_chain_does_not_persist() {
+#[test]
+fn apply_edl_dry_run_chain_does_not_persist() {
     // Dry-run apply followed by a live view_timeline must show the
     // *unchanged* timeline.
     let dir = seed_project();
@@ -304,33 +271,26 @@ async fn apply_edl_dry_run_chain_does_not_persist() {
 @@ anchor: transcript_snippet=\"Stripe\"
 *** End EDL
 ";
-    let apply_out = ApplyEdlTool
-        .handle(
-            invoke(
-                "apply_edl",
-                serde_json::json!({"edl": edl, "dry_run": true}),
-            ),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    assert!(apply_out.content.contains("DRY RUN"));
+    let apply_out = apply_edl::run(apply_edl_args(edl, true), ctx_at(dir.path())).unwrap();
+    assert!(apply_out.contains("DRY RUN"));
 
-    let view_out = ViewTimelineTool
-        .handle(
-            invoke("view_timeline", serde_json::json!({})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    let view_out = view_timeline::run(
+        ViewTimelineArgs {
+            start_s: None,
+            end_s: None,
+            lines: None,
+        },
+        ctx_at(dir.path()),
+    )
+    .unwrap();
     // All 3 clips still present.
-    assert!(view_out.content.contains("clip \"clip-0\""));
-    assert!(view_out.content.contains("clip \"clip-1\""));
-    assert!(view_out.content.contains("clip \"clip-2\""));
+    assert!(view_out.contains("clip \"clip-0\""));
+    assert!(view_out.contains("clip \"clip-1\""));
+    assert!(view_out.contains("clip \"clip-2\""));
 }
 
-#[tokio::test]
-async fn apply_edl_anchor_miss_doesnt_corrupt_project() {
+#[test]
+fn apply_edl_anchor_miss_doesnt_corrupt_project() {
     let dir = seed_project();
     let edl = "\
 *** Begin EDL
@@ -339,15 +299,8 @@ async fn apply_edl_anchor_miss_doesnt_corrupt_project() {
 *** End EDL
 ";
     // First op fails → entire envelope rejected.
-    let err = ApplyEdlTool
-        .handle(
-            invoke("apply_edl", serde_json::json!({"edl": edl})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("Did you mean"));
+    let err = apply_edl::run(apply_edl_args(edl, false), ctx_at(dir.path())).unwrap_err();
+    assert!(err.contains("Did you mean"));
 
     // Project unchanged.
     let after = Project::read(dir.path()).unwrap();
@@ -357,8 +310,8 @@ async fn apply_edl_anchor_miss_doesnt_corrupt_project() {
     assert_eq!(t.children.len(), 3, "no clip removed on anchor miss");
 }
 
-#[tokio::test]
-async fn apply_edl_later_op_failure_rolls_back_prior_successful_ops() {
+#[test]
+fn apply_edl_later_op_failure_rolls_back_prior_successful_ops() {
     let dir = seed_project();
     let before = std::fs::read_to_string(dir.path().join(files::OTIO)).unwrap();
     let edl = "\
@@ -370,15 +323,8 @@ async fn apply_edl_later_op_failure_rolls_back_prior_successful_ops() {
 *** End EDL
 ";
 
-    let err = ApplyEdlTool
-        .handle(
-            invoke("apply_edl", serde_json::json!({"edl": edl})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("Did you mean"));
+    let err = apply_edl::run(apply_edl_args(edl, false), ctx_at(dir.path())).unwrap_err();
+    assert!(err.contains("Did you mean"));
 
     let after = std::fs::read_to_string(dir.path().join(files::OTIO)).unwrap();
     assert_eq!(

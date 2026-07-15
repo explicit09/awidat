@@ -11,42 +11,28 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::Path;
-use std::sync::Arc;
 
-use montage_core::tools::assess_continuity::AssessContinuityTool;
-use montage_core::{ToolContext, ToolHandler, ToolInvocation};
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::assess_continuity::{AssessContinuityArgs, run};
 use montage_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
     TrackChild, TrackKind,
 };
 use montage_proto::project::{Project, files};
-use tokio::sync::broadcast;
 
 // --- fixture builders ---
 
-fn ctx_at(root: &Path) -> ToolContext {
-    let (tx, _) = broadcast::channel(8);
-    ToolContext {
+fn ctx_at(root: &Path) -> McpToolCtx {
+    McpToolCtx {
         project_root: root.to_path_buf(),
-        events_tx: tx,
-        user_input_tx: None,
-        job_manager: montage_render::JobManager::new(),
-        approval_tx: None,
-        sandbox_mode: montage_core::tool::SandboxMode::Default,
-        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-            name: "test".into(),
-            version: "0.0.0".into(),
-        }),
-        skills: Arc::new(montage_core::skills::SkillRegistry::default()),
-        subagent_return: None,
     }
 }
 
-fn invoke(args: serde_json::Value) -> ToolInvocation {
-    ToolInvocation {
-        call_id: "c1".into(),
-        name: "assess_continuity".into(),
-        args,
+fn invoke(at_s: f64, kind: &str) -> AssessContinuityArgs {
+    AssessContinuityArgs {
+        at_s,
+        kind: kind.to_string(),
+        asset_id: None,
     }
 }
 
@@ -163,18 +149,12 @@ fn write_motion(dir: &Path, asset_id: &str, magnitudes: &[f32]) {
 
 // --- tests ---
 
-#[tokio::test]
-async fn dirty_when_cut_lands_mid_word() {
+#[test]
+fn dirty_when_cut_lands_mid_word() {
     // Word "hello" spans 1.0..1.5; cut at 1.2 lands inside it.
     let dir = seed_project_with_whisper("raw/ep.mp4", &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)]);
-    let out = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 1.2, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("handle");
-    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let out = run(invoke(1.2, "trim_in"), ctx_at(dir.path())).expect("run");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["verdict"], "dirty");
     let rules = v["rules"].as_array().unwrap();
     let mid_sent = rules
@@ -185,18 +165,12 @@ async fn dirty_when_cut_lands_mid_word() {
     assert!(mid_sent["reason"].as_str().unwrap().contains("hello"));
 }
 
-#[tokio::test]
-async fn clean_when_cut_at_word_boundary() {
+#[test]
+fn clean_when_cut_at_word_boundary() {
     // Cut at 1.5 (end of "hello") is clean.
     let dir = seed_project_with_whisper("raw/ep.mp4", &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)]);
-    let out = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 1.55, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("handle");
-    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let out = run(invoke(1.55, "trim_in"), ctx_at(dir.path())).expect("run");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let mid_sent = v["rules"]
         .as_array()
         .unwrap()
@@ -208,22 +182,16 @@ async fn clean_when_cut_at_word_boundary() {
     // the test pins only the mid_sentence verdict for this scenario.
 }
 
-#[tokio::test]
-async fn risky_with_three_cuts_in_five_seconds() {
+#[test]
+fn risky_with_three_cuts_in_five_seconds() {
     // Three contiguous 4s clips → cut points at 0, 4, 8.
     // Proposing a TrimIn at 6.0 → existing cuts at 4 (within 2s) and
     // 8 (within 2s) → 2 nearby cuts → rhythm rule risky.
     let dir = seed_project_with_whisper("raw/ep.mp4", &[]);
     replace_timeline_with_three_clips(dir.path(), "raw/ep.mp4");
 
-    let out = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 6.0, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("handle");
-    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let out = run(invoke(6.0, "trim_in"), ctx_at(dir.path())).expect("run");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let rhythm = v["rules"]
         .as_array()
         .unwrap()
@@ -234,21 +202,15 @@ async fn risky_with_three_cuts_in_five_seconds() {
     assert!(rhythm["reason"].as_str().unwrap().contains("frantic"));
 }
 
-#[tokio::test]
-async fn dirty_when_high_motion_no_scene_change() {
+#[test]
+fn dirty_when_high_motion_no_scene_change() {
     // Motion sidecar: high score at second 5; no scene-change index.
     // Cut at 5.5 should fire the mid_motion rule as dirty.
     let dir = seed_project_with_whisper("raw/ep.mp4", &[]);
     write_motion(dir.path(), "raw/ep.mp4", &[0.0, 0.1, 0.05, 0.1, 0.1, 0.8]);
 
-    let out = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 5.5, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("handle");
-    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let out = run(invoke(5.5, "trim_in"), ctx_at(dir.path())).expect("run");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let motion = v["rules"]
         .as_array()
         .unwrap()
@@ -259,8 +221,8 @@ async fn dirty_when_high_motion_no_scene_change() {
     assert_eq!(v["verdict"], "dirty");
 }
 
-#[tokio::test]
-async fn abstain_when_no_sidecars() {
+#[test]
+fn abstain_when_no_sidecars() {
     // No whisper, no motion, no silence — every rule abstains.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut project = Project::init(dir.path()).expect("init");
@@ -287,14 +249,8 @@ async fn abstain_when_no_sidecars() {
     )
     .unwrap();
 
-    let out = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 5.0, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .expect("handle");
-    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    let out = run(invoke(5.0, "trim_in"), ctx_at(dir.path())).expect("run");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     // Aggregate: no sidecars at all → all rules abstain except
     // rhythm (which has nearby_cuts_s = empty Vec, defaulting to
     // Clean). So aggregate is Clean. The interesting assertion is
@@ -307,31 +263,17 @@ async fn abstain_when_no_sidecars() {
     );
 }
 
-#[tokio::test]
-async fn errors_when_at_s_past_timeline_end() {
+#[test]
+fn errors_when_at_s_past_timeline_end() {
     let dir = seed_project_with_whisper("raw/ep.mp4", &[]);
     // Timeline is 10s long; at_s=99 is off the end.
-    let err = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 99.0, "kind": "trim_in"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(msg.contains("doesn't land on any video clip"));
+    let err = run(invoke(99.0, "trim_in"), ctx_at(dir.path())).unwrap_err();
+    assert!(err.contains("doesn't land on any video clip"));
 }
 
-#[tokio::test]
-async fn errors_on_unknown_kind() {
+#[test]
+fn errors_on_unknown_kind() {
     let dir = seed_project_with_whisper("raw/ep.mp4", &[]);
-    let err = AssessContinuityTool
-        .handle(
-            invoke(serde_json::json!({"at_s": 1.0, "kind": "lol_what"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(msg.contains("unknown kind"));
+    let err = run(invoke(1.0, "lol_what"), ctx_at(dir.path())).unwrap_err();
+    assert!(err.contains("unknown kind"));
 }

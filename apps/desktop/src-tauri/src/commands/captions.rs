@@ -4,9 +4,9 @@
 //! The cues are remapped to *timeline-time*, not raw source-time, so
 //! cuts/trims/inserts the user has made in the Edit screen flow into
 //! the exported sidecar. Implementation reuses
-//! `montage_core::tools::export_package::collect_timeline_cues` which
-//! is the same algorithm `export_package` relies on for its package
-//! exports.
+//! `montage_core::montage_mcp::tools::export_package::collect_timeline_cues`
+//! which is the same algorithm `export_package` relies on for its
+//! package exports.
 //!
 //! Captions on the Deliver page are sidecar-only (SRT + VTT files
 //! the user uploads to YouTube/TikTok/etc. separately). Burn-in
@@ -14,7 +14,7 @@
 
 use std::path::PathBuf;
 
-use montage_core::tools::export_package::collect_timeline_cues;
+use montage_core::montage_mcp::tools::export_package::collect_timeline_cues;
 use montage_proto::project::Project;
 use montage_proto::subtitle::{format_srt, format_vtt};
 use serde::Serialize;

@@ -5,8 +5,10 @@ use montage_core::edl::anchor::AnchorContext;
 use montage_core::edl::apply::apply;
 use montage_core::edl::op::EdlOp;
 use montage_core::edl::parser::parse;
+use montage_core::montage_mcp::tools::plan_visual_support::{
+    VisualSupportLane, route_visual_support_request,
+};
 use montage_core::motion_scene::{MotionScenePlanRequest, plan_motion_scene_request};
-use montage_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
 use montage_proto::otio::Timeline;
 use montage_proto::professional::MotionSceneLayerKind;
 

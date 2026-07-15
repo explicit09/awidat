@@ -10,40 +10,27 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use montage_core::FunctionCallError;
 use montage_core::media_catalog_mutation::{
     create_bin, ensure_montage_metadata, move_asset_to_bin, upsert_asset,
 };
-use montage_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
-use montage_core::tools::list_assets::ListAssetsTool;
+use montage_core::montage_mcp::context::McpToolCtx;
+use montage_core::montage_mcp::tools::list_assets::{ListAssetsArgs, run};
 use montage_proto::professional::{AssetReadiness, AssetRecord, AssetRole};
 use montage_proto::project::Project;
 use std::path::Path;
-use tokio::sync::broadcast;
 
-fn ctx_at(root: &Path) -> ToolContext {
-    let (tx, _) = broadcast::channel(8);
-    ToolContext {
+fn ctx_at(root: &Path) -> McpToolCtx {
+    McpToolCtx {
         project_root: root.to_path_buf(),
-        events_tx: tx,
-        user_input_tx: None,
-        job_manager: montage_render::JobManager::new(),
-        approval_tx: None,
-        sandbox_mode: SandboxMode::Default,
-        mcp_host: montage_core::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-            name: "test".into(),
-            version: "0.0.0".into(),
-        }),
-        skills: std::sync::Arc::new(montage_core::skills::SkillRegistry::default()),
-        subagent_return: None,
     }
 }
 
-fn invoke(args: serde_json::Value) -> ToolInvocation {
-    ToolInvocation {
-        call_id: "c1".into(),
-        name: "list_assets".into(),
-        args,
+fn args(scope: Option<&str>, bin: Option<&str>, offset: Option<usize>) -> ListAssetsArgs {
+    ListAssetsArgs {
+        scope: scope.map(str::to_string),
+        offset,
+        limit: None,
+        bin: bin.map(str::to_string),
     }
 }
 
@@ -87,97 +74,65 @@ fn project_with_bins() -> tempfile::TempDir {
     dir
 }
 
-#[tokio::test]
-async fn list_assets_without_bin_filter_is_unchanged() {
+#[test]
+fn list_assets_without_bin_filter_is_unchanged() {
     let dir = project_with_bins();
-    let out = ListAssetsTool
-        .handle(invoke(serde_json::json!({})), ctx_at(dir.path()))
-        .await
-        .unwrap();
+    let out = run(args(None, None, None), ctx_at(dir.path())).unwrap();
     // 3 raw + 1 render = 4
     assert!(
-        out.content.contains("scope=all total=4"),
-        "expected total=4 without bin filter, got:\n{}",
-        out.content
+        out.contains("scope=all total=4"),
+        "expected total=4 without bin filter, got:\n{out}"
     );
-    assert!(out.content.contains("[raw] a.mp4"));
-    assert!(out.content.contains("[raw] b.mp4"));
-    assert!(out.content.contains("[raw] c.mp4"));
-    assert!(out.content.contains("[renders] out.mp4"));
+    assert!(out.contains("[raw] a.mp4"));
+    assert!(out.contains("[raw] b.mp4"));
+    assert!(out.contains("[raw] c.mp4"));
+    assert!(out.contains("[renders] out.mp4"));
 }
 
-#[tokio::test]
-async fn list_assets_with_bin_filter_returns_only_members() {
+#[test]
+fn list_assets_with_bin_filter_returns_only_members() {
     let dir = project_with_bins();
-    let out = ListAssetsTool
-        .handle(
-            invoke(serde_json::json!({"bin": "scene-1"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    let out = run(args(None, Some("scene-1"), None), ctx_at(dir.path())).unwrap();
     assert!(
-        out.content.contains("bin=scene-1 total=2"),
-        "expected bin=scene-1 total=2, got:\n{}",
-        out.content
+        out.contains("bin=scene-1 total=2"),
+        "expected bin=scene-1 total=2, got:\n{out}"
     );
-    assert!(out.content.contains("a.mp4"));
-    assert!(out.content.contains("b.mp4"));
+    assert!(out.contains("a.mp4"));
+    assert!(out.contains("b.mp4"));
     assert!(
-        !out.content.contains("c.mp4"),
-        "c.mp4 belongs to broll, not scene-1; should be filtered out: {}",
-        out.content
+        !out.contains("c.mp4"),
+        "c.mp4 belongs to broll, not scene-1; should be filtered out: {out}"
     );
     assert!(
-        !out.content.contains("out.mp4"),
-        "renders are not in bin scene-1; should be filtered out: {}",
-        out.content
+        !out.contains("out.mp4"),
+        "renders are not in bin scene-1; should be filtered out: {out}"
     );
 }
 
-#[tokio::test]
-async fn list_assets_unknown_bin_returns_zero_results() {
+#[test]
+fn list_assets_unknown_bin_returns_zero_results() {
     let dir = project_with_bins();
-    let out = ListAssetsTool
-        .handle(
-            invoke(serde_json::json!({"bin": "no-such-bin"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
+    let out = run(args(None, Some("no-such-bin"), None), ctx_at(dir.path())).unwrap();
     assert!(
-        out.content.contains("total=0"),
-        "unknown bin should yield total=0, got:\n{}",
-        out.content
+        out.contains("total=0"),
+        "unknown bin should yield total=0, got:\n{out}"
     );
 }
 
-#[tokio::test]
-async fn list_assets_bin_filter_combines_with_scope_raw() {
+#[test]
+fn list_assets_bin_filter_combines_with_scope_raw() {
     let dir = project_with_bins();
     // scope=raw + bin=broll → only c.mp4 (raw).
-    let out = ListAssetsTool
-        .handle(
-            invoke(serde_json::json!({"scope": "raw", "bin": "broll"})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap();
-    assert!(out.content.contains("total=1"));
-    assert!(out.content.contains("c.mp4"));
-    assert!(!out.content.contains("a.mp4"));
-    assert!(!out.content.contains("b.mp4"));
+    let out = run(args(Some("raw"), Some("broll"), None), ctx_at(dir.path())).unwrap();
+    assert!(out.contains("total=1"));
+    assert!(out.contains("c.mp4"));
+    assert!(!out.contains("a.mp4"));
+    assert!(!out.contains("b.mp4"));
 }
 
-#[tokio::test]
-async fn list_assets_offset_zero_still_errors_with_bin() {
+#[test]
+fn list_assets_offset_zero_still_errors_with_bin() {
     let dir = project_with_bins();
-    let err = ListAssetsTool
-        .handle(
-            invoke(serde_json::json!({"bin": "scene-1", "offset": 0})),
-            ctx_at(dir.path()),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("1-indexed")));
+    let err = run(args(None, Some("scene-1"), Some(0)), ctx_at(dir.path())).unwrap_err();
+    assert!(err.contains("1-indexed"));
 }
