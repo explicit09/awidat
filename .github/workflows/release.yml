@@ -97,7 +97,10 @@ jobs:
         # codex-sidecar.yml prebuilds it per content hash; building it inline
         # cost 19-57 minutes per release leg. Falls back to building from
         # source if no prebuilt matches (e.g. first run after a vendor bump
-        # before the prebuild workflow finishes).
+        # before the prebuild workflow finishes) — but that fallback must be
+        # LOUD: a silent multi-hour inline rebuild reads as "release is slow"
+        # instead of "the prebuild cache is missing and codex-sidecar.yml
+        # needs a look".
         run: |
           set -euo pipefail
           key="$(git rev-parse "HEAD:vendor/codex-rs" | cut -c1-12)-$(git hash-object Cargo.lock | cut -c1-12)"
@@ -108,7 +111,9 @@ jobs:
             chmod +x "$dest"
             echo "using prebuilt codex sidecar $asset"
           else
-            echo "prebuilt $asset not found; building codex sidecar from source" >&2
+            msg="codex sidecar cache miss for $asset — inline rebuild (~20-60 min). Check codex-sidecar.yml run for the current Cargo.lock."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
             make desktop-codex TARGET_TRIPLE=${{ matrix.target }} CODEX_PROFILE=release
           fi
 
@@ -128,19 +133,49 @@ jobs:
         # CLEANS it after the DMG is built — which made the later
         # "Verify desktop resources" step inspect a gutted .app and fail on
         # a missing Contents/Resources.
-        # Retried because codesign reaches Apple's timestamp server, which
-        # flakes (one such flake previously discarded a 112-minute build). A
-        # retry reuses the warm target/, so only bundling and signing rerun.
+        #
+        # At most ONE retry (two attempts total), not three: a blind 3x
+        # retry silently masked how often this actually flakes. Attempt 1's
+        # failure output is captured and echoed into both the log and the
+        # job summary so flakes stay visible and countable instead of
+        # disappearing into a green run. Before retrying, detach any stale
+        # `dmg.*` volumes left mounted by the failed attempt — a stale
+        # mount makes Finder's AppleEvent time out (-1712) on the next
+        # hdiutil/Finder-driven DMG step, a known local failure mode.
+        # codesign also reaches Apple's timestamp server, which flakes
+        # independently (one such flake previously discarded a 112-minute
+        # build); the retry reuses the warm target/, so only bundling and
+        # signing rerun.
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
-            if pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles app,dmg; then
-              exit 0
-            fi
-            echo "tauri build attempt $attempt failed; retrying in 30s" >&2
-            sleep 30
-          done
-          echo "tauri build failed after 3 attempts" >&2
+          attempt1_log="$(mktemp)"
+          if pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles app,dmg 2>&1 | tee "$attempt1_log"; then
+            exit 0
+          fi
+          echo "::warning::tauri build attempt 1 failed for ${{ matrix.target }}; capturing output and retrying once after detaching stale dmg volumes"
+          {
+            echo "### tauri build attempt 1 failed (${{ matrix.target }})"
+            echo '```'
+            tail -n 100 "$attempt1_log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Detach any stale dmg.* (or other build-leftover) volumes before
+          # retrying so the retry doesn't inherit a wedged mount. Each
+          # mounted-volume line in `hdiutil info` starts with its own
+          # slice device (e.g. `/dev/disk4s1`), so the device is column 1
+          # of the same line the volume path appears on.
+          while IFS= read -r stale_dev; do
+            [ -n "$stale_dev" ] || continue
+            echo "detaching stale volume on $stale_dev" >&2
+            hdiutil detach "$stale_dev" -force || true
+          done < <(hdiutil info | awk '/\/Volumes\/(dmg\.|Montage)/{print $1}')
+
+          sleep 10
+          if pnpm --dir apps/desktop tauri build --target ${{ matrix.target }} --bundles app,dmg; then
+            exit 0
+          fi
+          echo "::error::tauri build failed after 2 attempts for ${{ matrix.target }}" >&2
           exit 1
 
       - name: Verify desktop resources

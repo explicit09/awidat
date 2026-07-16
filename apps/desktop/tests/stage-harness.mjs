@@ -250,11 +250,32 @@ async function runCase(ctx, testCase) {
     // passed. Its spring-animated word layers give the compositor more
     // to do, widening the gap.
     //
-    // Wait for two animation frames: rAF fires before paint, so the
-    // second one is only reached after the first has been painted.
-    await page.evaluate(
-      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
+    // The overlays themselves are NOT animated: every layer's style is
+    // computed once, synchronously, from the frozen `clock.now()` (see
+    // StageHarness.tsx's determinism contract) — there is no CSS
+    // transition/@keyframes on `.timeline-title-layer` /
+    // `.timeline-motion-scene-layer` and no free-running rAF driving
+    // them. So once React has committed, the only remaining race is
+    // browser paint/compositor timing, not the rendered values. Force a
+    // synchronous layout flush (reading a layout property drains any
+    // pending style recalc immediately, rather than leaving it to the
+    // next frame) before waiting for the paint to land: rAF fires
+    // before paint, so a callback that only resolves once a forced
+    // layout matches the wait-for-paint intent, and two chained rAFs
+    // guarantee the frame between them was actually presented.
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-testid="stage-harness-root"]');
+      // Reading offsetHeight forces layout synchronously.
+      void root?.getBoundingClientRect();
+      return new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          // Force layout again inside the first frame so any recalc
+          // triggered by that frame's paint prep is flushed too.
+          void root?.getBoundingClientRect();
+          requestAnimationFrame(resolve);
+        });
+      });
+    });
 
     // Assert the expected overlay DOM landed before trusting the screenshot.
     const frame = page.locator('[data-testid="stage-harness-root"]');
@@ -262,8 +283,12 @@ async function runCase(ctx, testCase) {
     await assertDom(page);
 
     // Screenshot only the program-frame element — avoids window-chrome
-    // variance since the frame itself is a fixed 1280x720 box.
-    await frame.screenshot({ path: shotPath });
+    // variance since the frame itself is a fixed 1280x720 box. Capture
+    // via Playwright's own screenshot (not a raw CDP call) so it
+    // continues to wait for its own actionability/stability checks on
+    // top of the paint wait above — belt and suspenders against a
+    // mid-paint capture.
+    await frame.screenshot({ path: shotPath, animations: "disabled" });
   } finally {
     await page.close();
   }
