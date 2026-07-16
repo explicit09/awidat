@@ -9,6 +9,10 @@
  * DOM-asserts the expected overlays landed, screenshots just the
  * program-frame element, and compares it against a committed
  * per-platform golden via ffmpeg SSIM (see `scripts/ssim-compare.sh`).
+ * A failing compare gets ONE evidence-preserving recapture from a fresh
+ * page load (the known CI flake is a stale pre-seek video frame in the
+ * captured surface — see comments in captureCase/runCase); both
+ * attempts' SSIMs are printed and the attempt-1 screenshot is kept.
  *
  * A missing per-platform golden is a hard failure so the gate can never
  * silently self-seed in CI. To seed a new platform, run once locally with
@@ -218,13 +222,10 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
-/** Run one case: navigate, DOM-assert, screenshot, bootstrap/compare. */
-async function runCase(ctx, testCase) {
-  const { name, scene, t, assertDom } = testCase;
-  const caseLabel = `${name} t=${t}`;
+/** Navigate a fresh page, DOM-assert, and screenshot one case. */
+async function captureCase(ctx, testCase, shotPath) {
+  const { scene, t, assertDom } = testCase;
   const harnessUrl = new URL(`/stage-harness?t=${t}&scene=${scene}`, BASE_URL).toString();
-  const shotPath = path.join(SCREENSHOT_DIR, `stage-harness-${name}-t${t}.png`);
-  const goldenPath = path.join(GOLDEN_DIR, `${name}-t${t}-${process.platform}.png`);
 
   const page = await ctx.newPage();
   try {
@@ -242,39 +243,41 @@ async function runCase(ctx, testCase) {
     const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
     assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
 
-    // `stage-harness-ready` means the seeked frame has been PRESENTED
-    // (requestVideoFrameCallback), but presented is not painted: the
-    // compositor still has to draw it. Screenshotting in that window
-    // captures the pre-seek frame — which is what made kinetic-text
-    // diverge on the Linux runner while the same run's other cases
-    // passed. Its spring-animated word layers give the compositor more
-    // to do, widening the gap.
+    // What the CI flake actually is (diagnosed from run 29462080026's
+    // artifact): the OVERLAYS in a failing capture are pixel-identical
+    // to the golden — text, fonts, positions all correct — but the
+    // underlying VIDEO shows the clip's FIRST frame (t=0) instead of
+    // the seeked frame. SSIM of the failing kinetic-text t=1.5 shot's
+    // video region: 0.9987 vs frame 0, 0.7986 vs the correct frame 45.
+    // Only two frames are ever presented in the page's life (frame 0 on
+    // load, frame N after the seek), so a stale capture is always the
+    // same wrong image — which is why failing SSIMs repeat byte-identical
+    // across runs (0.818982 twice) instead of varying like a mid-paint
+    // race would.
     //
-    // The overlays themselves are NOT animated: every layer's style is
-    // computed once, synchronously, from the frozen `clock.now()` (see
-    // StageHarness.tsx's determinism contract) — there is no CSS
-    // transition/@keyframes on `.timeline-title-layer` /
-    // `.timeline-motion-scene-layer` and no free-running rAF driving
-    // them. So once React has committed, the only remaining race is
-    // browser paint/compositor timing, not the rendered values. Force a
-    // synchronous layout flush (reading a layout property drains any
-    // pending style recalc immediately, rather than leaving it to the
-    // next frame) before waiting for the paint to land: rAF fires
-    // before paint, so a callback that only resolves once a forced
-    // layout matches the wait-for-paint intent, and two chained rAFs
-    // guarantee the frame between them was actually presented.
-    await page.evaluate(() => {
+    // Why the in-page rVFC ready-gate doesn't prevent it: rVFC firing
+    // with mediaTime == t proves the seeked frame was SUBMITTED for
+    // compositing (that's what flips the title), but after that the
+    // harness page is completely static — nothing mutates the DOM, and
+    // rAF callbacks alone create no compositor damage. On a busy
+    // software-rendered CI compositor the captured surface can still
+    // hold the pre-seek video quad. So: force REAL damage (a style
+    // mutation on the root) to make the compositor produce a fresh
+    // display frame that must include the current video quad, then wait
+    // two rAFs (rAF fires before paint, so the second one is only
+    // reached after the first's frame was generated), revert, and wait
+    // again. The transparent outline changes zero pixels but is a
+    // genuine style invalidation.
+    await page.evaluate(async () => {
       const root = document.querySelector('[data-testid="stage-harness-root"]');
-      // Reading offsetHeight forces layout synchronously.
+      const twoFrames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Reading layout forces any pending style recalc synchronously.
       void root?.getBoundingClientRect();
-      return new Promise((resolve) => {
-        requestAnimationFrame(() => {
-          // Force layout again inside the first frame so any recalc
-          // triggered by that frame's paint prep is flushed too.
-          void root?.getBoundingClientRect();
-          requestAnimationFrame(resolve);
-        });
-      });
+      if (root) root.style.outline = "1px solid transparent";
+      await twoFrames();
+      if (root) root.style.outline = "";
+      await twoFrames();
     });
 
     // Assert the expected overlay DOM landed before trusting the screenshot.
@@ -292,6 +295,51 @@ async function runCase(ctx, testCase) {
   } finally {
     await page.close();
   }
+}
+
+/**
+ * Compare a screenshot against its golden. Returns `{ ok, score }`
+ * (score is the parsed SSIM, or null if unparseable). Throws only on a
+ * broken environment: ssim-compare.sh exits 2 when ffmpeg is missing or
+ * failed, and reporting a broken environment as "diverged" is how a
+ * gate that never actually compared anything still looks like it ran.
+ */
+function ssimCompare(shotPath, goldenPath) {
+  const script = path.join(REPO_ROOT, "scripts/ssim-compare.sh");
+  let output;
+  let ok;
+  try {
+    output = execFileSync(script, [shotPath, goldenPath, MIN_SSIM], { encoding: "utf8" });
+    ok = true;
+  } catch (err) {
+    if (err.status === 2) {
+      process.stderr.write(String(err.stderr ?? ""));
+      throw new Error("could not compare: ffmpeg is missing or failed (see above)");
+    }
+    output = `${err.stdout ?? ""}${err.stderr ?? ""}`;
+    ok = false;
+  }
+  process.stdout.write(output);
+  const match = /SSIM=([0-9.]+)/.exec(output);
+  return { ok, score: match ? match[1] : null };
+}
+
+/** Run one case: capture, then bootstrap or golden-compare — with ONE
+ * evidence-preserving recapture. The known CI flake is a stale video
+ * frame in the captured surface (see the damage-forcing comment in
+ * captureCase); when the first compare fails, the failing screenshot is
+ * kept with an `-attempt1` suffix (the CI artifact glob
+ * `stage-harness-*.png` uploads it), its SSIM is printed, and the case
+ * is re-run from a FRESH page load. Both attempts' SSIMs are always
+ * printed so flakes stay visible and countable; a genuine visual
+ * regression fails both attempts and the case still fails. */
+async function runCase(ctx, testCase) {
+  const { name, t } = testCase;
+  const caseLabel = `${name} t=${t}`;
+  const shotPath = path.join(SCREENSHOT_DIR, `stage-harness-${name}-t${t}.png`);
+  const goldenPath = path.join(GOLDEN_DIR, `${name}-t${t}-${process.platform}.png`);
+
+  await captureCase(ctx, testCase, shotPath);
 
   if (!existsSync(goldenPath)) {
     if (process.env.STAGE_GOLDEN_BOOTSTRAP !== "1") {
@@ -304,22 +352,32 @@ async function runCase(ctx, testCase) {
     console.log(`[${caseLabel}] golden bootstrapped: ${goldenPath}`);
     return;
   }
-  try {
-    execFileSync(
-      path.join(REPO_ROOT, "scripts/ssim-compare.sh"),
-      [shotPath, goldenPath, MIN_SSIM],
-      { stdio: "inherit" },
-    );
+
+  const first = ssimCompare(shotPath, goldenPath);
+  if (first.ok) {
     console.log(`[${caseLabel}] screenshot matches golden (>= ${MIN_SSIM})`);
-  } catch (err) {
-    // ssim-compare.sh exits 2 when ffmpeg is missing and 1 on a real
-    // divergence. Reporting a broken environment as "diverged" is how a
-    // gate that never actually compared anything still looks like it ran.
-    if (err.status === 2) {
-      throw new Error("could not compare: ffmpeg is missing (see above)");
-    }
-    throw new Error(`screenshot diverged from golden below ${MIN_SSIM}: ${goldenPath}`);
+    return;
   }
+
+  const attempt1Path = shotPath.replace(/\.png$/, "-attempt1.png");
+  copyFileSync(shotPath, attempt1Path);
+  console.error(
+    `[${caseLabel}] attempt 1 diverged (SSIM=${first.score ?? "?"} < ${MIN_SSIM}); ` +
+      `evidence kept at ${attempt1Path}; recapturing once from a fresh page load`,
+  );
+
+  await captureCase(ctx, testCase, shotPath);
+  const second = ssimCompare(shotPath, goldenPath);
+  console.error(
+    `[${caseLabel}] attempt SSIMs: 1=${first.score ?? "?"} 2=${second.score ?? "?"} (min ${MIN_SSIM})`,
+  );
+  if (!second.ok) {
+    throw new Error(
+      `screenshot diverged from golden below ${MIN_SSIM} on both attempts ` +
+        `(SSIM ${first.score ?? "?"} then ${second.score ?? "?"}): ${goldenPath}`,
+    );
+  }
+  console.log(`[${caseLabel}] screenshot matches golden on attempt 2 (>= ${MIN_SSIM}) — attempt 1 was a stale-frame flake`);
 }
 
 await ensureAppServer();
