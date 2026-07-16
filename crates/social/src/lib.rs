@@ -17,7 +17,6 @@ pub mod pg_store;
 pub mod platform_metadata;
 pub mod provider;
 pub mod publish_service;
-pub mod sqlite_store;
 pub mod store;
 pub mod team_service;
 pub mod tiktok_upload;

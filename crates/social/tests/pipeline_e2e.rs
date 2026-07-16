@@ -9,8 +9,9 @@
 //!     -> poll_upload_status -> Published
 //!
 //! Every observable boundary (API responses and audit events) is asserted to
-//! be free of provider token material. The full flow runs against both the
-//! in-memory and SQLite stores to prove parity.
+//! be free of provider token material. The harness is generic over
+//! `SocialStore` so it exercises the same lifecycle production runs against
+//! `PgSocialStore`, using `InMemorySocialStore` as the fast test double.
 
 use montage_social::api::{
     ApiActor, ApiOwner, BindTargetRequest, ExecuteUploadRequest, OAuthCompleteRequest,
@@ -23,7 +24,6 @@ use montage_social::model::{
 use montage_social::oauth_url::OAuthProviderConfig;
 use montage_social::provider::ProviderRegistry;
 use montage_social::publish_service::PublishService;
-use montage_social::sqlite_store::SqliteSocialStore;
 use montage_social::store::{InMemorySocialStore, SocialStore};
 use montage_social::token::TestKeyProvider;
 use montage_social::token_bundle::ProviderTokenBundle;
@@ -319,37 +319,4 @@ fn run_full_pipeline<S: SocialStore>(store: &mut S, store_label: &str) {
 fn full_pipeline_in_memory_store() {
     let mut store = InMemorySocialStore::default();
     run_full_pipeline(&mut store, "in-memory");
-}
-
-#[test]
-fn full_pipeline_sqlite_store() {
-    let mut store =
-        SqliteSocialStore::new_in_memory().unwrap_or_else(|err| panic!("open sqlite store: {err}"));
-    run_full_pipeline(&mut store, "sqlite");
-}
-
-#[test]
-fn full_pipeline_parity_between_stores() {
-    // Run the same pipeline against both stores; the visible terminal state
-    // must match field-for-field (ids, status, provider post, event count).
-    let mut mem = InMemorySocialStore::default();
-    run_full_pipeline(&mut mem, "in-memory");
-    let mut sql =
-        SqliteSocialStore::new_in_memory().unwrap_or_else(|err| panic!("open sqlite store: {err}"));
-    run_full_pipeline(&mut sql, "sqlite");
-
-    let owner = OwnerRef::User("user_e2e".into());
-    let actor = ApiActor::new("user_e2e", Vec::new());
-    let api_owner = ApiOwner { owner };
-
-    let mem_job = SocialApi::publish_job(&mem, &actor, &api_owner, "job_e2e")
-        .unwrap_or_else(|err| panic!("mem final job: {err}"));
-    let sql_job = SocialApi::publish_job(&sql, &actor, &api_owner, "job_e2e")
-        .unwrap_or_else(|err| panic!("sqlite final job: {err}"));
-
-    assert_eq!(mem_job.status, sql_job.status);
-    assert_eq!(mem_job.provider_post_id, sql_job.provider_post_id);
-    assert_eq!(mem_job.provider_post_url, sql_job.provider_post_url);
-    assert_eq!(mem_job.attempt_count, sql_job.attempt_count);
-    assert_eq!(mem_job.events.len(), sql_job.events.len());
 }

@@ -10208,7 +10208,6 @@ dependencies = [
  "r2d2_postgres",
  "rand 0.9.3",
  "reqwest 0.12.28",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",

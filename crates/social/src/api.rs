@@ -2051,14 +2051,11 @@ mod tests {
         assert!(!json.contains("refresh_token"));
     }
 
-    // --- SQLite / in-memory parity --------------------------------------------
-
-    use crate::sqlite_store::SqliteSocialStore;
+    // --- Account/publish/worker route round-trips ------------------------------
 
     #[test]
-    fn api_round_trips_account_routes_with_sqlite_store() {
-        let mut store = SqliteSocialStore::new_in_memory()
-            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+    fn api_round_trips_account_routes() {
+        let mut store = InMemorySocialStore::default();
         let key_provider = TestKeyProvider::new("test-key-1", "local-key");
 
         SocialApi::oauth_start(&mut store, &user_actor(), start_request())
@@ -2097,9 +2094,8 @@ mod tests {
     }
 
     #[test]
-    fn api_round_trips_publish_routes_with_sqlite_store() {
-        let mut store = SqliteSocialStore::new_in_memory()
-            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+    fn api_round_trips_publish_routes() {
+        let mut store = InMemorySocialStore::default();
         let registry = ProviderRegistry::default_multi_platform();
         store
             .save_connected_account(connected_account("acct_1", user_owner()))
@@ -2164,9 +2160,8 @@ mod tests {
     }
 
     #[test]
-    fn api_round_trips_worker_routes_with_sqlite_store() {
-        let mut store = SqliteSocialStore::new_in_memory()
-            .unwrap_or_else(|err| panic!("open sqlite store: {err}"));
+    fn api_round_trips_worker_routes() {
+        let mut store = InMemorySocialStore::default();
         store
             .save_connected_account(connected_account("acct_1", user_owner()))
             .unwrap_or_else(|err| panic!("save account: {err}"));

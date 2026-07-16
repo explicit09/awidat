@@ -91,7 +91,6 @@ pub mod skills;
 pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
-pub mod tool_schema;
 pub mod transcript_alignment;
 pub mod transcript_cleanup;
 pub mod transcript_pack;
@@ -105,9 +104,6 @@ pub mod x_trends;
 pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;
 pub use events::{SessionError, SessionEvent};
-pub use tool::{
-    ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest,
-};
 
 /// Returns the version of the agent core.
 pub fn version() -> &'static str {

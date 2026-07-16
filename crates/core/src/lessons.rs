@@ -57,11 +57,6 @@ pub struct EditorialDecision {
     /// relying on fragile summary substrings.
     #[serde(default)]
     pub editorial_tags: Vec<String>,
-    /// Operation-scoped approval keys considered by the orchestrator.
-    /// Used to debug why an AllowForSession did or did not cover a
-    /// later request.
-    #[serde(default)]
-    pub approval_keys: Vec<crate::tool::ApprovalKey>,
     /// Present for an explicit unsandboxed retry prompt after sandbox
     /// denial. Absence means this was the first-attempt approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -498,7 +493,6 @@ pub fn record_apply_edl_commit(
         tool: "apply_edl".into(),
         args_summary: args_summary.into(),
         editorial_tags,
-        approval_keys: Vec::new(),
         retry_reason: None,
         decision: "Allow".into(),
         timestamp: Utc::now(),
@@ -710,7 +704,6 @@ mod tests {
             tool: tool.into(),
             args_summary: summary.into(),
             editorial_tags: vec![],
-            approval_keys: vec![],
             retry_reason: None,
             decision: decision.into(),
             timestamp: Utc::now(),
@@ -722,7 +715,6 @@ mod tests {
             tool: tool.into(),
             args_summary: "apply_edl proposal".into(),
             editorial_tags: vec![tag.into()],
-            approval_keys: vec![],
             retry_reason: None,
             decision: decision.into(),
             timestamp: Utc::now(),

@@ -6,34 +6,6 @@ pub mod registry;
 pub mod seedance;
 
 #[cfg(test)]
-/// Test helpers for generated-media tool unit tests.
-pub mod test_support {
-    use std::path::Path;
-    use std::sync::Arc;
-
-    use tokio::sync::broadcast;
-
-    /// Build a minimal tool context rooted at `root`.
-    pub fn ctx_at(root: &Path) -> crate::tool::ToolContext {
-        let (tx, _) = broadcast::channel(8);
-        crate::tool::ToolContext {
-            project_root: root.to_path_buf(),
-            events_tx: tx,
-            user_input_tx: None,
-            job_manager: montage_render::JobManager::new(),
-            approval_tx: None,
-            sandbox_mode: crate::tool::SandboxMode::Default,
-            mcp_host: crate::mcp_host::McpHost::new(montage_mcp::ClientInfo {
-                name: "test".into(),
-                version: "0.0.0".into(),
-            }),
-            skills: Arc::new(crate::skills::SkillRegistry::default()),
-            subagent_return: None,
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
