@@ -26,7 +26,6 @@ use montage_social::{
     auth_context::JwtVerifier,
     model::{AccountUsageAudit, TeamAction, WorkspaceMemberRole},
     oauth_url::OAuthProviderConfig,
-    pg_store::PgSocialStore,
     store::SocialStore,
 };
 use serde::{Deserialize, Serialize};
@@ -141,10 +140,10 @@ async fn workspace_roles_for_user(
     state: &SharedState,
     user_id: &str,
 ) -> Result<Vec<WorkspaceMemberRole>, HttpError> {
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let user_id = user_id.to_string();
     tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         store.workspace_member_roles_for_user(&user_id)
     })
     .await
@@ -189,9 +188,9 @@ pub(crate) async fn accounts_handler(
     headers: HeaderMap,
 ) -> HttpResult<Vec<AccountSummary>> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let accounts = tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::accounts(&store, &actor, &owner)
     })
     .await
@@ -238,10 +237,10 @@ pub(crate) async fn oauth_start_handler(
         client_id,
         redirect_uri,
     };
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
 
     let resp = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::oauth_start(
             &mut store,
             &actor,
@@ -272,10 +271,10 @@ pub(crate) async fn disconnect_handler(
     Path(account_id): Path<String>,
 ) -> HttpResult<AccountSummary> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let now = now_secs();
     let account = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::disconnect_account(&mut store, &actor, &owner, &account_id, now)
     })
     .await
@@ -292,9 +291,9 @@ pub(crate) async fn account_audit_handler(
     Path(account_id): Path<String>,
 ) -> HttpResult<AccountUsageAudit> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let audit = tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::account_usage_audit(&store, &actor, &owner, &account_id)
     })
     .await
@@ -311,9 +310,9 @@ pub(crate) async fn bind_target_handler(
     Json(req): Json<BindTargetRequest>,
 ) -> HttpResult<montage_social::model::CampaignVariantTarget> {
     let (actor, _owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let target = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::bind_target(&mut store, &actor, req)
     })
     .await
@@ -330,9 +329,9 @@ pub(crate) async fn update_target_handler(
     Json(req): Json<UpdateTargetRequest>,
 ) -> HttpResult<montage_social::model::CampaignVariantTarget> {
     let (actor, _owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let target = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::update_target(&mut store, &actor, req)
     })
     .await
@@ -349,9 +348,9 @@ pub(crate) async fn validate_target_handler(
     Json(req): Json<ValidateTargetRequest>,
 ) -> HttpResult<ValidateTargetResponse> {
     let (actor, _owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let target = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::validate_target(&mut store, &state_registry(), &actor, req)
     })
     .await
@@ -368,9 +367,9 @@ pub(crate) async fn schedule_target_handler(
     Json(req): Json<ScheduleTargetRequest>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, _owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::schedule_target(&mut store, &state_registry(), &actor, req)
     })
     .await
@@ -387,9 +386,9 @@ pub(crate) async fn job_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job = tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::publish_job(&store, &actor, &owner, &job_id)
     })
     .await
@@ -406,10 +405,10 @@ pub(crate) async fn cancel_job_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::cancel_job(&mut store, &actor, &owner, &job_id, now)
     })
     .await
@@ -426,10 +425,10 @@ pub(crate) async fn retry_job_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::retry_job(&mut store, &actor, &owner, &job_id, now)
     })
     .await
@@ -446,10 +445,10 @@ pub(crate) async fn fire_due_job_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::authorize_publish_job_action(
             &store,
             &actor,
@@ -472,9 +471,9 @@ pub(crate) async fn fire_due_job_handler(
         })?;
 
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job = tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::publish_job(&store, &actor, &owner, &job_id)
     })
     .await
@@ -491,10 +490,10 @@ pub(crate) async fn poll_processing_job_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::authorize_publish_job_action(
             &store,
             &actor,
@@ -517,9 +516,9 @@ pub(crate) async fn poll_processing_job_handler(
         })?;
 
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job = tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::publish_job(&store, &actor, &owner, &job_id)
     })
     .await
@@ -537,10 +536,10 @@ pub(crate) async fn reschedule_job_handler(
     Json(mut req): Json<RescheduleJobRequest>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     req.now = now_secs();
     let job = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::reschedule_job(&mut store, &actor, &owner, &job_id, req)
     })
     .await
@@ -574,10 +573,10 @@ pub(crate) async fn upload_url_handler(
     let (actor, owner) = desktop_auth(&state, &headers).await?;
 
     // Authorize: staging rendered bytes is part of the publish workflow.
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let job_id_for_check = job_id.clone();
     tokio::task::spawn_blocking(move || {
-        let store = PgSocialStore::new(pool);
+        let store = store_handle.open();
         SocialApi::authorize_publish_job_action(
             &store,
             &actor,
@@ -659,11 +658,11 @@ pub(crate) async fn upload_complete_handler(
     Path(job_id): Path<String>,
 ) -> HttpResult<PublishJobResponse> {
     let (actor, owner) = desktop_auth(&state, &headers).await?;
-    let pool = state.pool.clone();
+    let store_handle = state.store.clone();
     let bucket = state.config.storage_bucket.clone();
 
     let job = tokio::task::spawn_blocking(move || {
-        let mut store = PgSocialStore::new(pool);
+        let mut store = store_handle.open();
         SocialApi::authorize_publish_job_action(
             &store,
             &actor,

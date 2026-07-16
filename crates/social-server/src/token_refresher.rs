@@ -27,12 +27,18 @@ enum RefreshExchange {
 }
 
 impl ServerTokenRefresher {
-    pub fn new(client_id: String, client_secret: String, key: Aead256Key) -> Self {
+    pub fn new(
+        client_id: String,
+        client_secret: String,
+        token_endpoint: String,
+        key: Aead256Key,
+    ) -> Self {
         Self {
             exchange: RefreshExchange::Google(GoogleOAuthExchange::new(
                 GoogleOAuthExchangeConfig {
                     client_id,
                     client_secret,
+                    token_endpoint,
                 },
             )),
             key,
@@ -151,7 +157,12 @@ mod tests {
             b[..src.len()].copy_from_slice(src);
             b
         });
-        let refresher = ServerTokenRefresher::new("cid".into(), "csecret".into(), aead);
+        let refresher = ServerTokenRefresher::new(
+            "cid".into(),
+            "csecret".into(),
+            montage_social::oauth_exchange::GOOGLE_TOKEN_ENDPOINT.into(),
+            aead,
+        );
         let err = refresher.refresh("acct1", &secret, 1_000).unwrap_err();
         assert!(matches!(err, TokenRefreshError::InvalidGrant(_)));
     }

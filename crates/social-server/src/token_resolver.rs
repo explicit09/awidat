@@ -1,19 +1,14 @@
+use crate::store_handle::StoreHandle;
 use montage_social::{
-    pg_store::PgSocialStore,
     store::SocialStore,
     token::Aead256Key,
     youtube_upload::{AccessTokenResolver, AccessTokenResolverError},
 };
-use r2d2::Pool;
-use r2d2_postgres::PostgresConnectionManager;
-use r2d2_postgres::postgres::NoTls;
-
-pub type PgPool = Pool<PostgresConnectionManager<NoTls>>;
 
 /// Production `AccessTokenResolver` used in the server worker.
 ///
 /// Resolves `"token_secret:<account_id>"` → decrypted bearer token by:
-/// 1. Looking up the `TokenSecret` row in Postgres.
+/// 1. Looking up the `TokenSecret` row in the social store.
 /// 2. Checking expiry — expired tokens return `Expired` (caller should refresh first).
 /// 3. Decrypting with the AEAD key.
 ///
@@ -21,14 +16,14 @@ pub type PgPool = Pool<PostgresConnectionManager<NoTls>>;
 /// If a token is expired here, the job will be retried on the next tick after
 /// the sweep has refreshed it.
 pub struct ServerAccessTokenResolver {
-    pool: PgPool,
+    store: StoreHandle,
     key: Aead256Key,
     now: i64,
 }
 
 impl ServerAccessTokenResolver {
-    pub fn new(pool: PgPool, key: Aead256Key, now: i64) -> Self {
-        Self { pool, key, now }
+    pub fn new(store: StoreHandle, key: Aead256Key, now: i64) -> Self {
+        Self { store, key, now }
     }
 }
 
@@ -42,7 +37,7 @@ impl AccessTokenResolver for ServerAccessTokenResolver {
                 ))
             })?;
 
-        let store = PgSocialStore::new(self.pool.clone());
+        let store = self.store.open();
         let secret = store
             .token_secret_for_account(account_id)
             .map_err(|e| AccessTokenResolverError::NotFound(e.to_string()))?;

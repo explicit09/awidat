@@ -53,9 +53,25 @@ pub trait OAuthTokenExchange {
 
 // ── Google / YouTube ──────────────────────────────────────────────────────────
 
+/// Production Google OAuth token endpoint (authorization-code + refresh grants).
+pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+
 pub struct GoogleOAuthExchangeConfig {
     pub client_id: String,
     pub client_secret: String,
+    /// OAuth token endpoint. Defaults to [`GOOGLE_TOKEN_ENDPOINT`]; overridable
+    /// so hermetic tests can point the exchange at a local mock server.
+    pub token_endpoint: String,
+}
+
+impl GoogleOAuthExchangeConfig {
+    pub fn new(client_id: String, client_secret: String) -> Self {
+        Self {
+            client_id,
+            client_secret,
+            token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
+        }
+    }
 }
 
 /// Exchanges a Google OAuth code for tokens and resolves the YouTube channel ID.
@@ -97,7 +113,7 @@ impl GoogleOAuthExchange {
         ];
         let resp = self
             .client
-            .post("https://oauth2.googleapis.com/token")
+            .post(&self.config.token_endpoint)
             .form(&params)
             .send()
             .await
@@ -643,7 +659,7 @@ impl OAuthTokenExchange for GoogleOAuthExchange {
         ];
         let resp = self
             .client
-            .post("https://oauth2.googleapis.com/token")
+            .post(&self.config.token_endpoint)
             .form(&params)
             .send()
             .await
