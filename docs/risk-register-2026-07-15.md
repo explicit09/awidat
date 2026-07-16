@@ -262,6 +262,7 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 ## Status log
 
 - 2026-07-15: Approval-hash decision (R1 prerequisite): legacy `approval_keys`/`normalize_edl_for_approval`/`short_sha256` served ONLY the legacy harness's session-approval cache (`crate::tool::approved_for_session`), which no binary reaches since the codex-engine cutover. Codex gates mutating tools pre-execution via MCP destructive_hint annotations. Verdict: SUPERSEDED — delete with the tree, do not port. Only delta is lost re-prompt memoization for identical retried EDLs (UX, not safety).
+- 2026-07-16: Wave 4a DONE — social-server testability seams (lib split, StoreHandle, provider base-URL config; behavior-preserving) + 12 hermetic route tests closing R8/R16 (66 crate tests total). bearer_auth now fails closed on empty secret (was fail-open — found by these tests). New findings R26/R27/R28 registered. Google-callback happy path untestable pending a channels_endpoint seam (noted in R16 context).
 - 2026-07-16: WAVE 3 DONE — R4 (all 6 long-ffmpeg awaits bounded w/ env-overridable timeouts, .pending cleanup on failure; run 29466101293 green), R11 (StalePending status + pruning past 2x timeout), R18 (export watchdog: 5m no-progress / 35m absolute).
 - 2026-07-16: WAVE 2 DONE — R2 (desktop Rust tests on both CI legs), R3 (14/16 dead suites chained + zustand localStorage bug fixed; perf-budget/perf-full remain, blocked on Playwright cache), R17 (tsc gate), R9 (sidecar-cache miss loud + evidence-preserving DMG retry; validates on next v* tag), R25 (stage-harness stale-compositor root cause + recapture-with-evidence; run 29463364029 fully green, recapture observed working at the exact historical bimodal SSIMs). Main CI green end-to-end.
 - 2026-07-15: R1 DONE — legacy crates/core/src/tools/ deleted (104 files, ~47k lines); montage_mcp is the sole tool surface. R14 DONE — montage-tools stub removed. R24 DONE — hooks merge fixed, hook test live. Follow-up open: delete dead ToolRegistry/ToolHandler infra once lessons.rs drops ApprovalKey.
@@ -276,6 +277,28 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 **Blast radius:** main CI red ~half the time regardless of the change being tested; the whole Desktop frontend job's verdict is noise, training everyone to ignore red CI — the root disease Wave 2 exists to cure.
 
 **Recommendation:** make the capture deterministic (drive the animation clock manually instead of free-running: pause + set time, capture the presented frame), or as a stopgap re-seek-and-recapture once with both attempts' SSIM logged and screenshots uploaded so true regressions stay visible. Mitigated meanwhile by moving stage-harness to the end of the test chain (2026-07-15) so it cannot shadow deterministic suites.
+
+### R26 — OAuth callback exchanges the provider code before validating `state`
+
+**Severity:** medium · **Lens:** correctness/security · **Fix cost:** hours · **Verification:** confirmed (found by Wave 4a route tests)
+
+**Evidence:** social-server's oauth_callback handler performs the token exchange round-trip first and only then rejects invalid/forged state. An unauthenticated caller can make the server burn provider token-exchange calls (and provider rate limits) with garbage codes. Persistence is safe (rejection still happens — tested), so this is a resource/abuse issue, not an account-takeover one.
+
+**Recommendation:** validate state (shape + hash against a started connection) before any provider round-trip.
+
+### R27 — tick handler strands claimed jobs in Uploading when the token refresher is unconfigured
+
+**Severity:** medium · **Lens:** correctness · **Fix cost:** hours · **Verification:** confirmed (observed while fixturing Wave 4a tests)
+
+**Evidence:** in the tick YouTube arm, if Google OAuth creds are absent the loop `continue`s AFTER claim_due_publish_jobs claimed the job — no requeue, no event; the job is stuck in Uploading until manual intervention.
+
+**Recommendation:** check refresher config before claiming, or restore the job with a backoff + event on the unconfigured path (mirror the quota-exhausted restore).
+
+### R28 — provider 5xx retry burns a YouTube quota unit per attempt (note)
+
+**Severity:** low · **Lens:** correctness · **Fix cost:** hours · **Verification:** confirmed (asserted as-is by Wave 4a test)
+
+**Evidence:** the requeue-with-backoff path returns Ok from execute_claimed_upload_job_with_refresher, so the handler increments the daily YouTube quota even when nothing uploaded — a job retrying 5x consumes 5 units of the 100/day budget. Possibly intended (Google bills per attempt); decide and document either way.
 
 ## Corrections to prior beliefs (not risks)
 

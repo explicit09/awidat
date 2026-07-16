@@ -571,6 +571,12 @@ pub(crate) fn aead_key_from_state(
 }
 
 pub(crate) fn bearer_auth(headers: &HeaderMap, secret: &str) -> bool {
+    // Fail closed on an empty secret: constant_time_eq("", "") is true,
+    // so a SERVICE_SHARED_SECRET set to "" would otherwise turn every
+    // /internal/* route into an unauthenticated endpoint.
+    if secret.is_empty() {
+        return false;
+    }
     let auth = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -2422,6 +2428,14 @@ mod tests {
     fn bearer_auth_accepts_matching_secret() {
         let h = headers_with_auth("Bearer s3cret");
         assert!(bearer_auth(&h, "s3cret"));
+    }
+
+    #[test]
+    fn bearer_auth_fails_closed_on_empty_secret() {
+        let no_auth = HeaderMap::new();
+        assert!(!bearer_auth(&no_auth, ""));
+        let empty_bearer = headers_with_auth("Bearer ");
+        assert!(!bearer_auth(&empty_bearer, ""));
     }
 
     #[test]
