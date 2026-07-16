@@ -10,12 +10,16 @@
  * program-frame element, and compares it against a committed
  * per-platform golden via ffmpeg SSIM (see `scripts/ssim-compare.sh`).
  * Before capture, the video's decoded content is verified in-page
- * against a frame-0 signature (with a re-seek recovery loop) — the known
- * CI flake is the pre-seek frame remaining the video's presented frame,
- * a state observed to stick across page loads in one browser session. A
- * failing compare still gets ONE evidence-preserving recapture, from a
- * FRESH browser launch; both attempts' SSIMs are printed and the
- * attempt-1 screenshot is kept. See comments in captureCase/runCase.
+ * against a frame-0 signature (with a re-seek recovery loop), then the
+ * verified frame is painted into a canvas that replaces the video for
+ * the screenshot — the known CI flake was CDP capture rasterizing a
+ * stale video compositor quad (frame 0 under correct overlays), a state
+ * sticky across page loads and even browser processes; canvas pixels
+ * live in the directly-rasterized content layer, so the screenshot
+ * contains exactly the verified pixels. A failing compare still gets
+ * ONE evidence-preserving recapture, from a FRESH browser launch; both
+ * attempts' SSIMs are printed and the attempt-1 screenshot is kept. See
+ * comments in captureCase/runCase.
  *
  * A missing per-platform golden is a hard failure so the gate can never
  * silently self-seed in CI. To seed a new platform, run once locally with
@@ -280,7 +284,11 @@ async function captureCase(ctx, testCase, shotPath) {
     // ~0 while every case's target frame measures >= 2.23 — see
     // FRAME0_LUMA_DIFF_THRESHOLD calibration). If frame 0 is still the
     // decoded frame, re-seek (0 then t) and re-check up to MAX_RESEEKS
-    // times before failing with a distinct, named error.
+    // times before failing with a distinct, named error. Once verified,
+    // the decoded frame is painted into a canvas that REPLACES the video
+    // for the screenshot (see the substitution comment inside), because
+    // a verified decoder does not guarantee a fresh video quad in the
+    // captured surface.
     if (Number(t) > 0) {
       const check = await page.evaluate(
         async ({ t: target, maxReseeks, threshold }) => {
@@ -388,11 +396,54 @@ async function captureCase(ctx, testCase, shotPath) {
             await presentedAt(target);
             diff = meanAbsDiff(signature(video), frame0Sig);
           }
-          return {
-            status: diff > threshold ? "ok" : "stale",
-            reseeks,
-            diff: Number(diff.toFixed(2)),
-          };
+          if (diff <= threshold) {
+            return { status: "stale", reseeks, diff: Number(diff.toFixed(2)) };
+          }
+
+          // CANVAS SUBSTITUTION (CI run 29476729241): the decoder can
+          // verifiably hold the seeked frame (the check above passed
+          // silently on the failing case) while the SCREENSHOT still
+          // shows frame 0 — headless Chromium composites <video> via a
+          // surface layer that CDP Page.captureScreenshot sometimes
+          // rasterizes stale, and that state can survive a fresh browser
+          // process. A canvas has no such out-of-band path: its pixels
+          // live in the main content layer that captureScreenshot
+          // rasterizes directly. So paint the verified decoded frame
+          // into a full-resolution canvas positioned exactly over the
+          // video (object-fit: cover math; identity for the 1280x720
+          // fixture), verify THE CANVAS's own signature, then hide the
+          // video — the screenshot then contains exactly the pixels
+          // verified above.
+          const box = video.getBoundingClientRect();
+          const sub = document.createElement("canvas");
+          sub.width = Math.round(box.width);
+          sub.height = Math.round(box.height);
+          const sctx = sub.getContext("2d");
+          if (!sctx) {
+            return { status: "setup-error", reason: "2d context unavailable for substitution canvas" };
+          }
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          const scale = Math.max(sub.width / vw, sub.height / vh);
+          const srcW = sub.width / scale;
+          const srcH = sub.height / scale;
+          const srcX = (vw - srcW) / 2;
+          const srcY = (vh - srcH) / 2;
+          sctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sub.width, sub.height);
+          const subDiff = meanAbsDiff(signature(sub), frame0Sig);
+          if (subDiff <= threshold) {
+            return { status: "substitution-stale", reseeks, diff: Number(subDiff.toFixed(2)) };
+          }
+          sub.setAttribute("data-testid", "stage-harness-video-substitute");
+          sub.style.position = "absolute";
+          sub.style.left = "0";
+          sub.style.top = "0";
+          sub.style.width = `${box.width}px`;
+          sub.style.height = `${box.height}px`;
+          video.insertAdjacentElement("afterend", sub);
+          video.style.visibility = "hidden";
+
+          return { status: "ok", reseeks, diff: Number(diff.toFixed(2)) };
         },
         { t: Number(t), maxReseeks: MAX_RESEEKS, threshold: FRAME0_LUMA_DIFF_THRESHOLD },
       );
@@ -406,6 +457,12 @@ async function captureCase(ctx, testCase, shotPath) {
             `(frame-0 luma diff ${check.diff} <= ${FRAME0_LUMA_DIFF_THRESHOLD}, t=${t})`,
         );
       }
+      if (check.status === "substitution-stale") {
+        throw new Error(
+          `substitution canvas still showed frame 0 after decoder verification ` +
+            `(frame-0 luma diff ${check.diff} <= ${FRAME0_LUMA_DIFF_THRESHOLD}, t=${t})`,
+        );
+      }
       if (check.reseeks > 0) {
         console.error(
           `[stage-harness t=${t}] video content check recovered after ${check.reseeks} re-seek(s) ` +
@@ -414,31 +471,19 @@ async function captureCase(ctx, testCase, shotPath) {
       }
     }
 
-    // What the CI flake actually is (diagnosed from run 29462080026's
-    // artifact): the OVERLAYS in a failing capture are pixel-identical
-    // to the golden — text, fonts, positions all correct — but the
-    // underlying VIDEO shows the clip's FIRST frame (t=0) instead of
-    // the seeked frame. SSIM of the failing kinetic-text t=1.5 shot's
-    // video region: 0.9987 vs frame 0, 0.7986 vs the correct frame 45.
-    // Only two frames are ever presented in the page's life (frame 0 on
-    // load, frame N after the seek), so a stale capture is always the
-    // same wrong image — which is why failing SSIMs repeat byte-identical
-    // across runs (0.818982 twice) instead of varying like a mid-paint
-    // race would.
-    //
-    // Why the in-page rVFC ready-gate doesn't prevent it: rVFC firing
-    // with mediaTime == t proves the seeked frame was SUBMITTED for
-    // compositing (that's what flips the title), but after that the
-    // harness page is completely static — nothing mutates the DOM, and
-    // rAF callbacks alone create no compositor damage. On a busy
-    // software-rendered CI compositor the captured surface can still
-    // hold the pre-seek video quad. So: force REAL damage (a style
-    // mutation on the root) to make the compositor produce a fresh
-    // display frame that must include the current video quad, then wait
-    // two rAFs (rAF fires before paint, so the second one is only
-    // reached after the first's frame was generated), revert, and wait
-    // again. The transparent outline changes zero pixels but is a
-    // genuine style invalidation.
+    // Force real compositor damage (a style mutation on the root) so a
+    // fresh display frame is produced that includes the substitution
+    // canvas just inserted above and the settled overlays, then wait two
+    // rAFs (rAF fires before paint, so the second one is only reached
+    // after the first's frame was generated), revert, and wait again.
+    // The transparent outline changes zero pixels but is a genuine style
+    // invalidation. (Historical context: before the canvas substitution,
+    // the screenshot depended on the VIDEO's compositor quad, which CDP
+    // capture could rasterize stale — frame 0 under correct overlays,
+    // byte-identical across runs 29462080026/29475319831/29476729241
+    // and sticky across pages and even browser processes. The
+    // substitution removes the video quad from the captured output
+    // entirely; this damage-force remains as cheap paint hygiene.)
     await page.evaluate(async () => {
       const root = document.querySelector('[data-testid="stage-harness-root"]');
       const twoFrames = () =>
