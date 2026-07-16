@@ -38,8 +38,17 @@ pub enum ProxyCacheStatus {
     Missing,
     /// Proxy file exists without a matching raw asset.
     Orphan,
-    /// Pending proxy file from an incomplete transcode exists.
+    /// Pending proxy file from an incomplete transcode exists and is
+    /// recent enough to plausibly still be in flight.
     Pending,
+    /// A `.pending` file exists but is older than
+    /// [`stale_pending_age_threshold`] — the writer is presumed dead
+    /// (crashed, force-quit, OOM-killed) rather than still running.
+    /// `transcode_proxy` bounds a single attempt to
+    /// `montage_render::DEFAULT_PROXY_TIMEOUT` and cleans up its own
+    /// `.pending` file on that timeout, so survival past 2x that bound
+    /// means no live writer is coming back for this file (R11).
+    StalePending,
 }
 
 /// One row in the proxy cache lifecycle manifest.
@@ -72,6 +81,8 @@ pub struct ProxyCacheManifest {
     pub orphan_count: usize,
     /// Number of pending proxy files.
     pub pending_count: usize,
+    /// Number of stale (age-abandoned) pending proxy files.
+    pub stale_pending_count: usize,
     /// Ordered manifest entries.
     pub entries: Vec<ProxyCacheEntry>,
 }
@@ -161,17 +172,23 @@ pub async fn proxy_cache_lifecycle_report(
     plan_proxy_cache_cleanup(&project_root)
 }
 
-/// Delete every orphaned proxy artifact in `project_root`'s cache —
-/// any `.mp4` (or `.mp4.pending`) under `.montage/proxies/` that doesn't
-/// match the expected filename for some asset currently in `raw/`.
+/// Delete every orphaned or abandoned-pending proxy artifact in
+/// `project_root`'s cache — any `.mp4` under `.montage/proxies/` that
+/// doesn't match the expected filename for some asset currently in
+/// `raw/`, plus any `.mp4.pending` file old enough to be classified
+/// [`ProxyCacheStatus::StalePending`] (R11).
 ///
-/// Targets two cases: proxies left behind after a raw file is deleted,
-/// and proxies whose filename schema is stale because the encoder
+/// Targets three cases: proxies left behind after a raw file is
+/// deleted; proxies whose filename schema is stale because the encoder
 /// target changed (e.g. the 720p → 1080p bump that adds a quality
-/// marker to the path). Both leave files the timeline flattener can't
-/// match against; without cleanup the next backfill would also skip
-/// the new transcode if the *old* file happened to satisfy a freshness
-/// check by accident.
+/// marker to the path); and `.pending` files whose writer crashed,
+/// was force-quit, or was OOM-killed without reaching its own
+/// timeout-driven cleanup. All three leave files that either the
+/// timeline flattener can't match against, or that make
+/// `proxy_status_for` report a proxy as permanently "Pending" — a
+/// preview that never becomes ready and never gets regenerated.
+/// Genuinely fresh `.pending` files (a transcode that may still be
+/// running) are left untouched.
 ///
 /// Returns the number of files deleted and bytes freed. Errors from
 /// individual deletes are logged and swallowed — cleanup is best-
@@ -181,7 +198,10 @@ pub fn cleanup_orphaned_proxies_in(project_root: &Path) -> Result<(usize, u64), 
     let mut deleted = 0usize;
     let mut bytes_freed = 0u64;
     for entry in manifest.entries {
-        if entry.status != ProxyCacheStatus::Orphan {
+        if !matches!(
+            entry.status,
+            ProxyCacheStatus::Orphan | ProxyCacheStatus::StalePending
+        ) {
             continue;
         }
         match std::fs::remove_file(&entry.proxy_path) {
@@ -193,7 +213,8 @@ pub fn cleanup_orphaned_proxies_in(project_root: &Path) -> Result<(usize, u64), 
                 tracing::warn!(
                     error = %e,
                     path = %entry.proxy_path,
-                    "failed to delete orphan proxy; leaving on disk",
+                    status = ?entry.status,
+                    "failed to delete stale proxy artifact; leaving on disk",
                 );
             }
         }
@@ -602,8 +623,12 @@ async fn transcode_one_reserved(
         }
         Err(montage_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             // Cancelled is reported as NonZero with stderr_tail =
-            // "cancelled" (see transcode_proxy).
+            // "cancelled" (see transcode_proxy). Clean up the partial
+            // `.pending` artifact the same as any other failure path so
+            // a user-cancelled transcode doesn't leave a stale pending
+            // file for proxy_status_for to report as stuck (R11).
             let _ = stderr_tail;
+            let _ = tokio::fs::remove_file(&pending_path).await;
             emitter.cancelled();
             Err("cancelled".into())
         }
@@ -675,6 +700,22 @@ fn is_pending_proxy_file(path: &Path) -> bool {
             .is_some_and(|name| name.ends_with(".mp4.pending"))
 }
 
+/// True when a `.pending` file's mtime is past
+/// `montage_core::proxy::stale_pending_age_threshold` — see that
+/// function's doc comment for why 2x `DEFAULT_PROXY_TIMEOUT` is the
+/// abandonment bound (R11). Unreadable/future mtime errs toward "not
+/// stale" so we never prune a possibly-active transcode on a metadata
+/// hiccup.
+fn pending_meta_is_stale(meta: &std::fs::Metadata) -> bool {
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    match std::time::SystemTime::now().duration_since(modified) {
+        Ok(age) => age > montage_core::proxy::stale_pending_age_threshold(),
+        Err(_) => false,
+    }
+}
+
 fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest, String> {
     let raw_dir = project_root.join("raw");
     let proxies_dir = project_root.join(".montage").join("proxies");
@@ -690,6 +731,7 @@ fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest,
     let mut missing_count = 0;
     let mut orphan_count = 0;
     let mut pending_count = 0;
+    let mut stale_pending_count = 0;
 
     for asset in &assets {
         let proxy_path = proxy_path_for(&proxies_dir, asset);
@@ -722,12 +764,19 @@ fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest,
         for entry in proxy_entries.flatten() {
             let path = entry.path();
             if is_pending_proxy_file(&path) {
-                pending_count += 1;
+                let meta = entry.metadata().ok();
+                let status = if meta.as_ref().is_some_and(pending_meta_is_stale) {
+                    stale_pending_count += 1;
+                    ProxyCacheStatus::StalePending
+                } else {
+                    pending_count += 1;
+                    ProxyCacheStatus::Pending
+                };
                 entries.push(ProxyCacheEntry {
                     asset_path: None,
                     proxy_path: path.to_string_lossy().into_owned(),
-                    status: ProxyCacheStatus::Pending,
-                    size_bytes: entry.metadata().ok().map(|meta| meta.len()),
+                    status,
+                    size_bytes: meta.map(|meta| meta.len()),
                 });
             } else if path.is_file() && is_proxy_artifact(&path) && !expected.contains(&path) {
                 orphan_count += 1;
@@ -750,6 +799,7 @@ fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest,
         missing_count,
         orphan_count,
         pending_count,
+        stale_pending_count,
         entries,
     })
 }
@@ -760,9 +810,13 @@ fn plan_proxy_cache_cleanup(project_root: &Path) -> Result<ProxyCacheCleanupRepo
         .entries
         .iter()
         .filter(|entry| {
+            // `Pending` (fresh, plausibly in-flight) is deliberately
+            // excluded — only `StalePending` (writer presumed dead,
+            // R11) is a safe delete candidate alongside stale-by-mtime
+            // proxies and orphaned artifacts.
             matches!(
                 entry.status,
-                ProxyCacheStatus::Stale | ProxyCacheStatus::Orphan | ProxyCacheStatus::Pending
+                ProxyCacheStatus::Stale | ProxyCacheStatus::Orphan | ProxyCacheStatus::StalePending
             )
         })
         .filter_map(|entry| {
@@ -951,8 +1005,63 @@ mod tests {
         }));
     }
 
+    /// Push a file's mtime back by `age` so it reads as abandoned
+    /// without the test actually sleeping for
+    /// `stale_pending_age_threshold()` (60 real minutes at the default
+    /// bound). Stable since Rust 1.75 — no `filetime` dependency needed.
+    fn backdate(path: &Path, age: std::time::Duration) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        let backdated = std::time::SystemTime::now() - age;
+        file.set_modified(backdated).unwrap();
+    }
+
+    fn well_past_stale_pending_threshold() -> std::time::Duration {
+        montage_core::proxy::stale_pending_age_threshold() + std::time::Duration::from_secs(60)
+    }
+
     #[test]
-    fn proxy_cache_cleanup_dry_run_lists_deletable_stale_orphan_and_pending_files() {
+    fn manifest_classifies_pending_as_stale_past_the_age_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("camera.mov");
+        std::fs::write(&asset, b"source").unwrap();
+        let proxies_dir = dir.path().join(".montage").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy_path = proxy_path_for(&proxies_dir, &asset);
+        let fresh_pending = proxy_pending_path(&proxy_path);
+        std::fs::write(&fresh_pending, b"in-flight").unwrap();
+
+        let manifest = build_proxy_cache_manifest(dir.path()).unwrap();
+        assert_eq!(manifest.pending_count, 1);
+        assert_eq!(manifest.stale_pending_count, 0);
+        assert!(
+            manifest
+                .entries
+                .iter()
+                .any(|entry| entry.proxy_path.ends_with(".mp4.pending")
+                    && entry.status == ProxyCacheStatus::Pending)
+        );
+
+        backdate(&fresh_pending, well_past_stale_pending_threshold());
+
+        let manifest = build_proxy_cache_manifest(dir.path()).unwrap();
+        assert_eq!(
+            manifest.pending_count, 0,
+            "aged-out pending must not still count as Pending"
+        );
+        assert_eq!(manifest.stale_pending_count, 1);
+        assert!(
+            manifest
+                .entries
+                .iter()
+                .any(|entry| entry.proxy_path.ends_with(".mp4.pending")
+                    && entry.status == ProxyCacheStatus::StalePending)
+        );
+    }
+
+    #[test]
+    fn proxy_cache_cleanup_dry_run_lists_deletable_stale_orphan_and_stale_pending_files() {
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
@@ -965,9 +1074,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         std::fs::write(&stale_asset, b"new-source").unwrap();
         let orphan_proxy = proxies_dir.join("orphan-00000000.mp4");
-        let pending_proxy = proxy_pending_path(&stale_proxy);
+        let stale_pending_proxy = proxy_pending_path(&stale_proxy);
         std::fs::write(&orphan_proxy, b"orphan").unwrap();
-        std::fs::write(&pending_proxy, b"partial").unwrap();
+        std::fs::write(&stale_pending_proxy, b"partial").unwrap();
+        backdate(&stale_pending_proxy, well_past_stale_pending_threshold());
 
         let report = plan_proxy_cache_cleanup(dir.path()).unwrap();
         let paths: Vec<&str> = report
@@ -990,18 +1100,47 @@ mod tests {
         assert!(paths.iter().any(|path| path.ends_with(".mp4.pending")));
         assert!(stale_proxy.exists());
         assert!(orphan_proxy.exists());
-        assert!(pending_proxy.exists());
+        assert!(stale_pending_proxy.exists());
     }
 
     #[test]
-    fn cleanup_deletes_orphan_proxies_but_keeps_stale_and_pending() {
+    fn proxy_cache_cleanup_dry_run_keeps_fresh_pending_out_of_delete_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("camera.mov");
+        std::fs::write(&asset, b"source").unwrap();
+        let proxies_dir = dir.path().join(".montage").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy_path = proxy_path_for(&proxies_dir, &asset);
+        let fresh_pending = proxy_pending_path(&proxy_path);
+        std::fs::write(&fresh_pending, b"in-flight").unwrap();
+
+        let report = plan_proxy_cache_cleanup(dir.path()).unwrap();
+
+        assert!(
+            report
+                .delete_candidates
+                .iter()
+                .all(|candidate| !candidate.path.ends_with(".mp4.pending")),
+            "a recent .pending file must not be offered as a delete candidate: {:?}",
+            report.delete_candidates,
+        );
+    }
+
+    #[test]
+    fn cleanup_deletes_orphan_and_stale_pending_proxies_but_keeps_stale_and_fresh_pending() {
         // The schema-bump case: a proxy from a previous encoder target
         // (`old-720p` here, the 720p→1080p bump in production) lives
         // in the cache but doesn't match any current `proxy_path_for`.
         // Cleanup deletes it so the next backfill can write the new
-        // file without colliding. Stale + pending are *not* touched —
-        // an in-flight transcode would lose its `.pending` file, and
-        // a stale-by-mtime proxy may just be a cloud-sync artifact.
+        // file without colliding. Stale-by-mtime and fresh pending are
+        // *not* touched — an in-flight transcode would lose its
+        // `.pending` file, and a stale-by-mtime proxy may just be a
+        // cloud-sync artifact. A `.pending` file old enough to be
+        // classified `StalePending` (R11) IS deleted: its writer is
+        // presumed dead, and leaving it means `proxy_status_for` would
+        // report the proxy as stuck "Pending" forever.
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
@@ -1018,11 +1157,27 @@ mod tests {
         let pending_inflight = proxy_pending_path(&current_proxy);
         std::fs::write(&pending_inflight, b"in-flight").unwrap();
 
+        // A second asset whose `.pending` file is old enough to be
+        // abandoned.
+        let dead_asset = raw_dir.join("dead-writer.mov");
+        std::fs::write(&dead_asset, b"source2").unwrap();
+        let dead_proxy = proxy_path_for(&proxies_dir, &dead_asset);
+        let dead_pending = proxy_pending_path(&dead_proxy);
+        std::fs::write(&dead_pending, b"abandoned").unwrap();
+        backdate(&dead_pending, well_past_stale_pending_threshold());
+
         let (deleted, bytes_freed) = cleanup_orphaned_proxies_in(dir.path()).unwrap();
 
-        assert_eq!(deleted, 1);
-        assert_eq!(bytes_freed, b"old-720p-proxy".len() as u64);
+        assert_eq!(deleted, 2, "orphan + stale-pending should both be removed");
+        assert_eq!(
+            bytes_freed,
+            (b"old-720p-proxy".len() + b"abandoned".len()) as u64
+        );
         assert!(!orphan_old_schema.exists(), "orphan should be removed");
+        assert!(
+            !dead_pending.exists(),
+            "abandoned .pending past the age threshold should be removed"
+        );
         assert!(current_proxy.exists(), "stale-by-mtime proxy must be kept");
         assert!(pending_inflight.exists(), "in-flight pending must be kept");
     }
