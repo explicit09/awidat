@@ -265,6 +265,16 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 - 2026-07-15: R1 DONE — legacy crates/core/src/tools/ deleted (104 files, ~47k lines); montage_mcp is the sole tool surface. R14 DONE — montage-tools stub removed. R24 DONE — hooks merge fixed, hook test live. Follow-up open: delete dead ToolRegistry/ToolHandler infra once lessons.rs drops ApprovalKey.
 - 2026-07-15: R22 done (WIP landed, 095de43e). R1 unblocked (cross-tree deps ported, b830aea8; legacy-tree deletion pending R-approval-hash decision). R5/R6/R7/R23 done (6a5fa802). R24 added.
 
+### R25 — stage-harness visual gate is nondeterministically flaky on CI (~50% of main pushes fail on a random case)
+
+**Severity:** high · **Lens:** ci-trust · **Fix cost:** days · **Verification:** confirmed (observed live: run 29437335962 failed scene-basic t=1.0 SSIM=0.824; run 29460563860 failed scene-kinetic-text t=1.5 SSIM=0.819; each time the other 4 cases scored exactly 1.000000; upstream merge c4ed38e9 failed the same way pre-Wave-1)
+
+**Evidence:** a different case fails per run with SSIM ~0.82 while all others are byte-perfect — a frame-capture race (screenshot lands on a mid-animation frame), not rendering divergence. Upstream PRs #98/#101 already added rVFC/paint gating; insufficient.
+
+**Blast radius:** main CI red ~half the time regardless of the change being tested; the whole Desktop frontend job's verdict is noise, training everyone to ignore red CI — the root disease Wave 2 exists to cure.
+
+**Recommendation:** make the capture deterministic (drive the animation clock manually instead of free-running: pause + set time, capture the presented frame), or as a stopgap re-seek-and-recapture once with both attempts' SSIM logged and screenshots uploaded so true regressions stay visible. Mitigated meanwhile by moving stage-harness to the end of the test chain (2026-07-15) so it cannot shadow deterministic suites.
+
 ## Corrections to prior beliefs (not risks)
 
 - **montage_social crate dependency in apps/desktop/src-tauri is legitimate (DTO reuse), not leftover legacy wiring — refutes the 'still depends on legacy' framing from prior-session memory** — apps/desktop/src-tauri/src/social_client.rs imports montage_social::api::* and montage_social::model::* purely as shared serde DTOs for its HTTPS client to montage-social-server (doc comment: 'sends/receives the re-exported montage_social::api DTOs so client and server agree on exactly one serde shape'). apps/desktop/src-tauri/src/commands/social.rs uses SocialApi::providers(&registry) at line 45,
