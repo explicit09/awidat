@@ -17,34 +17,46 @@ confidence-threshold = 0.8
 
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2024-0320", reason = "Transitive via syntect/two-face in vendored Codex TUI; replace when upstream Codex moves off yaml-rust." },
-  { id = "RUSTSEC-2024-0370", reason = "Transitive unmaintained proc-macro-error in current dependency graph; tracked as follow-up dependency cleanup." },
-  { id = "RUSTSEC-2024-0388", reason = "Transitive unmaintained derivative in current dependency graph; tracked as follow-up dependency cleanup." },
-  { id = "RUSTSEC-2024-0411", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0412", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0413", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0414", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0415", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0416", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0417", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0418", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0419", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0420", reason = "GTK3 binding advisory from current Tauri stack; tracked until Tauri dependency path removes it." },
-  { id = "RUSTSEC-2024-0436", reason = "Transitive unmaintained paste in current dependency graph; tracked as follow-up dependency cleanup." },
-  { id = "RUSTSEC-2025-0057", reason = "Transitive unmaintained fxhash in current dependency graph; tracked as follow-up dependency cleanup." },
-  { id = "RUSTSEC-2025-0075", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
-  { id = "RUSTSEC-2025-0080", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
-  { id = "RUSTSEC-2025-0081", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
-  { id = "RUSTSEC-2025-0098", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
-  { id = "RUSTSEC-2025-0100", reason = "Transitive via Tauri urlpattern; no safe upgrade in current graph, tracked for upstream update." },
-  { id = "RUSTSEC-2025-0141", reason = "Transitive bincode advisory in vendored/current dependency graph; tracked for upstream dependency update." },
-  { id = "RUSTSEC-2026-0097", reason = "Current rand advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
-  { id = "RUSTSEC-2026-0118", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
-  { id = "RUSTSEC-2026-0119", reason = "Current hickory-proto advisory baseline; tracked for dependency update while enabling CI to catch new advisories." },
-  { id = "RUSTSEC-2026-0173", reason = "Transitive unmaintained proc-macro-error2 in current dependency graph; tracked as follow-up dependency cleanup." },
-  { id = "RUSTSEC-2026-0189", reason = "rmcp 0.15 is deliberately pinned to match vendored Codex; advisory affects Streamable HTTP server transport and is tracked for the planned rmcp/codex-rmcp-client migration." },
-  { id = "RUSTSEC-2026-0194", reason = "Direct quick-xml usage (codex-protocol) is on patched >=0.41.0; the remaining 0.39.4 copy is a Linux-only build-time proc-macro (wayland-scanner via arboard) parsing local protocol XML, not attacker-controlled input, and is pinned to ^0.39 upstream. Tracked until wayland-scanner moves to quick-xml >=0.41." },
-  { id = "RUSTSEC-2026-0195", reason = "Direct quick-xml usage (codex-protocol) is on patched >=0.41.0; the remaining 0.39.4 copy is a Linux-only build-time proc-macro (wayland-scanner via arboard) parsing local protocol XML, not attacker-controlled input, and is pinned to ^0.39 upstream. Tracked until wayland-scanner moves to quick-xml >=0.41." },
+  # --- yaml-rust / bincode: vendored Codex TUI syntax highlighting (syntect/two-face) ---
+  { id = "RUSTSEC-2024-0320", reason = "Blocked 2026-07-16: yaml-rust v0.4.5 is pulled by syntect v5.3.0 and two-face v0.5.1, both hard dependencies of vendor/codex-rs/tui (codex-cli, codex-cloud-tasks). `cargo update -p syntect`/`-p two-face` lock 0 packages (already latest); no maintained yaml-rust replacement is wired into syntect upstream. Revisit when codex-rs upstream bumps syntect/two-face off yaml-rust, or when scripts/codex-upstream-drift.sh flags a syntect version bump." },
+  { id = "RUSTSEC-2025-0141", reason = "Blocked 2026-07-16: bincode v1.3.3 (unmaintained; safe replacement is bincode 2.x, a breaking API rewrite) is pulled by the same syntect/two-face chain as RUSTSEC-2024-0320, via vendor/codex-rs/tui. Not a small mechanical change since it's vendored, not ours to edit. Revisit when codex-rs upstream moves syntect/two-face to bincode 2.x." },
+
+  # --- GTK3 bindings: Tauri 2.x desktop stack (Linux target only) ---
+  { id = "RUSTSEC-2024-0411", reason = "Blocked 2026-07-16: gtk-rs GTK3 bindings (atk/gtk v0.18.2) are pulled transitively by tauri v2.11.2 (montage-desktop) via muda/tao/tauri-runtime-wry/webkit2gtk/wry, Linux-only build target. `cargo update -p gtk`/`-p tauri` lock 0 packages; GTK4 migration is a Tauri 3.x-line project, not ours to force. Revisit when Tauri ships a GTK4-based runtime (tracked upstream at github.com/tauri-apps/tauri) or when we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0412", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0413", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0414", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0415", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0416", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0417", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0418", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0419", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0420", reason = "Blocked 2026-07-16: same GTK3/Tauri chain as RUSTSEC-2024-0411 (gtk-rs GTK3 bindings, Linux-only). No safe upgrade; revisit when Tauri ships GTK4 or we bump the tauri major version." },
+
+  # --- unmaintained proc-macro / hashing crates: deep transitive, not ours to swap ---
+  { id = "RUSTSEC-2024-0370", reason = "Blocked 2026-07-16: proc-macro-error v1.0.4 (unmaintained) is pulled by glib-macros v0.18.5 -> glib -> atk/gtk v0.18.2, the same GTK3/Tauri chain as RUSTSEC-2024-0411 (Linux-only). Fixing requires Tauri's GTK4 migration, not a change in our crates. Revisit when Tauri ships GTK4 or we bump the tauri major version." },
+  { id = "RUSTSEC-2024-0388", reason = "Blocked 2026-07-16: derivative v2.2.0 (unmaintained; suggested replacement is derive_more/educe) is pulled by starlark v0.13.0, a hard dependency of vendor/codex-rs/execpolicy (codex-cli, codex-config). Vendored code, not a small mechanical change in our crates. Revisit when codex-rs upstream moves starlark off derivative, tracked via scripts/codex-upstream-drift.sh." },
+  { id = "RUSTSEC-2024-0436", reason = "Blocked 2026-07-16: paste v1.0.15 (unmaintained) is pulled by metal v0.28.0 -> wgpu-hal v0.21.1 -> wgpu v0.20.1, a direct dependency of OUR crates/render-gpu. `cargo update -p wgpu`/`-p metal` lock 0 packages (already latest within 0.20.x); dropping paste requires a wgpu major-version bump (0.20 -> 0.25+), which is an API-breaking change to crates/render-gpu and crates/render, out of scope for this advisory sweep. Revisit when we schedule a wgpu major-version upgrade." },
+  { id = "RUSTSEC-2025-0057", reason = "Blocked 2026-07-16: fxhash v0.2.1 (unmaintained; suggested replacement rustc-hash) is pulled by bm25 v2.3.2, a hard dependency of vendor/codex-rs/core. Vendored code, not a small mechanical change in our crates. Revisit when codex-rs upstream moves bm25 (or its own fork) off fxhash, tracked via scripts/codex-upstream-drift.sh." },
+  { id = "RUSTSEC-2026-0173", reason = "Blocked 2026-07-16: proc-macro-error2 v2.0.1 (unmaintained) is pulled by i18n-embed-fl v0.9.4 -> age v0.11.2, a hard dependency of vendor/codex-rs/secrets (codex-memories-write). Vendored code, not a small mechanical change in our crates. Revisit when codex-rs upstream moves age/i18n-embed-fl off proc-macro-error2, tracked via scripts/codex-upstream-drift.sh." },
+
+  # --- unic-* unmaintained family: Tauri's urlpattern dependency ---
+  { id = "RUSTSEC-2025-0075", reason = "Blocked 2026-07-16: unic-char-range v0.9.0 (unmaintained) is pulled by unic-ucd-ident -> urlpattern v0.3.0 -> tauri-utils v2.9.2 (montage-desktop). `cargo update -p urlpattern`/`-p tauri-utils` do not move off unic-*; a patch bump to tauri-utils 2.9.3 was tested and left urlpattern at 0.3.0 with wide unrelated windows-sys/heck resolver churn, so it was not applied. Revisit when Tauri's urlpattern dependency moves off the unic-* crate family, or when we bump the tauri major version." },
+  { id = "RUSTSEC-2025-0080", reason = "Blocked 2026-07-16: unic-common v0.9.0 (unmaintained) is pulled by the same urlpattern/tauri-utils chain as RUSTSEC-2025-0075. No safe upgrade; revisit when Tauri's urlpattern dependency moves off unic-* or we bump the tauri major version." },
+  { id = "RUSTSEC-2025-0081", reason = "Blocked 2026-07-16: unic-char-property v0.9.0 (unmaintained) is pulled by the same urlpattern/tauri-utils chain as RUSTSEC-2025-0075. No safe upgrade; revisit when Tauri's urlpattern dependency moves off unic-* or we bump the tauri major version." },
+  { id = "RUSTSEC-2025-0098", reason = "Blocked 2026-07-16: unic-ucd-version v0.9.0 (unmaintained) is pulled by the same urlpattern/tauri-utils chain as RUSTSEC-2025-0075. No safe upgrade; revisit when Tauri's urlpattern dependency moves off unic-* or we bump the tauri major version." },
+  { id = "RUSTSEC-2025-0100", reason = "Blocked 2026-07-16: unic-ucd-ident v0.9.0 (unmaintained) is pulled by the same urlpattern/tauri-utils chain as RUSTSEC-2025-0075. No safe upgrade; revisit when Tauri's urlpattern dependency moves off unic-* or we bump the tauri major version." },
+
+  # --- hickory-proto: DNS resolver via vendored codex network proxy ---
+  { id = "RUSTSEC-2026-0118", reason = "Blocked 2026-07-16: hickory-proto v0.25.2 is capped by rama-dns v0.3.0-alpha.4's `hickory-resolver = \"^0.25\"` requirement (vendor/codex-rs/network-proxy -> codex-config/codex-core). `cargo update -p hickory-resolver --precise 0.26.1` fails: 'candidate versions found which didn't match: 0.26.1 ... required by rama-dns'. No safe upgrade within the ^0.25 constraint per the advisory itself. Revisit when codex-rs upstream bumps rama-dns past 0.3.0-alpha.4 to a version allowing hickory-resolver >=0.26, tracked via scripts/codex-upstream-drift.sh." },
+  { id = "RUSTSEC-2026-0119", reason = "Blocked 2026-07-16: same hickory-proto v0.25.2 / rama-dns v0.3.0-alpha.4 constraint as RUSTSEC-2026-0118 (advisory solution 'upgrade to >=0.26.1' is unreachable under the locked ^0.25 requirement). Revisit when codex-rs upstream bumps rama-dns, tracked via scripts/codex-upstream-drift.sh." },
+
+  # --- rmcp: Streamable HTTP server transport, verified not reachable in shipped code ---
+  { id = "RUSTSEC-2026-0189", reason = "Verified 2026-07-16 via `cargo tree -p rmcp -e features --invert`: vendor/codex-rs/rmcp-client/Cargo.toml enables rmcp's `transport-streamable-http-server` feature in [dependencies] (compiled into codex-rmcp-client, consumed by codex-app-server/codex-core/codex-cli), so the vulnerable module IS compiled in. However the only call site that constructs a StreamableHttpServer/StreamableHttpService is vendor/codex-rs/rmcp-client/src/bin/test_streamable_http_server.rs, a loopback-only (127.0.0.1) test-support binary invoked exclusively from integration tests (rmcp-client/tests/streamable_http_test_support.rs, core/tests/suite/rmcp_client.rs) — no production binary (montage-cli, montage-core, montage-mcp, codex-cli, codex-tui) ever instantiates the HTTP server transport, so the DNS-rebinding attack surface (CVSS 8.8, fixed in rmcp >=1.4.0) is not reachable at runtime in shipped code. rmcp is workspace-pinned to 0.15.0 to match vendored Codex (`cargo update -p rmcp --precise 1.4.0` fails: locked by montage-core's `^0.15.0` requirement). Revisit trigger: when vendored codex-rs upstream bumps rmcp to >=1.4.0 (tracked via scripts/codex-upstream-drift.sh), or immediately if any production crate is found constructing StreamableHttpServer/StreamableHttpService." },
+
+  # --- quick-xml: Linux-only Wayland clipboard build-time proc-macro ---
+  { id = "RUSTSEC-2026-0194", reason = "Blocked 2026-07-16: Direct quick-xml usage (codex-protocol) is on patched >=0.41.0; the remaining 0.39.4 copy is pulled solely by wayland-scanner v0.31.10 (`cargo tree -i quick-xml@0.39.4 --target all` shows only this path) via wl-clipboard-rs -> arboard -> vendor/codex-rs/tui, Linux-only build-time proc-macro parsing local protocol XML, not attacker-controlled input. wayland-scanner v0.31.10 is the latest published version and hard-pins `quick-xml = \"^0.39\"` (`cargo update -p wayland-scanner` locks 0 packages; precise-pinning quick-xml to 0.41.0 fails the ^0.39 requirement). Revisit when wayland-scanner releases a version allowing quick-xml >=0.41." },
+  { id = "RUSTSEC-2026-0195", reason = "Blocked 2026-07-16: same wayland-scanner v0.31.10 / quick-xml 0.39.4 constraint as RUSTSEC-2026-0194 (Linux-only build-time proc-macro, not attacker-controlled input). Revisit when wayland-scanner releases a version allowing quick-xml >=0.41." },
 ]
 
 [sources]
@@ -66,4 +78,17 @@ allow-git = [
 # This task establishes license/advisory/source gates. Duplicate dependency
 # cleanup is noisy in the vendored Codex/Tauri graph and should be handled as a
 # separate dependency-consolidation effort.
+#
+# Investigated 2026-07-16 (R21): constant_time_eq duplicates at 0.1.5 and 0.3.1.
+# `cargo tree -i constant_time_eq@0.1.5 --target all` shows the old copy comes
+# from zip v0.6.6, a hard dependency of webrtc-sys-build (git-pinned rev in
+# https://github.com/juberti-oai/rust-sdks.git), reached via vendor/codex-rs/
+# realtime-webrtc -> codex-tui. `cargo update -p zip@0.6.6 --precise 2.4.2`
+# fails: webrtc-sys-build requires `zip = "^0.6"` and is locked to a specific
+# git rev we do not control. The 0.3.1 copy comes from
+# vendor/codex-rs/app-server-transport's own dependency chain. This is a
+# transitive-locked duplication in vendored/forked code, not our dependency
+# chain — leaving multiple-versions = "allow" rather than attempting a broad
+# dedup. Revisit when the juberti-oai/rust-sdks.git fork bumps webrtc-sys-build
+# past zip 0.6, or when codex-rs upstream drops the constant_time_eq 0.3.1 path.
 multiple-versions = "allow"

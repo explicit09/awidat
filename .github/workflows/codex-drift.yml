@@ -1,0 +1,66 @@
+name: codex-upstream-drift
+
+# Weekly report of what has landed in openai/codex (codex-rs/) since we
+# forked vendor/codex-rs (see vendor/codex-rs/SOURCE for the fork SHA and the
+# cherry-pick process). This workflow does not merge or modify anything —
+# it only reports. It fails the job when scripts/codex-upstream-drift.sh
+# flags security-relevant commits, purely so the failure is visible in the
+# Actions tab; nothing else depends on this workflow, so a failure here
+# never blocks CI, PRs, or releases.
+
+on:
+  schedule:
+    # Mondays 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift-report:
+    name: Report codex-rs upstream drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run drift report
+        id: drift
+        run: |
+          set -euo pipefail
+          if scripts/codex-upstream-drift.sh > drift-report.txt 2>&1; then
+            echo "security_relevant=false" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "security_relevant=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "security_relevant=error" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          cat drift-report.txt
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## codex-rs upstream drift report"
+            echo
+            echo '```'
+            cat drift-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail visibly if security-relevant commits were flagged
+        if: steps.drift.outputs.security_relevant == 'true'
+        run: |
+          echo "::error::codex-rs upstream has security-relevant commits since our fork SHA. See the job summary for the report, then decide whether to cherry-pick into vendor/codex-rs/."
+          exit 1
+
+      - name: Fail visibly if the drift check itself errored
+        if: steps.drift.outputs.security_relevant == 'error'
+        run: |
+          echo "::error::scripts/codex-upstream-drift.sh could not complete (see log above) — likely a network or git failure, not a drift finding."
+          exit 1

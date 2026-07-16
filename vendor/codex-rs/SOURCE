@@ -61,3 +61,37 @@ Our edits (re-apply after every refresh):
   width).
 - vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
   inside Montage's single root workspace.
+
+Upstream security drift process (added 2026-07-16, R13):
+We do not track openai/codex automatically, but we do watch it for
+security-relevant changes on a schedule:
+- Cadence: weekly, via .github/workflows/codex-drift.yml (Mondays 09:00 UTC,
+  plus workflow_dispatch for on-demand runs). The workflow is standalone —
+  nothing depends on it, so a failure there never blocks CI, PRs, or
+  releases. It fails visibly (job goes red, report in the job summary) only
+  when scripts/codex-upstream-drift.sh flags security-relevant commits, so
+  the signal is easy to spot in the Actions tab.
+- What it does: scripts/codex-upstream-drift.sh shallow-clones
+  github.com/openai/codex, lists commits touching codex-rs/ since the
+  "Forked at commit" SHA recorded above, and flags any whose commit message
+  matches security|CVE|RUSTSEC|vuln|sanitiz|escape|injection|overflow
+  (case-insensitive) or whose changed paths look security-sensitive
+  (core/src/safety, core/src/sandbox, sandbox/, exec/src/sandbox, landlock,
+  seatbelt). It only reports — it never merges, cherry-picks, or modifies
+  vendor/codex-rs.
+- How to cherry-pick: when the report flags something worth pulling in,
+  clone openai/codex locally (or reuse the workflow's report to identify the
+  SHA), then `git -C <clone> show <sha> -- codex-rs/<path>` to inspect the
+  change, and manually re-apply the equivalent edit inside
+  vendor/codex-rs/<path> (a raw `git cherry-pick` won't apply cleanly since
+  vendor/codex-rs/ is a subtree copy, not a git remote/subtree-merge). After
+  cherry-picking, re-apply any of "our edits" listed above that touch the
+  same files, and re-run the workspace's affected crate tests.
+- Where SOURCE lives: this file (vendor/codex-rs/SOURCE) is the single
+  source of truth for the fork SHA. Update "Forked at commit" and
+  "Previous fork SHA" here whenever we do a full refresh of vendor/codex-rs
+  from upstream — the drift script reads this file directly and has no
+  other source of truth.
+- Run it locally any time: `scripts/codex-upstream-drift.sh` (requires
+  network access to github.com; set UPSTREAM_CLONE=/path/to/local/codex to
+  run offline against a pre-fetched clone).
