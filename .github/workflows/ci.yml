@@ -141,18 +141,26 @@ jobs:
             -p montage-render \
             -p montage-secrets \
             --all-targets -- -D warnings
+      # montage-desktop's #[test] suite is pure logic (mocked keychain
+      # backend, wiremock HTTP servers, tempdir-backed IO — no AppHandle /
+      # WebviewWindow construction, no macOS-only APIs beyond the
+      # keyring backend swap already covered by the target-specific
+      # deps above). It's no longer excluded here: fmt (job-wide) and
+      # Clippy (both legs, see above) already cover it, so running its
+      # tests on both OSes keeps that coverage symmetric instead of
+      # leaving a gap only nextest carved out.
       - name: Test
         run: |
           set -euo pipefail
           export MONTAGE_FFMPEG="$(command -v ffmpeg)"
           export MONTAGE_FFPROBE="$(command -v ffprobe)"
-          cargo nextest run --workspace $VENDOR_EXCLUDES --exclude montage-desktop
+          cargo nextest run --workspace $VENDOR_EXCLUDES
       - name: Doctests
         run: |
           set -euo pipefail
           export MONTAGE_FFMPEG="$(command -v ffmpeg)"
           export MONTAGE_FFPROBE="$(command -v ffprobe)"
-          cargo test --doc --workspace $VENDOR_EXCLUDES --exclude montage-desktop
+          cargo test --doc --workspace $VENDOR_EXCLUDES
       - name: Doc
         if: matrix.os == 'ubuntu-latest'
         run: cargo doc --no-deps --workspace $VENDOR_EXCLUDES
@@ -206,6 +214,8 @@ jobs:
         run: pnpm --dir apps/desktop build
       - name: Generated protocol unchanged
         run: git diff --exit-code -- apps/desktop/src/protocol/generated
+      - name: Typecheck
+        run: pnpm --dir apps/desktop typecheck
       - name: UI smoke
         timeout-minutes: 10
         run: pnpm --dir apps/desktop test

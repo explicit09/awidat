@@ -285,7 +285,19 @@ export const useProposalHistoryStore = create<HistoryState>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      // Guard against environments without a global `localStorage`
+      // (plain Node test runs). createJSONStorage only treats the
+      // store as unavailable when getStorage() *throws* — Node
+      // exposes `localStorage` as `undefined` rather than throwing on
+      // reference, so we throw explicitly to trigger persist's
+      // built-in no-op fallback (matches the pattern used elsewhere,
+      // e.g. state/introState.ts, state/mode.ts).
+      storage: createJSONStorage(() => {
+        if (typeof localStorage === "undefined") {
+          throw new Error("localStorage unavailable");
+        }
+        return localStorage;
+      }),
       // Cap on persist too — defends against a state migration that
       // brings in a giant pre-cap history blob.
       partialize: (state) => serialize(enforcePerProjectCap(state.entries)),

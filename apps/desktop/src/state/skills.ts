@@ -551,7 +551,16 @@ export const useSkillsStore = create<SkillsStore>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      // Guard against environments without a global `localStorage`
+      // (plain Node test runs) — see state/proposalHistory.ts for why
+      // we throw rather than return undefined (createJSONStorage only
+      // falls back to a no-op store when getStorage() throws).
+      storage: createJSONStorage(() => {
+        if (typeof localStorage === "undefined") {
+          throw new Error("localStorage unavailable");
+        }
+        return localStorage;
+      }),
       // Persist only the disabled + pinned maps (serialized) — the
       // action functions get rebuilt by the store on rehydration.
       partialize: (state) => {
