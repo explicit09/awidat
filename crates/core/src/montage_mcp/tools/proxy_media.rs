@@ -45,9 +45,22 @@ pub async fn run(args: GenerateProxyArgs, ctx: McpToolCtx) -> Result<String, Str
 
     let proxy_path = proxy_path_for(&ctx.project_root, &asset_path);
     let pending_path = proxy_pending_path(&proxy_path);
-    montage_render::transcode_proxy(&asset_path, &pending_path, None, CancellationToken::new())
-        .await
-        .map_err(|e| format!("generate_proxy: {e}"))?;
+    // Own a fresh token here (nothing else can fire it from outside this
+    // call) purely so `transcode_proxy` has a token to poll; the bound
+    // that actually protects this tool call is `transcode_proxy`'s own
+    // internal timeout (R4). On any error — including timeout — remove
+    // the `.pending` artifact so a failed generate_proxy doesn't leave a
+    // stale pending file that `proxy_status_for` would otherwise report
+    // as perpetually "Pending" (R11).
+    let cancel = CancellationToken::new();
+    if let Err(e) = montage_render::transcode_proxy(&asset_path, &pending_path, None, cancel).await
+    {
+        let _ = tokio::fs::remove_file(&pending_path).await;
+        return Err(format!(
+            "generate_proxy: transcode failed for {}: {e}",
+            args.asset_id
+        ));
+    }
     if proxy_path.is_file() {
         tokio::fs::remove_file(&proxy_path)
             .await

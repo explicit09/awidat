@@ -7,11 +7,25 @@
 //! Bump `montage_render::PROXY_SCHEMA_TAG` to invalidate old proxies.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use montage_index::media_files::{MediaScanOptions, collect_project_media_files};
-use montage_render::PROXY_SCHEMA_TAG;
+use montage_render::{DEFAULT_PROXY_TIMEOUT, PROXY_SCHEMA_TAG};
 use serde::Serialize;
+
+/// Age past which a `.pending` proxy artifact is treated as abandoned
+/// rather than actively in-flight (R11). `transcode_proxy` itself now
+/// bounds a single attempt to `montage_render::DEFAULT_PROXY_TIMEOUT`
+/// (overridable via `MONTAGE_PROXY_TIMEOUT_SECS`) and removes the
+/// `.pending` file on that timeout — so a `.pending` file surviving
+/// past 2x that bound means the writer crashed, was killed, or the
+/// process died mid-write without running its own cleanup (e.g. a
+/// desktop force-quit or OOM-kill), not that a legitimate transcode is
+/// still running. 2x leaves headroom for `DEFAULT_PROXY_TIMEOUT`
+/// overrides and slow filesystems flushing the rename.
+pub fn stale_pending_age_threshold() -> Duration {
+    DEFAULT_PROXY_TIMEOUT * 2
+}
 
 /// Agent-visible proxy cache status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -23,8 +37,14 @@ pub enum ProxyStatus {
     Stale,
     /// Proxy does not exist.
     Missing,
-    /// Pending proxy artifact exists.
+    /// Pending proxy artifact exists and is recent enough to plausibly
+    /// be an active transcode.
     Pending,
+    /// A `.pending` artifact exists but is older than
+    /// [`stale_pending_age_threshold`] — the writer is presumed dead.
+    /// Callers should treat this like `Missing` (safe to regenerate)
+    /// rather than waiting on it forever.
+    StalePending,
 }
 
 /// Status for one source asset.
@@ -75,11 +95,13 @@ pub fn proxy_status_for(
 ) -> ProxyStatusEntry {
     let proxy_path = proxy_path_for(project_root, asset_path);
     let pending_path = proxy_pending_path(&proxy_path);
-    let (status, size_bytes) = if pending_path.is_file() {
-        (
-            ProxyStatus::Pending,
-            std::fs::metadata(&pending_path).map(|meta| meta.len()).ok(),
-        )
+    let (status, size_bytes) = if let Ok(meta) = std::fs::metadata(&pending_path) {
+        let status = if pending_is_stale(&meta) {
+            ProxyStatus::StalePending
+        } else {
+            ProxyStatus::Pending
+        };
+        (status, Some(meta.len()))
     } else {
         match std::fs::metadata(&proxy_path) {
             Ok(meta) if proxy_is_fresh(asset_path, &proxy_path) => {
@@ -129,6 +151,22 @@ pub fn proxy_is_fresh(asset_path: &Path, proxy_path: &Path) -> bool {
 
 fn modified(path: &Path) -> std::io::Result<SystemTime> {
     std::fs::metadata(path)?.modified()
+}
+
+/// True when a `.pending` file's mtime is older than
+/// [`stale_pending_age_threshold`]. Unknown/unreadable mtime (rare —
+/// e.g. a filesystem without mtime support) errs toward "not stale" so
+/// we never prune a possibly-active transcode on a metadata read
+/// failure; the file will get another chance to age out on the next
+/// scan once mtime is readable.
+fn pending_is_stale(meta: &std::fs::Metadata) -> bool {
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    match SystemTime::now().duration_since(modified) {
+        Ok(age) => age > stale_pending_age_threshold(),
+        Err(_) => false, // clock skew (mtime in the future) — not stale.
+    }
 }
 
 fn stable_path_hash(path: &Path) -> u32 {
@@ -182,6 +220,44 @@ mod tests {
         let pending = proxy_status_for(dir.path(), "raw/camera.mov", &asset);
         assert_eq!(pending.status, ProxyStatus::Pending);
         assert_eq!(pending.size_bytes, Some(7));
+    }
+
+    #[test]
+    fn proxy_status_reports_stale_pending_past_the_age_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("raw/camera.mov");
+        write(&asset, b"media");
+
+        let proxy_path = proxy_path_for(dir.path(), &asset);
+        let pending_path = proxy_pending_path(&proxy_path);
+        write(&pending_path, b"partial");
+
+        // Fresh pending: recent mtime, plausibly in-flight.
+        let entry = proxy_status_for(dir.path(), "raw/camera.mov", &asset);
+        assert_eq!(entry.status, ProxyStatus::Pending);
+
+        // Backdate the .pending file's mtime past the abandonment
+        // threshold without sleeping for real (the default threshold is
+        // 60 real minutes) — `File::set_modified` is stable since Rust
+        // 1.75, no extra dependency needed.
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&pending_path)
+            .unwrap();
+        let backdated =
+            SystemTime::now() - (stale_pending_age_threshold() + Duration::from_secs(60));
+        file.set_modified(backdated).unwrap();
+
+        let entry = proxy_status_for(dir.path(), "raw/camera.mov", &asset);
+        assert_eq!(
+            entry.status,
+            ProxyStatus::StalePending,
+            "a .pending file past the age threshold must be reported as abandoned, \
+             not left as Pending forever (R11)"
+        );
+        // Size is still reported so a caller can see what it's about to
+        // replace/prune.
+        assert_eq!(entry.size_bytes, Some(7));
     }
 
     #[test]

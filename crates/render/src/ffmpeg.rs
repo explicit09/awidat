@@ -85,6 +85,77 @@ const STDERR_TAIL_BYTES: usize = 4 * 1024;
 /// running renders use the JobManager's own timeout, not this.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default wall-clock bound for [`transcode_proxy`], overridable via
+/// `MONTAGE_PROXY_TIMEOUT_SECS`. Proxies of long source media (multi-hour
+/// interview/podcast recordings, dense 4K camera cards) can legitimately
+/// take many minutes on modest hardware, so this is deliberately generous
+/// rather than tight — its job is to catch a genuinely hung/runaway ffmpeg
+/// process (R4: a proxy transcode with a dead cancellation token could
+/// previously hang an agent tool call or desktop command forever), not to
+/// second-guess normal long transcodes.
+pub const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Env var to override [`DEFAULT_PROXY_TIMEOUT`] in seconds. Useful for
+/// tests (tiny timeout to exercise the timeout path fast) and for users
+/// with unusually large/slow source media.
+const PROXY_TIMEOUT_ENV: &str = "MONTAGE_PROXY_TIMEOUT_SECS";
+
+/// Resolve the proxy transcode timeout: `MONTAGE_PROXY_TIMEOUT_SECS` if set
+/// and parseable, else [`DEFAULT_PROXY_TIMEOUT`].
+fn proxy_transcode_timeout() -> Duration {
+    std::env::var(PROXY_TIMEOUT_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_PROXY_TIMEOUT)
+}
+
+/// Default wall-clock bound for one-pass ffmpeg analysis helpers
+/// (`generate_thumbnails`, `generate_waveform`, `generate_silences`,
+/// `generate_black_frames`, `generate_motion_signal`). These decode the
+/// full asset once (not a heavier re-encode like a proxy transcode) but
+/// are called from agent tools with a freshly-constructed, unowned
+/// `CancellationToken` (see e.g. `analyze_sync.rs`, `find_black_frames.rs`,
+/// `verify_render.rs`) — nothing can fire that token, so without an
+/// internal bound a stuck/runaway ffmpeg process hangs the tool call
+/// forever, same failure class as R4. Shorter than the proxy timeout
+/// because these are decode-only passes, not encodes; still generous for
+/// multi-hour source media.
+pub const DEFAULT_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// Env var to override [`DEFAULT_ANALYSIS_TIMEOUT`] in seconds.
+const ANALYSIS_TIMEOUT_ENV: &str = "MONTAGE_ANALYSIS_TIMEOUT_SECS";
+
+fn analysis_timeout() -> Duration {
+    std::env::var(ANALYSIS_TIMEOUT_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_ANALYSIS_TIMEOUT)
+}
+
+/// Run `fut` (an ffmpeg-backed analysis future that owns a clone of
+/// `cancel` and races it internally) under [`analysis_timeout`]. On
+/// timeout, fires `cancel` (for any other holder of a clone) and drops
+/// `fut`, which drops the in-flight `Command`/`Child` — every analysis
+/// helper spawns with `kill_on_drop(true)`, so the ffmpeg process is
+/// reaped as part of unwinding, same as [`transcode_proxy`]'s own
+/// timeout path. Returns a descriptive [`FfmpegError::Timeout`] naming
+/// the bound.
+async fn bounded_by_analysis_timeout<T>(
+    cancel: tokio_util::sync::CancellationToken,
+    fut: impl std::future::Future<Output = Result<T, FfmpegError>>,
+) -> Result<T, FfmpegError> {
+    let bound = analysis_timeout();
+    match timeout(bound, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            cancel.cancel();
+            Err(FfmpegError::Timeout(bound))
+        }
+    }
+}
+
 /// Path to the `ffmpeg` binary. Cached after first lookup.
 pub fn ffmpeg_path() -> Result<PathBuf, FfmpegError> {
     static CACHE: OnceLock<Result<PathBuf, ()>> = OnceLock::new();
@@ -783,7 +854,44 @@ fn proxy_scale_filter() -> String {
 /// `cancel` is polled every progress tick; when fired the ffmpeg
 /// child is killed and the function returns `Err(NonZero)` with
 /// stderr empty (or `Err(Io)` if the kill races).
+///
+/// Bounded by [`DEFAULT_PROXY_TIMEOUT`] (override via
+/// `MONTAGE_PROXY_TIMEOUT_SECS`): a caller that hands in a fresh,
+/// unowned `CancellationToken` (nobody able to fire it) would
+/// otherwise have no way to bound this await, and a hung/runaway
+/// ffmpeg process would wait forever (R4). On timeout the internal
+/// child is killed, the partial `output_path` artifact is removed so
+/// no stale `.pending` file survives, and `Err(FfmpegError::Timeout)`
+/// names the elapsed bound and the source asset.
 pub async fn transcode_proxy(
+    asset_path: &Path,
+    output_path: &Path,
+    progress: Option<TranscodeProgressCallback>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), FfmpegError> {
+    let bound = proxy_transcode_timeout();
+    match timeout(
+        bound,
+        transcode_proxy_inner(asset_path, output_path, progress, cancel.clone()),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            // `timeout` drops the inner future here, which drops the
+            // in-flight `Command`/`Child` (both the remux and full
+            // transcode paths spawn with `kill_on_drop(true)`), so the
+            // ffmpeg process is reaped as part of unwinding. Also fire
+            // the token in case any clone is still observed elsewhere
+            // (e.g. a caller sharing `cancel` across a batch of assets).
+            cancel.cancel();
+            let _ = tokio::fs::remove_file(output_path).await;
+            Err(FfmpegError::Timeout(bound))
+        }
+    }
+}
+
+async fn transcode_proxy_inner(
     asset_path: &Path,
     output_path: &Path,
     progress: Option<TranscodeProgressCallback>,
@@ -1273,6 +1381,18 @@ pub async fn generate_thumbnails(
     output_dir: &Path,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<(), FfmpegError> {
+    bounded_by_analysis_timeout(
+        cancel.clone(),
+        generate_thumbnails_inner(asset_path, output_dir, cancel),
+    )
+    .await
+}
+
+async fn generate_thumbnails_inner(
+    asset_path: &Path,
+    output_dir: &Path,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), FfmpegError> {
     let bin = ffmpeg_path()?;
 
     tokio::fs::create_dir_all(output_dir)
@@ -1382,6 +1502,18 @@ pub struct Waveform {
 }
 
 pub async fn generate_waveform(
+    asset_path: &Path,
+    bucket_count: usize,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Waveform, FfmpegError> {
+    bounded_by_analysis_timeout(
+        cancel.clone(),
+        generate_waveform_inner(asset_path, bucket_count, cancel),
+    )
+    .await
+}
+
+async fn generate_waveform_inner(
     asset_path: &Path,
     bucket_count: usize,
     cancel: tokio_util::sync::CancellationToken,
@@ -1577,6 +1709,19 @@ pub async fn generate_silences(
     min_duration_s: f64,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<Vec<SilenceRange>, FfmpegError> {
+    bounded_by_analysis_timeout(
+        cancel.clone(),
+        generate_silences_inner(asset_path, threshold_db, min_duration_s, cancel),
+    )
+    .await
+}
+
+async fn generate_silences_inner(
+    asset_path: &Path,
+    threshold_db: f64,
+    min_duration_s: f64,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<SilenceRange>, FfmpegError> {
     if !threshold_db.is_finite() || threshold_db >= 0.0 {
         return Err(FfmpegError::Io(std::io::Error::other(format!(
             "invalid threshold_db {threshold_db}: must be finite and < 0"
@@ -1698,6 +1843,19 @@ fn parse_silence_ranges(stderr: &str) -> Vec<SilenceRange> {
 
 /// Detect black video ranges with FFmpeg's `blackdetect` filter.
 pub async fn generate_black_frames(
+    asset_path: &Path,
+    picture_black_ratio_th: f64,
+    min_duration_s: f64,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<BlackFrameRange>, FfmpegError> {
+    bounded_by_analysis_timeout(
+        cancel.clone(),
+        generate_black_frames_inner(asset_path, picture_black_ratio_th, min_duration_s, cancel),
+    )
+    .await
+}
+
+async fn generate_black_frames_inner(
     asset_path: &Path,
     picture_black_ratio_th: f64,
     min_duration_s: f64,
@@ -1839,6 +1997,17 @@ pub type MotionSignal = Vec<f32>;
 /// `cancel` kills ffmpeg and returns `Err(NonZero { stderr_tail:
 /// "cancelled" })`, mirroring [`transcode_proxy`].
 pub async fn generate_motion_signal(
+    asset_path: &Path,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<MotionSignal, FfmpegError> {
+    bounded_by_analysis_timeout(
+        cancel.clone(),
+        generate_motion_signal_inner(asset_path, cancel),
+    )
+    .await
+}
+
+async fn generate_motion_signal_inner(
     asset_path: &Path,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<MotionSignal, FfmpegError> {

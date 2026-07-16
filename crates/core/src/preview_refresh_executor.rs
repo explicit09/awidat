@@ -74,12 +74,22 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
         let artifact = Path::new(&task.artifact_path);
         match task.artifact_kind.as_str() {
             "proxy" => {
-                montage_render::transcode_proxy(&source, artifact, None, self.cancel.clone())
-                    .await
-                    .map_err(|e| PreviewRefreshError::Executor {
-                        task_id: task.task_id.clone(),
-                        message: format!("transcode_proxy: {e}"),
-                    })
+                // `transcode_proxy` already removes a partial output on
+                // its own internal timeout (R4), but a caller-triggered
+                // cancel or a non-zero ffmpeg exit can still leave a
+                // truncated artifact at `artifact_path`; clean it up here
+                // too so a failed refresh task never leaves a landmine
+                // file behind for the next status scan to trip over.
+                let result =
+                    montage_render::transcode_proxy(&source, artifact, None, self.cancel.clone())
+                        .await;
+                if result.is_err() {
+                    let _ = tokio::fs::remove_file(artifact).await;
+                }
+                result.map_err(|e| PreviewRefreshError::Executor {
+                    task_id: task.task_id.clone(),
+                    message: format!("transcode_proxy: {e}"),
+                })
             }
             "thumbnails" => {
                 montage_render::generate_thumbnails(&source, artifact, self.cancel.clone())

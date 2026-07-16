@@ -169,14 +169,20 @@ fn proxy_layer(
     let status = match entry.status {
         ProxyStatus::Fresh => MediaIntelligenceLayerStatus::Ready,
         ProxyStatus::Pending => MediaIntelligenceLayerStatus::Processing,
-        ProxyStatus::Missing | ProxyStatus::Stale => MediaIntelligenceLayerStatus::Pending,
+        // A stale-by-age `.pending` file means the writer is presumed
+        // dead (R11) — treat it the same as Missing/Stale so callers
+        // regenerate instead of waiting on a transcode that will never
+        // finish.
+        ProxyStatus::Missing | ProxyStatus::Stale | ProxyStatus::StalePending => {
+            MediaIntelligenceLayerStatus::Pending
+        }
     };
     MediaIntelligenceLayer {
         kind: MediaIntelligenceLayerKind::Proxy,
         status,
         artifact_refs: vec![artifact_ref(project_root, &proxy_path)],
         producer: Some("proxy_cache".into()),
-        stale: entry.status == ProxyStatus::Stale,
+        stale: matches!(entry.status, ProxyStatus::Stale | ProxyStatus::StalePending),
         blocking_reason: None,
         updated_at: modified_at(&proxy_path),
     }

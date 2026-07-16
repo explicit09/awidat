@@ -61,12 +61,12 @@ pub use dialogue_leveling::{
     measure_clip_loudness,
 };
 pub use ffmpeg::{
-    BlackFrameRange, FfmpegError, ImageFormat, MediaProbe, MotionSignal, PROXY_SCHEMA_TAG,
-    ReframeTarget, SilenceRange, TranscodeProgress, TranscodeProgressCallback, Waveform,
-    extract_frame, extract_frame_complex, extract_frame_filtered, extract_frame_raw_gray,
-    ffmpeg_path, ffprobe_path, generate_black_frames, generate_motion_signal, generate_silences,
-    generate_thumbnails, generate_waveform, probe_duration_s, probe_media, reframe_to_target,
-    transcode_proxy,
+    BlackFrameRange, DEFAULT_ANALYSIS_TIMEOUT, DEFAULT_PROXY_TIMEOUT, FfmpegError, ImageFormat,
+    MediaProbe, MotionSignal, PROXY_SCHEMA_TAG, ReframeTarget, SilenceRange, TranscodeProgress,
+    TranscodeProgressCallback, Waveform, extract_frame, extract_frame_complex,
+    extract_frame_filtered, extract_frame_raw_gray, ffmpeg_path, ffprobe_path,
+    generate_black_frames, generate_motion_signal, generate_silences, generate_thumbnails,
+    generate_waveform, probe_duration_s, probe_media, reframe_to_target, transcode_proxy,
 };
 pub use frame_io::{FrameEncoder, FrameIoError, FrameProvider};
 pub use job::{

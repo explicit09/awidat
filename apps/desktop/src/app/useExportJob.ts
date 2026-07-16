@@ -12,6 +12,12 @@ import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgentStore } from "../agent/store";
 import type { Item } from "../protocol";
+import {
+  checkWatchdog,
+  initWatchdog,
+  recordProgress,
+  type WatchdogState,
+} from "./exportJobWatchdog";
 
 /** Subset of `montage_render::JobStatus` we actually consume. */
 type JobStatus = {
@@ -41,6 +47,11 @@ export function useExportJob() {
   // Track the active interval so we can clear it on unmount or on
   // a second start. One job at a time per hook instance.
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // No-progress / absolute-cap watchdog (R18): the backend's own
+  // 30-minute job timeout only protects jobs whose child process is
+  // still tracked, so this poll loop needs its own bound in case the
+  // backend job record itself gets stuck. See exportJobWatchdog.ts.
+  const watchdogRef = useRef<WatchdogState | null>(null);
 
   // Stop polling on unmount so we don't keep firing IPC calls into
   // a torn-down view.
@@ -50,6 +61,7 @@ export function useExportJob() {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      watchdogRef.current = null;
     };
   }, []);
 
@@ -91,6 +103,8 @@ export function useExportJob() {
       }),
     );
 
+    watchdogRef.current = initWatchdog(Date.now());
+
     intervalRef.current = setInterval(async () => {
       let st: JobStatus;
       try {
@@ -98,6 +112,7 @@ export function useExportJob() {
       } catch (e) {
         // Polling itself failed — surface as terminal err and stop.
         clearIntervalSafe(intervalRef);
+        watchdogRef.current = null;
         upsert(
           makeJob({
             id: job_id,
@@ -108,6 +123,40 @@ export function useExportJob() {
           }),
         );
         return;
+      }
+
+      if (watchdogRef.current !== null) {
+        const now = Date.now();
+        watchdogRef.current = recordProgress(
+          watchdogRef.current,
+          { state: st.state, progressPct: st.progress_pct, timeDoneS: st.time_done_s },
+          now,
+        );
+        const verdict = checkWatchdog(watchdogRef.current, now);
+        if (verdict.tripped) {
+          clearIntervalSafe(intervalRef);
+          watchdogRef.current = null;
+          // Best-effort: ask the backend to tear down the job. Swallow
+          // any error — the UI has already decided this export failed
+          // either way, and a cancel invoke failing (e.g. the job
+          // already vanished server-side) shouldn't mask the watchdog
+          // message with a different one.
+          try {
+            await invoke("cancel_timeline_render", { jobId: job_id });
+          } catch {
+            // Ignored — see comment above.
+          }
+          upsert(
+            makeJob({
+              id: job_id,
+              phase: "completed",
+              status: verdict.reason,
+              result: { err: { message: verdict.reason } },
+              output_path: null,
+            }),
+          );
+          return;
+        }
       }
 
       switch (st.state) {
@@ -131,6 +180,7 @@ export function useExportJob() {
         }
         case "done": {
           clearIntervalSafe(intervalRef);
+          watchdogRef.current = null;
           upsert(
             makeJob({
               id: job_id,
@@ -145,6 +195,7 @@ export function useExportJob() {
         }
         case "failed": {
           clearIntervalSafe(intervalRef);
+          watchdogRef.current = null;
           const tail = lastNonEmptyLines(st.log_excerpt, 200);
           upsert(
             makeJob({
@@ -159,6 +210,7 @@ export function useExportJob() {
         }
         case "cancelled": {
           clearIntervalSafe(intervalRef);
+          watchdogRef.current = null;
           upsert(
             makeJob({
               id: job_id,
