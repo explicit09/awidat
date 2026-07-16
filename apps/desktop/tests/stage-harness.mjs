@@ -9,10 +9,13 @@
  * DOM-asserts the expected overlays landed, screenshots just the
  * program-frame element, and compares it against a committed
  * per-platform golden via ffmpeg SSIM (see `scripts/ssim-compare.sh`).
- * A failing compare gets ONE evidence-preserving recapture from a fresh
- * page load (the known CI flake is a stale pre-seek video frame in the
- * captured surface — see comments in captureCase/runCase); both
- * attempts' SSIMs are printed and the attempt-1 screenshot is kept.
+ * Before capture, the video's decoded content is verified in-page
+ * against a frame-0 signature (with a re-seek recovery loop) — the known
+ * CI flake is the pre-seek frame remaining the video's presented frame,
+ * a state observed to stick across page loads in one browser session. A
+ * failing compare still gets ONE evidence-preserving recapture, from a
+ * FRESH browser launch; both attempts' SSIMs are printed and the
+ * attempt-1 screenshot is kept. See comments in captureCase/runCase.
  *
  * A missing per-platform golden is a hard failure so the gate can never
  * silently self-seed in CI. To seed a new platform, run once locally with
@@ -50,6 +53,25 @@ mkdirSync(SCREENSHOT_DIR, { recursive: true });
 mkdirSync(GOLDEN_DIR, { recursive: true });
 
 const MIN_SSIM = "0.98";
+
+/** Shared context options — the retry path launches a fresh browser and
+ * must match the primary context exactly or goldens won't compare. */
+const CONTEXT_OPTIONS = {
+  viewport: { width: 1280, height: 720 },
+  deviceScaleFactor: 1,
+};
+
+/**
+ * In-page video content check threshold (mean absolute luminance
+ * difference on a 32x18 downsample, 0-255 scale). Calibrated against the
+ * fixture clip with ffmpeg: the stale frame (frame 0) vs itself is ~0 and
+ * vs its neighbor frame 1 is 0.53, while frame 0 vs each case's target
+ * frame is 2.23 (t=0.4) / 3.09 (t=0.5) / 7.53 (t=1.0) / 7.66 (t=1.5) /
+ * 6.42 (t=2.0) — so 1.0 separates "still showing frame 0" from "showing
+ * the seeked frame" with >= 2x margin on both sides for every case.
+ */
+const FRAME0_LUMA_DIFF_THRESHOLD = 1.0;
+const MAX_RESEEKS = 5;
 
 const MOTION_TITLE_SELECTOR = ".timeline-motion-scene-layer .timeline-title-overlay";
 const LEGACY_TITLE_SELECTOR = ".timeline-title-layer .timeline-title-overlay";
@@ -243,6 +265,155 @@ async function captureCase(ctx, testCase, shotPath) {
     const sceneErrorCount = await page.locator('[data-testid="stage-harness-scene-error"]').count();
     assert.equal(sceneErrorCount, 0, "harness reported a scene/asset load error");
 
+    // VERIFY the video's decoded content in-page before trusting anything
+    // downstream (CI runs 29462080026 + 29475319831: failing captures
+    // show the clip's FIRST frame under correct overlays, even though the
+    // in-app rVFC ready-gate fired — and in run 29475319831 the stale
+    // state survived a fresh page load in the same browser, failing both
+    // attempts with identical SSIM 0.818982). The fixture is all-intra
+    // (90/90 keyframes), so this is not a sparse-GOP seek artifact; the
+    // browser session itself can wedge with frame 0 as the presented
+    // frame. Strategy: draw the video to an offscreen canvas and compare
+    // a downsampled luminance signature against a frame-0 reference
+    // signature taken from a second, unseeked video element of the same
+    // clip (same in-browser decode pipeline, so "still frame 0" measures
+    // ~0 while every case's target frame measures >= 2.23 — see
+    // FRAME0_LUMA_DIFF_THRESHOLD calibration). If frame 0 is still the
+    // decoded frame, re-seek (0 then t) and re-check up to MAX_RESEEKS
+    // times before failing with a distinct, named error.
+    if (Number(t) > 0) {
+      const check = await page.evaluate(
+        async ({ t: target, maxReseeks, threshold }) => {
+          const video = document.querySelector('[data-testid="stage-harness-video"]');
+          if (!(video instanceof HTMLVideoElement)) {
+            return { status: "setup-error", reason: "stage-harness video element not found" };
+          }
+
+          const W = 32;
+          const H = 18;
+          const canvas = document.createElement("canvas");
+          canvas.width = W;
+          canvas.height = H;
+          const g = canvas.getContext("2d", { willReadFrequently: true });
+          if (!g) return { status: "setup-error", reason: "2d canvas context unavailable" };
+          const signature = (source) => {
+            g.drawImage(source, 0, 0, W, H);
+            const { data } = g.getImageData(0, 0, W, H);
+            const out = new Array(W * H);
+            for (let i = 0; i < W * H; i += 1) {
+              out[i] = 0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2];
+            }
+            return out;
+          };
+          const meanAbsDiff = (a, b) => {
+            let sum = 0;
+            for (let i = 0; i < a.length; i += 1) sum += Math.abs(a[i] - b[i]);
+            return sum / a.length;
+          };
+
+          // Frame-0 reference: a second video element on the same clip,
+          // never seeked, so its decoded frame IS frame 0 — through the
+          // exact same decode pipeline as the element under test.
+          const ref = document.createElement("video");
+          ref.muted = true;
+          ref.preload = "auto";
+          ref.src = video.currentSrc || video.src;
+          try {
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("timeout")), 10000);
+              ref.addEventListener(
+                "loadeddata",
+                () => {
+                  clearTimeout(timer);
+                  resolve();
+                },
+                { once: true },
+              );
+              ref.addEventListener(
+                "error",
+                () => {
+                  clearTimeout(timer);
+                  reject(new Error("media error"));
+                },
+                { once: true },
+              );
+              ref.load();
+            });
+          } catch (e) {
+            return { status: "setup-error", reason: `frame-0 reference video failed to load: ${e.message}` };
+          }
+          const frame0Sig = signature(ref);
+
+          const seekTo = (time) =>
+            new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error(`re-seek to ${time} timed out`)), 5000);
+              video.addEventListener(
+                "seeked",
+                () => {
+                  clearTimeout(timer);
+                  resolve();
+                },
+                { once: true },
+              );
+              video.currentTime = time;
+            });
+          const presentedAt = (time) =>
+            new Promise((resolve) => {
+              if (typeof video.requestVideoFrameCallback !== "function") {
+                resolve();
+                return;
+              }
+              const timer = setTimeout(resolve, 2000);
+              const onFrame = (_now, metadata) => {
+                if (Math.abs(metadata.mediaTime - time) <= 1 / 60) {
+                  clearTimeout(timer);
+                  resolve();
+                  return;
+                }
+                video.requestVideoFrameCallback(onFrame);
+              };
+              video.requestVideoFrameCallback(onFrame);
+            });
+
+          let diff = meanAbsDiff(signature(video), frame0Sig);
+          let reseeks = 0;
+          while (diff <= threshold && reseeks < maxReseeks) {
+            reseeks += 1;
+            try {
+              await seekTo(0);
+              await seekTo(target);
+            } catch (e) {
+              return { status: "setup-error", reason: e.message, reseeks };
+            }
+            await presentedAt(target);
+            diff = meanAbsDiff(signature(video), frame0Sig);
+          }
+          return {
+            status: diff > threshold ? "ok" : "stale",
+            reseeks,
+            diff: Number(diff.toFixed(2)),
+          };
+        },
+        { t: Number(t), maxReseeks: MAX_RESEEKS, threshold: FRAME0_LUMA_DIFF_THRESHOLD },
+      );
+
+      if (check.status === "setup-error") {
+        throw new Error(`video content check could not run: ${check.reason}`);
+      }
+      if (check.status === "stale") {
+        throw new Error(
+          `video never presented seeked frame after ${MAX_RESEEKS} re-seeks ` +
+            `(frame-0 luma diff ${check.diff} <= ${FRAME0_LUMA_DIFF_THRESHOLD}, t=${t})`,
+        );
+      }
+      if (check.reseeks > 0) {
+        console.error(
+          `[stage-harness t=${t}] video content check recovered after ${check.reseeks} re-seek(s) ` +
+            `(final frame-0 luma diff ${check.diff})`,
+        );
+      }
+    }
+
     // What the CI flake actually is (diagnosed from run 29462080026's
     // artifact): the OVERLAYS in a failing capture are pixel-identical
     // to the golden — text, fonts, positions all correct — but the
@@ -326,13 +497,15 @@ function ssimCompare(shotPath, goldenPath) {
 
 /** Run one case: capture, then bootstrap or golden-compare — with ONE
  * evidence-preserving recapture. The known CI flake is a stale video
- * frame in the captured surface (see the damage-forcing comment in
+ * frame (see the content-check and damage-forcing comments in
  * captureCase); when the first compare fails, the failing screenshot is
  * kept with an `-attempt1` suffix (the CI artifact glob
  * `stage-harness-*.png` uploads it), its SSIM is printed, and the case
- * is re-run from a FRESH page load. Both attempts' SSIMs are always
- * printed so flakes stay visible and countable; a genuine visual
- * regression fails both attempts and the case still fails. */
+ * is re-run in a freshly LAUNCHED browser (the bad state is
+ * session-sticky, so a fresh page in the same browser is not enough).
+ * Both attempts' SSIMs are always printed so flakes stay visible and
+ * countable; a genuine visual regression fails both attempts and the
+ * case still fails. */
 async function runCase(ctx, testCase) {
   const { name, t } = testCase;
   const caseLabel = `${name} t=${t}`;
@@ -363,11 +536,21 @@ async function runCase(ctx, testCase) {
   copyFileSync(shotPath, attempt1Path);
   console.error(
     `[${caseLabel}] attempt 1 diverged (SSIM=${first.score ?? "?"} < ${MIN_SSIM}); ` +
-      `evidence kept at ${attempt1Path}; recapturing once from a fresh page load`,
+      `evidence kept at ${attempt1Path}; recapturing once from a fresh browser launch`,
   );
 
-  await captureCase(ctx, testCase, shotPath);
-  const second = ssimCompare(shotPath, goldenPath);
+  // Fresh browser PROCESS, not just a fresh page: run 29475319831 showed
+  // the stale-video state is session-sticky — a fresh page load in the
+  // same browser reproduced the byte-identical stale capture.
+  const retryBrowser = await chromium.launch();
+  let second;
+  try {
+    const retryCtx = await retryBrowser.newContext(CONTEXT_OPTIONS);
+    await captureCase(retryCtx, testCase, shotPath);
+    second = ssimCompare(shotPath, goldenPath);
+  } finally {
+    await retryBrowser.close();
+  }
   console.error(
     `[${caseLabel}] attempt SSIMs: 1=${first.score ?? "?"} 2=${second.score ?? "?"} (min ${MIN_SSIM})`,
   );
@@ -383,10 +566,7 @@ async function runCase(ctx, testCase) {
 await ensureAppServer();
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({
-  viewport: { width: 1280, height: 720 },
-  deviceScaleFactor: 1,
-});
+const ctx = await browser.newContext(CONTEXT_OPTIONS);
 
 let failures = 0;
 
