@@ -590,6 +590,11 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+
+    /// Montage fork edit: side panel showing project timeline/insights.
+    /// `None` in vanilla codex sessions (no `MONTAGE_PROJECT_ROOT` /
+    /// current-dir detection applicable). See vendor/codex-rs/SOURCE.
+    pub(crate) montage_panel: Option<crate::montage::MontagePanel>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1075,6 +1080,7 @@ See the Codex keymap documentation for supported actions and examples."
             rate_limit_hard_stop_generation: 0,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            montage_panel: crate::montage::MontagePanel::detect(),
         };
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
@@ -1358,18 +1364,53 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
-        let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
+        // Montage fork edit: when the Montage panel is active, reserve
+        // its column from the chat widget's width budget so the
+        // composer measures correctly. When inactive (no panel), the
+        // chat widget gets the full terminal width — vanilla codex
+        // behavior. See vendor/codex-rs/SOURCE.
+        let terminal_width = tui.terminal.size()?.width;
+        let chat_width = match self.montage_panel {
+            Some(_) => terminal_width.saturating_sub(crate::montage::PANEL_WIDTH),
+            None => terminal_width,
+        };
+        let desired_height = self.chat_widget.desired_height(chat_width);
         let mut rendered_area = Rect::default();
+        let montage_panel_active = self.montage_panel.is_some();
         tui.draw_with_resize_reflow(desired_height, |frame| {
             let area = frame.area();
             rendered_area = area;
-            self.chat_widget.render(area, frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+            let (chat_area, panel_area) = split_chat_and_panel(area, montage_panel_active);
+            self.chat_widget.render(chat_area, frame.buffer);
+            if let (Some(panel), Some(panel_area)) = (self.montage_panel.as_ref(), panel_area) {
+                ratatui::widgets::Widget::render(panel, panel_area, frame.buffer);
+            }
+            if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                frame.set_cursor_style(self.chat_widget.cursor_style(chat_area));
                 frame.set_cursor_position((x, y));
             }
         })?;
         Ok(rendered_area)
+    }
+}
+
+/// Montage fork helper: split a frame area between chat (left) and
+/// the Montage side panel (right, fixed [`crate::montage::PANEL_WIDTH`]).
+/// Returns `(chat_area, panel_area)`; `panel_area` is `None` when the
+/// panel is inactive OR when the terminal is too narrow to host it
+/// (we'd rather hide the panel than crowd the composer).
+fn split_chat_and_panel(area: Rect, panel_active: bool) -> (Rect, Option<Rect>) {
+    if panel_active && area.width > crate::montage::PANEL_WIDTH {
+        let chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Horizontal)
+            .constraints([
+                ratatui::layout::Constraint::Min(0),
+                ratatui::layout::Constraint::Length(crate::montage::PANEL_WIDTH),
+            ])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
     }
 }
 

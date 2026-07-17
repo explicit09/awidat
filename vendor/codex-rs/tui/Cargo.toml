@@ -23,6 +23,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+# Montage fork edit: read OTIO project state for the side panel
+# mounted via `crate::montage::MontagePanel`. Auto-activates when
+# MONTAGE_PROJECT_ROOT is set in the env. See
+# vendor/codex-rs/SOURCE for the running list of fork edits.
+montage-proto = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }

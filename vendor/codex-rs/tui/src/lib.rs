@@ -144,6 +144,9 @@ mod markdown_text_merge;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+// Montage fork edit: side panel showing project timeline/insights.
+// See vendor/codex-rs/SOURCE.
+mod montage;
 mod motion;
 mod multi_agents;
 mod notifications;

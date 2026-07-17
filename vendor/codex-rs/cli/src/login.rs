@@ -11,12 +11,12 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthRouteConfig;
-use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
+use codex_login::oauth_client_id;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::auth::AuthMode;
@@ -149,9 +149,18 @@ pub async fn login_with_chatgpt(
     )
     .await;
 
+    // Montage fork edit: no hardcoded first-party ChatGPT OAuth client id.
+    // Deployments must set MONTAGE_OAUTH_CLIENT_ID (or
+    // CODEX_APP_SERVER_LOGIN_CLIENT_ID) to the sanctioned client id.
+    let client_id = oauth_client_id().ok_or_else(|| {
+        std::io::Error::other(
+            "ChatGPT login is not configured. Set MONTAGE_OAUTH_CLIENT_ID to the sanctioned client id used for login.",
+        )
+    })?;
+
     let opts = ServerOptions::new(
         codex_home,
-        CLIENT_ID.to_string(),
+        client_id,
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
         auth_keyring_backend_kind,
@@ -324,9 +333,18 @@ pub async fn run_login_with_device_code(
     )
     .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
+    // Montage fork edit: no hardcoded first-party ChatGPT OAuth client id.
+    // Deployments must set MONTAGE_OAUTH_CLIENT_ID (or
+    // CODEX_APP_SERVER_LOGIN_CLIENT_ID) to the sanctioned client id.
+    let Some(client_id) = client_id.or_else(oauth_client_id) else {
+        eprintln!(
+            "ChatGPT login is not configured. Set MONTAGE_OAUTH_CLIENT_ID to the sanctioned client id used for login."
+        );
+        std::process::exit(1);
+    };
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
-        client_id.unwrap_or(CLIENT_ID.to_string()),
+        client_id,
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
@@ -373,9 +391,18 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     .await;
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
+    // Montage fork edit: no hardcoded first-party ChatGPT OAuth client id.
+    // Deployments must set MONTAGE_OAUTH_CLIENT_ID (or
+    // CODEX_APP_SERVER_LOGIN_CLIENT_ID) to the sanctioned client id.
+    let Some(client_id) = client_id.or_else(oauth_client_id) else {
+        eprintln!(
+            "ChatGPT login is not configured. Set MONTAGE_OAUTH_CLIENT_ID to the sanctioned client id used for login."
+        );
+        std::process::exit(1);
+    };
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
-        client_id.unwrap_or(CLIENT_ID.to_string()),
+        client_id,
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),

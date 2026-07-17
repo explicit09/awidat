@@ -5,7 +5,6 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
-use codex_login::CLIENT_ID;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -232,10 +231,13 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         requests[0]
             .body_json::<Value>()
             .context("revoke request should be JSON")?,
+        // Montage fork edit: no OAuth client id is configured in this test
+        // (MONTAGE_OAUTH_CLIENT_ID / CODEX_APP_SERVER_LOGIN_CLIENT_ID unset),
+        // so the revoke request omits `client_id` — see
+        // `codex_login::oauth_client_id` and `revoke::RevokeTokenKind::client_id`.
         json!({
             "token": REFRESH_TOKEN,
             "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
         })
     );
     server.verify().await;

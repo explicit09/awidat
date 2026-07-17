@@ -56,6 +56,10 @@ struct AppServerArgs {
     /// Enable remote control for this app-server process without changing persistence.
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
+
+    /// Honor CODEX_API_KEY when loading app-server auth.
+    #[arg(long = "enable-codex-api-key-env", hide = true)]
+    enable_codex_api_key_env: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -70,6 +74,7 @@ fn main() -> anyhow::Result<()> {
             #[cfg(debug_assertions)]
             disable_plugin_startup_tasks_for_tests,
             remote_control,
+            enable_codex_api_key_env,
         } = AppServerArgs::parse();
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
@@ -91,6 +96,7 @@ fn main() -> anyhow::Result<()> {
                 (false, true) => codex_app_server::RemoteControlStartupMode::DisabledEphemeral,
                 (false, false) => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
             };
+        runtime_options.enable_codex_api_key_env = enable_codex_api_key_env;
 
         run_main_with_transport_options(
             arg0_paths,

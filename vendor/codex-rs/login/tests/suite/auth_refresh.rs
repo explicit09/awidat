@@ -8,6 +8,7 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
+use codex_login::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
@@ -31,6 +32,11 @@ use wiremock::matchers::path;
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
+/// Test-only sanctioned client id. Montage's fork requires
+/// `MONTAGE_OAUTH_CLIENT_ID` (or `CODEX_APP_SERVER_LOGIN_CLIENT_ID`) to be
+/// configured before token refresh requests are sent; see
+/// `codex_login::oauth_client_id`.
+const TEST_CLIENT_ID: &str = "app_sanctioned";
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
@@ -1204,6 +1210,7 @@ struct RefreshTokenTestContext {
     codex_home: TempDir,
     auth_manager: Arc<AuthManager>,
     _env_guard: EnvGuard,
+    _client_id_guard: EnvGuard,
 }
 
 impl RefreshTokenTestContext {
@@ -1212,6 +1219,8 @@ impl RefreshTokenTestContext {
 
         let endpoint = format!("{}/oauth/token", server.uri());
         let env_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
+        let client_id_guard =
+            EnvGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, TEST_CLIENT_ID.to_string());
 
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -1228,6 +1237,7 @@ impl RefreshTokenTestContext {
             codex_home,
             auth_manager,
             _env_guard: env_guard,
+            _client_id_guard: client_id_guard,
         })
     }
 

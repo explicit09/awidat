@@ -1335,8 +1335,13 @@ async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &HttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
+    let client_id = oauth_client_id().ok_or_else(|| {
+        RefreshTokenError::Transient(std::io::Error::other(format!(
+            "ChatGPT OAuth refresh is not configured. Set {MONTAGE_OAUTH_CLIENT_ID_ENV_VAR} to the sanctioned client id used for login."
+        )))
+    })?;
     let refresh_request = RefreshRequest {
-        client_id: oauth_client_id(),
+        client_id,
         grant_type: "refresh_token",
         refresh_token,
     };
@@ -1435,21 +1440,28 @@ struct RefreshRequest {
     refresh_token: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 struct RefreshResponse {
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 }
 
-// Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+// Montage fork edit: earlier Montage revisions hardcoded another client's
+// first-party ChatGPT OAuth client id here to bypass model-access gates.
+// Public source now requires explicit deployment configuration instead of
+// silently mimicking another client's sanctioned id.
+pub const MONTAGE_OAUTH_CLIENT_ID_ENV_VAR: &str = "MONTAGE_OAUTH_CLIENT_ID";
 
-pub fn oauth_client_id() -> String {
+pub fn oauth_client_id() -> Option<String> {
     std::env::var(CLIENT_ID_OVERRIDE_ENV_VAR)
         .ok()
         .filter(|client_id| !client_id.trim().is_empty())
-        .unwrap_or_else(|| CLIENT_ID.to_string())
+        .or_else(|| {
+            std::env::var(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR)
+                .ok()
+                .filter(|client_id| !client_id.trim().is_empty())
+        })
 }
 
 fn refresh_token_endpoint() -> String {

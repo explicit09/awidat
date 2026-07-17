@@ -454,13 +454,23 @@ impl AccountRequestProcessor {
             ));
         }
 
+        // Montage fork edit: ChatGPT OAuth login is not configured with a
+        // hardcoded first-party client id. Deployments must set
+        // MONTAGE_OAUTH_CLIENT_ID (or CODEX_APP_SERVER_LOGIN_CLIENT_ID) to
+        // the sanctioned client id.
+        let client_id = oauth_client_id().ok_or_else(|| {
+            invalid_request(
+                "ChatGPT login is not configured. Set MONTAGE_OAUTH_CLIENT_ID to the sanctioned client id used for login.",
+            )
+        })?;
+
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                oauth_client_id(),
+                client_id,
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
                 config.auth_keyring_backend_kind(),

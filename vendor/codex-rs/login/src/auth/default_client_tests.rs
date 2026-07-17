@@ -2,11 +2,38 @@ use super::sanitize_user_agent;
 use super::*;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::env;
 use std::io;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing_subscriber::layer::SubscriberExt;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 struct TestLogWriter {
@@ -39,11 +66,25 @@ impl Write for TestLogSink {
 }
 
 #[test]
+#[serial_test::serial(codex_auth_env)]
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;
     let prefix = format!("{originator}/");
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+#[serial_test::serial(codex_auth_env)]
+fn codex_user_agent_uses_configured_codex_cli_version() {
+    let _guard = EnvVarGuard::set(MONTAGE_CODEX_CLI_VERSION_ENV_VAR, "1.2.3");
+    let user_agent = get_codex_user_agent();
+    let originator = originator().value;
+    let prefix = format!("{originator}/1.2.3 ");
+    assert!(
+        user_agent.starts_with(&prefix),
+        "user agent should start with {prefix:?}, got {user_agent:?}"
+    );
 }
 
 #[test]

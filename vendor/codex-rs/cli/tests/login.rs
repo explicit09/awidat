@@ -2,8 +2,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_login::CLIENT_ID;
+use codex_login::MONTAGE_OAUTH_CLIENT_ID_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
+
+/// Test-only sanctioned client id. Montage's fork requires
+/// `MONTAGE_OAUTH_CLIENT_ID` to be configured before the ChatGPT device-code
+/// or browser login flows will run; see `codex_login::oauth_client_id`.
+const TEST_CLIENT_ID: &str = "app_test_sanctioned";
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -136,6 +141,7 @@ async fn device_login_revokes_existing_auth_before_requesting_new_tokens() -> Re
         REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
         format!("{issuer}/oauth/revoke"),
     )
+    .env(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, TEST_CLIENT_ID)
     .env("NO_PROXY", "127.0.0.1,localhost")
     .env("no_proxy", "127.0.0.1,localhost")
     .env_remove("CODEX_ACCESS_TOKEN")
@@ -166,7 +172,7 @@ async fn device_login_revokes_existing_auth_before_requesting_new_tokens() -> Re
         json!({
             "token": "old-refresh",
             "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
+            "client_id": TEST_CLIENT_ID,
         })
     );
 

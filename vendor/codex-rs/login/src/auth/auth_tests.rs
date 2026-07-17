@@ -63,6 +63,59 @@ async fn refresh_without_id_token() {
     assert_eq!(tokens.refresh_token, "new-refresh-token");
 }
 
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn refresh_request_uses_configured_montage_oauth_client_id() {
+    let server = MockServer::start().await;
+    let _endpoint_guard = EnvVarGuard::set(
+        REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+        &format!("{}/oauth/token", server.uri()),
+    );
+    let _client_id_guard = EnvVarGuard::set(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR, "app_sanctioned");
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new(reqwest::Client::new());
+    request_chatgpt_token_refresh("old-refresh-token".to_string(), &client)
+        .await
+        .expect("configured OAuth client id should allow refresh");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received requests should be available");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+    assert_eq!(body["client_id"], "app_sanctioned");
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn refresh_request_fails_without_configured_montage_oauth_client_id() {
+    let _client_id_guard = EnvVarGuard::remove(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR);
+    let _override_guard = EnvVarGuard::remove(CLIENT_ID_OVERRIDE_ENV_VAR);
+
+    let client = HttpClient::new(reqwest::Client::new());
+    let error = request_chatgpt_token_refresh("old-refresh-token".to_string(), &client)
+        .await
+        .expect_err("refresh should fail without a configured OAuth client id");
+
+    match error {
+        RefreshTokenError::Transient(err) => {
+            assert!(err.to_string().contains(MONTAGE_OAUTH_CLIENT_ID_ENV_VAR));
+        }
+        other => panic!("expected a transient configuration error, got {other:?}"),
+    }
+}
+
 #[test]
 fn login_with_api_key_overwrites_existing_auth_json() {
     let dir = tempdir().unwrap();

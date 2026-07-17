@@ -433,6 +433,12 @@ pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
+    // Montage fork edit: plumb `--enable-codex-api-key-env` through so
+    // deployments can opt in to honoring CODEX_API_KEY when loading
+    // app-server auth, instead of the hardcoded `false` upstream still
+    // passes at both `AuthManager::shared_from_config` call sites below.
+    // See vendor/codex-rs/SOURCE.
+    pub enable_codex_api_key_env: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -441,6 +447,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
+            enable_codex_api_key_env: false,
         }
     }
 }
@@ -504,8 +511,11 @@ pub async fn run_main_with_transport_options(
             let discovered_thread_config_loader = configured_thread_config_loader(&config);
             config_manager
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
-            let auth_manager =
-                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+            let auth_manager = AuthManager::shared_from_config(
+                &config,
+                runtime_options.enable_codex_api_key_env,
+            )
+            .await;
             config_manager
                 .replace_cloud_config_bundle_loader(auth_manager, config.chatgpt_base_url);
         }
@@ -714,7 +724,7 @@ pub async fn run_main_with_transport_options(
     drop(unix_socket_startup_lock);
 
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(&config, runtime_options.enable_codex_api_key_env).await;
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested

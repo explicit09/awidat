@@ -39,7 +39,7 @@ impl RevokeTokenKind {
     fn client_id(self) -> Option<String> {
         match self {
             Self::Access => None,
-            Self::Refresh => Some(oauth_client_id()),
+            Self::Refresh => oauth_client_id(),
         }
     }
 }

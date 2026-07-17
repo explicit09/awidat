@@ -36,6 +36,12 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+// Montage fork edit: Montage's workspace-level crate version (0.1.0) is not
+// the Codex CLI wire-protocol version the OpenAI backend expects in the
+// `version` provider header. Stamp the sanctioned Codex client version
+// instead of `env!("CARGO_PKG_VERSION")`. Keep this in sync with
+// `models-manager`'s `CODEX_MODEL_DISCOVERY_CLIENT_VERSION`.
+const OPENAI_PROVIDER_VERSION: &str = "0.144.5";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -338,7 +344,7 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                [("version".to_string(), OPENAI_PROVIDER_VERSION.to_string())]
                     .into_iter()
                     .collect(),
             ),

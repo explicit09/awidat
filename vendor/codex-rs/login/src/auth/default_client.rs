@@ -41,6 +41,12 @@ use crate::outbound_proxy::AuthRouteConfig;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+// Montage fork edit: the User-Agent may need to preserve the compatible Codex
+// client version expected by a sanctioned backend deployment, which is not
+// the same as this crate's own Cargo package version. Public source requires
+// explicit deployment configuration via this env var instead of silently
+// mimicking another client's hardcoded version.
+pub const MONTAGE_CODEX_CLI_VERSION_ENV_VAR: &str = "MONTAGE_CODEX_CLI_VERSION";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
 pub use codex_config::ResidencyRequirement;
@@ -159,7 +165,10 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = std::env::var(MONTAGE_CODEX_CLI_VERSION_ENV_VAR)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
