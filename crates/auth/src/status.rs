@@ -1,6 +1,6 @@
 //! Classifying the current credential into a UI-ready status snapshot.
 
-use codex_login::{AuthDotJson, load_auth_dot_json};
+use codex_login::{AuthDotJson, AuthKeyringBackendKind, load_auth_dot_json};
 use serde::{Deserialize, Serialize};
 
 use crate::env::AuthEnv;
@@ -115,7 +115,11 @@ pub fn status(env: &AuthEnv) -> AuthStatus {
     if let Some(status) = env_override_status() {
         return status;
     }
-    match load_auth_dot_json(&env.codex_home, env.store_mode) {
+    match load_auth_dot_json(
+        &env.codex_home,
+        env.store_mode,
+        AuthKeyringBackendKind::default(),
+    ) {
         Ok(Some(auth)) => classify(&auth),
         Ok(None) => AuthStatus::new(AuthModeKind::None, None, false),
         Err(err) => {
@@ -266,12 +270,17 @@ mod tests {
             &env.codex_home,
             "sk-proj-rounDtripKey0123456789",
             env.store_mode,
+            AuthKeyringBackendKind::default(),
         )
         .unwrap();
 
-        let stored = load_auth_dot_json(&env.codex_home, env.store_mode)
-            .unwrap()
-            .unwrap();
+        let stored = load_auth_dot_json(
+            &env.codex_home,
+            env.store_mode,
+            AuthKeyringBackendKind::default(),
+        )
+        .unwrap()
+        .unwrap();
         let status = classify(&stored);
         assert_eq!(status.mode, AuthModeKind::ApiKey);
         assert_eq!(status.account_hint.as_deref(), Some("sk-…6789"));

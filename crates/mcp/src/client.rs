@@ -286,23 +286,13 @@ impl Client {
         // Pre-load our handler with the ClientInfo we want to advertise.
         // The `ClientHandler::get_info` default returns ClientInfo::default();
         // we override on MontageHandler by stashing this and returning it.
-        // rmcp 0.15 dropped constructor methods on these param structs;
-        // build with struct literal. `Implementation` only ships
-        // `from_build_env()`, so we set name/version explicitly and
-        // leave the optional fields at default.
-        let init_params = InitializeRequestParams {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::LATEST,
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: info.name,
-                title: None,
-                version: info.version,
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-        };
+        // rmcp 1.8: both param structs are #[non_exhaustive], so build via
+        // their constructors instead of struct literals.
+        let init_params = InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::new(info.name, info.version),
+        )
+        .with_protocol_version(rmcp::model::ProtocolVersion::LATEST);
         self.handler.set_client_info(init_params).await;
 
         let handler = self.handler.clone();
@@ -315,22 +305,23 @@ impl Client {
             })?
             .map_err(|e| map_init_error(&self.server_name, e))?;
 
-        let peer_info =
-            service
-                .peer_info()
-                .cloned()
-                .ok_or_else(|| McpError::ProtocolViolation {
-                    server: self.server_name.clone(),
-                    message: "server did not return peer_info after initialize".into(),
-                })?;
+        // rmcp 1.8: `peer_info()` returns `Option<Arc<InitializeResult>>`
+        // directly (already effectively cloned via the Arc), not
+        // `Option<&InitializeResult>`.
+        let peer_info = service
+            .peer_info()
+            .ok_or_else(|| McpError::ProtocolViolation {
+                server: self.server_name.clone(),
+                message: "server did not return peer_info after initialize".into(),
+            })?;
 
-        let capabilities: ServerCapabilities = peer_info.capabilities.into();
+        let capabilities: ServerCapabilities = peer_info.capabilities.clone().into();
         let server_info = ServerInfo {
-            name: peer_info.server_info.name,
-            version: peer_info.server_info.version,
+            name: peer_info.server_info.name.clone(),
+            version: peer_info.server_info.version.clone(),
             protocol_version: peer_info.protocol_version.to_string(),
             capabilities: capabilities.clone(),
-            instructions: peer_info.instructions,
+            instructions: peer_info.instructions.clone(),
         };
 
         self.capabilities = capabilities;
@@ -433,21 +424,15 @@ impl Client {
                 map
             }),
         };
-        // rmcp 0.15: build with struct literal; `name` is `Cow<'static,
-        // str>`, owned `String` converts via `Cow::Owned`.
-        let params = CallToolRequestParams {
-            meta: None,
-            name: std::borrow::Cow::Owned(name.to_string()),
-            arguments: arguments_obj,
-            task: None,
-        };
+        // rmcp 1.8: `CallToolRequestParams` is #[non_exhaustive]; build via
+        // its constructor. `name` takes `impl Into<Cow<'static, str>>`, so
+        // an owned `String` converts directly.
+        let mut params = CallToolRequestParams::new(name.to_string());
+        params.arguments = arguments_obj;
 
         let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
         let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
-        let options = PeerRequestOptions {
-            timeout: Some(to),
-            ..Default::default()
-        };
+        let options = PeerRequestOptions::with_timeout(to);
 
         let handle = service
             .peer()
