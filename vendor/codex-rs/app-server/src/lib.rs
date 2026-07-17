@@ -511,11 +511,9 @@ pub async fn run_main_with_transport_options(
             let discovered_thread_config_loader = configured_thread_config_loader(&config);
             config_manager
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
-            let auth_manager = AuthManager::shared_from_config(
-                &config,
-                runtime_options.enable_codex_api_key_env,
-            )
-            .await;
+            let auth_manager =
+                AuthManager::shared_from_config(&config, runtime_options.enable_codex_api_key_env)
+                    .await;
             config_manager
                 .replace_cloud_config_bundle_loader(auth_manager, config.chatgpt_base_url);
         }

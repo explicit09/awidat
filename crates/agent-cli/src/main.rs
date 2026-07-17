@@ -63,6 +63,21 @@ enum Command {
     },
 }
 
+/// Montage's default model when the caller (CLI flag, config, or codex's own
+/// `-c model=...`) hasn't chosen one. gpt-5.6-terra is the refreshed model
+/// catalog's "balanced agentic coding model for everyday work" — see
+/// vendor/codex-rs/models-manager/models.json — and replaces gpt-5.4, which
+/// the catalog no longer lists (`visibility: "hide"`). Montage pins this
+/// explicitly rather than relying on codex's own catalog-order default
+/// (currently gpt-5.6-sol, the first `visibility: "list"` entry), since that
+/// ordering is upstream's to change on any future refresh.
+const MONTAGE_DEFAULT_MODEL: &str = "gpt-5.6-terra";
+
+/// Reasoning effort to pair with [`MONTAGE_DEFAULT_MODEL`] when the caller
+/// hasn't set one via `-c model_reasoning_effort=...`. Matches
+/// gpt-5.6-terra's own catalog `default_reasoning_level` ("medium").
+const MONTAGE_DEFAULT_REASONING_EFFORT: &str = "medium";
+
 struct CodexRunOptions {
     prompt: Option<String>,
     dangerously_bypass: bool,
@@ -90,6 +105,7 @@ impl CodexRunOptions {
 
         let mut raw_overrides = montage_mcp_overrides(abs_project_root.as_deref());
         raw_overrides.extend(self.config_overrides);
+        apply_default_model_overrides(&mut raw_overrides, self.model.is_some());
 
         let mut cli = ExecCli {
             prompt: self.prompt,
@@ -209,6 +225,29 @@ fn montage_mcp_overrides(project_root: Option<&Path>) -> Vec<String> {
     overrides
 }
 
+/// Appends `-c model=...` / `-c model_reasoning_effort=...` overrides for
+/// [`MONTAGE_DEFAULT_MODEL`] / [`MONTAGE_DEFAULT_REASONING_EFFORT`] unless the
+/// caller already chose a model (`model_explicitly_set`, e.g. via `--model`)
+/// or already has a `model=`/`model_reasoning_effort=` entry in
+/// `raw_overrides` (e.g. via `-c model=...` or a user's own config.toml
+/// default surfaced as a raw override upstream). Mutates `raw_overrides` in
+/// place so callers can push it straight into `CliConfigOverrides`.
+fn apply_default_model_overrides(raw_overrides: &mut Vec<String>, model_explicitly_set: bool) {
+    let user_set_model =
+        model_explicitly_set || raw_overrides.iter().any(|entry| entry.starts_with("model="));
+    if !user_set_model {
+        raw_overrides.push(format!("model=\"{MONTAGE_DEFAULT_MODEL}\""));
+    }
+    let user_set_reasoning_effort = raw_overrides
+        .iter()
+        .any(|entry| entry.starts_with("model_reasoning_effort="));
+    if !user_set_reasoning_effort {
+        raw_overrides.push(format!(
+            "model_reasoning_effort=\"{MONTAGE_DEFAULT_REASONING_EFFORT}\""
+        ));
+    }
+}
+
 fn absolute_project_root(root: &Path) -> PathBuf {
     if root.is_absolute() {
         return root.to_path_buf();
@@ -216,4 +255,55 @@ fn absolute_project_root(root: &Path) -> PathBuf {
     std::env::current_dir()
         .map(|cwd| cwd.join(root))
         .unwrap_or_else(|_| root.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_model_and_reasoning_effort_when_unset() {
+        let mut overrides = vec!["mcp_servers.montage.command=\"/bin/montage-mcp-server\"".into()];
+        apply_default_model_overrides(&mut overrides, /*model_explicitly_set*/ false);
+
+        assert!(overrides.contains(&format!("model=\"{MONTAGE_DEFAULT_MODEL}\"")));
+        assert!(overrides.contains(&format!(
+            "model_reasoning_effort=\"{MONTAGE_DEFAULT_REASONING_EFFORT}\""
+        )));
+    }
+
+    #[test]
+    fn does_not_override_explicit_model_flag() {
+        let mut overrides = Vec::new();
+        apply_default_model_overrides(&mut overrides, /*model_explicitly_set*/ true);
+
+        assert!(
+            !overrides
+                .iter()
+                .any(|entry| entry.starts_with("model=")),
+            "explicit --model should not get a competing -c model= override: {overrides:?}"
+        );
+        // Reasoning effort still defaults even when the model was chosen explicitly.
+        assert!(overrides.contains(&format!(
+            "model_reasoning_effort=\"{MONTAGE_DEFAULT_REASONING_EFFORT}\""
+        )));
+    }
+
+    #[test]
+    fn does_not_override_explicit_config_overrides() {
+        let mut overrides = vec![
+            "model=\"gpt-5.6-sol\"".to_string(),
+            "model_reasoning_effort=\"high\"".to_string(),
+        ];
+        apply_default_model_overrides(&mut overrides, /*model_explicitly_set*/ false);
+
+        assert_eq!(
+            overrides,
+            vec![
+                "model=\"gpt-5.6-sol\"".to_string(),
+                "model_reasoning_effort=\"high\"".to_string(),
+            ],
+            "user's own -c overrides must win over Montage's defaults"
+        );
+    }
 }

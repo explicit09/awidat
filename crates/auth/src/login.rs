@@ -141,9 +141,13 @@ mod tests {
         let (_home, env) = temp_env();
         set_api_key(&env, "  sk-proj-validkey0123456789abc  ").unwrap();
 
-        let stored = load_auth_dot_json(&env.codex_home, env.store_mode, AuthKeyringBackendKind::default())
-            .unwrap()
-            .unwrap();
+        let stored = load_auth_dot_json(
+            &env.codex_home,
+            env.store_mode,
+            AuthKeyringBackendKind::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             stored.openai_api_key.as_deref(),
             Some("sk-proj-validkey0123456789abc")
@@ -157,9 +161,13 @@ mod tests {
         assert!(matches!(err, AuthError::InvalidApiKey(_)));
         // Nothing should have been written.
         assert!(
-            load_auth_dot_json(&env.codex_home, env.store_mode, AuthKeyringBackendKind::default())
-                .unwrap()
-                .is_none()
+            load_auth_dot_json(
+                &env.codex_home,
+                env.store_mode,
+                AuthKeyringBackendKind::default()
+            )
+            .unwrap()
+            .is_none()
         );
     }
 
@@ -193,9 +201,13 @@ mod tests {
         let err = set_api_key(&env, "sk-proj-validkey0123456789abc").unwrap_err();
         assert!(matches!(err, AuthError::ForbiddenByPolicy(_)));
         assert!(
-            load_auth_dot_json(&env.codex_home, env.store_mode, AuthKeyringBackendKind::default())
-                .unwrap()
-                .is_none(),
+            load_auth_dot_json(
+                &env.codex_home,
+                env.store_mode,
+                AuthKeyringBackendKind::default()
+            )
+            .unwrap()
+            .is_none(),
             "no key should be written when policy forbids it"
         );
     }

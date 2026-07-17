@@ -36,6 +36,24 @@ does not appear to call rusqlite directly at the source level (dependency
 looked unused at grep time) — flagged for follow-up if `cargo check`
 surfaces real API drift.
 
+Default model (crates/agent-cli, crates/codex-bridge): the refreshed model
+catalog (vendor/codex-rs/models-manager/models.json) no longer lists
+gpt-5.4 (`visibility: "hide"`, superseded per its own migration note —
+"Codex now uses GPT-5.6 Terra in place of GPT-5.4"). Montage now defaults
+to gpt-5.6-terra ("Balanced agentic coding model for everyday work",
+catalog `default_reasoning_level: "medium"`) at reasoning effort medium,
+pinned explicitly by crates/agent-cli/src/main.rs (via `-c model=...` / `-c
+model_reasoning_effort=...` config overrides, so an explicit --model or a
+user's own config.toml default still wins) and
+crates/codex-bridge/src/wire.rs's thread_start_request (desktop's
+app-server RPC path; thread_resume_request intentionally does not apply
+this — a resumed thread keeps its existing model). Without this pin,
+codex's own catalog-order default resolves to gpt-5.6-sol (the first
+`visibility: "list"` entry) via
+protocol::openai_models::mark_default_by_picker_visibility — see that
+function if this default ever needs re-deriving after a future refresh
+reorders the catalog.
+
 Our edits (re-apply after every refresh):
 - vendor/codex-rs/exec/src/cli.rs: `#[derive(Parser, Debug, Default)]` on `Cli`
   so montage-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.

@@ -56,6 +56,18 @@ pub fn initialize_request(id: i64, client_version: &str) -> serde_json::Value {
     })
 }
 
+/// Montage's default model for a freshly started thread when the caller
+/// hasn't chosen one. gpt-5.6-terra is the refreshed model catalog's
+/// "balanced agentic coding model for everyday work" — see
+/// vendor/codex-rs/models-manager/models.json — and replaces gpt-5.4, which
+/// the catalog no longer lists (`visibility: "hide"`). Montage pins this
+/// explicitly rather than relying on the app-server's own catalog-order
+/// default (currently gpt-5.6-sol, the first `visibility: "list"` entry),
+/// since that ordering is upstream's to change on any future refresh.
+/// Resuming an existing thread (`thread_resume_request`) intentionally does
+/// not apply this — a resumed thread keeps whatever model it already used.
+pub const MONTAGE_DEFAULT_MODEL: &str = "gpt-5.6-terra";
+
 pub fn thread_start_request(
     id: i64,
     project_root: &std::path::Path,
@@ -67,6 +79,7 @@ pub fn thread_start_request(
         "params": {
             "cwd": project_root.display().to_string(),
             "developerInstructions": developer_instructions,
+            "model": MONTAGE_DEFAULT_MODEL,
         },
     })
 }
