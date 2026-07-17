@@ -6,10 +6,8 @@ pub mod model_info;
 pub mod model_presets;
 pub mod test_support;
 
-pub use codex_app_server_protocol::AuthMode;
+pub use codex_protocol::auth::AuthMode;
 pub use config::ModelsManagerConfig;
-
-const CODEX_MODEL_DISCOVERY_CLIENT_VERSION: &str = "0.128.0";
 
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()
@@ -19,13 +17,10 @@ pub fn bundled_models_response()
 
 /// Convert the client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3").
 pub fn client_version_to_whole() -> String {
-    CODEX_MODEL_DISCOVERY_CLIENT_VERSION.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn model_discovery_uses_codex_protocol_version() {
-        assert_eq!(super::client_version_to_whole(), "0.128.0");
-    }
+    format!(
+        "{}.{}.{}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH")
+    )
 }

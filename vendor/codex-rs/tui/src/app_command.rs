@@ -6,8 +6,6 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
-use codex_app_server_protocol::ThreadRealtimeAudioChunk;
-use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
@@ -28,12 +26,6 @@ use serde_json::Value;
 pub(crate) enum AppCommand {
     Interrupt,
     CleanBackgroundTerminals,
-    RealtimeConversationStart {
-        transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<Value>,
-    },
-    RealtimeConversationAudio(ThreadRealtimeAudioChunk),
-    RealtimeConversationClose,
     RunUserShellCommand {
         command: String,
     },
@@ -99,9 +91,6 @@ pub(crate) enum AppCommand {
         name: String,
     },
     Shutdown,
-    ThreadRollback {
-        num_turns: u32,
-    },
     Review {
         target: ReviewTarget,
     },
@@ -117,22 +106,6 @@ impl AppCommand {
 
     pub(crate) fn clean_background_terminals() -> Self {
         Self::CleanBackgroundTerminals
-    }
-
-    pub(crate) fn realtime_conversation_start(
-        transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<Value>,
-    ) -> Self {
-        Self::RealtimeConversationStart { transport, voice }
-    }
-
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn realtime_conversation_audio(frame: ThreadRealtimeAudioChunk) -> Self {
-        Self::RealtimeConversationAudio(frame)
-    }
-
-    pub(crate) fn realtime_conversation_close() -> Self {
-        Self::RealtimeConversationClose
     }
 
     pub(crate) fn run_user_shell_command(command: String) -> Self {
@@ -262,10 +235,6 @@ impl AppCommand {
     #[allow(dead_code)]
     pub(crate) fn shutdown() -> Self {
         Self::Shutdown
-    }
-
-    pub(crate) fn thread_rollback(num_turns: u32) -> Self {
-        Self::ThreadRollback { num_turns }
     }
 
     pub(crate) fn review(target: ReviewTarget) -> Self {

@@ -77,9 +77,10 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
@@ -104,7 +105,9 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_) | ServerNotification::ThreadSettingsUpdated(_)
+        ServerNotification::TurnCompleted(_)
+            | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
 }
 
@@ -124,8 +127,8 @@ pub struct InProcessStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Whether config API paths should reject unknown config fields.
     pub strict_config: bool,
-    /// Preloaded cloud requirements provider.
-    pub cloud_requirements: CloudRequirementsLoader,
+    /// Preloaded cloud config bundle provider.
+    pub cloud_config_bundle: CloudConfigBundleLoader,
     /// Loader used to fetch typed thread config sources before a thread starts.
     pub thread_config_loader: Arc<dyn ThreadConfigLoader>,
     /// Feedback sink used by app-server/core telemetry and logs.
@@ -347,7 +350,16 @@ impl InProcessClientHandle {
 /// This function sends `initialize` followed by `initialized` before returning
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
-pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    if let Ok(Some(err)) = check_execpolicy_for_warnings(&args.config.config_layer_stack).await {
+        let (path, range) = crate::exec_policy_warning_location(&err);
+        args.config_warnings.push(ConfigWarningNotification {
+            summary: "Error parsing rules; custom rules not applied.".to_string(),
+            details: Some(err.to_string()),
+            path,
+            range,
+        });
+    }
     let initialize = args.initialize.clone();
     let client = start_uninitialized(args).await?;
 
@@ -415,7 +427,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.cli_overrides,
             args.loader_overrides,
             args.strict_config,
-            args.cloud_requirements,
+            args.cloud_config_bundle,
             args.arg0_paths.clone(),
             args.thread_config_loader,
         );
@@ -655,7 +667,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                     .await;
                             }
                         }
-                        OutgoingMessage::AppServerNotification(notification) => {
+                        OutgoingMessage::AppServerNotification(envelope) => {
+                            let notification = envelope.notification;
                             if server_notification_requires_delivery(&notification) {
                                 if event_tx
                                     .send(InProcessServerEvent::ServerNotification(notification))
@@ -729,6 +742,7 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -772,7 +786,7 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             strict_config: false,
-            cloud_requirements: CloudRequirementsLoader::default(),
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
@@ -892,6 +906,14 @@ mod tests {
                     duration_ms: None,
                 },
             })
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ExternalAgentConfigImportCompleted(
+                ExternalAgentConfigImportCompletedNotification {
+                    import_id: "import".to_string(),
+                    item_type_results: Vec::new(),
+                },
+            )
         ));
     }
 }

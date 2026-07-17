@@ -1,16 +1,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ExtensionData;
+use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
-use crate::context::ContextualUserFragment;
-use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
@@ -37,7 +34,8 @@ use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
-pub(crate) fn image_generation_artifact_path(
+/// Returns the host-owned default artifact path for a generated image.
+pub fn image_generation_artifact_path(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
@@ -106,25 +104,6 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
     None
 }
 
-async fn save_image_generation_result(
-    codex_home: &AbsolutePathBuf,
-    session_id: &str,
-    call_id: &str,
-    result: &str,
-) -> Result<AbsolutePathBuf> {
-    let bytes = BASE64_STANDARD
-        .decode(result.trim().as_bytes())
-        .map_err(|err| {
-            CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
-        })?;
-    let path = image_generation_artifact_path(codex_home, session_id, call_id);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&path, bytes).await?;
-    Ok(path)
-}
-
 /// Persist a completed model response item and record any cited memory usage.
 pub(crate) async fn record_completed_response_item(
     sess: &Session,
@@ -152,7 +131,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(
                 item,
-                turn_context.collaboration_mode.mode == ModeKind::Plan,
+                turn_context.mode == ModeKind::Plan,
             )
         },
         |facts| facts.defers_mailbox_delivery_to_next_turn,
@@ -202,7 +181,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     }
     state_db::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
-        sess.conversation_id,
+        sess.thread_id,
         "record_completed_response_item",
     )
     .await;
@@ -233,7 +212,7 @@ async fn record_stage1_output_usage_for_memory_citation(
     }
 
     if let Some(db) = state_db_ctx {
-        let _ = db.record_stage1_output_usage(&thread_ids).await;
+        let _ = db.memories().record_stage1_output_usage(&thread_ids).await;
     }
     true
 }
@@ -259,7 +238,7 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
-async fn apply_turn_item_contributors(
+pub(crate) async fn apply_turn_item_contributors(
     sess: &Session,
     turn_store: &ExtensionData,
     item: &mut TurnItem,
@@ -294,14 +273,12 @@ pub(crate) struct FinalizedTurnItemFacts {
 
 pub(crate) async fn finalize_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<FinalizedTurnItem> {
     let turn_item =
-        handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
-            .await?;
+        handle_non_tool_response_item(sess, contributor_policy, item, plan_mode).await?;
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
         match &turn_item {
             TurnItem::AgentMessage(agent_message) => {
@@ -326,7 +303,6 @@ pub(crate) async fn finalize_non_tool_response_item(
                     defers_mailbox_delivery_to_next_turn,
                 )
             }
-            TurnItem::ImageGeneration(_) => (None, None, true),
             _ => (None, None, false),
         };
     Some(FinalizedTurnItem {
@@ -346,7 +322,7 @@ pub(crate) async fn handle_output_item_done(
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
 
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
@@ -361,7 +337,7 @@ pub(crate) async fn handle_output_item_done(
 
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!(
-                thread_id = %ctx.sess.conversation_id,
+                thread_id = %ctx.sess.thread_id,
                 "ToolCall: {} {}",
                 call.tool_name,
                 payload_preview
@@ -384,7 +360,6 @@ pub(crate) async fn handle_output_item_done(
         Ok(None) => {
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
@@ -395,15 +370,8 @@ pub(crate) async fn handle_output_item_done(
                 .map(|finalized| finalized.facts.clone());
             if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
-                    let mut started_item = finalized_turn_item.turn_item.clone();
-                    if let TurnItem::ImageGeneration(item) = &mut started_item {
-                        item.status = "in_progress".to_string();
-                        item.revised_prompt = None;
-                        item.result.clear();
-                        item.saved_path = None;
-                    }
                     ctx.sess
-                        .emit_turn_item_started(&ctx.turn_context, &started_item)
+                        .emit_turn_item_started(&ctx.turn_context, &finalized_turn_item.turn_item)
                         .await;
                 }
 
@@ -454,83 +422,41 @@ pub(crate) async fn handle_output_item_done(
 
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
-    turn_context: &TurnContext,
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
-    debug!(?item, "Output item");
+    let item_type = match item {
+        ResponseItem::AdditionalTools { .. } => "additional_tools",
+        ResponseItem::Message { .. } => "message",
+        ResponseItem::AgentMessage { .. } => "agent_message",
+        ResponseItem::Reasoning { .. } => "reasoning",
+        ResponseItem::LocalShellCall { .. } => "local_shell_call",
+        ResponseItem::FunctionCall { .. } => "function_call",
+        ResponseItem::ToolSearchCall { .. } => "tool_search_call",
+        ResponseItem::FunctionCallOutput { .. } => "function_call_output",
+        ResponseItem::CustomToolCall { .. } => "custom_tool_call",
+        ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
+        ResponseItem::ToolSearchOutput { .. } => "tool_search_output",
+        ResponseItem::WebSearchCall { .. } => "web_search_call",
+        ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
+        ResponseItem::Compaction { .. } => "compaction",
+        ResponseItem::CompactionTrigger { .. } => "compaction_trigger",
+        ResponseItem::ContextCompaction { .. } => "context_compaction",
+        ResponseItem::Other => "other",
+    };
+    debug!(
+        item_type,
+        item_id = item.id().map(ResponseItemId::as_str),
+        "Output item"
+    );
 
     match item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. } => {
+        | ResponseItem::WebSearchCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
-                apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
-            }
-            if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
-                let combined = agent_message
-                    .content
-                    .iter()
-                    .map(|entry| match entry {
-                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-                    })
-                    .collect::<String>();
-                let (stripped, memory_citation) =
-                    strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
-                agent_message.content =
-                    vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
-                if agent_message.memory_citation.is_none() {
-                    agent_message.memory_citation = memory_citation;
-                }
-            }
-            if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                let session_id = sess.conversation_id.to_string();
-                match save_image_generation_result(
-                    &turn_context.config.codex_home,
-                    &session_id,
-                    &image_item.id,
-                    &image_item.result,
-                )
-                .await
-                {
-                    Ok(path) => {
-                        image_item.saved_path = Some(path);
-                        let image_output_path = image_generation_artifact_path(
-                            &turn_context.config.codex_home,
-                            &session_id,
-                            "<image_id>",
-                        );
-                        let image_output_dir = image_output_path
-                            .parent()
-                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let message: ResponseItem =
-                            ContextualUserFragment::into(ImageGenerationInstructions::new(
-                                image_output_dir.display(),
-                                image_output_path.display(),
-                            ));
-                        sess.record_conversation_items(turn_context, &[message])
-                            .await;
-                    }
-                    Err(err) => {
-                        let output_path = image_generation_artifact_path(
-                            &turn_context.config.codex_home,
-                            &session_id,
-                            &image_item.id,
-                        );
-                        let output_dir = output_path
-                            .parent()
-                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        tracing::warn!(
-                            call_id = %image_item.id,
-                            output_dir = %output_dir.display(),
-                            "failed to save generated image: {err}"
-                        );
-                    }
-                }
-            }
+            finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)
         }
         ResponseItem::FunctionCallOutput { .. }
@@ -540,6 +466,33 @@ pub(crate) async fn handle_non_tool_response_item(
             None
         }
         _ => None,
+    }
+}
+
+pub(crate) async fn finalize_turn_item(
+    sess: &Session,
+    contributor_policy: TurnItemContributorPolicy<'_>,
+    turn_item: &mut TurnItem,
+    plan_mode: bool,
+) {
+    if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
+        apply_turn_item_contributors(sess, turn_store, turn_item).await;
+    }
+    if let TurnItem::AgentMessage(agent_message) = &mut *turn_item {
+        let combined = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        let (stripped, memory_citation) =
+            strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
+        agent_message.content =
+            vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+        if agent_message.memory_citation.is_none() {
+            agent_message.memory_citation = memory_citation;
+        }
     }
 }
 
@@ -573,7 +526,6 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
             // to the safer "defer mailbox mail" behavior.
             last_assistant_message_from_item(item, plan_mode).is_some()
         }
-        ResponseItem::ImageGenerationCall { .. } => true,
         _ => false,
     }
 }
@@ -582,8 +534,10 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
     match input {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: call_id.clone(),
                 output: output.clone(),
+                internal_chat_message_metadata_passthrough: None,
             })
         }
         ResponseInputItem::CustomToolCallOutput {
@@ -591,15 +545,19 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             name,
             output,
         } => Some(ResponseItem::CustomToolCallOutput {
+            id: None,
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
+            internal_chat_message_metadata_passthrough: None,
         }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: call_id.clone(),
                 output,
+                internal_chat_message_metadata_passthrough: None,
             })
         }
         ResponseInputItem::ToolSearchOutput {
@@ -608,10 +566,12 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             execution,
             tools,
         } => Some(ResponseItem::ToolSearchOutput {
+            id: None,
             call_id: Some(call_id.clone()),
             status: status.clone(),
             execution: execution.clone(),
             tools: tools.clone(),
+            internal_chat_message_metadata_passthrough: None,
         }),
         _ => None,
     }

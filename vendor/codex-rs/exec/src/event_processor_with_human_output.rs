@@ -68,10 +68,9 @@ impl EventProcessorWithHumanOutput {
         match item {
             ThreadItem::CommandExecution { command, cwd, .. } => {
                 eprintln!(
-                    "{}\n{} in {}",
+                    "{}\n{} in {cwd}",
                     "exec".style(self.italic).style(self.magenta),
                     command.style(self.bold),
-                    cwd.display()
                 );
             }
             ThreadItem::McpToolCall { server, tool, .. } => {
@@ -82,8 +81,8 @@ impl EventProcessorWithHumanOutput {
                     "started".style(self.dimmed)
                 );
             }
-            ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
+            ThreadItem::WebSearch(item) => {
+                eprintln!("{} {}", "web search:".style(self.bold), item.query);
             }
             ThreadItem::FileChange { .. } => {
                 eprintln!("{}", "apply patch".style(self.bold));
@@ -197,8 +196,8 @@ impl EventProcessorWithHumanOutput {
                     eprintln!("{}", error.message.style(self.red));
                 }
             }
-            ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
+            ThreadItem::WebSearch(item) => {
+                eprintln!("{} {}", "web search:".style(self.bold), item.query);
             }
             ThreadItem::ContextCompaction { .. } => {
                 eprintln!("{}", "context compacted".style(self.dimmed));
@@ -215,10 +214,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
-        // Montage fork edit: surface Montage as the user-facing brand even
-        // though codex is the engine.
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("Montage (codex engine) v{VERSION}\n--------");
+        eprintln!("OpenAI Codex v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
@@ -241,6 +238,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => self.process_warning(notification.message),
             ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",
@@ -448,7 +446,8 @@ fn config_summary_entries(
             "reasoning effort",
             config
                 .model_reasoning_effort
-                .map(|effort| effort.to_string())
+                .as_ref()
+                .map(std::string::ToString::to_string)
                 .unwrap_or_else(|| "none".to_string()),
         ));
         entries.push((

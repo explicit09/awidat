@@ -13,6 +13,7 @@ use toml_edit::value;
 
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
+use crate::McpServerAuth;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
@@ -146,7 +147,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 entry["env_vars"] = array_from_env_vars(env_vars);
             }
             if let Some(cwd) = cwd {
-                entry["cwd"] = value(cwd.to_string_lossy().to_string());
+                entry["cwd"] = value(cwd.as_str());
             }
         }
         McpServerTransportConfig::StreamableHttp {
@@ -172,6 +173,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         }
     }
 
+    if matches!(&config.auth, McpServerAuth::ChatGpt) {
+        entry["auth"] = value("chatgpt");
+    }
     if !config.enabled {
         entry["enabled"] = value(false);
     }
@@ -194,6 +198,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         entry["default_tools_approval_mode"] = value(match approval_mode {
             AppToolApproval::Auto => "auto",
             AppToolApproval::Prompt => "prompt",
+            AppToolApproval::Writes => "writes",
             AppToolApproval::Approve => "approve",
         });
     }
@@ -230,7 +235,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         let mut tools = TomlTable::new();
         tools.set_implicit(false);
         let mut tool_entries: Vec<_> = config.tools.iter().collect();
-        tool_entries.sort_by_key(|(left, _)| *left);
+        tool_entries.sort_by_key(|(name, _)| *name);
         for (name, tool_config) in tool_entries {
             let mut tool_entry = TomlTable::new();
             tool_entry.set_implicit(false);
@@ -238,6 +243,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 tool_entry["approval_mode"] = value(match approval_mode {
                     AppToolApproval::Auto => "auto",
                     AppToolApproval::Prompt => "prompt",
+                    AppToolApproval::Writes => "writes",
                     AppToolApproval::Approve => "approve",
                 });
             }
@@ -280,7 +286,7 @@ where
     I: IntoIterator<Item = (&'a String, &'a String)>,
 {
     let mut entries: Vec<_> = pairs.into_iter().collect();
-    entries.sort_by_key(|(left, _)| *left);
+    entries.sort_by_key(|(key, _)| *key);
     let mut table = TomlTable::new();
     table.set_implicit(false);
     for (key, value_str) in entries {

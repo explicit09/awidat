@@ -1,10 +1,10 @@
 use super::windows_common::finish_driver_spawn;
-use super::windows_common::normalize_windows_tty_input;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
 use crate::logging::log_failure;
 use crate::logging::log_success;
+use crate::process::ConsoleMode;
 use crate::process::StderrMode;
 use crate::process::StdinMode;
 use crate::process::read_handle_loop;
@@ -17,10 +17,12 @@ use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
+use codex_utils_pty::WindowsTtyInputNormalizer;
 use std::collections::HashMap;
 use std::path::Path;
 use std::ptr;
@@ -97,6 +99,7 @@ fn spawn_legacy_process(
                 StdinMode::Closed
             },
             StderrMode::Separate,
+            ConsoleMode::Inherit,
             use_private_desktop,
             logs_base_dir,
         )?;
@@ -152,13 +155,13 @@ fn spawn_input_writer(
     normalize_newlines: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
-        let mut previous_was_cr = false;
+        let mut windows_input = WindowsTtyInputNormalizer::default();
         while let Some(bytes) = writer_rx.blocking_recv() {
             let Some(handle) = input_write else {
                 continue;
             };
             let bytes = if normalize_newlines {
-                normalize_windows_tty_input(&bytes, &mut previous_was_cr)
+                windows_input.normalize(&bytes)
             } else {
                 bytes
             };
@@ -269,8 +272,8 @@ fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HANDLE>>>, size: TerminalSize)
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_windows_sandbox_session_legacy(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -283,8 +286,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
+        permission_profile,
+        workspace_roots,
         codex_home,
         cwd,
         &mut env_map,
@@ -294,7 +297,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             add_git_safe_directory: false,
         },
     )?;
-    if !common.policy.has_full_disk_read_access() {
+    if !common.permissions.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
     // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
@@ -307,14 +310,17 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
     let capability_roots = legacy_session_capability_roots(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         &common.current_dir,
         &env_map,
         codex_home,
     );
-    let security =
-        prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
+    let security = prepare_legacy_session_security(
+        common.uses_write_capabilities,
+        codex_home,
+        cwd,
+        capability_roots,
+    )?;
     allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
     apply_legacy_session_acl_rules(

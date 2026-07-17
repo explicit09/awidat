@@ -6,7 +6,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 use std::path::PathBuf;
 
-#[derive(Parser, Debug, Default)]
+#[derive(Parser, Debug)]
 #[command(
     version,
     override_usage = "codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"

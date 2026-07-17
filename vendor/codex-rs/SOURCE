@@ -1,8 +1,8 @@
 Source: https://github.com/openai/codex (codex-rs/)
-Forked at commit: 8a94430bb273623be42b68f144f1ab1df343bb53
-Subject: fix(process-hardening): preserve macos malloc diagnostics (#24479)
-Date: 2026-05-25
-Previous fork SHA: 35aaa5d9fcb606fb6f27dd5747ecab3f4ba0c07e (2026-05-01)
+Forked at commit: 315195492c80fdade38e917c18f9584efd599304
+Subject: Support custom transports for Amazon Bedrock (#33695)
+Date: 2026-07-16
+Previous fork SHA: 8a94430bb273623be42b68f144f1ab1df343bb53 (2026-05-25)
 
 We own this fork. Edits are normal code changes; we do not track upstream
 automatically. To pull a specific upstream change later, cherry-pick from a
@@ -10,6 +10,31 @@ local clone of openai/codex into vendor/codex-rs/.
 
 Montage workspace lints (unwrap_used=deny, etc.) are scoped to crates/* and
 do not apply here.
+
+2026-07-17 full refresh (codex-refresh-2026-07): upstream moved ~1349
+commits / 2775 files since the previous fork point. Crate set changed:
+NEW cloud-config, code-mode-host, code-mode-protocol, codex-home,
+context-fragments, exec-server-protocol, http-client, prompts,
+websocket-client, plus a larger `ext/` family (ext/agent, ext/connectors,
+ext/image-generation, ext/items, ext/mcp, ext/skills alongside the
+existing ext/extension-api, ext/goal, ext/guardian, ext/memories).
+REMOVED debug-client, cloud-requirements, execpolicy-legacy,
+external-agent-sessions, realtime-webrtc. vendor/codex-rs/Cargo.toml and
+Cargo.lock are deleted again (as before, crates fold into Montage's root
+workspace). rmcp bumped 0.15.0 -> 1.8.0 (upstream moved past the 1.7.0
+noted in the investigation pass); sqlx bumped 0.8.6 -> 0.9.0 (feature
+`sqlite` + `runtime-tokio-rustls` -> `sqlite-bundled` + `runtime-tokio` +
+`tls-rustls`); starlark 0.13.0 -> 0.14.2; v8 147.4.0 -> 149.2.0;
+tokio-tungstenite/tungstenite openai-oss-forks revs bumped to match
+upstream's Cargo.toml. Root Cargo.toml needed a new `tokio-rustls`
+workspace.dependencies entry (websocket-client depends on it directly).
+The sqlx 0.9 bump pulls in libsqlite3-sys 0.37, which collides (single
+`links = "sqlite3"` slot) with Montage's own `rusqlite` dependency in
+crates/core; rusqlite bumped 0.32.0 -> 0.39.0 (the first rusqlite series
+whose libsqlite3-sys requirement is `^0.37`) to resolve it. montage-core
+does not appear to call rusqlite directly at the source level (dependency
+looked unused at grep time) — flagged for follow-up if `cargo check`
+surfaces real API drift.
 
 Our edits (re-apply after every refresh):
 - vendor/codex-rs/exec/src/cli.rs: `#[derive(Parser, Debug, Default)]` on `Cli`
@@ -59,6 +84,12 @@ Our edits (re-apply after every refresh):
   horizontal split when the panel is `Some`. Behavior is unchanged in
   vanilla codex sessions (env unset → panel is None → chat gets full
   width).
+- vendor/codex-rs/app-server/src/lib.rs, vendor/codex-rs/app-server/src/main.rs,
+  vendor/codex-rs/cli/src/main.rs: `AppServerRuntimeOptions.enable_codex_api_key_env`
+  plumbed from a hidden `--enable-codex-api-key-env` CLI flag on both the
+  standalone app-server binary and `codex app-server`, replacing the
+  hardcoded `false`/`true` literals upstream still passes at the
+  `AuthManager::shared_from_config` call sites in app-server/src/lib.rs.
 - vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
   inside Montage's single root workspace.
 

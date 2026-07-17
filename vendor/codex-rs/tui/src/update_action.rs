@@ -12,11 +12,13 @@ pub enum UpdateAction {
     NpmGlobalLatest,
     /// Update via `bun install -g @openai/codex@latest`.
     BunGlobalLatest,
+    /// Update via `pnpm add -g @openai/codex@latest`.
+    PnpmGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
     StandaloneUnix,
-    /// Update via `irm https://chatgpt.com/codex/install.ps1|iex`.
+    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
     StandaloneWindows,
 }
 
@@ -26,6 +28,7 @@ impl UpdateAction {
         match &context.method {
             InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
             InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
+            InstallMethod::Pnpm => Some(UpdateAction::PnpmGlobalLatest),
             InstallMethod::Brew => Some(UpdateAction::BrewUpgrade),
             InstallMethod::Standalone { platform, .. } => Some(match platform {
                 StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
@@ -40,10 +43,14 @@ impl UpdateAction {
         match self {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
+            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+                &[
+                    "-c",
+                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+                ],
             ),
             UpdateAction::StandaloneWindows => (
                 "powershell",
@@ -51,7 +58,7 @@ impl UpdateAction {
                     "-ExecutionPolicy",
                     "Bypass",
                     "-c",
-                    "irm https://chatgpt.com/codex/install.ps1 | iex",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
                 ],
             ),
         }
@@ -105,6 +112,13 @@ mod tests {
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::Pnpm,
+                package_layout: None,
+            }),
+            Some(UpdateAction::PnpmGlobalLatest)
+        );
+        assert_eq!(
+            UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Brew,
                 package_layout: None,
             }),
@@ -140,7 +154,10 @@ mod tests {
             UpdateAction::StandaloneUnix.command_args(),
             (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"][..],
+                &[
+                    "-c",
+                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+                ][..],
             )
         );
         assert_eq!(
@@ -151,7 +168,7 @@ mod tests {
                     "-ExecutionPolicy",
                     "Bypass",
                     "-c",
-                    "irm https://chatgpt.com/codex/install.ps1 | iex"
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
                 ][..],
             )
         );

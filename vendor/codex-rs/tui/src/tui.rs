@@ -41,8 +41,11 @@ pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
+use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
@@ -57,6 +60,8 @@ mod frame_requester;
 mod job_control;
 mod keyboard_modes;
 mod terminal_stderr;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -278,6 +283,18 @@ pub fn restore() -> Result<()> {
     restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
 }
 
+/// Force crossterm's cached raw-mode state back in sync with the terminal after `fg`.
+///
+/// A shell may restore the job's saved termios after the process receives `SIGCONT`. When that
+/// races with [`set_modes`], crossterm still believes raw mode is enabled even though the terminal
+/// has returned to canonical, echoing mode. Clearing crossterm's saved state before enabling raw
+/// mode again makes the kernel state authoritative once the shell has completed its handoff.
+#[cfg(unix)]
+pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
+    disable_raw_mode()?;
+    enable_raw_mode()
+}
+
 /// Restore the terminal after Codex is exiting.
 ///
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
@@ -435,6 +452,9 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let enhanced_keys_supported =
         !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
 
+    #[cfg(windows)]
+    probe_windows_default_colors();
+
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     Ok(InitializedTerminal {
@@ -454,9 +474,31 @@ fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Pos
 
 #[cfg(not(unix))]
 fn detect_keyboard_enhancement_supported() -> bool {
-    // Non-Unix startup keeps the existing crossterm path because the bounded probe implementation
-    // relies on Unix file descriptors and `/dev/tty` semantics.
+    // Non-Unix startup keeps the existing crossterm keyboard probe path because it already knows
+    // how to interpret platform-specific event sources.
     supports_keyboard_enhancement().unwrap_or(/*default*/ false)
+}
+
+#[cfg(windows)]
+fn probe_windows_default_colors() {
+    let started_at = std::time::Instant::now();
+    match crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT) {
+        Ok(colors) => {
+            tracing::info!(
+                duration_ms = %started_at.elapsed().as_millis(),
+                default_colors = colors.is_some(),
+                "terminal default color probe completed"
+            );
+            crate::terminal_palette::set_default_colors_from_startup_probe(colors);
+        }
+        Err(err) => {
+            tracing::warn!(
+                duration_ms = %started_at.elapsed().as_millis(),
+                "terminal default color probe failed: {err}"
+            );
+            crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
+        }
+    }
 }
 
 fn set_panic_hook() {
@@ -500,6 +542,8 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
+    // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
+    is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
     // Keeps unmanaged process stderr writes out of the inline viewport.
@@ -507,7 +551,7 @@ pub struct Tui {
 }
 
 struct PendingHistoryLines {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
     wrap_policy: HistoryLineWrapPolicy,
 }
 
@@ -535,6 +579,7 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
+        let is_zellij = codex_terminal_detection::terminal_info().is_zellij();
 
         Self {
             frame_requester,
@@ -552,6 +597,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
+            is_zellij,
             alt_screen_enabled: true,
             _stderr_guard: stderr_guard,
         }
@@ -732,6 +778,17 @@ impl Tui {
         lines: Vec<Line<'static>>,
         wrap_policy: HistoryLineWrapPolicy,
     ) {
+        self.insert_history_hyperlink_lines_with_wrap_policy(
+            plain_hyperlink_lines(lines),
+            wrap_policy,
+        );
+    }
+
+    pub(crate) fn insert_history_hyperlink_lines_with_wrap_policy(
+        &mut self,
+        lines: Vec<HyperlinkLine>,
+        wrap_policy: HistoryLineWrapPolicy,
+    ) {
         if lines.is_empty() {
             return;
         }
@@ -797,15 +854,22 @@ impl Tui {
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
         pending_history_lines: &mut Vec<PendingHistoryLines>,
+        is_zellij: bool,
     ) -> Result<()> {
         if pending_history_lines.is_empty() {
             return Ok(());
         }
 
         for batch in pending_history_lines.iter() {
-            crate::insert_history::insert_history_lines_with_wrap_policy(
+            let mode = if is_zellij && batch.wrap_policy == HistoryLineWrapPolicy::Terminal {
+                InsertHistoryMode::ZellijRaw
+            } else {
+                InsertHistoryMode::Standard
+            };
+            crate::insert_history::insert_history_hyperlink_lines_with_mode_and_wrap_policy(
                 terminal,
                 batch.lines.clone(),
+                mode,
                 batch.wrap_policy,
             )?;
         }
@@ -823,7 +887,7 @@ impl Tui {
         #[cfg(unix)]
         let mut prepared_resume = self
             .suspend_context
-            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+            .prepare_resume_action(&mut self.alt_saved_viewport);
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
@@ -862,7 +926,11 @@ impl Tui {
                 terminal.set_viewport_area(area);
             }
 
-            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
+            Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -955,7 +1023,7 @@ impl Tui {
         #[cfg(unix)]
         let mut prepared_resume = self
             .suspend_context
-            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+            .prepare_resume_action(&mut self.alt_saved_viewport);
 
         ensure_virtual_terminal_processing()?;
 
@@ -968,7 +1036,11 @@ impl Tui {
             let terminal = &mut self.terminal;
             let needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height)?;
-            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
+            Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();
