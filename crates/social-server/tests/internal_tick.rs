@@ -163,12 +163,17 @@ async fn tick_happy_path_fires_due_youtube_job_through_mock_provider() {
     // wiremock `.expect(1)` on both mocks verifies the exact call pattern on drop.
 }
 
-/// R8.4 — provider 5xx: the ACTUAL contract is bounded-backoff requeue, not
-/// terminal failure. The job returns to `Scheduled` with `scheduled_for`
+/// R8.4 / R28 — provider 5xx: the ACTUAL contract is bounded-backoff requeue,
+/// not terminal failure. The job returns to `Scheduled` with `scheduled_for`
 /// pushed ~60s out (base backoff, attempt 1 of 5), attempt_count stays at 1,
-/// and a `RetryQueued` event is appended. NOTE (actual behavior): the handler
-/// treats a requeued failure as a non-error and still increments the YouTube
-/// quota — asserted here as-is.
+/// and a `RetryQueued` event is appended. NOTE (R28, now-intentional
+/// contract): quota counts actual upload attempts that reached the provider,
+/// not "did the job end up Published." A 5xx means the request WAS dispatched
+/// to the provider (see `TrackedUploadAdapter` in lib.rs, which flags
+/// `dispatched()` from inside `adapter.upload()` itself) — the failure just
+/// happened on the far side of that round-trip — so burning a quota unit here
+/// is correct, unlike a purely local pre-provider short-circuit (e.g. R27's
+/// unconfigured-refresher case), which must NOT burn one.
 #[tokio::test]
 async fn tick_requeues_job_with_backoff_on_provider_5xx() {
     let mock = MockServer::start().await;
@@ -282,6 +287,208 @@ async fn tick_restores_youtube_job_when_daily_quota_exhausted() {
     );
     // Guard the fixture: the job really is a YouTube job.
     assert_eq!(job.provider, Provider::YouTube);
+}
+
+/// R27 / R28 — a due YouTube job is claimed by the sweep, but Google OAuth
+/// creds are unconfigured (empty `google_client_id`/`google_client_secret`),
+/// so `token_refresher_for_provider` returns `None`. Before the fix this hit
+/// a bare `continue` after the claim, stranding the job in `Uploading`
+/// forever with no requeue and no event. The fix must:
+///   - still answer the tick request OK (not 5xx the whole sweep);
+///   - restore the job to `Scheduled` (not leave it `Uploading`), with the
+///     claim's attempt refunded, mirroring the quota-exhausted restore path;
+///   - append an event recording why (so the misconfiguration is visible in
+///     the job's audit trail, not just a log line);
+///   - never contact the provider;
+///   - (R28) never increment the YouTube daily quota, since the upload was
+///     never actually dispatched to the provider.
+#[tokio::test]
+async fn tick_restores_due_youtube_job_when_refresher_unconfigured() {
+    let mock = MockServer::start().await;
+    let now = now_secs();
+    let store = StoreHandle::in_memory();
+    seed_due_youtube_job(&store, "job_due", "file:///tmp/unused.mp4", now);
+
+    let mut config = tick_config(&mock.uri(), true, "/tmp");
+    config.google_client_id = String::new();
+    config.google_client_secret = String::new();
+    let base = serve(state_with(config, store.clone())).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/internal/tick"))
+        .bearer_auth("tick-secret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "tick responds OK, not 5xx");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["claimed"], 1, "the sweep did claim the due job");
+
+    let opened = store.open();
+    let job = opened.publish_job("job_due").unwrap();
+    assert_eq!(
+        job.status,
+        PublishJobStatus::Scheduled,
+        "job is restored, not stranded in Uploading"
+    );
+    assert_eq!(job.attempt_count, 0, "claim attempt refunded");
+
+    let events = opened.publish_job_events("job_due").unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == PublishJobEventType::RetryQueued
+                && e.message.to_lowercase().contains("refresh")),
+        "an event records the refresher-unconfigured condition, got: {:?}",
+        events
+            .iter()
+            .map(|e| (&e.event_type, &e.message))
+            .collect::<Vec<_>>()
+    );
+
+    assert!(
+        mock.received_requests().await.unwrap().is_empty(),
+        "provider never contacted: the refresher gate fires before any upload dispatch"
+    );
+    assert_eq!(
+        opened.youtube_upload_quota_today(now_secs()).unwrap(),
+        0,
+        "R28: no quota unit burned — the upload never reached the provider"
+    );
+}
+
+/// R28 (direct-fire path) — `POST /social/jobs/{id}/fire` reaches
+/// `fire_due_publish_job`, which has its own quota-increment site separate
+/// from the /internal/tick sweep. Same contract: quota counts only upload
+/// attempts actually dispatched to the provider.
+///   - Local failure (Google OAuth creds unconfigured → refresher gate errors
+///     before any provider contact): fire fails with 422, provider untouched,
+///     quota NOT incremented — and (R27 analog) the claimed job is restored
+///     to `Scheduled` with the attempt refunded plus a RetryQueued event,
+///     not stranded in `Uploading`.
+///   - Provider-dispatched attempt (upload initiate answered with 5xx → job
+///     requeued with backoff): the request DID reach the provider, so one
+///     quota unit IS burned even though the upload failed.
+#[tokio::test]
+async fn direct_fire_counts_quota_only_for_provider_dispatched_attempts() {
+    let client = reqwest::Client::new();
+
+    // ── Phase 1: local failure (refresher unconfigured) → no quota burned. ──
+    let mock_a = MockServer::start().await;
+    let now = now_secs();
+    let store_a = StoreHandle::in_memory();
+    seed_due_youtube_job(&store_a, "job_local", "file:///tmp/unused.mp4", now);
+
+    let mut config_a = tick_config(&mock_a.uri(), true, "/tmp");
+    config_a.google_client_id = String::new();
+    config_a.google_client_secret = String::new();
+    // Desktop dev bearer mapping to the seeded account owner `user_1`.
+    config_a.desktop_auth_token = "desktop-dev".into();
+    config_a.desktop_user_id = "user_1".into();
+    let base_a = serve(state_with(config_a, store_a.clone())).await;
+
+    let resp = client
+        .post(format!("{base_a}/social/jobs/job_local/fire"))
+        .bearer_auth("desktop-dev")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        422,
+        "local pre-provider failure surfaces as unprocessable"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("youtube OAuth not configured"),
+        "error names the misconfiguration, got: {body}"
+    );
+    assert!(
+        mock_a.received_requests().await.unwrap().is_empty(),
+        "provider never contacted on the local-failure path"
+    );
+    let opened_a = store_a.open();
+    assert_eq!(
+        opened_a.youtube_upload_quota_today(now_secs()).unwrap(),
+        0,
+        "R28: no quota unit burned — the upload never reached the provider"
+    );
+    // R27 (direct-fire analog): despite the 422, the claimed job must be
+    // restored — not stranded in `Uploading` — with the claim's attempt
+    // refunded and an event naming the missing-refresher cause.
+    let job_local = opened_a.publish_job("job_local").unwrap();
+    assert_eq!(
+        job_local.status,
+        PublishJobStatus::Scheduled,
+        "job restored to Scheduled after the failed fire, not stuck Uploading"
+    );
+    assert_eq!(job_local.attempt_count, 0, "claim attempt refunded");
+    let events_local = opened_a.publish_job_events("job_local").unwrap();
+    assert!(
+        events_local
+            .iter()
+            .any(|e| e.event_type == PublishJobEventType::RetryQueued
+                && e.message.to_lowercase().contains("refresh")),
+        "an event records the refresher-unconfigured condition, got: {:?}",
+        events_local
+            .iter()
+            .map(|e| (&e.event_type, &e.message))
+            .collect::<Vec<_>>()
+    );
+    drop(opened_a);
+
+    // ── Phase 2: provider-dispatched 5xx → exactly one quota unit burned. ──
+    let mock_b = MockServer::start().await;
+    let artifacts = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = artifacts.path().join("render.mp4");
+    std::fs::write(&artifact_path, b"fake-mp4-bytes").expect("write artifact");
+    let artifact_ref = format!("file://{}", artifact_path.to_string_lossy());
+
+    let now = now_secs();
+    let store_b = StoreHandle::in_memory();
+    seed_due_youtube_job(&store_b, "job_dispatched", &artifact_ref, now);
+
+    Mock::given(method("POST"))
+        .and(path("/upload/youtube/v3/videos"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("backend exploded"))
+        .expect(1)
+        .mount(&mock_b)
+        .await;
+
+    let mut config_b = tick_config(&mock_b.uri(), true, &artifacts.path().to_string_lossy());
+    config_b.desktop_auth_token = "desktop-dev".into();
+    config_b.desktop_user_id = "user_1".into();
+    let base_b = serve(state_with(config_b, store_b.clone())).await;
+
+    let resp = client
+        .post(format!("{base_b}/social/jobs/job_dispatched/fire"))
+        .bearer_auth("desktop-dev")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "5xx requeue is a non-error to the fire route (job requeued, not failed)"
+    );
+
+    let opened = store_b.open();
+    let job = opened.publish_job("job_dispatched").unwrap();
+    assert_eq!(
+        job.status,
+        PublishJobStatus::Scheduled,
+        "5xx requeues with backoff on the direct-fire path too"
+    );
+    assert_eq!(
+        opened.youtube_upload_quota_today(now_secs()).unwrap(),
+        1,
+        "R28: the attempt reached the provider, so one quota unit is burned"
+    );
+    // `.expect(1)` on the mock verifies exactly one provider dispatch on drop.
 }
 
 /// Fixture sanity: the seeded token secret round-trips through the same AEAD

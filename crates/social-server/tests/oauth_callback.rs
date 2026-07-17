@@ -73,9 +73,12 @@ fn seed_started_connection(store: &StoreHandle, connection_id: &str, raw_state: 
         .expect("seed oauth connection");
 }
 
-/// R16.6 — malformed or unknown `state` is rejected and nothing is persisted.
-/// (The code exchange happens before state parsing, so the token endpoint is
-/// stubbed even for the rejection paths.)
+/// R16.6 / R26 — malformed or unknown `state` is rejected and nothing is
+/// persisted. State is validated (shape, then hash + status/expiry against the
+/// stored connection) BEFORE any provider round-trip, so the token endpoint is
+/// stubbed here only to prove it is never actually hit by a rejected callback
+/// — see `callback_rejects_invalid_state_before_any_provider_request` below
+/// for the dedicated `.expect(0)` assertion.
 #[tokio::test]
 async fn callback_rejects_missing_or_invalid_state_and_persists_nothing() {
     let mock = MockServer::start().await;
@@ -142,6 +145,60 @@ async fn callback_rejects_missing_or_invalid_state_and_persists_nothing() {
         OAuthConnectionStatus::Started,
         "seeded connection not consumed by a forged state"
     );
+    // R26: state is validated before any provider round-trip, so none of the
+    // three rejected callbacks above should have hit the token endpoint.
+    assert!(
+        mock.received_requests().await.unwrap().is_empty(),
+        "state validation rejects before any provider request is made"
+    );
+}
+
+/// R26 — dedicated proof that state validation happens strictly before the
+/// provider token exchange: the token endpoint mock is configured to fail the
+/// test (`.expect(0)`) if it receives ANY request, then a callback with a
+/// state-hash mismatch is sent. The 400 response alone doesn't prove
+/// ordering (a post-exchange rejection would also 400) — the zero-requests
+/// assertion is what proves the reorder.
+#[tokio::test]
+async fn callback_rejects_invalid_state_before_any_provider_request() {
+    let mock = MockServer::start().await;
+    // No token/profile stubs mounted with a body — mount a bare 200 responder
+    // but assert it is called exactly zero times. If state validation ever
+    // regresses to run after the exchange, this mock still "succeeds" (200)
+    // but `.expect(0)` fails the test on drop.
+    Mock::given(method("POST"))
+        .and(path("/v2/oauth/token/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": ACCESS_TOKEN,
+            "refresh_token": REFRESH_TOKEN,
+            "expires_in": 86_400,
+            "refresh_expires_in": 31_536_000,
+            "open_id": "tt_user_1",
+            "scope": "user.info.basic,video.publish"
+        })))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let now = now_secs();
+    let store = StoreHandle::in_memory();
+    seed_started_connection(&store, "conn_real", "conn_real~genuine-entropy", now);
+
+    let base = serve(state_with(callback_config(&mock.uri()), store.clone())).await;
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "{base}/oauth/callback/tiktok?code=auth-code&state=conn_real~forged-entropy"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400, "invalid state rejected");
+
+    assert!(
+        mock.received_requests().await.unwrap().is_empty(),
+        "zero provider requests: state is validated before the token exchange"
+    );
+    // `mock` is dropped at end of scope, which also asserts `.expect(0)` held.
 }
 
 /// R16.7 — happy path: the code is exchanged at the wiremock token endpoint,

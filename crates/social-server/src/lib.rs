@@ -69,7 +69,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use constant_time_eq::constant_time_eq;
 use hmac::{Hmac, Mac};
-use montage_social::upload_adapter::{TikTokInteractionSettings, UploadPrivacy};
+use montage_social::upload_adapter::{TikTokInteractionSettings, UploadAdapter, UploadPrivacy};
 use montage_social::{
     account_service::{CompleteOAuthInput, SocialAccountService},
     api::{ExecuteUploadRequest, SocialApi},
@@ -78,7 +78,8 @@ use montage_social::{
         LiveInstagramStatusClient, LiveInstagramUploadClient,
     },
     model::{
-        ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobEventType, PublishJobStatus,
+        ConnectedAccount, OwnerRef, Provider, PublishJob, PublishJobActorType, PublishJobEvent,
+        PublishJobEventType, PublishJobStatus,
     },
     oauth_exchange::{
         GOOGLE_TOKEN_ENDPOINT, GoogleOAuthExchange, GoogleOAuthExchangeConfig, OAuthTokenExchange,
@@ -707,6 +708,12 @@ struct OAuthCallbackQuery {
 /// The desktop app redirects here after the provider grants access. This
 /// handler performs the server-side code exchange (keeping `client_secret`
 /// off the desktop) and stores tokens encrypted with ChaCha20-Poly1305.
+///
+/// SECURITY (R26): `state` is validated — shape, then hash + status/expiry
+/// against the stored `OAuthConnection` — BEFORE any provider round-trip. A
+/// forged/replayed/expired `state` must never cause an authorization `code`
+/// to be spent against the provider's token endpoint; validating state first
+/// means a rejected callback makes zero provider requests.
 async fn oauth_callback_handler(
     State(state): State<SharedState>,
     Path(provider_str): Path<String>,
@@ -715,6 +722,52 @@ async fn oauth_callback_handler(
     let provider = parse_provider(&provider_str)?;
     let key = aead_key_from_state(&state.config)?;
     let redirect_uri = redirect_uri(&state.config, &provider);
+
+    // SECURITY: server-authoritative timestamp; never trust a client-supplied clock.
+    let now = now_secs();
+    let raw_state = q.state.clone();
+    // Recover the connection id embedded in `state` at oauth-start
+    // (`<connection_id>~<random>`). `validate_callback` below re-validates the
+    // full `raw_state` against the stored connection's hash, so a forged state
+    // can't match — splitting here only locates which connection to check.
+    let connection_id = raw_state
+        .split_once('~')
+        .map(|(id, _)| id.to_string())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "malformed oauth state"})),
+            )
+        })?;
+
+    // Validate `state` against the started connection BEFORE touching the
+    // provider — an invalid/expired/forged/replayed state must reject here
+    // with zero provider traffic (no code exchange spent).
+    let store_handle_for_validate = state.store.clone();
+    let connection_id_for_validate = connection_id.clone();
+    let raw_state_for_validate = raw_state.clone();
+    tokio::task::spawn_blocking(move || {
+        let store = store_handle_for_validate.open();
+        let connection = store
+            .oauth_connection(&connection_id_for_validate)
+            .map_err(|e| format!("connection lookup: {e}"))?;
+        connection
+            .validate_callback(&raw_state_for_validate, now)
+            .map_err(|e| format!("{e:?}"))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("join error: {e}")})),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
 
     // Exchange the authorization code for tokens (async, hits provider API).
     let output = match &provider {
@@ -782,22 +835,9 @@ async fn oauth_callback_handler(
     let token_response = output.token_response;
     let access_token = output.access_token;
     let refresh_token = output.refresh_token;
-    // SECURITY: server-authoritative timestamp; never trust a client-supplied clock.
-    let now = now_secs();
-    let raw_state = q.state.clone();
-    // Recover the connection id embedded in `state` at oauth-start
-    // (`<connection_id>~<random>`). complete_oauth re-validates the full
-    // `raw_state` against the stored connection's hash, so a forged state can't
-    // match — splitting here only locates which connection to validate against.
-    let connection_id = raw_state
-        .split_once('~')
-        .map(|(id, _)| id.to_string())
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "malformed oauth state"})),
-            )
-        })?;
+    // `now`, `raw_state`, and `connection_id` were already derived above (state
+    // validated before the provider exchange); reused here for the same
+    // `complete_oauth` re-validation contract.
     let provider_account_id = token_response.provider_account_id.clone();
     let store_handle = state.store.clone();
     let provider_for_blocking = provider.clone();
@@ -1211,19 +1251,50 @@ async fn internal_tick_handler(
                         &Provider::YouTube,
                         aead_key_clone(&aead_key),
                     ) else {
+                        // R27: the job is already claimed (Uploading, attempt
+                        // bumped) at this point — a bare `continue` here used
+                        // to strand it with no requeue and no event. Restore
+                        // it the same way the quota-exhausted arm does, and
+                        // never touched the provider, so no quota unit is
+                        // consumed (see the quota-increment comment below).
                         tracing::warn!(job_id = %job.id, "YouTube token refresh unavailable: OAuth not configured");
+                        if let Err(e) =
+                            restore_youtube_refresher_unconfigured_job(&mut store, job, now)
+                        {
+                            tracing::warn!(
+                                "failed to restore refresher-unconfigured YouTube job: {e}"
+                            );
+                        }
                         continue;
                     };
                     let upload = upload_request_for_job(&store, &job, now);
-                    if let Err(e) = SocialApi::execute_claimed_upload_job_with_refresher(
+                    let tracked_adapter = TrackedUploadAdapter::new(&adapter);
+                    let execute_result = SocialApi::execute_claimed_upload_job_with_refresher(
                         &mut store,
-                        &adapter,
+                        &tracked_adapter,
                         &refresher,
                         upload,
                         TOKEN_REFRESH_SWEEP_SKEW_SECS,
-                    ) {
+                    );
+                    if let Err(e) = &execute_result {
                         tracing::warn!(job_id = %job.id, "YouTube execute failed: {e}");
-                    } else {
+                    }
+                    // R28: quota counts actual upload attempts that reached the
+                    // provider, not every claim. `execute_claimed_upload_job_with_refresher`
+                    // returns `Ok` both when the provider was genuinely
+                    // contacted (success, requires-action, media-constraint
+                    // failure, or a retryable 5xx requeue) AND when a purely
+                    // local pre-provider failure short-circuits with an `Ok`
+                    // job transition (e.g. an exhausted/invalid refresh token
+                    // flips the account to NeedsReauth without ever calling
+                    // the adapter) — so the `Result` alone can't be trusted
+                    // here. `tracked_adapter.dispatched()` is the ground truth:
+                    // it is only ever true if `adapter.upload()` — the actual
+                    // provider round-trip — was invoked. Only then do we count
+                    // the attempt and burn a quota unit; a 5xx still counts
+                    // (it reached the provider), but a refresher-unconfigured
+                    // or refresh-failure short-circuit never does.
+                    if tracked_adapter.dispatched() {
                         youtube_used += 1;
                         let _ = store.increment_youtube_quota(now);
                     }
@@ -1495,6 +1566,57 @@ fn claim_direct_fire_job(
     Ok(Some(job))
 }
 
+/// R28 — wraps an [`UploadAdapter`] and records whether `upload()` was
+/// actually invoked.
+///
+/// `UploadService::execute_claimed_job_full` returns `Ok(..)` both when the
+/// provider was genuinely contacted (success, requires-action,
+/// media-constraint-failure, or a retryable 5xx requeue — all call
+/// `adapter.upload()` first) AND when a purely local, pre-provider failure
+/// short-circuits with a job-level `Ok` (e.g. an unrefreshable/expired token
+/// flips the account to `NeedsReauth` and returns `Ok` without ever touching
+/// the provider). The `Result` alone can't distinguish these; the adapter
+/// itself is the only place that unambiguously knows whether it was called.
+/// The quota-increment site uses `dispatched()` after the call, so a job that
+/// never reached the provider — regardless of which `Ok`/`Err` path it took —
+/// never burns a quota unit; a job that did reach the provider (including a
+/// 5xx that gets requeued) correctly does.
+struct TrackedUploadAdapter<'a, A: UploadAdapter> {
+    inner: &'a A,
+    dispatched: std::cell::Cell<bool>,
+}
+
+impl<'a, A: UploadAdapter> TrackedUploadAdapter<'a, A> {
+    fn new(inner: &'a A) -> Self {
+        Self {
+            inner,
+            dispatched: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Whether `upload()` was invoked at least once through this wrapper.
+    fn dispatched(&self) -> bool {
+        self.dispatched.get()
+    }
+}
+
+impl<A: UploadAdapter> UploadAdapter for TrackedUploadAdapter<'_, A> {
+    fn provider(&self) -> Provider {
+        self.inner.provider()
+    }
+
+    fn upload(
+        &self,
+        request: &montage_social::upload_adapter::UploadRequest,
+    ) -> Result<
+        montage_social::upload_adapter::UploadResult,
+        montage_social::upload_adapter::UploadAdapterError,
+    > {
+        self.dispatched.set(true);
+        self.inner.upload(request)
+    }
+}
+
 fn restore_youtube_quota_blocked_job(
     store: &mut impl SocialStore,
     mut job: PublishJob,
@@ -1506,6 +1628,44 @@ fn restore_youtube_quota_blocked_job(
     store
         .save_publish_job(job)
         .map_err(|e| format!("restore quota-blocked job: {e}"))
+}
+
+/// R27 — a job was already claimed (status `Uploading`, attempt bumped) when
+/// the sweep discovered the YouTube token refresher is unconfigured (missing
+/// Google OAuth creds). Mirrors [`restore_youtube_quota_blocked_job`]: refund
+/// the attempt and restore to `Scheduled` so the job isn't stranded — but also
+/// appends a `RetryQueued` event, since "refresher unconfigured" is an
+/// operator-visible misconfiguration a bare log line would hide from the job's
+/// audit trail.
+fn restore_youtube_refresher_unconfigured_job(
+    store: &mut impl SocialStore,
+    mut job: PublishJob,
+    now: i64,
+) -> Result<(), String> {
+    let job_id = job.id.clone();
+    job.status = PublishJobStatus::Scheduled;
+    job.attempt_count = job.attempt_count.saturating_sub(1);
+    job.updated_at = now;
+    store
+        .save_publish_job(job)
+        .map_err(|e| format!("restore refresher-unconfigured job: {e}"))?;
+
+    let sequence = store
+        .publish_job_events(&job_id)
+        .map_err(|e| format!("load events for restore: {e}"))?
+        .len()
+        + 1;
+    store
+        .append_publish_job_event(PublishJobEvent::new(
+            format!("event_{job_id}_retry_queued_{sequence}"),
+            job_id,
+            PublishJobEventType::RetryQueued,
+            PublishJobActorType::System,
+            "YouTube token refresher unavailable (OAuth not configured); job restored to Scheduled",
+            serde_json::json!({"provider": "youtube", "reason": "refresher_unconfigured"}),
+            now,
+        ))
+        .map_err(|e| format!("append refresher-unconfigured event: {e}"))
 }
 
 pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> Result<(), String> {
@@ -1555,22 +1715,48 @@ pub(crate) async fn fire_due_publish_job(state: SharedState, job_id: String) -> 
                 };
                 let client = LiveYouTubeUploadClient::new(resolver, artifact_source, yt_config);
                 let adapter = YouTubeUploadAdapter::new(client);
-                let refresher = token_refresher_for_provider(
+                let Some(refresher) = token_refresher_for_provider(
                     &oauth_credentials,
                     &Provider::YouTube,
                     aead_key_clone(&aead_key),
-                )
-                .ok_or_else(|| "youtube OAuth not configured".to_string())?;
+                ) else {
+                    // R27 (direct-fire analog): the job was already claimed by
+                    // `claim_direct_fire_job` above — erroring out here used to
+                    // strand it in `Uploading`. Restore it (attempt refunded,
+                    // RetryQueued/System event naming the cause) and THEN
+                    // surface the error: the caller still learns the fire
+                    // failed, but the job stays retryable instead of stuck.
+                    if let Err(e) = restore_youtube_refresher_unconfigured_job(&mut store, job, now)
+                    {
+                        tracing::warn!("failed to restore refresher-unconfigured YouTube job: {e}");
+                    }
+                    return Err("youtube OAuth not configured".to_string());
+                };
                 let upload = upload_request_for_job(&store, &job, now);
-                SocialApi::execute_claimed_upload_job_with_refresher(
+                let tracked_adapter = TrackedUploadAdapter::new(&adapter);
+                let execute_result = SocialApi::execute_claimed_upload_job_with_refresher(
                     &mut store,
-                    &adapter,
+                    &tracked_adapter,
                     &refresher,
                     upload,
                     TOKEN_REFRESH_SWEEP_SKEW_SECS,
-                )
-                .map_err(|e| format!("youtube execute: {e}"))?;
-                let _ = store.increment_youtube_quota(now);
+                );
+                // R28 (same contract as the /internal/tick sweep): quota counts
+                // actual upload attempts that reached the provider. The execute
+                // `Result` alone can't tell "provider was contacted" apart from
+                // a purely local pre-provider short-circuit that also returns
+                // Ok (e.g. an exhausted/invalid refresh token flipping the
+                // account to NeedsReauth without calling the adapter), so
+                // `tracked_adapter.dispatched()` — set from inside
+                // `adapter.upload()` itself — is the signal. A 5xx that gets
+                // requeued still counts (it reached the provider); a local
+                // failure never does. Increment before propagating any error so
+                // a dispatched-then-failed attempt (e.g. cancel race) is still
+                // counted.
+                if tracked_adapter.dispatched() {
+                    let _ = store.increment_youtube_quota(now);
+                }
+                execute_result.map_err(|e| format!("youtube execute: {e}"))?;
             }
             Provider::TikTok => {
                 let resolver = ServerAccessTokenResolver::new(
