@@ -10202,6 +10202,7 @@ name = "montage-desktop-protocol"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "montage-proto",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -10334,6 +10335,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chacha20poly1305",
+ "montage-proto",
  "postgres",
  "r2d2",
  "r2d2_postgres",

@@ -154,7 +154,7 @@ mod tests {
     fn rational_time_roundtrip() {
         let t = RationalTime::new(123.0, 24.0);
         let json = serde_json::to_string(&t).unwrap();
-        let back: RationalTime = serde_json::from_str(&json).unwrap();
+        let back: RationalTime = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(t, back);
     }
 }

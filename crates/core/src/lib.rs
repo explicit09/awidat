@@ -83,6 +83,10 @@ pub mod proxy;
 pub mod render_preflight_core;
 pub mod review;
 pub mod scene_aware_short_form;
+/// Re-exported from `montage-proto` — the helper lives there so crates that
+/// cannot depend on `montage-core` (e.g. `montage-render`) can reach it too.
+/// See `montage_proto::serde_robust` for the module doc.
+pub use montage_proto::serde_robust;
 pub mod short_form_intelligence;
 pub mod short_form_review;
 pub mod short_form_review_context;

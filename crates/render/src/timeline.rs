@@ -12331,7 +12331,8 @@ mod tests {
 
     fn write_fixture_project_with_guide_section(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let metadata = tl.metadata.montage.as_mut().unwrap();
         metadata
             .guide_tracks
@@ -12356,7 +12357,8 @@ mod tests {
 
     fn write_fixture_project_with_time_remap(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let StackChild::Track(track) = &mut tl.tracks.children[0] else {
             panic!("expected video track");
         };
@@ -12477,7 +12479,8 @@ mod tests {
             rationale: None,
         };
         let otio_path = write_fixture_project_with_overlay_animation(dir, animation);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let StackChild::Track(track) = &mut tl.tracks.children[1] else {
             panic!("fixture second child should be overlay track");
         };
@@ -12580,7 +12583,8 @@ mod tests {
 
     fn write_fixture_project_with_short_tracker_bound_overlay(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project_with_tracker_bound_overlay(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let samples = &mut tl
             .metadata
             .montage
@@ -12814,7 +12818,8 @@ mod tests {
 
     fn write_fixture_project_with_animated_mask_overlay(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project_with_mask_overlay(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let mask = tl
             .metadata
             .montage
@@ -12841,7 +12846,8 @@ mod tests {
         animation: ParameterAnimation,
     ) -> PathBuf {
         let otio_path = write_fixture_project(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata
             .montage
             .as_mut()
@@ -12891,7 +12897,8 @@ mod tests {
         layers: Vec<MotionSceneLayer>,
     ) -> PathBuf {
         let otio_path = write_fixture_project(dir);
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata
             .montage
             .as_mut()
@@ -12931,7 +12938,8 @@ mod tests {
     fn effect_project_produces_concat_argv() {
         let dir = tempfile::tempdir().unwrap();
         let otio_path = write_fixture_project(dir.path());
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let StackChild::Track(track) = &mut tl.tracks.children[0] else {
             panic!("expected video track");
         };
@@ -13416,7 +13424,8 @@ mod tests {
             }],
         );
         // Anchor the scene 5s into the program.
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata.montage.as_mut().unwrap().motion_scenes[0].start_s = 5.0;
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
 
@@ -13861,7 +13870,8 @@ mod tests {
     fn timeline_render_spec_rejects_time_remap_zero_source_slope() {
         let dir = tempfile::tempdir().unwrap();
         let otio_path = write_fixture_project(dir.path());
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         let StackChild::Track(track) = &mut tl.tracks.children[0] else {
             panic!("expected video track");
         };
@@ -14234,7 +14244,8 @@ mod tests {
             } if guide_track_id == "deliverables" && marker_id == "missing"
         ));
 
-        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mut tl: Timeline =
+            montage_proto::serde_robust::from_json_slice(&fs::read(&otio_path).unwrap()).unwrap();
         tl.metadata.montage.as_mut().unwrap().guide_tracks[0].markers[0].duration_s = None;
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
 

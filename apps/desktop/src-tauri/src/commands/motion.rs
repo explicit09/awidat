@@ -172,8 +172,8 @@ pub async fn read_motion(path: String) -> Result<MotionSidecar, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read motion sidecar: {e}"))?;
-    let parsed: MotionSidecar =
-        serde_json::from_slice(&bytes).map_err(|e| format!("parse motion sidecar: {e}"))?;
+    let parsed: MotionSidecar = montage_proto::serde_robust::from_json_slice(&bytes)
+        .map_err(|e| format!("parse motion sidecar: {e}"))?;
     Ok(parsed)
 }
 
@@ -222,7 +222,7 @@ mod tests {
             magnitudes: vec![0.0, 0.12, 0.55, 0.9, 0.05],
         };
         let s = serde_json::to_string(&payload).unwrap();
-        let back: MotionSidecar = serde_json::from_str(&s).unwrap();
+        let back: MotionSidecar = montage_proto::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.samples_per_second, 1);
         assert_eq!(back.magnitudes.len(), 5);
         assert!((back.magnitudes[2] - 0.55).abs() < 1e-6);

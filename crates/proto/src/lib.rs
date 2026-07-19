@@ -36,6 +36,7 @@ pub mod montage_meta;
 pub mod otio;
 pub mod professional;
 pub mod project;
+pub mod serde_robust;
 pub mod subtitle;
 pub mod transitions;
 pub mod validate;

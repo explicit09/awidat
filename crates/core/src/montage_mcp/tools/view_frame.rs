@@ -257,7 +257,7 @@ fn resolve_grade_preview(project_root: &Path, clip_name: &str) -> Result<ClipGra
             otio_path.display()
         )
     })?;
-    let tl: Timeline = serde_json::from_str(&raw)
+    let tl: Timeline = montage_proto::serde_robust::from_json_str(&raw)
         .map_err(|e| format!("view_frame: project OTIO not valid JSON: {e}"))?;
     for stack_child in &tl.tracks.children {
         let StackChild::Track(track) = stack_child else {

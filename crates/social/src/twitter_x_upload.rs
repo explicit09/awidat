@@ -39,7 +39,7 @@ impl TwitterXProcessingRef {
     }
 
     pub fn decode(raw: &str) -> Result<Self, TwitterXStatusClientError> {
-        serde_json::from_str(raw).map_err(|e| {
+        montage_proto::serde_robust::from_json_str(raw).map_err(|e| {
             TwitterXStatusClientError::NetworkOrServer(format!(
                 "invalid twitter_x processing ref: {e}"
             ))

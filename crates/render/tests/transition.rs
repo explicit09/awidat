@@ -157,7 +157,9 @@ fn project_with_asymmetric_transition_uses_otio_offset_handles() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition(dir.path());
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -183,7 +185,9 @@ fn project_with_transition_fails_when_incoming_handle_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition(dir.path());
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -208,7 +212,9 @@ fn project_with_duplicate_transition_nodes_fails_before_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition(dir.path());
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -230,7 +236,9 @@ fn project_with_trailing_transition_node_fails_before_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition(dir.path());
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -288,7 +296,9 @@ fn project_with_transition_composition_carries_recipe_into_render_plan() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition_kind(dir.path(), "montage.slide_left");
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -355,7 +365,9 @@ fn project_with_agent_composite_lowers_recipe_to_xfade() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition_kind(dir.path(), "montage.composite");
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -411,7 +423,9 @@ fn project_with_unlowerable_composite_recipe_fails_before_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition_kind(dir.path(), "montage.composite");
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };
@@ -445,7 +459,9 @@ fn project_with_invalid_transition_composition_fails_before_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition_kind(dir.path(), "montage.slide_left");
     let otio_path = dir.path().join(files::OTIO);
-    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let mut tl: Timeline =
+        montage_proto::serde_robust::from_json_str(&fs::read_to_string(&otio_path).unwrap())
+            .unwrap();
     let StackChild::Track(track) = &mut tl.tracks.children[0] else {
         panic!("expected track");
     };

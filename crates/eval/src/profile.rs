@@ -86,7 +86,7 @@ impl HouseProfile {
     /// Load a profile from a JSON document.
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, ProfileError> {
         let content = std::fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&content)?)
+        Ok(montage_proto::serde_robust::from_json_str(&content)?)
     }
 
     /// A built-in profile by name (`doac`, `tbpn`, `technologia`).
@@ -102,7 +102,7 @@ impl HouseProfile {
         };
         // Compile-time-included canonical documents; a parse failure is a
         // build defect caught by the sync test, not a runtime condition.
-        serde_json::from_str(content).ok()
+        montage_proto::serde_robust::from_json_str(content).ok()
     }
 
     /// Targets for `archetype`, if the profile defines it.

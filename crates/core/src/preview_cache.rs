@@ -478,7 +478,7 @@ pub fn read_preview_cache_refresh_lifecycle(
         return Ok(None);
     }
     let bytes = std::fs::read(&path)?;
-    serde_json::from_slice::<PreviewCacheRefreshLifecycle>(&bytes)
+    crate::serde_robust::from_json_slice::<PreviewCacheRefreshLifecycle>(&bytes)
         .map(Some)
         .map_err(|err| PreviewRefreshError::Corrupt(err.to_string()))
 }

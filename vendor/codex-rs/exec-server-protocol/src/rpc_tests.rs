@@ -49,6 +49,9 @@ fn round_trips_every_jsonrpc_message_variant() -> serde_json::Result<()> {
 }
 
 #[test]
+#[ignore = "MONTAGE FORK PATCH #9: arbitrary_precision disabled workspace-wide \
+(feature unification broke montage-core EdlOp serde); >f64 numbers lose \
+lossless fidelity here by design"]
 fn round_trips_arbitrary_precision_numbers() -> serde_json::Result<()> {
     let encoded = r#"{"method":"numbers","params":{"decimal":1.5,"exponent":1e100,"largeInteger":18446744073709551616}}"#;
     let expected = serde_json::from_str::<Value>(encoded)?;

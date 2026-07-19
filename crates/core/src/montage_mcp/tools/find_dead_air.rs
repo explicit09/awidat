@@ -268,7 +268,7 @@ fn load_sidecar(project_root: &Path, asset_id: &str) -> Option<SilenceSidecar> {
     }
     let sidecar_path = silences_path_for(project_root, &abs);
     let bytes = std::fs::read(&sidecar_path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    montage_proto::serde_robust::from_json_slice(&bytes).ok()
 }
 
 /// Pull whisper words around a silence range to give the agent

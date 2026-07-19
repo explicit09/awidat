@@ -129,7 +129,7 @@ pub fn load_skill_config_sync(project_root: &Path) -> SkillConfig {
     let Ok(bytes) = std::fs::read(&path) else {
         return SkillConfig::default();
     };
-    match serde_json::from_slice::<SkillConfig>(&bytes) {
+    match montage_proto::serde_robust::from_json_slice::<SkillConfig>(&bytes) {
         Ok(cfg) => cfg,
         Err(err) => {
             tracing::warn!(
@@ -158,7 +158,7 @@ pub async fn read_skill_config(project_path: String) -> Result<SkillConfig, Stri
     let root = validate_project_root(&project_path)?;
     let path = config_path(&root);
     match fs::read(&path).await {
-        Ok(bytes) => match serde_json::from_slice::<SkillConfig>(&bytes) {
+        Ok(bytes) => match montage_proto::serde_robust::from_json_slice::<SkillConfig>(&bytes) {
             Ok(cfg) => Ok(cfg),
             Err(err) => {
                 // Front-end never sees the error — the agent's catalog
@@ -233,7 +233,9 @@ async fn write_config_to_disk(root: &Path, cfg: &SkillConfig) -> Result<(), Stri
 async fn read_existing_or_default(root: &Path) -> SkillConfig {
     let path = config_path(root);
     match fs::read(&path).await {
-        Ok(bytes) => serde_json::from_slice::<SkillConfig>(&bytes).unwrap_or_default(),
+        Ok(bytes) => {
+            montage_proto::serde_robust::from_json_slice::<SkillConfig>(&bytes).unwrap_or_default()
+        }
         Err(_) => SkillConfig::default(),
     }
 }

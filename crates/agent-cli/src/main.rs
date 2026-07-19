@@ -233,8 +233,10 @@ fn montage_mcp_overrides(project_root: Option<&Path>) -> Vec<String> {
 /// default surfaced as a raw override upstream). Mutates `raw_overrides` in
 /// place so callers can push it straight into `CliConfigOverrides`.
 fn apply_default_model_overrides(raw_overrides: &mut Vec<String>, model_explicitly_set: bool) {
-    let user_set_model =
-        model_explicitly_set || raw_overrides.iter().any(|entry| entry.starts_with("model="));
+    let user_set_model = model_explicitly_set
+        || raw_overrides
+            .iter()
+            .any(|entry| entry.starts_with("model="));
     if !user_set_model {
         raw_overrides.push(format!("model=\"{MONTAGE_DEFAULT_MODEL}\""));
     }
@@ -278,9 +280,7 @@ mod tests {
         apply_default_model_overrides(&mut overrides, /*model_explicitly_set*/ true);
 
         assert!(
-            !overrides
-                .iter()
-                .any(|entry| entry.starts_with("model=")),
+            !overrides.iter().any(|entry| entry.starts_with("model=")),
             "explicit --model should not get a competing -c model= override: {overrides:?}"
         );
         // Reasoning effort still defaults even when the model was chosen explicitly.

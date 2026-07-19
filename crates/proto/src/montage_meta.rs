@@ -1420,7 +1420,7 @@ mod tests {
         let s = serde_json::to_string(&a).unwrap();
         // Optional `None` fields should be omitted.
         assert!(!s.contains("scene_change_index"));
-        let back: Anchor = serde_json::from_str(&s).unwrap();
+        let back: Anchor = crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.transcript_snippet.as_deref(), Some("hello"));
     }
 
@@ -1444,7 +1444,7 @@ mod tests {
             },
         );
         let s = serde_json::to_string(&m).unwrap();
-        let back: MontageTimelineMetadata = serde_json::from_str(&s).unwrap();
+        let back: MontageTimelineMetadata = crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.version, "0.1");
         assert_eq!(back.source_assets.len(), 1);
         let spec = back
@@ -1490,7 +1490,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&m).unwrap();
-        let back: MontageTimelineMetadata = serde_json::from_str(&json).unwrap();
+        let back: MontageTimelineMetadata = crate::serde_robust::from_json_str(&json).unwrap();
 
         assert_eq!(back.timeline_markers[0].label, "Act 1");
         assert_eq!(
@@ -1601,7 +1601,7 @@ mod tests {
             ..MontageClipMetadata::default()
         };
         let s = serde_json::to_string(&m).unwrap();
-        let back: MontageClipMetadata = serde_json::from_str(&s).unwrap();
+        let back: MontageClipMetadata = crate::serde_robust::from_json_str(&s).unwrap();
         let split = back.split_edit.expect("split edit");
         assert_eq!(split.audio_lead_s, Some(0.35));
         assert_eq!(split.audio_lead_from_clip_id.as_deref(), Some("clip-a"));

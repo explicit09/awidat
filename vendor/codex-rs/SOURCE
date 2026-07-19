@@ -144,3 +144,13 @@ security-relevant changes on a schedule:
 - Run it locally any time: `scripts/codex-upstream-drift.sh` (requires
   network access to github.com; set UPSTREAM_CLONE=/path/to/local/codex to
   run offline against a pre-fetched clone).
+
+## Fork patch #9 (2026-07-18, post-refresh)
+exec-server-protocol/Cargo.toml: removed serde_json "arbitrary_precision"
+feature (kept raw_value). Workspace feature unification bled it into every
+Montage binary, breaking buffered serde of f64 fields in montage-core's EdlOp
+(numbers become the private Number-token map when serde buffers untagged/
+tagged content). Montage never uses the exec-server RPC's lossless >f64
+numbers; their arbitrary-precision roundtrip test is #[ignore]d with a fork
+note. Revisit if Montage ever consumes codex's cloud exec-server, or if
+upstream stops enabling the feature.

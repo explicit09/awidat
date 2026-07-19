@@ -173,7 +173,7 @@ fn load_fixture() -> VectorFixture {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/animation-vectors.json");
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-    serde_json::from_str(&json)
+    montage_proto::serde_robust::from_json_str(&json)
         .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
 }
 

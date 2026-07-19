@@ -208,7 +208,7 @@ pub async fn load_with_keychain(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PublishingStore::default()),
         Err(e) => return Err(ProviderError::Io(format!("read {}: {e}", path.display()))),
     };
-    let raw: RawStore = serde_json::from_str(&raw_str)
+    let raw: RawStore = montage_proto::serde_robust::from_json_str(&raw_str)
         .map_err(|e| ProviderError::Io(format!("parse {}: {e}", path.display())))?;
 
     let mut providers: HashMap<String, Option<Credentials>> =

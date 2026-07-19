@@ -1204,7 +1204,7 @@ mod tests {
             .join("animation-parity.json");
         let json = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        serde_json::from_str(&json)
+        montage_proto::serde_robust::from_json_str(&json)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
     }
 }

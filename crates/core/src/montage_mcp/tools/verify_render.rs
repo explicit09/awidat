@@ -1469,12 +1469,13 @@ fn add_source_range_manifest_gate(
             path.display()
         )
     })?;
-    let expected: SourceRangeManifest = serde_json::from_slice(&bytes).map_err(|e| {
-        format!(
-            "verify_render: parse source_range_manifest_path {}: {e}",
-            path.display()
-        )
-    })?;
+    let expected: SourceRangeManifest = montage_proto::serde_robust::from_json_slice(&bytes)
+        .map_err(|e| {
+            format!(
+                "verify_render: parse source_range_manifest_path {}: {e}",
+                path.display()
+            )
+        })?;
     let check = compare_source_range_manifest(
         timeline_manifest,
         &expected,

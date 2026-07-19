@@ -198,8 +198,8 @@ pub async fn read_waveform(path: String) -> Result<WaveformData, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read waveform sidecar: {e}"))?;
-    let parsed: WaveformSidecar =
-        serde_json::from_slice(&bytes).map_err(|e| format!("parse waveform sidecar: {e}"))?;
+    let parsed: WaveformSidecar = montage_proto::serde_robust::from_json_slice(&bytes)
+        .map_err(|e| format!("parse waveform sidecar: {e}"))?;
     Ok(WaveformData {
         buckets: parsed.buckets,
         duration_s: parsed.duration_s,
@@ -262,8 +262,10 @@ mod tests {
 
     #[test]
     fn sidecar_parses_with_duration() {
-        let parsed: WaveformSidecar =
-            serde_json::from_str(r#"{"buckets":[0.1,0.2],"duration_s":12.5}"#).unwrap();
+        let parsed: WaveformSidecar = montage_proto::serde_robust::from_json_str(
+            r#"{"buckets":[0.1,0.2],"duration_s":12.5}"#,
+        )
+        .unwrap();
         assert_eq!(parsed.buckets.len(), 2);
         assert!((parsed.duration_s - 12.5).abs() < 1e-9);
     }
@@ -272,7 +274,8 @@ mod tests {
     fn legacy_sidecar_without_duration_still_parses() {
         // Sidecars written before duration_s existed must still load;
         // duration defaults to 0.0 (the frontend treats that as unknown).
-        let parsed: WaveformSidecar = serde_json::from_str(r#"{"buckets":[0.1,0.2,0.3]}"#).unwrap();
+        let parsed: WaveformSidecar =
+            montage_proto::serde_robust::from_json_str(r#"{"buckets":[0.1,0.2,0.3]}"#).unwrap();
         assert_eq!(parsed.buckets.len(), 3);
         assert_eq!(parsed.duration_s, 0.0);
     }
