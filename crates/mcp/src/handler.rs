@@ -46,8 +46,14 @@ pub struct ProgressEvent {
 enum ProgressSlot {
     /// No subscriber yet — buffer up to BACKLOG_CAP events.
     Backlog(Vec<ProgressEvent>),
-    /// Live subscriber — forward directly.
-    Subscriber(mpsc::Sender<ProgressEvent>),
+    /// Live subscriber — forward directly. `delivered` counts frames handed
+    /// to the channel (backlog drain + live), so the post-response drain in
+    /// the client can wait until that count stops changing rather than
+    /// racing a wall-clock timeout.
+    Subscriber {
+        tx: mpsc::Sender<ProgressEvent>,
+        delivered: usize,
+    },
 }
 
 const BACKLOG_CAP: usize = 64;
@@ -83,16 +89,39 @@ impl MontageHandler {
         tx: mpsc::Sender<ProgressEvent>,
     ) -> ProgressGuard {
         let mut map = self.progress.lock().await;
+        let mut delivered = 0usize;
         if let Some(ProgressSlot::Backlog(backlog)) = map.remove(&token) {
             for event in backlog {
-                let _ = tx.try_send(event);
+                if tx.try_send(event).is_ok() {
+                    delivered += 1;
+                }
             }
         }
-        map.insert(token, ProgressSlot::Subscriber(tx));
+        map.insert(token, ProgressSlot::Subscriber { tx, delivered });
         ProgressGuard {
             map: self.progress.clone(),
             token,
+            disarmed: false,
         }
+    }
+
+    /// Number of frames delivered to the subscriber's channel for `token` so
+    /// far, or `None` if no live subscriber is registered. Used by the
+    /// client's post-response drain to detect quiescence deterministically.
+    pub(crate) async fn delivered_count(&self, token: i64) -> Option<usize> {
+        match self.progress.lock().await.get(&token) {
+            Some(ProgressSlot::Subscriber { delivered, .. }) => Some(*delivered),
+            _ => None,
+        }
+    }
+
+    /// Synchronously (from an async context) deregister the subscriber for
+    /// `token`. Unlike the `ProgressGuard` `Drop` fallback — which must spawn
+    /// because `Drop` can't `await` — this removes the entry deterministically
+    /// before the caller returns, so no late notification can resurrect an
+    /// orphaned backlog after teardown.
+    pub(crate) async fn deregister_progress(&self, token: i64) {
+        self.progress.lock().await.remove(&token);
     }
 }
 
@@ -114,8 +143,10 @@ impl ClientHandler for MontageHandler {
         };
         let mut map = self.progress.lock().await;
         match map.get_mut(&token) {
-            Some(ProgressSlot::Subscriber(tx)) => {
-                let _ = tx.try_send(event);
+            Some(ProgressSlot::Subscriber { tx, delivered }) => {
+                if tx.try_send(event).is_ok() {
+                    *delivered += 1;
+                }
             }
             Some(ProgressSlot::Backlog(backlog)) => {
                 if backlog.len() < BACKLOG_CAP {
@@ -142,13 +173,37 @@ impl ClientHandler for MontageHandler {
 }
 
 /// RAII guard that deregisters a progress subscriber when dropped.
+///
+/// The preferred teardown path is [`ProgressGuard::disarm`] plus an explicit
+/// `deregister_progress` on the handler, which removes the entry
+/// deterministically from an async context after the post-response drain.
+/// The `Drop` impl is only a best-effort safety net for panics / early
+/// returns that skip the explicit path; it must spawn because `Drop` can't
+/// `await`.
 pub(crate) struct ProgressGuard {
     map: ProgressMap,
     token: i64,
+    disarmed: bool,
+}
+
+impl ProgressGuard {
+    /// The token this guard tears down.
+    pub(crate) fn token(&self) -> i64 {
+        self.token
+    }
+
+    /// Suppress the `Drop` fallback because the caller deregisters
+    /// synchronously via `deregister_progress` instead.
+    pub(crate) fn disarm(&mut self) {
+        self.disarmed = true;
+    }
 }
 
 impl Drop for ProgressGuard {
     fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
         // We can't `await` the lock from Drop; spawn a one-shot to deregister.
         // The map is Arc'd so the spawned future stays valid.
         let map = self.map.clone();

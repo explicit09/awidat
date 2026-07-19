@@ -173,17 +173,12 @@ async fn progress_notifications_are_routed_to_subscriber() {
         .unwrap();
     assert!(!result.is_error);
 
-    // Drain until the channel actually closes (the `ProgressGuard` drops
-    // when `call_tool_with_progress` returns, which deregisters the
-    // subscriber and drops the sender — that's a deterministic
-    // end-of-stream signal). Do NOT bound this with a short fixed
-    // per-recv timeout: under heavy parallel test load (CI runs ~2700
-    // tests concurrently via nextest) the reader task that turns stdout
-    // lines into `on_progress` calls can be starved of CPU time for
-    // well over 100ms, which previously made this test flake with
-    // "got 0" events even though delivery eventually completes. A
-    // single generous timeout around the whole drain (not each recv)
-    // still catches a genuine hang without racing scheduling jitter.
+    // Drain until the channel closes. `call_tool_with_progress` only returns
+    // after it has flushed in-flight `notifications/progress` frames into the
+    // channel and deregistered the subscriber (dropping the sender), so the
+    // close is a deterministic end-of-stream signal and all three frames are
+    // guaranteed to be queued by the time we get here. The 10s cap only guards
+    // against a genuine hang; it is not part of the happy path.
     let mut events = Vec::new();
     let drain = async {
         while let Some(ev) = rx.recv().await {
