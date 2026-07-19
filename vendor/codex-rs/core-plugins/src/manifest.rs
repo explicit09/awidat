@@ -121,6 +121,8 @@ enum RawPluginManifestMcpServers {
     Invalid(JsonValue),
 }
 
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum RawPluginManifestHooks {
