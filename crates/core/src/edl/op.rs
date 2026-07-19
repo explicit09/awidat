@@ -1602,7 +1602,10 @@ mod tests {
             end: Some(3.0),
         };
         let json = serde_json::to_string(&op).unwrap();
-        let back: EdlOp = serde_json::from_str(&json).unwrap();
+        // Via the robust helper: plain from_str breaks when any crate in
+        // the graph enables serde_json/arbitrary_precision (see
+        // crate::serde_robust) — the helper IS the production contract.
+        let back: EdlOp = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(op, back);
     }
 }

@@ -113,8 +113,8 @@ pub fn read_master_loudnorm_plan(
     }
     let raw = std::fs::read_to_string(&otio_path)
         .map_err(|e| MasterLoudnormError::OtioParse(e.to_string()))?;
-    let tl: OtioTimeline =
-        serde_json::from_str(&raw).map_err(|e| MasterLoudnormError::OtioParse(e.to_string()))?;
+    let tl: OtioTimeline = montage_proto::serde_robust::from_json_str(&raw)
+        .map_err(|e| MasterLoudnormError::OtioParse(e.to_string()))?;
     Ok(tl
         .metadata
         .montage

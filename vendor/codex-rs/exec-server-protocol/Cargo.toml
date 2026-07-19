@@ -1,0 +1,31 @@
+[package]
+name = "codex-exec-server-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_exec_server_protocol"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+codex-file-system = { workspace = true }
+codex-network-proxy = { workspace = true }
+codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+# MONTAGE FORK PATCH #9: `arbitrary_precision` removed. Cargo feature
+# unification bled it into every Montage binary sharing this workspace,
+# breaking buffered (untagged/tagged) serde of f64 fields in montage-core's
+# EdlOp (numbers become the private Number-token map mid-buffer). The exec
+# server RPC loses lossless >f64 numeric fidelity, which Montage never uses.
+serde_json = { workspace = true, features = ["raw_value"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

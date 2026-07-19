@@ -201,7 +201,7 @@ impl Registry {
             return Ok(Self::default());
         }
         let raw = fs::read_to_string(&path)?;
-        let registry: Self = serde_json::from_str(&raw)?;
+        let registry: Self = montage_proto::serde_robust::from_json_str(&raw)?;
         registry.validate()?;
         Ok(registry)
     }
@@ -332,7 +332,7 @@ fn register_generated_description_sidecar(
         .join(files::INDEX_DIR)
         .join(files::INDEX_MANIFEST);
     let mut manifest = if manifest_path.is_file() {
-        serde_json::from_slice::<Manifest>(&fs::read(&manifest_path)?)?
+        crate::serde_robust::from_json_slice::<Manifest>(&fs::read(&manifest_path)?)?
     } else {
         Manifest::empty()
     };

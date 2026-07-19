@@ -226,7 +226,7 @@ fn serialize_line(entry: &FeedbackEntry) -> Result<String, String> {
 fn parse_jsonl(raw: &str) -> Vec<FeedbackEntry> {
     raw.lines()
         .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<FeedbackEntry>(line).ok())
+        .filter_map(|line| montage_proto::serde_robust::from_json_str::<FeedbackEntry>(line).ok())
         .collect()
 }
 
@@ -313,7 +313,8 @@ mod tests {
         assert_eq!(on_disk.lines().count(), 1);
         assert!(on_disk.ends_with('\n'));
         // Round-trip.
-        let parsed: FeedbackEntry = serde_json::from_str(on_disk.trim()).unwrap();
+        let parsed: FeedbackEntry =
+            montage_proto::serde_robust::from_json_str(on_disk.trim()).unwrap();
         assert_eq!(parsed, entry);
     }
 
@@ -336,7 +337,7 @@ mod tests {
         assert_eq!(on_disk.lines().count(), 3, "{on_disk}");
         // Lines parse independently.
         for line in on_disk.lines() {
-            serde_json::from_str::<FeedbackEntry>(line).unwrap();
+            montage_proto::serde_robust::from_json_str::<FeedbackEntry>(line).unwrap();
         }
     }
 

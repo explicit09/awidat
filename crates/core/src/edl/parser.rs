@@ -1603,7 +1603,7 @@ fn parse_broadcast_overlay_config(
     line: usize,
 ) -> Result<BroadcastOverlayConfig, EdlParseError> {
     if let Some(raw) = take_field_string(fields, "config_json") {
-        return serde_json::from_str::<BroadcastOverlayConfig>(&raw).map_err(|e| {
+        return crate::serde_robust::from_json_str::<BroadcastOverlayConfig>(&raw).map_err(|e| {
             EdlParseError::BadField {
                 line,
                 raw: "config_json".into(),
@@ -1694,12 +1694,13 @@ fn parse_audio_fx_config(
         loudnorm_tp: take_field_f64(fields, "loudnorm_tp"),
     };
     if let Some(raw) = take_field_string(fields, "eq_bands_json") {
-        fx.eq_bands =
-            serde_json::from_str::<Vec<EqBand>>(&raw).map_err(|e| EdlParseError::BadField {
+        fx.eq_bands = crate::serde_robust::from_json_str::<Vec<EqBand>>(&raw).map_err(|e| {
+            EdlParseError::BadField {
                 line,
                 raw: format!("eq_bands_json: {raw}"),
                 message: format!("must be valid JSON array of EQ bands: {e}"),
-            })?;
+            }
+        })?;
     } else if let Some(freq_hz) = take_field_f64(fields, "eq_freq_hz") {
         fx.eq_bands.push(EqBand {
             freq_hz,
@@ -1715,7 +1716,7 @@ fn parse_json_value<T: serde::de::DeserializeOwned>(
     line: usize,
     field: &str,
 ) -> Result<T, EdlParseError> {
-    serde_json::from_str(raw).map_err(|e| EdlParseError::BadField {
+    crate::serde_robust::from_json_str(raw).map_err(|e| EdlParseError::BadField {
         line,
         raw: field.into(),
         message: format!("must be valid JSON: {e}"),
@@ -2107,7 +2108,7 @@ fn take_field_json<T: serde::de::DeserializeOwned>(
     let Some(raw) = take_field_string(fields, key) else {
         return Ok(None);
     };
-    serde_json::from_str(&raw)
+    crate::serde_robust::from_json_str(&raw)
         .map(Some)
         .map_err(|e| EdlParseError::BadField {
             line,

@@ -789,7 +789,8 @@ pub fn finalize_render_manifest_file(path: &Path) -> Result<(), RenderManifestEr
         path: path.to_string_lossy().into_owned(),
         source,
     })?;
-    let mut manifest: RenderExecutionManifest = serde_json::from_slice(&bytes)?;
+    let mut manifest: RenderExecutionManifest =
+        montage_proto::serde_robust::from_json_slice(&bytes)?;
     finalize_render_manifest_outputs(&mut manifest)?;
     write_render_manifest(path, &manifest)
 }
@@ -832,9 +833,11 @@ pub fn read_render_manifest(path: &Path) -> Result<RenderExecutionManifest, Rend
             source,
         },
     })?;
-    serde_json::from_slice(&bytes).map_err(|source| RenderReplayError::ParseManifest {
-        path: path.to_string_lossy().into_owned(),
-        source,
+    montage_proto::serde_robust::from_json_slice(&bytes).map_err(|source| {
+        RenderReplayError::ParseManifest {
+            path: path.to_string_lossy().into_owned(),
+            source,
+        }
     })
 }
 

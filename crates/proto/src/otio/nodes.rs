@@ -703,7 +703,7 @@ mod tests {
     fn empty_timeline_roundtrips() {
         let t = Timeline::empty("ep-001");
         let json = serde_json::to_string(&t).unwrap();
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.name, "ep-001");
         assert_eq!(back.otio_schema, "Timeline.1");
     }
@@ -766,7 +766,7 @@ mod tests {
         t.tracks.children.push(StackChild::Track(track));
 
         let json = serde_json::to_string(&t).unwrap();
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.tracks.children.len(), 1);
     }
 
@@ -782,7 +782,7 @@ mod tests {
         let mut t = Timeline::empty("ep");
         t.tracks = outer;
         let json = serde_json::to_string(&t).unwrap();
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.tracks.children.len(), 1);
         match &back.tracks.children[0] {
             StackChild::Stack(s) => assert_eq!(s.name, "interview"),
@@ -800,7 +800,7 @@ mod tests {
             ..MontageMarkerMetadata::default()
         });
         let json = serde_json::to_string(&m).unwrap();
-        let back: Marker = serde_json::from_str(&json).unwrap();
+        let back: Marker = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.color.as_deref(), Some("YELLOW"));
         let am = back.metadata.montage.unwrap();
         assert_eq!(am.category.as_deref(), Some("laugh"));
@@ -811,7 +811,7 @@ mod tests {
         let e = Effect::new("montage.color_correction");
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("Effect.1"));
-        let back: Effect = serde_json::from_str(&json).unwrap();
+        let back: Effect = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.effect_name, "montage.color_correction");
     }
 
@@ -821,7 +821,7 @@ mod tests {
         let json = serde_json::to_string(&mr).unwrap();
         // Inside the enum, the tag injects OTIO_SCHEMA.
         assert!(json.contains("MissingReference.1"));
-        let back: MediaReference = serde_json::from_str(&json).unwrap();
+        let back: MediaReference = crate::serde_robust::from_json_str(&json).unwrap();
         assert!(matches!(back, MediaReference::Missing(_)));
     }
 
@@ -854,7 +854,7 @@ mod tests {
             ..MontageTimelineMetadata::default()
         });
         let json = serde_json::to_string(&t).unwrap();
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         let am = back.metadata.montage.unwrap();
         assert_eq!(am.anchors.len(), 1);
         assert!(am.anchors.contains_key("c-1"));
@@ -976,7 +976,7 @@ mod tests {
         let mut t = Timeline::empty("ep");
         t.tracks.children.push(StackChild::Track(track));
         let json = serde_json::to_string(&t).unwrap();
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         // Drill in to confirm.
         let StackChild::Track(rt) = &back.tracks.children[0] else {
             panic!("expected Track")
@@ -1011,7 +1011,7 @@ mod tests {
         clip.media_reference = MediaReference::External(ExternalReference::new("raw/foo.mp4"));
         let s = serde_json::to_string(&clip).unwrap();
         assert!(s.contains("\"active\":false"));
-        let back: Clip = serde_json::from_str(&s).unwrap();
+        let back: Clip = crate::serde_robust::from_json_str(&s).unwrap();
         assert!(!back.active);
     }
 
@@ -1028,7 +1028,7 @@ mod tests {
         m.comment = Some("biggest laugh of the year".into());
         let s = serde_json::to_string(&m).unwrap();
         assert!(s.contains("\"comment\":\"biggest laugh of the year\""));
-        let back: Marker = serde_json::from_str(&s).unwrap();
+        let back: Marker = crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.comment.as_deref(), Some("biggest laugh of the year"));
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
             json.contains("\"OTIO_SCHEMA\":\"Transition.1\""),
             "Transition tag must be Transition.1: {json}"
         );
-        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let back: Timeline = crate::serde_robust::from_json_str(&json).unwrap();
         let StackChild::Track(rt) = &back.tracks.children[0] else {
             panic!("expected Track")
         };

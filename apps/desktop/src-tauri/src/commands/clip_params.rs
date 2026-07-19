@@ -768,7 +768,7 @@ mod tests {
             value: 0.8,
         };
         let json = serde_json::to_string(&op).unwrap();
-        let back: EdlOp = serde_json::from_str(&json).unwrap();
+        let back: EdlOp = montage_proto::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(op, back);
     }
 
@@ -781,7 +781,7 @@ mod tests {
             factor: 1.5,
         };
         let json = serde_json::to_string(&op).unwrap();
-        let back: EdlOp = serde_json::from_str(&json).unwrap();
+        let back: EdlOp = montage_proto::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(op, back);
     }
 
@@ -795,7 +795,7 @@ mod tests {
             fade_out_s: Some(1.0),
         };
         let json = serde_json::to_string(&op).unwrap();
-        let back: EdlOp = serde_json::from_str(&json).unwrap();
+        let back: EdlOp = montage_proto::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(op, back);
     }
 }

@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use codex_login::{
-    LoginServer, ServerOptions, ShutdownHandle, login_with_api_key, logout_with_revoke,
-    run_login_server,
+    AuthKeyringBackendKind, LoginServer, ServerOptions, ShutdownHandle, login_with_api_key,
+    logout_with_revoke, run_login_server,
 };
 
 use crate::env::{AuthEnv, ForcedMethod};
@@ -24,7 +24,13 @@ pub fn set_api_key(env: &AuthEnv, raw_key: &str) -> Result<(), AuthError> {
     }
     let key = validate_api_key(raw_key)?;
     ensure_home(&env.codex_home)?;
-    login_with_api_key(&env.codex_home, &key, env.store_mode).map_err(AuthError::Io)
+    login_with_api_key(
+        &env.codex_home,
+        &key,
+        env.store_mode,
+        AuthKeyringBackendKind::default(),
+    )
+    .map_err(AuthError::Io)
 }
 
 /// Clear stored credentials. Returns whether a credential was present to remove.
@@ -34,9 +40,14 @@ pub fn set_api_key(env: &AuthEnv, raw_key: &str) -> Result<(), AuthError> {
 /// copied/restored `auth.json` would keep working. It still deletes locally even
 /// if the network revoke fails, so offline sign-out keeps working.
 pub async fn logout(env: &AuthEnv) -> Result<bool, AuthError> {
-    logout_with_revoke(&env.codex_home, env.store_mode)
-        .await
-        .map_err(AuthError::Io)
+    logout_with_revoke(
+        &env.codex_home,
+        env.store_mode,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await
+    .map_err(AuthError::Io)
 }
 
 /// A running "Sign in with ChatGPT" flow: the consent URL plus the local OAuth
@@ -94,6 +105,8 @@ pub fn begin_chatgpt_login(env: &AuthEnv) -> Result<LoginHandle, AuthError> {
         oauth_client_id()?,
         env.forced_workspace_ids.clone(),
         env.store_mode,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     );
     let server = run_login_server(options).map_err(AuthError::Io)?;
     Ok(LoginHandle {
@@ -128,9 +141,13 @@ mod tests {
         let (_home, env) = temp_env();
         set_api_key(&env, "  sk-proj-validkey0123456789abc  ").unwrap();
 
-        let stored = load_auth_dot_json(&env.codex_home, env.store_mode)
-            .unwrap()
-            .unwrap();
+        let stored = load_auth_dot_json(
+            &env.codex_home,
+            env.store_mode,
+            AuthKeyringBackendKind::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             stored.openai_api_key.as_deref(),
             Some("sk-proj-validkey0123456789abc")
@@ -144,9 +161,13 @@ mod tests {
         assert!(matches!(err, AuthError::InvalidApiKey(_)));
         // Nothing should have been written.
         assert!(
-            load_auth_dot_json(&env.codex_home, env.store_mode)
-                .unwrap()
-                .is_none()
+            load_auth_dot_json(
+                &env.codex_home,
+                env.store_mode,
+                AuthKeyringBackendKind::default()
+            )
+            .unwrap()
+            .is_none()
         );
     }
 
@@ -180,9 +201,13 @@ mod tests {
         let err = set_api_key(&env, "sk-proj-validkey0123456789abc").unwrap_err();
         assert!(matches!(err, AuthError::ForbiddenByPolicy(_)));
         assert!(
-            load_auth_dot_json(&env.codex_home, env.store_mode)
-                .unwrap()
-                .is_none(),
+            load_auth_dot_json(
+                &env.codex_home,
+                env.store_mode,
+                AuthKeyringBackendKind::default()
+            )
+            .unwrap()
+            .is_none(),
             "no key should be written when policy forbids it"
         );
     }

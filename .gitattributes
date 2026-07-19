@@ -8,3 +8,9 @@
 *.mp4 binary
 *.mov binary
 *.pdf binary
+
+# Vendored codex-rs is upstream's tree — we don't whitespace-lint it (mirrors
+# CI's VENDOR_EXCLUDES for clippy/test). Its insta snapshot fixtures
+# intentionally carry trailing whitespace to capture rendered terminal padding;
+# `git diff --check` must not flag them. See PR #102 (codex refresh).
+vendor/codex-rs/** -whitespace

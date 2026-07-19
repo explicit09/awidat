@@ -81,7 +81,10 @@ fn professional_timeline_ops_roundtrip_through_edl_json() {
             Ok(json) => json,
             Err(error) => panic!("serialize op: {error}"),
         };
-        let roundtrip: EdlOp = match serde_json::from_str(&json) {
+        // Robust helper, not bare from_str: any graph crate enabling
+        // serde_json/arbitrary_precision breaks buffered tagged-enum
+        // deserialization (see montage_core::serde_robust).
+        let roundtrip: EdlOp = match montage_core::serde_robust::from_json_str(&json) {
             Ok(op) => op,
             Err(error) => panic!("deserialize op: {error}"),
         };

@@ -1,6 +1,7 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell::default_user_shell;
+use codex_exec_server::Environment;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -8,6 +9,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolCallSource;
@@ -26,9 +28,11 @@ async fn invocation_for_payload(
     payload: ToolPayload,
 ) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     ToolInvocation {
         session: session.into(),
-        turn: turn.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: call_id.to_string(),
@@ -165,7 +169,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
 }
 
 #[test]
-fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<()> {
+fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
     let args: ExecCommandArgs = parse_arguments(json)?;
     let shell_zsh_path = AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
@@ -174,7 +178,7 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         "/opt/codex/zsh"
     })?;
     let shell_mode = UnifiedExecShellMode::ZshFork(ZshForkConfig {
-        shell_zsh_path: shell_zsh_path.clone(),
+        shell_zsh_path,
         main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
             r"C:\opt\codex\codex-execve-wrapper"
         } else {
@@ -182,23 +186,50 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let resolved = get_command(
+    let err = get_command(
         &args,
         Arc::new(default_user_shell()),
         &shell_mode,
         /*allow_login_shell*/ true,
     )
-    .map_err(anyhow::Error::msg)?;
+    .expect_err("explicit shell should be rejected");
+
+    assert!(
+        err.contains("`shell` is not supported for local zsh-fork exec"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_mode_for_environment_uses_direct_mode_for_remote_environments() -> anyhow::Result<()>
+{
+    let shell_zsh_path = AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+        r"C:\opt\codex\zsh"
+    } else {
+        "/opt/codex/zsh"
+    })?;
+    let shell_mode = UnifiedExecShellMode::ZshFork(ZshForkConfig {
+        shell_zsh_path,
+        main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+            r"C:\opt\codex\codex-execve-wrapper"
+        } else {
+            "/opt/codex/codex-execve-wrapper"
+        })?,
+    });
+    let local_environment = Environment::default_for_tests();
+    let remote_environment =
+        Environment::create_for_tests(Some("ws://127.0.0.1:1/remote-exec-server".to_string()))?;
 
     assert_eq!(
-        resolved.command,
-        vec![
-            shell_zsh_path.to_string_lossy().to_string(),
-            "-lc".to_string(),
-            "echo hello".to_string()
-        ]
+        shell_mode_for_environment(&shell_mode, &local_environment),
+        shell_mode
     );
-    assert_eq!(resolved.shell_type, ShellType::Zsh);
+    assert_eq!(
+        shell_mode_for_environment(&shell_mode, &remote_environment),
+        UnifiedExecShellMode::Direct
+    );
+
     Ok(())
 }
 
@@ -208,12 +239,14 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     let handler = ExecCommandHandler::default();
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
-            turn: turn.into(),
+            step_context: StepContext::for_test(Arc::clone(&turn)),
+            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
@@ -234,12 +267,14 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     let handler = WriteStdinHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
-            turn: turn.into(),
+            step_context: StepContext::for_test(Arc::clone(&turn)),
+            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),
@@ -266,6 +301,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-43", payload).await;
@@ -296,6 +332,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-44", payload).await;
@@ -327,6 +364,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         process_id: Some(45),
         exit_code: None,
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-45", payload).await;
@@ -353,6 +391,7 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo finished".to_string()),
     };
     let invocation = invocation_for_payload("write_stdin", "write-stdin-call", payload).await;
@@ -384,6 +423,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("sleep 2; echo alpha".to_string()),
     };
     let output_b = ExecCommandToolOutput {
@@ -396,6 +436,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
+        output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo beta".to_string()),
     };
     let invocation_b = invocation_for_payload("write_stdin", "write-call-b", payload.clone()).await;

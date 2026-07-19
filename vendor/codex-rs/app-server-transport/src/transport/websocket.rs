@@ -327,7 +327,6 @@ async fn run_websocket_outbound_loop<M, SinkError>(
     }
 }
 
-#[allow(clippy::collapsible_match)]
 async fn run_websocket_inbound_loop<M, StreamError>(
     websocket_reader: impl futures::stream::Stream<Item = Result<M, StreamError>> + Send + 'static,
     transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -348,7 +347,7 @@ async fn run_websocket_inbound_loop<M, StreamError>(
             incoming_message = websocket_reader.next() => {
                 match incoming_message {
                     Some(Ok(message)) => match message.into_incoming() {
-                        Some(IncomingWebSocketMessage::Text(text)) => {
+                        Some(IncomingWebSocketMessage::Text(text))
                             if !forward_incoming_message(
                                 &transport_event_tx,
                                 &writer_tx_for_reader,
@@ -356,10 +355,10 @@ async fn run_websocket_inbound_loop<M, StreamError>(
                                 &text,
                             )
                             .await
-                            {
-                                break;
-                            }
+                        => {
+                            break;
                         }
+                        Some(IncomingWebSocketMessage::Text(_)) => {}
                         Some(IncomingWebSocketMessage::Ping(payload)) => {
                             match writer_control_tx.try_send(M::pong(payload)) {
                                 Ok(()) => {}

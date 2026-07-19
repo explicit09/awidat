@@ -286,23 +286,13 @@ impl Client {
         // Pre-load our handler with the ClientInfo we want to advertise.
         // The `ClientHandler::get_info` default returns ClientInfo::default();
         // we override on MontageHandler by stashing this and returning it.
-        // rmcp 0.15 dropped constructor methods on these param structs;
-        // build with struct literal. `Implementation` only ships
-        // `from_build_env()`, so we set name/version explicitly and
-        // leave the optional fields at default.
-        let init_params = InitializeRequestParams {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::LATEST,
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: info.name,
-                title: None,
-                version: info.version,
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-        };
+        // rmcp 1.8: both param structs are #[non_exhaustive], so build via
+        // their constructors instead of struct literals.
+        let init_params = InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::new(info.name, info.version),
+        )
+        .with_protocol_version(rmcp::model::ProtocolVersion::LATEST);
         self.handler.set_client_info(init_params).await;
 
         let handler = self.handler.clone();
@@ -315,22 +305,23 @@ impl Client {
             })?
             .map_err(|e| map_init_error(&self.server_name, e))?;
 
-        let peer_info =
-            service
-                .peer_info()
-                .cloned()
-                .ok_or_else(|| McpError::ProtocolViolation {
-                    server: self.server_name.clone(),
-                    message: "server did not return peer_info after initialize".into(),
-                })?;
+        // rmcp 1.8: `peer_info()` returns `Option<Arc<InitializeResult>>`
+        // directly (already effectively cloned via the Arc), not
+        // `Option<&InitializeResult>`.
+        let peer_info = service
+            .peer_info()
+            .ok_or_else(|| McpError::ProtocolViolation {
+                server: self.server_name.clone(),
+                message: "server did not return peer_info after initialize".into(),
+            })?;
 
-        let capabilities: ServerCapabilities = peer_info.capabilities.into();
+        let capabilities: ServerCapabilities = peer_info.capabilities.clone().into();
         let server_info = ServerInfo {
-            name: peer_info.server_info.name,
-            version: peer_info.server_info.version,
+            name: peer_info.server_info.name.clone(),
+            version: peer_info.server_info.version.clone(),
             protocol_version: peer_info.protocol_version.to_string(),
             capabilities: capabilities.clone(),
-            instructions: peer_info.instructions,
+            instructions: peer_info.instructions.clone(),
         };
 
         self.capabilities = capabilities;
@@ -433,21 +424,15 @@ impl Client {
                 map
             }),
         };
-        // rmcp 0.15: build with struct literal; `name` is `Cow<'static,
-        // str>`, owned `String` converts via `Cow::Owned`.
-        let params = CallToolRequestParams {
-            meta: None,
-            name: std::borrow::Cow::Owned(name.to_string()),
-            arguments: arguments_obj,
-            task: None,
-        };
+        // rmcp 1.8: `CallToolRequestParams` is #[non_exhaustive]; build via
+        // its constructor. `name` takes `impl Into<Cow<'static, str>>`, so
+        // an owned `String` converts directly.
+        let mut params = CallToolRequestParams::new(name.to_string());
+        params.arguments = arguments_obj;
 
         let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
         let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
-        let options = PeerRequestOptions {
-            timeout: Some(to),
-            ..Default::default()
-        };
+        let options = PeerRequestOptions::with_timeout(to);
 
         let handle = service
             .peer()
@@ -455,9 +440,10 @@ impl Client {
             .await
             .map_err(|e| map_service_error(&self.server_name, e))?;
 
-        // Register a progress subscriber under the token rmcp picked.
-        // Held until the call returns (Drop deregisters).
-        let _progress_guard = match progress_tx {
+        // Register a progress subscriber under the token rmcp picked, so
+        // `notifications/progress` frames are routed to `progress_tx`. Keep the
+        // completion `Notify` so we can wait for the full frame burst below.
+        let mut progress_sub = match progress_tx {
             Some(tx) => match &handle.progress_token {
                 ProgressToken(NumberOrString::Number(n)) => {
                     Some(self.handler.register_progress(*n, tx).await)
@@ -502,6 +488,28 @@ impl Client {
             None => handle.await_response().await,
         };
 
+        // Wait for the full progress-frame burst to be delivered before
+        // tearing down the subscriber. rmcp 1.8 dispatches each
+        // `notifications/progress` frame on an *independent* `tokio::spawn`ed
+        // task (service.rs `handle_notification`): those tasks can run out of
+        // order and, under load, may not have run at all by the time this
+        // request's response resolves. Deregistering here (which closes the
+        // channel) would drop any not-yet-run frame — the "got 0" failure.
+        //
+        // The handler advertises a completion `Notify` that fires once every
+        // frame the server promised (via `total`) has been delivered — an
+        // order-independent, delivery-counted end-of-stream signal, not a
+        // timing guess. We register as a waiter first (`enable()`), then
+        // re-check completion to close the wakeup gap, then await the signal
+        // under a hard cap. Only after that do we deregister synchronously.
+        if let Some((guard, complete)) = progress_sub.as_mut() {
+            let token = guard.token();
+            self.await_progress_completion(token, complete).await;
+            guard.disarm();
+            self.handler.deregister_progress(token).await;
+        }
+        drop(progress_sub);
+
         let server_result = response_result.map_err(|e| map_service_error(&self.server_name, e))?;
         let result: CallToolResult = match server_result {
             rmcp::model::ServerResult::CallToolResult(r) => r,
@@ -518,6 +526,40 @@ impl Client {
             is_error: result.is_error.unwrap_or(false),
             structured_content: result.structured_content,
         })
+    }
+
+    /// Block until the progress subscriber for `token` has received its full
+    /// frame burst, so teardown never drops a not-yet-delivered frame.
+    ///
+    /// rmcp 1.8 runs each `notifications/progress` frame on an independent
+    /// spawned task, so frames can be delivered out of order and arbitrarily
+    /// late under CPU contention. The server advertises `total`; the handler
+    /// derives an exact, order-independent completion from it (delivered >=
+    /// total) and fires `complete`. Awaiting that signal is a real
+    /// end-of-stream condition — it holds no matter how long the spawned tasks
+    /// are starved — never a timing window:
+    ///
+    /// * `Complete` — already done (e.g. every frame drained from the backlog
+    ///   at registration): return at once.
+    /// * `Pending`/`Unknown` — await `complete`, bounded only by a generous cap
+    ///   that exists solely to bound a misbehaving peer that never sends its
+    ///   promised final frame. The armed waiter (`enable()` before the status
+    ///   read) closes the wake gap so a `notify_waiters()` firing in between is
+    ///   not lost.
+    ///
+    /// A stream that advertises no `total` at all cannot signal completion this
+    /// way and would wait out the cap; no montage caller does that today, and
+    /// progress-reporting servers are expected to advertise `total` per the MCP
+    /// progress model. If such a caller appears, give it an explicit expected
+    /// count rather than reintroducing a timing guess here.
+    async fn await_progress_completion(&self, token: i64, complete: &tokio::sync::Notify) {
+        const COMPLETION_CAP: Duration = Duration::from_secs(10);
+        let notified = complete.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.handler.progress_complete(token).await {
+            let _ = tokio::time::timeout(COMPLETION_CAP, notified).await;
+        }
     }
 
     /// Cleanly shut down the server.

@@ -16,10 +16,15 @@ pub struct ResponseDebugContext {
     pub auth_error_code: Option<String>,
 }
 
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::unneeded_wildcard_pattern)]
 pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
 
-    let TransportError::Http { headers, .. } = transport else {
+    let TransportError::Http {
+        headers, body: _, ..
+    } = transport
+    else {
         return context;
     };
 

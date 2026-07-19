@@ -148,7 +148,7 @@ pub fn load_notes(project_root: &Path) -> NotesFile {
         Ok(b) => b,
         Err(_) => return NotesFile::empty(),
     };
-    match serde_json::from_slice::<NotesFile>(&bytes) {
+    match crate::serde_robust::from_json_slice::<NotesFile>(&bytes) {
         Ok(f) => f,
         Err(e) => {
             tracing::warn!(

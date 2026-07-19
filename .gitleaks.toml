@@ -15,4 +15,13 @@ paths = [
   '''Cargo\.lock''',
   '''vendor/codex-rs/agent-identity/src/lib\.rs''',
   '''vendor/codex-rs/login/src/auth/auth_tests\.rs''',
+  # codex-refresh-2026-07: newly-vendored files with synthetic/test-only
+  # secret-shaped strings (fake JWTs, test RSA fixture keys, FNV hash
+  # constants, and credential-broker test tokens deliberately shaped like
+  # real secrets to exercise redaction/virtualization). No real credentials.
+  '''vendor/codex-rs/app-server/README\.md''',
+  '''vendor/codex-rs/cli/tests/login\.rs''',
+  '''vendor/codex-rs/core-plugins/src/remote/catalog_cache\.rs''',
+  '''vendor/codex-rs/login/src/auth/agent_identity\.rs''',
+  '''vendor/codex-rs/network-proxy/src/credential_broker_tests\.rs''',
 ]

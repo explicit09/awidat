@@ -32,12 +32,11 @@ use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::path::Path;
-use std::path::PathBuf;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
@@ -45,11 +44,11 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.cwd_path().to_path_buf()),
+            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -57,37 +56,13 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model,
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),
             ..Default::default()
         },
     }
-}
-
-fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
-    fn sanitize(value: &str) -> String {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    }
-
-    codex_home
-        .join("generated_images")
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
 }
 
 fn test_model_info(
@@ -111,6 +86,10 @@ fn test_model_info(
         input_modalities,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -118,7 +97,8 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
-        supports_reasoning_summaries: false,
+        include_skills_usage_instructions: false,
+        supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
@@ -131,6 +111,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -147,7 +128,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex");
+    let mut builder = test_codex().with_model("gpt-5.2");
     let test = builder.build(&server).await?;
     let next_model = "gpt-5.4";
 
@@ -212,14 +193,12 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .enable(Feature::Personality)
+            .expect("test config should allow feature update");
+    });
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
 
@@ -380,6 +359,46 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_configured_service_tier_warns_at_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let model_slug = "test-no-tier-model";
+    let model = test_model_info(
+        model_slug,
+        model_slug,
+        "no service tiers",
+        default_input_modalities(),
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.service_tier = Some(ServiceTier::Flex.request_value().to_string());
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(warning)
+                if warning.message.contains("will be omitted from requests")
+        )
+    })
+    .await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("wait_for_event matched a warning")
+    };
+    assert_eq!(
+        warning.message,
+        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests."
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn default_service_tier_override_is_omitted_from_http_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -498,9 +517,12 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         .to_string();
 
     test.codex
@@ -554,19 +576,6 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             .any(|text| text == "image content omitted because you do not support image input"),
         "second request should include the image-omitted placeholder text"
     );
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == &codex_protocol::models::image_open_tag_text()),
-        "second request should preserve the image open tag text"
-    );
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == &codex_protocol::models::image_close_tag_text()),
-        "second request should preserve the image close tag text"
-    );
-
     Ok(())
 }
 
@@ -609,15 +618,12 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -656,23 +662,14 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     );
     assert_eq!(
         image_generation_calls[0]["id"].as_str(),
-        Some("ig_123"),
-        "expected the original image generation call id to be preserved"
+        None,
+        "expected the image generation call id to be omitted"
     );
     assert_eq!(
         image_generation_calls[0]["result"].as_str(),
         Some("Zm9v"),
         "expected the original generated image payload to be preserved"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -723,15 +720,12 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -773,8 +767,8 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     );
     assert_eq!(
         image_generation_calls[0]["id"].as_str(),
-        Some("ig_123"),
-        "second request should preserve the original generated image call id"
+        None,
+        "second request should omit the generated image call id"
     );
     assert_eq!(
         image_generation_calls[0]["result"].as_str(),
@@ -788,15 +782,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             .all(|text| text != "image content omitted because you do not support image input"),
         "second request should not inject the image-omitted placeholder text"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -839,15 +824,12 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_rollback",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -894,20 +876,11 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
         "rollback should remove the rolled-back image-generation user turn"
     );
     assert!(
-        !second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "rollback should remove the generated-image save note with the rolled-back turn"
-    );
-    assert!(
         second_request
             .inputs_of_type("image_generation_call")
             .is_empty(),
         "rollback should remove the generated image call with the rolled-back turn"
     );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -941,6 +914,10 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -948,7 +925,8 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
-        supports_reasoning_summaries: false,
+        include_skills_usage_instructions: false,
+        supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
@@ -961,6 +939,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         context_window: Some(large_context_window),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),
     };
@@ -1001,7 +980,12 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    let available_models = models_manager.list_models(RefreshStrategy::Online).await;
+    let available_models = models_manager
+        .list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
     assert!(
         available_models
             .iter()

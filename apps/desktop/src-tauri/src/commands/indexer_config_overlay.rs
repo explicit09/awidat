@@ -70,7 +70,7 @@ pub fn load_disabled_indexers_sync(project_root: &Path) -> Vec<String> {
     let Ok(bytes) = std::fs::read(&path) else {
         return Vec::new();
     };
-    match serde_json::from_slice::<DisabledIndexersConfig>(&bytes) {
+    match montage_proto::serde_robust::from_json_slice::<DisabledIndexersConfig>(&bytes) {
         Ok(cfg) => cfg.disabled,
         Err(err) => {
             tracing::warn!(
@@ -91,19 +91,21 @@ pub async fn read_disabled_indexers(project_path: String) -> Result<Vec<String>,
     let root = validate_project_root(&project_path)?;
     let path = config_path(&root);
     match fs::read(&path).await {
-        Ok(bytes) => match serde_json::from_slice::<DisabledIndexersConfig>(&bytes) {
-            Ok(cfg) => Ok(cfg.disabled),
-            Err(err) => {
-                // Mirror skill_config: the dispatcher's overlay loader
-                // fails open, so the UI stays consistent with it.
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "indexers.json malformed; returning empty disabled list"
-                );
-                Ok(Vec::new())
+        Ok(bytes) => {
+            match montage_proto::serde_robust::from_json_slice::<DisabledIndexersConfig>(&bytes) {
+                Ok(cfg) => Ok(cfg.disabled),
+                Err(err) => {
+                    // Mirror skill_config: the dispatcher's overlay loader
+                    // fails open, so the UI stays consistent with it.
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "indexers.json malformed; returning empty disabled list"
+                    );
+                    Ok(Vec::new())
+                }
             }
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("read indexers.json: {e}")),
     }

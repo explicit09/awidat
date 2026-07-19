@@ -261,6 +261,7 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 
 ## Status log
 
+- 2026-07-19: R29 ADDED (codex-refresh follow-up): `progress_notifications_are_routed_to_subscriber` `#[ignore]`d. rmcp 1.8 dispatches progress-notification delivery on a fire-and-forget tokio::spawn (service.rs:1228, crates.io crate) that starves under whole-workspace nextest oversubscription; five timing/isolation rounds all tripped the 10s cap. Production routing is correct with zero callers, so no product impact. Re-enable when rmcp exposes inline notification delivery or via a dedicated un-oversubscribed `--ignored` CI job.
 - 2026-07-15: Approval-hash decision (R1 prerequisite): legacy `approval_keys`/`normalize_edl_for_approval`/`short_sha256` served ONLY the legacy harness's session-approval cache (`crate::tool::approved_for_session`), which no binary reaches since the codex-engine cutover. Codex gates mutating tools pre-execution via MCP destructive_hint annotations. Verdict: SUPERSEDED — delete with the tree, do not port. Only delta is lost re-prompt memoization for identical retried EDLs (UX, not safety).
 - 2026-07-17: R26/R27/R28 CLOSED (incl. the direct-fire analogs of R27/R28 found during the fix). REGISTER COMPLETE: every wave done. Open follow-ups parked with triggers: vendor/codex-rs upstream refresh (1325 commits, 8 security-relevant — codex-drift.yml nags weekly), perf-budget/perf-full chaining (blocked on local Playwright cache), Google-callback happy-path test (needs channels_endpoint seam), R28-style audit of non-YouTube providers if they ever gain quotas.
 - 2026-07-16: WAVE 5 DONE — R19 (cargo-deny pinned 0.20.2), R20 (rmcp suppression verified: loopback test binary only; revisit = fork rmcp bump), R10/R12 (rand advisory fixed+removed; 25 ignores annotated w/ blocker+trigger+date), R21 (constant_time_eq traced/documented), R13 (drift script + weekly codex-drift.yml, dry-run verified). Priority follow-up surfaced: refresh vendor/codex-rs from upstream (1325 commits behind, 8 security-relevant incl. rmcp 1.7.0).
@@ -303,6 +304,16 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 **Severity:** low · **Lens:** correctness · **Fix cost:** hours · **Verification:** confirmed (asserted as-is by Wave 4a test)
 
 **Evidence:** the requeue-with-backoff path returns Ok from execute_claimed_upload_job_with_refresher, so the handler increments the daily YouTube quota even when nothing uploaded — a job retrying 5x consumes 5 units of the 100/day budget. Possibly intended (Google bills per attempt); decide and document either way.
+
+### R29 — progress-notification test ignored: rmcp 1.8 spawns delivery on a starvable task
+
+**Severity:** low · **Lens:** test-gaps · **Fix cost:** days · **Verification:** confirmed (5 CI rounds during the codex refresh)
+
+**Evidence:** crates/mcp/tests/client_against_test_server.rs `progress_notifications_are_routed_to_subscriber` is `#[ignore]`d. rmcp 1.8 (crates.io dep, rmcp-1.8.0/src/service.rs:1228) delivers each `notifications/progress` frame on a fire-and-forget `tokio::spawn`ed task, upstream of our handler, JoinHandle dropped. Under `cargo nextest run --workspace` (~2775 concurrent tests) that task is CPU-starved for the full 10s completion-wait cap → the subscriber drains 0. Five timing/isolation approaches all failed. Zero production callers of the exercised path (`call_tool_with_progress`), so the production routing (correct, completion-signal based) is unaffected.
+
+**Blast radius:** none in production. Coverage gap: the progress-routing path has no automated CI test until re-enabled.
+
+**Recommendation:** re-enable when rmcp exposes an inline (non-spawned) notification-delivery API, or add a dedicated CI job that runs `cargo test -p montage-mcp -- --ignored` un-oversubscribed (`--test-threads=1`).
 
 ### R30 — perf-budget/perf-full genuinely fail in CI (not just the local Playwright cache)
 

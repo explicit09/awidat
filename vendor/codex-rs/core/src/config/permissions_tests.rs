@@ -149,7 +149,7 @@ fn network_permission_containers_project_allowed_and_denied_entries() {
             ),
             (
                 "/tmp/ignored.sock".to_string(),
-                NetworkUnixSocketPermissionToml::None,
+                NetworkUnixSocketPermissionToml::Deny,
             ),
         ]),
     };
@@ -211,7 +211,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
                 ),
                 (
                     "/tmp/override.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::None,
+                    NetworkUnixSocketPermissionToml::Deny,
                 ),
             ]),
         }),
@@ -220,7 +220,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
     .apply_to_network_proxy_config(&mut config);
 
     assert_eq!(
-        config.network.unix_sockets,
+        config.unix_sockets,
         Some(codex_network_proxy::NetworkUnixSocketPermissions {
             entries: BTreeMap::from([
                 (
@@ -233,7 +233,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
                 ),
                 (
                     "/tmp/override.sock".to_string(),
-                    ProxyNetworkUnixSocketPermission::None,
+                    ProxyNetworkUnixSocketPermission::Deny,
                 ),
             ]),
         })
@@ -265,6 +265,7 @@ enabled = true
 
 [base.network.unix_sockets]
 "/tmp/base.sock" = "allow"
+"/tmp/blocked.sock" = "deny"
 
 [child]
 extends = "base"
@@ -319,13 +320,13 @@ allow_local_binding = true
 
 [network.unix_sockets]
 "/tmp/base.sock" = "allow"
+"/tmp/blocked.sock" = "deny"
 "/tmp/child.sock" = "allow"
 "#,
     )
     .expect("expected profile should deserialize");
 
-    assert_eq!(resolved.profile, expected_profile);
-    assert_eq!(resolved.inherited_profile_names, vec!["base".to_string()]);
+    assert_eq!(resolved, expected_profile);
 }
 
 #[test]
@@ -398,7 +399,7 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_bare_network_access() {
         ..Default::default()
     }));
 
-    assert!(!config.network.enabled);
+    assert!(!config.enabled);
 }
 
 #[test]
@@ -416,11 +417,11 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_proxy_policy() {
         ..Default::default()
     }));
 
-    assert!(!config.network.enabled);
-    assert_eq!(config.network.proxy_url, "http://127.0.0.1:43128");
-    assert!(!config.network.enable_socks5);
+    assert!(!config.enabled);
+    assert_eq!(config.proxy_url, "http://127.0.0.1:43128");
+    assert!(!config.enable_socks5);
     assert_eq!(
-        config.network.domains,
+        config.domains,
         Some(codex_network_proxy::NetworkDomainPermissions {
             entries: vec![codex_network_proxy::NetworkDomainPermissionEntry {
                 pattern: "openai.com".to_string(),
@@ -542,7 +543,6 @@ fn glob_scan_max_depth_must_be_positive() {
 
 #[test]
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
-    let cwd = TempDir::new()?;
     let mut startup_warnings = Vec::new();
     let (file_system_policy, _) = compile_permission_profile(
         &PermissionsToml {
@@ -567,7 +567,6 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
             )]),
         },
         "workspace",
-        cwd.path(),
         &mut startup_warnings,
     )?;
 

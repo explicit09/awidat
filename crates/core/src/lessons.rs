@@ -467,7 +467,7 @@ pub fn load_decisions_from_path(path: &Path) -> Result<Vec<EditorialDecision>, S
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<EditorialDecision>(line) {
+        match crate::serde_robust::from_json_str::<EditorialDecision>(line) {
             Ok(d) => out.push(d),
             Err(e) => {
                 tracing::warn!(

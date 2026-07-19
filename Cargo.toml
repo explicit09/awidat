@@ -38,7 +38,6 @@ members = [
     "vendor/codex-rs/app-server-protocol",
     "vendor/codex-rs/app-server-test-client",
     "vendor/codex-rs/bwrap",
-    "vendor/codex-rs/debug-client",
     "vendor/codex-rs/apply-patch",
     "vendor/codex-rs/arg0",
     "vendor/codex-rs/feedback",
@@ -46,7 +45,10 @@ members = [
     "vendor/codex-rs/install-context",
     "vendor/codex-rs/codex-backend-openapi-models",
     "vendor/codex-rs/code-mode",
-    "vendor/codex-rs/cloud-requirements",
+    "vendor/codex-rs/code-mode-host",
+    "vendor/codex-rs/code-mode-protocol",
+    "vendor/codex-rs/codex-home",
+    "vendor/codex-rs/cloud-config",
     "vendor/codex-rs/cloud-tasks",
     "vendor/codex-rs/cloud-tasks-client",
     "vendor/codex-rs/cloud-tasks-mock-client",
@@ -54,6 +56,7 @@ members = [
     "vendor/codex-rs/collaboration-mode-templates",
     "vendor/codex-rs/connectors",
     "vendor/codex-rs/config",
+    "vendor/codex-rs/context-fragments",
     "vendor/codex-rs/shell-command",
     "vendor/codex-rs/shell-escalation",
     "vendor/codex-rs/skills",
@@ -62,14 +65,25 @@ members = [
     "vendor/codex-rs/core-plugins",
     "vendor/codex-rs/core-skills",
     "vendor/codex-rs/hooks",
+    "vendor/codex-rs/http-client",
     "vendor/codex-rs/secrets",
     "vendor/codex-rs/exec",
     "vendor/codex-rs/file-system",
+    "vendor/codex-rs/exec-server-protocol",
     "vendor/codex-rs/exec-server",
     "vendor/codex-rs/execpolicy",
-    "vendor/codex-rs/execpolicy-legacy",
+    "vendor/codex-rs/ext/agent",
+    "vendor/codex-rs/ext/connectors",
+    "vendor/codex-rs/ext/extension-api",
+    "vendor/codex-rs/ext/goal",
+    "vendor/codex-rs/ext/guardian",
+    "vendor/codex-rs/ext/image-generation",
+    "vendor/codex-rs/ext/items",
+    "vendor/codex-rs/ext/memories",
+    "vendor/codex-rs/ext/mcp",
+    "vendor/codex-rs/ext/skills",
+    "vendor/codex-rs/ext/web-search",
     "vendor/codex-rs/external-agent-migration",
-    "vendor/codex-rs/external-agent-sessions",
     "vendor/codex-rs/keyring-store",
     "vendor/codex-rs/file-search",
     "vendor/codex-rs/linux-sandbox",
@@ -79,20 +93,15 @@ members = [
     "vendor/codex-rs/mcp-server",
     "vendor/codex-rs/memories/read",
     "vendor/codex-rs/memories/write",
-    "vendor/codex-rs/memories/mcp",
     "vendor/codex-rs/message-history",
     "vendor/codex-rs/file-watcher",
-    "vendor/codex-rs/ext/extension-api",
-    "vendor/codex-rs/ext/goal",
-    "vendor/codex-rs/ext/guardian",
-    "vendor/codex-rs/ext/memories",
     "vendor/codex-rs/model-provider-info",
     "vendor/codex-rs/models-manager",
     "vendor/codex-rs/network-proxy",
     "vendor/codex-rs/ollama",
     "vendor/codex-rs/process-hardening",
     "vendor/codex-rs/protocol",
-    "vendor/codex-rs/realtime-webrtc",
+    "vendor/codex-rs/prompts",
     "vendor/codex-rs/rollout",
     "vendor/codex-rs/rollout-trace",
     "vendor/codex-rs/rmcp-client",
@@ -104,7 +113,9 @@ members = [
     "vendor/codex-rs/tui",
     "vendor/codex-rs/tools",
     "vendor/codex-rs/v8-poc",
+    "vendor/codex-rs/websocket-client",
     "vendor/codex-rs/utils/absolute-path",
+    "vendor/codex-rs/utils/path-uri",
     "vendor/codex-rs/utils/cargo-bin",
     "vendor/codex-rs/git-utils",
     "vendor/codex-rs/utils/cache",
@@ -244,42 +255,53 @@ codex-chatgpt = { path = "vendor/codex-rs/chatgpt" }
 codex-cli = { path = "vendor/codex-rs/cli" }
 codex-client = { path = "vendor/codex-rs/codex-client" }
 codex-collaboration-mode-templates = { path = "vendor/codex-rs/collaboration-mode-templates" }
-codex-cloud-requirements = { path = "vendor/codex-rs/cloud-requirements" }
+codex-cloud-config = { path = "vendor/codex-rs/cloud-config" }
 codex-cloud-tasks-client = { path = "vendor/codex-rs/cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "vendor/codex-rs/cloud-tasks-mock-client" }
 codex-code-mode = { path = "vendor/codex-rs/code-mode" }
+codex-code-mode-protocol = { path = "vendor/codex-rs/code-mode-protocol" }
+codex-home = { path = "vendor/codex-rs/codex-home" }
+codex-http-client = { path = "vendor/codex-rs/http-client" }
+codex-websocket-client = { path = "vendor/codex-rs/websocket-client" }
 codex-config = { path = "vendor/codex-rs/config" }
 codex-connectors = { path = "vendor/codex-rs/connectors" }
+codex-agent-extension = { path = "vendor/codex-rs/ext/agent" }
+codex-connectors-extension = { path = "vendor/codex-rs/ext/connectors" }
+codex-context-fragments = { path = "vendor/codex-rs/context-fragments" }
 codex-core = { path = "vendor/codex-rs/core" }
 codex-core-api = { path = "vendor/codex-rs/core-api" }
 codex-core-plugins = { path = "vendor/codex-rs/core-plugins" }
 codex-core-skills = { path = "vendor/codex-rs/core-skills" }
 codex-exec = { path = "vendor/codex-rs/exec" }
 codex-file-system = { path = "vendor/codex-rs/file-system" }
+codex-exec-server-protocol = { path = "vendor/codex-rs/exec-server-protocol" }
 codex-exec-server = { path = "vendor/codex-rs/exec-server" }
 codex-execpolicy = { path = "vendor/codex-rs/execpolicy" }
-codex-external-agent-migration = { path = "vendor/codex-rs/external-agent-migration" }
-codex-external-agent-sessions = { path = "vendor/codex-rs/external-agent-sessions" }
-codex-experimental-api-macros = { path = "vendor/codex-rs/codex-experimental-api-macros" }
 codex-extension-api = { path = "vendor/codex-rs/ext/extension-api" }
+codex-extension-items = { path = "vendor/codex-rs/ext/items" }
 codex-goal-extension = { path = "vendor/codex-rs/ext/goal" }
 codex-guardian = { path = "vendor/codex-rs/ext/guardian" }
-codex-file-watcher = { path = "vendor/codex-rs/file-watcher" }
-codex-message-history = { path = "vendor/codex-rs/message-history" }
-codex-memories-extension = { path = "vendor/codex-rs/ext/memories" }
+codex-image-generation-extension = { path = "vendor/codex-rs/ext/image-generation" }
+codex-external-agent-migration = { path = "vendor/codex-rs/external-agent-migration" }
+codex-experimental-api-macros = { path = "vendor/codex-rs/codex-experimental-api-macros" }
 codex-features = { path = "vendor/codex-rs/features" }
 codex-feedback = { path = "vendor/codex-rs/feedback" }
 codex-install-context = { path = "vendor/codex-rs/install-context" }
 codex-file-search = { path = "vendor/codex-rs/file-search" }
+codex-file-watcher = { path = "vendor/codex-rs/file-watcher" }
 codex-git-utils = { path = "vendor/codex-rs/git-utils" }
 codex-hooks = { path = "vendor/codex-rs/hooks" }
 codex-keyring-store = { path = "vendor/codex-rs/keyring-store" }
 codex-linux-sandbox = { path = "vendor/codex-rs/linux-sandbox" }
 codex-lmstudio = { path = "vendor/codex-rs/lmstudio" }
 codex-login = { path = "vendor/codex-rs/login" }
+codex-message-history = { path = "vendor/codex-rs/message-history" }
+codex-memories-extension = { path = "vendor/codex-rs/ext/memories" }
+codex-web-search-extension = { path = "vendor/codex-rs/ext/web-search" }
 codex-memories-read = { path = "vendor/codex-rs/memories/read" }
 codex-memories-write = { path = "vendor/codex-rs/memories/write" }
 codex-mcp = { path = "vendor/codex-rs/codex-mcp" }
+codex-mcp-extension = { path = "vendor/codex-rs/ext/mcp" }
 codex-mcp-server = { path = "vendor/codex-rs/mcp-server" }
 codex-model-provider-info = { path = "vendor/codex-rs/model-provider-info" }
 codex-models-manager = { path = "vendor/codex-rs/models-manager" }
@@ -290,7 +312,7 @@ codex-plugin = { path = "vendor/codex-rs/plugin" }
 codex-model-provider = { path = "vendor/codex-rs/model-provider" }
 codex-process-hardening = { path = "vendor/codex-rs/process-hardening" }
 codex-protocol = { path = "vendor/codex-rs/protocol" }
-codex-realtime-webrtc = { path = "vendor/codex-rs/realtime-webrtc" }
+codex-prompts = { path = "vendor/codex-rs/prompts" }
 codex-responses-api-proxy = { path = "vendor/codex-rs/responses-api-proxy" }
 codex-response-debug-context = { path = "vendor/codex-rs/response-debug-context" }
 codex-rmcp-client = { path = "vendor/codex-rs/rmcp-client" }
@@ -300,6 +322,7 @@ codex-sandboxing = { path = "vendor/codex-rs/sandboxing" }
 codex-secrets = { path = "vendor/codex-rs/secrets" }
 codex-shell-command = { path = "vendor/codex-rs/shell-command" }
 codex-shell-escalation = { path = "vendor/codex-rs/shell-escalation" }
+codex-skills-extension = { path = "vendor/codex-rs/ext/skills" }
 codex-skills = { path = "vendor/codex-rs/skills" }
 codex-state = { path = "vendor/codex-rs/state" }
 codex-stdio-to-uds = { path = "vendor/codex-rs/stdio-to-uds" }
@@ -322,6 +345,7 @@ codex-utils-json-to-toml = { path = "vendor/codex-rs/utils/json-to-toml" }
 codex-utils-oss = { path = "vendor/codex-rs/utils/oss" }
 codex-utils-output-truncation = { path = "vendor/codex-rs/utils/output-truncation" }
 codex-utils-path = { path = "vendor/codex-rs/utils/path-utils" }
+codex-utils-path-uri = { path = "vendor/codex-rs/utils/path-uri" }
 codex-utils-plugins = { path = "vendor/codex-rs/utils/plugins" }
 codex-utils-pty = { path = "vendor/codex-rs/utils/pty" }
 codex-utils-rustls-provider = { path = "vendor/codex-rs/utils/rustls-provider" }
@@ -350,17 +374,16 @@ serde_json = "1"
 clap = "4"
 clap_complete = "4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+tokio-rustls = "0.26.4"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
 tokio-util = { version = "0.7.18", default-features = false }
-# Downgraded from rmcp 1.x to 0.15.0 to match codex. crates/mcp will be
-# replaced by codex-rmcp-client in a later step; the brief porting cost
-# is cheaper than keeping two rmcp majors in the workspace.
-rmcp = { version = "0.15.0", default-features = false }
+# Bumped to match upstream codex's rmcp version (codex-refresh-2026-07).
+rmcp = { version = "1.8.0", default-features = false }
 anyhow = "1"
 thiserror = "2.0.17"
 chrono = { version = "0.4.43", features = ["serde"] }
-rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "chrono"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
 tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.32.0"
@@ -424,6 +447,14 @@ axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 chacha20poly1305 = "0.10"
 chardetng = "0.1.17"
+clatter = { version = "2.2.0", default-features = false, features = [
+    "alloc",
+    "getrandom",
+    "use-25519",
+    "use-aes-gcm",
+    "use-rust-crypto-ml-kem",
+    "use-sha",
+] }
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
 crypto_box = { version = "0.9.1", features = ["seal"] }
@@ -445,6 +476,7 @@ glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
 http = "1.3.1"
+httpdate = "1.0.3"
 iana-time-zone = "0.1.64"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -460,9 +492,11 @@ jsonptr = { version = "0.7.1", default-features = false }
 jsonwebtoken = "9.3.1"
 landlock = "0.4.4"
 lazy_static = "1"
+libsqlite3-sys = { version = "0.37", default-features = false }
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"
+memchr = "2.7.6"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
@@ -503,22 +537,24 @@ sentry = "0.46.0"
 serial_test = "3.2.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
     "json",
     "macros",
     "migrate",
-    "runtime-tokio-rustls",
-    "sqlite",
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite-bundled",
     "time",
     "uuid",
 ] }
-starlark = "0.13.0"
+starlark = { version = "0.14.2", default-features = false }
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
+system-configuration = "0.7"
 tar = { version = "=0.4.45", default-features = false }
 test-log = "0.2.19"
 textwrap = "0.16.2"
@@ -538,7 +574,7 @@ uds_windows = "1.1.0"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=147.4.0"
+v8 = "=149.2.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -631,8 +667,8 @@ opt-level = 0
 [patch.crates-io]
 crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
 ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
-tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }

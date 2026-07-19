@@ -219,8 +219,8 @@ pub async fn read_silences(path: String) -> Result<SilenceSidecar, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read silences sidecar: {e}"))?;
-    let parsed: SilenceSidecar =
-        serde_json::from_slice(&bytes).map_err(|e| format!("parse silences sidecar: {e}"))?;
+    let parsed: SilenceSidecar = montage_proto::serde_robust::from_json_slice(&bytes)
+        .map_err(|e| format!("parse silences sidecar: {e}"))?;
     Ok(parsed)
 }
 
@@ -274,7 +274,7 @@ mod tests {
             min_duration_s: 0.6,
         };
         let s = serde_json::to_string(&payload).unwrap();
-        let back: SilenceSidecar = serde_json::from_str(&s).unwrap();
+        let back: SilenceSidecar = montage_proto::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.ranges.len(), 1);
         assert!((back.ranges[0].start_s - 1.5).abs() < 1e-9);
         assert!((back.ranges[0].end_s - 4.0).abs() < 1e-9);

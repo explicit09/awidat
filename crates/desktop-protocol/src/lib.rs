@@ -2033,7 +2033,7 @@ mod tests {
             text: "hello world".into(),
         };
         let json = serde_json::to_string(&item).unwrap();
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::Text { id, phase, text } => {
                 assert_eq!(id.0, "t-1");
@@ -2054,7 +2054,7 @@ mod tests {
             result: None,
         };
         let json = serde_json::to_string(&item).unwrap();
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::ToolCall {
                 id,
@@ -2092,7 +2092,7 @@ mod tests {
             rationale: None,
         };
         let json = serde_json::to_string(&item).unwrap();
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::ApprovalRequest {
                 tool_name,
@@ -2139,7 +2139,7 @@ mod tests {
             json.contains("\"rationale\":\"trimmed 0.42s silence per podcast defaults\""),
             "rationale must serialize on the wire, got: {json}"
         );
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::ApprovalRequest { rationale, .. } => {
                 assert_eq!(
@@ -2161,7 +2161,7 @@ mod tests {
             "capability_metadata": {},
         })
         .to_string();
-        let parsed: Item = serde_json::from_str(&legacy).unwrap();
+        let parsed: Item = montage_proto::serde_robust::from_json_str(&legacy).unwrap();
         match parsed {
             Item::ApprovalRequest { rationale, .. } => assert!(rationale.is_none()),
             _ => panic!("expected Item::ApprovalRequest"),
@@ -2202,7 +2202,7 @@ mod tests {
             rationale: None,
         };
         let json = serde_json::to_string(&item).unwrap();
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::ProposedEdit {
                 id,
@@ -2268,7 +2268,7 @@ mod tests {
             json.contains("\"rationale\":\"trimmed 0.42s silence per podcast defaults\""),
             "rationale must serialize on the wire, got: {json}"
         );
-        let back: Item = serde_json::from_str(&json).unwrap();
+        let back: Item = montage_proto::serde_robust::from_json_str(&json).unwrap();
         match back {
             Item::ProposedEdit { rationale, .. } => {
                 assert_eq!(
@@ -2285,7 +2285,7 @@ mod tests {
             ",\"rationale\":\"trimmed 0.42s silence per podcast defaults\"",
             "",
         );
-        let legacy: Item = serde_json::from_str(&legacy_json).unwrap();
+        let legacy: Item = montage_proto::serde_robust::from_json_str(&legacy_json).unwrap();
         match legacy {
             Item::ProposedEdit { rationale, .. } => assert!(rationale.is_none()),
             _ => panic!("expected Item::ProposedEdit"),
@@ -2300,7 +2300,7 @@ mod tests {
             value_s: 4.21,
         };
         let json = serde_json::to_string(&adj).unwrap();
-        let back: EditAdjustment = serde_json::from_str(&json).unwrap();
+        let back: EditAdjustment = montage_proto::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back.op_index, 2);
         assert_eq!(back.field, AdjustField::TrimEnd);
         assert!((back.value_s - 4.21).abs() < 1e-9);
@@ -2385,7 +2385,7 @@ mod tests {
             uuid: "clip-3".into(),
         };
         let json = serde_json::to_string(&anchor).unwrap();
-        let back: BrollAnchor = serde_json::from_str(&json).unwrap();
+        let back: BrollAnchor = montage_proto::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(back, anchor);
     }
 

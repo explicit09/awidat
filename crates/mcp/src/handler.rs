@@ -20,6 +20,7 @@ use rmcp::ClientHandler;
 use rmcp::model::{ClientInfo, NumberOrString, ProgressNotificationParam, ProgressToken};
 use rmcp::service::{NotificationContext, RoleClient};
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
 /// One `notifications/progress` event from the server.
@@ -47,7 +48,34 @@ enum ProgressSlot {
     /// No subscriber yet — buffer up to BACKLOG_CAP events.
     Backlog(Vec<ProgressEvent>),
     /// Live subscriber — forward directly.
-    Subscriber(mpsc::Sender<ProgressEvent>),
+    Subscriber(SubscriberState),
+}
+
+/// Per-token live-subscriber state.
+///
+/// rmcp 1.8 dispatches each `notifications/progress` frame on an *independent*
+/// `tokio::spawn`ed task (`service.rs` `handle_notification`), so those tasks
+/// can run out of order and — under load — may not have run at all by the time
+/// the originating request's response resolves on the client. Tearing the
+/// subscriber down at that point drops any not-yet-run frame. To make teardown
+/// wait for a *real* end-of-stream instead of a timing guess, we track how many
+/// frames were delivered and the completion `total` the server advertised, and
+/// fire `complete` once every expected frame is in.
+struct SubscriberState {
+    tx: mpsc::Sender<ProgressEvent>,
+    /// Frames handed to the channel so far (backlog drain + live).
+    delivered: usize,
+    /// The `total` the server advertised (the completion target for these
+    /// unit-counting progress streams: a final frame carries `progress ==
+    /// total`, and there are `total` frames). `None` until a frame with a
+    /// `total` is seen; while unknown no hard completion can be computed and
+    /// the client's `complete` wait is bounded only by its cap.
+    total: Option<usize>,
+    /// Fired once `delivered >= total` (all expected frames delivered). The
+    /// client awaits this before deregistering, so completion is keyed on
+    /// observed delivery of every frame — order-independent and not a timing
+    /// window.
+    complete: Arc<Notify>,
 }
 
 const BACKLOG_CAP: usize = 64;
@@ -76,23 +104,88 @@ impl MontageHandler {
     /// Register a progress subscriber under the given numeric token.
     /// Drains any backlog accumulated between request send and registration
     /// onto `tx` (best-effort — events that don't fit the channel are
-    /// dropped). Returns a guard that deregisters the subscriber on drop.
+    /// dropped). Returns a guard that deregisters the subscriber on drop, plus
+    /// a `Notify` that fires once every advertised frame has been delivered
+    /// (see [`SubscriberState`]).
     pub(crate) async fn register_progress(
         &self,
         token: i64,
         tx: mpsc::Sender<ProgressEvent>,
-    ) -> ProgressGuard {
+    ) -> (ProgressGuard, Arc<Notify>) {
+        let complete = Arc::new(Notify::new());
         let mut map = self.progress.lock().await;
+        let mut state = SubscriberState {
+            tx,
+            delivered: 0,
+            total: None,
+            complete: complete.clone(),
+        };
         if let Some(ProgressSlot::Backlog(backlog)) = map.remove(&token) {
             for event in backlog {
-                let _ = tx.try_send(event);
+                deliver_into(&mut state, event);
             }
         }
-        map.insert(token, ProgressSlot::Subscriber(tx));
-        ProgressGuard {
+        map.insert(token, ProgressSlot::Subscriber(state));
+        let guard = ProgressGuard {
             map: self.progress.clone(),
             token,
+            disarmed: false,
+        };
+        (guard, complete)
+    }
+
+    /// Whether the subscriber for `token` has already received its full frame
+    /// burst (`delivered >= total`), or no subscriber exists. When this is
+    /// false the client awaits the completion `Notify`. Lets the client
+    /// short-circuit when every frame was already drained from the backlog at
+    /// registration (so `notify_waiters()` fired before anyone was waiting).
+    pub(crate) async fn progress_complete(&self, token: i64) -> bool {
+        match self.progress.lock().await.get(&token) {
+            Some(ProgressSlot::Subscriber(s)) => s.is_complete(),
+            _ => true,
         }
+    }
+
+    /// Synchronously (from an async context) deregister the subscriber for
+    /// `token`. Unlike the `ProgressGuard` `Drop` fallback — which must spawn
+    /// because `Drop` can't `await` — this removes the entry deterministically
+    /// before the caller returns, so no late notification can resurrect an
+    /// orphaned backlog after teardown.
+    pub(crate) async fn deregister_progress(&self, token: i64) {
+        self.progress.lock().await.remove(&token);
+    }
+}
+
+impl SubscriberState {
+    /// Whether every advertised frame has been delivered. Unknown `total`
+    /// (server sent no `total`, or no frame yet) is *not* a completion, so the
+    /// client keeps awaiting the signal (bounded by its cap) rather than
+    /// tearing the subscriber down early.
+    fn is_complete(&self) -> bool {
+        matches!(self.total, Some(total) if self.delivered >= total)
+    }
+}
+
+/// Deliver one frame into a subscriber: forward to the channel, update the
+/// delivered count, learn the completion `total`, and fire the completion
+/// signal once every expected frame is in. Order-independent — the count, not
+/// which specific frame arrived, decides completion — so it is robust to
+/// rmcp's out-of-order notification tasks.
+fn deliver_into(state: &mut SubscriberState, event: ProgressEvent) {
+    // A `total` on any frame tells us how many unit-counting frames to expect.
+    // Take the max seen in case frames arrive out of order with a growing total.
+    if let Some(total) = event.total
+        && total.is_finite()
+        && total >= 0.0
+    {
+        let total = total.ceil() as usize;
+        state.total = Some(state.total.map_or(total, |cur| cur.max(total)));
+    }
+    if state.tx.try_send(event).is_ok() {
+        state.delivered += 1;
+    }
+    if state.is_complete() {
+        state.complete.notify_waiters();
     }
 }
 
@@ -114,8 +207,8 @@ impl ClientHandler for MontageHandler {
         };
         let mut map = self.progress.lock().await;
         match map.get_mut(&token) {
-            Some(ProgressSlot::Subscriber(tx)) => {
-                let _ = tx.try_send(event);
+            Some(ProgressSlot::Subscriber(state)) => {
+                deliver_into(state, event);
             }
             Some(ProgressSlot::Backlog(backlog)) => {
                 if backlog.len() < BACKLOG_CAP {
@@ -142,13 +235,37 @@ impl ClientHandler for MontageHandler {
 }
 
 /// RAII guard that deregisters a progress subscriber when dropped.
+///
+/// The preferred teardown path is [`ProgressGuard::disarm`] plus an explicit
+/// `deregister_progress` on the handler, which removes the entry
+/// deterministically from an async context after the post-response drain.
+/// The `Drop` impl is only a best-effort safety net for panics / early
+/// returns that skip the explicit path; it must spawn because `Drop` can't
+/// `await`.
 pub(crate) struct ProgressGuard {
     map: ProgressMap,
     token: i64,
+    disarmed: bool,
+}
+
+impl ProgressGuard {
+    /// The token this guard tears down.
+    pub(crate) fn token(&self) -> i64 {
+        self.token
+    }
+
+    /// Suppress the `Drop` fallback because the caller deregisters
+    /// synchronously via `deregister_progress` instead.
+    pub(crate) fn disarm(&mut self) {
+        self.disarmed = true;
+    }
 }
 
 impl Drop for ProgressGuard {
     fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
         // We can't `await` the lock from Drop; spawn a one-shot to deregister.
         // The map is Arc'd so the spawned future stays valid.
         let map = self.map.clone();

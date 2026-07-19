@@ -282,7 +282,7 @@ mod tests {
             }],
         };
         let s = serde_json::to_string(&m).unwrap();
-        let back: Manifest = serde_json::from_str(&s).unwrap();
+        let back: Manifest = crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.indexers.len(), 1);
         assert_eq!(back.indexers[0].name, "whisper");
     }
@@ -309,7 +309,7 @@ mod tests {
         assert!(s.contains("\"indexer\":\"whisper\""));
         assert!(s.contains("\"data\":"));
         assert!(!s.contains("\"header\":"));
-        let back: IndexSidecar<serde_json::Value> = serde_json::from_str(&s).unwrap();
+        let back: IndexSidecar<serde_json::Value> = crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(back.header.indexer, "whisper");
     }
 
@@ -331,7 +331,8 @@ mod tests {
             }
         });
         let s = serde_json::to_string(&json).unwrap();
-        let parsed: IndexSidecar<serde_json::Value> = serde_json::from_str(&s).unwrap();
+        let parsed: IndexSidecar<serde_json::Value> =
+            crate::serde_robust::from_json_str(&s).unwrap();
         assert_eq!(parsed.header.indexer, "speaker-emotion");
         // The engine successfully read the header without knowing the schema.
         assert!(parsed.data.is_object());

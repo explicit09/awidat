@@ -2480,7 +2480,7 @@ mod tests {
         let curve = ParamCurve::Const(0.5);
         let json = serde_json::to_string(&curve).unwrap();
         assert_eq!(json, "0.5", "const must serialize as a bare number");
-        let parsed: ParamCurve = serde_json::from_str(&json).unwrap();
+        let parsed: ParamCurve = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(parsed, ParamCurve::Const(0.5));
     }
 
@@ -2505,7 +2505,7 @@ mod tests {
         ]);
         let json = serde_json::to_string(&curve).unwrap();
         assert!(json.starts_with('['), "keyframes must serialize as array");
-        let parsed: ParamCurve = serde_json::from_str(&json).unwrap();
+        let parsed: ParamCurve = crate::serde_robust::from_json_str(&json).unwrap();
         assert_eq!(parsed, curve);
     }
 
@@ -2663,7 +2663,7 @@ mod tests {
             "amount": 0.5,
             "direction": "left"
         }"#;
-        let parsed: TransitionPrimitiveOp = serde_json::from_str(json).unwrap();
+        let parsed: TransitionPrimitiveOp = crate::serde_robust::from_json_str(json).unwrap();
         match parsed {
             TransitionPrimitiveOp::Blur { amount, direction } => {
                 assert_eq!(amount, ParamCurve::Const(0.5));
@@ -2683,7 +2683,7 @@ mod tests {
                 {"t": 1.0, "v": 0.0}
             ]
         }"#;
-        let parsed: TransitionPrimitiveOp = serde_json::from_str(json).unwrap();
+        let parsed: TransitionPrimitiveOp = crate::serde_robust::from_json_str(json).unwrap();
         match parsed {
             TransitionPrimitiveOp::Blur { amount, .. } => match amount {
                 ParamCurve::Keyframes(keys) => {
@@ -3309,7 +3309,7 @@ mod tests {
     #[test]
     fn exports_stable_builtin_manifest_json_roundtrip() {
         let json = stable_builtin_transition_manifest_json().unwrap();
-        let manifests: Vec<TransitionManifest> = serde_json::from_str(&json).unwrap();
+        let manifests: Vec<TransitionManifest> = crate::serde_robust::from_json_str(&json).unwrap();
         validate_transition_manifests(&manifests).unwrap();
 
         assert!(json.contains("\"id\": \"montage.cross_dissolve\""));

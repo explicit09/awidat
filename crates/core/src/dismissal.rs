@@ -162,7 +162,7 @@ pub fn load_dismissals(project_root: &Path) -> DismissalFile {
         Ok(b) => b,
         Err(_) => return DismissalFile::empty(),
     };
-    match serde_json::from_slice::<DismissalFile>(&bytes) {
+    match crate::serde_robust::from_json_slice::<DismissalFile>(&bytes) {
         Ok(f) => f,
         Err(e) => {
             tracing::warn!(

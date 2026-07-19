@@ -8,7 +8,7 @@ pub fn format_env_display<S: AsRef<str>>(
 
     if let Some(map) = env {
         let mut pairs: Vec<_> = map.iter().collect();
-        pairs.sort_by_key(|(a, _)| *a);
+        pairs.sort_by_key(|(key, _)| *key);
         parts.extend(pairs.into_iter().map(|(key, _)| format!("{key}=*****")));
     }
 

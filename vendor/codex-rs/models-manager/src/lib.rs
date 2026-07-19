@@ -6,10 +6,14 @@ pub mod model_info;
 pub mod model_presets;
 pub mod test_support;
 
-pub use codex_app_server_protocol::AuthMode;
+pub use codex_protocol::auth::AuthMode;
 pub use config::ModelsManagerConfig;
 
-const CODEX_MODEL_DISCOVERY_CLIENT_VERSION: &str = "0.128.0";
+// Montage fork edit: keep the Codex protocol/model discovery client version
+// separate from Montage's workspace package version (0.1.0) so `/models`
+// filtering remains compatible with the vendored Codex engine. Keep in sync
+// with `model-provider-info`'s `OPENAI_PROVIDER_VERSION`.
+const CODEX_MODEL_DISCOVERY_CLIENT_VERSION: &str = "0.144.5";
 
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()
@@ -26,6 +30,6 @@ pub fn client_version_to_whole() -> String {
 mod tests {
     #[test]
     fn model_discovery_uses_codex_protocol_version() {
-        assert_eq!(super::client_version_to_whole(), "0.128.0");
+        assert_eq!(super::client_version_to_whole(), "0.144.5");
     }
 }

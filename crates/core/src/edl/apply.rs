@@ -9509,7 +9509,8 @@ impl ValidateForApply for Timeline {
         // deserialize, which exercises the shape-level invariants of
         // the entire tree.
         let s = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        let _: Timeline = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+        let _: Timeline =
+            montage_proto::serde_robust::from_json_str(&s).map_err(|e| e.to_string())?;
         // Then walk: every clip must have a positive duration, every
         // track child non-negative duration. We do this manually since
         // Timeline::validate is pub(crate).

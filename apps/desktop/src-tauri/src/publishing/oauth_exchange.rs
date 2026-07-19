@@ -206,7 +206,7 @@ async fn post_token_form(
             body = body.as_str(),
             "oauth token endpoint returned non-success",
         );
-        let summary = match serde_json::from_str::<OAuthErrorBody>(&body) {
+        let summary = match montage_proto::serde_robust::from_json_str::<OAuthErrorBody>(&body) {
             Ok(parsed) => match parsed.error_description {
                 Some(desc) => format!("{}: {desc}", parsed.error),
                 None => parsed.error,
@@ -216,7 +216,7 @@ async fn post_token_form(
         return Err(ProviderError::OAuthFailed(summary));
     }
 
-    let raw: RawTokenResponse = serde_json::from_str(&body).map_err(|e| {
+    let raw: RawTokenResponse = montage_proto::serde_robust::from_json_str(&body).map_err(|e| {
         // The body could include the access token here — only debug-log
         // the parse error, not the body itself.
         tracing::debug!(error = %e, "oauth token response parse failed");

@@ -320,7 +320,7 @@ pub fn disclosure_for_project_root(project_root: &Path) -> AiDisclosure {
         Ok(s) => s,
         Err(_) => return AiDisclosure::empty(),
     };
-    let timeline: Timeline = match serde_json::from_str(&raw) {
+    let timeline: Timeline = match montage_proto::serde_robust::from_json_str(&raw) {
         Ok(t) => t,
         Err(_) => return AiDisclosure::empty(),
     };

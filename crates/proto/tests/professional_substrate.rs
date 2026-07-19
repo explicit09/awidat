@@ -241,7 +241,8 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
         Ok(json) => json,
         Err(error) => panic!("serialize metadata: {error}"),
     };
-    let roundtrip: MontageTimelineMetadata = match serde_json::from_str(&json) {
+    let roundtrip: MontageTimelineMetadata = match montage_proto::serde_robust::from_json_str(&json)
+    {
         Ok(metadata) => metadata,
         Err(error) => panic!("deserialize metadata: {error}"),
     };
@@ -340,7 +341,7 @@ fn first_class_episode_metadata_roundtrips() {
     assert!(json.contains("\"status\":\"rejected\""));
 
     let roundtrip: MontageTimelineMetadata =
-        serde_json::from_str(&json).expect("deserialize metadata");
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize metadata");
 
     assert_eq!(roundtrip.episodes.len(), 3);
     assert_eq!(roundtrip.episodes[0].id, "episode-1");
@@ -476,7 +477,7 @@ fn transcript_alignment_package_round_trips() {
 
     let json = serde_json::to_string(&package).expect("serialize package");
     let roundtrip: TranscriptAlignmentPackage =
-        serde_json::from_str(&json).expect("deserialize package");
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize package");
 
     assert_eq!(roundtrip.asset_id, "raw/interview.mov");
     assert_eq!(roundtrip.words[0].corrected_text.as_deref(), Some("hello"));
@@ -573,7 +574,7 @@ fn media_intelligence_package_round_trips() {
 
     let json = serde_json::to_string(&package).expect("serialize package");
     let roundtrip: MediaIntelligencePackage =
-        serde_json::from_str(&json).expect("deserialize package");
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize package");
 
     assert_eq!(roundtrip.assets[0].asset_id, "raw/interview.mov");
     assert_eq!(
@@ -642,7 +643,8 @@ fn understanding_package_round_trips() {
     };
 
     let json = serde_json::to_string(&package).expect("serialize package");
-    let roundtrip: UnderstandingPackage = serde_json::from_str(&json).expect("deserialize package");
+    let roundtrip: UnderstandingPackage =
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize package");
 
     assert_eq!(roundtrip.assets[0].moments[0].category, "hook");
     assert_eq!(
@@ -702,7 +704,8 @@ fn clip_candidate_package_round_trips() {
     };
 
     let json = serde_json::to_string(&package).expect("serialize package");
-    let roundtrip: ClipCandidatePackage = serde_json::from_str(&json).expect("deserialize package");
+    let roundtrip: ClipCandidatePackage =
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize package");
 
     assert_eq!(roundtrip.assets[0].candidates[0].rank, 1);
     assert_eq!(
@@ -764,7 +767,7 @@ fn broll_recommendation_package_round_trips() {
 
     let json = serde_json::to_string(&package).expect("serialize package");
     let roundtrip: BrollRecommendationPackage =
-        serde_json::from_str(&json).expect("deserialize package");
+        montage_proto::serde_robust::from_json_str(&json).expect("deserialize package");
 
     assert_eq!(
         roundtrip.assets[0].recommendations[0].category,
@@ -821,7 +824,8 @@ fn timeline_metadata_carries_durable_beat_markers() {
         Ok(json) => json,
         Err(error) => panic!("serialize metadata: {error}"),
     };
-    let roundtrip: MontageTimelineMetadata = match serde_json::from_str(&json) {
+    let roundtrip: MontageTimelineMetadata = match montage_proto::serde_robust::from_json_str(&json)
+    {
         Ok(metadata) => metadata,
         Err(error) => panic!("deserialize metadata: {error}"),
     };
@@ -1333,7 +1337,7 @@ fn tracking_package_validates_segmentation_prompt_packages() {
         Ok(json) => json,
         Err(error) => panic!("serialize prompt package: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize prompt package: {error}"),
     };
@@ -1433,7 +1437,7 @@ fn tracking_package_validates_grounding_evidence() {
         Ok(json) => json,
         Err(error) => panic!("serialize grounding evidence: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize grounding evidence: {error}"),
     };
@@ -1620,7 +1624,7 @@ fn tracking_package_distinguishes_grounding_evidence_statuses() {
     assert!(json.contains("low_confidence"));
     assert!(json.contains("missing_runtime_evidence"));
 
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize grounding statuses: {error}"),
     };
@@ -1740,7 +1744,7 @@ fn tracking_package_validates_mask_quality_scorecards() {
         Ok(json) => json,
         Err(error) => panic!("serialize mask quality: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize mask quality: {error}"),
     };
@@ -1848,7 +1852,7 @@ fn tracking_package_validates_matte_generation_recipe() {
         Ok(json) => json,
         Err(error) => panic!("serialize matte generation: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize matte generation: {error}"),
     };
@@ -1962,7 +1966,7 @@ fn tracking_package_validates_segmentation_session_operations() {
         Ok(json) => json,
         Err(error) => panic!("serialize segmentation session operations: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize segmentation session operations: {error}"),
     };
@@ -2077,7 +2081,7 @@ fn tracking_package_validates_mask_artifact_profiles() {
         Ok(json) => json,
         Err(error) => panic!("serialize mask artifact profiles: {error}"),
     };
-    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+    let roundtrip: TrackingPackage = match montage_proto::serde_robust::from_json_str(&json) {
         Ok(package) => package,
         Err(error) => panic!("deserialize mask artifact profiles: {error}"),
     };

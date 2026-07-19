@@ -131,7 +131,8 @@ fn to_json<T: Serialize>(value: &T) -> Result<String, SocialStoreError> {
 }
 
 fn from_json<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T, SocialStoreError> {
-    serde_json::from_str(s).map_err(|e| SocialStoreError::Storage(e.to_string()))
+    montage_proto::serde_robust::from_json_str(s)
+        .map_err(|e| SocialStoreError::Storage(e.to_string()))
 }
 
 fn pg_error(e: postgres::Error) -> SocialStoreError {

@@ -401,7 +401,8 @@ fn read_sidecar_header(
             return None;
         }
     };
-    let parsed: Result<IndexSidecar<serde_json::Value>, _> = serde_json::from_str(&text);
+    let parsed: Result<IndexSidecar<serde_json::Value>, _> =
+        crate::serde_robust::from_json_str(&text);
     match parsed {
         Ok(s) => Some(s.header),
         Err(e) => {

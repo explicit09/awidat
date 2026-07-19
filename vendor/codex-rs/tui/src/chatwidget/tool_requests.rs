@@ -287,16 +287,17 @@ impl ChatWidget {
         self.notify(Notification::ExecApprovalRequested { command });
 
         let available_decisions = ev.effective_available_decisions();
-        let request = ApprovalRequest::Exec {
+        let request = ApprovalRequest::Exec(ExecApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.effective_approval_id(),
+            environment_id: ev.environment_id,
             command: ev.command,
             reason: ev.reason,
             available_decisions,
             network_approval_context: ev.network_approval_context,
             additional_permissions: ev.additional_permissions,
-        };
+        });
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.set_ambient_pet_notification(
@@ -309,14 +310,14 @@ impl ChatWidget {
     pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
 
-        let request = ApprovalRequest::ApplyPatch {
+        let request = ApprovalRequest::ApplyPatch(ApplyPatchApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
-        };
+        });
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.set_ambient_pet_notification(
@@ -360,17 +361,18 @@ impl ChatWidget {
         } else {
             match params.request {
                 McpServerElicitationRequest::Form { message, .. } => {
-                    let request = ApprovalRequest::McpElicitation {
+                    let request = ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
                         thread_id,
                         thread_label: None,
                         server_name: params.server_name,
                         request_id,
                         message,
-                    };
+                    });
                     self.bottom_pane
                         .push_approval_request(request, &self.config.features);
                 }
-                McpServerElicitationRequest::Url { .. } => {
+                McpServerElicitationRequest::OpenAiForm { .. }
+                | McpServerElicitationRequest::Url { .. } => {
                     self.app_event_tx.resolve_elicitation(
                         thread_id,
                         params.server_name,
@@ -432,13 +434,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
         self.flush_answer_stream_with_separator();
-        let request = ApprovalRequest::Permissions {
+        let request = ApprovalRequest::Permissions(PermissionsApprovalRequest {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             call_id: ev.call_id,
+            environment_id: ev.environment_id,
             reason: ev.reason,
             permissions: ev.permissions,
-        };
+        });
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.set_ambient_pet_notification(

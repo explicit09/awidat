@@ -308,7 +308,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ProtoErro
         path: path.display().to_string(),
         source: e,
     })?;
-    serde_json::from_str::<T>(&text).map_err(|e| ProtoError::Json {
+    crate::serde_robust::from_json_str::<T>(&text).map_err(|e| ProtoError::Json {
         file: path.display().to_string(),
         line: e.line(),
         column: e.column(),

@@ -165,7 +165,7 @@ pub fn find_audio_assets(
             index_path.display()
         )
     })?;
-    let index: PackIndex = serde_json::from_slice(&bytes)
+    let index: PackIndex = montage_proto::serde_robust::from_json_slice(&bytes)
         .map_err(|e| format!("failed to parse {}: {e}", index_path.display()))?;
     if index.version != 1 {
         return Err(format!(

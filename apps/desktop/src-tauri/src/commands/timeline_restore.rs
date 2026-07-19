@@ -93,7 +93,8 @@ pub async fn restore_timeline_otio(
         // is more useful than "write failed" when the caller hands us
         // a corrupted blob.
         let restored_timeline: Timeline =
-            serde_json::from_str(&snapshot_owned).map_err(|e| format!("parse snapshot: {e}"))?;
+            montage_proto::serde_robust::from_json_str(&snapshot_owned)
+                .map_err(|e| format!("parse snapshot: {e}"))?;
 
         // Read the project so we preserve the edit_plan + manifest;
         // we only swap the timeline. If the project no longer exists
@@ -153,14 +154,15 @@ mod tests {
     fn snapshot_round_trips_through_serde() {
         let timeline = Timeline::empty("restore-test");
         let json = serde_json::to_string(&timeline).expect("serialize timeline");
-        let restored: Timeline = serde_json::from_str(&json).expect("deserialize timeline");
+        let restored: Timeline =
+            montage_proto::serde_robust::from_json_str(&json).expect("deserialize timeline");
         assert_eq!(restored.name, "restore-test");
     }
 
     #[test]
     fn malformed_snapshot_fails_parse() {
         let bad = "{ not valid json";
-        let err = serde_json::from_str::<Timeline>(bad).unwrap_err();
+        let err = montage_proto::serde_robust::from_json_str::<Timeline>(bad).unwrap_err();
         // Any non-empty parse error message is fine — we just want to
         // prove the deserialize path rejects malformed input before
         // the restore command touches disk.

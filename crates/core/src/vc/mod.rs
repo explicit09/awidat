@@ -1613,7 +1613,7 @@ fn header_line(message: &str) -> String {
 fn parse_action_metadata(message: &str) -> Option<ActionMetadata> {
     message.lines().find_map(|line| {
         let json = line.trim().strip_prefix("Action metadata: ")?;
-        serde_json::from_str(json).ok()
+        crate::serde_robust::from_json_str(json).ok()
     })
 }
 
