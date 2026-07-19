@@ -1,0 +1,32 @@
+# Example A/B manifest for montage-eval's prompt-merge comparison harness.
+#
+# Config A is the control arm: no instruction-override flags, so
+# `codex-exec` runs byte-identical to its stock default (the hardcoded
+# `base_instructions: None` / `developer_instructions: None` codex-exec has
+# always had, before the fork edit documented in vendor/codex-rs/SOURCE
+# patch #10 made those flags exist at all).
+#
+# Config B is the experimental arm: a merged base prompt (system tier) plus
+# a reduced developer-tier layer, per
+# docs/decision-prompt-layer-merge-2026-07-19.md §3/§5.
+#
+# `config-b-base.md` and `config-b-developer.md` in this directory are
+# PLACEHOLDER fixtures only — realistic enough in size/shape to exercise
+# the harness end-to-end, not the actual merged prompt Awidat would ship.
+# Swap them for the real merged-prompt artifacts before trusting Config B
+# results as anything other than a smoke test of the harness itself.
+
+model = "gpt-5.2-codex"
+trials = 1
+
+[config_a]
+name = "A-stock"
+# base_instructions_file and developer_instructions_file omitted: stock
+# codex-exec behavior.
+extra_config_overrides = []
+
+[config_b]
+name = "B-merged-placeholder"
+base_instructions_file = "crates/eval/fixtures/ab/config-b-base.md"
+developer_instructions_file = "crates/eval/fixtures/ab/config-b-developer.md"
+extra_config_overrides = []

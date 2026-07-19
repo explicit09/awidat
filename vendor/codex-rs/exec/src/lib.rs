@@ -254,6 +254,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        base_instructions_file,
+        developer_instructions_file,
     } = cli;
     let shared = shared.into_inner();
     let SharedCliOptions {
@@ -414,6 +416,42 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     } else {
         Some(AskForApproval::Never)
     };
+
+    // Montage fork edit: `--base-instructions-file` / `--developer-instructions-file`
+    // let a caller (montage-eval's A/B harness) swap the base and developer
+    // instruction strings from files instead of the vendored defaults.
+    // Omitting both flags keeps `base_instructions`/`developer_instructions`
+    // as `None`, i.e. identical to stock codex-exec behavior. See
+    // vendor/codex-rs/SOURCE (fork patch #10).
+    #[allow(clippy::print_stderr)]
+    let base_instructions = match base_instructions_file {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(contents) => Some(contents),
+            Err(err) => {
+                eprintln!(
+                    "Error reading --base-instructions-file {}: {err}",
+                    path.display()
+                );
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+    #[allow(clippy::print_stderr)]
+    let developer_instructions = match developer_instructions_file {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(contents) => Some(contents),
+            Err(err) => {
+                eprintln!(
+                    "Error reading --developer-instructions-file {}: {err}",
+                    path.display()
+                );
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
     let overrides = ConfigOverrides {
         model,
         review_model: None,
@@ -430,8 +468,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         default_zsh_path: None,
-        base_instructions: None,
-        developer_instructions: None,
+        base_instructions,
+        developer_instructions,
         personality: None,
         compact_prompt: None,
         show_raw_agent_reasoning: oss.then_some(true),

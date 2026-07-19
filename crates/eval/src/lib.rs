@@ -5,6 +5,7 @@
 //! `docs/post-house-pipeline.md`. The same checks serve the production
 //! pipeline (department gates) and the eval loop (tier checks).
 
+pub mod ab_driver;
 mod cuts_io;
 pub mod gates;
 mod measurable;

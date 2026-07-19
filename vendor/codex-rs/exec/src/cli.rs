@@ -53,6 +53,27 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE", global = true)]
     pub output_schema: Option<PathBuf>,
 
+    /// Montage fork edit: path to a file whose contents replace the default
+    /// base (system-tier) instructions normally loaded from
+    /// `models-manager/prompt.md`. Used by montage-eval's A/B harness to
+    /// swap prompt configs without touching the vendored default. Omit for
+    /// stock codex behavior. See vendor/codex-rs/SOURCE (fork patch #10).
+    #[arg(long = "base-instructions-file", value_name = "FILE", global = true)]
+    pub base_instructions_file: Option<PathBuf>,
+
+    /// Montage fork edit: path to a file whose contents replace the default
+    /// developer-tier instructions (Montage's editorial layer). Used by
+    /// montage-eval's A/B harness to vary the editorial layer independently
+    /// of the base prompt. Omit for stock codex behavior (no developer
+    /// instructions injected here). See vendor/codex-rs/SOURCE (fork
+    /// patch #10).
+    #[arg(
+        long = "developer-instructions-file",
+        value_name = "FILE",
+        global = true
+    )]
+    pub developer_instructions_file: Option<PathBuf>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

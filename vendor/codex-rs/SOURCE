@@ -44,6 +44,20 @@ Our edits (re-apply after every refresh):
   approval prompts never fire even when annotations and config say
   they should. Keeps `Never` as the default when the user hasn't set
   a policy, so existing non-interactive callers don't change behavior.
+- vendor/codex-rs/exec/src/cli.rs and vendor/codex-rs/exec/src/lib.rs
+  (fork patch #10): add `--base-instructions-file` and
+  `--developer-instructions-file` flags to `codex exec`. When set, their
+  file contents replace the hardcoded `base_instructions: None` /
+  `developer_instructions: None` in `ConfigOverrides` (previously always
+  `None`, i.e. stock `prompt.md` + no developer-tier override). Built for
+  montage-eval's A/B harness (crates/eval/src/ab_driver.rs) so it can
+  spawn `codex-exec` with Config A (stock prompt, flags omitted) or
+  Config B (a merged base-prompt fixture + reduced developer instructions)
+  as the single controlled variable — see
+  docs/decision-prompt-layer-merge-2026-07-19.md §6/§8. Additive and
+  reversible: omitting both flags is byte-for-byte identical to prior
+  behavior (`None` default). Not used by any interactive/production Montage
+  entry point today (agent-cli, codex-bridge) — only by the eval harness.
 - vendor/codex-rs/tui/Cargo.toml + vendor/codex-rs/tui/src/lib.rs:
   add `montage-proto = { workspace = true }` and `mod montage;` for the
   step-6 side panel.
