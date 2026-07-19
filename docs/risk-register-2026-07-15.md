@@ -304,6 +304,16 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 
 **Evidence:** the requeue-with-backoff path returns Ok from execute_claimed_upload_job_with_refresher, so the handler increments the daily YouTube quota even when nothing uploaded — a job retrying 5x consumes 5 units of the 100/day budget. Possibly intended (Google bills per attempt); decide and document either way.
 
+### R30 — perf-budget/perf-full genuinely fail in CI (not just the local Playwright cache)
+
+**Severity:** low · **Lens:** ci-trust · **Fix cost:** days · **Verification:** confirmed (CI run 29695336526, 2026-07-19)
+
+**Evidence:** chaining test:perf-budget/perf-full into the desktop test script (attempted 2026-07-19) turned main red. In CI the browser installs fresh so they RUN, but fail on two real issues, not the local headless-shell cache: (1) `slowest workspace switch: 1022ms` exceeds the 700ms budget — an actual perf regression or a too-tight budget for CI hardware; (2) `locator.waitFor: Timeout 30000ms` at perf-budget.mjs:180 — an element the test waits for never appears in CI's headless env. Reverted the chaining to keep main green.
+
+**Blast radius:** none (parked). These two perf suites remain uncovered by CI.
+
+**Recommendation:** investigate each separately — right-size the workspace-switch budget against CI hardware (or fix the regression), and make the line-180 locator resilient to the headless env — before chaining. Do NOT chain until both pass in CI.
+
 ## Corrections to prior beliefs (not risks)
 
 - **montage_social crate dependency in apps/desktop/src-tauri is legitimate (DTO reuse), not leftover legacy wiring — refutes the 'still depends on legacy' framing from prior-session memory** — apps/desktop/src-tauri/src/social_client.rs imports montage_social::api::* and montage_social::model::* purely as shared serde DTOs for its HTTPS client to montage-social-server (doc comment: 'sends/receives the re-exported montage_social::api DTOs so client and server agree on exactly one serde shape'). apps/desktop/src-tauri/src/commands/social.rs uses SocialApi::providers(&registry) at line 45,
