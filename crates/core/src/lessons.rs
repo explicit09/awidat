@@ -599,6 +599,14 @@ pub fn project_format_defaults_from_markdown(markdown: &str) -> LearnedProjectFo
     defaults
 }
 
+/// Return the learned-style markdown prose (distilled from accepted
+/// editorial decisions) for splicing into the system prompt, or `None`
+/// when no learned-style file exists / it is empty. Reads the configured
+/// path ([`default_output_path`]); a corrupt file logs and yields `None`.
+pub fn learned_style_prose() -> Option<String> {
+    default_output_path().and_then(|path| read_learned_style(&path))
+}
+
 /// Read the configured learned-style file and return any accepted
 /// project-format defaults it contains.
 pub fn learned_project_format_defaults() -> LearnedProjectFormatDefaults {

@@ -104,9 +104,37 @@ checklist passes; a compaction is a checkpoint, not a stopping point.";
 /// project's OTIO metadata, build the prompt. Returns the base
 /// prompt with neutral defaults when reads fail — never panics.
 pub fn assemble_for_project(project_root: &Path) -> String {
+    // The learned editorial style is user-scoped (see
+    // `lessons::default_output_path`) and read from disk; inject it here so
+    // the pure assembly below is unit-testable without touching global env.
+    assemble_for_project_with_style(project_root, crate::lessons::learned_style_prose())
+}
+
+/// Assemble the project prompt, taking the learned-style prose as an explicit
+/// argument (the seam `assemble_for_project` fills from disk).
+///
+/// The learned style — distilled from prior accepted decisions — was
+/// originally wired into the now-deleted legacy `Session::new`; after the
+/// codex cutover nothing re-injected it, so the agent never saw its own
+/// learned playbook. Splicing it into `assemble_for_project`'s output puts it
+/// on the developer-instructions channel, so it survives compaction alongside
+/// the base prompt. `None`/blank is a no-op.
+pub fn assemble_for_project_with_style(
+    project_root: &Path,
+    learned_style: Option<String>,
+) -> String {
     let format = read_project_format(project_root);
     let permission = read_permission_mode(project_root);
-    assemble_system_prompt(&format, permission)
+    let mut prompt = assemble_system_prompt(&format, permission);
+    if let Some(style) = learned_style
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        prompt.push_str("\n\n**Learned editorial style (from your accepted decisions):**\n");
+        prompt.push_str(style);
+    }
+    prompt
 }
 
 /// Read the project type from
@@ -807,5 +835,31 @@ mod tests {
         let prompt = assemble_for_project(dir.path());
         assert!(prompt.contains("long-form podcast production"));
         assert!(prompt.contains("Permission mode: copilot"));
+    }
+
+    #[test]
+    fn assemble_for_project_splices_learned_style_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt = assemble_for_project_with_style(
+            dir.path(),
+            Some("Prefer J-cuts on dialogue handoffs.".into()),
+        );
+        assert!(
+            prompt.contains("Learned editorial style"),
+            "learned-style header missing"
+        );
+        assert!(prompt.contains("Prefer J-cuts on dialogue handoffs."));
+    }
+
+    #[test]
+    fn assemble_for_project_omits_learned_style_when_absent_or_blank() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !assemble_for_project_with_style(dir.path(), None).contains("Learned editorial style")
+        );
+        assert!(
+            !assemble_for_project_with_style(dir.path(), Some("   \n".into()))
+                .contains("Learned editorial style")
+        );
     }
 }
