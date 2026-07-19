@@ -159,7 +159,16 @@ async fn spawn_failure_returns_typed_error() {
     assert!(matches!(err, McpError::Spawn { .. }));
 }
 
-#[tokio::test]
+// Multi-threaded runtime on purpose: rmcp 1.8 delivers each progress frame on
+// an independent `tokio::spawn`ed task. On the default current-thread runtime
+// that delivery task shares the single OS thread with the test body, so under a
+// starved box it can be denied CPU until the completion wait times out. A
+// multi-worker runtime lets the delivery tasks progress on a separate worker
+// from wherever the test is parked, decoupling delivery from the test body's
+// thread. Paired with the nextest `threads-required = num-cpus` isolation in
+// .config/nextest.toml (which stops the rest of the workspace from starving
+// this test), it makes the routing deterministic under full-workspace load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn progress_notifications_are_routed_to_subscriber() {
     // Server emits 3 progress frames before responding; the subscriber
     // must receive all three.
