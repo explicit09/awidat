@@ -86,6 +86,8 @@ mod thread_unarchive;
 mod thread_unsubscribe;
 mod turn_interrupt;
 mod turn_start;
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::useless_borrows_in_formatting)]
 mod turn_start_zsh_fork;
 mod turn_steer;
 mod web_search;

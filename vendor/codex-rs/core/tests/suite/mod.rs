@@ -129,6 +129,8 @@ mod subagent_notifications;
 mod token_budget;
 mod tool_harness;
 mod tool_parallelism;
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::useless_borrows_in_formatting)]
 mod tools;
 mod truncation;
 mod turn_state;

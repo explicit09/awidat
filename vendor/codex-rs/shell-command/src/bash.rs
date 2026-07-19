@@ -26,6 +26,8 @@ pub fn try_parse_shell(shell_lc_arg: &str) -> Option<Tree> {
 /// command and the parse tree does not contain disallowed constructs
 /// (parentheses, redirections, substitutions, control flow, etc.). Otherwise
 /// returns `None`.
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::question_mark)]
 pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<Vec<Vec<String>>> {
     if tree.root_node().has_error() {
         return None;

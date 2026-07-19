@@ -861,6 +861,8 @@ impl MessageProcessor {
         Ok(())
     }
 
+    // codex fork: upstream style, exempt from our -D warnings
+    #[allow(clippy::unneeded_wildcard_pattern)]
     async fn handle_initialized_client_request(
         self: Arc<Self>,
         connection_request_id: ConnectionRequestId,

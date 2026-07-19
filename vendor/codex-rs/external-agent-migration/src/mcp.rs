@@ -183,6 +183,8 @@ fn project_path_matches_source_root(project_path: &str, source_root: &Path) -> b
         .is_ok_and(|source_root| source_root == project_path)
 }
 
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::question_mark)]
 fn mcp_server_toml_table(
     server_name: &str,
     server_config: Option<&serde_json::Map<String, JsonValue>>,

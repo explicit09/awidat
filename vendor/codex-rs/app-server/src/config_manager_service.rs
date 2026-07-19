@@ -690,6 +690,8 @@ fn override_message(layer: &ConfigLayerSource) -> String {
     }
 }
 
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::question_mark)]
 fn compute_override_metadata(
     layers: &ConfigLayerStack,
     effective: &TomlValue,

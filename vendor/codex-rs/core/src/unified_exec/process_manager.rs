@@ -1512,4 +1512,6 @@ enum ProcessStatus {
 
 #[cfg(test)]
 #[path = "process_manager_tests.rs"]
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::byte_char_slices)]
 mod tests;

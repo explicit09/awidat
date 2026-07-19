@@ -772,4 +772,6 @@ pub fn create_seatbelt_command_args(
 
 #[cfg(test)]
 #[path = "seatbelt_tests.rs"]
+// codex fork: upstream style, exempt from our -D warnings
+#[allow(clippy::useless_borrows_in_formatting)]
 mod tests;
