@@ -174,11 +174,11 @@ async fn progress_notifications_are_routed_to_subscriber() {
     assert!(!result.is_error);
 
     // Drain until the channel closes. `call_tool_with_progress` only returns
-    // after it has flushed in-flight `notifications/progress` frames into the
-    // channel and deregistered the subscriber (dropping the sender), so the
-    // close is a deterministic end-of-stream signal and all three frames are
-    // guaranteed to be queued by the time we get here. The 10s cap only guards
-    // against a genuine hang; it is not part of the happy path.
+    // after it has waited for the full frame burst (keyed on the handler's
+    // delivered>=total completion signal) and deregistered the subscriber
+    // (dropping the sender), so the close is a deterministic end-of-stream
+    // signal and all three frames are guaranteed to be queued by the time we
+    // get here. The 10s cap only guards against a genuine hang.
     let mut events = Vec::new();
     let drain = async {
         while let Some(ev) = rx.recv().await {
@@ -194,8 +194,14 @@ async fn progress_notifications_are_routed_to_subscriber() {
         "expected 3 progress events, got {}: {events:?}",
         events.len()
     );
+    // rmcp 1.8 dispatches each progress frame on an independent spawned task,
+    // so delivery order into the channel is not guaranteed. Assert the frame
+    // *contents* order-independently by sorting on the progress value.
+    events.sort_by(|a, b| a.progress.total_cmp(&b.progress));
     assert_eq!(events[0].progress, 1.0);
-    assert_eq!(events[2].total, Some(3.0));
+    assert_eq!(events[1].progress, 2.0);
+    assert_eq!(events[2].progress, 3.0);
+    assert!(events.iter().all(|e| e.total == Some(3.0)));
     assert_eq!(events[1].message.as_deref(), Some("step 2 of 3"));
     let _ = c.shutdown().await;
 }

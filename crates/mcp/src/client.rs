@@ -441,8 +441,9 @@ impl Client {
             .map_err(|e| map_service_error(&self.server_name, e))?;
 
         // Register a progress subscriber under the token rmcp picked, so
-        // `notifications/progress` frames are routed to `progress_tx`.
-        let mut progress_guard = match progress_tx {
+        // `notifications/progress` frames are routed to `progress_tx`. Keep the
+        // completion `Notify` so we can wait for the full frame burst below.
+        let mut progress_sub = match progress_tx {
             Some(tx) => match &handle.progress_token {
                 ProgressToken(NumberOrString::Number(n)) => {
                     Some(self.handler.register_progress(*n, tx).await)
@@ -487,52 +488,27 @@ impl Client {
             None => handle.await_response().await,
         };
 
-        // Flush in-flight progress notifications before tearing down the
-        // subscriber. rmcp 1.8 dispatches each `notifications/progress` frame
-        // on a *fire-and-forget* `tokio::spawn`ed task (service.rs
-        // `handle_notification`), decoupled from the request's response
-        // future. Because progress frames precede the response on the ordered
-        // transport, those tasks are already spawned by the time the response
-        // resolves here — but they may not have *run* yet. If we dropped the
-        // subscriber now (closing the channel), those pending tasks would land
-        // on an empty map and their events would be lost — the "got 0"
-        // failure this fixes. So we settle first, then deregister
-        // deterministically.
-        if let Some(guard) = progress_guard.as_mut() {
+        // Wait for the full progress-frame burst to be delivered before
+        // tearing down the subscriber. rmcp 1.8 dispatches each
+        // `notifications/progress` frame on an *independent* `tokio::spawn`ed
+        // task (service.rs `handle_notification`): those tasks can run out of
+        // order and, under load, may not have run at all by the time this
+        // request's response resolves. Deregistering here (which closes the
+        // channel) would drop any not-yet-run frame — the "got 0" failure.
+        //
+        // The handler advertises a completion `Notify` that fires once every
+        // frame the server promised (via `total`) has been delivered — an
+        // order-independent, delivery-counted end-of-stream signal, not a
+        // timing guess. We register as a waiter first (`enable()`), then
+        // re-check completion to close the wakeup gap, then await the signal
+        // under a hard cap. Only after that do we deregister synchronously.
+        if let Some((guard, complete)) = progress_sub.as_mut() {
             let token = guard.token();
-            // Wait until the delivered-frame count goes quiet — no new frame
-            // observed across a short settle window — then deregister. The
-            // loop combines a scheduler yield (cheap, lets an already-runnable
-            // notification task deliver immediately) with a tiny sleep (lets a
-            // notification task that is merely CPU-starved get scheduled),
-            // both under a hard upper bound. Quiescence is keyed on *observed
-            // delivery*, so on the common fast path it exits in a couple of
-            // microsecond-scale turns; under contention it tolerates the
-            // scheduling delay that previously dropped frames, without ever
-            // exceeding the bound. Not a fixed wall-clock wait: it stops as
-            // soon as delivery is quiet.
-            const MAX_SETTLE: Duration = Duration::from_secs(2);
-            const QUIET_WINDOW: Duration = Duration::from_millis(5);
-            const STEP: Duration = Duration::from_millis(1);
-            let deadline = tokio::time::Instant::now() + MAX_SETTLE;
-            let mut last = self.handler.delivered_count(token).await.unwrap_or(0);
-            let mut quiet_since = tokio::time::Instant::now();
-            loop {
-                tokio::task::yield_now().await;
-                let now = self.handler.delivered_count(token).await.unwrap_or(last);
-                let t = tokio::time::Instant::now();
-                if now != last {
-                    last = now;
-                    quiet_since = t;
-                } else if t.duration_since(quiet_since) >= QUIET_WINDOW || t >= deadline {
-                    break;
-                }
-                tokio::time::sleep(STEP).await;
-            }
+            self.await_progress_completion(token, complete).await;
             guard.disarm();
             self.handler.deregister_progress(token).await;
         }
-        drop(progress_guard);
+        drop(progress_sub);
 
         let server_result = response_result.map_err(|e| map_service_error(&self.server_name, e))?;
         let result: CallToolResult = match server_result {
@@ -550,6 +526,40 @@ impl Client {
             is_error: result.is_error.unwrap_or(false),
             structured_content: result.structured_content,
         })
+    }
+
+    /// Block until the progress subscriber for `token` has received its full
+    /// frame burst, so teardown never drops a not-yet-delivered frame.
+    ///
+    /// rmcp 1.8 runs each `notifications/progress` frame on an independent
+    /// spawned task, so frames can be delivered out of order and arbitrarily
+    /// late under CPU contention. The server advertises `total`; the handler
+    /// derives an exact, order-independent completion from it (delivered >=
+    /// total) and fires `complete`. Awaiting that signal is a real
+    /// end-of-stream condition — it holds no matter how long the spawned tasks
+    /// are starved — never a timing window:
+    ///
+    /// * `Complete` — already done (e.g. every frame drained from the backlog
+    ///   at registration): return at once.
+    /// * `Pending`/`Unknown` — await `complete`, bounded only by a generous cap
+    ///   that exists solely to bound a misbehaving peer that never sends its
+    ///   promised final frame. The armed waiter (`enable()` before the status
+    ///   read) closes the wake gap so a `notify_waiters()` firing in between is
+    ///   not lost.
+    ///
+    /// A stream that advertises no `total` at all cannot signal completion this
+    /// way and would wait out the cap; no montage caller does that today, and
+    /// progress-reporting servers are expected to advertise `total` per the MCP
+    /// progress model. If such a caller appears, give it an explicit expected
+    /// count rather than reintroducing a timing guess here.
+    async fn await_progress_completion(&self, token: i64, complete: &tokio::sync::Notify) {
+        const COMPLETION_CAP: Duration = Duration::from_secs(10);
+        let notified = complete.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.handler.progress_complete(token).await {
+            let _ = tokio::time::timeout(COMPLETION_CAP, notified).await;
+        }
     }
 
     /// Cleanly shut down the server.
