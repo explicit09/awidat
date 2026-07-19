@@ -65,7 +65,6 @@ allow-git = [
   "https://github.com/dzbarsky/rules_rust",
   "https://github.com/explicit09/vedit.git",
   "https://github.com/helix-editor/nucleo.git",
-  "https://github.com/juberti-oai/rust-sdks.git",
   "https://github.com/nornagon/crossterm",
   "https://github.com/nornagon/ratatui",
   "https://github.com/openai-oss-forks/tokio-tungstenite",
@@ -77,16 +76,13 @@ allow-git = [
 # cleanup is noisy in the vendored Codex/Tauri graph and should be handled as a
 # separate dependency-consolidation effort.
 #
-# Investigated 2026-07-16 (R21): constant_time_eq duplicates at 0.1.5 and 0.3.1.
-# `cargo tree -i constant_time_eq@0.1.5 --target all` shows the old copy comes
-# from zip v0.6.6, a hard dependency of webrtc-sys-build (git-pinned rev in
-# https://github.com/juberti-oai/rust-sdks.git), reached via vendor/codex-rs/
-# realtime-webrtc -> codex-tui. `cargo update -p zip@0.6.6 --precise 2.4.2`
-# fails: webrtc-sys-build requires `zip = "^0.6"` and is locked to a specific
-# git rev we do not control. The 0.3.1 copy comes from
-# vendor/codex-rs/app-server-transport's own dependency chain. This is a
-# transitive-locked duplication in vendored/forked code, not our dependency
-# chain — leaving multiple-versions = "allow" rather than attempting a broad
-# dedup. Revisit when the juberti-oai/rust-sdks.git fork bumps webrtc-sys-build
-# past zip 0.6, or when codex-rs upstream drops the constant_time_eq 0.3.1 path.
+# Investigated 2026-07-16 (R21): constant_time_eq duplicates at 0.1.5 and 0.3.1,
+# traced to zip v0.6.6 pulled in by webrtc-sys-build (git-pinned rev in
+# https://github.com/juberti-oai/rust-sdks.git) via vendor/codex-rs/
+# realtime-webrtc -> codex-tui. Resolved by the codex-refresh-2026-07 upstream
+# bump: webrtc-sys-build/realtime-webrtc and the juberti-oai fork are no longer
+# in the dependency graph (Cargo.lock now has a single constant_time_eq 0.3.1
+# and zip 2.4.2), so the juberti-oai allow-git entry was also removed from
+# [sources] above. Leaving multiple-versions = "allow" as a general policy
+# rather than re-litigating per-duplicate, per the original scope note.
 multiple-versions = "allow"
