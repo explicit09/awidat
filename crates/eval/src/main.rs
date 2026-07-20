@@ -130,7 +130,23 @@ fn run_ab(args: &[String], scenario_path: &str) -> ExitCode {
         eprintln!("montage-eval --ab requires --ab-manifest <manifest.toml>");
         return ExitCode::FAILURE;
     };
+    // Canonicalize a path-like binary argument: the runner spawns with
+    // `current_dir` set to the scenario's project root, so a relative path
+    // like `./target/debug/codex-exec` would otherwise resolve inside the
+    // project directory and fail with a misleading "No such file" error.
+    // A bare command name (no separator) is left alone for PATH lookup.
     let codex_exec_binary = value_of("--ab-codex-exec").unwrap_or_else(|| "codex-exec".into());
+    let codex_exec_binary = if codex_exec_binary.contains(std::path::MAIN_SEPARATOR) {
+        match std::fs::canonicalize(&codex_exec_binary) {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                eprintln!("montage-eval: resolving --ab-codex-exec {codex_exec_binary}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        codex_exec_binary
+    };
     let runs_root = value_of("--ab-runs-root").unwrap_or_else(|| "ab-runs".into());
 
     let scenario = match Scenario::from_yaml_file(scenario_path) {
@@ -148,20 +164,50 @@ fn run_ab(args: &[String], scenario_path: &str) -> ExitCode {
         }
     };
 
+    // Snapshot the project's mutable state once, up front. Attempts edit
+    // the project on disk (apply_edl rewrites project.otio.json, renders
+    // land in renders/), so without a per-attempt restore every attempt
+    // after the first starts from the previous attempt's edits and the
+    // paired comparison is confounded — arm B would be "cleaning up" a
+    // project arm A already cleaned. Large read-only inputs (raw/, index/,
+    // proxies/) are excluded from the snapshot: agents consume them but
+    // the sanctioned tool surface never rewrites them.
+    let snapshot_dir = PathBuf::from(&runs_root).join(format!("pristine-{}", scenario.id));
+    if let Err(e) = snapshot_project(&scenario.source, &snapshot_dir) {
+        eprintln!(
+            "montage-eval: snapshotting project {}: {e}",
+            scenario.source.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let source = scenario.source.clone();
+    let reset = move |config_name: &str, trial: u32| {
+        if let Err(e) = restore_project(&snapshot_dir, &source) {
+            // A failed restore invalidates every later attempt; abort hard
+            // rather than silently comparing contaminated runs.
+            panic!("restoring project before {config_name} trial {trial}: {e}");
+        }
+    };
+
     let runner = SubprocessCodexExecRunner;
     let driver = AbDriver {
         runner: &runner,
         codex_exec_binary: PathBuf::from(codex_exec_binary),
         profile: None,
         archetype: None,
+        pre_attempt: Some(&reset),
     };
 
-    // No project-output convention is wired yet, so every attempt scores
-    // against an empty AttemptOutput (telemetry-only comparison). See the
-    // function doc comment.
+    // Score each attempt against the project state the agent left behind:
+    // `output_for_trial` runs after the attempt and before the next
+    // attempt's reset, so the OTIO on disk at that moment is this
+    // attempt's product. Cut-time extraction for the pacing gates is not
+    // wired yet, so those gates stay skipped.
+    let project_otio = scenario.source.join("project.otio.json");
     let (a_attempts, b_attempts, comparison) =
         match driver.run_scenario(&manifest, &scenario, |_config_name, _trial| AttemptOutput {
-            otio_path: None,
+            otio_path: Some(project_otio.clone()),
             cut_times: None,
             duration_secs: None,
         }) {
@@ -210,4 +256,79 @@ fn run_ab(args: &[String], scenario_path: &str) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Directories excluded from the A/B project snapshot: large read-only
+/// inputs the sanctioned tool surface never rewrites. Everything else at
+/// the project's top level (project.otio.json, edl/, .montage/, renders/,
+/// edit-plan.json, …) is mutable session state and gets snapshotted.
+const SNAPSHOT_EXCLUDES: &[&str] = &["raw", "index", "proxies"];
+
+/// Copy the project's mutable state into `snapshot_dir` (replacing any
+/// prior snapshot).
+fn snapshot_project(
+    project: &std::path::Path,
+    snapshot_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    if snapshot_dir.exists() {
+        std::fs::remove_dir_all(snapshot_dir)?;
+    }
+    std::fs::create_dir_all(snapshot_dir)?;
+    for entry in std::fs::read_dir(project)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if SNAPSHOT_EXCLUDES
+            .iter()
+            .any(|e| name.to_string_lossy() == *e)
+        {
+            continue;
+        }
+        copy_recursive(&entry.path(), &snapshot_dir.join(&name))?;
+    }
+    Ok(())
+}
+
+/// Restore the project's mutable state from `snapshot_dir`: every
+/// non-excluded top-level entry currently in the project is removed, then
+/// the snapshot is copied back. Excluded read-only dirs are left in place.
+fn restore_project(
+    snapshot_dir: &std::path::Path,
+    project: &std::path::Path,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(project)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if SNAPSHOT_EXCLUDES
+            .iter()
+            .any(|e| name.to_string_lossy() == *e)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    for entry in std::fs::read_dir(snapshot_dir)? {
+        let entry = entry?;
+        copy_recursive(&entry.path(), &project.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
+/// Minimal recursive copy (files + dirs + symlink targets); the snapshot
+/// subset is small session state, so no need for anything fancier.
+fn copy_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+        }
+    } else {
+        std::fs::copy(from, to)?;
+    }
+    Ok(())
 }

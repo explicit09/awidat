@@ -394,6 +394,17 @@ pub struct Telemetry {
     /// Number of completed tool-call items (`mcp_tool_call` /
     /// `collab_tool_call` items with `type` present).
     pub tool_calls: u32,
+    /// Number of completed `command_execution` items (built-in shell).
+    /// High shell counts on an editing scenario are a doctrine-violation
+    /// signal: the prompt bans shell for producing the edited artifact,
+    /// so an arm that edits via shell instead of MCP tools shows up here
+    /// even when `tool_calls` is zero.
+    pub shell_calls: u32,
+    /// Number of completed `file_change` items (`apply_patch` edits).
+    /// Direct file edits to `project.otio.json` are banned by the same
+    /// doctrine; a nonzero count on an editing scenario deserves a look
+    /// at the raw stream.
+    pub file_changes: u32,
     /// Number of completed tool-call items whose status was `failed` or
     /// which carried a structured `error` — the harness-contract
     /// regression signal called out in the decision doc.
@@ -452,6 +463,11 @@ pub fn parse_telemetry(jsonl: &str) -> Result<Telemetry, TelemetryError> {
                 }
             }
             RawThreadEvent::ItemCompleted { item } => {
+                match item.item_type.as_str() {
+                    "command_execution" => telemetry.shell_calls += 1,
+                    "file_change" => telemetry.file_changes += 1,
+                    _ => {}
+                }
                 let is_tool_call = matches!(
                     item.item_type.as_str(),
                     "mcp_tool_call" | "collab_tool_call"
@@ -545,6 +561,13 @@ pub struct ScoredAttempt {
     /// Floor pacing gate, when cut times + a profile + archetype were
     /// available.
     pub floor_gate: Option<gates::GateReport>,
+    /// Raw JSONL stream, carried for artifact persistence only — skipped
+    /// during serialization so `attempt_summary.json` stays a summary.
+    #[serde(skip)]
+    pub raw_stdout: String,
+    /// Raw stderr, same handling as `raw_stdout`.
+    #[serde(skip)]
+    pub raw_stderr: String,
 }
 
 impl ScoredAttempt {
@@ -575,6 +598,13 @@ pub struct RunOutcome {
     pub process_success: bool,
     /// Telemetry parsed from the run's `--json` JSONL stream.
     pub telemetry: Telemetry,
+    /// The raw `--json` JSONL stream the telemetry was parsed from.
+    /// Persisted verbatim by [`write_attempt_artifacts`] so a surprising
+    /// rollup (e.g. zero tool calls on a mutated project) can be
+    /// diagnosed from evidence instead of re-running a paid session.
+    pub raw_stdout: String,
+    /// Raw stderr from the invocation, for the same diagnostic purpose.
+    pub raw_stderr: String,
 }
 
 /// Score one attempt's output against the existing tier-1 + pacing gates.
@@ -613,6 +643,8 @@ pub fn score_attempt(
         measurable: None,
         cold_open_gate,
         floor_gate,
+        raw_stdout: outcome.raw_stdout,
+        raw_stderr: outcome.raw_stderr,
     }
 }
 
@@ -748,7 +780,18 @@ pub struct AbDriver<'a, R: CodexExecRunner> {
     pub profile: Option<HouseProfile>,
     /// Archetype used for the floor gate, if any.
     pub archetype: Option<String>,
+    /// Called with `(config_name, trial)` before each attempt runs.
+    /// Production uses this to restore the scenario project to a pristine
+    /// snapshot: attempts mutate the project on disk, so without a reset
+    /// every attempt after the first starts from the previous attempt's
+    /// edits and the paired comparison is confounded. `None` skips the
+    /// hook (fine for fakes that never touch a project).
+    pub pre_attempt: Option<PreAttemptHook<'a>>,
 }
+
+/// Pre-attempt callback: `(config_name, trial)`, invoked before each
+/// (config, trial) pass. See [`AbDriver::pre_attempt`].
+pub type PreAttemptHook<'a> = &'a dyn Fn(&str, u32);
 
 /// Failure running the A/B driver end-to-end.
 #[derive(Debug, Error)]
@@ -776,6 +819,9 @@ impl<'a, R: CodexExecRunner> AbDriver<'a, R> {
     ) -> Result<Vec<ScoredAttempt>, AbDriveError> {
         let mut attempts = Vec::with_capacity(manifest.trials as usize);
         for trial in 1..=manifest.trials {
+            if let Some(pre_attempt) = self.pre_attempt {
+                pre_attempt(&config.name, trial);
+            }
             let invocation =
                 build_invocation(self.codex_exec_binary.clone(), manifest, config, scenario);
             let started = Instant::now();
@@ -789,6 +835,8 @@ impl<'a, R: CodexExecRunner> AbDriver<'a, R> {
                 wall_time,
                 process_success: result.success,
                 telemetry,
+                raw_stdout: result.stdout,
+                raw_stderr: result.stderr,
             };
             attempts.push(score_attempt(
                 outcome,
@@ -854,7 +902,21 @@ pub fn write_attempt_artifacts(
     }
     write_json(&evidence_dir.join("attempt_summary.json"), scored)?;
 
+    // Raw stream + stderr, verbatim: the only way to diagnose a
+    // surprising rollup without re-running a paid model session.
+    write_raw(&evidence_dir.join("raw_stream.jsonl"), &scored.raw_stdout)?;
+    if !scored.raw_stderr.is_empty() {
+        write_raw(&evidence_dir.join("raw_stderr.log"), &scored.raw_stderr)?;
+    }
+
     Ok(attempt)
+}
+
+fn write_raw(path: &Path, contents: &str) -> Result<(), AbArtifactError> {
+    std::fs::write(path, contents).map_err(|source| AbArtifactError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Error writing A/B artifacts.
@@ -1079,6 +1141,73 @@ guards:
     }
 
     #[test]
+    fn shell_and_file_change_items_are_counted_separately_from_tool_calls() {
+        // Real streams from the smoke run: an agent that edits the
+        // project via shell/apply_patch instead of MCP tools produces
+        // zero `mcp_tool_call` items while still mutating the timeline.
+        // These counters make that doctrine violation visible in the
+        // rollup instead of requiring the raw stream.
+        let jsonl = r#"
+{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls raw/","status":"completed"}}
+{"type":"item.completed","item":{"id":"i2","type":"command_execution","command":"python3 edit.py","status":"completed"}}
+{"type":"item.completed","item":{"id":"i3","type":"file_change","status":"completed"}}
+{"type":"item.completed","item":{"id":"i4","type":"mcp_tool_call","server":"montage","tool":"view_episode","status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+"#;
+        let telemetry =
+            parse_telemetry(jsonl).unwrap_or_else(|e| panic!("telemetry should parse: {e}"));
+
+        assert_eq!(telemetry.shell_calls, 2);
+        assert_eq!(telemetry.file_changes, 1);
+        assert_eq!(telemetry.tool_calls, 1);
+        assert_eq!(telemetry.tool_call_errors, 0);
+    }
+
+    #[test]
+    fn pre_attempt_hook_fires_before_every_config_trial_pair() {
+        use std::cell::RefCell;
+
+        let mut manifest = manifest_a_stock_b_merged();
+        manifest.trials = 2;
+        let scenario = scenario();
+        let runner = FakeCodexExecRunner::constant(CodexExecOutput {
+            success: true,
+            stdout: FIXTURE_JSONL.to_string(),
+            stderr: String::new(),
+        });
+
+        let seen: RefCell<Vec<(String, u32)>> = RefCell::new(Vec::new());
+        let record = |config: &str, trial: u32| {
+            seen.borrow_mut().push((config.to_string(), trial));
+        };
+        let driver = AbDriver {
+            runner: &runner,
+            codex_exec_binary: PathBuf::from("codex-exec"),
+            profile: None,
+            archetype: None,
+            pre_attempt: Some(&record),
+        };
+
+        driver
+            .run_scenario(&manifest, &scenario, |_config, _trial| AttemptOutput {
+                otio_path: None,
+                cut_times: None,
+                duration_secs: None,
+            })
+            .unwrap_or_else(|e| panic!("fake-backed run should succeed: {e}"));
+
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                ("A-stock".to_string(), 1),
+                ("A-stock".to_string(), 2),
+                ("B-merged".to_string(), 1),
+                ("B-merged".to_string(), 2),
+            ]
+        );
+    }
+
+    #[test]
     fn turn_failed_events_are_counted_and_captured() {
         let jsonl = r#"{"type":"turn.failed","error":{"message":"context window exceeded"}}"#;
         let telemetry =
@@ -1197,6 +1326,8 @@ guards:
             wall_time: Duration::from_secs(1),
             process_success: true,
             telemetry,
+            raw_stdout: String::new(),
+            raw_stderr: String::new(),
         }
     }
 
@@ -1219,15 +1350,16 @@ guards:
             telemetry: Telemetry {
                 total_tokens: tokens,
                 turns_completed: 2,
-                turns_failed: 0,
                 tool_calls,
                 tool_call_errors,
-                error_messages: Vec::new(),
+                ..Telemetry::default()
             },
             mechanical: None,
             measurable: None,
             cold_open_gate: None,
             floor_gate: None,
+            raw_stdout: String::new(),
+            raw_stderr: String::new(),
         }
     }
 
@@ -1307,6 +1439,7 @@ guards:
             codex_exec_binary: PathBuf::from("codex-exec"),
             profile: None,
             archetype: None,
+            pre_attempt: None,
         };
 
         let (a_attempts, b_attempts, comparison) = driver
