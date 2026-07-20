@@ -325,9 +325,11 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 
 **Recommendation:** investigate each separately — right-size the workspace-switch budget against CI hardware (or fix the regression), and make the line-180 locator resilient to the headless env — before chaining. Do NOT chain until both pass in CI.
 
-### R31 — refreshed codex defers ALL MCP tools behind tool-search on gpt-5.6-terra: montage tool surface unused on organic prompts
+### R31 — refreshed codex defers ALL MCP tools behind tool-search on gpt-5.6-terra: montage tool surface unused on organic prompts — **FIXED (`eff838b2`)**
 
-**Severity:** high · **Lens:** correctness · **Fix cost:** days · **Verification:** confirmed (live A/B runs, 2026-07-19/20)
+**Severity:** high · **Lens:** correctness · **Fix cost:** days · **Verification:** confirmed + fixed + end-to-end verified (live A/B runs, 2026-07-19/20)
+
+**Resolution:** `crates/codex-bridge/src/tool_exposure.rs` derives a patched model catalog from the vendored `models.json` (`supports_search_tool=false` on every model) and passes it as `model_catalog_json` on both the external (production) and in-process bridge paths; the dead `features.tool_search_always_defer_mcp_tools=true` override was removed. End-to-end: the "quick cleanup pass" prompt went from 0 MCP calls / 12 shell edits → 6 MCP calls / 1 shell / 0 direct file edits, running the documented playbook. The fix also repaired pre-existing `in-process-codex` API drift from the merge (`CloudRequirementsLoader`→`CloudConfigBundleLoader`, new `mcp_server_openai_form_elicitation` field). **Original finding below for the record.**
 
 **Evidence:** the refreshed fork (PR #102) marks every MCP tool `ToolExposure::Deferred` when `model_info.supports_search_tool && provider.capabilities().namespace_tools` (vendor/codex-rs/core/src/mcp_tool_exposure.rs:35, vendor/codex-rs/core/src/tools/spec_plan.rs:319). gpt-5.6-terra — Montage's new pinned default — has `supports_search_tool: true` in models.json. In live A/B smoke runs, both prompt arms given "do a quick cleanup pass on this episode" made **zero** MCP calls across 12–13 shell calls each and edited project.otio.json via node scripts + apply_patch — the exact edit-graph doctrine violation the prompts ban. Explicitly naming a tool in the prompt ("call the view_episode tool") triggers discovery and works, which is why casual tool-poking didn't catch it. Input-token evidence: organic-prompt request ≈21.7K tokens (no tool schemas in context) vs ≈225K with direct exposure restored.
 
