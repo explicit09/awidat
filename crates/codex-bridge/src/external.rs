@@ -261,8 +261,6 @@ fn app_server_args_with_openrouter_cost_estimate(
         "project_doc_max_bytes=0".to_string(),
         "-c".to_string(),
         format_toml_string_override_value("approval_policy", codex_approval_policy(project_root)),
-        "-c".to_string(),
-        "features.tool_search_always_defer_mcp_tools=true".to_string(),
     ];
     if let Some(mcp_path) = mcp_server_path {
         args.extend([
@@ -274,6 +272,24 @@ fn app_server_args_with_openrouter_cost_estimate(
                 project_root,
             ),
         ]);
+
+        // R31: force direct MCP-tool exposure. The refreshed codex defers
+        // every MCP tool behind tool-search for search-tool models (all of
+        // them). This used to be an explicit
+        // `features.tool_search_always_defer_mcp_tools=true` we *wanted*,
+        // but that flag is now a removed no-op and the deferral is
+        // unconditional — so on organic editing prompts the model never
+        // searches, never sees the Montage tools, and shell-edits the OTIO
+        // directly. A patched model catalog with supports_search_tool=false
+        // is the only lever; see `crate::tool_exposure`. Best-effort: on
+        // failure the override is dropped and codex falls back to deferred
+        // behavior rather than blocking startup.
+        if let Some(catalog) = crate::tool_exposure::direct_exposure_catalog_override_value() {
+            args.extend([
+                "-c".to_string(),
+                format_toml_string_override_value("model_catalog_json", &catalog),
+            ]);
+        }
         if let Some(estimate) = openrouter_cost_estimate_usd
             && !estimate.trim().is_empty()
         {
@@ -568,9 +584,17 @@ mod tests {
             dir.display()
         );
         assert!(args.iter().any(|arg| arg == &project_override));
+        // R31: the dead always-defer feature flag must NOT be emitted — it
+        // is a removed no-op upstream and we now force direct exposure via
+        // the model_catalog_json override instead (asserted end-to-end in
+        // crate::tool_exposure's tempdir-backed tests, since resolving the
+        // real codex_home here would be an environment-dependent side
+        // effect).
         assert!(
-            args.iter()
-                .any(|arg| arg == "features.tool_search_always_defer_mcp_tools=true")
+            !args
+                .iter()
+                .any(|arg| arg == "features.tool_search_always_defer_mcp_tools=true"),
+            "the removed always-defer flag must no longer be passed"
         );
     }
 
@@ -591,6 +615,11 @@ mod tests {
     fn app_server_args_allow_missing_mcp_path_for_degraded_startup() {
         let dir = test_project_dir("missing-mcp");
         let args = app_server_args(None, &dir);
+        // Degraded (no MCP server) path: no MCP overrides, and — since the
+        // model_catalog_json direct-exposure override is scoped to the
+        // mcp_path branch (it only matters when there are MCP tools to
+        // expose) — no catalog override either. The removed always-defer
+        // feature flag is gone.
         let expected: Vec<String> = vec![
             "app-server".into(),
             "--listen".into(),
@@ -604,8 +633,6 @@ mod tests {
             "project_doc_max_bytes=0".into(),
             "-c".into(),
             "approval_policy=\"on-request\"".into(),
-            "-c".into(),
-            "features.tool_search_always_defer_mcp_tools=true".into(),
         ];
         assert_eq!(args, expected);
     }

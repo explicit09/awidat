@@ -36,6 +36,13 @@ codex-protocol = { workspace = true, optional = true }
 codex-arg0 = { workspace = true, optional = true }
 codex-feedback = { workspace = true, optional = true }
 
+# Non-optional: the R31 direct-tool-exposure override
+# (`src/tool_exposure.rs`) resolves codex_home to write the patched model
+# catalog, and it runs on the *external* app-server path that the default
+# desktop build compiles (no `in-process-codex`). This crate is light —
+# `dirs` + absolute-path, no vendored protocol graph.
+codex-utils-home-dir = { workspace = true }
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -45,3 +52,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

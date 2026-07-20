@@ -28,6 +28,7 @@
 
 mod external;
 pub mod mappers;
+mod tool_exposure;
 mod wire;
 
 use std::collections::HashMap;
@@ -48,7 +49,7 @@ use codex_app_server_protocol::{
 #[cfg(feature = "in-process-codex")]
 use codex_arg0::Arg0DispatchPaths;
 #[cfg(feature = "in-process-codex")]
-use codex_config::{CloudRequirementsLoader, LoaderOverrides};
+use codex_config::{CloudConfigBundleLoader, LoaderOverrides};
 #[cfg(feature = "in-process-codex")]
 use codex_core::config::ConfigBuilder;
 #[cfg(feature = "in-process-codex")]
@@ -368,6 +369,24 @@ impl CodexAppServer {
                 "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT".to_string(),
                 toml::Value::String(project_root.display().to_string()),
             ));
+
+            // R31: force direct MCP-tool exposure. The refreshed codex
+            // defers every MCP tool behind tool-search for search-tool
+            // models (all of them), so without this the agent never sees
+            // the Montage tools on organic prompts and shell-edits the
+            // OTIO instead. A patched model catalog with
+            // supports_search_tool=false is the only lever; see
+            // `tool_exposure`. Best-effort: on failure we log and fall
+            // back to codex's deferred behavior rather than blocking the
+            // session. Mirrors the same override on the external path
+            // (`external::app_server_args`), which the default desktop
+            // build actually spawns.
+            if let Some(catalog) = tool_exposure::direct_exposure_catalog_override_value() {
+                cli_overrides.push((
+                    "model_catalog_json".to_string(),
+                    toml::Value::String(catalog),
+                ));
+            }
         } else {
             warn!("montage-mcp-server path not provided; codex will run without Montage tools");
         }
@@ -415,7 +434,7 @@ impl CodexAppServer {
             cli_overrides,
             loader_overrides: LoaderOverrides::default(),
             strict_config: false,
-            cloud_requirements: CloudRequirementsLoader::default(),
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
             // v1: skip persistence; the desktop integration step can
@@ -428,6 +447,11 @@ impl CodexAppServer {
             client_name: "montage-desktop".to_string(),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             experimental_api: true,
+            // Matches the exec reference impl (vendor/codex-rs/exec/src/lib.rs):
+            // opt out of the OpenAI-form MCP elicitation flow, which is a
+            // codex-apps hosted-server feature Montage's stdio MCP server
+            // doesn't participate in.
+            mcp_server_openai_form_elicitation: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         };
