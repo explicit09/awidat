@@ -325,6 +325,18 @@ Numbers refer to the entries below (ranked, not wave-ordered).
 
 **Recommendation:** investigate each separately — right-size the workspace-switch budget against CI hardware (or fix the regression), and make the line-180 locator resilient to the headless env — before chaining. Do NOT chain until both pass in CI.
 
+### R31 — refreshed codex defers ALL MCP tools behind tool-search on gpt-5.6-terra: montage tool surface unused on organic prompts
+
+**Severity:** high · **Lens:** correctness · **Fix cost:** days · **Verification:** confirmed (live A/B runs, 2026-07-19/20)
+
+**Evidence:** the refreshed fork (PR #102) marks every MCP tool `ToolExposure::Deferred` when `model_info.supports_search_tool && provider.capabilities().namespace_tools` (vendor/codex-rs/core/src/mcp_tool_exposure.rs:35, vendor/codex-rs/core/src/tools/spec_plan.rs:319). gpt-5.6-terra — Montage's new pinned default — has `supports_search_tool: true` in models.json. In live A/B smoke runs, both prompt arms given "do a quick cleanup pass on this episode" made **zero** MCP calls across 12–13 shell calls each and edited project.otio.json via node scripts + apply_patch — the exact edit-graph doctrine violation the prompts ban. Explicitly naming a tool in the prompt ("call the view_episode tool") triggers discovery and works, which is why casual tool-poking didn't catch it. Input-token evidence: organic-prompt request ≈21.7K tokens (no tool schemas in context) vs ≈225K with direct exposure restored.
+
+**Blast radius:** desktop production path (codex-bridge → core Session → same spec_plan) inherits the behavior the moment the desktop ships on the refreshed fork with the terra default. The agent silently stops using the 116-tool Montage surface for organically-phrased editing asks — outputs still *look* like edits (shell-scripted OTIO rewrites) but skip validation/diff/proposal flows entirely.
+
+**Mitigation (proven in eval):** config-level `model_catalog_json` override with `supports_search_tool: false` restores direct exposure — no fork edit. Cost: the 116 tool schemas are ~100K input tokens per uncached request (largely cache-amortized within a session; measure before shipping).
+
+**Recommendation:** decide before the desktop ships the refresh: (a) catalog override at the codex_session boundary; (b) keep deferral but add explicit tool-search guidance to the editorial prompt; (c) selective exposure — core editing tools direct, long-tail deferred (see `override_tool_exposure`). Tracked as task #17.
+
 ## Corrections to prior beliefs (not risks)
 
 - **montage_social crate dependency in apps/desktop/src-tauri is legitimate (DTO reuse), not leftover legacy wiring — refutes the 'still depends on legacy' framing from prior-session memory** — apps/desktop/src-tauri/src/social_client.rs imports montage_social::api::* and montage_social::model::* purely as shared serde DTOs for its HTTPS client to montage-social-server (doc comment: 'sends/receives the re-exported montage_social::api DTOs so client and server agree on exactly one serde shape'). apps/desktop/src-tauri/src/commands/social.rs uses SocialApi::providers(&registry) at line 45,
