@@ -29,6 +29,11 @@ jobs:
           components: rustfmt
       - name: Format
         run: cargo fmt --all -- --check
+      # Pure-stdlib, ~60ms: the taste-corpus aligner tests ride the fast
+      # job so they actually run in CI (a test target that CI never
+      # invokes is not a gate — see the desktop test-chain lesson).
+      - name: taste-corpus tests
+        run: python3 -m unittest discover tools/taste-corpus
 
   security:
     name: Security hygiene
