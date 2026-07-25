@@ -184,13 +184,17 @@ fn run_taste_lower(args: &[String], project_root: &str) -> ExitCode {
     }
 }
 
-/// `montage-eval --taste <ground_truth.json>
+/// `montage-eval --taste <ground_truth.json | ground_truth_dir>
 ///   (--taste-proposed <proposed.json> | --taste-baseline keep_all)`
 ///
 /// Scores a proposed decision list against professional ground truth
 /// (docs/taste-gate-plan-2026-07-25.md Phase B) and prints the
 /// `TasteScore` JSON. `--taste-baseline keep_all` scores the
-/// keep-everything floor instead of a proposed file.
+/// keep-everything floor instead of a proposed file. When the ground
+/// argument is a DIRECTORY, every `*.json` in it is scored (baseline
+/// mode only — one proposed file can't answer multiple pairs) and a
+/// per-house mean rollup is appended; mixing houses in one directory is
+/// an error, mirroring the scorer's house discipline.
 #[allow(clippy::print_stderr)]
 fn run_taste(args: &[String], ground_path: &str) -> ExitCode {
     use montage_eval::taste::{DecisionList, keep_everything_baseline, score};
@@ -202,49 +206,122 @@ fn run_taste(args: &[String], ground_path: &str) -> ExitCode {
             .cloned()
     };
 
-    let ground = match DecisionList::from_json_file(ground_path) {
-        Ok(list) => list,
-        Err(e) => {
-            eprintln!("montage-eval: loading ground truth {ground_path}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let proposed = match (value_of("--taste-proposed"), value_of("--taste-baseline")) {
-        (Some(path), None) => match DecisionList::from_json_file(&path) {
-            Ok(list) => list,
+    let ground_paths: Vec<PathBuf> = if std::path::Path::new(ground_path).is_dir() {
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(ground_path) {
+            Ok(dir) => dir
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+                .collect(),
             Err(e) => {
-                eprintln!("montage-eval: loading proposed list {path}: {e}");
+                eprintln!("montage-eval: reading {ground_path}: {e}");
                 return ExitCode::FAILURE;
             }
-        },
-        (None, Some(name)) if name == "keep_all" => keep_everything_baseline(&ground),
-        (None, Some(other)) => {
-            eprintln!("montage-eval: unknown --taste-baseline '{other}' (expected keep_all)");
+        };
+        entries.sort();
+        if entries.is_empty() {
+            eprintln!("montage-eval: no *.json decision lists in {ground_path}");
             return ExitCode::FAILURE;
         }
-        _ => {
-            eprintln!(
-                "montage-eval --taste requires exactly one of \
-                 --taste-proposed <file> or --taste-baseline keep_all"
-            );
-            return ExitCode::FAILURE;
-        }
+        entries
+    } else {
+        vec![PathBuf::from(ground_path)]
     };
 
-    match score(&ground, &proposed) {
-        Ok(taste_score) => match serde_json::to_string_pretty(&taste_score) {
-            Ok(s) => {
-                println!("{s}");
-                ExitCode::SUCCESS
-            }
+    let proposed_arg = value_of("--taste-proposed");
+    let baseline_arg = value_of("--taste-baseline");
+    if ground_paths.len() > 1 && proposed_arg.is_some() {
+        eprintln!(
+            "montage-eval: --taste-proposed cannot answer a DIRECTORY of \
+             ground truths; use --taste-baseline for corpus rollups"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let mut scores = Vec::new();
+    for path in &ground_paths {
+        let ground = match DecisionList::from_json_file(path) {
+            Ok(list) => list,
             Err(e) => {
-                eprintln!("montage-eval: serializing taste score: {e}");
-                ExitCode::FAILURE
+                eprintln!("montage-eval: loading ground truth {}: {e}", path.display());
+                return ExitCode::FAILURE;
             }
-        },
+        };
+        let proposed = match (&proposed_arg, &baseline_arg) {
+            (Some(path), None) => match DecisionList::from_json_file(path) {
+                Ok(list) => list,
+                Err(e) => {
+                    eprintln!("montage-eval: loading proposed list {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            (None, Some(name)) if name == "keep_all" => keep_everything_baseline(&ground),
+            (None, Some(other)) => {
+                eprintln!("montage-eval: unknown --taste-baseline '{other}' (expected keep_all)");
+                return ExitCode::FAILURE;
+            }
+            _ => {
+                eprintln!(
+                    "montage-eval --taste requires exactly one of \
+                     --taste-proposed <file> or --taste-baseline keep_all"
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+        match score(&ground, &proposed) {
+            Ok(taste_score) => scores.push(taste_score),
+            Err(e) => {
+                eprintln!(
+                    "montage-eval: taste scoring failed for {}: {e}",
+                    path.display()
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    // House discipline at the rollup level too.
+    let houses: std::collections::BTreeSet<&str> =
+        scores.iter().map(|s| s.house.as_str()).collect();
+    if houses.len() > 1 {
+        eprintln!(
+            "montage-eval: refusing cross-house rollup over {houses:?} — \
+             score each house's directory separately (study Finding 13)"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let output = if scores.len() == 1 {
+        serde_json::to_value(&scores[0])
+    } else {
+        let n = scores.len() as f64;
+        let mean = |f: fn(&montage_eval::taste::TasteScore) -> f64| -> f64 {
+            scores.iter().map(f).sum::<f64>() / n
+        };
+        let speed_values: Vec<f64> = scores.iter().filter_map(|s| s.speed_agreement).collect();
+        serde_json::to_value(serde_json::json!({
+            "house": scores[0].house,
+            "pairs": scores,
+            "rollup": {
+                "pairs": scores.len(),
+                "mean_keep_cut_agreement": mean(|s| s.keep_cut_agreement),
+                "mean_boundary_f1_loose": mean(|s| s.boundary_f1_loose),
+                "mean_kept_mass_jaccard": mean(|s| s.kept_mass_jaccard),
+                "mean_speed_agreement": if speed_values.is_empty() {
+                    None
+                } else {
+                    Some(speed_values.iter().sum::<f64>() / speed_values.len() as f64)
+                },
+            }
+        }))
+    };
+    match output.and_then(|v| serde_json::to_string_pretty(&v)) {
+        Ok(s) => {
+            println!("{s}");
+            ExitCode::SUCCESS
+        }
         Err(e) => {
-            eprintln!("montage-eval: taste scoring failed: {e}");
+            eprintln!("montage-eval: serializing taste output: {e}");
             ExitCode::FAILURE
         }
     }
