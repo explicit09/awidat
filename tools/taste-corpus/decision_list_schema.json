@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Taste-corpus decision list",
+  "description": "Ground-truth editorial decisions recovered by aligning a raw recording's transcript against its professionally published edit. One file per raw->published pair. The contract between the corpus pipeline (tools/taste-corpus) and the agreement scorer (montage-eval). See docs/taste-gate-plan-2026-07-25.md.",
+  "type": "object",
+  "required": ["version", "pair_id", "house", "raw_ref", "published_ref", "window_s", "alignment", "segments"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "pair_id": { "type": "string", "minLength": 1 },
+    "house": {
+      "description": "Editorial house style the decisions belong to. Scores must never mix houses (Finding 13: taste polarity does not transfer).",
+      "type": "string",
+      "minLength": 1
+    },
+    "raw_ref": { "type": "string", "minLength": 1 },
+    "published_ref": { "type": "string", "minLength": 1 },
+    "window_s": { "type": "number", "exclusiveMinimum": 0 },
+    "alignment": {
+      "type": "object",
+      "required": ["published_windows", "matched_windows", "coverage"],
+      "additionalProperties": false,
+      "properties": {
+        "published_windows": { "type": "integer", "minimum": 0 },
+        "matched_windows": { "type": "integer", "minimum": 0 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action", "raw_span"],
+        "additionalProperties": false,
+        "properties": {
+          "action": { "enum": ["keep", "cut"] },
+          "raw_span": {
+            "type": "array",
+            "items": { "type": "number", "minimum": 0 },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "published_span": {
+            "type": "array",
+            "items": { "type": "number", "minimum": 0 },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "speed": {
+            "description": "Playback factor for keep segments. Snapped to 1.0 when the measured ratio is below the trust threshold (auto-sub cue jitter, study caveat: sustained >=1.2x readings are trustworthy).",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "scope": {
+            "description": "cut segments only: where the cut falls relative to the published show's aligned span of the raw.",
+            "enum": ["pre_show", "in_show", "post_show"]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}
