@@ -1,0 +1,76 @@
+# Bootstrap stage-harness goldens on a GitHub runner.
+#
+# Darwin goldens normally seed locally (STAGE_GOLDEN_BOOTSTRAP=1), but
+# that requires downloading Playwright Chromium, and the Playwright CDN
+# (playwright.download.prss.microsoft.com) is unreachable from some
+# networks — GitHub runners reach it fine. This workflow runs the stage
+# harness in bootstrap mode on the requested ref/OS and uploads the
+# resulting goldens + screenshots as an artifact; commit the NEW scene's
+# goldens from it (never overwrite existing goldens wholesale — mixed
+# capture machines are fine per scene, not per platform-history).
+#
+# Provenance matches local dev: Playwright Chromium on the same OS
+# family renders the shapes-only scenes identically enough for the
+# 0.98 in-platform SSIM gate.
+name: Bootstrap stage goldens
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch/ref to bootstrap goldens for
+        required: true
+        default: main
+      os:
+        description: Runner OS (darwin -> macos-latest, linux -> ubuntu-latest)
+        required: true
+        default: macos-latest
+        type: choice
+        options:
+          - macos-latest
+          - ubuntu-latest
+
+jobs:
+  bootstrap:
+    runs-on: ${{ inputs.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install Playwright Chromium
+        run: pnpm --dir apps/desktop exec playwright install --with-deps chromium
+      - name: Run stage harness in bootstrap mode
+        working-directory: apps/desktop
+        run: STAGE_GOLDEN_BOOTSTRAP=1 node tests/stage-harness.mjs
+        # Existing-scene compares can fail when the runner's rendering
+        # drifts from the committed goldens' capture machine — the new
+        # scene's goldens still get written and must still upload.
+        continue-on-error: true
+      - name: Upload goldens + screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrapped-stage-goldens
+          path: |
+            apps/desktop/tests/fixtures/stage-golden/
+            apps/desktop/tests/smoke/
+          if-no-files-found: error
