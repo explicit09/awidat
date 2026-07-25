@@ -550,11 +550,39 @@ pub struct VideoOverlayPlan {
     pub animations: Vec<RenderParameterAnimation>,
 }
 
+/// Pixel source for a [`MotionImagePlan`].
+///
+/// Image layers stream from a still asset (`-loop 1 -i <path>`);
+/// geometry-animated Shape/Solid layers synthesize a solid-color
+/// lavfi input (`color=c=<hex>:s=<w>x<h>`). Both then flow
+/// through the identical scale2ref/overlay/rotate/geq machinery in
+/// `append_motion_image_layers` (private emitter), so the compositing
+/// code is never duplicated for the shape path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MotionImageSource {
+    /// Still image asset loaded from disk.
+    Asset(PathBuf),
+    /// Synthesized flat color rectangle sized to the layer geometry at
+    /// the scene canvas resolution. The source stays fully opaque:
+    /// opacity (constant or keyframed) is applied downstream by the same
+    /// alpha stage the image path uses (`colorchannelmixer=aa=` /
+    /// `geq`), reading the plan's transform — baking `@opacity` into
+    /// `color=` here would double-apply it.
+    SolidColor {
+        /// `color=c=` value: the normalized hex, e.g. `#224466`.
+        color: String,
+        /// Source width in pixels at the scene canvas resolution.
+        width_px: u32,
+        /// Source height in pixels at the scene canvas resolution.
+        height_px: u32,
+    },
+}
+
 /// Render-time still image layer extracted from MotionScene metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MotionImagePlan {
-    /// Absolute path to the still image asset.
-    pub asset_path: PathBuf,
+    /// Pixel source: a still asset or a synthesized solid color.
+    pub source: MotionImageSource,
     /// Start time on the master timeline, in seconds.
     pub start_s: f64,
     /// End time on the master timeline, in seconds.
@@ -2012,15 +2040,20 @@ pub fn collect_timeline_full_plan(
             metadata,
             &mut render_limitations,
         ));
-        annotations.extend(collect_motion_scene_shape_plans(
-            metadata,
-            &mut render_limitations,
-        ));
+        let (shape_annotations, shape_solids) =
+            collect_motion_scene_shape_plans(metadata, &mut render_limitations);
+        annotations.extend(shape_annotations);
         motion_images.extend(collect_motion_scene_image_plans(
             project_root,
             metadata,
             &mut render_limitations,
         ));
+        // Geometry-animated shapes ride the motion-image machinery but
+        // must composite ABOVE the static `drawbox` shapes, so they land
+        // at the tail of `motion_images`; the argv builder partitions
+        // them by source and runs the solid pass after annotations to
+        // preserve the drawbox z-position (accent above backdrop).
+        motion_images.extend(shape_solids);
     }
     apply_dynamic_title_keywords(
         &mut titles,
@@ -2124,16 +2157,36 @@ fn collect_motion_scene_title_plans(
     titles
 }
 
+/// Lower MotionScene Shape/Solid layers.
+///
+/// Static-geometry rectangles keep the byte-identical `drawbox`
+/// annotation path (returned as `AnnotationPlan`s). A layer that carries
+/// ANY geometry animation (`overlay.x/y/scale/rotation_deg`) instead
+/// lowers to a synthesized solid-color [`MotionImagePlan`] (returned in
+/// the second vec) so it can slide/scale/rotate through the same
+/// scale2ref/overlay/rotate/geq machinery motion images use — `drawbox`
+/// can only step opacity and drops geometry entirely.
 fn collect_motion_scene_shape_plans(
     metadata: &MontageTimelineMetadata,
     limitations: &mut Vec<RenderPlanLimitation>,
-) -> Vec<AnnotationPlan> {
+) -> (Vec<AnnotationPlan>, Vec<MotionImagePlan>) {
     let mut annotations = Vec::new();
+    let mut animated_shapes = Vec::new();
     for scene in &metadata.motion_scenes {
         for layer in sorted_motion_scene_layers(scene) {
             match layer.kind {
                 MotionSceneLayerKind::Shape | MotionSceneLayerKind::Solid => {
-                    if let Some(annotation) = motion_scene_rect_annotation(scene, layer) {
+                    if motion_scene_shape_has_geometry_animation(layer) {
+                        if let Some(plan) = motion_scene_shape_solid_plan(scene, layer) {
+                            animated_shapes.push(plan);
+                        } else {
+                            limitations.push(motion_scene_layer_limitation(
+                                scene,
+                                layer,
+                                "shape layer is stored but only rectangle/solid shapes are lowered by the native MotionScene renderer yet",
+                            ));
+                        }
+                    } else if let Some(annotation) = motion_scene_rect_annotation(scene, layer) {
                         annotations.push(annotation);
                     } else {
                         limitations.push(motion_scene_layer_limitation(
@@ -2148,7 +2201,65 @@ fn collect_motion_scene_shape_plans(
             }
         }
     }
-    annotations
+    (annotations, animated_shapes)
+}
+
+/// True when a Shape/Solid layer animates any geometry channel that the
+/// `drawbox` path cannot honor. Opacity-only ramps stay on `drawbox`
+/// (its stepped-alpha windows) and are NOT geometry animation.
+fn motion_scene_shape_has_geometry_animation(layer: &MotionSceneLayer) -> bool {
+    layer.motion_animations().iter().any(|animation| {
+        matches!(
+            animation.parameter.as_str(),
+            "overlay.x" | "overlay.y" | "overlay.scale" | "overlay.rotation_deg"
+        )
+    })
+}
+
+/// Lower a geometry-animated rectangle Shape/Solid layer to a
+/// synthesized solid-color [`MotionImagePlan`]. Returns `None` for
+/// non-rectangle shapes (same support gate as [`motion_scene_rect_annotation`]).
+fn motion_scene_shape_solid_plan(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+) -> Option<MotionImagePlan> {
+    let is_rect = match layer.kind {
+        MotionSceneLayerKind::Shape => matches!(
+            layer_string_param(layer, "shape").as_deref(),
+            Some("rect" | "rectangle")
+        ),
+        MotionSceneLayerKind::Solid => true,
+        _ => false,
+    };
+    if !is_rect {
+        return None;
+    }
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+    let hex =
+        normalize_hex(&layer_string_param(layer, "color").unwrap_or_else(|| "#FFFFFF".into()));
+    // The synthesized `color=` source is sized to the layer's fractional
+    // geometry at the scene canvas resolution; the overlay compositor
+    // then scales it via scale2ref, so 1px minimums keep lavfi happy for
+    // hairline bars.
+    let width_px = ((transform.width.abs() * f64::from(scene.width)).round() as u32).max(1);
+    let height_px = ((transform.height.abs() * f64::from(scene.height)).round() as u32).max(1);
+    let animations = motion_scene_layer_animations_for_render(layer, transform.opacity);
+    // The `color=` source stays fully opaque: opacity (constant OR
+    // keyframed) is applied downstream by the SAME alpha stage the image
+    // path uses (`colorchannelmixer=aa=` for a constant, `geq` alpha for
+    // a ramp), reading `transform.opacity`. Baking `@opacity` into
+    // `color=` here would double-apply it.
+    Some(MotionImagePlan {
+        source: MotionImageSource::SolidColor {
+            color: hex,
+            width_px,
+            height_px,
+        },
+        start_s: scene.start_s + layer.from_s,
+        end_s: scene.start_s + layer.from_s + layer.duration_s,
+        transform,
+        animations,
+    })
 }
 
 fn collect_motion_scene_image_plans(
@@ -2173,7 +2284,7 @@ fn collect_motion_scene_image_plans(
             let asset_path = project_root.join(asset);
             let transform = MotionSceneTransform::from_layer_params(&layer.params);
             images.push(MotionImagePlan {
-                asset_path,
+                source: MotionImageSource::Asset(asset_path),
                 start_s: scene.start_s + layer.from_s,
                 end_s: scene.start_s + layer.from_s + layer.duration_s,
                 transform,
@@ -5569,10 +5680,48 @@ fn append_video_overlays(
     }
 }
 
-fn append_motion_images(
+/// Composite motion-image layers and annotations in the correct z-order.
+///
+/// `motion_images` is `[still assets…, synthesized solids…]` — assets
+/// first (collected before shapes), solids appended at the tail. Still
+/// assets composite BELOW annotations (unchanged image band); synthesized
+/// solids (geometry-animated shapes) composite ABOVE the static `drawbox`
+/// annotations so an animated accent still paints over a static backdrop,
+/// matching the drawbox z-position it replaced. Both solid and asset
+/// layers reuse the identical [`append_motion_image_layers`] emitter.
+fn append_motion_images_and_annotations(
+    base: FilterPlan,
+    motion_images: &[MotionImagePlan],
+    annotations: &[AnnotationPlan],
+    first_image_input: usize,
+) -> FilterPlan {
+    // Assets form a contiguous prefix, solids a contiguous suffix.
+    let solid_start = motion_images
+        .iter()
+        .position(|plan| matches!(plan.source, MotionImageSource::SolidColor { .. }))
+        .unwrap_or(motion_images.len());
+    let (asset_plans, solid_plans) = motion_images.split_at(solid_start);
+    let images = append_motion_image_layers(base, asset_plans, first_image_input, "motion_image");
+    let annotated = append_annotations(images, annotations);
+    append_motion_image_layers(
+        annotated,
+        solid_plans,
+        first_image_input + solid_start,
+        "motion_shape",
+    )
+}
+
+/// Composite a run of [`MotionImagePlan`]s (still assets OR synthesized
+/// solid colors) through the shared scale2ref/overlay/rotate/geq
+/// machinery. `label_prefix` namespaces the intermediate filter labels
+/// so an animated-shape pass can run alongside the image pass without
+/// colliding on `[motion_image_v0]` etc. — the shape path reuses this
+/// exact emitter rather than duplicating it.
+fn append_motion_image_layers(
     base: FilterPlan,
     motion_images: &[MotionImagePlan],
     first_image_input: usize,
+    label_prefix: &str,
 ) -> FilterPlan {
     if motion_images.is_empty() {
         return base;
@@ -5581,11 +5730,12 @@ fn append_motion_images(
     let mut current = base.video_out_label;
     for (idx, image) in motion_images.iter().enumerate() {
         let input_idx = first_image_input + idx;
-        let scaled = format!("[motion_image_scaled{idx}]");
-        let reference = format!("[motion_image_ref{idx}]");
-        let rotated = format!("[motion_image_rotated{idx}]");
-        let alpha = format!("[motion_image_alpha{idx}]");
-        let next = format!("[motion_image_v{idx}]");
+        let src = format!("[{label_prefix}_src{idx}]");
+        let scaled = format!("[{label_prefix}_scaled{idx}]");
+        let reference = format!("[{label_prefix}_ref{idx}]");
+        let rotated = format!("[{label_prefix}_rotated{idx}]");
+        let alpha = format!("[{label_prefix}_alpha{idx}]");
+        let next = format!("[{label_prefix}_v{idx}]");
         let scale = motion_image_animation_value_expr(image, "overlay.scale", "1", "t");
         let width = format!("{}*({scale})", fmt_filter_num(image.transform.width));
         let height = format!("{}*({scale})", fmt_filter_num(image.transform.height));
@@ -5635,8 +5785,8 @@ fn append_motion_images(
             filter.push(';');
         }
         filter.push_str(&format!(
-            "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS[motion_image_src{idx}];\
-             [motion_image_src{idx}]{current}scale2ref=w=main_w*({width}):h=main_h*({height}){scale_mode}:eval=frame{scaled}{reference};\
+            "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS{src};\
+             {src}{current}scale2ref=w=main_w*({width}):h=main_h*({height}){scale_mode}:eval=frame{scaled}{reference};\
              {scaled}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated};\
              {rotated}format=rgba,{alpha_filter}{alpha};\
              {reference}{alpha}overlay=x=main_w*({x}):y=main_h*({y}):enable='between(t\\,{start}\\,{end})'{next}",
@@ -10382,8 +10532,12 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         .with_canvas(canvas)
         .plan();
     let media = append_video_overlays(base, &video_overlays, segs.len());
-    let images = append_motion_images(media, motion_images, first_motion_image_input);
-    let annotated = append_annotations(images, annotations);
+    let annotated = append_motion_images_and_annotations(
+        media,
+        motion_images,
+        annotations,
+        first_motion_image_input,
+    );
     let ffmpeg_broadcast_overlay = browser_broadcast_overlay
         .is_none()
         .then_some(broadcast_overlay)
@@ -10477,14 +10631,37 @@ fn append_video_overlay_input_args(argv: &mut Vec<String>, segment: &TimelineSeg
 }
 
 fn append_motion_image_input_args(argv: &mut Vec<String>, image: &MotionImagePlan) {
-    argv.extend([
-        "-loop".into(),
-        "1".into(),
-        "-t".into(),
-        format!("{}", image.end_s - image.start_s),
-        "-i".into(),
-        image.asset_path.to_string_lossy().into_owned(),
-    ]);
+    match &image.source {
+        MotionImageSource::Asset(asset_path) => {
+            argv.extend([
+                "-loop".into(),
+                "1".into(),
+                "-t".into(),
+                format!("{}", image.end_s - image.start_s),
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+            ]);
+        }
+        MotionImageSource::SolidColor {
+            color,
+            width_px,
+            height_px,
+        } => {
+            // Synthesized flat-color layer: a lavfi `color=` source
+            // sized to the layer geometry, trimmed to the layer window
+            // (`-t`) so it loops for exactly the same duration a still
+            // asset would. The scale2ref/overlay/rotate machinery in
+            // `append_motion_image_layers` treats it identically to a still.
+            argv.extend([
+                "-f".into(),
+                "lavfi".into(),
+                "-t".into(),
+                format!("{}", image.end_s - image.start_s),
+                "-i".into(),
+                format!("color=c={color}:s={width_px}x{height_px}"),
+            ]);
+        }
+    }
 }
 
 fn still_graphic_asset(path: &Path) -> bool {
@@ -10652,8 +10829,12 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         &video_overlays,
         segs.len(),
     );
-    let images = append_motion_images(media, motion_images, first_motion_image_input);
-    let annotated = append_annotations(images, annotations);
+    let annotated = append_motion_images_and_annotations(
+        media,
+        motion_images,
+        annotations,
+        first_motion_image_input,
+    );
     filter = annotated.filter_complex;
     let mut video_label = annotated.video_out_label;
     let ffmpeg_broadcast_overlay = browser_broadcast_overlay
@@ -12043,7 +12224,14 @@ fn render_input_paths(
             .iter()
             .map(|overlay| overlay.segment.asset_path.clone()),
     );
-    paths.extend(motion_images.iter().map(|image| image.asset_path.clone()));
+    paths.extend(
+        motion_images
+            .iter()
+            .filter_map(|image| match &image.source {
+                MotionImageSource::Asset(asset_path) => Some(asset_path.clone()),
+                MotionImageSource::SolidColor { .. } => None,
+            }),
+    );
     paths.extend(
         segs.iter()
             .filter_map(renderable_mask_source)
@@ -18434,6 +18622,331 @@ layout_box: None,
         assert!(spec.output_path.exists());
     }
 
+    /// A geometry-animated rect Shape must leave the `drawbox` path and
+    /// lower to a synthesized lavfi `color=` motion-image input with
+    /// `motion_shape`-namespaced filter labels, and the synthesized
+    /// source must NOT appear in `input_paths` (it is not a file).
+    #[test]
+    fn timeline_render_spec_lowers_animated_shape_to_lavfi_solid() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "accent".into(),
+                kind: MotionSceneLayerKind::Shape,
+                from_s: 0.2,
+                duration_s: 0.7,
+                z_index: 6,
+                params: [
+                    ("shape".to_string(), serde_json::json!("rect")),
+                    ("x".to_string(), serde_json::json!(0.12)),
+                    ("y".to_string(), serde_json::json!(0.52)),
+                    ("width".to_string(), serde_json::json!(0.28)),
+                    ("height".to_string(), serde_json::json!(0.04)),
+                    ("color".to_string(), serde_json::json!("#22C55E")),
+                    ("opacity".to_string(), serde_json::json!(0.8)),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([
+                            {
+                                "parameter": "overlay.x",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": -0.3, "interpolation": "linear" },
+                                    { "time_s": 0.3, "value": 0.12, "interpolation": "linear" }
+                                ]
+                            }
+                        ]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+        // Synthesized lavfi input sized to 0.28×1920 × 0.04×1080 = 538×43.
+        assert!(
+            cmd.contains("color=c=#22C55E:s=538x43"),
+            "expected a lavfi color input for the animated shape: {cmd}"
+        );
+        // The shape rides the motion-image machinery under its own label
+        // namespace, and the drawbox path no longer carries this layer.
+        assert!(
+            cmd.contains("[motion_shape_src0]"),
+            "expected motion_shape-namespaced labels: {cmd}"
+        );
+        assert!(
+            !cmd.contains("drawbox"),
+            "animated shape must not also emit a drawbox: {cmd}"
+        );
+        // Synthesized sources are not files: input_paths stays video-only.
+        assert_eq!(spec.input_paths, vec![dir.path().join("raw/x.mp4")]);
+    }
+
+    /// An opacity-only ramp is NOT geometry animation: the layer must
+    /// stay on the byte-identical `drawbox` annotation path (stepped
+    /// alpha windows), with no synthesized lavfi input.
+    #[test]
+    fn timeline_render_spec_opacity_only_shape_stays_on_drawbox() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "backdrop".into(),
+                kind: MotionSceneLayerKind::Solid,
+                from_s: 0.0,
+                duration_s: 1.0,
+                z_index: 0,
+                params: [
+                    ("x".to_string(), serde_json::json!(0.1)),
+                    ("y".to_string(), serde_json::json!(0.1)),
+                    ("width".to_string(), serde_json::json!(0.5)),
+                    ("height".to_string(), serde_json::json!(0.5)),
+                    ("color".to_string(), serde_json::json!("#111827")),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([
+                            {
+                                "parameter": "overlay.opacity",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": 0.0, "interpolation": "linear" },
+                                    { "time_s": 0.3, "value": 0.9, "interpolation": "linear" }
+                                ]
+                            }
+                        ]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+        assert!(
+            cmd.contains("drawbox"),
+            "opacity-only shape should keep the drawbox path: {cmd}"
+        );
+        assert!(
+            !cmd.contains("color=c=#111827"),
+            "opacity-only shape must not synthesize a lavfi solid: {cmd}"
+        );
+    }
+
+    /// Z-order: a geometry-animated accent must composite ABOVE a static
+    /// drawbox backdrop — in filter_complex terms, the drawbox stage runs
+    /// before the motion_shape overlay stage consumes its output.
+    #[test]
+    fn animated_shape_composites_above_static_drawbox() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![
+                MotionSceneLayer {
+                    id: "backdrop".into(),
+                    kind: MotionSceneLayerKind::Solid,
+                    from_s: 0.0,
+                    duration_s: 1.0,
+                    z_index: 0,
+                    params: [
+                        ("x".to_string(), serde_json::json!(0.05)),
+                        ("y".to_string(), serde_json::json!(0.05)),
+                        ("width".to_string(), serde_json::json!(0.9)),
+                        ("height".to_string(), serde_json::json!(0.9)),
+                        ("color".to_string(), serde_json::json!("#111827")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "accent".into(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.0,
+                    duration_s: 1.0,
+                    z_index: 6,
+                    params: [
+                        ("shape".to_string(), serde_json::json!("rect")),
+                        ("x".to_string(), serde_json::json!(0.1)),
+                        ("y".to_string(), serde_json::json!(0.5)),
+                        ("width".to_string(), serde_json::json!(0.3)),
+                        ("height".to_string(), serde_json::json!(0.05)),
+                        ("color".to_string(), serde_json::json!("#22C55E")),
+                        (
+                            "animations".to_string(),
+                            serde_json::json!([
+                                {
+                                    "parameter": "overlay.scale",
+                                    "keyframes": [
+                                        { "time_s": 0.0, "value": 0.2, "interpolation": "linear" },
+                                        { "time_s": 0.4, "value": 1.0, "interpolation": "linear" }
+                                    ]
+                                }
+                            ]),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = spec
+            .args
+            .iter()
+            .position(|a| a == "-filter_complex")
+            .map(|i| spec.args[i + 1].clone())
+            .expect("filter_complex present");
+        let drawbox_at = filter.find("drawbox").expect("static backdrop drawbox");
+        let shape_at = filter
+            .find("[motion_shape_src0]")
+            .expect("animated accent motion_shape stage");
+        assert!(
+            drawbox_at < shape_at,
+            "drawbox backdrop must be composited before the animated accent \
+             so the accent paints above it:\n{filter}"
+        );
+    }
+
+    /// Non-rectangle shapes with geometry animation aren't lowered yet:
+    /// they must surface a limitation instead of silently dropping the
+    /// layer or panicking.
+    #[test]
+    fn animated_non_rect_shape_surfaces_limitation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "blob".into(),
+                kind: MotionSceneLayerKind::Shape,
+                from_s: 0.0,
+                duration_s: 1.0,
+                z_index: 3,
+                params: [
+                    ("shape".to_string(), serde_json::json!("ellipse")),
+                    ("x".to_string(), serde_json::json!(0.2)),
+                    ("y".to_string(), serde_json::json!(0.2)),
+                    ("width".to_string(), serde_json::json!(0.4)),
+                    ("height".to_string(), serde_json::json!(0.4)),
+                    ("color".to_string(), serde_json::json!("#DB2777")),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([
+                            {
+                                "parameter": "overlay.rotation_deg",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": 0.0, "interpolation": "linear" },
+                                    { "time_s": 1.0, "value": 90.0, "interpolation": "linear" }
+                                ]
+                            }
+                        ]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        assert!(
+            spec.limitations
+                .iter()
+                .any(|limitation| limitation.message.contains("blob")),
+            "expected a limitation for the unsupported animated ellipse: {:?}",
+            spec.limitations
+        );
+        let cmd = spec.args.join(" ");
+        assert!(!cmd.contains("color=c=#DB2777"), "must not lower: {cmd}");
+    }
+
+    /// Real-render proof: an animated accent sliding over a static
+    /// backdrop renders through ffmpeg end-to-end. No text layer, so the
+    /// only guard is ffmpeg availability.
+    #[test]
+    fn ffmpeg_smoke_renders_animated_shape_solid() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![
+                MotionSceneLayer {
+                    id: "backdrop".into(),
+                    kind: MotionSceneLayerKind::Solid,
+                    from_s: 0.0,
+                    duration_s: 1.0,
+                    z_index: 0,
+                    params: [
+                        ("x".to_string(), serde_json::json!(0.08)),
+                        ("y".to_string(), serde_json::json!(0.12)),
+                        ("width".to_string(), serde_json::json!(0.84)),
+                        ("height".to_string(), serde_json::json!(0.76)),
+                        ("color".to_string(), serde_json::json!("#111827")),
+                        ("opacity".to_string(), serde_json::json!(0.86)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "accent".into(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.1,
+                    duration_s: 0.8,
+                    z_index: 6,
+                    params: [
+                        ("shape".to_string(), serde_json::json!("rect")),
+                        ("x".to_string(), serde_json::json!(0.12)),
+                        ("y".to_string(), serde_json::json!(0.52)),
+                        ("width".to_string(), serde_json::json!(0.28)),
+                        ("height".to_string(), serde_json::json!(0.04)),
+                        ("color".to_string(), serde_json::json!("#22C55E")),
+                        ("opacity".to_string(), serde_json::json!(0.8)),
+                        (
+                            "animations".to_string(),
+                            serde_json::json!([
+                                {
+                                    "parameter": "overlay.x",
+                                    "keyframes": [
+                                        { "time_s": 0.0, "value": -0.3, "interpolation": "spring" },
+                                        { "time_s": 0.4, "value": 0.12, "interpolation": "spring" }
+                                    ]
+                                },
+                                {
+                                    "parameter": "overlay.opacity",
+                                    "keyframes": [
+                                        { "time_s": 0.0, "value": 0.0, "interpolation": "linear" },
+                                        { "time_s": 0.2, "value": 0.8, "interpolation": "linear" }
+                                    ]
+                                }
+                            ]),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ],
+        );
+        write_synthetic_video(&ffmpeg, &dir.path().join("raw/x.mp4"), "blue");
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let output = std::process::Command::new(ffmpeg)
+            .args(&spec.args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            spec.args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(spec.output_path.exists());
+    }
+
     fn write_synthetic_video(ffmpeg: &Path, path: &Path, color: &str) {
         let output = std::process::Command::new(ffmpeg)
             .args([
@@ -19012,7 +19525,7 @@ layout_box: None,
     #[test]
     fn motion_scene_image_opacity_uses_layer_local_alpha_clock() {
         let image = MotionImagePlan {
-            asset_path: PathBuf::from("/tmp/image.png"),
+            source: MotionImageSource::Asset(PathBuf::from("/tmp/image.png")),
             start_s: 5.0,
             end_s: 7.0,
             transform: MotionSceneTransform::default(),
