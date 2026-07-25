@@ -104,20 +104,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `montage-eval --ab <scenario.yaml> --ab-manifest <manifest.toml>
-/// [--ab-codex-exec <path>] [--ab-runs-root <dir>]`
-///
-/// Runs one scenario through both configs in the manifest against a real
-/// `codex-exec` binary (`SubprocessCodexExecRunner`) — this is the only
-/// code path in this crate that spawns a real process; everything under
-/// `cargo test -p montage-eval` uses `FakeCodexExecRunner` instead, per
-/// the constraint that building/testing this crate must never invoke a
-/// live model. This lane has no gate scoring wired to a real project yet:
-/// it reports the paired telemetry comparison and writes artifacts, but
-/// `AttemptOutput` (the OTIO/cuts evidence tier-1/pacing gates need) must
-/// be supplied by the caller once a real project-output convention exists
-/// — see `ab_driver::ScoredAttempt::measurable` doc comment for the
-/// broader gap.
 /// `montage-eval --taste-lower <project_root> --taste-raw <substr>
 ///   --taste-house <house> --taste-pair-id <id> --taste-raw-duration <s>`
 ///
@@ -327,6 +313,20 @@ fn run_taste(args: &[String], ground_path: &str) -> ExitCode {
     }
 }
 
+/// `montage-eval --ab <scenario.yaml> --ab-manifest <manifest.toml>
+/// [--ab-codex-exec <path>] [--ab-runs-root <dir>]`
+///
+/// Runs one scenario through both configs in the manifest against a real
+/// `codex-exec` binary (`SubprocessCodexExecRunner`) — this is the only
+/// code path in this crate that spawns a real process; everything under
+/// `cargo test -p montage-eval` uses `FakeCodexExecRunner` instead, per
+/// the constraint that building/testing this crate must never invoke a
+/// live model. This lane has no gate scoring wired to a real project yet:
+/// it reports the paired telemetry comparison and writes artifacts, but
+/// `AttemptOutput` (the OTIO/cuts evidence tier-1/pacing gates need) must
+/// be supplied by the caller once a real project-output convention exists
+/// — see `ab_driver::ScoredAttempt::measurable` doc comment for the
+/// broader gap.
 #[allow(clippy::print_stderr)]
 fn run_ab(args: &[String], scenario_path: &str) -> ExitCode {
     use montage_eval::RunArtifacts;
