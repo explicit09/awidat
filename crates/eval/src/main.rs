@@ -41,6 +41,10 @@ fn main() -> ExitCode {
         return run_ab(&args, &scenario_path);
     }
 
+    if let Some(project_root) = value_of("--taste-lower") {
+        return run_taste_lower(&args, &project_root);
+    }
+
     if let Some(ground_path) = value_of("--taste") {
         return run_taste(&args, &ground_path);
     }
@@ -114,6 +118,72 @@ fn main() -> ExitCode {
 /// be supplied by the caller once a real project-output convention exists
 /// — see `ab_driver::ScoredAttempt::measurable` doc comment for the
 /// broader gap.
+/// `montage-eval --taste-lower <project_root> --taste-raw <substr>
+///   --taste-house <house> --taste-pair-id <id> --taste-raw-duration <s>`
+///
+/// Lower an edited project's timeline into a proposed decision list over
+/// one raw asset (printed as JSON) — pipe into a file and score it with
+/// `--taste ... --taste-proposed ...`. This is the bridge that makes the
+/// agent's actual edits taste-scoreable.
+#[allow(clippy::print_stderr)]
+fn run_taste_lower(args: &[String], project_root: &str) -> ExitCode {
+    use montage_eval::taste::decision_list_from_timeline;
+
+    let value_of = |flag: &str| -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|idx| args.get(idx + 1))
+            .cloned()
+    };
+
+    let (Some(raw_ref), Some(house), Some(pair_id), Some(duration)) = (
+        value_of("--taste-raw"),
+        value_of("--taste-house"),
+        value_of("--taste-pair-id"),
+        value_of("--taste-raw-duration"),
+    ) else {
+        eprintln!(
+            "montage-eval --taste-lower requires --taste-raw <substr> \
+             --taste-house <house> --taste-pair-id <id> --taste-raw-duration <seconds>"
+        );
+        return ExitCode::FAILURE;
+    };
+    let Ok(raw_duration_s) = duration.parse::<f64>() else {
+        eprintln!("montage-eval: --taste-raw-duration '{duration}' is not a number");
+        return ExitCode::FAILURE;
+    };
+
+    let otio_path = PathBuf::from(project_root).join(montage_proto::project::files::OTIO);
+    let mut warnings = Vec::new();
+    let timeline = match montage_proto::project::read_otio_timeline(&otio_path, &mut warnings) {
+        Ok(timeline) => timeline,
+        Err(e) => {
+            eprintln!("montage-eval: reading {}: {e}", otio_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    for warning in &warnings {
+        eprintln!("montage-eval: schema warning: {warning:?}");
+    }
+
+    match decision_list_from_timeline(&timeline, &raw_ref, raw_duration_s, &house, &pair_id) {
+        Ok(list) => match serde_json::to_string_pretty(&list) {
+            Ok(s) => {
+                println!("{s}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("montage-eval: serializing decision list: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("montage-eval: lowering failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `montage-eval --taste <ground_truth.json>
 ///   (--taste-proposed <proposed.json> | --taste-baseline keep_all)`
 ///

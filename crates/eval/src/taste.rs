@@ -346,6 +346,143 @@ pub fn score(ground: &DecisionList, proposed: &DecisionList) -> Result<TasteScor
     })
 }
 
+/// Lower an EDITED project timeline into a proposed [`DecisionList`]
+/// over one raw asset — the bridge that lets the agent's actual output
+/// be taste-scored against professional ground truth.
+///
+/// Every video-track clip whose external media reference contains
+/// `raw_ref` contributes a keep span (its `source_range` in media
+/// seconds) at the factor of its `montage.speed` effect (default 1.0).
+/// The complement over `[0, raw_duration_s]` becomes cut segments,
+/// scoped pre/in/post show. Overlapping keeps are left as-is: the
+/// scorer's rasterization treats keep-wins-overlap.
+pub fn decision_list_from_timeline(
+    timeline: &montage_proto::otio::Timeline,
+    raw_ref: &str,
+    raw_duration_s: f64,
+    house: &str,
+    pair_id: &str,
+) -> Result<DecisionList, TasteError> {
+    use montage_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
+
+    let mut keeps: Vec<Segment> = Vec::new();
+    for stack_child in &timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        if track.kind != TrackKind::Video {
+            continue;
+        }
+        for track_child in &track.children {
+            let TrackChild::Clip(clip) = track_child else {
+                continue;
+            };
+            let MediaReference::External(reference) = &clip.media_reference else {
+                continue;
+            };
+            if !reference.target_url.contains(raw_ref) {
+                continue;
+            }
+            let Some(range) = clip.source_range else {
+                continue;
+            };
+            let start = range.start_time.to_seconds();
+            let end = start + range.duration.to_seconds();
+            if end <= start {
+                continue;
+            }
+            let speed = clip
+                .effects
+                .iter()
+                .find(|effect| effect.effect_name == montage_effects::SPEED)
+                .and_then(|effect| effect.metadata.get("factor"))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(1.0);
+            keeps.push(Segment {
+                action: Action::Keep,
+                raw_span: [start, end],
+                published_span: None,
+                speed: Some(speed),
+                scope: None,
+                confidence: None,
+            });
+        }
+    }
+
+    if keeps.is_empty() {
+        return Err(TasteError::Empty(format!(
+            "{pair_id} (no video clips referencing '{raw_ref}')"
+        )));
+    }
+    keeps.sort_by(|a, b| a.raw_span[0].total_cmp(&b.raw_span[0]));
+
+    // Complement -> cuts, against the merged keep coverage.
+    let mut merged: Vec<[f64; 2]> = Vec::new();
+    for keep in &keeps {
+        match merged.last_mut() {
+            Some(last) if keep.raw_span[0] <= last[1] => {
+                last[1] = last[1].max(keep.raw_span[1]);
+            }
+            _ => merged.push(keep.raw_span),
+        }
+    }
+    let first_kept = merged[0][0];
+    let last_kept = merged[merged.len() - 1][1];
+    let mut segments = keeps;
+    let mut cursor = 0.0;
+    for span in &merged {
+        if span[0] > cursor {
+            let scope = if span[0] <= first_kept {
+                CutScope::PreShow
+            } else {
+                CutScope::InShow
+            };
+            segments.push(Segment {
+                action: Action::Cut,
+                raw_span: [cursor, span[0]],
+                published_span: None,
+                speed: None,
+                scope: Some(scope),
+                confidence: None,
+            });
+        }
+        cursor = cursor.max(span[1]);
+    }
+    if raw_duration_s > cursor {
+        let scope = if cursor >= last_kept {
+            CutScope::PostShow
+        } else {
+            CutScope::InShow
+        };
+        segments.push(Segment {
+            action: Action::Cut,
+            raw_span: [cursor, raw_duration_s],
+            published_span: None,
+            speed: None,
+            scope: Some(scope),
+            confidence: None,
+        });
+    }
+    segments.sort_by(|a, b| a.raw_span[0].total_cmp(&b.raw_span[0]));
+
+    Ok(DecisionList {
+        version: 1,
+        pair_id: pair_id.to_string(),
+        house: house.to_string(),
+        raw_ref: raw_ref.to_string(),
+        published_ref: "proposed:timeline".to_string(),
+        // Not an alignment product; carry the scorer window so the
+        // document stays schema-valid (window_s must be > 0).
+        window_s: WINDOW_S,
+        alignment: Alignment {
+            published_windows: 0,
+            matched_windows: 0,
+            coverage: 0.0,
+        },
+        segments,
+    })
+}
+
 /// The keep-everything baseline: one realtime keep spanning the ground
 /// truth's horizon. The floor any real editor proposal must beat — it
 /// maximizes keep recall and fails structural curation by construction.
@@ -522,5 +659,107 @@ mod tests {
         assert_eq!(list.segments.len(), 2);
         assert_eq!(list.segments[0].scope, Some(CutScope::PreShow));
         assert_eq!(list.segments[1].speed, Some(1.15));
+    }
+
+    // ---- timeline -> decision-list lowering ----
+
+    fn timeline_with_clips(clips: Vec<montage_proto::otio::Clip>) -> montage_proto::otio::Timeline {
+        use montage_proto::otio::{Stack, StackChild, Timeline, Track, TrackChild, TrackKind};
+        let mut track = Track::empty("V1", TrackKind::Video);
+        for clip in clips {
+            track.children.push(TrackChild::Clip(clip));
+        }
+        let mut timeline = Timeline::empty("t");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        timeline.tracks = stack;
+        timeline
+    }
+
+    fn raw_clip(name: &str, url: &str, start_s: f64, dur_s: f64) -> montage_proto::otio::Clip {
+        use montage_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, TimeRange,
+        };
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(url));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(start_s * 30.0, 30.0),
+            RationalTime::new(dur_s * 30.0, 30.0),
+        ));
+        clip
+    }
+
+    #[test]
+    fn timeline_lowers_to_keeps_speeds_and_scoped_cuts() {
+        // Two keeps over the raw (10-100 @1.0, 200-300 @1.5x), a b-roll
+        // clip on another asset (ignored), horizon 400s.
+        let mut sped = raw_clip("clip-1", "raw/x.mp4", 200.0, 100.0);
+        let mut effect = montage_proto::otio::Effect::new(montage_effects::SPEED);
+        effect
+            .metadata
+            .insert("factor".to_string(), serde_json::json!(1.5));
+        sped.effects.push(effect);
+        let timeline = timeline_with_clips(vec![
+            raw_clip("clip-0", "raw/x.mp4", 10.0, 90.0),
+            sped,
+            raw_clip("broll-0", "raw/other.mp4", 0.0, 50.0),
+        ]);
+
+        let list =
+            decision_list_from_timeline(&timeline, "raw/x.mp4", 400.0, "testhouse", "pair-1")
+                .unwrap_or_else(|e| panic!("lowering succeeds: {e}"));
+
+        let keeps: Vec<&Segment> = list
+            .segments
+            .iter()
+            .filter(|s| s.action == Action::Keep)
+            .collect();
+        assert_eq!(keeps.len(), 2, "b-roll asset must not contribute keeps");
+        assert_eq!(keeps[0].raw_span, [10.0, 100.0]);
+        assert_eq!(keeps[0].speed, Some(1.0));
+        assert_eq!(keeps[1].raw_span, [200.0, 300.0]);
+        assert_eq!(keeps[1].speed, Some(1.5));
+
+        let cuts: Vec<&Segment> = list
+            .segments
+            .iter()
+            .filter(|s| s.action == Action::Cut)
+            .collect();
+        assert_eq!(cuts.len(), 3);
+        assert_eq!(cuts[0].raw_span, [0.0, 10.0]);
+        assert_eq!(cuts[0].scope, Some(CutScope::PreShow));
+        assert_eq!(cuts[1].raw_span, [100.0, 200.0]);
+        assert_eq!(cuts[1].scope, Some(CutScope::InShow));
+        assert_eq!(cuts[2].raw_span, [300.0, 400.0]);
+        assert_eq!(cuts[2].scope, Some(CutScope::PostShow));
+    }
+
+    #[test]
+    fn lowered_timeline_scores_against_ground_truth() {
+        // End-to-end: a timeline that reproduces the `ground()` fixture's
+        // decisions exactly must score perfect agreement.
+        let mut sped = raw_clip("clip-1", "raw/x.mp4", 600.0, 300.0);
+        let mut effect = montage_proto::otio::Effect::new(montage_effects::SPEED);
+        effect
+            .metadata
+            .insert("factor".to_string(), serde_json::json!(1.5));
+        sped.effects.push(effect);
+        let timeline = timeline_with_clips(vec![raw_clip("clip-0", "raw/x.mp4", 0.0, 300.0), sped]);
+
+        let proposed =
+            decision_list_from_timeline(&timeline, "raw/x.mp4", 1200.0, "testhouse", "gt")
+                .unwrap_or_else(|e| panic!("lowering succeeds: {e}"));
+        let s = score(&ground(), &proposed).unwrap_or_else(|e| panic!("scores: {e}"));
+        assert_eq!(s.keep_cut_agreement, 1.0);
+        assert_eq!(s.boundary_f1_tight, 1.0);
+        assert_eq!(s.speed_agreement, Some(1.0));
+        assert_eq!(s.kept_mass_jaccard, 1.0);
+    }
+
+    #[test]
+    fn timeline_without_matching_clips_is_an_error() {
+        let timeline = timeline_with_clips(vec![raw_clip("c", "raw/other.mp4", 0.0, 10.0)]);
+        let result = decision_list_from_timeline(&timeline, "raw/x.mp4", 100.0, "h", "p");
+        assert!(matches!(result, Err(TasteError::Empty(_))));
     }
 }
