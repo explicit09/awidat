@@ -192,7 +192,8 @@ fn write_parity_project(dir: &Path) {
         width: Some(1280),
         height: Some(720),
         template: Some("progress_bar".into()),
-        progress: Some((0.2, 0.9, 0.86)),
+        progress: Some((0.2, 0.9, 0.08)),
+        color: Some("#22D3EE".into()),
         ..MotionScenePlanRequest::default()
     })
     .expect("progress bar should plan");

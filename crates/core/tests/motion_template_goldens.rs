@@ -855,6 +855,14 @@ fn harness_scene_lower_third_matches_expander() {
 /// solids (PR #103), so this scene pins preview and export to the same
 /// pixels for that path. 3s duration matches the harness fixture clip.
 ///
+/// Placement is deliberate: cyan (#22D3EE) at y=0.08, over the dark
+/// acoustic-panel region of the fixture clip. The clip has a large
+/// yellow banner baked in across the bottom — the template's default
+/// gold accent at a low y sits ON that banner and is nearly invisible,
+/// which would leave the parity gate blind to a missing bar (verified
+/// against the first CI screenshot artifact, 2026-07-25). Keep the bar
+/// in a high-contrast region or the gate stops gating.
+///
 /// Built via `plan_motion_scene_request` in template mode (the
 /// production entry point), same as the other harness scenes.
 #[test]
@@ -867,7 +875,8 @@ fn harness_scene_progress_bar_matches_expander() {
         width: Some(1280),
         height: Some(720),
         template: Some("progress_bar".into()),
-        progress: Some((0.2, 0.9, 0.86)),
+        progress: Some((0.2, 0.9, 0.08)),
+        color: Some("#22D3EE".into()),
         ..MotionScenePlanRequest::default()
     })
     .expect("progress bar should plan");
