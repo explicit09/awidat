@@ -102,6 +102,28 @@ jobs:
       - name: Install macOS media dependencies
         if: matrix.os == 'macos-latest'
         run: brew install ffmpeg
+      # The `v8` crate's build script downloads a prebuilt static lib from
+      # GitHub releases; on a rust-cache miss that unauthenticated download
+      # gets rate-limited on shared runner IPs and the whole job dies with
+      # "could not find native static library rusty_v8" (4 consecutive
+      # runs, 2026-07-25). Prefetch it with retries and hand the path to
+      # the build script via RUSTY_V8_ARCHIVE so it never downloads.
+      # (v8 reaches the graph via codex-core -> codex-code-mode; cutting
+      # it entirely is tracked separately as a fork patch.)
+      - name: Prefetch rusty_v8 static lib
+        run: |
+          set -euo pipefail
+          V8_VERSION=$(grep -A1 '^name = "v8"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+          case "${{ matrix.os }}" in
+            macos-latest) TRIPLE=aarch64-apple-darwin ;;
+            *)            TRIPLE=x86_64-unknown-linux-gnu ;;
+          esac
+          ARCHIVE="librusty_v8_release_${TRIPLE}.a.gz"
+          URL="https://github.com/denoland/rusty_v8/releases/download/v${V8_VERSION}/${ARCHIVE}"
+          echo "prefetching ${URL}"
+          curl -sfL --retry 6 --retry-all-errors --retry-delay 5 \
+            -o "${RUNNER_TEMP}/${ARCHIVE}" "${URL}"
+          echo "RUSTY_V8_ARCHIVE=${RUNNER_TEMP}/${ARCHIVE}" >> "${GITHUB_ENV}"
       - uses: Swatinem/rust-cache@v2
         with:
           # Stable key (not the per-job default) so the cache is reusable; one
