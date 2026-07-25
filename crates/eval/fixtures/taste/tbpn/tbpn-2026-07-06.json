@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "pair_id": "tbpn-2026-07-06",
+  "house": "tbpn",
+  "raw_ref": "WwLBYeito9Q",
+  "published_ref": "p6oniGpzzds",
+  "window_s": 15.0,
+  "alignment": {
+    "published_windows": 122,
+    "matched_windows": 118,
+    "coverage": 0.967
+  },
+  "segments": [
+    {
+      "action": "cut",
+      "raw_span": [
+        0.0,
+        300.0
+      ],
+      "scope": "pre_show"
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        300.0,
+        1050.0
+      ],
+      "published_span": [
+        0.0,
+        720.0
+      ],
+      "speed": 1.0,
+      "confidence": 0.784
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        1035.0,
+        1110.0
+      ],
+      "published_span": [
+        720.0,
+        780.0
+      ],
+      "speed": 1.25,
+      "confidence": 0.639
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        1095.0,
+        1800.0
+      ],
+      "published_span": [
+        780.0,
+        1155.0
+      ],
+      "speed": 1.88,
+      "confidence": 0.79
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        1365.0,
+        1455.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        1605.0,
+        1695.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        1710.0,
+        1755.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        1785.0,
+        1860.0
+      ],
+      "published_span": [
+        1155.0,
+        1200.0
+      ],
+      "speed": 1.67,
+      "confidence": 0.78
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        1860.0,
+        2265.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        2265.0,
+        2595.0
+      ],
+      "published_span": [
+        1200.0,
+        1365.0
+      ],
+      "speed": 2.0,
+      "confidence": 0.757
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        2325.0,
+        2430.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        2460.0,
+        2520.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        2595.0,
+        2745.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        2745.0,
+        3000.0
+      ],
+      "published_span": [
+        1365.0,
+        1530.0
+      ],
+      "speed": 1.55,
+      "confidence": 0.743
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        2940.0,
+        2985.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        3000.0,
+        3315.0
+      ],
+      "scope": "in_show"
+    },
+    {
+      "action": "keep",
+      "raw_span": [
+        3315.0,
+        3570.0
+      ],
+      "published_span": [
+        1530.0,
+        1770.0
+      ],
+      "speed": 1.0,
+      "confidence": 0.858
+    },
+    {
+      "action": "cut",
+      "raw_span": [
+        3570.0,
+        7845.0
+      ],
+      "scope": "post_show"
+    }
+  ]
+}

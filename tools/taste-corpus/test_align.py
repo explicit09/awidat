@@ -249,6 +249,57 @@ class CliEmitsSchemaConformingJson(unittest.TestCase):
                 self.assertEqual(len(seg["raw_span"]), 2)
 
 
+class IdentifyRanksTruePairFirst(unittest.TestCase):
+    def test_identify_picks_the_true_raw_confidently(self):
+        import identify
+
+        with tempfile.TemporaryDirectory() as d:
+            candidates_dir = os.path.join(d, "raws")
+            os.makedirs(candidates_dir)
+            raw = build_raw(120)
+            true_raw = os.path.join(candidates_dir, "true.vtt")
+            write_vtt(true_raw, raw)
+            # A decoy raw with fully DISJOINT vocabulary (no shared topic
+            # backbone): unique letter-words only. A decoy built from
+            # `sentence()` would share the cycling topic words in every
+            # window — far denser overlap than real distinct episodes
+            # (3-15% coverage in the real TBPN matrices) — and defeats
+            # identification by construction.
+            decoy = [
+                (
+                    i * 5.0,
+                    " ".join(index_word(5000 + i, salt) for salt in range(6)),
+                )
+                for i in range(120)
+            ]
+            decoy_raw = os.path.join(candidates_dir, "decoy.vtt")
+            write_vtt(decoy_raw, decoy)
+            # Published = a subset of the true raw; lives OUTSIDE the
+            # candidates dir so the glob can't match the query itself.
+            pub = [(t, text) for t, text in raw[:80]]
+            pub_path = os.path.join(d, "pub.vtt")
+            write_vtt(pub_path, pub)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(os.path.dirname(__file__), "identify.py"),
+                    "--published-vtt",
+                    pub_path,
+                    "--candidates",
+                    os.path.join(candidates_dir, "*.vtt"),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            _ = identify  # imported to fail fast on syntax errors
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            doc = json.loads(proc.stdout)
+            self.assertTrue(doc["confident"])
+            self.assertTrue(doc["match"].endswith("true.vtt"))
+
+
 class VttParsing(unittest.TestCase):
     def test_vtt_cues_strip_tags_and_ordinals(self):
         with tempfile.TemporaryDirectory() as d:
