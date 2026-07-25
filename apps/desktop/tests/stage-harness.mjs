@@ -131,6 +131,14 @@ async function assertLowerThird(page) {
   assert.deepEqual(texts, ["Ada Lovelace", "Mathematician"], "lower-third text overlays mismatch");
 }
 
+/** Progress bar: a single shapes-only layer (the export-parity gate's
+ * scene of record — no text so the ffmpeg-vs-browser SSIM in
+ * `crates/core/tests/export_parity_gate.rs` isn't swamped by font
+ * rasterization differences). */
+async function assertProgressBar(page) {
+  await assertOverlayCounts(page, { legacyTitles: 0, motionTitles: 0, shapes: 1, images: 0 });
+}
+
 /** Kinetic text: word layers have their own windows, so the visible
  * word set is timestamp-specific. */
 function assertKineticWords(expectedWords) {
@@ -172,6 +180,24 @@ const CASES = [
     scene: "/fixtures/stage/scene-lower-third.json",
     t: "2.0",
     assertDom: assertLowerThird,
+  },
+  {
+    // Bar mid-growth (scale ~0.61 of its 0.9 width) and mid fade-in
+    // (opacity 0.75) — both animation channels in flight.
+    name: "scene-progress-bar",
+    scene: "/fixtures/stage/scene-progress-bar.json",
+    t: "0.3",
+    assertDom: assertProgressBar,
+  },
+  {
+    // Settled: full width, full opacity. This timestamp's golden is the
+    // reference frame the export-parity gate compares the ffmpeg render
+    // against — keep it away from animation edges so the comparison
+    // isn't sensitive to sub-frame time alignment.
+    name: "scene-progress-bar",
+    scene: "/fixtures/stage/scene-progress-bar.json",
+    t: "1.5",
+    assertDom: assertProgressBar,
   },
   {
     // "Ship" at full hold (opacity held; its exit fade only starts at

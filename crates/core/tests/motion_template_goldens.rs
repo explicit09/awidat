@@ -845,6 +845,46 @@ fn harness_scene_lower_third_matches_expander() {
     assert_matches_harness_golden("scene-lower-third.json", &actual);
 }
 
+/// Progress-bar harness scene: the cross-renderer export-parity gate's
+/// scene of record (see `export_parity_gate.rs`). Deliberately
+/// SHAPES-ONLY — no text layer — because the parity gate SSIM-compares
+/// the ffmpeg export against the browser-rendered stage golden, and
+/// font rasterization differences between CSS and drawtext would
+/// swamp the comparison. The bar's `overlay.scale` ramp is exactly the
+/// geometry-animation channel the render lowering ships via lavfi
+/// solids (PR #103), so this scene pins preview and export to the same
+/// pixels for that path. 3s duration matches the harness fixture clip.
+///
+/// Placement is deliberate: cyan (#22D3EE) at y=0.08, over the dark
+/// acoustic-panel region of the fixture clip. The clip has a large
+/// yellow banner baked in across the bottom — the template's default
+/// gold accent at a low y sits ON that banner and is nearly invisible,
+/// which would leave the parity gate blind to a missing bar (verified
+/// against the first CI screenshot artifact, 2026-07-25). Keep the bar
+/// in a high-contrast region or the gate stops gating.
+///
+/// Built via `plan_motion_scene_request` in template mode (the
+/// production entry point), same as the other harness scenes.
+#[test]
+fn harness_scene_progress_bar_matches_expander() {
+    let plan = plan_motion_scene_request(&MotionScenePlanRequest {
+        request: "progress bar for the challenge".into(),
+        scene_id: Some("progress-bar".into()),
+        duration_s: Some(3.0),
+        fps: Some(30.0),
+        width: Some(1280),
+        height: Some(720),
+        template: Some("progress_bar".into()),
+        progress: Some((0.2, 0.9, 0.08)),
+        color: Some("#22D3EE".into()),
+        ..MotionScenePlanRequest::default()
+    })
+    .expect("progress bar should plan");
+    let scene = harness_scene(&plan.scene.id, &plan.scene.layers);
+    let actual = serde_json::to_string_pretty(&scene).expect("serialize harness scene");
+    assert_matches_harness_golden("scene-progress-bar.json", &actual);
+}
+
 /// Kinetic-text harness scene: words staggered so the harness catches
 /// distinct states at its two screenshot times — at t=0.5 "Ship" is at
 /// full hold (its exit fade only starts at t=0.54) and "it" is

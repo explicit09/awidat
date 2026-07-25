@@ -1,0 +1,71 @@
+{
+  "layers": [
+    {
+      "kind": "shape",
+      "key": "progress-bar:progress-bar",
+      "startS": 0.0,
+      "endS": 3.0,
+      "shape": "rect",
+      "x": 0.0,
+      "y": 0.08,
+      "width": 0.9,
+      "height": 0.012,
+      "color": "#22D3EE",
+      "opacity": 1.0,
+      "scale": 1.0,
+      "anchorX": 0.0,
+      "anchorY": 0.5,
+      "rotationDeg": 0.0,
+      "animations": [
+        {
+          "id": "progress-bar:progress-bar:overlay.scale",
+          "parameter": "overlay.scale",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": 0.22222222222222224,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 0.6,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            }
+          ]
+        },
+        {
+          "id": "progress-bar:progress-bar:overlay.opacity",
+          "parameter": "overlay.opacity",
+          "keyframes": [
+            {
+              "timeS": 0.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 0.4,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 2.6,
+              "value": 1.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            },
+            {
+              "timeS": 3.0,
+              "value": 0.0,
+              "interpolation": "linear",
+              "easing": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
