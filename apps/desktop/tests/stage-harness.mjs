@@ -289,7 +289,14 @@ async function captureCase(ctx, testCase, shotPath) {
     });
 
     await page.goto(harnessUrl, { waitUntil: "networkidle" });
-    await page.waitForFunction(() => document.title === "stage-harness-ready", null, { timeout: 15000 });
+    // Readiness = the presented-frame handshake (video seek + decode +
+    // requestVideoFrameCallback), which on a loaded CI runner can
+    // legitimately take >15s — that timeout flaked twice in one day on
+    // DIFFERENT scenes (kinetic-text t=0.5, progress-bar t=0.3), i.e.
+    // runner load, not scene content. 45s keeps the gate honest (a
+    // genuinely wedged harness still fails) without tripping on slow
+    // decode.
+    await page.waitForFunction(() => document.title === "stage-harness-ready", null, { timeout: 45000 });
 
     assert.deepEqual(errors, [], `harness console/page errors: ${errors.join("; ")}`);
 
