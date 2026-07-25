@@ -174,8 +174,9 @@ const CASES = [
     assertDom: assertLowerThird,
   },
   {
-    // "Ship" mid-exit-fade, "it" mid pop-in (opacity+spring scale),
-    // "today" not yet started.
+    // "Ship" at full hold (opacity held; its exit fade only starts at
+    // t=0.54), "it" mid pop-in (opacity+spring scale), "today" not yet
+    // started (begins at t=0.9).
     name: "scene-kinetic-text",
     scene: "/fixtures/stage/scene-kinetic-text.json",
     t: "0.5",

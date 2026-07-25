@@ -846,9 +846,10 @@ fn harness_scene_lower_third_matches_expander() {
 }
 
 /// Kinetic-text harness scene: words staggered so the harness catches
-/// distinct states at its two screenshot times — at t=0.5 "Ship" is
-/// mid-exit-fade and "it" is mid-pop-in ("today" not yet started); at
-/// t=1.5 only "today" remains (settled, holds to scene end).
+/// distinct states at its two screenshot times — at t=0.5 "Ship" is at
+/// full hold (its exit fade only starts at t=0.54) and "it" is
+/// mid-pop-in ("today" not yet started, begins at t=0.9); at t=1.5 only
+/// "today" remains (settled, holds to scene end).
 ///
 /// Built via `plan_motion_scene_request` in template mode (the
 /// production entry point) so the harness scene tracks the fitter and

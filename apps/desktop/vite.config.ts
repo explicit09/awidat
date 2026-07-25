@@ -1,14 +1,32 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { resolve } from "node:path";
+import { rm } from "node:fs/promises";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// Keep the stage-harness fixtures (video clip + images + scene JSONs,
+// ~1.5MB) out of the production bundle. They live under `public/` so the
+// dev server serves them at `/fixtures/*` for the harness, but nothing in
+// the app loads them at runtime — only the dev-only `/stage-harness` route
+// does. `apply: "build"` scopes this to `tauri build`; dev serving is
+// untouched.
+function dropHarnessFixtures(): Plugin {
+  return {
+    name: "drop-harness-fixtures",
+    apply: "build",
+    async closeBundle() {
+      const outDir = resolve(__dirname, "dist/fixtures");
+      await rm(outDir, { recursive: true, force: true });
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), dropHarnessFixtures()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
