@@ -17,6 +17,7 @@ mod scenario;
 mod scorecard;
 mod sound;
 pub mod suite;
+pub mod taste;
 
 pub use cuts_io::{CutsIoError, load_cut_times};
 pub use measurable::{

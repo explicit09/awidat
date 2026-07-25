@@ -41,6 +41,10 @@ fn main() -> ExitCode {
         return run_ab(&args, &scenario_path);
     }
 
+    if let Some(ground_path) = value_of("--taste") {
+        return run_taste(&args, &ground_path);
+    }
+
     let mut lanes = Vec::new();
     for lane in ["--product", "--stress", "--live"] {
         if has(lane) {
@@ -110,6 +114,72 @@ fn main() -> ExitCode {
 /// be supplied by the caller once a real project-output convention exists
 /// — see `ab_driver::ScoredAttempt::measurable` doc comment for the
 /// broader gap.
+/// `montage-eval --taste <ground_truth.json>
+///   (--taste-proposed <proposed.json> | --taste-baseline keep_all)`
+///
+/// Scores a proposed decision list against professional ground truth
+/// (docs/taste-gate-plan-2026-07-25.md Phase B) and prints the
+/// `TasteScore` JSON. `--taste-baseline keep_all` scores the
+/// keep-everything floor instead of a proposed file.
+#[allow(clippy::print_stderr)]
+fn run_taste(args: &[String], ground_path: &str) -> ExitCode {
+    use montage_eval::taste::{DecisionList, keep_everything_baseline, score};
+
+    let value_of = |flag: &str| -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|idx| args.get(idx + 1))
+            .cloned()
+    };
+
+    let ground = match DecisionList::from_json_file(ground_path) {
+        Ok(list) => list,
+        Err(e) => {
+            eprintln!("montage-eval: loading ground truth {ground_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let proposed = match (value_of("--taste-proposed"), value_of("--taste-baseline")) {
+        (Some(path), None) => match DecisionList::from_json_file(&path) {
+            Ok(list) => list,
+            Err(e) => {
+                eprintln!("montage-eval: loading proposed list {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        (None, Some(name)) if name == "keep_all" => keep_everything_baseline(&ground),
+        (None, Some(other)) => {
+            eprintln!("montage-eval: unknown --taste-baseline '{other}' (expected keep_all)");
+            return ExitCode::FAILURE;
+        }
+        _ => {
+            eprintln!(
+                "montage-eval --taste requires exactly one of \
+                 --taste-proposed <file> or --taste-baseline keep_all"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match score(&ground, &proposed) {
+        Ok(taste_score) => match serde_json::to_string_pretty(&taste_score) {
+            Ok(s) => {
+                println!("{s}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("montage-eval: serializing taste score: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("montage-eval: taste scoring failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[allow(clippy::print_stderr)]
 fn run_ab(args: &[String], scenario_path: &str) -> ExitCode {
     use montage_eval::RunArtifacts;
