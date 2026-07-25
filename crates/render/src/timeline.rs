@@ -5694,6 +5694,7 @@ fn append_motion_images_and_annotations(
     motion_images: &[MotionImagePlan],
     annotations: &[AnnotationPlan],
     first_image_input: usize,
+    canvas: RenderCanvas,
 ) -> FilterPlan {
     // Assets form a contiguous prefix, solids a contiguous suffix.
     let solid_start = motion_images
@@ -5701,13 +5702,15 @@ fn append_motion_images_and_annotations(
         .position(|plan| matches!(plan.source, MotionImageSource::SolidColor { .. }))
         .unwrap_or(motion_images.len());
     let (asset_plans, solid_plans) = motion_images.split_at(solid_start);
-    let images = append_motion_image_layers(base, asset_plans, first_image_input, "motion_image");
+    let images =
+        append_motion_image_layers(base, asset_plans, first_image_input, "motion_image", canvas);
     let annotated = append_annotations(images, annotations);
     append_motion_image_layers(
         annotated,
         solid_plans,
         first_image_input + solid_start,
         "motion_shape",
+        canvas,
     )
 }
 
@@ -5722,6 +5725,7 @@ fn append_motion_image_layers(
     motion_images: &[MotionImagePlan],
     first_image_input: usize,
     label_prefix: &str,
+    canvas: RenderCanvas,
 ) -> FilterPlan {
     if motion_images.is_empty() {
         return base;
@@ -5732,10 +5736,35 @@ fn append_motion_image_layers(
         let input_idx = first_image_input + idx;
         let src = format!("[{label_prefix}_src{idx}]");
         let scaled = format!("[{label_prefix}_scaled{idx}]");
-        let reference = format!("[{label_prefix}_ref{idx}]");
         let rotated = format!("[{label_prefix}_rotated{idx}]");
         let alpha = format!("[{label_prefix}_alpha{idx}]");
         let next = format!("[{label_prefix}_v{idx}]");
+
+        // Unrotated SOLIDS take a dedicated full-canvas geq lowering:
+        // the color source is canvas-sized (see
+        // `append_motion_image_input_args`), and geq carves the animated
+        // rectangle out of its alpha per pixel — position, scale, and
+        // opacity all animate inside ONE statically-sized filter chain.
+        // This is the only reliable way to animate geometry: ffmpeg
+        // negotiates filter-link dimensions once, so a per-frame `scale`
+        // silently auto-conforms back to the first frame's size
+        // (frozen-animation bug caught by the export-parity gate,
+        // 2026-07-25). Solids with rotation stay on the legacy chain
+        // below (rotation needs resampling geq can't do); their known
+        // rotate-padding offset is a pre-existing follow-up.
+        if matches!(image.source, MotionImageSource::SolidColor { .. })
+            && !motion_image_has_rotation(image)
+        {
+            if !filter.ends_with(';') && !filter.is_empty() {
+                filter.push(';');
+            }
+            filter.push_str(&append_solid_geq_layer(
+                image, input_idx, &src, &alpha, &next, &current, canvas,
+            ));
+            current = next;
+            continue;
+        }
+
         let scale = motion_image_animation_value_expr(image, "overlay.scale", "1", "t");
         let width = format!("{}*({scale})", fmt_filter_num(image.transform.width));
         let height = format!("{}*({scale})", fmt_filter_num(image.transform.height));
@@ -5776,20 +5805,56 @@ fn append_motion_image_layers(
             "t",
         );
         let rotation_deg = motion_image_rotation_deg_expr(image, "t");
-        let scale_mode = match image.transform.fit {
-            MotionSceneTransformFit::Contain => ":force_original_aspect_ratio=decrease",
-            MotionSceneTransformFit::Cover => ":force_original_aspect_ratio=increase",
-            MotionSceneTransformFit::Stretch => "",
+        // Solids stretch exactly to their computed geometry — aspect
+        // preservation is meaningless for a flat color and, combined
+        // with extreme bar aspects (e.g. 128:1), turns rounding drift
+        // into visible size errors. Assets keep their authored fit.
+        let scale_mode = match image.source {
+            MotionImageSource::SolidColor { .. } => "",
+            MotionImageSource::Asset(_) => match image.transform.fit {
+                MotionSceneTransformFit::Contain => ":force_original_aspect_ratio=decrease",
+                MotionSceneTransformFit::Cover => ":force_original_aspect_ratio=increase",
+                MotionSceneTransformFit::Stretch => "",
+            },
         };
         if !filter.ends_with(';') && !filter.is_empty() {
             filter.push(';');
         }
+        // Layer geometry scales against LITERAL canvas dimensions, via a
+        // plain `scale` filter. The previous `scale2ref` formulation
+        // (w=main_w*(...)) was wrong twice over: in scale2ref's w/h
+        // expressions main_w/main_h alias the input BEING SCALED (not
+        // the reference canvas), and scale2ref itself is deprecated with
+        // expression semantics that drift across ffmpeg 6/7/8 — the
+        // export-parity gate (2026-07-25) caught a 1152x9 bar rendering
+        // as a canvas-sized slab on ffmpeg 6.1 and as a frozen-scale
+        // block on 8.1. Motion IMAGES were silently mis-sized the same
+        // way since the lowering landed (smoke tests only assert exit
+        // status). The canvas is known at argv-build time, so literal
+        // dimensions are exact and portable; `t` in scale exprs is
+        // available with eval=frame. The overlay x/y below correctly
+        // keep main_w/main_h: in the OVERLAY filter those genuinely
+        // mean the background input.
+        let canvas_w = canvas.width;
+        let canvas_h = canvas.height;
+        // The rotate stage pads its output to a hypot(w,h) square even at
+        // 0°, shifting the layer by the padding delta since the overlay
+        // position doesn't compensate — skip it entirely for unrotated
+        // layers (exact position). Rotated layers keep the stage; their
+        // padding offset is a known pre-existing follow-up.
+        let rotate_stage = if motion_image_has_rotation(image) {
+            format!(
+                "{scaled}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated};\
+                 {rotated}format=rgba,"
+            )
+        } else {
+            format!("{scaled}format=rgba,")
+        };
         filter.push_str(&format!(
             "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS{src};\
-             {src}{current}scale2ref=w=main_w*({width}):h=main_h*({height}){scale_mode}:eval=frame{scaled}{reference};\
-             {scaled}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated};\
-             {rotated}format=rgba,{alpha_filter}{alpha};\
-             {reference}{alpha}overlay=x=main_w*({x}):y=main_h*({y}):enable='between(t\\,{start}\\,{end})'{next}",
+             {src}scale=w='{canvas_w}*({width})':h='{canvas_h}*({height})'{scale_mode}:eval=frame{scaled};\
+             {rotate_stage}{alpha_filter}{alpha};\
+             {current}{alpha}overlay=x=main_w*({x}):y=main_h*({y}):enable='between(t\\,{start}\\,{end})'{next}",
             start = image.start_s,
             end = image.end_s,
         ));
@@ -5805,6 +5870,77 @@ fn append_motion_image_layers(
 fn motion_image_rotation_deg_expr(image: &MotionImagePlan, time_var: &str) -> String {
     let fallback = fmt_filter_num(image.transform.rotation_deg);
     motion_image_animation_value_expr(image, "overlay.rotation_deg", &fallback, time_var)
+}
+
+/// True when the layer rotates at all: a non-zero static rotation or any
+/// `overlay.rotation_deg` animation.
+fn motion_image_has_rotation(image: &MotionImagePlan) -> bool {
+    image.transform.rotation_deg != 0.0
+        || image
+            .animations
+            .iter()
+            .any(|animation| animation.parameter == "overlay.rotation_deg")
+}
+
+/// Emit the filter chain for one unrotated solid: a full-canvas color
+/// plane whose alpha is carved per-pixel by geq into the animated
+/// rectangle, then a whole-frame overlay.
+///
+/// Geometry semantics mirror the stage preview (`motionScene.tsx`): the
+/// rect's un-scaled top-left is `(x, y)` in canvas fractions, and
+/// `overlay.scale` scales width/height around the anchor point
+/// `(anchor_x, anchor_y)` inside the rect — so
+/// `left(t) = W*(x + ax*w*(1-s(t)))` and `width(t) = W*w*s(t)`.
+/// Time exprs use geq's `T` mapped through the same layer-local
+/// convention the legacy alpha stage uses.
+#[allow(clippy::too_many_arguments)] // one emit site; a struct would only relabel the same locals
+fn append_solid_geq_layer(
+    image: &MotionImagePlan,
+    input_idx: usize,
+    src: &str,
+    alpha: &str,
+    next: &str,
+    current: &str,
+    canvas: RenderCanvas,
+) -> String {
+    let time_var = format!("(T+{})", fmt_filter_num(image.start_s));
+    let scale = motion_image_animation_value_expr(image, "overlay.scale", "1", &time_var);
+    let x = motion_image_animation_value_expr(
+        image,
+        "overlay.x",
+        &fmt_filter_num(image.transform.x),
+        &time_var,
+    );
+    let y = motion_image_animation_value_expr(
+        image,
+        "overlay.y",
+        &fmt_filter_num(image.transform.y),
+        &time_var,
+    );
+    let opacity = motion_image_animation_value_expr(
+        image,
+        "overlay.opacity",
+        &fmt_filter_num(image.transform.opacity),
+        &time_var,
+    );
+    let canvas_w = canvas.width;
+    let canvas_h = canvas.height;
+    let w0 = fmt_filter_num(image.transform.width);
+    let h0 = fmt_filter_num(image.transform.height);
+    let ax = fmt_filter_num(image.transform.anchor_x);
+    let ay = fmt_filter_num(image.transform.anchor_y);
+    let left = format!("{canvas_w}*(({x})+({ax})*({w0})*(1-({scale})))");
+    let top = format!("{canvas_h}*(({y})+({ay})*({h0})*(1-({scale})))");
+    let right = format!("({left})+{canvas_w}*({w0})*({scale})");
+    let bottom = format!("({top})+{canvas_h}*({h0})*({scale})");
+    format!(
+        "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS{src};\
+         {src}format=gbrap,geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':\
+         a='alpha(X\\,Y)*({opacity})*gte(X\\,{left})*lt(X\\,{right})*gte(Y\\,{top})*lt(Y\\,{bottom})'{alpha};\
+         {current}{alpha}overlay=x=0:y=0:enable='between(t\\,{start}\\,{end})'{next}",
+        start = image.start_s,
+        end = image.end_s,
+    )
 }
 
 fn motion_image_animation_value_expr(
@@ -6139,7 +6275,7 @@ fn apply_overlay_matte_filter(
         format!(
             "{input_label}format=rgba{matte_rgba};\
              {matte_source_filter}\
-             {matte_stream_label}{matte_rgba}scale2ref=w=main_w:h=main_h{matte_scaled}{matte_ref};\
+             {matte_stream_label}{matte_rgba}scale2ref=w=ref_w:h=ref_h{matte_scaled}{matte_ref};\
              {matte_ref}{matte_scaled}alphamerge=shortest=1{matte_label};"
         ),
         matte_label,
@@ -6503,7 +6639,7 @@ fn apply_overlay_sample_matte_filter(
     filter.push_str(&format!(
         "{input_label}format=rgba{matte_rgba};\
          {matte_source_filter}\
-         {matte_stream_label}{matte_rgba}scale2ref=w=main_w:h=main_h{matte_scaled}{matte_ref};\
+         {matte_stream_label}{matte_rgba}scale2ref=w=ref_w:h=ref_h{matte_scaled}{matte_ref};\
          {matte_ref}{matte_scaled}alphamerge=shortest=1{matte_label};"
     ));
     matte_label
@@ -8145,7 +8281,7 @@ fn masked_color_pipeline_filter_block(
         "{in_label}split{orig}{to_lut};\
          {to_lut}{}{lutted};\
          [{mask_input_index}:v:0]format=gray,loop=-1:1{mask_loop};\
-         {mask_loop}{lutted}scale2ref=w=main_w:h=main_h{mask_scaled}{lut_ref};\
+         {mask_loop}{lutted}scale2ref=w=ref_w:h=ref_h{mask_scaled}{lut_ref};\
          {lut_ref}{mask_scaled}alphamerge{lut_alpha};\
          {orig}{lut_alpha}overlay=format=auto{out_label}",
         lut3d_filter(look_lut, plan.look_interpolation.as_deref()),
@@ -10513,7 +10649,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     for image in motion_images {
-        append_motion_image_input_args(&mut argv, image);
+        append_motion_image_input_args(&mut argv, image, canvas);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
@@ -10537,6 +10673,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         motion_images,
         annotations,
         first_motion_image_input,
+        canvas,
     );
     let ffmpeg_broadcast_overlay = browser_broadcast_overlay
         .is_none()
@@ -10630,7 +10767,11 @@ fn append_video_overlay_input_args(argv: &mut Vec<String>, segment: &TimelineSeg
     }
 }
 
-fn append_motion_image_input_args(argv: &mut Vec<String>, image: &MotionImagePlan) {
+fn append_motion_image_input_args(
+    argv: &mut Vec<String>,
+    image: &MotionImagePlan,
+    canvas: RenderCanvas,
+) {
     match &image.source {
         MotionImageSource::Asset(asset_path) => {
             argv.extend([
@@ -10642,23 +10783,24 @@ fn append_motion_image_input_args(argv: &mut Vec<String>, image: &MotionImagePla
                 asset_path.to_string_lossy().into_owned(),
             ]);
         }
-        MotionImageSource::SolidColor {
-            color,
-            width_px,
-            height_px,
-        } => {
-            // Synthesized flat-color layer: a lavfi `color=` source
-            // sized to the layer geometry, trimmed to the layer window
-            // (`-t`) so it loops for exactly the same duration a still
-            // asset would. The scale2ref/overlay/rotate machinery in
-            // `append_motion_image_layers` treats it identically to a still.
+        MotionImageSource::SolidColor { color, .. } => {
+            // Synthesized flat-color layer: a FULL-CANVAS lavfi `color=`
+            // source, trimmed to the layer window (`-t`). The geq-based
+            // lowering in `append_motion_image_layers` carves the
+            // animated rectangle out of this canvas-sized plane per
+            // pixel — full-canvas dimensions keep every filter link
+            // statically sized, which is what makes animated geometry
+            // work at all (ffmpeg negotiates link dimensions once; a
+            // per-frame `scale` gets auto-conformed back to the first
+            // frame's size, freezing the animation — caught by the
+            // export-parity gate, 2026-07-25).
             argv.extend([
                 "-f".into(),
                 "lavfi".into(),
                 "-t".into(),
                 format!("{}", image.end_s - image.start_s),
                 "-i".into(),
-                format!("color=c={color}:s={width_px}x{height_px}"),
+                format!("color=c={color}:s={}x{}", canvas.width, canvas.height),
             ]);
         }
     }
@@ -10783,7 +10925,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     for image in motion_images {
-        append_motion_image_input_args(&mut argv, image);
+        append_motion_image_input_args(&mut argv, image, canvas);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
@@ -10834,6 +10976,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         motion_images,
         annotations,
         first_motion_image_input,
+        canvas,
     );
     filter = annotated.filter_complex;
     let mut video_label = annotated.video_out_label;
@@ -18665,16 +18808,22 @@ layout_box: None,
 
         let spec = build_timeline_render_spec(dir.path()).unwrap();
         let cmd = spec.args.join(" ");
-        // Synthesized lavfi input sized to 0.28×1920 × 0.04×1080 = 538×43.
+        // Synthesized lavfi input is FULL-CANVAS (static link dims are
+        // what make animated geometry work — see append_solid_geq_layer);
+        // the geq alpha stage carves the animated rect out of it.
         assert!(
-            cmd.contains("color=c=#22C55E:s=538x43"),
-            "expected a lavfi color input for the animated shape: {cmd}"
+            cmd.contains("color=c=#22C55E:s=1920x1080"),
+            "expected a full-canvas lavfi color input for the animated shape: {cmd}"
         );
-        // The shape rides the motion-image machinery under its own label
-        // namespace, and the drawbox path no longer carries this layer.
+        // The shape rides its own label namespace through the geq
+        // lowering, and the drawbox path no longer carries this layer.
         assert!(
             cmd.contains("[motion_shape_src0]"),
             "expected motion_shape-namespaced labels: {cmd}"
+        );
+        assert!(
+            cmd.contains("gte(X"),
+            "expected geq rect-carving alpha expressions: {cmd}"
         );
         assert!(
             !cmd.contains("drawbox"),

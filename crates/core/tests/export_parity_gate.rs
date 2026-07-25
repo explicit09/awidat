@@ -60,17 +60,19 @@ const VACUITY_T: f64 = 0.05;
 
 /// Minimum SSIM for the export frame vs the browser golden.
 ///
-/// PROVISIONAL until first calibration: 0.90 is an informed prior
-/// (browser-vs-browser goldens gate at 0.98; cross-renderer flat-rect
-/// scenes lose a little to scaling/AA/color-pipeline differences but
-/// stay well above wrong-content scores). The gate asserts pass > MIN
-/// AND vacuity < MIN, so a mis-set threshold fails loudly in one
-/// direction or the other rather than passing vacuously. Once the
-/// goldens exist, replace this comment with the measured pass/vacuity
-/// SSIMs and re-center the threshold between them. If the gate fails
-/// after an intentional renderer change, re-run the stage harness to
-/// refresh the golden first; recalibrate here only if the scene itself
-/// changed.
+/// Calibration (2026-07-25, darwin ffmpeg 8.1 export vs the linux
+/// browser golden — a cross-platform comparison, so same-platform CI
+/// scores should be at least this good): pass frame 0.9746, vacuity
+/// frame 0.8352. The 0.90 threshold sits between the populations with
+/// ~0.07 margin both sides. During bring-up this gate caught three
+/// real export bugs (scale2ref canvas-constant misuse, frozen animated
+/// scale from per-frame link renegotiation, rotate hypot-padding
+/// offset) that scored 0.77–0.96 across intermediate states — the
+/// margins are meaningful, not decorative. The dual-sided assertion
+/// (pass > MIN AND vacuity < MIN) makes a mis-set threshold fail
+/// loudly rather than pass vacuously. If the gate fails after an
+/// intentional renderer change, re-run the stage harness to refresh
+/// the golden first; recalibrate here only if the scene itself changed.
 const MIN_CROSS_RENDERER_SSIM: f64 = 0.90;
 
 fn desktop_fixture(rel: &str) -> PathBuf {
@@ -108,9 +110,13 @@ fn run_ffmpeg(ffmpeg: &Path, args: &[&str], cwd: &Path) -> std::process::Output 
         .expect("spawn ffmpeg")
 }
 
-/// Extract the frame at `t` from `video` as a PNG. Output seeking
-/// (`-ss` before `-i` on a decoded stream) is frame-accurate in modern
-/// ffmpeg for this purpose.
+/// Extract the frame at `t` from `video` as a PNG, scaled to the
+/// golden's 1280x720. The export conforms to the 16:9 1920x1080 master
+/// canvas (`timeline_render_canvas` has no 720p option), so the frame
+/// takes a deterministic bicubic downscale back to golden size; the
+/// clip's 720->1080->720 round trip softens the background slightly,
+/// which the threshold calibration absorbs. Output seeking (`-ss`
+/// before `-i` on a decoded stream) is frame-accurate in modern ffmpeg.
 fn extract_frame(ffmpeg: &Path, cwd: &Path, video: &Path, t: f64, out: &Path) {
     let t = format!("{t}");
     let output = run_ffmpeg(
@@ -123,6 +129,8 @@ fn extract_frame(ffmpeg: &Path, cwd: &Path, video: &Path, t: f64, out: &Path) {
             &video.to_string_lossy(),
             "-frames:v",
             "1",
+            "-vf",
+            "scale=1280:720:flags=bicubic",
             &out.to_string_lossy(),
         ],
         cwd,
@@ -160,14 +168,39 @@ fn ssim(ffmpeg: &Path, cwd: &Path, a: &Path, b: &Path) -> f64 {
 /// Build a minimal project: the shared 3s harness fixture clip on one
 /// video track, plus the progress-bar MotionScene from the SAME
 /// production planning entry point the harness fixture derives from.
-fn write_parity_project(dir: &Path) {
+fn write_parity_project(dir: &Path, ffmpeg: &Path) {
     let asset_rel = "raw/x.mp4";
     std::fs::create_dir_all(dir.join("raw")).expect("mkdir raw");
-    std::fs::copy(
-        desktop_fixture("public/fixtures/stage/clip.mp4"),
-        dir.join(asset_rel),
-    )
-    .expect("copy harness fixture clip");
+    // The harness fixture clip is VIDEO-ONLY, but the timeline
+    // filtergraph maps `[0:a:0]` into its concat — a video-only source
+    // fails with "Stream specifier ':a:0' matches no streams". Remux
+    // with a silent track, stream-copying video so the pixels the
+    // golden was captured from are byte-identical.
+    let src = desktop_fixture("public/fixtures/stage/clip.mp4");
+    let output = run_ffmpeg(
+        ffmpeg,
+        &[
+            "-y",
+            "-i",
+            &src.to_string_lossy(),
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-shortest",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            &dir.join(asset_rel).to_string_lossy(),
+        ],
+        dir,
+    );
+    assert!(
+        output.status.success(),
+        "remuxing fixture clip with silent audio failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let mut clip = Clip::empty("clip-0".to_string());
     clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
@@ -237,7 +270,7 @@ fn exported_frame_matches_stage_preview_golden() {
     );
 
     let dir = tempfile::tempdir().expect("tempdir");
-    write_parity_project(dir.path());
+    write_parity_project(dir.path(), &ffmpeg);
 
     let spec = build_timeline_render_spec(dir.path()).expect("render spec builds");
     let render = Command::new(&ffmpeg)
@@ -271,9 +304,20 @@ fn exported_frame_matches_stage_preview_golden() {
 
     let pass_ssim = ssim(&ffmpeg, dir.path(), &pass_frame, &golden);
     let vacuity_ssim = ssim(&ffmpeg, dir.path(), &vacuity_frame, &golden);
+
+    // Preserve the compared frames OUTSIDE the tempdir (which drops on
+    // panic) so a failure leaves inspectable evidence, mirroring the
+    // stage harness keeping its screenshots.
+    let debug_dir = std::env::temp_dir().join("montage-export-parity-debug");
+    std::fs::create_dir_all(&debug_dir).expect("create debug dir");
+    let kept_pass = debug_dir.join(format!("export-t{GOLDEN_T}.png"));
+    let kept_vacuity = debug_dir.join(format!("export-t{VACUITY_T}.png"));
+    std::fs::copy(&pass_frame, &kept_pass).expect("keep pass frame");
+    std::fs::copy(&vacuity_frame, &kept_vacuity).expect("keep vacuity frame");
     eprintln!(
         "export parity: t={GOLDEN_T} SSIM {pass_ssim:.4} (min {MIN_CROSS_RENDERER_SSIM}); \
-         vacuity t={VACUITY_T} SSIM {vacuity_ssim:.4}"
+         vacuity t={VACUITY_T} SSIM {vacuity_ssim:.4}; frames kept in {}",
+        debug_dir.display()
     );
 
     assert!(
