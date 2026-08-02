@@ -75,9 +75,9 @@
   <main class="shell">
     <header>
       <div>
-        <div class="eyebrow">Montage · simplification complete</div>
-        <h1>Five cuts. One clearer product.</h1>
-        <p class="lede">The editor, evidence model, atomic project protocol, render verification, social server, and resumable preview pipeline remain. Dormant facades, duplicate subsystems, and dead desktop adapters are gone.</p>
+        <div class="eyebrow">Montage · simplification results</div>
+        <h1>Seven cuts. One clearer product.</h1>
+        <p class="lede">The editor, evidence model, atomic project protocol, render verification, social server, and resumable preview pipeline remain. Dormant facades, duplicate subsystems, dead adapters, and every production-unreachable frontend module are gone.</p>
       </div>
       <div class="branch">
         <strong><code>codex/montage-simplification</code></strong>
@@ -87,10 +87,10 @@
     </header>
 
     <section class="metrics" aria-label="Result metrics">
-      <div class="card metric"><b>−13,568</b><span>net non-documentation lines</span></div>
-      <div class="card metric"><b>14,031</b><span>implementation lines deleted</span></div>
-      <div class="card metric"><b>5</b><span>independently verified waves</span></div>
-      <div class="card metric"><b>75</b><span>files in the audited branch diff</span></div>
+      <div class="card metric"><b>−17,638</b><span>net non-documentation lines</span></div>
+      <div class="card metric"><b>18,256</b><span>implementation lines deleted</span></div>
+      <div class="card metric"><b>7</b><span>independently verified waves</span></div>
+      <div class="card metric"><b>118</b><span>files in the audited branch diff</span></div>
     </section>
 
     <nav role="tablist" aria-label="Results sections">
@@ -106,7 +106,9 @@
         <article class="card wave"><h3>2 · Publishing</h3><p>Deleted the duplicate desktop OAuth, keychain, provider, storage, upload-queue, and platform stack. Publishing now converges on the existing social server.</p></article>
         <article class="card wave"><h3>3 · Professional facade</h3><p>Removed the unused workflow/readiness facade and its uncalled commands. A live audio-finishing helper discovered by compile evidence was retained in a focused module.</p></article>
         <article class="card wave"><h3>4 · Preview cache</h3><p>Deleted the second desktop preview cache and its uncalled endpoints. The active persisted, resumable, ffmpeg-backed core lifecycle remains authoritative.</p></article>
-        <article class="card wave wide"><h3>5 · Desktop adapters</h3><p>Removed unused dismissal/review modules and uncalled raw motion/social wrappers while preserving Notes dismissal persistence, MCP review packaging, motion-region workflows, and server-backed social commands.</p></article>
+        <article class="card wave"><h3>5 · Desktop adapters</h3><p>Removed unused dismissal/review modules and uncalled raw motion/social wrappers while preserving Notes dismissal persistence, MCP review packaging, motion-region workflows, and server-backed social commands.</p></article>
+        <article class="card wave"><h3>6 · Runtime edge cases</h3><p>Made the Codex sidecar build honor the configured target directory and fail honestly, canonicalized <code>/tmp</code> media paths, and made video-only waveform extraction return an empty result instead of ffmpeg error 234.</p></article>
+        <article class="card wave wide"><h3>7 · Frontend reachability</h3><p>Deleted eight unmounted surfaces, then removed the remaining 17 modules unreachable from all six shipped entries, their dead-only tests, and the unused Radix Dialog dependency. The resolver-backed graph is now <strong>309/309 reachable</strong>.</p></article>
       </div>
     </section>
 
@@ -124,6 +126,7 @@
           <thead><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr></thead>
           <tbody>
             <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000</td></tr>
+            <tr><td>Packaged desktop</td><td class="note">Partial</td><td>Exact external-drive bundle built, launched, and resource-verified. Computer Use could not capture the exact app while the Mac session was inaccessible, so the final tiny-edit/reopen proof remains open.</td></tr>
             <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>316/316 tests</td></tr>
             <tr><td>Core Rust</td><td class="pass">Pass</td><td>732 unit tests plus integration and doc tests; two environment-dependent tests ignored</td></tr>
             <tr><td>Workspace compile</td><td class="pass">Pass*</td><td>All targets except <code>codex-http-client</code> tests; its ignored local PEM fixtures are absent from this worktree</td></tr>
@@ -137,8 +140,9 @@
 
     <section class="panel" id="boundary" role="tabpanel">
       <div class="grid">
-        <article class="card"><h3>Automated review</h3><p>The final review bundle was refused by its secret scanner because the deleted motion-command context includes <code>CancellationToken</code>. Production code was not rewritten to appease the scanner. Earlier review feedback was traced to callers; a live audio helper was retained and reverified.</p></article>
+        <article class="card"><h3>Automated review</h3><p>The first frontend deletion passed automated and independent review with no findings. Later review bundles were refused by the secret scanner because deleted context contains ordinary identifiers such as <code>CancellationToken</code> and <code>loadToken</code>; production code was not rewritten to appease the scanner.</p></article>
         <article class="card"><h3>Checkout preservation</h3><p>The original checkout's modified <code>App.css</code>, episode-start tool, secrets library, and untracked target link were not touched. All simplification commits remain isolated in the dedicated worktree.</p></article>
+        <article class="card"><h3>QA coverage boundary</h3><p>The discovery pipeline catalogued 27 user-level capabilities. Its planner phase stalled twice before producing executable plans, so those stories are an inventory—not claimed test coverage.</p></article>
         <article class="card wide"><h3>Audit trail</h3><p>See the <a href="montage-simplification-audit-2026-08-02.html">initial structural audit</a> and the focused design/implementation plans under <code>docs/superpowers/</code>.</p></article>
       </div>
     </section>
