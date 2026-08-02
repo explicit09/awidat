@@ -41,4 +41,3 @@ that dead code.
 2. Run desktop typecheck and the revised complete test chain.
 3. Run desktop UI smoke and stage visual goldens through that chain.
 4. Run `git diff --check` and review the exact deletion boundary.
-
