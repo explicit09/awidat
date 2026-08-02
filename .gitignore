@@ -24,6 +24,9 @@ target/
 
 # Superpowers brainstorming session artifacts
 .superpowers/
+.worktrees/
+.agent-loops/
+.codex/
 
 # Private competitive/reference research artifacts.
 .reference-research/

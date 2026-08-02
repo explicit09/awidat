@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Montage simplification audit · 2026-08-02</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #12161b;
+      --panel-2: #171c22;
+      --line: #29313b;
+      --text: #edf1f5;
+      --muted: #98a4b3;
+      --cyan: #69d9e7;
+      --mint: #82e5b8;
+      --amber: #f3c56b;
+      --red: #ff8989;
+      --blue: #86afff;
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% -10%, rgba(105, 217, 231, .13), transparent 34rem),
+        radial-gradient(circle at 95% 0%, rgba(134, 175, 255, .10), transparent 30rem),
+        var(--bg);
+      font: 14px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, a { font: inherit; }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+      color: #d8e9ff;
+    }
+
+    .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 48px; }
+    header {
+      display: grid;
+      grid-template-columns: 1.4fr .8fr;
+      gap: 18px;
+      align-items: end;
+      padding: 8px 2px 22px;
+    }
+    .eyebrow { color: var(--cyan); letter-spacing: .15em; text-transform: uppercase; font-size: 11px; font-weight: 800; }
+    h1 { max-width: 760px; margin: 8px 0 10px; font-size: clamp(32px, 5vw, 58px); line-height: .98; letter-spacing: -.04em; }
+    .lede { max-width: 760px; margin: 0; color: #c4ced9; font-size: 16px; }
+    .snapshot { justify-self: end; color: var(--muted); text-align: right; font-size: 12px; }
+    .snapshot strong { display: block; color: var(--text); font-size: 13px; }
+
+    .tabs {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 6px;
+      padding: 10px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(11, 13, 16, .88);
+      backdrop-filter: blur(18px);
+    }
+    .tab {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 13px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tab[aria-selected="true"] { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
+    .panel { display: none; padding-top: 18px; }
+    .panel.active { display: block; }
+
+    .grid { display: grid; gap: 14px; }
+    .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(160deg, rgba(23, 28, 34, .96), rgba(17, 21, 26, .96));
+      padding: 18px;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, .16);
+    }
+    .metric b { display: block; font-size: 30px; line-height: 1; letter-spacing: -.03em; }
+    .metric span { display: block; margin-top: 7px; color: var(--muted); }
+    .metric small { display: block; margin-top: 8px; color: #c5ced8; }
+    .accent-cyan b { color: var(--cyan); }
+    .accent-amber b { color: var(--amber); }
+    .accent-red b { color: var(--red); }
+    .accent-mint b { color: var(--mint); }
+
+    h2 { margin: 30px 0 12px; font-size: 22px; letter-spacing: -.02em; }
+    h3 { margin: 0 0 7px; font-size: 16px; }
+    p { margin: 6px 0; }
+    ul { margin: 10px 0 0; padding-left: 19px; }
+    li + li { margin-top: 6px; }
+    .muted { color: var(--muted); }
+    .verdict { border-left: 3px solid var(--cyan); }
+    .callout {
+      margin-top: 14px;
+      border: 1px solid rgba(243, 197, 107, .34);
+      border-radius: 14px;
+      background: rgba(243, 197, 107, .07);
+      padding: 15px 17px;
+    }
+
+    .finding {
+      display: grid;
+      grid-template-columns: 50px 1fr auto;
+      gap: 14px;
+      align-items: start;
+    }
+    .rank {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      color: var(--bg);
+      background: var(--amber);
+      font-weight: 900;
+    }
+    .finding[data-tier="P0"] .rank { background: var(--red); }
+    .finding[data-tier="P2"] .rank { background: var(--blue); }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .chip { padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: #c8d2dd; background: #0d1115; font-size: 11px; }
+    .confidence { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .impact { margin-top: 11px; color: #d6dee7; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 11px 10px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    tr:last-child td { border-bottom: 0; }
+    .keep { color: var(--mint); }
+    .simplify { color: var(--amber); }
+    .decide { color: var(--blue); }
+
+    .map {
+      display: grid;
+      grid-template-columns: 1fr 44px 1.3fr 44px 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .node { min-height: 118px; border: 1px solid var(--line); border-radius: 14px; padding: 15px; background: var(--panel); }
+    .node strong { display: block; margin-bottom: 7px; }
+    .node.core { border-color: rgba(105, 217, 231, .55); box-shadow: inset 0 0 0 1px rgba(105, 217, 231, .10); }
+    .arrow { display: grid; place-items: center; color: var(--muted); font-size: 24px; }
+    .optional { margin-top: 10px; border-style: dashed; }
+    .bar { height: 9px; margin-top: 8px; border-radius: 99px; overflow: hidden; background: #090c0f; }
+    .bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--blue)); }
+
+    .status { display: inline-flex; align-items: center; gap: 7px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .pass .dot { background: var(--mint); box-shadow: 0 0 12px rgba(130,229,184,.55); }
+    .fail .dot { background: var(--red); }
+    .blocked .dot { background: var(--amber); }
+    details { border: 1px solid var(--line); border-radius: 12px; background: #0e1216; }
+    details + details { margin-top: 8px; }
+    summary { cursor: pointer; padding: 12px 14px; font-weight: 700; }
+    details > div { padding: 0 14px 14px; color: #cad3dc; }
+
+    footer { margin-top: 30px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 900px) {
+      header { grid-template-columns: 1fr; }
+      .snapshot { justify-self: start; text-align: left; }
+      .metrics, .three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .map { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); min-height: 28px; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 20px, 1180px); padding-top: 16px; }
+      .metrics, .two, .three { grid-template-columns: 1fr; }
+      .finding { grid-template-columns: 42px 1fr; }
+      .confidence { grid-column: 2; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">Montage · structural simplification audit</div>
+        <h1>Keep the editor. Remove the parallel products.</h1>
+        <p class="lede">Montage has a strong kernel—project protocol, evidence-backed editing, atomic EDL application, and render verification. The weight comes from parallel generations of agent, publishing, render, UI, and “professional” surfaces that were added faster than older paths were retired.</p>
+      </div>
+      <div class="snapshot">
+        <strong>Snapshot: <code>019366d3</code> on <code>main</code></strong>
+        2026-08-02 · 3 pre-existing modified source files<br />
+        Structural audit only; product code left untouched
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist" aria-label="Audit sections">
+      <button class="tab" role="tab" aria-selected="true" aria-controls="verdict">Verdict</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="cut-order">Cut order</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="systems">System map</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="verification">Verification</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="evidence">Evidence</button>
+    </nav>
+
+    <section class="panel active" id="verdict" role="tabpanel">
+      <div class="grid metrics">
+        <div class="card metric accent-red"><b>150</b><span>Rust workspace members</span><small>20 first-party + 130 vendored</small></div>
+        <div class="card metric accent-amber"><b>133</b><span>direct MCP tool registrations</span><small>39,908 core lines in the MCP surface</small></div>
+        <div class="card metric accent-cyan"><b>3,522</b><span>lines in <code>App.tsx</code></span><small>69 imports · 34 state hooks · 30 effects</small></div>
+        <div class="card metric accent-mint"><b>8,645</b><span>lines in <code>App.css</code></span><small>≈1,121 selectors · 87 <code>!important</code>s</small></div>
+      </div>
+
+      <h2>Bottom line</h2>
+      <div class="grid two">
+        <article class="card verdict">
+          <h3>The architecture is recoverable</h3>
+          <p>The foundational flow is coherent: import → index → inspect → propose/apply → render → verify. The safest strategy is to name that as the product kernel, then force every other subsystem to be an adapter, an optional capability, or removed.</p>
+          <div class="chips"><span class="chip">no rewrite</span><span class="chip">delete before splitting</span><span class="chip">one canonical path per behavior</span></div>
+        </article>
+        <article class="card">
+          <h3>Growth outpaced retirement</h3>
+          <p><strong>1,603 commits</strong> landed between May 2 and July 25. The repository now contains 261k first-party Rust lines, 63k desktop TS/TSX/CSS lines, and a 1.16M-line vendored Rust runtime. Several comments explicitly describe old paths as superseded while those paths remain compiled and registered.</p>
+        </article>
+      </div>
+
+      <div class="callout"><strong>Do not simplify away hard-won safeguards.</strong> Keep atomic timeline writes, validation, picture lock, subprocess timeouts, pending-file cleanup, credential migration readers, render verification, and external-drive mount guards. They protect observed failure modes, not hypothetical architecture.</div>
+
+      <h2>Subsystem disposition</h2>
+      <div class="card" style="padding: 6px 10px; overflow-x: auto;">
+        <table>
+          <thead><tr><th>Subsystem</th><th>Disposition</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td>Project protocol + EDL apply</td><td class="keep">Keep</td><td>Core product contract; simplify file layout only after dead ops/compatibility paths are measured.</td></tr>
+            <tr><td>Indexing sidecars + Python package isolation</td><td class="keep">Keep</td><td>Boundaries isolate heavyweight dependencies; extract only repeated media helpers.</td></tr>
+            <tr><td>Render verification + eval gates</td><td class="keep">Keep</td><td>These are the objective quality layer and should remain independent of the LLM.</td></tr>
+            <tr><td>MCP surface</td><td class="simplify">Simplify</td><td>133 registrations are exposed directly; the allowlist system already contains the information needed for tiered exposure.</td></tr>
+            <tr><td>Professional pipeline scaffolding</td><td class="simplify">Retire dormant slices</td><td>13 of 16 public functions in <code>core/professional.rs</code> have no production caller outside that file.</td></tr>
+            <tr><td>Desktop root + CSS</td><td class="simplify">Simplify</td><td>The “composition” root still owns broad hydration/routing state; CSS carries multiple appended design generations.</td></tr>
+            <tr><td>Social publishing</td><td class="decide">Product decision</td><td>Keep only if it is part of the next product milestone; either way, finish the dual-path migration.</td></tr>
+            <tr><td>Generated media / full post-house substrate</td><td class="decide">Product decision</td><td>Large ambition surface; should not expand until the import-to-verified-render kernel is dependable.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="cut-order" role="tabpanel">
+      <h2>Recommended cut order</h2>
+      <div class="grid">
+        <article class="card finding" data-tier="P0">
+          <div class="rank">P0</div>
+          <div><h3>Repair the control plane before touching architecture</h3><p><code>make check-app</code> currently fails because its package list still names the deleted <code>montage-tools</code> and <code>montage-sandboxing</code> crates. Remove those entries, delete the no-op <code>legacy_local_publishing</code> feature declaration (or make it real), remove the verified unused direct dependencies, and ignore local <code>.agent-loops/</code>, <code>.codex/</code>, and the root <code>target</code> symlink.</p><p class="impact"><strong>Outcome:</strong> the documented development lane works again and repository state reflects the code that actually exists.</p></div>
+          <div class="confidence">High confidence · low risk</div>
+        </article>
+
+        <article class="card finding" data-tier="P0">
+          <div class="rank">P0</div>
+          <div><h3>Freeze new surfaces and name the v1 kernel</h3><p>Use one acceptance sentence: “A user can import real media, obtain evidence, make a reviewable edit, render it, and verify the output.” Social scheduling, generated media, secure review/VFX handoffs, and full post-house parity must justify themselves against that milestone before receiving more code.</p><p class="impact"><strong>Outcome:</strong> simplification has a product boundary, not just a list of refactors.</p></div>
+          <div class="confidence">Needs product sign-off</div>
+        </article>
+
+        <article class="card finding" data-tier="P1">
+          <div class="rank">P1</div>
+          <div><h3>Make Codex a sidecar boundary everywhere</h3><p>The default desktop bridge already uses a thin external JSON-RPC client. The terminal path still falls back to compiling <code>montage-agent-cli</code>, whose normal dependency closure is about <strong>827 packages</strong>. Point terminal chat/TUI/resume at the same external sidecar contract, then move the vendored fork into its own workspace/build lane.</p><p class="impact"><strong>Outcome:</strong> normal product builds stop treating a 130-crate, 1.16M-line fork as first-party workspace surface.</p></div>
+          <div class="confidence">High confidence · medium migration</div>
+        </article>
+
+        <article class="card finding" data-tier="P1">
+          <div class="rank">P1</div>
+          <div><h3>Finish or remove the publishing migration</h3><p>The desktop compiles a 6,919-line local OAuth/upload implementation and a server-backed social implementation at the same time. The manifest calls the local path old, but its feature flag has no <code>cfg</code> use. If publishing stays, migrate the three render-queue upload commands and delete the local path. If it is not v1, extract the entire social product from the editor build.</p><p class="impact"><strong>Outcome:</strong> one credential model, one job model, one upload path.</p></div>
+          <div class="confidence">Structure confirmed · scope decision required</div>
+        </article>
+
+        <article class="card finding" data-tier="P1">
+          <div class="rank">P1</div>
+          <div><h3>Expose a small tool kernel; reveal the rest by skill</h3><p>Keep a directly visible primitive set (project/readiness, timeline inspection, apply, render/poll/verify, skill load, diff). Use the existing per-skill allowlists to expose task-specific tools. Do not return to “defer everything”: the July A/B proved organic prompts then bypass tools entirely. Remove no-value wrappers such as <code>attempt_completion</code>, which explicitly does not gate or end a turn.</p><p class="impact"><strong>Outcome:</strong> less schema/context weight and fewer overlapping ways for the agent to do the same job.</p></div>
+          <div class="confidence">High confidence · requires live A/B</div>
+        </article>
+
+        <article class="card finding" data-tier="P1">
+          <div class="rank">P1</div>
+          <div><h3>Delete dormant “professional snapshot” code before reorganizing it</h3><p>In <code>crates/core/src/professional.rs</code>, 13 of 16 public functions have no production caller outside the file. The dead family includes professional snapshot, VFX package, secure review package, assistant workflow, media operations, color handoff, audio post, delivery master, and timeline-scale derivation. Preserve serialized protocol fields until migration policy is explicit, but stop computing structures nothing consumes.</p><p class="impact"><strong>Outcome:</strong> remove speculative application logic without destabilizing the core protocol.</p></div>
+          <div class="confidence">Call graph confirmed · compatibility review needed</div>
+        </article>
+
+        <article class="card finding" data-tier="P2">
+          <div class="rank">P2</div>
+          <div><h3>Collapse exact skill variants</h3><p>Six skills—chapter intro, quote highlight, retention-list opener, route map, search-bar sequence, and statistic counter—have the exact same tool allowlist and route through the same proposal/revise/verify implementation. Keep their artifact types as data under one visual-support workflow rather than six separately maintained playbooks.</p><p class="impact"><strong>Outcome:</strong> fewer discovery entries and less instruction drift without losing capability.</p></div>
+          <div class="confidence">Exact duplication confirmed</div>
+        </article>
+
+        <article class="card finding" data-tier="P2">
+          <div class="rank">P2</div>
+          <div><h3>Move state out of <code>App.tsx</code>; prune CSS by rendered coverage</h3><p>Push project hydration, media readiness, agent-session hydration, and workspace routing into the existing domain stores/controllers. Then delete superseded CSS rules against screenshot baselines instead of adding another override layer. Only after behavior is smaller should <code>timeline.rs</code> and <code>edl/apply.rs</code> be split by domain.</p><p class="impact"><strong>Outcome:</strong> the root becomes composition in fact, and styling stops depending on cascade archaeology.</p></div>
+          <div class="confidence">High confidence · staged UI verification</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel" id="systems" role="tabpanel">
+      <h2>Target shape</h2>
+      <div class="map">
+        <div class="node"><strong>Surfaces</strong>Desktop composition<br />CLI launcher<br /><span class="muted">No embedded agent runtime</span></div>
+        <div class="arrow">→</div>
+        <div class="node core"><strong>Montage kernel</strong>Project + protocol<br />Evidence/index access<br />Atomic EDL apply<br />Render + verify<br />Small tool facade</div>
+        <div class="arrow">→</div>
+        <div class="node"><strong>Adapters</strong>Codex sidecar<br />Python indexers<br />FFmpeg/GPU renderer<br /><span class="muted">Optional publishing adapter</span></div>
+      </div>
+      <div class="grid three" style="margin-top: 14px;">
+        <div class="card"><h3>One owner per behavior</h3><p>One auth owner, one publish owner, one render selection point, one timeline mutation path.</p></div>
+        <div class="card"><h3>Capabilities stay data-led</h3><p>Skills, house profiles, effect definitions, and indexer manifests describe behavior; the kernel supplies a small stable set of primitives.</p></div>
+        <div class="card"><h3>Compatibility has an expiry</h3><p>Legacy readers may stay for project migration. Legacy writers and parallel runtimes should have a removal release and test.</p></div>
+      </div>
+
+      <h2>Where the weight sits</h2>
+      <div class="card">
+        <table>
+          <thead><tr><th>Area</th><th>Measured size / surface</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            <tr><td>Vendored Codex</td><td>5,123 tracked files · 1,160,260 Rust lines</td><td>Upstream product embedded as workspace members; isolate behind sidecar build.</td></tr>
+            <tr><td>First-party Rust</td><td>261,310 lines</td><td>Large for a three-month-old developer preview; deletion should precede abstraction.</td></tr>
+            <tr><td><code>montage-core</code></td><td>100,018 lines under <code>src/</code> (inline tests included)</td><td>God crate; MCP code alone is ≈40% of that source tree.</td></tr>
+            <tr><td>Render timeline</td><td>20,453 lines</td><td>Planning, compatibility lowering, FFmpeg generation, audio modes, titles, overlays, and tests share one file.</td></tr>
+            <tr><td>EDL apply</td><td>16,399 lines</td><td>Many operations + validation + inline tests; split only after obsolete ops are identified.</td></tr>
+            <tr><td>Publishing</td><td>25,417 social Rust + 6,919 local desktop Rust + 6,098 UI workflow lines</td><td>A second product inside the editor, plus two backend generations.</td></tr>
+            <tr><td>Desktop IPC</td><td>168 Tauri commands across 43 files</td><td>Broad surface; reduce by removing product areas, not by inventing a generic command bus.</td></tr>
+            <tr><td>Python indexers</td><td>14 packages · 10,199 Python lines</td><td>Relatively contained; package isolation is justified by dependency cost.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="verification" role="tabpanel">
+      <h2>Current proof</h2>
+      <div class="card" style="padding: 6px 10px; overflow-x: auto;">
+        <table>
+          <thead><tr><th>Check</th><th>Result</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td>First-party Rust formatting</td><td><span class="status pass"><i class="dot"></i>Pass</span></td><td>All 20 first-party workspace packages checked with <code>cargo fmt -p … --check</code>.</td></tr>
+            <tr><td>Desktop TypeScript</td><td><span class="status pass"><i class="dot"></i>Pass</span></td><td><code>pnpm --dir apps/desktop typecheck</code>.</td></tr>
+            <tr><td>Safe Python indexer smoke</td><td><span class="status pass"><i class="dot"></i>Pass</span></td><td>14 packages, schema keys, and eval workflow contract verified without model downloads.</td></tr>
+            <tr><td>Review artifact render</td><td><span class="status pass"><i class="dot"></i>Pass</span></td><td>Rendered in Chrome at 1440px and 390px; five tabs switched, zero page errors, zero mobile horizontal overflow.</td></tr>
+            <tr><td>Documented app lane</td><td><span class="status fail"><i class="dot"></i>Fail</span></td><td><code>make fmt-app</code> stops on deleted <code>montage-sandboxing</code>; <code>montage-tools</code> is stale too.</td></tr>
+            <tr><td>Rust unit/integration suite</td><td><span class="status blocked"><i class="dot"></i>Incomplete</span></td><td>Audit-started targeted tests were stopped when internal free space fell from 199 MiB to 115 MiB; no pass claimed.</td></tr>
+            <tr><td>Desktop browser/runtime suite</td><td><span class="status blocked"><i class="dot"></i>Not run</span></td><td>Current disk state makes Playwright/browser temp artifacts unsafe.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout"><strong>Verification constraint:</strong> the root <code>target</code> symlink correctly points to <code>/Volumes/My Passport for Mac/awidat-build/main-target</code> and the external drive has about 1.5 TiB free, but the internal data volume reached 100% with only 115 MiB available. Broader validation should resume only after a separate, approved disk-space action.</div>
+    </section>
+
+    <section class="panel" id="evidence" role="tabpanel">
+      <h2>Evidence index</h2>
+      <details open><summary>Workspace and control-plane mismatch</summary><div><a href="../../Cargo.toml">Cargo.toml</a> declares 150 members and a 459-line shared dependency section. <a href="../../Makefile">Makefile</a> still names two deleted crates. <a href="../../README.md">README.md</a> recommends the broken app lane.</div></details>
+      <details><summary>Agent runtime boundary</summary><div><a href="../../crates/codex-bridge/src/external.rs">external.rs</a> is already a standalone JSON-RPC sidecar client. <a href="../../crates/cli/src/agent_delegate_cmd.rs">agent_delegate_cmd.rs</a> falls back to compiling <code>montage-agent-cli</code>. <a href="../../crates/agent-cli/src/main.rs">agent-cli</a> embeds vendored Codex execution.</div></details>
+      <details><summary>Tool surface and skill routing</summary><div><a href="../../crates/core/src/montage_mcp/mod.rs">montage_mcp/mod.rs</a> registers 133 tools. <a href="../../crates/codex-bridge/src/tool_exposure.rs">tool_exposure.rs</a> forces them all direct after the defer-all failure. <a href="../../crates/core/src/skill_session.rs">skill_session.rs</a> already persists per-skill allowlists, which can drive selective exposure.</div></details>
+      <details><summary>Dual publishing generations</summary><div><a href="../../apps/desktop/src-tauri/Cargo.toml">desktop Cargo.toml</a> describes the local stack as old, but its feature is empty. <a href="../../apps/desktop/src-tauri/src/publishing">desktop publishing</a> and <a href="../../crates/social-server">social-server</a> remain compiled together.</div></details>
+      <details><summary>Dormant professional application layer</summary><div><a href="../../crates/core/src/professional.rs">core/professional.rs</a> contains 16 public functions; only <code>build_workflow_lens_snapshots</code>, <code>inspect_pre_autonomy_readiness</code>, and <code>derive_audio_finishing_state</code> have production callers outside the file. <a href="../../crates/proto/src/professional.rs">proto/professional.rs</a> is a separate compatibility concern and should not be deleted casually.</div></details>
+      <details><summary>Desktop concentration</summary><div><a href="../../apps/desktop/src/App.tsx">App.tsx</a> says it is composition/glue while retaining broad state and effects. <a href="../../apps/desktop/src/App.css">App.css</a> contains appended “production revamp,” “correction,” “calm pass,” and glass override sections.</div></details>
+      <details><summary>Verified unused direct dependencies</summary><div>No Rust source reference was found for: <code>montage-core</code> → <code>async-stream</code>, <code>eventsource-stream</code>, <code>rusqlite</code>; <code>render-gpu</code> → <code>tracing</code>; <code>index</code> → <code>tokio-util</code>; <code>cli</code> → <code>tracing</code>; <code>social</code> → <code>rand</code>; <code>social-server</code> → <code>thiserror</code>; <code>desktop-protocol</code> → <code>chrono</code>; desktop → <code>anyhow</code>. Confirm with a package build after removal rather than deleting as one blind batch.</div></details>
+      <details><summary>Audit boundary</summary><div>The snapshot had pre-existing edits in <code>App.css</code>, <code>find_episode_start.rs</code>, and <code>crates/secrets/src/lib.rs</code>, plus local untracked agent-loop/Codex artifacts and a root target symlink. Those were preserved. Generated protocol code and the vendored fork were measured but not treated as first-party refactor targets.</div></details>
+    </section>
+
+    <footer>Prepared as a structural simplification review. No product refactor was applied. Suggested next step: approve the v1 kernel and choose whether social publishing remains in that boundary; then execute P0 as one small, independently verifiable cleanup.</footer>
+  </main>
+
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+    function activate(tab) {
+      tabs.forEach((item) => item.setAttribute('aria-selected', String(item === tab)));
+      panels.forEach((panel) => panel.classList.toggle('active', panel.id === tab.getAttribute('aria-controls')));
+      tab.focus({ preventScroll: true });
+    }
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activate(tab));
+      tab.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        activate(tabs[next]);
+      });
+    });
+  </script>
+</body>
+</html>
