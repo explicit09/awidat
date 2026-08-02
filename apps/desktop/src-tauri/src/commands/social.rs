@@ -9,17 +9,12 @@
 //! to discover the newly-connected account. Firing scheduled jobs is the
 //! server's job (pg_cron); the desktop only schedules + polls.
 //!
-//! `social_providers` stays static: it is pure registry data (provider slots +
-//! capability summaries) carrying no secrets. It can move server-side later.
-
 use montage_social::api::{AccountSummary, OAuthStartResponse};
 use montage_social::api::{
-    BindTargetRequest, ProviderSummary, PublishJobResponse, RescheduleJobRequest,
-    ScheduleTargetRequest, SocialApi, UpdateTargetRequest, ValidateTargetRequest,
-    ValidateTargetResponse,
+    BindTargetRequest, PublishJobResponse, RescheduleJobRequest, ScheduleTargetRequest,
+    UpdateTargetRequest, ValidateTargetRequest, ValidateTargetResponse,
 };
 use montage_social::model::{AccountUsageAudit, CampaignVariantTarget, Provider};
-use montage_social::provider::ProviderRegistry;
 use tauri::State;
 
 use crate::social_client::SocialClient;
@@ -37,12 +32,6 @@ async fn client(state: &State<'_, MontageState>) -> Result<SocialClient, String>
         .await
         .clone()
         .ok_or_else(|| "social client not initialized".to_string())
-}
-
-#[tauri::command]
-pub async fn social_providers() -> Result<Vec<ProviderSummary>, String> {
-    let registry = ProviderRegistry::default_multi_platform();
-    Ok(SocialApi::providers(&registry))
 }
 
 #[tauri::command]
@@ -280,26 +269,4 @@ pub async fn social_upload_artifact(
         .await?;
     // No storage_ref echoed back — the server derives it from (bucket, job_id).
     client.complete_upload(&job_id).await
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn providers_list_has_major_platform_slots() {
-        let registry = ProviderRegistry::default_multi_platform();
-        assert_eq!(SocialApi::providers(&registry).len(), 4);
-    }
-
-    #[test]
-    fn providers_payload_carries_no_token_material() {
-        let registry = ProviderRegistry::default_multi_platform();
-        let providers = SocialApi::providers(&registry);
-        let json = serde_json::to_string(&providers).expect("serialize providers");
-        assert!(!json.contains("access_token"));
-        assert!(!json.contains("refresh_token"));
-        assert!(!json.contains("client_secret"));
-    }
 }

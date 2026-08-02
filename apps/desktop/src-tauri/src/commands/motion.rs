@@ -165,18 +165,6 @@ fn sidecar_is_fresh(asset: &Path, sidecar: &Path) -> bool {
     sidecar_mtime >= asset_mtime
 }
 
-/// Read the motion sidecar at `path`. Errors when the path doesn't
-/// exist or isn't valid JSON.
-#[tauri::command]
-pub async fn read_motion(path: String) -> Result<MotionSidecar, String> {
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|e| format!("read motion sidecar: {e}"))?;
-    let parsed: MotionSidecar = montage_proto::serde_robust::from_json_slice(&bytes)
-        .map_err(|e| format!("parse motion sidecar: {e}"))?;
-    Ok(parsed)
-}
-
 async fn register_job(state: &MontageState, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
