@@ -126,8 +126,8 @@
           <thead><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr></thead>
           <tbody>
             <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000</td></tr>
-            <tr><td>Packaged desktop</td><td class="note">Partial</td><td>Exact external-drive bundle built, launched, and resource-verified. Computer Use could not capture the exact app while the Mac session was inaccessible, so the final tiny-edit/reopen proof remains open.</td></tr>
-            <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>316/316 tests</td></tr>
+            <tr><td>Packaged desktop</td><td class="pass">Pass</td><td>Exact external-drive bundle built, launched, resource-verified, and ad-hoc signature-verified. Computer Use opened the tiny project, saved an <code>AGENTS.md</code> edit, quit and reopened the exact bundle, then observed the persisted value and unchanged file hash.</td></tr>
+            <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>318/318 tests</td></tr>
             <tr><td>Core Rust</td><td class="pass">Pass</td><td>732 unit tests plus integration and doc tests; two environment-dependent tests ignored</td></tr>
             <tr><td>Workspace compile</td><td class="pass">Pass*</td><td>All targets except <code>codex-http-client</code> tests; its ignored local PEM fixtures are absent from this worktree</td></tr>
             <tr><td>Workspace clippy</td><td class="pass">Pass*</td><td>Same scope, with <code>-D warnings</code></td></tr>
