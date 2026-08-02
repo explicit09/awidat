@@ -327,8 +327,7 @@ async function maybeChainUploads(
   if (targets.length === 0) return;
   const store = useRenderQueueStore.getState();
   // Snapshot the per-target metadata the user typed into the Deliver
-  // form. Keyed by `(entry.id, provider)` while the form is open, but
-  // the backend keys by `(jobId, provider)` — so we re-key here.
+  // form for the server-backed publishing request and later retries.
   const metadataStore = useUploadMetadata.getState();
   const metadataByProvider: Record<string, UploadMetadata> = {};
   for (const provider of targets) {
@@ -345,21 +344,10 @@ async function maybeChainUploads(
       {},
     );
     store.setUploadMetadata(entry.id, metadataByProvider);
-    // Compute the AI disclosure (W5.A4) — backend walks the project
-    // timeline against the generated-media registry. The result is
-    // parked on the upload-queue entry so every target's
-    // `UploadParams` carries the same disclosure when the dispatcher
-    // runs. Mirror onto the local entry + the disclosure store so
-    // the RenderQueue chip + UploadMetadataForm banner render.
-    //
-    // When the auto-disclose toggle is OFF (power-user opt-out) we
-    // still compute + show the disclosure locally — the user needs
-    // to *see* what they're not flagging — but explicitly skip the
-    // backend stamp so the upload `UploadParams.ai_disclosure` stays
-    // None and providers don't set the platform flag.
-    const autoDiscloseEnabled =
-      useAiDisclosure.getState().autoDiscloseEnabled;
-    const disclosure = await computeAiDisclosure(jobId, autoDiscloseEnabled);
+    // Inspect the local timeline against its generated-media registry,
+    // then mirror the result into the queue and disclosure stores so
+    // the RenderQueue chip and upload warning can render.
+    const disclosure = await computeAiDisclosure();
     if (disclosure) {
       store.setAiDisclosure(entry.id, disclosure);
       useAiDisclosure.getState().set(jobId, disclosure);
@@ -479,44 +467,20 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Ask the backend for the AI disclosure for this render. The backend
- * walks the project's timeline against the generated-media registry
- * + parks the result on the upload-queue entry for the dispatcher.
+ * Ask the backend to inspect the current project's timeline against
+ * its generated-media registry.
  *
- * `autoDisclose` mirrors the user's "Auto-disclose AI content" toggle:
- * when true (default) the backend parks the computed disclosure on
- * the queue so the dispatcher stamps it onto every target's
- * `UploadParams`; when false the backend parks an empty disclosure
- * (no auto-flag) but still returns the real computed one for the UI
- * to display — the banner must warn the user about what they're not
- * flagging automatically.
- *
- * Failures (no project, IPC error) collapse to `undefined` — the
- * dispatcher proceeds without a banner; the upload chain stays alive.
+ * Failures (no project, IPC error) collapse to `undefined` — publishing
+ * proceeds without a banner and the upload chain stays alive.
  */
-async function computeAiDisclosure(
-  jobId: string,
-  autoDisclose: boolean,
-): Promise<AiDisclosure | undefined> {
+async function computeAiDisclosure(): Promise<AiDisclosure | undefined> {
   try {
-    return await invoke<AiDisclosure>("compute_ai_disclosure", {
-      jobId,
-      autoDisclose,
-    });
+    return await invoke<AiDisclosure>("compute_ai_disclosure");
   } catch {
     return undefined;
   }
 }
 
-/**
- * Retry one failed upload for a render. Caller passes the queue
- * entry's `jobId`, the provider key, and the file/title metadata
- * (we re-stub it the same way `maybeChainUploads` does — when W5.A3
- * lands the per-target form, it'll override here too).
- *
- * Kicks the backend and starts a fresh poll loop. Errors land in the
- * target's `failed` state via the standard polling path.
- */
 /**
  * Cancel a running render. Kills the backend ffmpeg child via the matching
  * cancel command (timeline vs reframe), then marks the entry cancelled so the

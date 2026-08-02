@@ -50,42 +50,16 @@ tokio = { workspace = true, features = ["net"] }
 # rendered artifact straight from disk into a signed-URL PUT body (so a
 # multi-GB render never loads into RAM).
 tokio-util = { workspace = true, features = ["io"] }
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
-keyring = { workspace = true, features = ["crypto-rust"] }
-# OAuth token-exchange HTTP client. Uses the workspace `reqwest` with
-# `rustls-tls` (the `json` feature pulls in serde plumbing for the
-# `TokenResponse` deserialise) so we don't have to depend on system
-# OpenSSL on macOS / Linux. The `cookies` and `stream` workspace
-# features are unused here but harmless — they ride along for the
-# render / index crates that share this dep.
+# Authenticated client for montage-social-server and signed artifact uploads.
 reqwest = { workspace = true }
-
-# Per-target keyring backends. Same matrix the rest of the workspace uses
-# (mirrors `crates/secrets/Cargo.toml` and `vendor/codex-rs/keyring-store`):
-# macOS Keychain Services, Windows Credential Manager, and the Linux
-# `linux-native-async-persistent` combo (kernel keyutils + secret-service
-# persistence) so credentials survive logout without forcing a synchronous
-# D-Bus dependency.
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { workspace = true, features = ["linux-native-async-persistent"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { workspace = true, features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { workspace = true, features = ["windows-native"] }
-
-[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
-keyring = { workspace = true, features = ["sync-secret-service"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-# Mocked HTTP server for OAuth token-exchange / refresh / userinfo
-# unit tests so the test suite never reaches out to Google.
+# Mocked montage-social-server responses for desktop client tests.
 wiremock = { workspace = true }
 
 # This crate intentionally does NOT inherit workspace lints. Tauri's

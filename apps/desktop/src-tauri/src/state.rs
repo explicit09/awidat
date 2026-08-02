@@ -107,11 +107,6 @@ pub struct MontageState {
     /// frames. Wrapped in `Arc` so the command can drop the lock
     /// before doing the GPU work itself.
     pub gpu_preview_renderers: Mutex<HashMap<TransitionShader, Arc<GpuTransitionRenderer>>>,
-    /// Per-render upload fan-out (W5.A2). Mirrors the frontend's
-    /// `RenderQueueEntry.uploadTargets` so the publishing pipeline can
-    /// chain `render done → uploading → published / failed` per target
-    /// without the frontend having to drive each transition itself.
-    pub upload_queue: crate::publishing::UploadQueue,
     /// Cancel handle + task join handle for an in-flight "Sign in with
     /// ChatGPT" OAuth login. A later auth action (set API key / sign out / a
     /// second sign-in) shuts the pending callback server down *and awaits the

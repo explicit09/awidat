@@ -174,15 +174,6 @@ function App() {
   // root so it survives Deliver-tab unmounts and continues exports
   // when the user switches back to Edit.
   useRenderQueueWorker();
-  // Pull the persisted "Upload after render?" opt-ins from the
-  // backend once on mount. Local mirror in localStorage means the UI
-  // doesn't flash an "off" state in the meantime.
-  useEffect(() => {
-    return deferNonCriticalHydration(() => {
-      void useUploadPrefs.getState().hydrate();
-    });
-  }, []);
-
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
   const projectType = useProjectStore((s) => s.projectType);

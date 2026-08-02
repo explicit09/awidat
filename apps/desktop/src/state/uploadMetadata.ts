@@ -1,9 +1,7 @@
-// Per-target upload metadata store (W5.A3).
+// Per-target upload metadata store.
 //
-// Keyed by `(jobId, provider)` → `UploadMetadata`. Mirrors the backend
-// `UploadJobEntry.upload_metadata` so the publishing pipeline can pick
-// up real per-target params (title / description / tags / visibility /
-// schedule / thumbnail) when it dispatches an upload.
+// Keyed by `(jobId, provider)` → `UploadMetadata`. The server-backed
+// publishing path reads this store directly when it creates a target.
 //
 // Why separate from `useRenderQueueStore`:
 //   - The render queue tracks ephemeral lifecycle (running %, terminal
@@ -17,12 +15,6 @@
 // Persistence:
 //   - localStorage mirror keyed by `montage.deliver.uploadMetadata.v1`
 //     so reloading the app preserves form state across reload.
-//   - Tauri command `set_upload_metadata(job_id, provider, metadata)`
-//     pushes the value to the backend so the upload dispatcher can
-//     read it on render-done.
-//   - No separate hydrate path — backend metadata is per-job and the
-//     job lifecycle is short-lived (render → upload → terminal), so we
-//     don't need to rehydrate across app restarts.
 
 import { create } from "zustand";
 
@@ -37,9 +29,7 @@ export type TikTokInteractionSettings = {
   disableStitch: boolean;
 };
 
-/** Per-target upload metadata. Mirrors `UploadParams` on the backend
- *  minus `file_path` (which the dispatcher fills in from the render's
- *  output_path). */
+/** Per-target upload metadata used to build social-server target fields. */
 export type UploadMetadata = {
   /** Required — provider rejects empty titles. Validation pipeline
    *  flags this as `title.required` when the user clears the field. */
@@ -230,8 +220,7 @@ interface UploadMetadataState {
   byKey: Record<string, UploadMetadata>;
   /** Read one entry, falling back to defaults derived from `label`. */
   get: (jobId: string, provider: string, label: string) => UploadMetadata;
-  /** Replace metadata for one entry. Pushes to the backend in the
-   *  background; localStorage mirror is synchronous. */
+  /** Replace metadata for one entry and persist it locally. */
   set: (jobId: string, provider: string, metadata: UploadMetadata) => void;
   /** Drop metadata for a job. Called when the render terminates so
    *  the store doesn't accumulate stale entries across sessions. */
@@ -262,28 +251,6 @@ function persistLocal(byKey: Record<string, UploadMetadata>): void {
   }
 }
 
-/** Push one entry to the backend. Best-effort — running outside the
- *  Tauri shell (tests, browser preview) silently no-ops. */
-async function persistBackend(
-  jobId: string,
-  provider: string,
-  metadata: UploadMetadata,
-): Promise<void> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke<void>("set_upload_metadata", {
-      jobId,
-      provider,
-      metadata,
-    });
-  } catch {
-    // Backend unavailable; local mirror is the fallback. The upload
-    // dispatcher falls back to default params if the backend hasn't
-    // seen this entry, so an unreachable backend just downgrades to
-    // the W5.A2 behavior.
-  }
-}
-
 export const useUploadMetadata = create<UploadMetadataState>((set, get) => ({
   byKey: loadLocal(),
   get: (jobId, provider, label) => {
@@ -297,7 +264,6 @@ export const useUploadMetadata = create<UploadMetadataState>((set, get) => ({
       persistLocal(next);
       return { byKey: next };
     });
-    void persistBackend(jobId, provider, metadata);
   },
   forgetJob: (jobId) => {
     set((state) => {

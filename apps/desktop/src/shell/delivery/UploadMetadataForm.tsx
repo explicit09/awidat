@@ -157,15 +157,8 @@ export function UploadMetadataForm({
  * Non-editable banner at the top of the per-target form (W5.A4).
  *
  * Rendered only when the backend's disclosure has at least one
- * generated credit. Three states:
- *
- *   1. `has_synthetic_content === false` → null (clean cut).
- *   2. `has_synthetic_content === true` + autoDiscloseEnabled
- *      → warning banner: "AI disclosure: this cut includes N
- *        generated clips. The AI flag will be set on upload."
- *   3. `has_synthetic_content === true` + autoDisclose disabled
- *      → red banner: "Disclosure is disabled — confirm you've
- *        manually flagged on the platform."
+ * generated credit. Clean cuts render nothing; generated content gets
+ * a warning to review the destination platform's disclosure control.
  *
  * The credits list is folded into a small expandable section so
  * the banner stays compact when collapsed.
@@ -176,22 +169,15 @@ export function AiDisclosureBanner({
   jobIdHint: string;
 }) {
   const disclosure = useAiDisclosure((s) => s.byJobId[jobIdHint]);
-  const autoDiscloseEnabled = useAiDisclosure((s) => s.autoDiscloseEnabled);
   const [expanded, setExpanded] = useState(false);
   if (!disclosure || !disclosure.has_synthetic_content) return null;
   const count = disclosure.credits.length;
   const plural = count === 1 ? "clip" : "clips";
-  const willFlag = autoDiscloseEnabled;
   return (
     <div
       role="status"
       aria-live="polite"
-      className={cn(
-        "rounded-[var(--radius-md)] border px-3 py-2",
-        willFlag
-          ? "border-[var(--color-warning)] bg-[rgba(245,158,11,0.08)]"
-          : "border-[var(--color-danger)] bg-[rgba(220,38,38,0.08)]",
-      )}
+      className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[rgba(245,158,11,0.08)] px-3 py-2"
     >
       <Inline justify="between" align="center">
         <Inline gap="2" align="center">
@@ -199,9 +185,7 @@ export function AiDisclosureBanner({
             ⚠
           </span>
           <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
-            {willFlag
-              ? `AI disclosure: This cut includes ${count} generated ${plural}. The AI flag will be set on upload.`
-              : `Disclosure is disabled — ${count} generated ${plural} in this cut. Confirm you've manually flagged on the platform.`}
+            {`AI disclosure: This cut includes ${count} generated ${plural}. Review the platform's AI-content disclosure before publishing.`}
           </span>
         </Inline>
         <button

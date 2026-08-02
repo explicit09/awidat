@@ -9,8 +9,6 @@ import {
 import {
   campaignUploadRequests,
   publishCampaignViaServer,
-  startCampaignUploads,
-  type CampaignUploadRequest,
 } from "../src/campaign/publisher.ts";
 
 const entries: RenderQueueEntry[] = [
@@ -126,9 +124,7 @@ assert.equal(tiktok.metadata.scheduledAt, 1_782_686_400);
   assert.equal(selectedYoutube?.accountId, "acct-youtube-selected");
 }
 
-// --- Behavioral tests for the upload start path -------------------------
-
-// A single-target campaign reused across the start-path tests below.
+// A single-target campaign reused across the server-path tests below.
 const singleEntry: RenderQueueEntry = {
   id: "render-youtube",
   targetId: "youtube",
@@ -165,44 +161,6 @@ const singleCampaign = createCampaignManifest({
     }),
   ],
 });
-
-// Mock invoke recording (command, args), returning scripted poll snapshots.
-function recordingInvoke(responses: Record<string, unknown[]> = {}) {
-  const calls: { command: string; args?: Record<string, unknown> }[] = [];
-  const cursors: Record<string, number> = {};
-  const invoke = async <T>(
-    command: string,
-    args?: Record<string, unknown>,
-  ): Promise<T> => {
-    calls.push({ command, args });
-    const queue = responses[command];
-    if (queue && queue.length > 0) {
-      const i = cursors[command] ?? 0;
-      cursors[command] = Math.min(i + 1, queue.length - 1);
-      return queue[i] as T;
-    }
-    return undefined as T;
-  };
-  return { invoke, calls };
-}
-
-const noSleep = async () => {};
-
-const publishedSnapshot = {
-  job_id: "job-youtube",
-  upload_targets: ["youtube"],
-  upload_states: { youtube: { state: "published", remote_url: "u" } },
-  published_urls: { youtube: "u" },
-};
-
-const requiresActionSnapshot = {
-  job_id: "job-youtube",
-  upload_targets: ["youtube"],
-  upload_states: {
-    youtube: { state: "requires_action", reason: "missing_scope" },
-  },
-  published_urls: {},
-};
 
 // Server-backed campaign publishing forwards full platform metadata.
 {
@@ -487,94 +445,6 @@ const requiresActionSnapshot = {
     1,
     "non-terminal upload state stays eligible",
   );
-}
-
-// P1: compute_ai_disclosure runs before start_uploads_for_job (default-on).
-{
-  const { invoke, calls } = recordingInvoke({
-    poll_upload_states: [publishedSnapshot],
-  });
-  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
-    sleep: noSleep,
-  });
-  const order = calls.map((c) => c.command);
-  const discloseIdx = order.indexOf("compute_ai_disclosure");
-  const startIdx = order.indexOf("start_uploads_for_job");
-  assert.ok(discloseIdx >= 0, "compute_ai_disclosure invoked");
-  assert.ok(discloseIdx < startIdx, "disclosure before start_uploads_for_job");
-  assert.equal(calls[discloseIdx].args?.autoDisclose, true);
-  assert.equal(calls[discloseIdx].args?.jobId, "job-youtube");
-}
-
-// autoDisclose:false is forwarded for the power-user opt-out.
-{
-  const { invoke, calls } = recordingInvoke({
-    poll_upload_states: [publishedSnapshot],
-  });
-  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
-    sleep: noSleep,
-    autoDisclose: false,
-  });
-  const disclose = calls.find((c) => c.command === "compute_ai_disclosure");
-  assert.equal(disclose?.args?.autoDisclose, false);
-}
-
-// P2: polls poll_upload_states until every target is terminal.
-{
-  const { invoke, calls } = recordingInvoke({
-    poll_upload_states: [
-      {
-        job_id: "job-youtube",
-        upload_targets: ["youtube"],
-        upload_states: { youtube: { state: "uploading", progress: 0.5 } },
-        published_urls: {},
-      },
-      publishedSnapshot,
-    ],
-  });
-  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
-    sleep: noSleep,
-    maxPollTicks: 10,
-  });
-  const pollCount = calls.filter(
-    (c) => c.command === "poll_upload_states",
-  ).length;
-  assert.ok(pollCount >= 2, "polled until terminal state");
-}
-
-// Action-needed upload states are terminal for polling; user recovery happens
-// through reconnect/retry controls rather than continued background polling.
-{
-  const { invoke, calls } = recordingInvoke({
-    poll_upload_states: [requiresActionSnapshot],
-  });
-  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
-    sleep: noSleep,
-    maxPollTicks: 10,
-  });
-  const pollCount = calls.filter(
-    (c) => c.command === "poll_upload_states",
-  ).length;
-  assert.equal(pollCount, 1, "requires_action stops campaign upload polling");
-}
-
-// onStarted fires before any polling so the caller can map variant->job early.
-{
-  let pollsBeforeOnStarted = -1;
-  const { invoke, calls } = recordingInvoke({
-    poll_upload_states: [publishedSnapshot],
-  });
-  await startCampaignUploads(singleCampaign, [singleEntry], invoke, {
-    sleep: noSleep,
-    onStarted: (started: CampaignUploadRequest[]) => {
-      assert.equal(started.length, 1);
-      assert.equal(started[0].jobId, "job-youtube");
-      pollsBeforeOnStarted = calls.filter(
-        (c) => c.command === "poll_upload_states",
-      ).length;
-    },
-  });
-  assert.equal(pollsBeforeOnStarted, 0, "onStarted fires before polling");
 }
 
 console.log("campaign-publisher: OK");

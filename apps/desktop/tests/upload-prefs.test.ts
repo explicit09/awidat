@@ -1,11 +1,20 @@
 import { strict as assert } from "node:assert";
-import { shouldApplyBackendUploadPrefs } from "../src/state/uploadPrefs.ts";
+import {
+  providerKeyForTarget,
+  useUploadPrefs,
+} from "../src/state/uploadPrefs.ts";
 
-assert.equal(shouldApplyBackendUploadPrefs(0, 0), true);
-assert.equal(
-  shouldApplyBackendUploadPrefs(0, 1),
-  false,
-  "backend hydrate must not overwrite a local edit made after scheduling",
-);
+const state = useUploadPrefs.getState();
+assert.equal("hydrate" in state, false, "local preferences need no backend hydrate");
+assert.equal("revision" in state, false, "local preferences need no race counter");
+assert.equal(providerKeyForTarget("youtube"), "youtube");
+assert.equal(providerKeyForTarget("twitter_x"), "twitter_x");
+assert.equal(providerKeyForTarget("video_master"), null);
+
+state.setEnabled([]);
+state.toggle("youtube");
+assert.deepEqual([...useUploadPrefs.getState().enabled], ["youtube"]);
+useUploadPrefs.getState().toggle("youtube");
+assert.deepEqual([...useUploadPrefs.getState().enabled], []);
 
 console.log("upload-prefs: OK");

@@ -1,24 +1,8 @@
-//! AI-content disclosure (W5.A4) — FTC / EU AI Act / platform compliance.
+//! Generated-media disclosure inspection.
 //!
-//! When the user uploads a cut that contains generated B-roll (Wave 3
-//! C3 routes generated assets through the Brief with provider / model /
-//! prompt metadata), platform policy now requires an AI-disclosure flag
-//! on the upload:
-//!
-//! - YouTube: "Altered or synthetic content" toggle.
-//! - TikTok: AIGC (AI-generated content) label.
-//! - Instagram: AI label (introduced 2024).
-//!
-//! This module owns the *detection* + *carry* of that signal — walks
-//! the timeline against the per-project generated-media registry,
-//! collects the matching credits, and exposes them as a serializable
-//! [`AiDisclosure`] that travels on [`UploadParams`] all the way to
-//! each provider's `upload()` call.
-//!
-//! Real platform-flag wiring is provider-specific and lands when the
-//! real upload code does (post W5.A4). For now each provider stub
-//! folds the disclosure intent into its `ProviderError::Unsupported`
-//! message so the user can see what *would* have been claimed.
+//! This module walks the current timeline against its project-local
+//! generated-media registry, collects provenance credits, and exposes a
+//! serializable [`AiDisclosure`] for the desktop warning surface.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -58,16 +42,13 @@ pub struct GeneratedMediaCredit {
 
 /// Full AI-disclosure payload for one render job.
 ///
-/// `has_synthetic_content` is the gate the upload providers match on
-/// — when true, each platform-specific flag is set. `credits` is the
-/// human-facing list (provider / prompt / time) so the disclosure
-/// banner can render the full audit trail.
+/// `has_synthetic_content` is the warning gate. `credits` is the
+/// human-facing provider/prompt/time audit trail.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiDisclosure {
     /// `true` iff the cut contains at least one generated-media clip.
-    /// Drives the per-platform flag below; never inferred from the
-    /// credits list length so a future "manually flag synthetic" path
-    /// can flip this on without populating credits.
+    /// Kept explicit rather than inferred from credits so callers can
+    /// represent synthetic content whose provenance is unavailable.
     pub has_synthetic_content: bool,
     /// Credits for every generated clip that landed in the cut.
     /// Sorted by `generated_at` descending so the most recent appears
@@ -78,9 +59,7 @@ pub struct AiDisclosure {
 
 impl AiDisclosure {
     /// Empty disclosure — no synthetic content, no credits. Used as
-    /// the default for clean cuts so the disclosure field is always
-    /// `Some(_)` rather than `None`, which keeps the JSON shape
-    /// predictable for the frontend.
+    /// the default for clean cuts and missing projects.
     pub fn empty() -> Self {
         Self::default()
     }
@@ -265,42 +244,6 @@ fn credit_from_record(record: &GeneratedMediaRecord) -> GeneratedMediaCredit {
         generated_at: record.completed_at.map(|t| t.timestamp()),
         asset_id: record.job_id.clone(),
     }
-}
-
-/// Build a one-line human summary for a credit, suitable for logging
-/// from the provider stubs (and reading in tests). Format:
-/// `"<provider>/<model> · <prompt prefix>…"`. Used by the provider
-/// stubs to fold disclosure intent into their `Unsupported` message.
-pub fn summarize_credit(credit: &GeneratedMediaCredit) -> String {
-    let provider_model = match &credit.model {
-        Some(m) if !m.is_empty() => format!("{}/{m}", credit.provider),
-        _ => credit.provider.clone(),
-    };
-    let prompt_summary = if credit.prompt.chars().count() > 80 {
-        let truncated: String = credit.prompt.chars().take(79).collect();
-        format!("{truncated}…")
-    } else {
-        credit.prompt.clone()
-    };
-    if prompt_summary.is_empty() {
-        provider_model
-    } else {
-        format!("{provider_model} · {prompt_summary}")
-    }
-}
-
-/// Render the disclosure as a one-line provider-stub hint: "would set
-/// <flag>; <N> generated clip(s): <first credit>". Used inside each
-/// provider's `Unsupported` error message so the user (and tests) can
-/// confirm the disclosure intent reached the platform layer.
-pub fn provider_log_line(flag_name: &str, disclosure: &AiDisclosure) -> String {
-    let n = disclosure.credits.len();
-    let plural = if n == 1 { "clip" } else { "clips" };
-    let head = match disclosure.credits.first() {
-        Some(c) => format!(" — {}", summarize_credit(c)),
-        None => String::new(),
-    };
-    format!("would set {flag_name}=true on the upload — {n} generated {plural}{head}")
 }
 
 /// Convenience helper for callers that have a project root path and
@@ -495,73 +438,6 @@ mod tests {
         assert_eq!(credits.len(), 2);
         assert_eq!(credits[0].asset_id, "job-new", "newest first");
         assert_eq!(credits[1].asset_id, "job-old");
-    }
-
-    #[test]
-    fn summarize_credit_truncates_long_prompt() {
-        let credit = GeneratedMediaCredit {
-            provider: "runway".into(),
-            model: Some("gen3".into()),
-            prompt: "x".repeat(120),
-            generated_at: Some(0),
-            asset_id: "job".into(),
-        };
-        let summary = summarize_credit(&credit);
-        assert!(summary.starts_with("runway/gen3 · "));
-        assert!(summary.ends_with('…'));
-        // 79 chars of x + ellipsis + provider/model prefix.
-        assert!(summary.chars().count() < 100);
-    }
-
-    #[test]
-    fn summarize_credit_omits_empty_model() {
-        let credit = GeneratedMediaCredit {
-            provider: "mock".into(),
-            model: None,
-            prompt: "short".into(),
-            generated_at: None,
-            asset_id: "job".into(),
-        };
-        let summary = summarize_credit(&credit);
-        assert_eq!(summary, "mock · short");
-    }
-
-    #[test]
-    fn provider_log_line_carries_count_and_first_credit() {
-        let disclosure = AiDisclosure::from_credits(vec![
-            GeneratedMediaCredit {
-                provider: "runway".into(),
-                model: Some("gen3".into()),
-                prompt: "neon city".into(),
-                generated_at: Some(1),
-                asset_id: "job-a".into(),
-            },
-            GeneratedMediaCredit {
-                provider: "sora".into(),
-                model: None,
-                prompt: "sunset".into(),
-                generated_at: Some(0),
-                asset_id: "job-b".into(),
-            },
-        ]);
-        let line = provider_log_line("altered_content", &disclosure);
-        assert!(line.contains("altered_content=true"));
-        assert!(line.contains("2 generated clips"));
-        assert!(line.contains("runway/gen3"));
-    }
-
-    #[test]
-    fn provider_log_line_singular_form_for_one_credit() {
-        let disclosure = AiDisclosure::from_credits(vec![GeneratedMediaCredit {
-            provider: "mock".into(),
-            model: None,
-            prompt: "x".into(),
-            generated_at: None,
-            asset_id: "j".into(),
-        }]);
-        let line = provider_log_line("ai_label", &disclosure);
-        assert!(line.contains("1 generated clip"));
-        assert!(!line.contains("clips"), "{line}");
     }
 
     #[test]

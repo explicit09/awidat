@@ -247,14 +247,12 @@ export type RenderQueueEntry = {
    */
   uploadMetadata?: Record<string, UploadMetadata>;
   /**
-   * AI disclosure (W5.A4) — computed at register time by the backend
-   * walking the project timeline against the generated-media
-   * registry. When `has_synthetic_content` is true the upload
-   * dispatcher folds the disclosure intent into each platform's flag
-   * (YouTube `alteredContent`, TikTok `aigc_label`, IG `ai_label`).
+   * AI disclosure — computed by the backend walking the project
+   * timeline against the generated-media registry and displayed as
+   * guidance before publishing.
    *
    * `undefined` means "not computed yet" — clean cuts where the
-   * dispatcher never asked. The UI treats undefined the same as "no
+   * worker never asked. The UI treats undefined the same as "no
    * synthetic content" for display so a missing disclosure doesn't
    * surface a banner on cuts that never contained generated media.
    */
@@ -462,7 +460,7 @@ type State = {
   /**
    * Replace this entry's per-target upload metadata snapshot. Called
    * by the worker just before server-backed publishing so the saved
-   * queue entry carries the same metadata the backend was handed —
+   * queue entry carries the same metadata the server request used —
    * useful for retry, where we don't want to re-read the user's form
    * state (they may have edited the form for a *different* render
    * since then).

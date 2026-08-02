@@ -42,7 +42,7 @@ There is no local fallback today, so deleting the uncalled implementation does n
 - Connected-account management and publishing remain server-backed.
 - Render-done auto-publish, campaign publish, retry, scheduler, and job polling keep their current `social_*` path.
 - Per-target metadata and default target preferences survive reload through localStorage.
-- AI disclosure detection, credits, UI chips/banner, and the auto-disclose preference remain.
+- AI disclosure detection, credits, UI chips, and an honest manual-review warning remain. The nonfunctional auto-disclose toggle is removed because the server path never consumed it.
 - No generated protocol files or user-owned dirty files are touched.
 
 ## Verification
@@ -52,4 +52,3 @@ There is no local fallback today, so deleting the uncalled implementation does n
 - `cargo test -p montage-desktop` and `cargo clippy -p montage-desktop --all-targets -- -D warnings`.
 - Workspace compile check if the focused gates pass.
 - Static proof that deleted commands and modules have no remaining references.
-

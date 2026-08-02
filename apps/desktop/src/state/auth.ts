@@ -4,8 +4,8 @@
 // `AuthStatus` snapshot and the async actions that drive the Tauri `auth_*`
 // commands (which wrap the `montage-auth` crate / codex-login).
 //
-// This is "who powers the agent" auth — distinct from the publishing OAuth in
-// PublishingSettings ("montage acting on your behalf toward YouTube").
+// This is "who powers the agent" auth — publishing account OAuth belongs to
+// the separate social server.
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

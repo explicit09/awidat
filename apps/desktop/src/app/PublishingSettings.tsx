@@ -1,6 +1,6 @@
 // SettingsModal → Publishing section.
 //
-// Owns three groups:
+// Owns two groups:
 //
 //   1. Connected accounts — the server-backed social publishing surface
 //      (`<SocialAccounts />`). Connect / list / disconnect run through the
@@ -9,8 +9,7 @@
 //      OAuth-connection rows ("replace as we go" — see
 //      docs/superpowers/specs/2026-06-03-social-desktop-ui-design.md).
 //
-//   2. Global publishing preferences — Auto-disclose AI toggle and the
-//      default-targets checkbox set. These persist across projects.
+//   2. Default upload targets. These persist across projects.
 //
 // Why a separate file: SettingsModal.tsx is already a stack of orthogonal
 // sections; the Publishing section is the heaviest, so isolating it keeps the
@@ -18,12 +17,9 @@
 
 import { SocialAccounts } from "./social/SocialAccounts";
 import { VISIBLE_PROVIDERS } from "./publishingSettingsModel";
-import { useAiDisclosure } from "../state/aiDisclosure";
 import { useUploadPrefs } from "../state/uploadPrefs";
 
 export function PublishingSettings() {
-  const autoDisclose = useAiDisclosure((s) => s.autoDiscloseEnabled);
-  const setAutoDisclose = useAiDisclosure((s) => s.setAutoDiscloseEnabled);
   const uploadDefaults = useUploadPrefs((s) => s.enabled);
   const toggleUploadDefault = useUploadPrefs((s) => s.toggle);
 
@@ -42,15 +38,9 @@ export function PublishingSettings() {
             Preferences
           </h4>
           <p className="m-0 mt-1 text-[11px] text-[var(--color-text-muted)]">
-            Defaults for queued renders and platform disclosure.
+            Defaults for queued renders.
           </p>
         </div>
-        <PreferenceToggle
-          label="Auto-disclose AI content"
-          note="AI labels may be required by connected platforms for synthetic content."
-          checked={autoDisclose}
-          onChange={setAutoDisclose}
-        />
         <div className="grid gap-1">
           <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
             Default upload targets
@@ -76,50 +66,12 @@ export function PublishingSettings() {
           montage-social server, which holds the OAuth app server-side. Users
           connect via the server-backed <SocialAccounts /> surface above
           ("just sign in"). They no longer paste per-platform client_id/secret.
-          Some legacy upload commands remain wired for render-queue
-          compatibility; this panel intentionally no longer surfaces their
-          credential path. */}
+          This panel intentionally has no local credential path. */}
     </div>
   );
 }
 
 // ----------------------------------------------------------------- rows
-
-function PreferenceToggle({
-  label,
-  note,
-  checked,
-  onChange,
-}: {
-  label: string;
-  note: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <div className="grid gap-1 rounded-lg border border-[var(--glass-border)] bg-[rgba(255,255,255,0.025)] px-3 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
-          {label}
-        </span>
-        <label className="inline-flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={(e) => onChange(e.target.checked)}
-            className="accent-[var(--color-accent-primary,#3b82f6)]"
-          />
-          <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-            {checked ? "On" : "Off"}
-          </span>
-        </label>
-      </div>
-      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-        {note}
-      </span>
-    </div>
-  );
-}
 
 function DefaultTargetCheckbox({
   label,

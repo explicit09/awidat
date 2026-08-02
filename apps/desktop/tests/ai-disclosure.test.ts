@@ -1,6 +1,4 @@
-// Tests for the W5.A4 AI-disclosure compliance surface — store
-// actions, the auto-disclose toggle persistence, and the helpers used
-// by the banner + chip components.
+// Tests for the AI-disclosure inspection store and display helpers.
 //
 // We don't mount React — the helpers we care about (`truncatePrompt`,
 // `summarizeCredit`, `emptyAiDisclosure`) are pure, and the store
@@ -11,7 +9,6 @@ import { strict as assert } from "node:assert";
 
 import {
   emptyAiDisclosure,
-  loadAutoDiscloseEnabled,
   summarizeCredit,
   truncatePrompt,
   useAiDisclosure,
@@ -22,7 +19,6 @@ import {
 function resetStore(): void {
   useAiDisclosure.setState({
     byJobId: {},
-    autoDiscloseEnabled: true,
   });
 }
 
@@ -120,23 +116,6 @@ function resetStore(): void {
   const state = useAiDisclosure.getState();
   assert.equal(state.byJobId["render-A"], undefined);
   assert.ok(state.byJobId["render-B"]);
-}
-
-// ---- autoDiscloseEnabled defaults ON ----
-{
-  // No localStorage in node — loader collapses to the safe default.
-  assert.equal(loadAutoDiscloseEnabled(), true);
-  resetStore();
-  assert.equal(useAiDisclosure.getState().autoDiscloseEnabled, true);
-}
-
-// ---- setAutoDiscloseEnabled persists in-memory ----
-{
-  resetStore();
-  useAiDisclosure.getState().setAutoDiscloseEnabled(false);
-  assert.equal(useAiDisclosure.getState().autoDiscloseEnabled, false);
-  useAiDisclosure.getState().setAutoDiscloseEnabled(true);
-  assert.equal(useAiDisclosure.getState().autoDiscloseEnabled, true);
 }
 
 // ---- has_synthetic_content false → banner-side check ----

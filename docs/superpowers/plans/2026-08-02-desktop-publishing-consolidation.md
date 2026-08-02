@@ -34,7 +34,7 @@
 2. Remove best-effort `set_upload_metadata` persistence; localStorage remains the store.
 3. Remove backend preference persistence/hydration; localStorage remains authoritative.
 4. Remove App’s preference hydrate effect.
-5. Keep `compute_ai_disclosure` for visible local analysis, but stop passing obsolete queue-stamping arguments and update comments.
+5. Keep `compute_ai_disclosure` for visible local analysis, remove the nonfunctional auto-disclose control, and update the warning copy.
 6. Run typecheck and focused frontend tests.
 
 ### Task 3: Collapse desktop publishing to disclosure detection
@@ -73,4 +73,3 @@
 5. Run `cargo check --workspace --all-targets` because dependencies and Tauri registration changed.
 6. Confirm `git diff --check`, branch status, deletion totals, and preserved main-checkout dirty files.
 7. Commit the design/plan and implementation in reviewable units.
-

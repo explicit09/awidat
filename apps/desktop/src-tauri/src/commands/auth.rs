@@ -7,9 +7,8 @@
 //! string form the frontend expects, and bridges the async ChatGPT flow to a
 //! Tauri event.
 //!
-//! This auth (who powers the agent) is deliberately separate from the
-//! publishing OAuth in [`crate::publishing`] (montage acting on a user's behalf
-//! toward YouTube/TikTok/IG). They share no token store.
+//! Publishing account credentials are owned by the separate social server;
+//! this desktop command layer never reads or stores them.
 
 use std::sync::atomic::Ordering;
 
