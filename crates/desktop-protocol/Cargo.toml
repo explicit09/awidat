@@ -13,7 +13,6 @@ path = "src/lib.rs"
 montage-proto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 ts-rs = { version = "10", features = ["serde-compat", "chrono-impl"] }
 
 [dev-dependencies]

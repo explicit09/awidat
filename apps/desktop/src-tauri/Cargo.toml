@@ -50,7 +50,6 @@ tokio = { workspace = true, features = ["net"] }
 # rendered artifact straight from disk into a signed-URL PUT body (so a
 # multi-GB render never loads into RAM).
 tokio-util = { workspace = true, features = ["io"] }
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

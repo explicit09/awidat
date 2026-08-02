@@ -36,7 +36,6 @@ dirs = { workspace = true }
 base64 = "0.22"
 sha2 = { workspace = true }
 chrono = { workspace = true }
-rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -45,9 +44,7 @@ bm25 = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process"] }
 tokio-util = { workspace = true }
 reqwest = { workspace = true }
-eventsource-stream = { workspace = true }
 futures = { workspace = true }
-async-stream = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
