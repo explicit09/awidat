@@ -16,9 +16,7 @@ MONTAGE_SKILLS_ROOT ?= $(CURDIR)/skills
 MONTAGE_APP_PACKAGES := \
 	-p montage-proto \
 	-p montage-core \
-	-p montage-tools \
 	-p montage-mcp \
-	-p montage-sandboxing \
 	-p montage-cli \
 	-p montage-render \
 	-p montage-render-gpu \

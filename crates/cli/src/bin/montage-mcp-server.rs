@@ -2,10 +2,6 @@
 //! tools. Spawned by codex (or any MCP-aware client) as a child
 //! process. See `montage_core::montage_mcp` for the server definition
 //! and the design rationale.
-//!
-//! Step 3 of the codex-harness migration: hello-world wiring. One
-//! stub tool registered, just enough to prove codex can call into
-//! Montage code over the standard MCP transport.
 
 use anyhow::Result;
 use montage_core::montage_mcp::MontageMcpServer;

@@ -11,8 +11,7 @@ path = "src/main.rs"
 
 # Montage MCP server, spawned as a child process by codex (or any other
 # MCP client). See crates/core/src/montage_mcp/mod.rs for the server
-# definition. Step 3 of the codex-harness migration ships this with
-# one stub tool; step 5 ports the ~100 video tools onto it.
+# definition and current Montage tool router.
 [[bin]]
 name = "montage-mcp-server"
 path = "src/bin/montage-mcp-server.rs"

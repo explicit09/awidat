@@ -20,24 +20,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # `tauri-build` and plugins are versioned independently and stay on `"2"`.
 tauri-build = { version = "2", features = [] }
 
-[features]
-# Phase 5 (social-publishing): the secret-holding legacy local-publish stack
-# (`publishing/{oauth_exchange,oauth_listener,keychain}` + the provider upload
-# clients) is the OLD desktop-local path the server-backed `social_*` path now
-# supersedes. The intent is to gate it off by default so the shipped binary
-# holds no `client_secret` and runs no loopback OAuth listener.
-#
-# DEVIATION (documented for the parent reviewer): those modules are still wired
-# into `commands/publishing.rs`, which backs the LIVE render-queue auto-upload
-# UI (`apps/desktop/src/app/useRenderQueueWorker.ts` calls
-# `set_render_upload_targets` / `start_uploads_for_job` / `poll_upload_states`).
-# Per Phase 5 Step 6 / RECONCILIATION G7, code that live UI still depends on is
-# left registered this phase; gating it now would break the render queue. So the
-# feature exists as the seam for the Phase 6/7 cleanup but is a default-on no-op
-# today — full deletion/gating lands once the render queue is migrated too.
-default = ["legacy_local_publishing"]
-legacy_local_publishing = []
-
 [dependencies]
 tauri = { version = "~2.11", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"

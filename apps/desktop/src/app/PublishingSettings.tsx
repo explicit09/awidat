@@ -76,9 +76,9 @@ export function PublishingSettings() {
           montage-social server, which holds the OAuth app server-side. Users
           connect via the server-backed <SocialAccounts /> surface above
           ("just sign in"). They no longer paste per-platform client_id/secret.
-          The legacy local-publishing path still exists behind the
-          `legacy_local_publishing` build flag (render-queue auto-upload); this
-          panel intentionally no longer surfaces it. */}
+          Some legacy upload commands remain wired for render-queue
+          compatibility; this panel intentionally no longer surfaces their
+          credential path. */}
     </div>
   );
 }
