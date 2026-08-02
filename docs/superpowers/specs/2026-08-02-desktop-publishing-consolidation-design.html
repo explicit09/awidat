@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Montage publishing consolidation</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111319; --card:#1a1e27; --line:#303746; --text:#eef2f8; --muted:#9ca9ba; --good:#79d6a5; --cut:#ff9a87; --accent:#8fb5ff; }
+    * { box-sizing:border-box } body { margin:0; font:14px/1.45 ui-sans-serif,system-ui; background:radial-gradient(circle at top,#20283a,var(--bg) 42%); color:var(--text) }
+    main { max-width:1000px; margin:auto; padding:36px 22px } h1 { margin:0 0 6px; font-size:30px } .lede { color:var(--muted); max-width:760px; margin:0 0 24px }
+    .flow { display:grid; grid-template-columns:1fr 54px 1fr; align-items:center; gap:10px } .card { background:rgba(26,30,39,.94); border:1px solid var(--line); border-radius:14px; padding:18px }
+    .before { border-color:#70463f } .after { border-color:#35634d } .arrow { text-align:center; color:var(--accent); font-size:28px } h2 { margin:0 0 12px; font-size:17px } ul { padding-left:19px; margin:0 } li+li { margin-top:6px }
+    .cut { color:var(--cut) } .keep { color:var(--good) } .proof { margin-top:16px; display:grid; grid-template-columns:repeat(3,1fr); gap:10px } .proof b { display:block; color:var(--accent); margin-bottom:5px }
+    details { margin-top:16px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 16px } summary { cursor:pointer; font-weight:700 }
+    @media(max-width:700px){ .flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}.proof{grid-template-columns:1fr} main{padding-top:24px} }
+  </style>
+</head>
+<body><main>
+  <h1>One publishing path</h1>
+  <p class="lede">The production UI already publishes through Montage Social Server. Wave 2 removes the dormant desktop-local OAuth/provider/upload implementation while keeping project-local AI disclosure detection.</p>
+  <section class="flow">
+    <article class="card before"><h2>Before: two implementations</h2><ul>
+      <li class="keep">Live: UI → <code>social_*</code> → server → provider</li>
+      <li class="cut">Dormant: UI tests → local queue → local OAuth/provider adapters</li>
+      <li class="cut">Metadata and preferences mirrored into an unused backend</li>
+    </ul></article>
+    <div class="arrow">→</div>
+    <article class="card after"><h2>After: explicit boundary</h2><ul>
+      <li class="keep">Render, campaign, scheduler → server publishing</li>
+      <li class="keep">Local project → disclosure detection → visible UI</li>
+      <li class="keep">Metadata and preferences → localStorage → server request</li>
+    </ul></article>
+  </section>
+  <section class="proof">
+    <div class="card"><b>Caller proof</b>Legacy IPC commands have no production frontend callers.</div>
+    <div class="card"><b>Behavior proof</b>Every active publishing surface already uses <code>social_*</code>.</div>
+    <div class="card"><b>Safety proof</b>Disclosure UI stays; server publishing and polling stay.</div>
+  </section>
+  <details><summary>Verification contract</summary><p>Run focused frontend tests and typecheck, desktop Rust tests and clippy, workspace compile checks, and static reference scans. Preserve the main checkout’s dirty files.</p></details>
+</main></body></html>
+
