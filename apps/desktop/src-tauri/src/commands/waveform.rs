@@ -20,11 +20,10 @@ use std::path::{Path, PathBuf};
 use montage_desktop_protocol::{Id, JobKind};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::waveform_path_for;
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// On-disk sidecar shape. Wrapped in a struct so future fields land
 /// behind a serde-friendly schema; the frontend mirrors this in
@@ -77,7 +76,7 @@ async fn run_one(
         "waveform-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let asset_label = asset
         .file_name()
         .unwrap_or_default()
@@ -93,7 +92,7 @@ async fn run_one(
     let result =
         montage_render::generate_waveform(asset, DEFAULT_BUCKET_COUNT, cancel.clone()).await;
 
-    unregister_job(state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     match result {
         Ok(wave) => {
@@ -204,21 +203,6 @@ pub async fn read_waveform(path: String) -> Result<WaveformData, String> {
         buckets: parsed.buckets,
         duration_s: parsed.duration_s,
     })
-}
-
-async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 #[cfg(test)]

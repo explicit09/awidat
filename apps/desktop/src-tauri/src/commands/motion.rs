@@ -17,11 +17,10 @@ use montage_desktop_protocol::{Id, JobKind};
 use montage_render::MotionSignal;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::motion_path_for;
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Default samples-per-second. v1 ships 1 — adequate for podcast +
 /// long-form spoken content. Action footage may want 2-4 in a
@@ -81,7 +80,7 @@ async fn run_one(
         "motion-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let asset_label = asset
         .file_name()
         .unwrap_or_default()
@@ -95,7 +94,7 @@ async fn run_one(
     );
 
     let result = montage_render::generate_motion_signal(asset, cancel.clone()).await;
-    unregister_job(state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     match result {
         Ok(magnitudes) => {
@@ -163,21 +162,6 @@ fn sidecar_is_fresh(asset: &Path, sidecar: &Path) -> bool {
         return false;
     };
     sidecar_mtime >= asset_mtime
-}
-
-async fn register_job(state: &MontageState, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &MontageState, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 #[cfg(test)]

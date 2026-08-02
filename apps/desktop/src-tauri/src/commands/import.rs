@@ -21,7 +21,7 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Copy or symlink an existing local file into `<project>/raw/`.
 /// Emits an `Item::Job` (kind = `LocalImport`) for visibility, even
@@ -51,7 +51,7 @@ pub async fn import_local(
         "import-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(&state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -60,7 +60,7 @@ pub async fn import_local(
     );
 
     let result = run_local_import(&project_root, &src_path, link, &cancel).await;
-    unregister_job(&state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     match result {
         Ok(dst) => {
@@ -112,7 +112,7 @@ pub async fn import_locals(
         "import-many-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(&state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -123,7 +123,7 @@ pub async fn import_locals(
     let mut imported = Vec::with_capacity(src_paths.len());
     for (i, src) in src_paths.iter().enumerate() {
         if cancel.is_cancelled() {
-            unregister_job(&state, &job_id).await;
+            state.unregister_job(&job_id.0).await;
             emitter.cancelled();
             return Err("cancelled".into());
         }
@@ -135,18 +135,18 @@ pub async fn import_locals(
         match run_local_import(&project_root, src, link, &cancel).await {
             Ok(dst) => imported.push(dst),
             Err(_e) if cancel.is_cancelled() => {
-                unregister_job(&state, &job_id).await;
+                state.unregister_job(&job_id.0).await;
                 emitter.cancelled();
                 return Err("cancelled".into());
             }
             Err(e) => {
-                unregister_job(&state, &job_id).await;
+                state.unregister_job(&job_id.0).await;
                 emitter.err(e.clone());
                 return Err(e);
             }
         }
     }
-    unregister_job(&state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     let summary = format!("imported {} files", imported.len());
     emitter.ok(Some(summary));
@@ -430,7 +430,7 @@ pub async fn import_url(
         "ytdlp-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(&state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -439,7 +439,7 @@ pub async fn import_url(
     );
 
     let result = run_url_import(&app, &project_root, &url, &emitter, &cancel).await;
-    unregister_job(&state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     match result {
         Ok(path) => {
@@ -589,21 +589,6 @@ fn parse_progress(line: &str) -> Option<ParsedProgress> {
         percent: pct_u8,
         status: trimmed.to_string(),
     })
-}
-
-async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 #[cfg(test)]

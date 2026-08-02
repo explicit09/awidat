@@ -57,14 +57,13 @@ pub struct MontageState {
     /// "social client not initialized" error. Provider token material still
     /// lives server-side.
     pub social_client: Mutex<Option<crate::social_client::SocialClient>>,
-    /// In-flight long jobs (yt-dlp / indexing) keyed by job-item id,
-    /// so a `cancel_job` command can find them. Tracking by id rather
-    /// than a single global slot lets concurrent jobs run (e.g. an
-    /// import while indexing of a previously-imported asset
-    /// continues, in a future commit). Read by the import/index
-    /// commands in the next commit.
-    #[allow(dead_code)]
+    /// In-flight import, indexing, analysis, transcode, and reframe jobs keyed
+    /// by job-item id so commands and app shutdown share one lifecycle.
     pub jobs: Mutex<HashMap<String, JobHandle>>,
+    /// Parent cancellation token for every job in [`Self::jobs`]. Once app
+    /// shutdown begins, child tokens created by late background work start in
+    /// the cancelled state instead of launching another subprocess.
+    job_shutdown: CancellationToken,
     /// Proxy output paths currently owned by an active ffmpeg writer.
     /// Project-load backfill and UI-triggered backfill can overlap, so
     /// proxy generation needs a per-artifact gate rather than relying
@@ -224,17 +223,48 @@ pub struct TurnHandle {
     pub cancel: CancellationToken,
 }
 
-/// Handle on a running long-job (import, indexing). Owned by
-/// `MontageState::jobs[job_id]`. Used by the import/index commands
-/// in the next commit; predeclared here so the state-layout commit
-/// is self-contained.
-#[allow(dead_code)]
+/// Handle on a running background job owned by [`MontageState::jobs`].
 pub struct JobHandle {
     /// Token the job watches; flipped by `cancel_job`.
     pub cancel: CancellationToken,
 }
 
 impl MontageState {
+    /// Register a long-running job and return the token it should observe.
+    pub async fn register_job(&self, id: &str) -> CancellationToken {
+        let token = self.job_shutdown.child_token();
+        self.jobs.lock().await.insert(
+            id.to_string(),
+            JobHandle {
+                cancel: token.clone(),
+            },
+        );
+        token
+    }
+
+    /// Remove a completed job from the live registry.
+    pub async fn unregister_job(&self, id: &str) {
+        self.jobs.lock().await.remove(id);
+    }
+
+    /// Cancel every long-running job owned by the desktop process.
+    pub async fn cancel_all_jobs(&self) {
+        self.job_shutdown.cancel();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let remaining = self.jobs.lock().await.len();
+            if remaining == 0 {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(remaining, "timed out waiting for background jobs to stop");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
     pub async fn reserve_turn_start(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
         let guard = self
             .turn_start_gate
@@ -244,5 +274,37 @@ impl MontageState {
             return Err("a turn is already running - cancel it first".to_string());
         }
         Ok(guard)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancel_all_jobs_waits_for_registered_jobs_to_finish() {
+        let state = Arc::new(MontageState::default());
+        let first = state.register_job("first").await;
+        let observed = first.clone();
+        let cleanup_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            first.cancelled().await;
+            cleanup_state.unregister_job("first").await;
+        });
+
+        state.cancel_all_jobs().await;
+
+        assert!(observed.is_cancelled());
+        assert!(state.jobs.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn jobs_registered_after_shutdown_start_cancel_immediately() {
+        let state = MontageState::default();
+        state.cancel_all_jobs().await;
+
+        let late = state.register_job("late").await;
+
+        assert!(late.is_cancelled());
     }
 }

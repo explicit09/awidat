@@ -1920,7 +1920,7 @@ function App() {
       focused={agentFocusMode}
       onToggleFocus={() => setAgentFocusMode((focused) => !focused)}
       onSelectChatSession={(session) => void selectChatSession(session)}
-      onOpenHistory={() => void refreshChatSessions()}
+      onOpenHistory={chatSessions.length === 0 ? () => void refreshChatSessions() : undefined}
       onNewChat={() => void startNewChat()}
       onSubmit={(command) => void runEngineCommand(command)}
       onCancel={() => {
@@ -2202,7 +2202,7 @@ function App() {
         chatSessions={chatSessions}
         activeChatSession={activeChatSession}
         chatLoading={chatLoading}
-        onOpenHistory={() => void refreshChatSessions()}
+        onOpenHistory={chatSessions.length === 0 ? () => void refreshChatSessions() : undefined}
         onSelectChatSession={(session) => void selectChatSession(session)}
         onNewChat={() => void startNewChat()}
         permissionMode={permissionMode}

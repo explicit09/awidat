@@ -103,7 +103,8 @@ function Handle({
     e.currentTarget.releasePointerCapture(e.pointerId);
     const finalDx = e.clientX - startXRef.current;
     const baseSeconds = xToTime(spec.x, pps);
-    const newValueS = Math.max(0, baseSeconds + finalDx / Math.max(0.001, pps));
+    const rawValueS = Math.max(0, baseSeconds + finalDx / Math.max(0.001, pps));
+    const newValueS = Math.round(rawValueS * 100) / 100;
     setDragOffset(0);
     setTooltip(null);
     const adj = spec.buildAdjustment(newValueS);

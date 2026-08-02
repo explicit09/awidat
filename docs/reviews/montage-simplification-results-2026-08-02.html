@@ -76,21 +76,21 @@
     <header>
       <div>
         <div class="eyebrow">Montage · simplification results</div>
-        <h1>Seven cuts. One clearer product.</h1>
-        <p class="lede">The editor, evidence model, atomic project protocol, render verification, social server, and resumable preview pipeline remain. Dormant facades, duplicate subsystems, dead adapters, and every production-unreachable frontend module are gone.</p>
+        <h1>Seven cuts. Runtime-tested.</h1>
+        <p class="lede">Dormant facades, duplicate subsystems, dead adapters, and every production-unreachable frontend module are gone. The retained editor was then exercised against real 34-minute and 6-minute projects; dogfood-found playback and subprocess-lifecycle failures were fixed instead of hidden behind green builds.</p>
       </div>
       <div class="branch">
         <strong><code>codex/montage-simplification</code></strong>
         2026-08-02 · preserved worktree<br />
-        not merged or pushed
+        <a href="https://github.com/explicit09/awidat/pull/105">draft PR #105</a> · not merged
       </div>
     </header>
 
     <section class="metrics" aria-label="Result metrics">
-      <div class="card metric"><b>−17,638</b><span>net non-documentation lines</span></div>
-      <div class="card metric"><b>18,256</b><span>implementation lines deleted</span></div>
+      <div class="card metric"><b>−17,655</b><span>net non-documentation lines</span></div>
+      <div class="card metric"><b>18,436</b><span>implementation lines deleted</span></div>
       <div class="card metric"><b>7</b><span>independently verified waves</span></div>
-      <div class="card metric"><b>118</b><span>files in the audited branch diff</span></div>
+      <div class="card metric"><b>135</b><span>files in the audited branch diff</span></div>
     </section>
 
     <nav role="tablist" aria-label="Results sections">
@@ -109,6 +109,7 @@
         <article class="card wave"><h3>5 · Desktop adapters</h3><p>Removed unused dismissal/review modules and uncalled raw motion/social wrappers while preserving Notes dismissal persistence, MCP review packaging, motion-region workflows, and server-backed social commands.</p></article>
         <article class="card wave"><h3>6 · Runtime edge cases</h3><p>Made the Codex sidecar build honor the configured target directory and fail honestly, canonicalized <code>/tmp</code> media paths, and made video-only waveform extraction return an empty result instead of ffmpeg error 234.</p></article>
         <article class="card wave wide"><h3>7 · Frontend reachability</h3><p>Deleted eight unmounted surfaces, then removed the remaining 17 modules unreachable from all six shipped entries, their dead-only tests, and the unused Radix Dialog dependency. The resolver-backed graph is now <strong>309/309 reachable</strong>.</p></article>
+        <article class="card wide"><h3>Dogfood hardening</h3><p>Space-to-pause now reads live playback state instead of a stale first-render closure. Desktop jobs share one cancellation root and registry, with cleanup on both Tauri exit signals. Loaded chat history no longer refetches merely because its menu opens, and proposal handles now remain draggable above review overlays with hundredth-second payload precision.</p></article>
       </div>
     </section>
 
@@ -125,9 +126,12 @@
         <table>
           <thead><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr></thead>
           <tbody>
-            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000</td></tr>
-            <tr><td>Packaged desktop</td><td class="pass">Pass</td><td>Exact external-drive bundle built, launched, resource-verified, and ad-hoc signature-verified. Computer Use opened the tiny project, saved an <code>AGENTS.md</code> edit, quit and reopened the exact bundle, then observed the persisted value and unchanged file hash.</td></tr>
-            <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>318/318 tests</td></tr>
+            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000; focused Space play/pause regression passed</td></tr>
+            <tr><td>Real-project dogfood</td><td class="pass">Pass</td><td>Opened the 34:24 project with 357 transcript segments and 216 filler detections. In the 6:27 clone, Computer Use added a video track, observed <code>1 → 2</code> tracks and a new on-disk hash, quit/reopened, and observed two tracks again. The source project remained byte-identical.</td></tr>
+            <tr><td>Packaged desktop</td><td class="pass">Pass</td><td>Exact external-drive bundle built, launched, resource-verified, and ad-hoc signature-verified. Active waveform/proxy jobs supplied the shutdown stress workload.</td></tr>
+            <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>321/321 tests, including late-job cancellation and final-exit cleanup</td></tr>
+            <tr><td>Feature matrix</td><td class="note">Pass with explicit gaps</td><td>36 feature stories/plans/specs: 31 implemented browser scenarios passed, 4 absent-feature checks are expected failures, and the unmounted Notes surface is skipped</td></tr>
+            <tr><td>Signed release rehearsal</td><td class="pass">Pass</td><td><a href="https://github.com/explicit09/awidat/actions/runs/30764203194">Both macOS architectures</a> built, signed, notarized, stapled, checksummed, and uploaded; branch dispatch correctly skipped publishing</td></tr>
             <tr><td>Core Rust</td><td class="pass">Pass</td><td>732 unit tests plus integration and doc tests; two environment-dependent tests ignored</td></tr>
             <tr><td>Workspace compile</td><td class="pass">Pass*</td><td>All targets except <code>codex-http-client</code> tests; its ignored local PEM fixtures are absent from this worktree</td></tr>
             <tr><td>Workspace clippy</td><td class="pass">Pass*</td><td>Same scope, with <code>-D warnings</code></td></tr>
@@ -140,14 +144,15 @@
 
     <section class="panel" id="boundary" role="tabpanel">
       <div class="grid">
-        <article class="card"><h3>Automated review</h3><p>The first frontend deletion passed automated and independent review with no findings. Later review bundles were refused by the secret scanner because deleted context contains ordinary identifiers such as <code>CancellationToken</code> and <code>loadToken</code>; production code was not rewritten to appease the scanner.</p></article>
+        <article class="card"><h3>Automated review</h3><p>The pushed simplification head passed format, security, Linux Rust, macOS Rust, and desktop frontend CI. Later local review bundles were refused by the secret scanner because deleted context contains ordinary identifiers such as <code>CancellationToken</code> and <code>loadToken</code>; production code was not rewritten to appease the scanner.</p></article>
         <article class="card"><h3>Checkout preservation</h3><p>The original checkout's modified <code>App.css</code>, episode-start tool, secrets library, and untracked target link were not touched. All simplification commits remain isolated in the dedicated worktree.</p></article>
-        <article class="card"><h3>QA coverage boundary</h3><p>The discovery pipeline catalogued 27 user-level capabilities. Its planner phase stalled twice before producing executable plans, so those stories are an inventory—not claimed test coverage.</p></article>
-        <article class="card wide"><h3>Audit trail</h3><p>See the <a href="montage-simplification-audit-2026-08-02.html">initial structural audit</a> and the focused design/implementation plans under <code>docs/superpowers/</code>.</p></article>
+        <article class="card"><h3>Known product gaps</h3><p>Expected failures remain for absent recent-project search/removal affordances, direct split, and immediate undo/redo. Notes is skipped because no mounted Notes product surface exists. The matrix reports a warning rather than a blocker.</p></article>
+        <article class="card"><h3>Media boundary retained</h3><p>The external source symlink was deliberately rejected by preview confinement. Dogfood used project-local caches and never weakened the rule that preview media must resolve inside the project's media directories.</p></article>
+        <article class="card wide"><h3>Audit trail</h3><p>See the <a href="montage-simplification-audit-2026-08-02.html">initial structural audit</a>, the focused design/implementation plans under <code>docs/superpowers/</code>, and <a href="https://github.com/explicit09/awidat/pull/105">PR #105</a> for final-head CI and release-rehearsal links.</p></article>
       </div>
     </section>
 
-    <footer>Result: fewer parallel systems, fewer false surfaces, and no intentional product-kernel reduction.</footer>
+    <footer>Result: fewer parallel systems, fewer false surfaces, four dogfood/QA-found regressions fixed, and no intentional product-kernel reduction.</footer>
   </main>
   <script>
     const tabs = [...document.querySelectorAll('[role="tab"]')];

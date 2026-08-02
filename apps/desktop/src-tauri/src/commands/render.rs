@@ -23,11 +23,10 @@ use montage_render::{
     reframe_to_target,
 };
 use serde::Serialize;
-use tauri::{AppHandle, State};
-use tokio_util::sync::CancellationToken;
+use tauri::{AppHandle, Manager, State};
 
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Reply from `start_timeline_render`: enough info for the frontend
 /// to start polling and to wire up "Show in Finder" later.
@@ -264,7 +263,7 @@ pub async fn start_reframe_render(
         "reframe-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(&state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -287,6 +286,8 @@ pub async fn start_reframe_render(
     let cancel_for_task = cancel.clone();
     let app_for_progress = app.clone();
     let id_for_progress = job_id.clone();
+    let app_for_cleanup = app.clone();
+    let id_for_cleanup = job_id.clone();
     tokio::spawn(async move {
         let progress_cb: montage_render::TranscodeProgressCallback =
             std::sync::Arc::new(move |p| {
@@ -329,6 +330,10 @@ pub async fn start_reframe_render(
                 emitter.err(format!("reframe: {e}"));
             }
         }
+        app_for_cleanup
+            .state::<MontageState>()
+            .unregister_job(&id_for_cleanup.0)
+            .await;
     });
 
     Ok(ReframeJobInfo {
@@ -345,22 +350,10 @@ pub async fn cancel_reframe_render(
     state: State<'_, MontageState>,
     job_id: String,
 ) -> Result<(), String> {
-    let mut jobs = state.jobs.lock().await;
-    if let Some(handle) = jobs.remove(&job_id) {
+    if let Some(handle) = state.jobs.lock().await.get(&job_id) {
         handle.cancel.cancel();
     }
     Ok(())
-}
-
-async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
 }
 
 #[cfg(test)]

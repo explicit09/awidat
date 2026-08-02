@@ -21,11 +21,10 @@ use montage_desktop_protocol::{Id, JobKind};
 use montage_render::SilenceRange;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::silences_path_for;
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Default silence threshold in dBFS. Picked for podcast audio:
 /// typical noise floor is `-50 to -60` dBFS, conversational speech
@@ -115,7 +114,7 @@ async fn run_one(
         "silences-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let asset_label = asset
         .file_name()
         .unwrap_or_default()
@@ -136,7 +135,7 @@ async fn run_one(
     )
     .await;
 
-    unregister_job(state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     match result {
         Ok(ranges) => {
@@ -222,21 +221,6 @@ pub async fn read_silences(path: String) -> Result<SilenceSidecar, String> {
     let parsed: SilenceSidecar = montage_proto::serde_robust::from_json_slice(&bytes)
         .map_err(|e| format!("parse silences sidecar: {e}"))?;
     Ok(parsed)
-}
-
-async fn register_job(state: &MontageState, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &MontageState, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 #[cfg(test)]

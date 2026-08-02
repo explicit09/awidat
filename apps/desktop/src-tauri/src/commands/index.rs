@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Tauri-facing entrypoint. Thin wrapper over [`index_project_inner`]
 /// so the auto-chain in `import.rs` can call the real implementation
@@ -157,7 +157,7 @@ async fn index_project_at_root_with_assets(
         "index-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(&state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -309,7 +309,7 @@ async fn index_project_at_root_with_assets(
         }
     };
 
-    unregister_job(&state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
 
     // Pull the emitter back from the forwarder task. The forwarder
     // exits when the callback channel closes (which happens when the
@@ -854,21 +854,6 @@ fn desktop_indexer_priority(name: &str) -> u8 {
         "face" | "gaze" | "shot" | "clip" => 6,
         _ => 7,
     }
-}
-
-async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {

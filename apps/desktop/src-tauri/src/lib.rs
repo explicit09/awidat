@@ -286,15 +286,21 @@ pub fn run() {
         }
     };
 
-    // Intercept ExitRequested so the in-flight turn (if any) has a
-    // chance to terminate cleanly and the codex bridge drains its
-    // pump task before the process dies. Bridge shutdown is async;
-    // we block on it so the event-pump's last turn-end emit and
-    // JSONRPC drain land before Tauri tears the runtime down.
+    // Clean up on both exit signals. macOS can reach the final `Exit`
+    // event without first delivering `ExitRequested` for every quit path,
+    // and `App::run` terminates the process directly after this callback.
+    // Bridge shutdown is async; block so the final turn event and every
+    // owned subprocess land before Tauri tears the runtime down.
     app.run(move |handle, event| {
-        if let tauri::RunEvent::ExitRequested { .. } = event {
+        if is_shutdown_event(&event) {
             let state = handle.state::<MontageState>();
             tauri::async_runtime::block_on(async {
+                // Background import, indexing, proxy, thumbnail, waveform,
+                // and reframe jobs may own subprocesses. Cancel them before
+                // the process exits so their kill-on-cancel paths can reap
+                // those children instead of leaving them orphaned.
+                state.cancel_all_jobs().await;
+
                 // Cancel the in-flight turn first so the bridge's
                 // pump-task drains a TurnInterrupt-shaped completion
                 // rather than getting kicked while a turn is open.
@@ -312,4 +318,22 @@ pub fn run() {
             });
         }
     });
+}
+
+fn is_shutdown_event(event: &tauri::RunEvent) -> bool {
+    matches!(
+        event,
+        tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_exit_event_still_runs_shutdown_cleanup() {
+        assert!(is_shutdown_event(&tauri::RunEvent::Exit));
+        assert!(!is_shutdown_event(&tauri::RunEvent::Ready));
+    }
 }

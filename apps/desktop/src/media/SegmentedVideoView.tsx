@@ -639,10 +639,14 @@ function SegmentedPlayer({
     // User gesture — the one place WebKit lets a suspended
     // AudioContext start.
     resumePreviewAudio();
-    if (isPlaying) {
+    const playback = useMediaStore.getState();
+    if (playback.isPlaying) {
       setPlaying(false);
     } else {
-      if (timelineDurationS > 0 && timelineTime >= timelineDurationS) {
+      if (
+        playback.timelineDurationS > 0 &&
+        playback.timelineTime >= playback.timelineDurationS
+      ) {
         requestTimelineSeek(0);
         previewClockSeek(clockRef.current, 0);
       }

@@ -800,8 +800,8 @@ fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf
     Ok(buf)
 }
 
-/// Cancel an in-flight long job (yt-dlp download, indexer run) by
-/// its protocol-Item id. No-op if the id isn't currently running.
+/// Cancel an in-flight background job by its protocol-Item id. No-op if the id
+/// isn't currently running.
 #[tauri::command]
 pub async fn cancel_job(state: State<'_, MontageState>, job_id: String) -> Result<(), String> {
     if let Some(handle) = state.jobs.lock().await.get(&job_id) {

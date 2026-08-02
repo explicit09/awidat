@@ -20,11 +20,10 @@ use montage_render::{TranscodeProgress, TranscodeProgressCallback};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use crate::commands::media::proxy_path_for;
 use crate::events::JobEmitter;
-use crate::state::{JobHandle, MontageState};
+use crate::state::MontageState;
 
 /// Proxy cache status for one expected or discovered artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -551,7 +550,7 @@ async fn transcode_one_reserved(
         "transcode-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     ));
-    let cancel = register_job(state, &job_id).await;
+    let cancel = state.register_job(&job_id.0).await;
     let emitter = JobEmitter::start(
         app.clone(),
         job_id.clone(),
@@ -602,7 +601,7 @@ async fn transcode_one_reserved(
     let result =
         montage_render::transcode_proxy(asset, &pending_path, Some(cb), cancel.clone()).await;
 
-    unregister_job(state, &job_id).await;
+    state.unregister_job(&job_id.0).await;
     let emitter = done_rx
         .await
         .map_err(|_| "transcode emitter task crashed".to_string())?;
@@ -890,21 +889,6 @@ fn looks_like_media(path: &Path) -> bool {
             | "aif"
             | "ogg"
     )
-}
-
-async fn register_job(state: &State<'_, MontageState>, id: &Id) -> CancellationToken {
-    let token = CancellationToken::new();
-    state.jobs.lock().await.insert(
-        id.0.clone(),
-        JobHandle {
-            cancel: token.clone(),
-        },
-    );
-    token
-}
-
-async fn unregister_job(state: &State<'_, MontageState>, id: &Id) {
-    state.jobs.lock().await.remove(&id.0);
 }
 
 #[cfg(test)]
