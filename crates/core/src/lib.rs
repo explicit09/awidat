@@ -46,6 +46,7 @@
     )
 )]
 
+pub mod audio_finishing;
 pub mod broll_recommendations;
 pub mod capabilities;
 pub mod capability_metadata;
@@ -78,7 +79,6 @@ pub mod podcast_analysis;
 pub mod podcast_cleanup_scan;
 pub mod preview_cache;
 pub mod preview_refresh_executor;
-pub mod professional;
 pub mod proxy;
 pub mod render_preflight_core;
 pub mod review;

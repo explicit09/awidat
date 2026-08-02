@@ -38,7 +38,7 @@ pub fn build_podcast_qc_report(
             "message": warning,
         }));
     }
-    let audio_finishing = crate::professional::derive_audio_finishing_state(&project.timeline);
+    let audio_finishing = crate::audio_finishing::derive_audio_finishing_state(&project.timeline);
     if audio_finishing.meters.is_empty() {
         issues.push(serde_json::json!({
             "kind": "audio_metering_missing",

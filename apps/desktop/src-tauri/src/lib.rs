@@ -179,8 +179,6 @@ pub fn run() {
             commands::auth::auth_begin_chatgpt,
             commands::config::read_indexer_config,
             commands::config::set_project_indexer_enabled,
-            commands::professional::read_professional_lenses,
-            commands::professional::read_pre_autonomy_inspection,
             commands::provider_keys::list_provider_keys,
             commands::provider_keys::save_provider_key,
             commands::provider_keys::remove_provider_key,

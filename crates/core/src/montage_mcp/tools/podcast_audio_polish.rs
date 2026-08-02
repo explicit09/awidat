@@ -23,7 +23,7 @@ pub fn run(args: PodcastAudioPolishArgs, ctx: McpToolCtx) -> Result<String, Stri
     let target_lufs = args.target_lufs.unwrap_or(-16.0);
     let project = Project::read(&ctx.project_root)
         .map_err(|e| format!("podcast_audio_polish: failed to read project: {e}"))?;
-    let finishing = crate::professional::derive_audio_finishing_state(&project.timeline);
+    let finishing = crate::audio_finishing::derive_audio_finishing_state(&project.timeline);
     let mut issues = Vec::new();
     let mut recommendations = Vec::new();
 
