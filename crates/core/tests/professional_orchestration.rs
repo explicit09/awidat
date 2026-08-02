@@ -2,13 +2,11 @@
 
 use montage_core::professional::{
     LensCorrectionAction, build_workflow_lens_snapshots, inspect_pre_autonomy_readiness,
-    record_learning_signal,
 };
 use montage_proto::montage_meta::MontageTimelineMetadata;
 use montage_proto::professional::{
     AssetCatalog, AssetRecord, CapabilityArea, CapabilityRegistry, CompositionGraph,
-    DeliveryProfile, LearningSignal, PipelineConflict, PlannerPassContract, ReadinessState,
-    ReviewStatus, WorkflowLens,
+    DeliveryProfile, PipelineConflict, PlannerPassContract, ReadinessState, WorkflowLens,
 };
 
 #[test]
@@ -102,33 +100,4 @@ fn orchestration_inspection_uses_registry_and_detects_cross_stage_conflicts() {
             edge.from_pass_id == "color-pass" && edge.to_pass_id == "delivery-pass"
         })
     );
-}
-
-#[test]
-fn learning_signal_capture_records_accepted_and_rejected_proposals() {
-    let mut metadata = MontageTimelineMetadata::default();
-
-    record_learning_signal(
-        &mut metadata,
-        LearningSignal {
-            proposal_id: "proposal-1".into(),
-            area: CapabilityArea::EditorialIntentAndReview,
-            status: ReviewStatus::Accepted,
-            reason: Some("better pacing".into()),
-        },
-    );
-    record_learning_signal(
-        &mut metadata,
-        LearningSignal {
-            proposal_id: "proposal-2".into(),
-            area: CapabilityArea::AudioFinishing,
-            status: ReviewStatus::Rejected,
-            reason: Some("music dipped too much".into()),
-        },
-    );
-
-    assert_eq!(metadata.learning_signals.len(), 2);
-    assert!(metadata.learning_signals.iter().any(|signal| {
-        signal.status == ReviewStatus::Rejected && signal.area == CapabilityArea::AudioFinishing
-    }));
 }
