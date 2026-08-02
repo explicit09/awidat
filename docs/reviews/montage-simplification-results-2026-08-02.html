@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Montage simplification results · 2026-08-02</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0d10;
+      --panel: #12171c;
+      --line: #29323b;
+      --text: #eef3f5;
+      --muted: #9ba8b2;
+      --cyan: #62d7e8;
+      --green: #78e0ad;
+      --amber: #f2c66d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 0, rgba(98, 215, 232, .13), transparent 30rem),
+        radial-gradient(circle at 95% 10%, rgba(120, 224, 173, .09), transparent 28rem),
+        var(--bg);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { color: #d5eaff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .shell { width: min(1120px, calc(100% - 28px)); margin: 0 auto; padding: 28px 0 42px; }
+    header { display: grid; grid-template-columns: 1.35fr .65fr; gap: 22px; align-items: end; }
+    .eyebrow { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 7px 0 9px; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spacing: -.045em; }
+    .lede { max-width: 760px; margin: 0; color: #c8d2d8; font-size: 16px; }
+    .branch { color: var(--muted); font-size: 12px; text-align: right; }
+    .branch strong { display: block; color: var(--text); font-size: 13px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 22px; }
+    .card { border: 1px solid var(--line); border-radius: 15px; background: rgba(18, 23, 28, .94); padding: 17px; }
+    .metric b { display: block; color: var(--green); font-size: 30px; line-height: 1; letter-spacing: -.035em; }
+    .metric span { display: block; margin-top: 7px; color: var(--muted); }
+    nav { display: flex; gap: 6px; margin-top: 18px; padding: 7px; border: 1px solid var(--line); border-radius: 13px; background: rgba(10, 13, 16, .88); }
+    button { border: 0; border-radius: 9px; padding: 8px 12px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; }
+    button[aria-selected="true"] { color: var(--text); background: #1b2229; box-shadow: inset 0 0 0 1px var(--line); }
+    .panel { display: none; padding-top: 14px; }
+    .panel.active { display: block; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    h2 { margin: 2px 0 12px; font-size: 21px; }
+    h3 { margin: 0 0 7px; font-size: 15px; }
+    p { margin: 6px 0; }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    li + li { margin-top: 5px; }
+    .wave { border-left: 3px solid var(--cyan); }
+    .pass { color: var(--green); }
+    .note { color: var(--amber); }
+    .muted { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    .wide { grid-column: 1 / -1; }
+    footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 760px) {
+      header, .grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .branch { text-align: left; }
+      nav { overflow-x: auto; }
+      button { white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">Montage · simplification complete</div>
+        <h1>Five cuts. One clearer product.</h1>
+        <p class="lede">The editor, evidence model, atomic project protocol, render verification, social server, and resumable preview pipeline remain. Dormant facades, duplicate subsystems, and dead desktop adapters are gone.</p>
+      </div>
+      <div class="branch">
+        <strong><code>codex/montage-simplification</code></strong>
+        2026-08-02 · preserved worktree<br />
+        not merged or pushed
+      </div>
+    </header>
+
+    <section class="metrics" aria-label="Result metrics">
+      <div class="card metric"><b>−13,568</b><span>net non-documentation lines</span></div>
+      <div class="card metric"><b>14,031</b><span>implementation lines deleted</span></div>
+      <div class="card metric"><b>5</b><span>independently verified waves</span></div>
+      <div class="card metric"><b>75</b><span>files in the audited branch diff</span></div>
+    </section>
+
+    <nav role="tablist" aria-label="Results sections">
+      <button role="tab" aria-selected="true" aria-controls="cuts">What changed</button>
+      <button role="tab" aria-selected="false" aria-controls="kept">What stayed</button>
+      <button role="tab" aria-selected="false" aria-controls="proof">Proof</button>
+      <button role="tab" aria-selected="false" aria-controls="boundary">Review boundary</button>
+    </nav>
+
+    <section class="panel active" id="cuts" role="tabpanel">
+      <div class="grid">
+        <article class="card wave"><h3>1 · Development lanes</h3><p>Repaired first-party Make targets, removed an empty feature, removed ten unused direct dependencies, and reduced dormant core orchestration.</p></article>
+        <article class="card wave"><h3>2 · Publishing</h3><p>Deleted the duplicate desktop OAuth, keychain, provider, storage, upload-queue, and platform stack. Publishing now converges on the existing social server.</p></article>
+        <article class="card wave"><h3>3 · Professional facade</h3><p>Removed the unused workflow/readiness facade and its uncalled commands. A live audio-finishing helper discovered by compile evidence was retained in a focused module.</p></article>
+        <article class="card wave"><h3>4 · Preview cache</h3><p>Deleted the second desktop preview cache and its uncalled endpoints. The active persisted, resumable, ffmpeg-backed core lifecycle remains authoritative.</p></article>
+        <article class="card wave wide"><h3>5 · Desktop adapters</h3><p>Removed unused dismissal/review modules and uncalled raw motion/social wrappers while preserving Notes dismissal persistence, MCP review packaging, motion-region workflows, and server-backed social commands.</p></article>
+      </div>
+    </section>
+
+    <section class="panel" id="kept" role="tabpanel">
+      <div class="grid">
+        <article class="card"><h3>Product kernel</h3><ul><li>Project protocol and atomic EDL application</li><li>Evidence-backed editorial operations</li><li>Render verification and GPU path</li><li>Active agent and MCP surfaces</li></ul></article>
+        <article class="card"><h3>Operational safeguards</h3><ul><li>Cancellation and resumable preview jobs</li><li>AI disclosure detection</li><li>Publishing authorization in the social server</li><li>Notes-based dismissal state</li></ul></article>
+        <article class="card wide"><h3>Intentionally deferred</h3><p>Commands with dynamic or internal call possibilities were not removed on name-search evidence alone. Frontend-visible history rename/delete stubs were also left intact because deleting them would change user-visible behavior and overlap unrelated local UI work.</p></article>
+      </div>
+    </section>
+
+    <section class="panel" id="proof" role="tabpanel">
+      <article class="card">
+        <table>
+          <thead><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000</td></tr>
+            <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>316/316 tests</td></tr>
+            <tr><td>Core Rust</td><td class="pass">Pass</td><td>732 unit tests plus integration and doc tests; two environment-dependent tests ignored</td></tr>
+            <tr><td>Workspace compile</td><td class="pass">Pass*</td><td>All targets except <code>codex-http-client</code> tests; its ignored local PEM fixtures are absent from this worktree</td></tr>
+            <tr><td>Workspace clippy</td><td class="pass">Pass*</td><td>Same scope, with <code>-D warnings</code></td></tr>
+            <tr><td>Python indexers</td><td class="pass">Pass</td><td>Safe smoke: 14 packages and required contracts</td></tr>
+            <tr><td>Formatting / diff</td><td class="pass">Pass</td><td><code>cargo fmt --check</code> and <code>git diff --check</code></td></tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+    <section class="panel" id="boundary" role="tabpanel">
+      <div class="grid">
+        <article class="card"><h3>Automated review</h3><p>The final review bundle was refused by its secret scanner because the deleted motion-command context includes <code>CancellationToken</code>. Production code was not rewritten to appease the scanner. Earlier review feedback was traced to callers; a live audio helper was retained and reverified.</p></article>
+        <article class="card"><h3>Checkout preservation</h3><p>The original checkout's modified <code>App.css</code>, episode-start tool, secrets library, and untracked target link were not touched. All simplification commits remain isolated in the dedicated worktree.</p></article>
+        <article class="card wide"><h3>Audit trail</h3><p>See the <a href="montage-simplification-audit-2026-08-02.html">initial structural audit</a> and the focused design/implementation plans under <code>docs/superpowers/</code>.</p></article>
+      </div>
+    </section>
+
+    <footer>Result: fewer parallel systems, fewer false surfaces, and no intentional product-kernel reduction.</footer>
+  </main>
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+    tabs.forEach((tab) => tab.addEventListener('click', () => {
+      tabs.forEach((item) => item.setAttribute('aria-selected', String(item === tab)));
+      panels.forEach((panel) => panel.classList.toggle('active', panel.id === tab.getAttribute('aria-controls')));
+    }));
+  </script>
+</body>
+</html>
