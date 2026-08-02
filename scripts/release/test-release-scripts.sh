@@ -276,8 +276,30 @@ test_make_desktop_codex_can_build_release_profile() {
   local output
   output="$(make -C "$ROOT_DIR" -n desktop-codex TARGET_TRIPLE=x86_64-apple-darwin CODEX_PROFILE=release)"
   assert_contains "$output" '--target "$target_triple" $codex_profile_flag' "codex sidecar build passes selected profile flag"
-  assert_contains "$output" 'target/$target_triple/$codex_profile/codex' "codex sidecar copies from selected profile"
+  assert_contains "$output" 'CARGO_TARGET_DIR="$cargo_target_dir" cargo build' "codex sidecar build uses configured cargo target directory"
+  assert_contains "$output" 'source="$cargo_target_dir/$target_triple/$codex_profile/codex"' "codex sidecar copies from selected profile"
   pass "desktop codex can build release profile"
+}
+
+test_make_desktop_codex_stops_when_build_fails() {
+  local fake_bin="$TMP_DIR/fake-cargo-bin"
+  local output
+  mkdir -p "$fake_bin"
+  cat > "$fake_bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+exit 17
+EOF
+  chmod +x "$fake_bin/cargo"
+
+  if output="$(
+    PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      CARGO_TARGET_DIR="$TMP_DIR/cargo-target" \
+      make -C "$ROOT_DIR" desktop-codex TARGET_TRIPLE=montage-test-target 2>&1
+  )"; then
+    fail "desktop codex should stop when cargo build fails"
+  fi
+  assert_not_contains "$output" "wrote apps/desktop/src-tauri/binaries/codex-montage-test-target" "codex sidecar is not reported written after failed build"
+  pass "desktop codex stops when build fails"
 }
 
 test_import_certificate_requires_env() {
@@ -427,6 +449,7 @@ test_make_desktop_ffmpeg_marks_windows_sidecars_executable
 test_make_desktop_uv_rejects_windows_stub_and_chmods
 test_make_desktop_mcp_server_builds_requested_target
 test_make_desktop_codex_can_build_release_profile
+test_make_desktop_codex_stops_when_build_fails
 test_import_certificate_requires_env
 test_notarize_requires_dmg_path
 test_import_certificate_imports_identity_with_fake_security

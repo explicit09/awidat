@@ -109,6 +109,31 @@ enum InsertMode {
     At(f64),
 }
 
+fn project_relative_asset_id(project_root: &Path, asset_abs_path: &Path) -> Result<String, String> {
+    let canonical_root = project_root.canonicalize().map_err(|e| {
+        format!(
+            "auto-insert: resolve project {}: {e}",
+            project_root.display()
+        )
+    })?;
+    let canonical_asset = asset_abs_path.canonicalize().map_err(|e| {
+        format!(
+            "auto-insert: resolve asset {}: {e}",
+            asset_abs_path.display()
+        )
+    })?;
+    canonical_asset
+        .strip_prefix(&canonical_root)
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| {
+            format!(
+                "auto-insert: asset {} is not inside project {}",
+                asset_abs_path.display(),
+                project_root.display()
+            )
+        })
+}
+
 #[allow(dead_code)]
 async fn insert_asset(
     project_root: &Path,
@@ -142,16 +167,7 @@ async fn insert_asset(
         }
 
         // Derive the project-relative asset id.
-        let asset_rel = match asset_abs_path.strip_prefix(&project_root) {
-            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
-            Err(_) => {
-                return Err(format!(
-                    "auto-insert: asset {} is not inside project {}",
-                    asset_abs_path.display(),
-                    project_root.display()
-                ));
-            }
-        };
+        let asset_rel = project_relative_asset_id(&project_root, &asset_abs_path)?;
 
         let envelope = EdlEnvelope {
             ops: vec![EdlOp::InsertClip {
@@ -269,16 +285,7 @@ async fn insert_media(
             }
             InsertMode::IfEmpty | InsertMode::Append => None,
         };
-        let asset_rel = match asset_abs_path.strip_prefix(&project_root) {
-            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
-            Err(_) => {
-                return Err(format!(
-                    "auto-insert: asset {} is not inside project {}",
-                    asset_abs_path.display(),
-                    project_root.display()
-                ));
-            }
-        };
+        let asset_rel = project_relative_asset_id(&project_root, &asset_abs_path)?;
 
         let link_group_id = if has_video && has_audio {
             Some(format!(
@@ -415,5 +422,55 @@ mod tests {
 
         let project = Project::read(root).unwrap();
         assert_eq!(clip_assets(&project), vec!["raw/first.mp4".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn auto_insert_accepts_canonical_asset_under_symlinked_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let root_alias = dir.path().join("project-alias");
+        Project::init(&root).unwrap();
+        std::os::unix::fs::symlink(&root, &root_alias).unwrap();
+        std::fs::create_dir_all(root.join("raw")).unwrap();
+        let asset = root.join("raw/clip.mp4");
+        std::fs::write(&asset, b"clip").unwrap();
+
+        assert!(
+            auto_insert_if_empty(&root_alias, &asset, 3.0)
+                .await
+                .unwrap()
+        );
+
+        let project = Project::read(&root).unwrap();
+        assert_eq!(clip_assets(&project), vec!["raw/clip.mp4".to_string()]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn append_media_accepts_private_tmp_asset_for_tmp_project() {
+        let dir = tempfile::Builder::new()
+            .prefix("montage-auto-insert-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = dir.path().join("project");
+        Project::init(&root).unwrap();
+        std::fs::create_dir_all(root.join("raw")).unwrap();
+        let asset = root.join("raw/clip.mp4");
+        std::fs::write(&asset, b"clip").unwrap();
+        let canonical_asset = asset.canonicalize().unwrap();
+        let probe = montage_render::MediaProbe {
+            duration_s: Some(3.0),
+            has_video: true,
+            has_audio: false,
+            stream_types: vec!["video".into()],
+            video_width: Some(16),
+            video_height: Some(16),
+        };
+
+        assert!(append_media(&root, &canonical_asset, &probe).await.unwrap());
+
+        let project = Project::read(&root).unwrap();
+        assert_eq!(clip_assets(&project), vec!["raw/clip.mp4".to_string()]);
     }
 }

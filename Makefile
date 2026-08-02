@@ -126,10 +126,12 @@ desktop-yt-dlp:
 	echo "wrote $$dest"
 
 desktop-codex:
-	@target_triple="$(TARGET_TRIPLE)"; \
+	@set -e; \
+	target_triple="$(TARGET_TRIPLE)"; \
 	if [ -z "$$target_triple" ]; then \
 	    target_triple="$$(rustc -vV | awk '/^host:/ { print $$2 }')"; \
 	fi; \
+	cargo_target_dir="$${CARGO_TARGET_DIR:-$(DESKTOP_CARGO_TARGET_DIR)}"; \
 	codex_profile="$${CODEX_PROFILE:-debug}"; \
 	codex_profile_flag=""; \
 	if [ "$$codex_profile" = "release" ]; then \
@@ -142,9 +144,13 @@ desktop-codex:
 	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
 	    dest="$$dest.exe"; \
 	fi; \
-	cargo build -p codex-cli --bin codex --target "$$target_triple" $$codex_profile_flag; \
+	CARGO_TARGET_DIR="$$cargo_target_dir" cargo build -p codex-cli --bin codex --target "$$target_triple" $$codex_profile_flag; \
+	source="$$cargo_target_dir/$$target_triple/$$codex_profile/codex"; \
+	if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then \
+	    source="$$source.exe"; \
+	fi; \
 	mkdir -p "$$(dirname "$$dest")"; \
-	cp "target/$$target_triple/$$codex_profile/codex$$(if [ "$$target_triple" = "x86_64-pc-windows-msvc" ]; then echo .exe; fi)" "$$dest"; \
+	cp "$$source" "$$dest"; \
 	chmod +x "$$dest"; \
 	echo "wrote $$dest"
 

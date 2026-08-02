@@ -1609,6 +1609,12 @@ async fn generate_waveform_inner(
     };
 
     if !status.success() {
+        if samples.is_empty()
+            && let Ok(probe) = probe_media(asset_path).await
+            && !probe.has_audio
+        {
+            return Ok(Waveform::default());
+        }
         return Err(FfmpegError::NonZero {
             code: status.code().unwrap_or(-1),
             stderr_tail: tail_string(&stderr_bytes, STDERR_TAIL_BYTES),
@@ -2388,6 +2394,41 @@ mod tests {
             zero_buckets < 5,
             "too many zero buckets: {zero_buckets}/256",
         );
+    }
+
+    #[test]
+    fn generate_waveform_returns_empty_for_video_without_audio() {
+        let Ok(bin) = ffmpeg_path() else {
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("video-only.mp4");
+        let status = std::process::Command::new(bin)
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("color=c=black:s=16x16:d=0.1")
+            .arg("-an")
+            .arg(&asset)
+            .status()
+            .expect("synth video spawn");
+        assert!(status.success(), "synth video exit: {status}");
+
+        let wave = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_waveform(&asset, 256, tokio_util::sync::CancellationToken::new()).await
+            })
+            .expect("video without audio should produce an empty waveform");
+
+        assert!(wave.buckets.is_empty());
+        assert_eq!(wave.duration_s, 0.0);
     }
 
     /// End-to-end: synthesize a 3s test video with `lavfi` and run
