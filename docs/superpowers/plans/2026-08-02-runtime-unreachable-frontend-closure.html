@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Runtime-unreachable frontend closure</title>
+  <style>
+    :root{color-scheme:dark;font:15px/1.45 Inter,system-ui,sans-serif;background:#0b1018;color:#e7edf7}body{margin:0;padding:28px}main{max-width:980px;margin:auto}h1{font-size:30px;margin:0 0 8px}p{color:#aebbd0}.stats,.grid{display:grid;gap:12px}.stats{grid-template-columns:repeat(4,1fr);margin:22px 0}.stat,.card{background:#131c29;border:1px solid #26354a;border-radius:14px;padding:16px}.stat strong{display:block;font-size:24px;color:#7ee0b8}.grid{grid-template-columns:1fr 1fr}h2{font-size:16px;margin:0 0 8px}ul{margin:8px 0 0;padding-left:20px}.pass{color:#7ee0b8}.keep{color:#8bc7ff}code{color:#f7c878}@media(max-width:720px){.stats,.grid{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body><main>
+  <h1>Runtime-unreachable frontend closure</h1>
+  <p>A resolver-backed import graph, not filename heuristics, defines this cut.</p>
+  <section class="stats">
+    <div class="stat"><strong>326</strong>production modules</div>
+    <div class="stat"><strong>309</strong>reachable</div>
+    <div class="stat"><strong>17</strong>unreachable</div>
+    <div class="stat"><strong>2,310</strong>dead lines with tests/CSS</div>
+  </section>
+  <section class="grid">
+    <article class="card"><h2>Delete</h2><ul><li>8 legacy UI surfaces</li><li>3 legacy hook/state modules</li><li>6 test-only helpers</li><li>4 dead-only tests</li><li><code>@radix-ui/react-dialog</code></li></ul></article>
+    <article class="card"><h2>Preserve</h2><ul><li class="keep">Current export, social, chat, timeline, transcript flows</li><li class="keep">All backend commands</li><li class="keep">Generated protocol and App.css</li></ul></article>
+    <article class="card"><h2>Baseline</h2><ul><li class="pass">Typecheck</li><li class="pass">Complete desktop tests</li><li class="pass">UI smoke 22/22</li><li class="pass">7 goldens at SSIM 1.000000</li></ul></article>
+    <article class="card"><h2>Done when</h2><ul><li>No unreachable production TS modules</li><li>Revised full gate remains green</li><li>Exact diff is deletion-only outside package metadata</li></ul></article>
+  </section>
+</main></body></html>
