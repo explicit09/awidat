@@ -24,7 +24,6 @@ pub mod notes;
 pub mod permission;
 pub mod playable;
 pub mod preview;
-pub mod preview_cache;
 pub mod project;
 pub mod proposal;
 pub mod provider_keys;
