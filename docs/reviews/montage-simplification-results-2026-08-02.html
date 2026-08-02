@@ -76,7 +76,7 @@
     <header>
       <div>
         <div class="eyebrow">Montage · simplification results</div>
-        <h1>Seven cuts. Runtime-tested.</h1>
+        <h1>Seven cuts. Runtime-proved.</h1>
         <p class="lede">Dormant facades, duplicate subsystems, dead adapters, and every production-unreachable frontend module are gone. The retained editor was then exercised against real 34-minute and 6-minute projects; dogfood-found playback and subprocess-lifecycle failures were fixed instead of hidden behind green builds.</p>
       </div>
       <div class="branch">
@@ -128,7 +128,7 @@
           <tbody>
             <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite; UI smoke 22/22; seven visual cases at SSIM 1.000000; focused Space play/pause regression passed</td></tr>
             <tr><td>Real-project dogfood</td><td class="pass">Pass</td><td>Opened the 34:24 project with 357 transcript segments and 216 filler detections. In the 6:27 clone, Computer Use added a video track, observed <code>1 → 2</code> tracks and a new on-disk hash, quit/reopened, and observed two tracks again. The source project remained byte-identical.</td></tr>
-            <tr><td>Packaged desktop</td><td class="pass">Pass</td><td>Exact external-drive bundle built, launched, resource-verified, and ad-hoc signature-verified. Active waveform/proxy jobs supplied the shutdown stress workload.</td></tr>
+            <tr><td>Packaged desktop</td><td class="pass">Pass</td><td>Exact external-drive bundle built, launched, resource-verified, and ad-hoc signature-verified. Native Quit reaped the live waveform and ~659% CPU proxy ffmpeg children before the first process poll; all three PIDs stayed absent for 20 seconds.</td></tr>
             <tr><td>Desktop Rust</td><td class="pass">Pass</td><td>321/321 tests, including late-job cancellation and final-exit cleanup</td></tr>
             <tr><td>Feature matrix</td><td class="note">Pass with explicit gaps</td><td>36 feature stories/plans/specs: 31 implemented browser scenarios passed, 4 absent-feature checks are expected failures, and the unmounted Notes surface is skipped</td></tr>
             <tr><td>Signed release rehearsal</td><td class="pass">Pass</td><td><a href="https://github.com/explicit09/awidat/actions/runs/30764203194">Both macOS architectures</a> built, signed, notarized, stapled, checksummed, and uploaded; branch dispatch correctly skipped publishing</td></tr>
