@@ -1,4 +1,4 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio perf-index-skip desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
 FFMPEG_VERSION ?= 7.1.1
@@ -78,6 +78,9 @@ python-smoke:
 
 python-smoke-audio:
 	python3 python/scripts/smoke_indexers.py --safe --audio-energy
+
+perf-index-skip:
+	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-/Volumes/My Passport for Mac/awidat-build/main-target}" cargo run --release -p montage-index --bin montage-index-skip-perf -- --work-dir "$${MONTAGE_INDEX_SKIP_WORK_DIR:-$${TMPDIR:-/tmp}/montage-index-skip-perf}" --output "$${MONTAGE_INDEX_SKIP_OUTPUT:-$${TMPDIR:-/tmp}/montage-index-skip-perf.json}" $${MONTAGE_INDEX_SKIP_ARGS:-}
 
 # Montage desktop (Tauri) — install frontend deps + run dev shell.
 # Frontend deps live under apps/desktop/node_modules; the Rust

@@ -100,6 +100,26 @@ cargo check --workspace --all-targets
 
 `make check` runs the historical full gate (`cargo test --workspace`, vendored Codex tests included); reserve it for broad integration or release changes.
 
+## Existing-sidecar Skip Benchmark
+
+Measure the public index dispatcher when every indexer/asset pair already has a matching sidecar:
+
+```bash
+make perf-index-skip
+```
+
+For a controlled 12 assets × 3 indexers × 8 MiB sidecar run on the external drive, capture CPU, maximum RSS, page-fault, and filesystem-I/O evidence with macOS `time`:
+
+```bash
+CARGO_TARGET_DIR="/Volumes/My Passport for Mac/awidat-build/main-target" \
+MONTAGE_INDEX_SKIP_WORK_DIR="/Volumes/My Passport for Mac/awidat-build/index-skip-perf" \
+MONTAGE_INDEX_SKIP_OUTPUT="/Volumes/My Passport for Mac/awidat-build/index-skip-perf.json" \
+MONTAGE_INDEX_SKIP_ARGS="--label controlled-12x3x8 --assets 12 --indexers 3 --sidecar-mib 8" \
+/usr/bin/time -l make perf-index-skip
+```
+
+The JSON report records the fixture configuration, machine facts, exact dispatch correctness counts, raw samples in milliseconds, and median/p95/MAD statistics. The `time -l` output supplies the CPU, peak-memory, page-fault, and filesystem-I/O evidence alongside that report.
+
 ## macOS Consumer Releases
 
 `.github/workflows/release.yml` builds a signed, notarized `Montage-aarch64-apple-darwin.dmg` and publishes it with its `.sha256` and `checksums.txt` as a GitHub release on `v*` tag pushes. Manual `workflow_dispatch` runs from a non-`v*` ref rehearse the build without publishing. The build is strict: missing Apple secrets, stub sidecars, or failed signing, notarization, or stapling fail the release.

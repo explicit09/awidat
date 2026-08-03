@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "montage-index-perf"
 path = "src/bin/montage-index-perf.rs"
 
+[[bin]]
+name = "montage-index-skip-perf"
+path = "src/bin/montage-index-skip-perf.rs"
+
 [dependencies]
 montage-proto = { workspace = true }
 montage-mcp = { workspace = true }
