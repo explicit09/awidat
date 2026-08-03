@@ -105,6 +105,7 @@ export function useAppGlue() {
   const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
   const clearSelection = useTimelineSelectionStore((s) => s.clear);
   const clearNotes = useNotesStore((s) => s.clear);
+  const refreshNotes = useNotesStore((s) => s.refresh);
   const ingestNote = useNotesStore((s) => s.ingest);
   const proxyBackfillKeyRef = useRef<string | null>(null);
 
@@ -255,6 +256,7 @@ export function useAppGlue() {
         id === MENU_COMMANDS.NAV_REVIEW ||
         id === MENU_COMMANDS.VIEW_TIMELINE ||
         id === MENU_COMMANDS.VIEW_TRANSCRIPT ||
+        id === MENU_COMMANDS.VIEW_NOTES ||
         id === MENU_COMMANDS.VIEW_EDITS
       ) {
         setStage("edit");
@@ -318,6 +320,7 @@ export function useAppGlue() {
         { id: MENU_COMMANDS.TIMELINE_ZOOM_IN, enabled: projectLoaded },
         { id: MENU_COMMANDS.TIMELINE_ZOOM_OUT, enabled: projectLoaded },
         { id: MENU_COMMANDS.TIMELINE_ZOOM_FIT, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_NOTES, enabled: projectLoaded },
       ],
     }).catch((e) => console.warn("set_menu_item_enabled failed", e));
   }, [activeProposal, current, items, selectedClipKey, timelineDuration]);
@@ -335,6 +338,7 @@ export function useAppGlue() {
     if (isTauri() && current !== null) {
       refreshTimeline().catch(() => {});
       refreshMedia().catch(() => {});
+      refreshNotes().catch(() => {});
       // Hydrate the Skills tab's enable/disable state from
       // `<project>/.montage/skills.json` so the toggles reflect any
       // changes that arrived via file sync (Dropbox/git/etc.). The
@@ -391,6 +395,7 @@ export function useAppGlue() {
     hydrateIndexerOverlayFromDisk,
     refreshTimeline,
     refreshMedia,
+    refreshNotes,
   ]);
 
   // The v2 shell no longer mounts MediaPane, so proxy discovery must

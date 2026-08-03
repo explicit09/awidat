@@ -66,6 +66,14 @@ pub fn run(args: ApplyEdlArgs, ctx: McpToolCtx) -> Result<String, String> {
         run_apply_edl_hook("pre_apply_edl", cmd, &args.edl, &ctx.project_root)?;
     }
 
+    let _mutation = if args.dry_run {
+        None
+    } else {
+        Some(
+            crate::vc::lock_timeline_mutation(&ctx.project_root)
+                .map_err(|e| format!("apply_edl: lock timeline mutation: {e}"))?,
+        )
+    };
     let project = Project::read(&ctx.project_root).map_err(|e| {
         format!(
             "apply_edl: failed to read project at {}: {e}",
@@ -120,6 +128,8 @@ pub fn run(args: ApplyEdlArgs, ctx: McpToolCtx) -> Result<String, String> {
                 );
             }
         }
+
+        drop(_mutation);
 
         // post_apply_edl hook (fire-and-forget).
         if let Ok(cfg) = montage_config::Config::load(Some(&ctx.project_root))

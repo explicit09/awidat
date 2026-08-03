@@ -69,6 +69,7 @@ pub struct VeditRestoreResponse {
     pub restored_ref: String,
     pub restored_commit_hash: String,
     pub restored_timeline_hash: String,
+    pub restored_parent_hash: Option<String>,
     pub audit_commit_hash: Option<String>,
 }
 
@@ -331,10 +332,17 @@ pub async fn checkout_vedit_branch(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = montage_core::vc::open_or_init(&project_root)
-        .map_err(|e| format!("open vedit repo: {e}"))?;
-    let checkout = montage_core::vc::checkout_branch(&repo, &branch)
-        .map_err(|e| format!("checkout vedit branch: {e}"))?;
+    let project_root_for_task = project_root.clone();
+    let checkout = tokio::task::spawn_blocking(move || {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root_for_task)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
+        let repo = montage_core::vc::open_or_init(&project_root_for_task)
+            .map_err(|e| format!("open vedit repo: {e}"))?;
+        montage_core::vc::checkout_branch(&repo, &branch)
+            .map_err(|e| format!("checkout vedit branch: {e}"))
+    })
+    .await
+    .map_err(|e| format!("checkout vedit branch join: {e}"))??;
     emit_timeline_changed(&app, &project_root);
     Ok(VeditCheckoutResponse {
         branch: checkout.branch,
@@ -422,6 +430,7 @@ pub async fn restore_vedit_ref(
     app: AppHandle,
     state: State<'_, MontageState>,
     refstr: String,
+    expected_current: String,
 ) -> Result<VeditRestoreResponse, String> {
     let refstr = refstr.trim().to_string();
     if refstr.is_empty() {
@@ -433,28 +442,75 @@ pub async fn restore_vedit_ref(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    let repo = montage_core::vc::open_or_init(&project_root)
-        .map_err(|e| format!("open vedit repo: {e}"))?;
-    let restored = montage_core::vc::restore_working_timeline(&repo, &refstr)
-        .map_err(|e| format!("restore vedit ref: {e}"))?;
-    let header = format!("Restore timeline to {}", short_hash(&restored.commit_hash));
-    // Restore is user-initiated from the desktop history panel — stamp
-    // the seat-holder on the audit commit so blame views show who
-    // rolled the timeline back.
-    let audit = montage_core::vc::commit_current_timeline_as(
-        &repo,
-        &header,
-        Some("Restored project.otio.json from the desktop timeline history panel."),
-        desktop_commit_author(),
-    )
-    .map_err(|e| format!("commit restore audit: {e}"))?;
-    emit_timeline_changed(&app, &project_root);
-    Ok(VeditRestoreResponse {
-        restored_ref: restored.requested_ref,
-        restored_commit_hash: restored.commit_hash,
-        restored_timeline_hash: restored.timeline_hash,
-        audit_commit_hash: Some(audit.commit_hash),
+    let project_root_for_task = project_root.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root_for_task)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
+        let repo = montage_core::vc::open_or_init(&project_root_for_task)
+            .map_err(|e| format!("open vedit repo: {e}"))?;
+        ensure_expected_current(&repo, &expected_current)?;
+        let restored = montage_core::vc::restore_working_timeline(&repo, &refstr)
+            .map_err(|e| format!("restore vedit ref: {e}"))?;
+        let restored_parent_hash = montage_core::vc::commit_parents(&repo, &restored.commit_hash)
+            .map_err(|e| format!("read restored commit parents: {e}"))?
+            .into_iter()
+            .next();
+        let header = format!("Restore timeline to {}", short_hash(&restored.commit_hash));
+        let reasoning = format!(
+            "Montage-Restored-Ref: {}\nMontage-Restored-Parent: {}\n\nRestored project.otio.json from the desktop timeline history panel.",
+            restored.commit_hash,
+            restored_parent_hash.as_deref().unwrap_or("none"),
+        );
+        // Restore is user-initiated from the desktop history panel — stamp
+        // the seat-holder on the audit commit so blame views show who
+        // rolled the timeline back.
+        let audit = montage_core::vc::commit_current_timeline_as(
+            &repo,
+            &header,
+            Some(&reasoning),
+            desktop_commit_author(),
+        )
+        .map_err(|e| format!("commit restore audit: {e}"))?;
+        Ok::<_, String>(VeditRestoreResponse {
+            restored_ref: restored.requested_ref,
+            restored_commit_hash: restored.commit_hash,
+            restored_timeline_hash: restored.timeline_hash,
+            restored_parent_hash,
+            audit_commit_hash: Some(audit.commit_hash),
+        })
     })
+    .await
+    .map_err(|e| format!("restore vedit ref join: {e}"))??;
+    emit_timeline_changed(&app, &project_root);
+    Ok(response)
+}
+
+fn ensure_expected_current(
+    repo: &montage_core::vc::Repo,
+    expected_current: &str,
+) -> Result<(), String> {
+    let expected = expected_current.trim();
+    if expected.is_empty() {
+        return Err("expected current vedit ref cannot be empty".into());
+    }
+    let actual = montage_core::vc::log(repo, 1)
+        .map_err(|e| format!("read current vedit ref: {e}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "timeline history is empty".to_string())?;
+    if actual.commit_hash != expected {
+        return Err(format!(
+            "timeline changed before restore (expected {}, found {})",
+            short_hash(expected),
+            short_hash(&actual.commit_hash),
+        ));
+    }
+    let working_hash = montage_core::vc::working_timeline_hash(repo)
+        .map_err(|e| format!("hash current working timeline: {e}"))?;
+    if working_hash != actual.timeline_hash {
+        return Err("timeline changed before restore (working copy has uncommitted edits)".into());
+    }
+    Ok(())
 }
 
 fn short_hash(hash: &str) -> String {
@@ -649,6 +705,33 @@ mod tests {
         assert_eq!(response.change_count, 1);
         assert_eq!(response.changed_clip_count, 2);
         assert_eq!(response.changed_clip_ids, ["raw/foo.mp4", "shot-a"]);
+    }
+
+    #[test]
+    fn restore_rejects_a_stale_expected_head() {
+        let dir = tempfile::tempdir().unwrap();
+        write_otio(dir.path(), 240.0);
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
+        let first = montage_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
+        write_otio(dir.path(), 120.0);
+        montage_core::vc::commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
+
+        let error = super::ensure_expected_current(&repo, &first.commit_hash).unwrap_err();
+
+        assert!(error.contains("timeline changed before restore"));
+    }
+
+    #[test]
+    fn restore_rejects_uncommitted_working_timeline_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_otio(dir.path(), 240.0);
+        let repo = montage_core::vc::open_or_init(dir.path()).unwrap();
+        let current = montage_core::vc::commit_current_timeline(&repo, "Initial", None).unwrap();
+        write_otio(dir.path(), 120.0);
+
+        let error = super::ensure_expected_current(&repo, &current.commit_hash).unwrap_err();
+
+        assert!(error.contains("working copy has uncommitted edits"));
     }
 
     // ---- desktop author attribution -----------------------------------

@@ -160,6 +160,8 @@ fn record_imported_asset(
     imported_from: Option<String>,
     created_by: &str,
 ) -> Result<(), String> {
+    let _mutation = crate::vc::lock_timeline_mutation(project_root)
+        .map_err(|e| format!("import_media: lock timeline mutation: {e}"))?;
     let mut project = Project::read(project_root)
         .map_err(|e| format!("import_media: unable to read project: {e}"))?;
     let meta = ensure_montage_metadata(&mut project.timeline);

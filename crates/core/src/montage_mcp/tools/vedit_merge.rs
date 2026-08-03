@@ -18,6 +18,8 @@ pub struct VeditMergeArgs {
 }
 
 pub fn run(args: VeditMergeArgs, ctx: McpToolCtx) -> Result<String, String> {
+    let _mutation = vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("vedit_merge: lock timeline mutation failed: {e}"))?;
     let repo = vc::open_or_init(&ctx.project_root)
         .map_err(|e| format!("vedit_merge: opening repo failed: {e}"))?;
     let outcome = vc::merge_refs(&repo, &args.source, args.target.as_deref())

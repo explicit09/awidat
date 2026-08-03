@@ -671,6 +671,14 @@ async fn remove_from_recents(p: &std::path::Path) -> std::io::Result<()> {
     prune_recents_file(&file, p).await
 }
 
+/// Remove one project from the recent-projects list without touching its files.
+#[tauri::command]
+pub async fn remove_recent_project(path: String) -> Result<(), String> {
+    remove_from_recents(Path::new(&path))
+        .await
+        .map_err(|e| format!("remove recent project: {e}"))
+}
+
 /// Internal helper for [`remove_from_recents`] that takes the recents
 /// file path explicitly. Split out so unit tests can target a tempdir
 /// instead of mutating the user's real config dir.

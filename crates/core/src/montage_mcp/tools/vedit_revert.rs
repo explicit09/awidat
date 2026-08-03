@@ -39,6 +39,8 @@ pub fn run(args: VeditRevertArgs, ctx: McpToolCtx) -> Result<String, String> {
         );
     }
 
+    let _mutation = vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("vedit_revert: lock timeline mutation failed: {e}"))?;
     let repo = vc::open_or_init(&ctx.project_root)
         .map_err(|e| format!("vedit_revert: opening repo failed: {e}"))?;
     let restored =

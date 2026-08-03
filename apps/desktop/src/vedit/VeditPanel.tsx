@@ -85,7 +85,10 @@ export function VeditPanel() {
   async function restore(entry: VeditCommitEntry) {
     setRestoreBusy(entry.commitHash);
     try {
-      await invoke("restore_vedit_ref", { refstr: entry.commitHash });
+      await invoke("restore_vedit_ref", {
+        refstr: entry.commitHash,
+        expectedCurrent: latest?.commitHash,
+      });
       setRestoreTarget(null);
       await refreshTimeline();
       load();

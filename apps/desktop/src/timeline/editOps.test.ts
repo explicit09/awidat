@@ -4,6 +4,7 @@ import {
   buildMoveDragOps,
   buildRippleDeleteOps,
   buildRollDragOps,
+  buildSplitSelectionOps,
   buildTrimDragOps,
 } from "./editOps.ts";
 import type {
@@ -159,6 +160,54 @@ describe("buildTrimDragOps", () => {
     };
 
     assert.deepEqual(buildTrimDragOps(drag, 12), []);
+  });
+});
+
+describe("buildSplitSelectionOps", () => {
+  it("maps an interior timeline playhead to source time", () => {
+    const selected = clip(2, "clip-2", 6, 6);
+    selected.source_start_s = 1;
+    selected.speed = 2;
+    const snap = snapshot([track(0, [selected])]);
+
+    assert.deepEqual(
+      buildSplitSelectionOps(snap, { trackIndex: 0, clipIndex: 2 }, 9),
+      [{
+        kind: "split_clip",
+        anchor: { kind: "clip_uuid", uuid: "clip-2" },
+        atS: 7,
+      }],
+    );
+  });
+
+  it("rejects clip boundaries and missing selections", () => {
+    const snap = snapshot([track(0, [clip(2, "clip-2", 6, 6)])]);
+
+    assert.deepEqual(buildSplitSelectionOps(snap, null, 9), []);
+    assert.deepEqual(
+      buildSplitSelectionOps(snap, { trackIndex: 0, clipIndex: 2 }, 6),
+      [],
+    );
+    assert.deepEqual(
+      buildSplitSelectionOps(snap, { trackIndex: 0, clipIndex: 2 }, 12),
+      [],
+    );
+  });
+
+  it("rejects unsupported reverse and zero-speed clips", () => {
+    const selected = clip(2, "clip-2", 6, 6);
+    const snap = snapshot([track(0, [selected])]);
+
+    selected.speed = -1;
+    assert.deepEqual(
+      buildSplitSelectionOps(snap, { trackIndex: 0, clipIndex: 2 }, 9),
+      [],
+    );
+    selected.speed = 0;
+    assert.deepEqual(
+      buildSplitSelectionOps(snap, { trackIndex: 0, clipIndex: 2 }, 9),
+      [],
+    );
   });
 });
 

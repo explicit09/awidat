@@ -11,6 +11,7 @@ import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
 import type { PermissionMode } from "../protocol";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
+import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 
 /**
  * StageShell — the 2026 "Stage" application shell (replaces the
@@ -47,7 +48,7 @@ function mediumColor(m: BriefMedium): string {
 }
 
 // Side-pane tools: source/context tools on the left, output/session tools on the right.
-type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit";
+type ToolKey = "transcript" | "media" | "inspector" | "index" | "vedit" | "notes";
 
 // Timeline strip sizing — fits the common V1 + A1 layout without vertical scroll.
 const TL_HEADER_PX = 40;
@@ -62,7 +63,7 @@ const SIDE_PANE_MIN_W = 260;
 const SIDE_PANE_MAX_W = 520;
 const SIDE_PANE_GUTTER = 12;
 type LeftPaneKey = "transcript" | "media" | "index";
-type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit";
+type RightPaneKey = "chat" | "deliver" | "inspector" | "vedit" | "notes";
 const LEFT_PANES: { id: LeftPaneKey; label: string }[] = [
   { id: "media", label: "Media" },
   { id: "transcript", label: "Transcript" },
@@ -73,6 +74,7 @@ const RIGHT_PANES: { id: RightPaneKey; label: string }[] = [
   { id: "deliver", label: "Deliver" },
   { id: "inspector", label: "Inspector" },
   { id: "vedit", label: "Vedit" },
+  { id: "notes", label: "Notes" },
 ];
 type PaneSide = "left" | "right";
 type PaneResize = { side: PaneSide; startX: number; startWidth: number };
@@ -94,6 +96,7 @@ export type StageShellProps = {
     index: ReactNode;
     transcript: ReactNode;
     vedit: ReactNode;
+    notes: ReactNode;
   };
   /** Rising edge auto-opens the Inspector tool (proposal/clip selected). */
   autoInspect?: boolean;
@@ -202,6 +205,16 @@ export function StageShell(props: StageShellProps) {
     prevAutoInspect.current = !!autoInspect;
   }, [autoInspect]);
 
+  useEffect(
+    () => onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.VIEW_NOTES) {
+        onStage("edit");
+        setRightPane("notes");
+      }
+    }),
+    [onStage],
+  );
+
   // Track-sized timeline strip — fit every track, never scroll vertically.
   // Falls back to the live store count if App didn't pass one.
   const storeTrackCount = useTimelineStore((s) => s.snapshot.tracks.length);
@@ -283,7 +296,7 @@ export function StageShell(props: StageShellProps) {
     if (lower === "transcript" || lower === "media" || lower === "index") {
       onStage("edit");
       setLeftPane(lower as LeftPaneKey);
-    } else if (lower === "inspector" || lower === "vedit") {
+    } else if (lower === "inspector" || lower === "vedit" || lower === "notes") {
       onStage("edit");
       setRightPane(lower as RightPaneKey);
     } else if (lower === "deliver") {
@@ -541,7 +554,9 @@ function rightPaneNode(
   nodes: Pick<StageShellProps, "deliver" | "tools">,
 ): ReactNode {
   if (key === "deliver") return nodes.deliver;
-  if (key === "inspector" || key === "vedit") return toolNode(key, nodes.tools);
+  if (key === "inspector" || key === "vedit" || key === "notes") {
+    return toolNode(key, nodes.tools);
+  }
   return null;
 }
 

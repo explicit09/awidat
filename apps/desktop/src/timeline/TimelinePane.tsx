@@ -2,10 +2,10 @@
 // listener, the timeline header (zoom controls + add track), and
 // delegates the editing surface to <TimelineSurface>.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { Pause, Play, Redo2, Scissors, SkipBack, SkipForward, Undo2 } from "lucide-react";
 import { useTimelineStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
@@ -15,6 +15,25 @@ import { TIMELINE_CHANGED_EVENT } from "../protocol";
 import { TimelineSurface } from "./TimelineSurface.tsx";
 import { computePps } from "./layout.ts";
 import { countCompletedTimelineEdits } from "./refreshActivity.ts";
+import { useTimelineSelectionStore } from "../properties/store.ts";
+import { useProposalStore } from "./proposal.ts";
+import { buildSplitSelectionOps } from "./editOps.ts";
+import { editorDispatch } from "../editor/tauriDispatch.ts";
+import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands.ts";
+import { logicalHistory, type TimelineCommit } from "./history.ts";
+
+type TimelineHistory = {
+  headRef: string | null;
+  currentRef: string | null;
+  undoRefs: string[];
+  redoRefs: string[];
+  busy: boolean;
+};
+
+type VeditRestoreResponse = {
+  auditCommitHash: string | null;
+  restoredParentHash: string | null;
+};
 
 type TimelinePaneProps = {
   previewRate?: number;
@@ -37,24 +56,82 @@ export function TimelinePane({
   // the timeline-time clock the SegmentedVideoView drives, not the
   // source-time of whatever proxy happens to be loaded.
   const currentTime = useMediaStore((s) => s.timelineTime);
+  const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
+  const activeProposal = useProposalStore((s) => s.active);
+  const [editableFocus, setEditableFocus] = useState(() =>
+    isEditableTarget(document.activeElement),
+  );
+  const [history, setHistory] = useState<TimelineHistory>({
+    headRef: null,
+    currentRef: null,
+    undoRefs: [],
+    redoRefs: [],
+    busy: false,
+  });
+  const restoringProjectRef = useRef<string | null>(null);
+  const historyRequestRef = useRef(0);
+
+  const loadHistory = useCallback(async () => {
+    const request = ++historyRequestRef.current;
+    if (!projectReady) {
+      setHistory({ headRef: null, currentRef: null, undoRefs: [], redoRefs: [], busy: false });
+      return;
+    }
+    setHistory((current) => ({ ...current, busy: true }));
+    try {
+      const commits = await invoke<TimelineCommit[]>("list_vedit_commits", { limit: 200 });
+      if (request !== historyRequestRef.current) return;
+      const logical = logicalHistory(commits);
+      setHistory({
+        headRef: commits[0]?.commitHash ?? null,
+        currentRef: logical.currentRef,
+        undoRefs: logical.undoRefs,
+        redoRefs: [],
+        busy: false,
+      });
+    } catch (error) {
+      if (request !== historyRequestRef.current) return;
+      console.warn("list_vedit_commits failed", error);
+      setHistory({ headRef: null, currentRef: null, undoRefs: [], redoRefs: [], busy: false });
+    }
+  }, [projectReady]);
 
   // Refresh on mount + on project change.
   useEffect(() => {
-    if (projectReady) {
-      refresh();
-    }
-  }, [projectReady, projectRoot, refresh]);
+    if (projectReady) refresh();
+    void loadHistory();
+  }, [loadHistory, projectReady, projectRoot, refresh]);
+
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      setEditableFocus(isEditableTarget(event.target));
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      if (!isEditableTarget(event.relatedTarget)) setEditableFocus(false);
+    };
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<string>(TIMELINE_CHANGED_EVENT, (event) => {
       if (useProjectStore.getState().current === event.payload) {
         refresh();
+        if (restoringProjectRef.current === event.payload) {
+          restoringProjectRef.current = null;
+        } else {
+          void loadHistory();
+        }
       }
     });
     return () => {
       unlisten.then((u) => u());
     };
-  }, [refresh]);
+  }, [loadHistory, refresh]);
 
   // Refresh after every completed apply_edl OR every completed
   // proposed_edit. Both paths can mutate the OTIO on disk.
@@ -62,8 +139,124 @@ export function TimelinePane({
   useEffect(() => {
     if (projectReady && completedEdits > 0) {
       refresh();
+      void loadHistory();
     }
-  }, [completedEdits, projectReady, refresh]);
+  }, [completedEdits, loadHistory, projectReady, refresh]);
+
+  const restoreRef = useCallback(async (direction: "undo" | "redo") => {
+    if (
+      !projectRoot ||
+      history.busy ||
+      !history.headRef ||
+      !history.currentRef ||
+      activeProposal
+    ) return;
+    const refs = direction === "undo" ? history.undoRefs : history.redoRefs;
+    const target = refs[0];
+    if (!target) return;
+    const previous = history.currentRef;
+    const request = ++historyRequestRef.current;
+    setHistory((current) => ({ ...current, busy: true }));
+    restoringProjectRef.current = projectRoot;
+    try {
+      const restored = await invoke<VeditRestoreResponse | null>("restore_vedit_ref", {
+        refstr: target,
+        expectedCurrent: history.headRef,
+      });
+      if (
+        request !== historyRequestRef.current ||
+        useProjectStore.getState().current !== projectRoot
+      ) {
+        if (restoringProjectRef.current === projectRoot) {
+          restoringProjectRef.current = null;
+        }
+        return;
+      }
+      setHistory((current) => direction === "undo"
+        ? {
+            headRef: restored?.auditCommitHash ?? target,
+            currentRef: target,
+            undoRefs: appendMissingParent(
+              current.undoRefs.slice(1),
+              restored?.restoredParentHash,
+            ),
+            redoRefs: [previous, ...current.redoRefs],
+            busy: false,
+          }
+        : {
+            headRef: restored?.auditCommitHash ?? target,
+            currentRef: target,
+            undoRefs: [previous, ...current.undoRefs],
+            redoRefs: current.redoRefs.slice(1),
+            busy: false,
+          });
+      await refresh();
+    } catch (error) {
+      if (
+        request !== historyRequestRef.current ||
+        useProjectStore.getState().current !== projectRoot
+      ) {
+        return;
+      }
+      restoringProjectRef.current = null;
+      console.warn(`timeline ${direction} failed`, error);
+      await loadHistory();
+    }
+  }, [activeProposal, history, loadHistory, projectRoot, refresh]);
+
+  const splitAtPlayhead = useCallback(async () => {
+    if (!projectReady || activeProposal) return;
+    const ops = buildSplitSelectionOps(snapshot, selectedClipKey, currentTime);
+    if (ops.length === 0) return;
+    try {
+      await editorDispatch.proposeUserEdit(ops);
+    } catch (error) {
+      console.warn("propose_user_edit (split clip) failed", error);
+    }
+  }, [activeProposal, currentTime, projectReady, selectedClipKey, snapshot]);
+
+  const canUndo = projectReady && history.undoRefs.length > 0 && !history.busy && !activeProposal;
+  const canRedo = projectReady && history.redoRefs.length > 0 && !history.busy && !activeProposal;
+  const canSplit = projectReady && buildSplitSelectionOps(snapshot, selectedClipKey, currentTime).length > 0 && !activeProposal;
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!modifier || event.altKey || isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && event.shiftKey && canRedo) {
+        event.preventDefault();
+        void restoreRef("redo");
+      } else if (key === "z" && !event.shiftKey && canUndo) {
+        event.preventDefault();
+        void restoreRef("undo");
+      } else if (key === "b" && canSplit) {
+        event.preventDefault();
+        void splitAtPlayhead();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    const unlistenMenu = onMenuCommand((id) => {
+      if (handleEditableMenuCommand(id)) return;
+      if (id === MENU_COMMANDS.UNDO) void restoreRef("undo");
+      if (id === MENU_COMMANDS.REDO) void restoreRef("redo");
+      if (id === MENU_COMMANDS.SPLIT_CLIP) void splitAtPlayhead();
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unlistenMenu();
+    };
+  }, [canRedo, canSplit, canUndo, restoreRef, splitAtPlayhead]);
+
+  useEffect(() => {
+    void invoke("set_menu_item_enabled", {
+      states: [
+        { id: MENU_COMMANDS.UNDO, enabled: editableFocus || canUndo },
+        { id: MENU_COMMANDS.REDO, enabled: editableFocus || canRedo },
+        { id: MENU_COMMANDS.SPLIT_CLIP, enabled: !editableFocus && canSplit },
+      ],
+    }).catch((error) => console.warn("set edit menu state failed", error));
+  }, [canRedo, canSplit, canUndo, editableFocus]);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageWidth, setStageWidth] = useState(0);
@@ -157,6 +350,17 @@ export function TimelinePane({
           />
         </div>
         <div className="timeline-header-right">
+          <div className="flex items-center gap-1" aria-label="Timeline edit controls">
+            <button type="button" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={() => void restoreRef("undo")}>
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+            <button type="button" aria-label="Redo" title="Redo (⌘⇧Z)" disabled={!canRedo} onClick={() => void restoreRef("redo")}>
+              <Redo2 className="h-3.5 w-3.5" />
+            </button>
+            <button type="button" aria-label="Split Clip at Playhead" title="Split Clip at Playhead (⌘B)" disabled={!canSplit} onClick={() => void splitAtPlayhead()}>
+              <Scissors className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <ZoomControls pps={computePps(snapshot.duration_s, stageWidth, zoom)} />
         </div>
       </header>
@@ -166,6 +370,28 @@ export function TimelinePane({
       </div>
     </section>
   );
+}
+
+function appendMissingParent(refs: string[], parent: string | null | undefined): string[] {
+  return parent && !refs.includes(parent) ? [...refs, parent] : refs;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  return !!element?.closest("input, textarea, select, [contenteditable='true']");
+}
+
+function handleEditableMenuCommand(id: string): boolean {
+  if (!isEditableTarget(document.activeElement)) return false;
+  if (id === MENU_COMMANDS.UNDO) {
+    document.execCommand("undo");
+    return true;
+  }
+  if (id === MENU_COMMANDS.REDO) {
+    document.execCommand("redo");
+    return true;
+  }
+  return id === MENU_COMMANDS.SPLIT_CLIP;
 }
 
 function TimelineTransportControls({

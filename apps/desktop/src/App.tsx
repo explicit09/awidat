@@ -41,6 +41,7 @@ import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
+import { NotesPanel } from "./notes/NotesPanel";
 import {
   AppShell,
   StageShell,
@@ -2166,6 +2167,7 @@ function App() {
   );
   const stageTranscript = <TranscriptView stem={selectedStem} />;
   const stageVedit = <VeditPanel />;
+  const stageNotes = <NotesPanel />;
 
   return (
     <>
@@ -2183,6 +2185,7 @@ function App() {
           index: stageIndex,
           transcript: stageTranscript,
           vedit: stageVedit,
+          notes: stageNotes,
         }}
         autoInspect={activeProposal !== null}
         deliver={realDeliveryWorkspace}

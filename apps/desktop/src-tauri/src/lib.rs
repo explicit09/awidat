@@ -145,6 +145,7 @@ pub fn run() {
             commands::project::close_project,
             commands::project::init_project,
             commands::project::recent_projects,
+            commands::project::remove_recent_project,
             commands::project::project_thumbnail,
             commands::project::project_preview_media,
             commands::project::delete_project,

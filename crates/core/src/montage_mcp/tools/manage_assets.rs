@@ -245,6 +245,8 @@ fn mutate_project(
     ctx: &McpToolCtx,
     mutate: impl FnOnce(&mut Project) -> Result<serde_json::Value, String>,
 ) -> Result<String, String> {
+    let _mutation = crate::vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("manage_assets: lock timeline mutation: {e}"))?;
     let mut project = Project::read(&ctx.project_root)
         .map_err(|e| format!("manage_assets: unable to read project: {e}"))?;
     let body = mutate(&mut project)?;

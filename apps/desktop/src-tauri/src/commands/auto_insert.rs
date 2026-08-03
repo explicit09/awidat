@@ -158,6 +158,8 @@ async fn insert_asset(
     // than the agent default.
     let seat_author = crate::commands::vedit::desktop_commit_author();
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root)
+            .map_err(|e| format!("auto-insert: lock timeline mutation: {e}"))?;
         let project =
             Project::read(&project_root).map_err(|e| format!("auto-insert: read project: {e}"))?;
 
@@ -269,6 +271,8 @@ async fn insert_media(
     // agent default.
     let seat_author = crate::commands::vedit::desktop_commit_author();
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root)
+            .map_err(|e| format!("auto-insert: lock timeline mutation: {e}"))?;
         let project =
             Project::read(&project_root).map_err(|e| format!("auto-insert: read project: {e}"))?;
         if matches!(mode, InsertMode::IfEmpty) && timeline_has_any_clips(&project) {

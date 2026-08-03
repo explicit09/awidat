@@ -640,6 +640,8 @@ pub fn apply_project_format_defaults_from_markdown(
     if !defaults.has_required_format() {
         return Ok(LearnedProjectFormatDefaults::default());
     }
+    let _mutation = crate::vc::lock_timeline_mutation(project_root)
+        .map_err(|e| format!("lock timeline mutation for learned format defaults: {e}"))?;
     let mut project = montage_proto::project::Project::read(project_root)
         .map_err(|e| format!("read project for learned format defaults: {e}"))?;
     let meta = project

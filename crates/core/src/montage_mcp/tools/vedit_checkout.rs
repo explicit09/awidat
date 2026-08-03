@@ -20,6 +20,8 @@ pub fn run(args: VeditCheckoutArgs, ctx: McpToolCtx) -> Result<String, String> {
         return Err("vedit_checkout: branch cannot be empty".into());
     }
 
+    let _mutation = vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("vedit_checkout: lock timeline mutation failed: {e}"))?;
     let repo = vc::open_or_init(&ctx.project_root)
         .map_err(|e| format!("vedit_checkout: opening repo failed: {e}"))?;
     let checkout =

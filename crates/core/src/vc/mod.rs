@@ -109,6 +109,41 @@ pub struct Repo {
     project_otio: PathBuf,
 }
 
+/// Exclusive cross-process guard for a project's timeline read/write/commit
+/// transaction. The lock is released when this value is dropped.
+pub struct TimelineMutationGuard {
+    _lock: fslock::LockFile,
+}
+
+/// Block until this process owns the project's timeline mutation lock.
+///
+/// Every production path that reads, changes, and writes `project.otio.json`
+/// must hold this guard through its vedit commit. This keeps desktop commands
+/// and the separate MCP process from overwriting one another's edits.
+pub fn lock_timeline_mutation(project_root: &Path) -> Result<TimelineMutationGuard, VcError> {
+    let lock_dir = project_root.join(".montage");
+    std::fs::create_dir_all(&lock_dir).map_err(|e| {
+        VcError::Project(format!(
+            "creating timeline lock directory {}: {e}",
+            lock_dir.display()
+        ))
+    })?;
+    let lock_path = lock_dir.join("timeline-mutation.lock");
+    let mut lock = fslock::LockFile::open(&lock_path).map_err(|e| {
+        VcError::Project(format!(
+            "opening timeline mutation lock {}: {e}",
+            lock_path.display()
+        ))
+    })?;
+    lock.lock().map_err(|e| {
+        VcError::Project(format!(
+            "locking timeline mutation lock {}: {e}",
+            lock_path.display()
+        ))
+    })?;
+    Ok(TimelineMutationGuard { _lock: lock })
+}
+
 impl Repo {
     /// Project root the repo is rooted at (`<root>/.vedit/`).
     pub fn workdir(&self) -> &Path {
@@ -300,6 +335,22 @@ pub fn commit_current_timeline_as(
         timeline_hash,
         message,
     })
+}
+
+/// Content hash of the current `project.otio.json` working timeline.
+pub fn working_timeline_hash(repo: &Repo) -> Result<String, VcError> {
+    let bytes = std::fs::read(&repo.project_otio)
+        .map_err(|e| VcError::Project(format!("reading {}: {e}", repo.project_otio.display())))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| VcError::Project(format!("parsing {}: {e}", repo.project_otio.display())))?;
+    repo.inner.write_timeline(&value).map_err(vedit_err)
+}
+
+/// Parent commit hashes for a resolved vedit ref.
+pub fn commit_parents(repo: &Repo, refstr: &str) -> Result<Vec<String>, VcError> {
+    let commit_hash = resolve_ref(repo, refstr)?;
+    let commit: Commit = repo.inner.read_commit(&commit_hash).map_err(vedit_err)?;
+    Ok(commit.parents)
 }
 
 /// Result of a successful commit.
@@ -1846,6 +1897,32 @@ mod tests {
         let r2 = open_or_init(dir.path()).unwrap();
         assert_eq!(r1.workdir(), r2.workdir());
         assert!(dir.path().join(".vedit").is_dir());
+    }
+
+    #[test]
+    fn timeline_mutation_lock_serializes_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = lock_timeline_mutation(dir.path()).unwrap();
+        let root = dir.path().to_path_buf();
+        let (attempted_tx, attempted_rx) = std::sync::mpsc::channel();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            attempted_tx.send(()).unwrap();
+            let _second = lock_timeline_mutation(&root).unwrap();
+            acquired_tx.send(()).unwrap();
+        });
+
+        attempted_rx.recv().unwrap();
+        assert!(
+            acquired_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err()
+        );
+        drop(first);
+        acquired_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        worker.join().unwrap();
     }
 
     #[test]

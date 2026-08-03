@@ -31,6 +31,8 @@ pub fn run(args: VeditCommitArgs, ctx: McpToolCtx) -> Result<String, String> {
         );
     }
 
+    let _mutation = vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("vedit_commit: lock timeline mutation failed: {e}"))?;
     let repo = vc::open_or_init(&ctx.project_root)
         .map_err(|e| format!("vedit_commit: opening repo failed: {e}"))?;
     let outcome = vc::commit_current_timeline(&repo, header, args.reasoning.as_deref())

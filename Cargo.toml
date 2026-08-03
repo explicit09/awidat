@@ -366,6 +366,7 @@ mcp_test_support = { path = "vendor/codex-rs/mcp-server/tests/common" }
 # deliberately, with a probe-test, the way we'd bump any external dep.
 # See PLAN.md for the vedit integration rationale.
 vedit-core = { git = "https://github.com/explicit09/vedit.git", rev = "23a2bbc9cd2ac11e68988bf27d6c0094ac29975e" }
+fslock = "0.2.1"
 
 # External — merged from Montage + codex. Conflicts resolved per the
 # table in the codex-adoption plan (lets-plan-golden-crystal.md).

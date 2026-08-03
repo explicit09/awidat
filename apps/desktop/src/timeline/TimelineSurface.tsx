@@ -498,6 +498,7 @@ function TimelineCanvas({
       );
       if (item?.kind === "clip") {
         e.currentTarget.setPointerCapture(e.pointerId);
+        requestTimelineSeek(timeFromClientX(clientX));
         // Modifier semantics (Premiere/Resolve):
         //   - Alt only        → slip (shift source range, hold position)
         //   - Cmd/Ctrl + Alt  → slide (shift position, hold neighbors)

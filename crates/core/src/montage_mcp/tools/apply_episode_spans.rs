@@ -61,6 +61,8 @@ pub fn run(args: ApplyEpisodeSpansArgs, ctx: McpToolCtx) -> Result<String, Strin
     let applied = args.episodes.len();
     let episodes = normalize_episode_inputs(args.episodes)?;
 
+    let _mutation = crate::vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("apply_episode_spans: lock timeline mutation: {e}"))?;
     let mut project = Project::read(&ctx.project_root)
         .map_err(|e| format!("apply_episode_spans: unable to read project: {e}"))?;
     let meta = ensure_montage_metadata(&mut project.timeline);

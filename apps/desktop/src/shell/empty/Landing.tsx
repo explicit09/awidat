@@ -21,8 +21,18 @@ type ProjectPreviewResponse = {
  */
 export function Landing() {
   const recentPaths = useProjectStore((s) => s.recent);
+  const refreshProjects = useProjectStore((s) => s.refresh);
   const recents = recentPaths.map((p) => ({ name: basename(p), path: p }));
   const [previewByPath, setPreviewByPath] = useState<Record<string, ProjectPreview>>({});
+  const [query, setQuery] = useState("");
+  const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleRecents = normalizedQuery
+    ? recents.filter((project) =>
+        `${project.name}\n${project.path}`.toLocaleLowerCase().includes(normalizedQuery),
+      )
+    : recents;
 
   const newProject = () => emitMenuCommand(MENU_COMMANDS.NEW_PROJECT);
   const importMedia = () => emitMenuCommand(MENU_COMMANDS.IMPORT_FILES);
@@ -69,6 +79,36 @@ export function Landing() {
       await useProjectStore.getState().refresh();
     } catch (err) {
       console.warn("openRecent failed", err);
+    }
+  };
+
+  const removeRecent = async (path: string) => {
+    setActionError(null);
+    try {
+      await invoke("remove_recent_project", { path });
+      setOpenMenuPath(null);
+      await refreshProjects();
+    } catch (err) {
+      setActionError(String(err));
+    }
+  };
+
+  const deleteProject = async (project: { name: string; path: string }) => {
+    setActionError(null);
+    try {
+      const size = await invoke<number>("project_size_bytes", { path: project.path });
+      const confirmed = window.confirm(
+        `Delete “${project.name}” permanently?\n\n${project.path}\n${formatBytes(size)}\n\nThis cannot be undone.`,
+      );
+      if (!confirmed) return;
+      await invoke("delete_project", {
+        path: project.path,
+        expectedBasename: project.name,
+      });
+      setOpenMenuPath(null);
+      await refreshProjects();
+    } catch (err) {
+      setActionError(String(err));
     }
   };
 
@@ -133,24 +173,46 @@ export function Landing() {
             </div>
             <label className="pm-glass flex h-9 w-[250px] shrink-0 items-center gap-2 rounded-lg px-3 text-[12px] text-[var(--color-text-disabled)]">
               <Search className="h-3.5 w-3.5" />
-              <span>Search projects...</span>
+              <input
+                aria-label="Search projects"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder="Search projects..."
+                className="min-w-0 flex-1 bg-transparent text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-disabled)]"
+              />
             </label>
           </div>
 
-          {recents.length > 0 ? (
+          {actionError ? (
+            <div role="alert" className="mb-4 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
+              {actionError}
+            </div>
+          ) : null}
+
+          {visibleRecents.length > 0 ? (
             <div
               data-testid="recent-project-grid"
               className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6"
             >
-              {recents.map((project) => (
+              {visibleRecents.map((project) => (
                 <RecentProjectTile
                   key={project.path}
                   name={project.name}
                   path={project.path}
                   preview={previewByPath[project.path]}
                   onOpen={() => openRecent(project.path)}
+                  menuOpen={openMenuPath === project.path}
+                  onToggleMenu={() =>
+                    setOpenMenuPath((current) => current === project.path ? null : project.path)
+                  }
+                  onRemove={() => void removeRecent(project.path)}
+                  onDelete={() => void deleteProject(project)}
                 />
               ))}
+            </div>
+          ) : recents.length > 0 ? (
+            <div className="pm-glass rounded-xl border border-dashed border-[rgba(255,255,255,0.16)] p-6 text-[13px] text-[var(--color-text-muted)]">
+              No recent projects match “{query.trim()}”.
             </div>
           ) : (
             <div
@@ -211,19 +273,38 @@ function RecentProjectTile({
   path,
   preview,
   onOpen,
+  menuOpen,
+  onToggleMenu,
+  onRemove,
+  onDelete,
 }: {
   name: string;
   path: string;
   preview?: ProjectPreview;
   onOpen: () => void;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+  onRemove: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <button
+    <div
       data-testid="recent-project-tile"
-      onClick={onOpen}
-      className="pm-project-card group text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+      tabIndex={0}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (!menuOpen) onToggleMenu();
+      }}
+      onKeyDown={(event) => {
+        if (event.shiftKey && event.key === "F10") {
+          event.preventDefault();
+          if (!menuOpen) onToggleMenu();
+        }
+      }}
+      className="pm-project-card group relative text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
     >
-      <div className="pm-project-frame">
+      <button type="button" onClick={onOpen} className="block w-full text-left">
+        <div className="pm-project-frame">
         <div className="relative flex h-full items-end justify-between bg-[radial-gradient(circle_at_24%_10%,rgba(239,68,68,0.10),transparent_34%),linear-gradient(135deg,#202020,#0A0A0A)] p-4">
           {preview?.kind === "video" ? (
             <video
@@ -246,20 +327,44 @@ function RecentProjectTile({
             </span>
           )}
           <span className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[rgba(0,0,0,0.72)] to-transparent" />
-          <span className="relative z-10 rounded bg-[rgba(0,0,0,0.38)] p-1 text-[var(--color-text-muted)] opacity-0 transition group-hover:opacity-100">
-            <MoreVertical className="h-3.5 w-3.5" />
-          </span>
         </div>
-      </div>
-      <div className="px-1 pb-1 pt-3">
-        <div className="truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
-          {name}
         </div>
-        <div className="mt-1 truncate text-[11px] text-[var(--color-text-muted)]">
-          {path}
+        <div className="px-1 pb-1 pt-3">
+          <div className="truncate pr-8 text-[14px] font-semibold text-[var(--color-text-primary)]">
+            {name}
+          </div>
+          <div className="mt-1 truncate text-[11px] text-[var(--color-text-muted)]">
+            {path}
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      <button
+        type="button"
+        aria-label={`Project actions for ${name}`}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleMenu();
+        }}
+        className="absolute bottom-11 right-3 z-20 rounded bg-[rgba(0,0,0,0.38)] p-1.5 text-[var(--color-text-muted)] opacity-0 transition hover:text-white focus:opacity-100 group-hover:opacity-100"
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          className="absolute bottom-10 right-2 z-30 w-48 rounded-lg border border-[rgba(255,255,255,0.12)] bg-[#171717] p-1.5 shadow-2xl"
+        >
+          <button type="button" role="menuitem" onClick={onRemove} className="block w-full rounded px-3 py-2 text-left text-[12px] text-[var(--color-text-primary)] hover:bg-white/10">
+            Remove from Recents
+          </button>
+          <button type="button" role="menuitem" onClick={onDelete} className="block w-full rounded px-3 py-2 text-left text-[12px] text-red-300 hover:bg-red-500/15">
+            Delete Project…
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -277,4 +382,12 @@ function projectInitials(name: string): string {
     .filter(Boolean);
   const initials = parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
   return initials || "M";
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unit;
+  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 }

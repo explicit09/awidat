@@ -48,6 +48,8 @@ async fn apply_single_op(
     let description_owned = description.to_string();
 
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root_buf)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
         let mut project =
             Project::read(&project_root_buf).map_err(|e| format!("project read: {e}"))?;
 
@@ -259,6 +261,8 @@ pub async fn trim_timeline_tail(
 
     let project_root_buf = project_root.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root_buf)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
         let mut project =
             Project::read(&project_root_buf).map_err(|e| format!("project read: {e}"))?;
         let track_names: Vec<String> = project

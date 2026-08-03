@@ -51,6 +51,8 @@ pub fn run(args: RelinkMediaArgs, ctx: McpToolCtx) -> Result<String, String> {
         ));
     }
 
+    let _mutation = crate::vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("relink_media: lock timeline mutation: {e}"))?;
     let mut project = Project::read(&ctx.project_root)
         .map_err(|e| format!("relink_media: unable to read project: {e}"))?;
     let mut affected_clips = Vec::new();

@@ -20,6 +20,9 @@ pub mod id {
     pub const RUN_INDEXERS: &str = "project:run_indexers";
     pub const EXPORT_TIMELINE: &str = "timeline:export";
     pub const REVEAL_PROJECT: &str = "project:reveal";
+    pub const UNDO: &str = "edit:undo";
+    pub const REDO: &str = "edit:redo";
+    pub const SPLIT_CLIP: &str = "edit:split_clip";
     pub const DELETE_CLIP: &str = "edit:delete_clip";
     pub const ACCEPT_PROPOSAL: &str = "proposal:accept";
     pub const REJECT_PROPOSAL: &str = "proposal:reject";
@@ -258,6 +261,9 @@ fn file_menu(
 }
 
 fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    let undo = item(app, id::UNDO, "Undo", false, None)?;
+    let redo = item(app, id::REDO, "Redo", false, None)?;
+    let split = item(app, id::SPLIT_CLIP, "Split Clip at Playhead", false, None)?;
     let delete_clip = item(
         app,
         id::DELETE_CLIP,
@@ -281,11 +287,15 @@ fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     )?;
 
     SubmenuBuilder::new(app, "Edit")
+        .item(&undo)
+        .item(&redo)
+        .separator()
         .cut()
         .copy()
         .paste()
         .select_all()
         .separator()
+        .item(&split)
         .item(&delete_clip)
         .separator()
         .item(&accept)
@@ -303,6 +313,7 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
 
     let timeline = item(app, id::VIEW_TIMELINE, "Timeline", false, None)?;
     let transcript = item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?;
+    let notes = item(app, id::VIEW_NOTES, "Notes", false, None)?;
     let run_indexers = item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?;
     let zoom_in = item(
         app,
@@ -343,6 +354,7 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
         .separator()
         .item(&timeline)
         .item(&transcript)
+        .item(&notes)
         .separator()
         .item(&run_indexers)
         .separator()
@@ -444,6 +456,9 @@ fn frontend_command_ids() -> &'static [&'static str] {
         id::RUN_INDEXERS,
         id::EXPORT_TIMELINE,
         id::REVEAL_PROJECT,
+        id::UNDO,
+        id::REDO,
+        id::SPLIT_CLIP,
         id::DELETE_CLIP,
         id::ACCEPT_PROPOSAL,
         id::REJECT_PROPOSAL,
@@ -489,6 +504,9 @@ fn edit_menu_labels() -> Vec<&'static str> {
         "Copy",
         "Paste",
         "Select All",
+        "Undo",
+        "Redo",
+        "Split Clip at Playhead",
         "Delete Selected Clip",
         "Accept Proposal",
         "Reject Proposal",
@@ -506,6 +524,7 @@ fn view_menu_labels() -> Vec<&'static str> {
         "Settings",
         "Timeline",
         "Transcript",
+        "Notes",
         "Run Indexers",
         "Zoom Timeline In",
         "Zoom Timeline Out",
@@ -567,13 +586,7 @@ mod tests {
     #[test]
     fn edit_menu_contains_only_functional_items() {
         let labels = edit_menu_labels();
-        for removed in [
-            "Undo",
-            "Redo",
-            "Split Clip at Playhead",
-            "Trim Start to Playhead",
-            "Trim End to Playhead",
-        ] {
+        for removed in ["Trim Start to Playhead", "Trim End to Playhead"] {
             assert!(!labels.contains(&removed), "{removed} should not be shown");
         }
         for kept in [
@@ -581,6 +594,9 @@ mod tests {
             "Copy",
             "Paste",
             "Select All",
+            "Undo",
+            "Redo",
+            "Split Clip at Playhead",
             "Delete Selected Clip",
             "Accept Proposal",
             "Reject Proposal",
@@ -596,7 +612,6 @@ mod tests {
             "Agent Rail",
             "Media Viewer",
             "Properties",
-            "Notes",
             "Color Scopes",
             "Sidebar",
             "Chat",
@@ -612,6 +627,7 @@ mod tests {
             "Delivery",
             "Settings",
             "Transcript",
+            "Notes",
             "Run Indexers",
             "Zoom Timeline In",
             "Zoom Timeline Out",

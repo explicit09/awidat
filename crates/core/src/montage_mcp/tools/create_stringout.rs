@@ -35,6 +35,8 @@ pub fn run(args: CreateStringoutArgs, ctx: McpToolCtx) -> Result<String, String>
     }
     let id = id.to_string();
 
+    let _mutation = crate::vc::lock_timeline_mutation(&ctx.project_root)
+        .map_err(|e| format!("create_stringout: lock timeline mutation: {e}"))?;
     let mut project = Project::read(&ctx.project_root)
         .map_err(|e| format!("create_stringout: unable to read project: {e}"))?;
 

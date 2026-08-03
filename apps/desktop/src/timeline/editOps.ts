@@ -124,6 +124,33 @@ export function buildRippleDeleteOps(
   ];
 }
 
+/** Build a source-time split for the selected clip at a timeline playhead. */
+export function buildSplitSelectionOps(
+  snapshot: TimelineSnapshot,
+  selectedClipKey: SelectedClipKey | null,
+  playheadS: number,
+): EdlOp[] {
+  if (!selectedClipKey || !Number.isFinite(playheadS)) return [];
+  const selectedTrack = snapshot.tracks[selectedClipKey.trackIndex];
+  const selectedItem = selectedTrack?.items.find(
+    (item) => item.index === selectedClipKey.clipIndex,
+  );
+  if (!selectedItem || selectedItem.kind !== "clip") return [];
+
+  const timelineStart = selectedItem.track_start_s;
+  const timelineEnd = timelineStart + selectedItem.duration_s;
+  if (playheadS <= timelineStart + 0.01 || playheadS >= timelineEnd - 0.01) return [];
+
+  const speed = selectedItem.speed ?? 1;
+  if (!Number.isFinite(speed) || speed <= 0) return [];
+  const sourceTime = (selectedItem.source_start_s ?? 0) + (playheadS - timelineStart) * speed;
+  return [{
+    kind: "split_clip",
+    anchor: { kind: "clip_uuid", uuid: selectedItem.clip_uuid },
+    atS: sourceTime,
+  }];
+}
+
 /** Roll-edit op-builder. Returns a single
  *  ProfessionalTimelineEdit::RollEdit envelope sized by the drag's
  *  pixel delta converted to seconds. */

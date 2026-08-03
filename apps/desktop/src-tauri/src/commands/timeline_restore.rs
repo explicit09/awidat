@@ -88,6 +88,8 @@ pub async fn restore_timeline_otio(
     let snapshot_owned = snapshot_json.clone();
     let project_root_buf = project_root.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root_buf)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
         // Parse first so a malformed snapshot is rejected before we
         // touch disk. serde's error message carries line/column, which
         // is more useful than "write failed" when the caller hands us
