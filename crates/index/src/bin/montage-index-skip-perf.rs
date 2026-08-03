@@ -1,10 +1,10 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use montage_config::{IndexerResourceClass, McpServer, McpServerKind};
 use montage_index::{AssetInput, PairOutcome, asset_fingerprint, run, sidecar_path};
@@ -45,6 +45,7 @@ async fn real_main() -> Result<(), String> {
         correctness = Some(sample_correctness);
     }
 
+    let provenance = report_provenance(&fixture.root, args.warmups);
     let report = BenchmarkReport {
         configuration: Configuration {
             label: args.label,
@@ -53,6 +54,8 @@ async fn real_main() -> Result<(), String> {
             sidecar_mib: args.sidecar_mib,
             warmups: args.warmups,
             samples: args.samples,
+            fixture_root: provenance.fixture_root,
+            cache_state: provenance.cache_state,
         },
         machine: Machine {
             os: std::env::consts::OS,
@@ -60,19 +63,15 @@ async fn real_main() -> Result<(), String> {
             parallelism: std::thread::available_parallelism()
                 .map(usize::from)
                 .unwrap_or(1),
+            build_profile: provenance.build_profile,
         },
         correctness: correctness.ok_or_else(|| "no benchmark samples ran".to_string())?,
         statistics: summarize_samples(&samples_ms),
         samples_ms,
     };
-    if let Some(parent) = args.output.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("create {}: {error}", parent.display()))?;
-    }
     let json =
         serde_json::to_vec_pretty(&report).map_err(|error| format!("serialize report: {error}"))?;
-    fs::write(&args.output, json)
-        .map_err(|error| format!("write {}: {error}", args.output.display()))?;
+    write_report_atomically(&args.output, &json)?;
     println!("{}", args.output.display());
     Ok(())
 }
@@ -173,27 +172,50 @@ struct Fixture {
 }
 
 fn prepare_fixture(work_dir: &Path, config: FixtureConfig) -> Result<Fixture, String> {
-    let root = work_dir.join(format!(
-        "assets-{}-indexers-{}-sidecar-{}-mib",
-        config.assets, config.indexers, config.sidecar_mib
-    ));
-    let metadata_path = root.join("fixture.json");
+    let root = fixture_root(work_dir, &config);
     if root.exists() {
-        let existing = fs::read(&metadata_path)
-            .map_err(|error| format!("read {}: {error}", metadata_path.display()))?;
-        let existing: FixtureConfig = serde_json::from_slice(&existing)
-            .map_err(|error| format!("parse {}: {error}", metadata_path.display()))?;
-        if existing != config {
-            return Err(format!(
-                "fixture configuration mismatch at {}",
-                metadata_path.display()
-            ));
-        }
-        return Ok(fixture_from_parts(root, config));
+        return read_fixture(&root, config);
+    }
+    let _guard = acquire_fixture_guard(work_dir, &config)?;
+    if root.exists() {
+        return read_fixture(&root, config);
     }
 
+    let temporary_root = unique_temporary_path(&root)?;
+    let result = build_fixture(&temporary_root, &config)
+        .and_then(|_| publish_fixture(&temporary_root, &root));
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&temporary_root);
+        return Err(error);
+    }
+    Ok(fixture_from_parts(root, config))
+}
+
+fn fixture_root(work_dir: &Path, config: &FixtureConfig) -> PathBuf {
+    work_dir.join(format!(
+        "assets-{}-indexers-{}-sidecar-{}-mib",
+        config.assets, config.indexers, config.sidecar_mib
+    ))
+}
+
+fn read_fixture(root: &Path, config: FixtureConfig) -> Result<Fixture, String> {
+    let metadata_path = root.join("fixture.json");
+    let existing = fs::read(&metadata_path)
+        .map_err(|error| format!("read {}: {error}", metadata_path.display()))?;
+    let existing: FixtureConfig = serde_json::from_slice(&existing)
+        .map_err(|error| format!("parse {}: {error}", metadata_path.display()))?;
+    if existing != config {
+        return Err(format!(
+            "fixture configuration mismatch at {}",
+            metadata_path.display()
+        ));
+    }
+    Ok(fixture_from_parts(root.to_path_buf(), config))
+}
+
+fn build_fixture(root: &Path, config: &FixtureConfig) -> Result<(), String> {
     fs::create_dir_all(root.join("raw")).map_err(|error| format!("create fixture: {error}"))?;
-    let fixture = fixture_from_parts(root, config.clone());
+    let fixture = fixture_from_parts(root.to_path_buf(), config.clone());
     for asset in &fixture.assets {
         fs::write(
             &asset.path,
@@ -217,9 +239,99 @@ fn prepare_fixture(work_dir: &Path, config: FixtureConfig) -> Result<Fixture, St
     }
     let metadata = serde_json::to_vec_pretty(&config)
         .map_err(|error| format!("serialize fixture metadata: {error}"))?;
+    let metadata_path = root.join("fixture.json");
     fs::write(&metadata_path, metadata)
         .map_err(|error| format!("write {}: {error}", metadata_path.display()))?;
-    Ok(fixture)
+    Ok(())
+}
+
+#[derive(Debug)]
+struct FixtureGuard {
+    path: PathBuf,
+}
+
+impl Drop for FixtureGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_fixture_guard(work_dir: &Path, config: &FixtureConfig) -> Result<FixtureGuard, String> {
+    fs::create_dir_all(work_dir)
+        .map_err(|error| format!("create {}: {error}", work_dir.display()))?;
+    let fixture = fixture_root(work_dir, config);
+    let name = fixture
+        .file_name()
+        .ok_or_else(|| format!("fixture has no name: {}", fixture.display()))?;
+    let path = work_dir.join(format!(".{}.lock", name.to_string_lossy()));
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(_) => Ok(FixtureGuard { path }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
+            "fixture build already in progress: {}",
+            fixture.display()
+        )),
+        Err(error) => Err(format!("create {}: {error}", path.display())),
+    }
+}
+
+fn unique_temporary_path(path: &Path) -> Result<PathBuf, String> {
+    let parent = output_directory(path);
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("path has no file name: {}", path.display()))?;
+    Ok(parent.join(format!(
+        ".{}.tmp-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        timestamp_nanos()
+    )))
+}
+
+fn timestamp_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn publish_fixture(temporary: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        return Err(format!("fixture already exists: {}", destination.display()));
+    }
+    fs::rename(temporary, destination).map_err(|error| {
+        format!(
+            "publish fixture {} -> {}: {error}",
+            temporary.display(),
+            destination.display()
+        )
+    })
+}
+
+fn output_directory(output: &Path) -> PathBuf {
+    output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
+fn write_report_atomically(output: &Path, contents: &[u8]) -> Result<(), String> {
+    let parent = output_directory(output);
+    fs::create_dir_all(&parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let temporary = unique_temporary_path(output)?;
+    if let Err(error) = fs::write(&temporary, contents) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("write {}: {error}", temporary.display()));
+    }
+    if let Err(error) = fs::rename(&temporary, output) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "publish report {} -> {}: {error}",
+            temporary.display(),
+            output.display()
+        ));
+    }
+    Ok(())
 }
 
 fn fixture_from_parts(root: PathBuf, config: FixtureConfig) -> Fixture {
@@ -368,6 +480,8 @@ struct Configuration {
     sidecar_mib: usize,
     warmups: usize,
     samples: usize,
+    fixture_root: String,
+    cache_state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,6 +489,25 @@ struct Machine {
     os: &'static str,
     arch: &'static str,
     parallelism: usize,
+    build_profile: &'static str,
+}
+
+struct ReportProvenance {
+    fixture_root: String,
+    cache_state: String,
+    build_profile: &'static str,
+}
+
+fn report_provenance(fixture_root: &Path, warmups: usize) -> ReportProvenance {
+    ReportProvenance {
+        fixture_root: fixture_root.display().to_string(),
+        cache_state: format!("warm after {warmups} warmups"),
+        build_profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -460,6 +593,58 @@ mod tests {
         }
         let error = Args::parse(vec!["--unknown".into()]).expect_err("unknown rejected");
         assert!(error.contains("unknown argument"));
+    }
+
+    #[test]
+    fn relative_output_filename_uses_current_directory() {
+        assert_eq!(
+            output_directory(Path::new("report.json")),
+            PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn fixture_guard_is_exclusive_and_releases() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 2,
+            indexers: 2,
+            sidecar_mib: 1,
+        };
+        let guard = acquire_fixture_guard(temp.path(), &config).expect("first guard");
+        let error = acquire_fixture_guard(temp.path(), &config).expect_err("second guard blocked");
+        assert!(error.contains("fixture build already in progress"));
+        drop(guard);
+        acquire_fixture_guard(temp.path(), &config).expect("guard released");
+    }
+
+    #[test]
+    fn fixture_and_report_publication_rename_hidden_temps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let temporary_fixture = temp.path().join(".fixture.tmp");
+        let fixture = temp.path().join("fixture");
+        std::fs::create_dir(&temporary_fixture).expect("temporary fixture");
+        std::fs::write(temporary_fixture.join("fixture.json"), b"complete").expect("metadata");
+        publish_fixture(&temporary_fixture, &fixture).expect("publish fixture");
+        assert!(fixture.join("fixture.json").is_file());
+        assert!(!temporary_fixture.exists());
+
+        let output = temp.path().join("report.json");
+        write_report_atomically(&output, b"{\"complete\":true}").expect("publish report");
+        assert_eq!(
+            std::fs::read(&output).expect("report"),
+            b"{\"complete\":true}"
+        );
+        let unexpected_temp = temp.path().join(".report.json.tmp");
+        assert!(!unexpected_temp.exists());
+    }
+
+    #[test]
+    fn report_provenance_records_fixture_cache_and_build_profile() {
+        let provenance = report_provenance(Path::new("/bench/fixture"), 3);
+        assert_eq!(provenance.fixture_root, "/bench/fixture");
+        assert_eq!(provenance.cache_state, "warm after 3 warmups");
+        assert!(matches!(provenance.build_profile, "debug" | "release"));
     }
 
     #[test]

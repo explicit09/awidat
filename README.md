@@ -114,7 +114,7 @@ For a controlled 12 assets × 3 indexers × 8 MiB sidecar run on the external dr
 CARGO_TARGET_DIR="/Volumes/My Passport for Mac/awidat-build/main-target" \
 MONTAGE_INDEX_SKIP_WORK_DIR="/Volumes/My Passport for Mac/awidat-build/index-skip-perf" \
 MONTAGE_INDEX_SKIP_OUTPUT="/Volumes/My Passport for Mac/awidat-build/index-skip-perf.json" \
-MONTAGE_INDEX_SKIP_ARGS="--label controlled-12x3x8 --assets 12 --indexers 3 --sidecar-mib 8" \
+MONTAGE_INDEX_SKIP_ARGS="--label controlled-12x3x8 --assets 12 --indexers 3 --sidecar-mib 8 --warmups 3 --samples 15" \
 /usr/bin/time -l make perf-index-skip
 ```
 
