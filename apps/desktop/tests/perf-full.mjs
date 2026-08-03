@@ -256,13 +256,29 @@ async function measureSwitches(page) {
             ctrlKey: !navigator.platform.includes("Mac"),
           }),
         );
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          if (destinationHeading ? destinationReady() : editReady()) {
-            return performance.now() - startedAt;
+        const ready = destinationHeading ? destinationReady : editReady;
+        await new Promise((resolve, reject) => {
+          const observer = new MutationObserver(() => {
+            if (ready()) {
+              cleanup();
+              resolve();
+            }
+          });
+          const timeout = window.setTimeout(() => {
+            cleanup();
+            reject(new Error(`workspace transition did not complete: ${destinationHeading ?? "Edit"}`));
+          }, 1_000);
+          const cleanup = () => {
+            observer.disconnect();
+            window.clearTimeout(timeout);
+          };
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+          if (ready()) {
+            cleanup();
+            resolve();
           }
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-        }
-        throw new Error(`workspace transition did not complete: ${destinationHeading ?? "Edit"}`);
+        });
+        return performance.now() - startedAt;
       }, { shortcutKey: shortcut, destinationHeading: heading });
       samples.push({
         name,
@@ -415,6 +431,21 @@ try {
   console.log(JSON.stringify(report.metrics, null, 2));
   console.log(`\nWrote ${paths.jsonPath}`);
   console.log(`Wrote ${paths.mdPath}`);
+  const failures = [
+    ["warmStartupUsableShellMs", report.metrics.warmStartupUsableShellMs, TARGETS.warmStartupUsableShellMs],
+    ["coldStartupUsableShellMs", report.metrics.coldStartupUsableShellMs, TARGETS.coldStartupUsableShellMs],
+    ["openProjectToFirstPreviewFrameMs", report.metrics.openProjectToFirstPreviewFrameMs, TARGETS.openProjectToFirstPreviewFrameMs],
+    ["openProjectToInteractiveTimelineMs", report.metrics.openProjectToInteractiveTimelineMs, TARGETS.openProjectToInteractiveTimelineMs],
+    ["menuSwitchP95Ms", report.metrics.menuSwitchP95Ms, TARGETS.menuSwitchP95Ms],
+    ["maxLongTaskMs", report.metrics.maxLongTaskMs, TARGETS.maxAvoidableLongTaskMs],
+  ].filter(([, value, target]) => value !== null && value > target);
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} performance target violation(s):`);
+    for (const [name, value, target] of failures) {
+      console.error(`  ${name} ${value} > ${target}`);
+    }
+    process.exitCode = 1;
+  }
 } finally {
   if (browser) await browser.close();
   await stopAppServer();
