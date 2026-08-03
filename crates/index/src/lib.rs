@@ -1191,18 +1191,25 @@ fn sidecar_path_in_index_dir(
 }
 
 fn read_existing_sha(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    v.get("asset_sha256")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "no asset_sha256 in sidecar",
-            )
-        })
+    let file = std::fs::File::open(path)?;
+    read_existing_sha_from(std::io::BufReader::new(file))
+}
+
+#[derive(serde::Deserialize)]
+struct ExistingSidecarFingerprint {
+    #[serde(default)]
+    asset_sha256: Option<String>,
+}
+
+fn read_existing_sha_from(reader: impl std::io::Read) -> std::io::Result<String> {
+    let header: ExistingSidecarFingerprint = serde_json::from_reader(reader)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    header.asset_sha256.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "no asset_sha256 in sidecar",
+        )
+    })
 }
 
 async fn write_sidecar(path: &Path, value: &serde_json::Value) -> Result<(), IndexError> {
@@ -1252,6 +1259,38 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn existing_sha_reader_accepts_fingerprint_after_large_data() {
+        let data = "x".repeat(64 * 1024);
+        let sidecar =
+            format!(r#"{{"data":"{data}","asset_sha256":"fingerprint-after-large-data"}}"#);
+
+        let fingerprint = read_existing_sha_from(std::io::Cursor::new(sidecar));
+
+        assert_eq!(fingerprint.unwrap(), "fingerprint-after-large-data");
+    }
+
+    #[test]
+    fn existing_sha_reader_rejects_malformed_trailing_json() {
+        let sidecar = r#"{"asset_sha256":"valid-fingerprint","data":{"truncated":"value""#;
+
+        let error = read_existing_sha_from(std::io::Cursor::new(sidecar)).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn existing_sha_reader_rejects_missing_or_non_string_fingerprint() {
+        let missing = read_existing_sha_from(std::io::Cursor::new(r#"{"data":{}}"#));
+        let non_string = read_existing_sha_from(std::io::Cursor::new(r#"{"asset_sha256":42}"#));
+
+        assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            non_string.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
 
     fn server(
         name: &str,
