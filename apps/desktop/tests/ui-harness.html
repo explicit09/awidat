@@ -15,6 +15,7 @@
         mockIPC,
         mockWindows,
       } from "@tauri-apps/api/mocks";
+      import perfPreviewUrl from "./fixtures/perf-preview.mp4?url";
 
       const params = new URLSearchParams(window.location.search);
       const projectLoaded = params.get("project") === "1";
@@ -85,8 +86,8 @@
                 duration_s: 8,
                 asset_id: "raw/intro.mp4",
                 source_start_s: 0,
-                proxy_path: "/tests/fixtures/perf-preview.mp4",
-                playable_path: "/tests/fixtures/perf-preview.mp4",
+                proxy_path: perfPreviewUrl,
+                playable_path: perfPreviewUrl,
                 playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
@@ -133,8 +134,8 @@
                 duration_s: 4,
                 asset_id: "raw/context.mp4",
                 source_start_s: 0,
-                proxy_path: "/tests/fixtures/perf-preview.mp4",
-                playable_path: "/tests/fixtures/perf-preview.mp4",
+                proxy_path: perfPreviewUrl,
+                playable_path: perfPreviewUrl,
                 playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
@@ -181,8 +182,8 @@
                 duration_s: 4,
                 asset_id: "raw/reaction.mp4",
                 source_start_s: 0,
-                proxy_path: "/tests/fixtures/perf-preview.mp4",
-                playable_path: "/tests/fixtures/perf-preview.mp4",
+                proxy_path: perfPreviewUrl,
+                playable_path: perfPreviewUrl,
                 playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
@@ -229,8 +230,8 @@
                 duration_s: 4,
                 asset_id: "raw/outro.mp4",
                 source_start_s: 0,
-                proxy_path: "/tests/fixtures/perf-preview.mp4",
-                playable_path: "/tests/fixtures/perf-preview.mp4",
+                proxy_path: perfPreviewUrl,
+                playable_path: perfPreviewUrl,
                 playable_kind: "source",
                 thumbnail_dir: null,
                 waveform_path: null,
@@ -433,7 +434,7 @@
           case "list_proxies":
             return reply([]);
           case "media_url_for_path":
-            return reply("/tests/fixtures/perf-preview.mp4");
+            return reply(perfPreviewUrl);
           case "read_transcript":
             return reply(null);
           case "list_generated_media":

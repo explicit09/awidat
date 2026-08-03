@@ -8,14 +8,18 @@
  */
 
 import { chromium } from "playwright";
-import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 
 const BASE_URL = process.env.PERF_URL ?? "http://localhost:1420/";
 const OUT_DIR = process.env.PERF_OUT_DIR ?? "tests/perf-results";
 const RUN_LABEL = process.env.PERF_LABEL ?? "current";
 const SWITCH_SAMPLES = Number(process.env.PERF_SWITCH_SAMPLES ?? 8);
+const SERVER_MODE = process.env.PERF_SERVER_MODE ?? (process.env.PERF_URL ? "external" : "vite-dev");
+const VIEWPORT = { width: 1400, height: 1000, deviceScaleFactor: 1 };
+const WORKSPACE_ROOT = new URL("../../..", import.meta.url);
 
 const TARGETS = {
   warmStartupUsableShellMs: 2_500,
@@ -27,8 +31,47 @@ const TARGETS = {
 };
 
 let appServer = null;
+let appServerCommand = null;
 
 mkdirSync(OUT_DIR, { recursive: true });
+
+function commandOutput(command, args) {
+  try {
+    return execFileSync(command, args, { cwd: WORKSPACE_ROOT, encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function provenance(browserVersion, userAgent) {
+  return {
+    server: {
+      mode: SERVER_MODE,
+      managedByBenchmark: appServer !== null,
+      external: appServer === null,
+      baseUrl: BASE_URL,
+    },
+    git: {
+      head: commandOutput("git", ["rev-parse", "HEAD"]),
+      branch: commandOutput("git", ["branch", "--show-current"]),
+      dirty: commandOutput("git", ["status", "--porcelain"]),
+    },
+    environment: {
+      node: process.version,
+      platform: process.platform,
+      release: os.release(),
+      arch: process.arch,
+      browser: { engine: "Chromium", version: browserVersion, userAgent },
+      viewport: VIEWPORT,
+      cache: "fresh Chromium context; one base-page warmup navigation before measurements",
+      warmup: "base page loaded with networkidle before measured pages",
+    },
+    buildEvidence: {
+      path: process.env.PERF_BUILD_EVIDENCE_PATH ?? null,
+      sha256: process.env.PERF_BUILD_EVIDENCE_SHA256 ?? null,
+    },
+  };
+}
 
 async function canReachApp() {
   try {
@@ -43,6 +86,7 @@ async function ensureAppServer() {
   if (await canReachApp()) return;
 
   const startedAt = Date.now();
+  appServerCommand = "pnpm --dir apps/desktop exec vite --host 127.0.0.1";
   appServer = spawn("pnpm", ["--dir", "apps/desktop", "exec", "vite", "--host", "127.0.0.1"], {
     cwd: new URL("../../..", import.meta.url),
     env: { ...process.env, BROWSER: "none" },
@@ -298,16 +342,24 @@ async function collectLongTasks(page) {
   return page.evaluate(() => window.__montagePerf?.longTasks ?? []);
 }
 
+function writeAtomically(path, content) {
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, content);
+  renameSync(temporaryPath, path);
+}
+
 function writeReports(report) {
   const jsonPath = `${OUT_DIR}/desktop-ux-performance-${RUN_LABEL}.json`;
   const mdPath = `${OUT_DIR}/desktop-ux-performance-${RUN_LABEL}.md`;
-  writeFileSync(jsonPath, JSON.stringify(report, null, 2));
-  writeFileSync(mdPath, markdownReport(report));
-  return { jsonPath, mdPath };
+  const htmlPath = `${OUT_DIR}/desktop-ux-performance-${RUN_LABEL}.html`;
+  writeAtomically(jsonPath, JSON.stringify(report, null, 2));
+  writeAtomically(mdPath, markdownReport(report));
+  writeAtomically(htmlPath, htmlReport(report));
+  return { jsonPath, mdPath, htmlPath };
 }
 
-function markdownReport(report) {
-  const rows = [
+function reportRows(report) {
+  return [
     ["Warm startup to usable shell", report.metrics.warmStartupUsableShellMs, TARGETS.warmStartupUsableShellMs],
     ["Cold startup to usable shell", report.metrics.coldStartupUsableShellMs, TARGETS.coldStartupUsableShellMs],
     ["Open project to first preview frame", report.metrics.openProjectToFirstPreviewFrameMs, TARGETS.openProjectToFirstPreviewFrameMs],
@@ -315,10 +367,25 @@ function markdownReport(report) {
     ["Menu/tab switch p95", report.metrics.menuSwitchP95Ms, TARGETS.menuSwitchP95Ms],
     ["Max UI long task", report.metrics.maxLongTaskMs, TARGETS.maxAvoidableLongTaskMs],
   ];
+}
+
+function scopeDescription() {
+  const renderer =
+    SERVER_MODE === "production-minified"
+      ? "Production tier measures the minified Chromium renderer"
+      : SERVER_MODE === "vite-dev"
+        ? "Development tier measures the Vite development Chromium renderer"
+        : `External tier measures a Chromium renderer served in ${SERVER_MODE} mode`;
+  return `${renderer} with mocked Tauri IPC; it is not native WebView/Tauri latency.`;
+}
+
+function markdownReport(report) {
+  const rows = reportRows(report);
   return `# Desktop UX Performance Report
 
 Label: ${report.label}
 Generated: ${report.generatedAt}
+Server: ${report.provenance.server.mode} (${report.provenance.server.managedByBenchmark ? "managed" : "external"})
 
 ## Metrics
 
@@ -334,7 +401,8 @@ ${rows
 ## Unsupported Native Metrics
 
 - Native process start to renderer ready is not measured by this harness.
-- This benchmark uses the desktop React renderer with Tauri IPC mocks, not a native WebView/WebDriver session.
+- ${scopeDescription()}
+- Cold native process start remains unsupported.
 
 ## Switch Samples
 
@@ -352,6 +420,23 @@ Observed ${report.longTasks.length} long task(s) over 50 ms. Max: ${round(report
 
 ${report.commands.map((command) => `- \`${command}\``).join("\n")}
 `;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]);
+}
+
+function htmlReport(report) {
+  const rows = reportRows(report)
+    .map(([name, result, target]) => `<tr><td>${escapeHtml(name)}</td><td>${result === null ? "not measured" : `${round(result)} ms`}</td><td>${target} ms</td><td class="${status(result, target)}">${status(result, target)}</td></tr>`)
+    .join("");
+  return `<!doctype html><meta charset="utf-8"><title>Desktop UX Performance</title><style>body{font:14px system-ui;margin:24px;color:#17212b}table{border-collapse:collapse;width:min(900px,100%)}td,th{border-bottom:1px solid #d8dee4;padding:8px;text-align:left}.pass{color:#087443}.fail{color:#b42318}.not_measured{color:#667085}small{color:#667085}</style><h1>Desktop UX Performance</h1><p>${escapeHtml(report.label)} · ${escapeHtml(report.provenance.server.mode)} (${report.provenance.server.managedByBenchmark ? "managed" : "external"})</p><table><thead><tr><th>Metric</th><th>Result</th><th>Target</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table><p><small>${escapeHtml(scopeDescription())} Cold native process start remains unsupported.</small></p>`;
 }
 
 process.on("SIGINT", async () => {
@@ -386,6 +471,7 @@ try {
   const project = await measureLoadedProject(projectPage);
   const switches = await measureSwitches(projectPage);
   const longTasks = await collectLongTasks(projectPage);
+  const userAgent = await projectPage.evaluate(() => navigator.userAgent);
   await projectPage.close();
 
   const maxLongTaskMs = longTasks.length
@@ -421,9 +507,12 @@ try {
       command: call.command,
       atMs: round(call.atMs),
     })),
+    provenance: provenance(browser.version(), userAgent),
     commands: [
-      "npm run test:perf-full",
-      "pnpm exec vite --host 127.0.0.1",
+      process.env.PERF_RUN_COMMAND ?? "node tests/perf-full.mjs",
+      ...(process.env.PERF_BUILD_COMMAND ? [process.env.PERF_BUILD_COMMAND] : []),
+      ...(process.env.PERF_SERVER_COMMAND ? [process.env.PERF_SERVER_COMMAND] : []),
+      ...(appServerCommand ? [appServerCommand] : []),
     ],
   };
 
@@ -431,14 +520,8 @@ try {
   console.log(JSON.stringify(report.metrics, null, 2));
   console.log(`\nWrote ${paths.jsonPath}`);
   console.log(`Wrote ${paths.mdPath}`);
-  const failures = [
-    ["warmStartupUsableShellMs", report.metrics.warmStartupUsableShellMs, TARGETS.warmStartupUsableShellMs],
-    ["coldStartupUsableShellMs", report.metrics.coldStartupUsableShellMs, TARGETS.coldStartupUsableShellMs],
-    ["openProjectToFirstPreviewFrameMs", report.metrics.openProjectToFirstPreviewFrameMs, TARGETS.openProjectToFirstPreviewFrameMs],
-    ["openProjectToInteractiveTimelineMs", report.metrics.openProjectToInteractiveTimelineMs, TARGETS.openProjectToInteractiveTimelineMs],
-    ["menuSwitchP95Ms", report.metrics.menuSwitchP95Ms, TARGETS.menuSwitchP95Ms],
-    ["maxLongTaskMs", report.metrics.maxLongTaskMs, TARGETS.maxAvoidableLongTaskMs],
-  ].filter(([, value, target]) => value !== null && value > target);
+  console.log(`Wrote ${paths.htmlPath}`);
+  const failures = reportRows(report).filter(([, value, target]) => value !== null && value > target);
   if (failures.length > 0) {
     console.error(`\n${failures.length} performance target violation(s):`);
     for (const [name, value, target] of failures) {

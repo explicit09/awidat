@@ -48,6 +48,7 @@
     "test:upload-prefs": "node --experimental-strip-types tests/upload-prefs.test.ts",
     "test:perf-budget": "node tests/perf-budget.mjs",
     "test:perf-full": "node tests/perf-full.mjs",
+    "test:perf-production": "node tests/perf-production.mjs",
     "test:intro-state": "node --experimental-strip-types tests/intro-state.test.ts",
     "test:evidence-accessors": "node --experimental-strip-types tests/evidence-accessors.test.ts",
     "test:evidence-drill-downs": "node --experimental-strip-types tests/evidence-drill-downs.test.ts",
