@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Clock3, FolderOpen, Import, MoreVertical, Plus, Search } from "lucide-react";
 import { BrandMark } from "../../brand/BrandMark";
@@ -15,6 +15,12 @@ type ProjectPreviewResponse = {
   path: string;
 };
 
+type PendingDelete = {
+  name: string;
+  path: string;
+  size: number | null;
+};
+
 /**
  * Landing — project-manager surface shown when no project is open.
  * Actions reuse the existing menu command bus so picker logic stays in App.
@@ -26,7 +32,15 @@ export function Landing() {
   const [previewByPath, setPreviewByPath] = useState<Record<string, ProjectPreview>>({});
   const [query, setQuery] = useState("");
   const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const deleteRequestIdRef = useRef(0);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const deleteDialogRef = useRef<HTMLElement>(null);
+  const cancelDeleteButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmDeleteButtonRef = useRef<HTMLButtonElement>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleRecents = normalizedQuery
     ? recents.filter((project) =>
@@ -73,6 +87,19 @@ export function Landing() {
     };
   }, [recentPaths.join("\n")]);
 
+  const pendingDeletePath = pendingDelete?.path;
+  useEffect(() => {
+    if (!pendingDeletePath) return;
+    const frame = window.requestAnimationFrame(() => cancelDeleteButtonRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingDeletePath]);
+
+  useEffect(() => {
+    if (!deleteBusy) return;
+    const frame = window.requestAnimationFrame(() => deleteDialogRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [deleteBusy]);
+
   const openRecent = async (path: string) => {
     try {
       await invoke("set_project_root", { path });
@@ -93,22 +120,96 @@ export function Landing() {
     }
   };
 
-  const deleteProject = async (project: { name: string; path: string }) => {
+  const requestDeleteProject = async (project: { name: string; path: string }) => {
+    if (pendingDelete || deleteBusy) return;
     setActionError(null);
+    setOpenMenuPath(null);
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const requestId = ++deleteRequestIdRef.current;
+    setPendingDelete({ ...project, size: null });
     try {
       const size = await invoke<number>("project_size_bytes", { path: project.path });
-      const confirmed = window.confirm(
-        `Delete “${project.name}” permanently?\n\n${project.path}\n${formatBytes(size)}\n\nThis cannot be undone.`,
+      if (deleteRequestIdRef.current !== requestId) return;
+      setPendingDelete((current) =>
+        current?.path === project.path ? { ...current, size } : current
       );
-      if (!confirmed) return;
+    } catch (err) {
+      if (deleteRequestIdRef.current !== requestId) return;
+      setActionError(String(err));
+    }
+  };
+
+  const restoreDeleteFocus = () => {
+    window.requestAnimationFrame(() => {
+      const previous = previousFocusRef.current;
+      if (previous?.isConnected) previous.focus();
+      else searchInputRef.current?.focus();
+    });
+  };
+
+  const cancelDeleteProject = () => {
+    if (deleteBusy) return;
+    deleteRequestIdRef.current += 1;
+    setPendingDelete(null);
+    setActionError(null);
+    restoreDeleteFocus();
+  };
+
+  const confirmDeleteProject = async () => {
+    if (!pendingDelete || pendingDelete.size === null || deleteBusy) return;
+    const project = pendingDelete;
+    setActionError(null);
+    setDeleteBusy(true);
+    try {
       await invoke("delete_project", {
         path: project.path,
         expectedBasename: project.name,
       });
-      setOpenMenuPath(null);
-      await refreshProjects();
     } catch (err) {
       setActionError(String(err));
+      setDeleteBusy(false);
+      return;
+    }
+
+    deleteRequestIdRef.current += 1;
+    setPendingDelete(null);
+    setDeleteBusy(false);
+    restoreDeleteFocus();
+    try {
+      await refreshProjects();
+    } catch (err) {
+      setActionError(`Project was deleted, but recent projects could not refresh: ${String(err)}`);
+    }
+  };
+
+  const handleDeleteDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape" && !deleteBusy) {
+      event.preventDefault();
+      cancelDeleteProject();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = [cancelDeleteButtonRef.current, confirmDeleteButtonRef.current]
+      .filter((control): control is HTMLButtonElement => control !== null && !control.disabled);
+    if (controls.length === 0) {
+      event.preventDefault();
+      deleteDialogRef.current?.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    const active = document.activeElement;
+    if (!controls.includes(active as HTMLButtonElement)) {
+      event.preventDefault();
+      first.focus();
+    } else if (controls.length === 1 || (event.shiftKey && active === first)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
     }
   };
 
@@ -118,10 +219,14 @@ export function Landing() {
       className="pm-shell relative z-10 h-full w-full min-h-0 overflow-hidden text-[var(--color-text-primary)]"
     >
       <div
+        inert={pendingDelete !== null}
         className="absolute inset-x-0 top-0 z-20 h-12 border-b border-[rgba(255,255,255,0.07)]"
         data-tauri-drag-region
       />
-      <div className="relative z-10 grid h-full grid-cols-[292px_minmax(0,1fr)] pt-12">
+      <div
+        inert={pendingDelete !== null}
+        className="relative z-10 grid h-full grid-cols-[292px_minmax(0,1fr)] pt-12"
+      >
         <aside className="pm-glass pm-sidebar mx-4 mb-4 mt-4 px-5 py-5">
           <div className="mb-8 flex items-center gap-3" data-tauri-drag-region={false}>
             <BrandMark size={34} className="rounded-[9px] drop-shadow-[0_0_18px_rgba(239,68,68,0.32)]" />
@@ -174,6 +279,7 @@ export function Landing() {
             <label className="pm-glass flex h-9 w-[250px] shrink-0 items-center gap-2 rounded-lg px-3 text-[12px] text-[var(--color-text-disabled)]">
               <Search className="h-3.5 w-3.5" />
               <input
+                ref={searchInputRef}
                 aria-label="Search projects"
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
@@ -206,7 +312,7 @@ export function Landing() {
                     setOpenMenuPath((current) => current === project.path ? null : project.path)
                   }
                   onRemove={() => void removeRecent(project.path)}
-                  onDelete={() => void deleteProject(project)}
+                  onDelete={() => void requestDeleteProject(project)}
                 />
               ))}
             </div>
@@ -232,6 +338,58 @@ export function Landing() {
           )}
         </main>
       </div>
+      {pendingDelete ? (
+        <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-4">
+          <section
+            ref={deleteDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-project-title"
+            tabIndex={-1}
+            onKeyDown={handleDeleteDialogKeyDown}
+            className="w-full max-w-md rounded-xl border border-red-500/30 bg-[#171717] p-5 shadow-2xl"
+          >
+            <h2 id="delete-project-title" className="text-[16px] font-semibold text-white">
+              Delete “{pendingDelete.name}” permanently?
+            </h2>
+            <p className="mt-3 break-all text-[12px] leading-5 text-[var(--color-text-muted)]">
+              {pendingDelete.path}
+            </p>
+            <p className="mt-1 text-[12px] text-[var(--color-text-muted)]">
+              {pendingDelete.size === null ? "Calculating size…" : formatBytes(pendingDelete.size)} · This cannot be undone.
+            </p>
+            {actionError ? (
+              <p
+                role="alert"
+                data-testid="delete-project-error"
+                className="mt-3 rounded border border-red-500/35 bg-red-500/10 px-3 py-2 text-[12px] text-red-200"
+              >
+                {actionError}
+              </p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                ref={cancelDeleteButtonRef}
+                type="button"
+                disabled={deleteBusy}
+                onClick={cancelDeleteProject}
+                className="glass-ghost rounded px-3 py-2 text-[12px] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                ref={confirmDeleteButtonRef}
+                type="button"
+                disabled={deleteBusy || pendingDelete.size === null}
+                onClick={() => void confirmDeleteProject()}
+                className="rounded bg-red-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                {deleteBusy ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
