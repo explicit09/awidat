@@ -182,7 +182,7 @@ async function firstContentfulPaint(page) {
 async function measureLoadedProject(page) {
   const navStart = Date.now();
   await page.goto(projectHarnessUrl(), { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "Stage" }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ state: "visible" });
   const shellInteractiveMs = Date.now() - navStart;
 
   await page.waitForFunction(() => {
@@ -219,31 +219,51 @@ async function measureLoadedProject(page) {
 
 async function measureSwitches(page) {
   const switches = [
-    { id: "deliver", name: "Deliver" },
-    { id: "schedule", name: "Schedule" },
-    { id: "skills", name: "Skills" },
-    { id: "edit", name: "Stage" },
+    { name: "Deliver", shortcut: "2", heading: "Deliver" },
+    { name: "Schedule", shortcut: "3", heading: "Schedule" },
+    { name: "Skills", shortcut: "4", heading: "Skills" },
+    { name: "Edit", shortcut: "1" },
   ];
   const samples = [];
   for (let iteration = 0; iteration < SWITCH_SAMPLES; iteration += 1) {
-    for (const { id, name } of switches) {
-      const durationMs = await page.evaluate(async (stageId) => {
-        const button = document.querySelector(`[data-perf-stage-switch="${stageId}"]`);
-        if (!button) throw new Error(`stage button not found: ${stageId}`);
+    for (const { name, shortcut, heading } of switches) {
+      const durationMs = await page.evaluate(async ({ shortcutKey, destinationHeading }) => {
+        const isVisible = (element) =>
+          !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+        const destinationReady = () => {
+          const backToStage = Array.from(document.querySelectorAll("button")).some(
+            (button) => button.textContent?.trim() === "← Stage" && isVisible(button),
+          );
+          const headingReady = Array.from(document.querySelectorAll("h1, h2")).some(
+            (candidate) =>
+              isVisible(candidate) &&
+              (candidate.textContent?.trim() === destinationHeading ||
+                candidate.textContent?.trim().startsWith(`${destinationHeading} `)),
+          );
+          return backToStage && headingReady;
+        };
+        const editReady = () =>
+          ["Media", "Chat"].every((label) =>
+            Array.from(document.querySelectorAll("button")).some(
+              (button) => button.textContent?.trim() === label && isVisible(button),
+            ),
+          );
         const startedAt = performance.now();
-        button.click();
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: shortcutKey,
+            metaKey: navigator.platform.includes("Mac"),
+            ctrlKey: !navigator.platform.includes("Mac"),
+          }),
+        );
         for (let attempt = 0; attempt < 20; attempt += 1) {
-          if (button.getAttribute("data-active") === "true") {
+          if (destinationHeading ? destinationReady() : editReady()) {
             return performance.now() - startedAt;
           }
-          await Promise.resolve();
+          await new Promise((resolve) => requestAnimationFrame(resolve));
         }
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (button.getAttribute("data-active") !== "true") {
-          throw new Error(`stage button did not become active: ${stageId}`);
-        }
-        return performance.now() - startedAt;
-      }, id);
+        throw new Error(`workspace transition did not complete: ${destinationHeading ?? "Edit"}`);
+      }, { shortcutKey: shortcut, destinationHeading: heading });
       samples.push({
         name,
         iteration,

@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
 const BASE_URL = process.env.PERF_URL ?? "http://localhost:1420/";
+const SHORTCUT_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
 const BUDGETS = {
   loadMs: 3000,
@@ -176,8 +177,12 @@ try {
   projectUrl.searchParams.set("slowNonCritical", "1");
   const projectStart = Date.now();
   await projectPage.goto(projectUrl.toString(), { waitUntil: "domcontentloaded" });
-  const projectButtonNames = ["Deliver", "Schedule", "Skills"];
-  await projectPage.getByRole("button", { name: "Stage" }).waitFor({ state: "visible" });
+  await projectPage.getByRole("button", { name: "Chat", exact: true }).waitFor({ state: "visible" });
+  const projectDestinations = [
+    { name: "Deliver", shortcut: "2", heading: /^Deliver$/ },
+    { name: "Schedule", shortcut: "3", heading: /^Schedule$/ },
+    { name: "Skills", shortcut: "4", heading: /^Skills/ },
+  ];
   projectShellMs = Date.now() - projectStart;
   console.log(`  project shell visible: ${projectShellMs} ms (budget ${BUDGETS.projectShellMs})`);
 
@@ -198,13 +203,11 @@ try {
   }
 
   projectWorkspaceSwitchMs = 0;
-  for (const name of projectButtonNames) {
-    const tab = projectPage
-      .locator("button")
-      .filter({ hasText: new RegExp(`${name}$`) })
-      .first();
+  for (const { name, shortcut, heading } of projectDestinations) {
     const start = Date.now();
-    await tab.click();
+    await projectPage.keyboard.press(`${SHORTCUT_MODIFIER}+${shortcut}`);
+    await projectPage.getByRole("button", { name: "← Stage", exact: true }).waitFor({ state: "visible" });
+    await projectPage.getByRole("heading", { name: heading }).waitFor({ state: "visible" });
     await projectPage.evaluate(
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     );
