@@ -154,8 +154,14 @@ function createOptimisticUserInput(text: string): Extract<Item, { kind: "user_in
 
 const HELP_DOCS_URL = "https://tadiwa.co/montage/setup";
 const HELP_REPORT_ISSUE_URL = "https://github.com/explicit09/awidat/issues/new";
+const PERF_ROOT_RENDER_COUNTER =
+  import.meta.env.MODE === "perf" ? "__montagePerfAppRootRenderCount" : undefined;
 
 function App() {
+  if (PERF_ROOT_RENDER_COUNTER && typeof window !== "undefined") {
+    const perfWindow = window as typeof window & Record<string, number | undefined>;
+    perfWindow[PERF_ROOT_RENDER_COUNTER] = (perfWindow[PERF_ROOT_RENDER_COUNTER] ?? 0) + 1;
+  }
   // Dev-only, Tauri-free harness route for the Stage compositor
   // (Task 8 screenshots this from Playwright). Must short-circuit
   // BEFORE useAppGlue/useRenderQueueWorker or any other Tauri-

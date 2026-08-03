@@ -15,6 +15,7 @@ const WORKSPACE_ROOT = resolve(DESKTOP_DIR, "../..");
 const LABEL = process.env.PERF_LABEL;
 const PORT = Number(process.env.PERF_PORT ?? 4173);
 const RUNS = Number(process.env.PERF_RUNS ?? 3);
+const SUITE = process.env.PERF_SUITE ?? "full";
 const safeLabel = LABEL?.replace(/[^a-zA-Z0-9._-]/g, "-");
 const defaultOutput = `/private/tmp/montage-desktop-production-perf-${safeLabel ?? "missing"}-${process.pid}`;
 const OUTPUT_DIR = resolve(process.env.PERF_OUTPUT_DIR ?? defaultOutput);
@@ -25,6 +26,8 @@ const SOURCE_PROVENANCE_PATHS = [
   "apps/desktop/vite.config.ts",
   "apps/desktop/tests/perf-production.mjs",
   "apps/desktop/tests/perf-full.mjs",
+  "apps/desktop/tests/perf-playback.mjs",
+  "apps/desktop/src/App.tsx",
 ];
 
 function fail(message) {
@@ -157,6 +160,7 @@ async function requireMissingOutput() {
 if (!LABEL || !safeLabel) fail("PERF_LABEL is required (use a filesystem-safe label)");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fail("PERF_PORT must be a valid TCP port");
 if (!Number.isInteger(RUNS) || RUNS < 1) fail("PERF_RUNS must be a positive integer");
+if (SUITE !== "full" && SUITE !== "playback") fail("PERF_SUITE must be full or playback");
 if (OUTPUT_DIR === WORKSPACE_ROOT || OUTPUT_DIR.startsWith(`${WORKSPACE_ROOT}/`)) fail("PERF_OUTPUT_DIR must be outside this worktree");
 
 const buildArgs = ["--dir", "apps/desktop", "exec", "vite", "build", "--mode", "perf", "--outDir", OUTPUT_DIR];
@@ -242,15 +246,19 @@ try {
   await waitForPreview(preview);
 
   const runs = [];
-  for (let index = 1; index <= RUNS; index += 1) {
-    const runLabel = `${safeLabel}-${index}`;
-    const runCommand = `PERF_LABEL=${runLabel} PERF_URL=${BASE_URL} node apps/desktop/tests/perf-full.mjs`;
-    const result = await run("node", ["apps/desktop/tests/perf-full.mjs"], {
+  const runCount = SUITE === "playback" ? 1 : RUNS;
+  for (let index = 1; index <= runCount; index += 1) {
+    const playback = SUITE === "playback";
+    const runLabel = playback ? safeLabel : `${safeLabel}-${index}`;
+    const script = playback ? "apps/desktop/tests/perf-playback.mjs" : "apps/desktop/tests/perf-full.mjs";
+    const runCommand = `PERF_LABEL=${runLabel} PERF_URL=${BASE_URL} node ${script}`;
+    const result = await run("node", [script], {
       env: {
         ...process.env,
         PERF_LABEL: runLabel,
         PERF_URL: BASE_URL,
         PERF_OUT_DIR: evidencePath,
+        PERF_PLAYBACK_OUT_DIR: evidencePath,
         PERF_SERVER_MODE: "production-minified",
         PERF_BUILD_EVIDENCE_PATH: buildEvidencePath,
         PERF_BUILD_EVIDENCE_SHA256: buildEvidenceSha256,
@@ -259,9 +267,15 @@ try {
         PERF_RUN_COMMAND: runCommand,
       },
     });
-    runs.push({ label: runLabel, exitCode: result.code, signal: result.signal, report: join(evidencePath, `desktop-ux-performance-${runLabel}.json`) });
+    runs.push({
+      label: runLabel,
+      suite: SUITE,
+      exitCode: result.code,
+      signal: result.signal,
+      report: join(evidencePath, playback ? `desktop-playback-performance-${runLabel}.json` : `desktop-ux-performance-${runLabel}.json`),
+    });
   }
-  await writeAtomic(join(evidencePath, "runs.json"), `${JSON.stringify({ label: LABEL, outputDir: OUTPUT_DIR, buildEvidencePath, runs }, null, 2)}\n`);
+  await writeAtomic(join(evidencePath, "runs.json"), `${JSON.stringify({ label: LABEL, suite: SUITE, outputDir: OUTPUT_DIR, buildEvidencePath, runs }, null, 2)}\n`);
   console.log(`\nBuild evidence: ${buildEvidencePath}`);
   console.log(`Run evidence: ${evidencePath}`);
   console.log(`Retained build output: ${OUTPUT_DIR}`);

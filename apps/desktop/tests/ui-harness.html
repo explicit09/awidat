@@ -37,7 +37,7 @@
         "social_accounts",
       ]);
 
-      const timeline = {
+      const defaultTimeline = {
         duration_s: 18,
         broadcast_overlay: null,
         cut_boundaries: [
@@ -350,6 +350,44 @@
         ],
       };
 
+      const playbackTrack = defaultTimeline.tracks[0];
+      const playbackClip = playbackTrack.items.find((item) => item.kind === "clip");
+      const playbackTimeline = {
+        ...defaultTimeline,
+        duration_s: 18,
+        cut_boundaries: Array.from({ length: 17 }, (_, index) => ({
+          key: `perf-playback-${index + 1}`,
+          from_clip_id: `perf-playback-clip-${index + 1}`,
+          to_clip_id: `perf-playback-clip-${index + 2}`,
+          cut_type: "cutaway",
+          intent: "playback_baseline",
+          energy: 0.5,
+          audio_relation: "sync",
+          confidence: 1,
+          reason: "Deterministic playback benchmark cut.",
+        })),
+        tracks: [{
+          ...playbackTrack,
+          items: Array.from({ length: 18 }, (_, index) => ({
+            ...playbackClip,
+            index,
+            name: `Playback ${index + 1}`,
+            clip_uuid: `perf-playback-clip-${index + 1}`,
+            track_start_s: index,
+            duration_s: 1,
+            asset_id: `raw/perf-preview-${index % 2}.mp4`,
+            source_start_s: index % 2 === 0 ? 0 : 0.75,
+            proxy_path: `${perfPreviewUrl}?playback-slot=${index % 2}`,
+            playable_path: `${perfPreviewUrl}?playback-slot=${index % 2}`,
+            audio_lead_s: null,
+            audio_trail_s: null,
+            split_edit_reason: null,
+            split_edit_confidence: null,
+          })),
+        }],
+      };
+      const timeline = scenario === "playback" ? playbackTimeline : defaultTimeline;
+
       const notes = {
         version: 1,
         notes: [
@@ -434,7 +472,7 @@
           case "list_proxies":
             return reply([]);
           case "media_url_for_path":
-            return reply(perfPreviewUrl);
+            return reply(scenario === "playback" ? args?.path ?? perfPreviewUrl : perfPreviewUrl);
           case "read_transcript":
             return reply(null);
           case "list_generated_media":
@@ -516,15 +554,44 @@
         agentStoreModule,
         timelineSelectionModule,
         proposalStoreModule,
+        mediaStoreModule,
       ] = await Promise.all([
         import("/src/App.tsx"),
         import("/src/agent/store.ts"),
         import("/src/properties/store.ts"),
         import("/src/timeline/proposal.ts"),
+        import("/src/media/store.ts"),
       ]);
       useAgentStore = agentStoreModule.useAgentStore;
       useTimelineSelectionStore = timelineSelectionModule.useTimelineSelectionStore;
       useProposalStore = proposalStoreModule.useProposalStore;
+      if (scenario === "playback") {
+        window.__montagePlayback = {
+          fixture: {
+            label: "18 contiguous 1s cuts; alternating query URLs over one verified MP4 byte asset",
+            durationS: 18,
+            sourceStarts: [0, 0.75],
+            segments: playbackTimeline.tracks[0].items.map((clip) => ({
+              index: clip.index,
+              startS: clip.track_start_s,
+              endS: clip.track_start_s + clip.duration_s,
+              sourceStartS: clip.source_start_s,
+              sourceEndS: clip.source_start_s + clip.duration_s,
+              playablePath: clip.playable_path,
+            })),
+          },
+          state: () => {
+            const state = mediaStoreModule.useMediaStore.getState();
+            return {
+              timelineTime: state.timelineTime,
+              timelineDuration: state.timelineDurationS,
+              isPlaying: state.isPlaying,
+              mediaError: state.mediaError,
+            };
+          },
+          seek: (timeS) => mediaStoreModule.useMediaStore.getState().requestTimelineSeek(timeS),
+        };
+      }
 
       function seedProposal() {
         useProposalStore.getState().ingest({
