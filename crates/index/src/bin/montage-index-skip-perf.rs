@@ -37,15 +37,14 @@ async fn real_main() -> Result<(), String> {
     )?;
 
     for _ in 0..args.warmups {
-        dispatch_fixture(&fixture).await?;
+        measure_fixture_dispatch(&fixture).await?;
     }
 
     let mut samples_ms = Vec::with_capacity(args.samples);
     let mut correctness = None;
     for _ in 0..args.samples {
-        let started = Instant::now();
-        let sample_correctness = dispatch_fixture(&fixture).await?;
-        samples_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+        let (sample_correctness, elapsed_ms) = measure_fixture_dispatch(&fixture).await?;
+        samples_ms.push(elapsed_ms);
         correctness = Some(sample_correctness);
     }
 
@@ -675,6 +674,13 @@ struct Correctness {
     skipped_dependencies: usize,
 }
 
+async fn measure_fixture_dispatch(fixture: &Fixture) -> Result<(Correctness, f64), String> {
+    validate_fixture(fixture)?;
+    let started = Instant::now();
+    let correctness = dispatch_fixture(fixture).await?;
+    Ok((correctness, started.elapsed().as_secs_f64() * 1_000.0))
+}
+
 async fn dispatch_fixture(fixture: &Fixture) -> Result<Correctness, String> {
     let report = run(
         &fixture.root,
@@ -1200,6 +1206,37 @@ mod tests {
         let error = prepare_fixture(temp.path(), config)
             .err()
             .expect("tiny reused sidecar rejected");
+        assert!(error.contains("smaller than"));
+    }
+
+    #[tokio::test]
+    async fn benchmark_sample_revalidates_a_mid_run_sidecar_replacement() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fixture = prepare_fixture(
+            temp.path(),
+            FixtureConfig {
+                assets: 1,
+                indexers: 1,
+                sidecar_mib: 1,
+            },
+        )
+        .expect("fixture");
+        let asset = &fixture.assets[0];
+        let server = &fixture.servers[0];
+        let sidecar = sidecar_path(&fixture.root, &server.name, &asset.id).expect("sidecar path");
+        write_sidecar(
+            &sidecar,
+            &server.name,
+            &asset.id,
+            &asset_fingerprint(&asset.path).expect("fingerprint"),
+            1,
+        )
+        .expect("replace sidecar after fixture preparation");
+
+        let error = measure_fixture_dispatch(&fixture)
+            .await
+            .expect_err("mid-run fixture drift rejected before dispatch");
+
         assert!(error.contains("smaller than"));
     }
 
