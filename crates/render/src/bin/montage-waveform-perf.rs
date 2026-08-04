@@ -566,7 +566,7 @@ fn prepare_fixture(args: &Args, ffmpeg: &Path) -> Result<Fixture, String> {
     let root = args.work_dir.join("fixture");
     fs::create_dir_all(&root).map_err(|error| format!("create {}: {error}", root.display()))?;
     let path = root.join(format!("mixed-aac-{}s.m4a", args.duration_s));
-    let metadata_path = root.join("fixture.json");
+    let metadata_path = root.join(format!("fixture-{}s.json", args.duration_s));
     let argv = fixture_argv(args.duration_s, &path);
     let (generated, metadata) = if path.exists() || metadata_path.exists() {
         let metadata: FixtureMetadata = serde_json::from_slice(
@@ -1551,5 +1551,73 @@ mod tests {
         let mut sample = baseline.clone();
         sample.decoder_ffmpeg.path = "/second/ffmpeg".into();
         assert!(assert_same_waveform(&baseline, &sample, 1).is_err());
+    }
+
+    #[test]
+    fn fixture_metadata_is_isolated_by_requested_duration() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let root = work_dir.path().join("fixture");
+        fs::create_dir_all(&root).unwrap();
+
+        let first_duration_s = 2;
+        let second_duration_s = 3;
+        let first_path = root.join(format!("mixed-aac-{first_duration_s}s.m4a"));
+        let second_path = root.join(format!("mixed-aac-{second_duration_s}s.m4a"));
+        fs::write(&first_path, b"first fixture").unwrap();
+        fs::write(&second_path, b"second fixture").unwrap();
+
+        let first_metadata = FixtureMetadata {
+            duration_s: first_duration_s,
+            generator_argv: fixture_argv(first_duration_s, &first_path),
+            ffmpeg_path: "fixture ffmpeg".into(),
+            ffmpeg_version: "fixture version".into(),
+            sha256: sha256_file(&first_path).unwrap(),
+        };
+        let second_metadata = FixtureMetadata {
+            duration_s: second_duration_s,
+            generator_argv: fixture_argv(second_duration_s, &second_path),
+            ffmpeg_path: "fixture ffmpeg".into(),
+            ffmpeg_version: "fixture version".into(),
+            sha256: sha256_file(&second_path).unwrap(),
+        };
+        fs::write(
+            root.join(format!("fixture-{first_duration_s}s.json")),
+            serde_json::to_vec(&first_metadata).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(format!("fixture-{second_duration_s}s.json")),
+            serde_json::to_vec(&second_metadata).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("fixture.json"),
+            serde_json::to_vec(&first_metadata).unwrap(),
+        )
+        .unwrap();
+
+        let first = prepare_fixture(
+            &Args {
+                work_dir: work_dir.path().to_path_buf(),
+                evidence_dir: work_dir.path().join("evidence"),
+                label: "test".into(),
+                duration_s: first_duration_s,
+            },
+            Path::new("ffmpeg-not-needed"),
+        )
+        .expect("first fixture uses its own metadata");
+        let second = prepare_fixture(
+            &Args {
+                work_dir: work_dir.path().to_path_buf(),
+                evidence_dir: work_dir.path().join("evidence"),
+                label: "test".into(),
+                duration_s: second_duration_s,
+            },
+            Path::new("ffmpeg-not-needed"),
+        )
+        .expect("second fixture uses its own metadata");
+
+        assert_eq!(first.duration_s, first_duration_s);
+        assert_eq!(second.duration_s, second_duration_s);
     }
 }
