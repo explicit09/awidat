@@ -10,6 +10,7 @@ function verifyTimelinePaintInstrumentation() {
   const source = readFileSync(new URL("../src/timeline/TimelineSurface.tsx", import.meta.url), "utf8");
   assert.match(source, /const TIMELINE_PAINT_METRICS_KEY\s*=\s*import\.meta\.env\.MODE\s*===\s*"perf"/);
   assert.match(source, /__montageTimelinePaintMetrics/);
+  assert.match(source, /__montageTimelinePaintInstrumentationVersion/);
 }
 
 if (process.env.PERF_TIMELINE_PAINT_STATIC_TEST === "1") {
@@ -21,6 +22,7 @@ if (process.env.PERF_TIMELINE_PAINT_STATIC_TEST === "1") {
 const BASE_URL = process.env.PERF_URL;
 const OUT_DIR = process.env.PERF_PLAYBACK_OUT_DIR ?? process.env.PERF_OUT_DIR ?? "tests/perf-results";
 const LABEL = process.env.PERF_LABEL ?? "current";
+const TIMELINE_PAINT_EXPECTATION = process.env.PERF_TIMELINE_PAINT_EXPECTATION ?? "candidate";
 const WARMUPS = Number(process.env.PERF_PLAYBACK_WARMUPS ?? 3);
 const SAMPLES = Number(process.env.PERF_PLAYBACK_SAMPLES ?? 15);
 const PLAY_SECONDS = Number(process.env.PERF_PLAYBACK_DURATION_S ?? 4);
@@ -47,10 +49,17 @@ const TARGETS = {
   boundaryObservationLagS: 0.1,
   activeFrameGapMs: 125,
   sourceTimeToleranceS: 0.08,
+  maxFullTimelinePaintsPerSecond: 2,
+  fullTimelinePaintSlack: 10,
+  timelinePaintExpectation: TIMELINE_PAINT_EXPECTATION,
 };
 const TIMELINE_PAINT_REASONS = ["effect", "resize", "thumbnail", "waveform"];
+const TIMELINE_PAINT_INSTRUMENTATION_VERSION = 1;
 
 if (!BASE_URL) throw new Error("PERF_URL is required for production playback benchmarking");
+if (!["baseline", "candidate"].includes(TIMELINE_PAINT_EXPECTATION)) {
+  throw new Error("PERF_TIMELINE_PAINT_EXPECTATION must be baseline or candidate");
+}
 if (!Number.isInteger(WARMUPS) || WARMUPS < 0) throw new Error("PERF_PLAYBACK_WARMUPS must be a non-negative integer");
 if (!Number.isInteger(SAMPLES) || SAMPLES < 1) throw new Error("PERF_PLAYBACK_SAMPLES must be a positive integer");
 if (!(PLAY_SECONDS > 0) || !(SWEEP_SECONDS >= TARGETS.fullSweepDurationS)) throw new Error("invalid playback durations");
@@ -299,7 +308,8 @@ function validPlaybackFixture(fixture) {
 async function runPlayback(page, client, seconds, requireFullSweep) {
   await waitForPlaybackReady(page);
   const controlRaf = await measureControlRaf(page);
-  await page.evaluate(() => {
+  const timelinePaintInstrumentationVersion = await page.evaluate(() => {
+    const instrumentationVersion = window.__montageTimelinePaintInstrumentationVersion ?? null;
     window.__montageTimelinePaintMetrics = {
       count: 0,
       totalMs: 0,
@@ -307,6 +317,7 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
       durationsMs: [],
       reasonCounts: { effect: 0, resize: 0, thumbnail: 0, waveform: 0 },
     };
+    return instrumentationVersion;
   });
   await page.evaluate(() => window.__montagePlaybackMetrics.start());
   await page.evaluate(() => window.__montagePlaybackMetrics.observe());
@@ -339,6 +350,8 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     renderCount: window.__montagePerfAppRootRenderCount ?? null,
     state: window.__montagePlayback.state(),
     metrics: window.__montagePlaybackMetrics,
+    timelinePaintInstrumentationVersion:
+      window.__montageTimelinePaintInstrumentationVersion ?? null,
     timelinePaint: window.__montageTimelinePaintMetrics ?? null,
     fixture: window.__montagePlayback.fixture,
   }));
@@ -349,8 +362,10 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
   const timelinePaintDurations = after.timelinePaint?.durationsMs;
   const timelinePaintReasonCounts = after.timelinePaint?.reasonCounts;
   const timelinePaintValid =
+    timelinePaintInstrumentationVersion === TIMELINE_PAINT_INSTRUMENTATION_VERSION &&
+    after.timelinePaintInstrumentationVersion === TIMELINE_PAINT_INSTRUMENTATION_VERSION &&
     Number.isInteger(after.timelinePaint?.count) &&
-    after.timelinePaint.count > 0 &&
+    after.timelinePaint.count >= 0 &&
     Number.isFinite(after.timelinePaint.totalMs) &&
     after.timelinePaint.totalMs >= 0 &&
     Number.isFinite(after.timelinePaint.maxMs) &&
@@ -369,7 +384,7 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
         count: after.timelinePaint.count,
         totalMs: after.timelinePaint.totalMs,
         maxMs: after.timelinePaint.maxMs,
-        p95Ms: percentile(timelinePaintDurations, 95),
+        p95Ms: timelinePaintDurations.length === 0 ? 0 : percentile(timelinePaintDurations, 95),
         durationsMs: timelinePaintDurations,
         reasonCounts: Object.fromEntries(
           TIMELINE_PAINT_REASONS.map((reason) => [reason, timelinePaintReasonCounts[reason]]),
@@ -439,6 +454,9 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     frame.mediaTime <= frame.expectedSourceEndS + TARGETS.sourceTimeToleranceS
   );
   const qualityMetricsFinite = Object.values(quality).every((value) => Number.isFinite(value));
+  const timelinePaintLimit =
+    Math.ceil(seconds * TARGETS.maxFullTimelinePaintsPerSecond) +
+    TARGETS.fullTimelinePaintSlack;
   const correctness = {
     fixture: validPlaybackFixture(after.fixture),
     controlRaf: controlRaf.count >= 20 && controlRaf.p95Ms <= TARGETS.controlRafP95Ms,
@@ -460,6 +478,11 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     noActiveLoadStall: media.activeWaiting === 0 && media.activeStalled === 0,
     activeFrameCadence: maxActiveFrameGapMs !== null && maxActiveFrameGapMs <= TARGETS.activeFrameGapMs,
     timelinePaint: timelinePaint.valid,
+    timelinePaintExpectation:
+      timelinePaint.valid &&
+      (TIMELINE_PAINT_EXPECTATION === "candidate"
+        ? timelinePaint.count <= timelinePaintLimit
+        : timelinePaint.count > timelinePaintLimit),
     finiteMetrics: finiteMetrics && qualityMetricsFinite,
   };
   return {

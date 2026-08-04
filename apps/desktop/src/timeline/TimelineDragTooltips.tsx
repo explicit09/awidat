@@ -1,4 +1,5 @@
 import { snapMoveDeltaS, type UserMoveDrag, type UserTrimDrag } from "./editMath";
+import { useMediaStore } from "../media/store";
 import type { TimelineSnapshot } from "./store";
 
 export function UserTrimTooltip({
@@ -25,14 +26,13 @@ export function UserTrimTooltip({
 export function UserMoveTooltip({
   drag,
   snapshot,
-  currentTime,
   pps,
 }: {
   drag: UserMoveDrag;
   snapshot: TimelineSnapshot;
-  currentTime: number;
   pps: number;
 }) {
+  const currentTime = useMediaStore((state) => state.timelineTime);
   const dxS = snapMoveDeltaS(snapshot, currentTime, drag, pps);
   return (
     <div className="user-trim-tooltip" style={{ left: drag.currentX }}>

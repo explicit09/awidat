@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "../media/store";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
@@ -49,6 +49,17 @@ import { drawFlashRanges } from "./flashOverlay.ts";
 
 const TIMELINE_PAINT_METRICS_KEY =
   import.meta.env.MODE === "perf" ? "__montageTimelinePaintMetrics" : undefined;
+const TIMELINE_PAINT_INSTRUMENTATION_VERSION_KEY =
+  import.meta.env.MODE === "perf"
+    ? "__montageTimelinePaintInstrumentationVersion"
+    : undefined;
+const TIMELINE_PAINT_INSTRUMENTATION_VERSION = 1;
+
+if (TIMELINE_PAINT_INSTRUMENTATION_VERSION_KEY) {
+  const perfWindow = window as typeof window & Record<string, number | undefined>;
+  perfWindow[TIMELINE_PAINT_INSTRUMENTATION_VERSION_KEY] =
+    TIMELINE_PAINT_INSTRUMENTATION_VERSION;
+}
 
 type TimelinePaintMetrics = {
   count: number;
@@ -81,13 +92,11 @@ function recordTimelinePaint(durationMs: number, reason: TimelinePaintReason) {
 /** Wrapper that owns layout state (pps, width) so the canvas can
  *  publish it on each paint and the handles can subscribe. Avoids
  *  recomputing layout in two places. */
-export function TimelineSurface({
+export const TimelineSurface = memo(function TimelineSurface({
   snapshot,
-  currentTime,
   zoom,
 }: {
   snapshot: TimelineSnapshot;
-  currentTime: number;
   zoom: number;
 }) {
   // Vertical zoom multiplier on the per-track lane height. trackZoom = 1
@@ -118,7 +127,6 @@ export function TimelineSurface({
     <>
       <TimelineCanvas
         snapshot={snapshot}
-        currentTime={currentTime}
         zoom={zoom}
         laneHeight={laneHeight}
         onLayout={handleLayout}
@@ -141,26 +149,34 @@ export function TimelineSurface({
       />
     </>
   );
-}
+});
 
 function TimelineCanvas({
   snapshot,
-  currentTime,
   zoom,
   laneHeight,
   onLayout,
 }: {
   snapshot: TimelineSnapshot;
-  currentTime: number;
   zoom: number;
   laneHeight: number;
   onLayout: (pps: number, widthPx: number, laneHeight: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const playheadCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const staticPaintRef = useRef<((reason: TimelinePaintReason) => void) | null>(null);
+  const playheadPaintRef = useRef<(() => void) | null>(null);
+  const canvasLayoutRef = useRef({
+    cssHeight: 0,
+    cssWidth: 0,
+    dpr: 1,
+    pps: PX_PER_SECOND_BASE,
+  });
   // Latest pps used for paint, captured into a ref so click handlers
   // can convert x → seconds without recomputing layout.
   const ppsRef = useRef<number>(PX_PER_SECOND_BASE);
+  const currentTimeRef = useRef(useMediaStore.getState().timelineTime);
   // Canvas seek + playhead use timeline-time. Single-asset / empty-
   // timeline mode keeps using source-time inside the MediaPane, but
   // the canvas itself is a timeline-time surface — clicking at x=80px
@@ -195,194 +211,217 @@ function TimelineCanvas({
   const selectClip = useTimelineSelectionStore((s) => s.select);
   const clearSelection = useTimelineSelectionStore((s) => s.clear);
 
-  // Compute pixel layout. When a proposal is active, the canvas
-  // paints two passes: original snapshot at α=0.45 (the "before")
-  // and the proposed snapshot at α=1.0 with diff-hint coloring
-  // (the "after"). pps is sized by the larger of the two durations
-  // so both fit; otherwise the post-state would clip if it grew.
-  useEffect(() => {
+  playheadPaintRef.current = () => {
+    const canvas = playheadCanvasRef.current;
+    const { cssHeight, cssWidth, dpr, pps } = canvasLayoutRef.current;
+    if (!canvas || cssWidth <= 0 || cssHeight <= 0) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+    drawPlayhead(ctx, cssWidth, cssHeight, currentTimeRef.current, pps);
+    if (edgeHover && !userTrim) {
+      const item = snapshot.tracks[edgeHover.trackIndex]?.items.find(
+        (it) => it.index === edgeHover.clipIndex,
+      );
+      if (item && item.kind === "clip") {
+        const edgeX =
+          edgeHover.side === "start"
+            ? timeToX(item.track_start_s, pps)
+            : timeToX(item.track_start_s + item.duration_s, pps);
+        const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
+        ctx.fillStyle = "rgba(239, 68, 68, 0.62)";
+        ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
+      }
+    }
+    if (userTrim) {
+      const x = userTrim.currentX;
+      const yTop = RULER_HEIGHT;
+      const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
+      ctx.fillStyle = "#EF4444";
+      ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
+    }
+    if (userMove) {
+      drawMoveGhost(ctx, snapshot, currentTimeRef.current, userMove, pps, laneHeight);
+    }
+  };
+
+  // Compute pixel layout. When a proposal is active, the base canvas
+  // paints two passes: original snapshot at α=0.45 (the "before") and
+  // the proposed snapshot at α=1.0 with diff-hint coloring (the "after").
+  // The playhead is drawn separately so playback time does not repaint the
+  // static timeline surface.
+  staticPaintRef.current = (reason) => {
     const canvas = canvasRef.current;
+    const playheadCanvas = playheadCanvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!canvas || !playheadCanvas || !container) return;
 
-    function paint(reason: TimelinePaintReason) {
-      if (!canvas || !container) return;
-      const paintStartedAt = TIMELINE_PAINT_METRICS_KEY ? performance.now() : 0;
-      const dpr = window.devicePixelRatio || 1;
-      const viewportWidth =
-        container.parentElement?.clientWidth || container.clientWidth;
-      const { cssHeight, cssWidth, pps, totalDuration } = computeCanvasLayout({
-        snapshot,
-        proposalSnapshot: proposal?.snapshot ?? null,
-        viewportWidth,
-        zoom,
+    const paintStartedAt = TIMELINE_PAINT_METRICS_KEY ? performance.now() : 0;
+    const dpr = window.devicePixelRatio || 1;
+    const viewportWidth =
+      container.parentElement?.clientWidth || container.clientWidth;
+    const { cssHeight, cssWidth, pps, totalDuration } = computeCanvasLayout({
+      snapshot,
+      proposalSnapshot: proposal?.snapshot ?? null,
+      viewportWidth,
+      zoom,
+      laneHeight,
+    });
+
+    for (const target of [canvas, playheadCanvas]) {
+      target.width = Math.floor(cssWidth * dpr);
+      target.height = Math.floor(cssHeight * dpr);
+      target.style.width = `${cssWidth}px`;
+      target.style.height = `${cssHeight}px`;
+    }
+    canvasLayoutRef.current = { cssHeight, cssWidth, dpr, pps };
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    ppsRef.current = pps;
+    onLayout(pps, cssWidth, laneHeight);
+
+    drawRuler(ctx, cssWidth, totalDuration, pps);
+
+    const selectedKey = selectedClipKey
+      ? `${selectedClipKey.trackIndex}:${selectedClipKey.clipIndex}`
+      : undefined;
+    if (proposal) {
+      // Pass A — current state under, dimmed, with delete strike.
+      const deletedKeys = collectDeletedKeys(proposal.diffHints);
+      ctx.globalAlpha = 0.45;
+      drawTracks(
+        ctx,
+        cssWidth,
+        snapshot.tracks,
+        pps,
+        { deletedKeys },
         laneHeight,
-      });
+      );
+      ctx.globalAlpha = 1.0;
+      // Pass B — proposed state on top, full opacity, with
+      // diff-hint highlights for trimmed/inserted/split items.
+      // Selection ring rides on the post-state pass so the user
+      // sees which clip in the *new* timeline they're inspecting.
+      const highlightKeys = collectHighlightKeys(proposal.diffHints);
+      drawTracks(
+        ctx,
+        cssWidth,
+        proposal.snapshot.tracks,
+        pps,
+        {
+          highlightKeys,
+          selectedKey,
+          // Surface the agent's one-sentence rationale below the
+          // clip name on highlighted clips. The Inspector / Brief
+          // own the full treatment; this is the lightweight
+          // canvas hint (Wave 3 B5).
+          proposalRationale: proposal.rationale,
+        },
+        laneHeight,
+      );
+    } else {
+      drawTracks(
+        ctx,
+        cssWidth,
+        snapshot.tracks,
+        pps,
+        { selectedKey },
+        laneHeight,
+      );
+    }
 
-      canvas.width = Math.floor(cssWidth * dpr);
-      canvas.height = Math.floor(cssHeight * dpr);
-      canvas.style.width = `${cssWidth}px`;
-      canvas.style.height = `${cssHeight}px`;
-
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-      ppsRef.current = pps;
-      onLayout(pps, cssWidth, laneHeight);
-
-      drawRuler(ctx, cssWidth, totalDuration, pps);
-
-      const selectedKey = selectedClipKey
-        ? `${selectedClipKey.trackIndex}:${selectedClipKey.clipIndex}`
-        : undefined;
-      if (proposal) {
-        // Pass A — current state under, dimmed, with delete strike.
-        const deletedKeys = collectDeletedKeys(proposal.diffHints);
-        ctx.globalAlpha = 0.45;
-        drawTracks(
-          ctx,
-          cssWidth,
-          snapshot.tracks,
-          pps,
-          { deletedKeys },
-          laneHeight,
-        );
-        ctx.globalAlpha = 1.0;
-        // Pass B — proposed state on top, full opacity, with
-        // diff-hint highlights for trimmed/inserted/split items.
-        // Selection ring rides on the post-state pass so the user
-        // sees which clip in the *new* timeline they're inspecting.
-        const highlightKeys = collectHighlightKeys(proposal.diffHints);
-        drawTracks(
-          ctx,
-          cssWidth,
-          proposal.snapshot.tracks,
-          pps,
-          {
-            highlightKeys,
-            selectedKey,
-            // Surface the agent's one-sentence rationale below the
-            // clip name on highlighted clips. The Inspector / Brief
-            // own the full treatment; this is the lightweight
-            // canvas hint (Wave 3 B5).
-            proposalRationale: proposal.rationale,
-          },
-          laneHeight,
-        );
-      } else {
-        drawTracks(
-          ctx,
-          cssWidth,
-          snapshot.tracks,
-          pps,
-          { selectedKey },
-          laneHeight,
-        );
-      }
-
-      // Wave 3 C2 — ghost-clip review pass. Only fires when there's
-      // no active proposal ghost (the two surfaces conflict; the
-      // single-proposal canvas overlay above already paints the cyan
-      // diff). Cut-medium pendings always render.
-      if (!proposal) {
-        const cutPending = pendingProposals.filter((p) => p.medium === "cut");
-        if (cutPending.length > 0) {
-          const ranges = buildGhostRanges(cutPending, snapshot);
-          if (ranges.length > 0) {
-            const proposalsById = new Map(
-              cutPending.map((p) => [p.callId, p] as const),
-            );
-            drawGhostClips(
-              ctx,
-              ranges,
-              proposalsById,
-              focusedProposalId,
-              pps,
-              laneHeight,
-            );
-          }
+    // Wave 3 C2 — ghost-clip review pass. Only fires when there's
+    // no active proposal ghost (the two surfaces conflict; the
+    // single-proposal canvas overlay above already paints the cyan
+    // diff). Cut-medium pendings always render.
+    if (!proposal) {
+      const cutPending = pendingProposals.filter((p) => p.medium === "cut");
+      if (cutPending.length > 0) {
+        const ranges = buildGhostRanges(cutPending, snapshot);
+        if (ranges.length > 0) {
+          const proposalsById = new Map(
+            cutPending.map((p) => [p.callId, p] as const),
+          );
+          drawGhostClips(
+            ctx,
+            ranges,
+            proposalsById,
+            focusedProposalId,
+            pps,
+            laneHeight,
+          );
         }
-      }
-
-      // Wave 4 W4.6 — Review-focus flash pass. Paints a brief glow on
-      // ranges the focus controller registered (cleared after ~600ms).
-      // Drawn before the playhead so the playhead stays visible over a
-      // flashed range.
-      if (flashRanges.length > 0) {
-        drawFlashRanges(ctx, flashRanges, pps, laneHeight);
-      }
-
-      drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
-
-      // Hover affordance — faint cyan outline on the edge under the
-      // pointer when the user isn't yet dragging. Tells them "yes,
-      // you can grab this" before they commit. Cyan matches the
-      // brand-secondary token (--color-brand-secondary).
-      if (edgeHover && !userTrim) {
-        const item = snapshot.tracks[edgeHover.trackIndex]?.items.find(
-          (it) => it.index === edgeHover.clipIndex,
-        );
-        if (item && item.kind === "clip") {
-          const edgeX =
-            edgeHover.side === "start"
-              ? timeToX(item.track_start_s, pps)
-              : timeToX(item.track_start_s + item.duration_s, pps);
-          const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
-          ctx.fillStyle = "rgba(239, 68, 68, 0.62)";
-          ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
-        }
-      }
-
-      // Live drag-edge phantom — 2px red line at the dragged x so it
-      // stays consistent with the selection / hover language above.
-      if (userTrim) {
-        const x = userTrim.currentX;
-        const yTop = RULER_HEIGHT;
-        const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
-        ctx.fillStyle = "#EF4444";
-        ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
-      }
-
-      if (userMove) {
-        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps, laneHeight);
-      }
-      if (TIMELINE_PAINT_METRICS_KEY) {
-        recordTimelinePaint(performance.now() - paintStartedAt, reason);
       }
     }
 
-    paint("effect");
+    // Wave 4 W4.6 — Review-focus flash pass. Paints a brief glow on
+    // ranges the focus controller registered (cleared after ~600ms).
+    // Drawn before the playhead so the playhead stays visible over a
+    // flashed range.
+    if (flashRanges.length > 0) {
+      drawFlashRanges(ctx, flashRanges, pps, laneHeight);
+    }
 
-    // Repaint on resize. ResizeObserver is the right tool — covers
-    // window resize AND parent flex/grid resizes.
-    const ro = new ResizeObserver(() => paint("resize"));
-    ro.observe(container);
-    // Repaint when a thumbnail or waveform finishes decoding so the
-    // strip / amplitude line populate as their data loads.
-    const unsubThumb = onThumbnailDecoded(() => paint("thumbnail"));
-    const unsubWave = onWaveformDecoded(() => paint("waveform"));
-    return () => {
-      ro.disconnect();
-      unsubThumb();
-      unsubWave();
-    };
+    if (TIMELINE_PAINT_METRICS_KEY) {
+      recordTimelinePaint(performance.now() - paintStartedAt, reason);
+    }
+    playheadPaintRef.current?.();
+  };
+
+  useEffect(() => {
+    staticPaintRef.current?.("effect");
   }, [
     snapshot,
-    currentTime,
     proposal,
     zoom,
     laneHeight,
     onLayout,
-    userTrim,
-    userMove,
-    edgeHover,
     selectedClipKey,
     pendingProposals,
     focusedProposalId,
     flashRanges,
   ]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // Covers window resize and parent flex/grid resizes without being
+    // recreated for each playback-clock update.
+    const ro = new ResizeObserver(() => staticPaintRef.current?.("resize"));
+    ro.observe(container);
+    const unsubThumb = onThumbnailDecoded(() =>
+      staticPaintRef.current?.("thumbnail"),
+    );
+    const unsubWave = onWaveformDecoded(() =>
+      staticPaintRef.current?.("waveform"),
+    );
+    return () => {
+      ro.disconnect();
+      unsubThumb();
+      unsubWave();
+    };
+  }, []);
+
+  useEffect(() => {
+    const update = (timelineTime: number) => {
+      currentTimeRef.current = timelineTime;
+      playheadPaintRef.current?.();
+    };
+    update(useMediaStore.getState().timelineTime);
+    return useMediaStore.subscribe((state, previous) => {
+      if (state.timelineTime === previous.timelineTime) return;
+      update(state.timelineTime);
+    });
+  }, []);
+
+  useEffect(() => {
+    playheadPaintRef.current?.();
+  }, [edgeHover, userTrim, userMove]);
 
   // Pointer dispatch:
   //   - On a clip edge → start user-trim drag
@@ -672,7 +711,12 @@ function TimelineCanvas({
   }
 
   async function commitUserMove(drag: UserMoveDrag): Promise<void> {
-    const ops = buildMoveDragOps(snapshot, currentTime, drag, ppsRef.current);
+    const ops = buildMoveDragOps(
+      snapshot,
+      currentTimeRef.current,
+      drag,
+      ppsRef.current,
+    );
     if (ops.length === 0) return;
 
     try {
@@ -722,6 +766,16 @@ function TimelineCanvas({
         onDragOver={onDragOver}
         onDrop={onDrop}
       />
+      <canvas
+        ref={playheadCanvasRef}
+        aria-hidden="true"
+        style={{
+          inset: 0,
+          pointerEvents: "none",
+          position: "absolute",
+          zIndex: 1,
+        }}
+      />
       {userTrim && (
         <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />
       )}
@@ -729,7 +783,6 @@ function TimelineCanvas({
         <UserMoveTooltip
           drag={userMove}
           snapshot={snapshot}
-          currentTime={currentTime}
           pps={ppsRef.current}
         />
       )}

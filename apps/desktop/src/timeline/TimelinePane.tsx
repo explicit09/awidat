@@ -365,7 +365,7 @@ export function TimelinePane({
         </div>
       </header>
       <div className="timeline-stage" ref={stageRef}>
-        <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
+        <TimelineSurface snapshot={snapshot} zoom={zoom} />
         <ProposalActions />
       </div>
     </section>
