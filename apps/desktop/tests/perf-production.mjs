@@ -21,6 +21,9 @@ const defaultOutput = `/private/tmp/montage-desktop-production-perf-${safeLabel 
 const OUTPUT_DIR = resolve(process.env.PERF_OUTPUT_DIR ?? defaultOutput);
 const EVIDENCE_DIR = resolve(process.env.PERF_EVIDENCE_DIR ?? "/Volumes/My Passport for Mac/awidat-build/desktop-production-perf/evidence");
 const BASE_URL = `http://127.0.0.1:${PORT}/`;
+const SLEEP_PREVENTION_ARGS = process.platform === "darwin"
+  ? ["-disu", "-w", String(process.pid)]
+  : null;
 const SOURCE_PROVENANCE_PATHS = [
   "apps/desktop/tests/ui-harness.html",
   "apps/desktop/vite.config.ts",
@@ -30,7 +33,10 @@ const SOURCE_PROVENANCE_PATHS = [
   "apps/desktop/src/App.tsx",
   "apps/desktop/src/timeline/TimelineSurface.tsx",
 ];
-const TIMELINE_PAINT_SENTINEL = "__montageTimelinePaintMetrics";
+const TIMELINE_PAINT_SENTINELS = [
+  "__montageTimelinePaintMetrics",
+  "__montageTimelinePaintInstrumentationVersion",
+];
 const NORMAL_HTML_INPUTS = ["gallery.html", "glass.html", "index.html", "shell.html", "studio.html"];
 
 function fail(message) {
@@ -55,6 +61,23 @@ function run(command, args, options = {}) {
     child.once("error", rejectRun);
     child.once("exit", (code, signal) => resolveRun({ code, signal }));
   });
+}
+
+async function startSleepPrevention() {
+  if (!SLEEP_PREVENTION_ARGS) return null;
+  const child = spawn("caffeinate", SLEEP_PREVENTION_ARGS, {
+    cwd: WORKSPACE_ROOT,
+    stdio: "ignore",
+  });
+  await new Promise((resolveSpawn, rejectSpawn) => {
+    child.once("error", rejectSpawn);
+    child.once("spawn", resolveSpawn);
+  });
+  return child;
+}
+
+function stopSleepPrevention(child) {
+  if (child?.exitCode === null) child.kill("SIGTERM");
 }
 
 async function requireFreePort() {
@@ -180,6 +203,7 @@ const buildCommand = commandText("pnpm", buildArgs);
 const previewCommand = commandText("pnpm", previewArgs);
 const fixturePath = join(DESKTOP_DIR, "tests/fixtures/perf-preview.mp4");
 let preview = null;
+let sleepPreventer = null;
 let normalOutputDir = null;
 let stopping = false;
 
@@ -187,6 +211,7 @@ async function stopForSignal(code) {
   if (stopping) return;
   stopping = true;
   await stopChild(preview);
+  stopSleepPrevention(sleepPreventer);
   if (normalOutputDir) await rm(normalOutputDir, { recursive: true, force: true });
   process.exit(code);
 }
@@ -195,6 +220,7 @@ process.on("SIGINT", () => { void stopForSignal(130); });
 process.on("SIGTERM", () => { void stopForSignal(143); });
 
 try {
+  sleepPreventer = await startSleepPrevention();
   await requireMissingOutput();
   const outputFilesystem = await requireApfsOutput();
   await requireFreePort();
@@ -216,7 +242,11 @@ try {
     fail("normal build contains a perf-only harness or media fixture");
   }
   const normalJavascript = normalFiles.filter((path) => path.endsWith(".js"));
-  const normalSentinelMatches = await filesContaining(normalJavascript, TIMELINE_PAINT_SENTINEL);
+  const normalSentinelMatches = (
+    await Promise.all(
+      TIMELINE_PAINT_SENTINELS.map((sentinel) => filesContaining(normalJavascript, sentinel)),
+    )
+  ).flat();
   if (normalSentinelMatches.length !== 0) fail("timeline paint instrumentation leaked into the normal build");
 
   const buildResult = await run("pnpm", buildArgs);
@@ -228,8 +258,21 @@ try {
   if (!builtFiles.includes(harnessPath)) fail(`missing production harness: ${harnessPath}`);
   if (mediaPaths.length !== 1) fail(`expected exactly one hashed perf-preview MP4 asset, found ${mediaPaths.length}`);
   const perfJavascript = builtFiles.filter((path) => path.endsWith(".js"));
-  const perfSentinelMatches = await filesContaining(perfJavascript, TIMELINE_PAINT_SENTINEL);
-  if (perfSentinelMatches.length === 0) fail("perf build is missing timeline paint instrumentation");
+  const perfSentinelMatchesByName = await Promise.all(
+    TIMELINE_PAINT_SENTINELS.map(async (sentinel) => ({
+      sentinel,
+      matches: await filesContaining(perfJavascript, sentinel),
+    })),
+  );
+  const missingPerfSentinels = perfSentinelMatchesByName
+    .filter(({ matches }) => matches.length === 0)
+    .map(({ sentinel }) => sentinel);
+  if (missingPerfSentinels.length > 0) {
+    fail(`perf build is missing timeline paint instrumentation: ${missingPerfSentinels.join(", ")}`);
+  }
+  const perfSentinelMatches = [
+    ...new Set(perfSentinelMatchesByName.flatMap(({ matches }) => matches)),
+  ];
   const fixtureSha256 = await hashFile(fixturePath);
   const emittedMedia = await hashEntries(mediaPaths);
   if (emittedMedia[0].sha256 !== fixtureSha256) fail("emitted perf-preview MP4 SHA-256 does not match source fixture");
@@ -277,6 +320,9 @@ try {
       os: `${os.type()} ${os.release()}`,
       arch: process.arch,
       browser: "Chromium via Playwright (version recorded by each perf-full run)",
+      sleepPrevention: SLEEP_PREVENTION_ARGS
+        ? commandText("caffeinate", SLEEP_PREVENTION_ARGS)
+        : null,
     },
     preview: { command: previewCommand, mode: "production-minified", port: PORT, baseUrl: BASE_URL },
   };
@@ -333,5 +379,6 @@ try {
   if (runs.some((runResult) => runResult.exitCode !== 0)) process.exitCode = 1;
 } finally {
   await stopChild(preview);
+  stopSleepPrevention(sleepPreventer);
   if (normalOutputDir) await rm(normalOutputDir, { recursive: true, force: true });
 }
