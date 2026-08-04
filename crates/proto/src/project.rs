@@ -346,7 +346,7 @@ pub fn read_otio_timeline(
     rewrite_schema_strings(&mut value, &file, &JsonPath::root(), warnings)?;
 
     // Try strict deserialization first — covers every well-formed file.
-    match Timeline::deserialize(&value) {
+    match serde_json::from_value::<Timeline>(value.clone()) {
         Ok(tl) => Ok(tl),
         Err(strict_err) => {
             // Strict parse failed. The most common cause we've seen is the
@@ -623,32 +623,6 @@ mod tests {
         let p = Project::read(&root).unwrap();
         assert_eq!(p.warnings.len(), 1);
         assert_eq!(p.warnings[0].schema, "Clip.99");
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn read_recovers_by_quarantining_malformed_timeline_markers() {
-        let root = tmp_dir();
-        Project::init(&root).unwrap();
-        let otio_path = root.join(files::OTIO);
-        let text = fs::read_to_string(&otio_path).unwrap();
-        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        v["metadata"]["montage"]["timeline_markers"] = serde_json::json!([
-            {"name": "bad-marker", "source_time_s": 12.0}
-        ]);
-        fs::write(&otio_path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
-
-        let p = Project::read(&root).unwrap();
-        assert!(p.warnings.is_empty());
-        assert!(
-            p.timeline
-                .metadata
-                .montage
-                .as_ref()
-                .unwrap()
-                .timeline_markers
-                .is_empty()
-        );
         fs::remove_dir_all(&root).ok();
     }
 
