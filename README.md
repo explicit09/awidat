@@ -120,6 +120,22 @@ MONTAGE_INDEX_SKIP_ARGS="--label controlled-12x3x8 --assets 12 --indexers 3 --si
 
 The JSON report records the fixture configuration, machine facts, exact dispatch correctness counts, raw samples in milliseconds, and median/p95/MAD statistics. The `time -l` output supplies the CPU, peak-memory, page-fault, and filesystem-I/O evidence alongside that report.
 
+## Waveform Benchmark
+
+`make perf-waveform` creates a deterministic two-hour mixed-signal AAC/M4A fixture outside the measured helpers. Before the warmup or timed samples, an independent oracle directly decodes that fixture with FFmpeg to f32le and applies a benchmark-owned implementation of the production bucket semantics. The warmup and all seven fresh 2048-bucket helpers must match the oracle's exact duration bits, bucket bits, and canonical hash, as well as finite `[0,1]`, nonzero, mixed-signal, and one-8-kHz-sample duration checks. Separate probes require no-audio, bad-input, and live cancellation behavior.
+
+Each wall sample starts before the helper process is spawned and ends when it exits, so it includes process and helper setup, decoder provenance lookup, Tokio runtime construction, the production `generate_waveform` call, correctness hashing, JSON serialization, and the atomic helper-result write. The production call dominates this wrapper work for the two-hour fixture, but short smoke runs should be interpreted as end-to-end helper overhead rather than decoder-only timing. The unique timestamped JSON report records generated UTC time, fixture-generator and helper-decoder provenance, executable/Cargo.lock/source hashes, Rust toolchain details, raw wall time, aggregate helper-plus-FFmpeg peak RSS, and maximum cumulative live-tree CPU time, with median/p95/MAD summaries; the recursive sampler runs every 10 ms. Disk-I/O accounting remains intentionally unavailable, so use platform tooling beside the report when required.
+
+The Make target defaults fixture work and evidence to the external build drive. For a short internal APFS smoke while that drive is unavailable:
+
+```bash
+CARGO_TARGET_DIR=target \
+MONTAGE_WAVEFORM_PERF_WORK_DIR=/private/tmp/montage-waveform-perf-smoke \
+MONTAGE_WAVEFORM_PERF_EVIDENCE_DIR=/private/tmp/montage-waveform-perf-smoke/evidence \
+MONTAGE_WAVEFORM_PERF_ARGS="--duration-s 12 --label internal-smoke" \
+make perf-waveform
+```
+
 ## macOS Consumer Releases
 
 `.github/workflows/release.yml` builds a signed, notarized `Montage-aarch64-apple-darwin.dmg` and publishes it with its `.sha256` and `checksums.txt` as a GitHub release on `v*` tag pushes. Manual `workflow_dispatch` runs from a non-`v*` ref rehearse the build without publishing. The build is strict: missing Apple secrets, stub sidecars, or failed signing, notarization, or stapling fail the release.
