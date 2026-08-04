@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,7 +35,7 @@ fn main() {
 }
 
 fn real_main() -> Result<(), String> {
-    let args = Args::parse(std::env::args().skip(1).collect())?;
+    let args = Args::parse(std::env::args_os().skip(1).collect())?;
     fs::create_dir_all(&args.output_dir)
         .map_err(|e| format!("create {}: {e}", args.output_dir.display()))?;
     let work_dirs = WorkDirs::create(&args.work_dir)?;
@@ -152,7 +153,7 @@ struct Args {
 }
 
 impl Args {
-    fn parse(raw: Vec<String>) -> Result<Self, String> {
+    fn parse(raw: Vec<OsString>) -> Result<Self, String> {
         let mut assets = Vec::new();
         let mut output_dir = PathBuf::from("artifacts/perf/indexing-optimization");
         let mut work_dir = std::env::temp_dir().join("montage-index-perf");
@@ -162,12 +163,15 @@ impl Args {
             DEFAULT_INDEXERS.iter().map(|name| (*name).into()).collect();
         let mut i = 0;
         while i < raw.len() {
-            match raw[i].as_str() {
+            let argument = raw[i]
+                .to_str()
+                .ok_or_else(|| "argument is not valid UTF-8".to_string())?;
+            match argument {
                 "--asset" => {
                     i += 1;
                     assets.push(
                         raw.get(i)
-                            .map(PathBuf::from)
+                            .map(|value| PathBuf::from(value))
                             .ok_or_else(|| "--asset requires a value".to_string())?,
                     );
                 }
@@ -175,28 +179,34 @@ impl Args {
                     i += 1;
                     output_dir = raw
                         .get(i)
-                        .map(PathBuf::from)
+                        .map(|value| PathBuf::from(value))
                         .ok_or_else(|| "--output-dir requires a value".to_string())?;
                 }
                 "--work-dir" => {
                     i += 1;
                     work_dir = raw
                         .get(i)
-                        .map(PathBuf::from)
+                        .map(|value| PathBuf::from(value))
                         .ok_or_else(|| "--work-dir requires a value".to_string())?;
                 }
                 "--label" => {
                     i += 1;
-                    label = raw
+                    let value = raw
                         .get(i)
-                        .cloned()
                         .ok_or_else(|| "--label requires a value".to_string())?;
+                    label = value
+                        .to_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "--label requires a valid UTF-8 value".to_string())?;
                 }
                 "--concurrency" => {
                     i += 1;
                     let value = raw
                         .get(i)
                         .ok_or_else(|| "--concurrency requires a value".to_string())?;
+                    let value = value
+                        .to_str()
+                        .ok_or_else(|| "--concurrency requires a valid UTF-8 value".to_string())?;
                     concurrency = value
                         .parse::<usize>()
                         .map_err(|e| format!("invalid --concurrency {value:?}: {e}"))?;
@@ -207,6 +217,8 @@ impl Args {
                         .get(i)
                         .ok_or_else(|| "--indexers requires a comma-separated value".to_string())?;
                     indexers = value
+                        .to_str()
+                        .ok_or_else(|| "--indexers requires a valid UTF-8 value".to_string())?
                         .split(',')
                         .map(str::trim)
                         .filter(|name| !name.is_empty())
@@ -223,10 +235,10 @@ impl Args {
         }
         let mut staged_asset_ids = HashSet::new();
         for asset in &assets {
+            let asset_id = staged_asset_id(asset)?;
             if !asset.is_file() {
                 return Err(format!("asset is not a file: {}", asset.display()));
             }
-            let asset_id = staged_asset_id(asset)?;
             if !staged_asset_ids.insert(asset_id.clone()) {
                 return Err(format!("duplicate staged filename: {asset_id}"));
             }
@@ -432,6 +444,10 @@ fn string_f64(value: &serde_json::Value, key: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     use montage_config::{IndexerResourceClass, McpServer, McpServerKind};
 
@@ -443,7 +459,7 @@ mod tests {
 
         let args = Args::parse(vec![
             "--asset".into(),
-            asset.display().to_string(),
+            asset.display().to_string().into(),
             "--work-dir".into(),
             "/bench/work".into(),
             "--output-dir".into(),
@@ -469,8 +485,8 @@ mod tests {
     fn default_indexer_order_matches_measured_pass2_order() {
         let asset = tiny_asset("default-order");
 
-        let args =
-            Args::parse(vec!["--asset".into(), asset.display().to_string()]).expect("args parse");
+        let args = Args::parse(vec!["--asset".into(), asset.display().to_string().into()])
+            .expect("args parse");
 
         assert_eq!(
             args.indexers,
@@ -496,9 +512,9 @@ mod tests {
 
         let error = Args::parse(vec![
             "--asset".into(),
-            first.display().to_string(),
+            first.display().to_string().into(),
             "--asset".into(),
-            second.display().to_string(),
+            second.display().to_string().into(),
         ])
         .expect_err("duplicate staged filenames must be rejected before dispatch");
 
@@ -513,13 +529,30 @@ mod tests {
 
         let args = Args::parse(vec![
             "--asset".into(),
-            first.display().to_string(),
+            first.display().to_string().into(),
             "--asset".into(),
-            second.display().to_string(),
+            second.display().to_string().into(),
         ])
         .expect("args parse");
 
         assert_eq!(args.assets, vec![first, second]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_utf8_asset_argument_before_dispatch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let asset = temp
+            .path()
+            .join(OsString::from_vec(b"non-utf8-\xff.mp4".to_vec()));
+
+        let error = Args::parse(vec![OsString::from("--asset"), asset.into_os_string()])
+            .expect_err("non-UTF-8 asset arguments must be rejected before dispatch");
+
+        assert!(
+            error.contains("asset filename is not valid UTF-8"),
+            "{error}"
+        );
     }
 
     #[test]
