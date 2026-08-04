@@ -21,13 +21,14 @@ from __future__ import annotations
 import math
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 
 import numpy as np
 import pyloudnorm as pyln
@@ -89,6 +90,8 @@ _TARGET_SR = 48_000
 _DECODE_CHUNK_BYTES = 64 * 1024
 _MAX_STDERR_DIAGNOSTIC_BYTES = 64 * 1024
 _PCM_SAMPLE_BYTES = np.dtype(np.float32).itemsize
+_EBU_ENERGY_BYTES = np.dtype(np.float64).itemsize
+_MAX_EBU_ENERGY_MEMORY_BYTES = 1024 * 1024
 _EBU_BLOCK_S = 0.400
 _EBU_STEP = 1.0 - 0.75
 
@@ -129,7 +132,13 @@ class _StreamingAudio:
 
         self._ebu_samples = np.empty(0, dtype=np.float32)
         self._ebu_buffer_start = 0
-        self._block_energies: list[float] = []
+        self._block_count = 0
+        self._energy_file: BinaryIO = tempfile.SpooledTemporaryFile(
+            max_size=_MAX_EBU_ENERGY_MEMORY_BYTES,
+            mode="w+b",
+            prefix="montage-audio-energy-",
+            suffix=".f64",
+        )
 
         meter = pyln.Meter(sample_rate, block_size=_EBU_BLOCK_S)
         self._filter_stages = tuple(meter._filters.values())
@@ -233,18 +242,36 @@ class _StreamingAudio:
             (1.0 / (_EBU_BLOCK_S * self.sample_rate)) * np.sum(np.square(samples))
         )
 
+    def _record_block_energy(self, samples: np.ndarray) -> None:
+        energy = self._block_energy(samples)
+        self._energy_file.write(struct.pack("<d", energy))
+        self._block_count += 1
+
+    def _block_energy_values(self) -> Iterator[float]:
+        self._energy_file.flush()
+        self._energy_file.seek(0)
+        while fragment := self._energy_file.read(_DECODE_CHUNK_BYTES):
+            if len(fragment) % _EBU_ENERGY_BYTES != 0:
+                raise RuntimeError("corrupt EBU energy storage")
+            yield from np.frombuffer(fragment, dtype=np.dtype("<f8"))
+
+    @staticmethod
+    def _energy_loudness(energy: float) -> float:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return float(-0.691 + 10.0 * np.log10(energy))
+
     def _append_ebu_blocks(self, samples: np.ndarray) -> None:
         self._ebu_samples = np.concatenate((self._ebu_samples, samples))
         while True:
-            lower, upper = self._ebu_bounds(len(self._block_energies))
+            lower, upper = self._ebu_bounds(self._block_count)
             if upper > self._sample_count:
                 break
             offset = lower - self._ebu_buffer_start
-            self._block_energies.append(
-                self._block_energy(self._ebu_samples[offset : offset + (upper - lower)])
+            self._record_block_energy(
+                self._ebu_samples[offset : offset + (upper - lower)]
             )
 
-        next_lower, _ = self._ebu_bounds(len(self._block_energies))
+        next_lower, _ = self._ebu_bounds(self._block_count)
         drop = next_lower - self._ebu_buffer_start
         if drop:
             self._ebu_samples = self._ebu_samples[drop:].copy()
@@ -255,41 +282,50 @@ class _StreamingAudio:
         block_count = int(
             np.round((duration - _EBU_BLOCK_S) / (_EBU_BLOCK_S * _EBU_STEP)) + 1
         )
-        while len(self._block_energies) < block_count:
-            lower, upper = self._ebu_bounds(len(self._block_energies))
+        while self._block_count < block_count:
+            lower, upper = self._ebu_bounds(self._block_count)
             offset = lower - self._ebu_buffer_start
-            self._block_energies.append(
-                self._block_energy(self._ebu_samples[offset : offset + (upper - lower)])
+            self._record_block_energy(
+                self._ebu_samples[offset : offset + (upper - lower)]
             )
 
     def _integrated_loudness(self) -> float:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            block_loudness = [
-                -0.691 + 10.0 * np.log10(np.sum([energy]))
-                for energy in self._block_energies
-            ]
-        absolute_gated = [
-            index for index, lufs in enumerate(block_loudness) if lufs >= -70.0
-        ]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            mean_energy = np.mean([self._block_energies[index] for index in absolute_gated])
-            relative_gate = -0.691 + 10.0 * np.log10(np.sum([mean_energy])) - 10.0
-        relative_gated = [
-            index
-            for index, lufs in enumerate(block_loudness)
-            if lufs > relative_gate and lufs > -70.0
-        ]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            mean_energy = np.nan_to_num(
-                np.array([np.mean([self._block_energies[index] for index in relative_gated])])
-            )[0]
-        with np.errstate(divide="ignore"):
-            return float(-0.691 + 10.0 * np.log10(np.sum([mean_energy])))
+        absolute_count = 0
+
+        def absolute_gated() -> Iterator[float]:
+            nonlocal absolute_count
+            for energy in self._block_energy_values():
+                if self._energy_loudness(energy) >= -70.0:
+                    absolute_count += 1
+                    yield energy
+
+        absolute_sum = math.fsum(absolute_gated())
+        if absolute_count == 0:
+            return -math.inf
+        mean_energy = absolute_sum / absolute_count
+        relative_gate = self._energy_loudness(mean_energy) - 10.0
+
+        relative_count = 0
+
+        def relative_gated() -> Iterator[float]:
+            nonlocal relative_count
+            for energy in self._block_energy_values():
+                loudness = self._energy_loudness(energy)
+                if loudness > relative_gate and loudness > -70.0:
+                    relative_count += 1
+                    yield energy
+
+        relative_sum = math.fsum(relative_gated())
+        if relative_count == 0:
+            return -math.inf
+        return self._energy_loudness(relative_sum / relative_count)
+
+    def close(self) -> None:
+        self._energy_file.close()
 
     def result(self, path: str) -> dict[str, Any]:
+        if self._remainder:
+            raise RuntimeError(f"ffmpeg produced an incomplete f32le PCM frame for {path}")
         if self._sample_count == 0:
             print(
                 f"audio-energy: no audio stream in {path}; emitting empty result",
@@ -352,48 +388,51 @@ def _retain_stderr_tail(tail: bytearray, fragment: bytes) -> None:
 
 def _stream_mono(path: str) -> dict[str, Any]:
     """Decode and analyze mono f32le PCM without staging decoded audio."""
-    process = subprocess.Popen(
-        _ffmpeg_command(path),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.stdout is None or process.stderr is None:
-        _terminate_ffmpeg(process)
-        raise RuntimeError("ffmpeg decode did not provide stdout and stderr pipes")
-
-    stderr_tail = bytearray()
-    stderr_errors: list[BaseException] = []
-
-    def drain_stderr() -> None:
-        try:
-            while fragment := process.stderr.read(_DECODE_CHUNK_BYTES):
-                _retain_stderr_tail(stderr_tail, fragment)
-        except BaseException as error:
-            stderr_errors.append(error)
-            _terminate_ffmpeg(process)
-
-    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-    stderr_thread.start()
     analysis = _StreamingAudio(_TARGET_SR)
     try:
-        while fragment := process.stdout.read(_DECODE_CHUNK_BYTES):
-            analysis.consume_bytes(fragment)
-        return_code = process.wait()
-    except BaseException:
-        _terminate_ffmpeg(process)
-        raise
-    finally:
-        _terminate_ffmpeg(process)
-        stderr_thread.join()
-        process.stdout.close()
-        process.stderr.close()
+        process = subprocess.Popen(
+            _ffmpeg_command(path),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if process.stdout is None or process.stderr is None:
+            _terminate_ffmpeg(process)
+            raise RuntimeError("ffmpeg decode did not provide stdout and stderr pipes")
 
-    if stderr_errors:
-        raise stderr_errors[0]
-    if return_code != 0:
-        stderr = bytes(stderr_tail).decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"ffmpeg decode failed (exit {return_code}) for {path}: {stderr}")
-    return analysis.result(path)
+        stderr_tail = bytearray()
+        stderr_errors: list[BaseException] = []
+
+        def drain_stderr() -> None:
+            try:
+                while fragment := process.stderr.read(_DECODE_CHUNK_BYTES):
+                    _retain_stderr_tail(stderr_tail, fragment)
+            except BaseException as error:
+                stderr_errors.append(error)
+                _terminate_ffmpeg(process)
+
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
+        try:
+            while fragment := process.stdout.read(_DECODE_CHUNK_BYTES):
+                analysis.consume_bytes(fragment)
+            return_code = process.wait()
+        except BaseException:
+            _terminate_ffmpeg(process)
+            raise
+        finally:
+            _terminate_ffmpeg(process)
+            stderr_thread.join()
+            process.stdout.close()
+            process.stderr.close()
+
+        if stderr_errors:
+            raise stderr_errors[0]
+        if return_code != 0:
+            stderr = bytes(stderr_tail).decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg decode failed (exit {return_code}) for {path}: {stderr}")
+        return analysis.result(path)
+    finally:
+        analysis.close()
 
 
 def _windowed_rms_db(audio: _LoadedAudio) -> list[dict[str, float]]:

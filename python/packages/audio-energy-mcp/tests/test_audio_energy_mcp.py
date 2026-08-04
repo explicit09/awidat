@@ -13,6 +13,7 @@ import numpy as np
 
 from audio_energy_mcp import (
     _LoadedAudio,
+    _StreamingAudio,
     _loudness,
     _silences,
     _true_peak_dbfs,
@@ -169,6 +170,31 @@ class AudioEnergyMeterTests(unittest.TestCase):
                     actual = handle(SimpleNamespace(asset_path="fixture.wav"))
 
                 self.assertEqual(actual, _reference_data(samples))
+
+    def test_streaming_analysis_does_not_retain_each_ebu_energy_in_memory(self) -> None:
+        with patch("audio_energy_mcp._MAX_EBU_ENERGY_MEMORY_BYTES", 64):
+            analysis = _StreamingAudio(48_000)
+        try:
+            chunk = np.full(4_800, 0.25, dtype=np.float32)
+            for _ in range(20):
+                analysis.consume_samples(chunk)
+
+            self.assertNotIn("_block_energies", vars(analysis))
+            self.assertTrue(analysis._energy_file._rolled)
+        finally:
+            close = getattr(analysis, "close", None)
+            if close is not None:
+                close()
+
+    def test_handle_rejects_incomplete_pcm_frame_after_successful_decode(self) -> None:
+        raw = np.full(48_000, 0.25, dtype="<f4").tobytes() + b"\x00"
+        process = _FakeFfmpeg([raw])
+
+        with (
+            patch("audio_energy_mcp.subprocess.Popen", return_value=process),
+            self.assertRaisesRegex(RuntimeError, "incomplete f32le PCM frame"),
+        ):
+            handle(SimpleNamespace(asset_path="malformed.wav"))
 
     def test_handle_emits_one_second_zero_result_after_successful_empty_decode(self) -> None:
         process = _FakeFfmpeg([])
