@@ -3,10 +3,10 @@
 
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
-import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -199,6 +199,19 @@ async function requireMissingOutput() {
   }
 }
 
+async function requireOutputOutsideWorktree() {
+  const parent = await existingParent(OUTPUT_DIR);
+  const [physicalParent, physicalWorkspace] = await Promise.all([
+    realpath(parent),
+    realpath(WORKSPACE_ROOT),
+  ]);
+  const physicalOutput = resolve(physicalParent, relative(parent, OUTPUT_DIR));
+  const relation = relative(physicalWorkspace, physicalOutput);
+  const insideWorktree = relation === ""
+    || (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
+  if (insideWorktree) fail("PERF_OUTPUT_DIR must be outside this worktree");
+}
+
 if (!LABEL || !safeLabel) fail("PERF_LABEL is required (use a filesystem-safe label)");
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fail("PERF_PORT must be a valid TCP port");
 if (!Number.isInteger(RUNS) || RUNS < 1) fail("PERF_RUNS must be a positive integer");
@@ -230,8 +243,9 @@ process.on("SIGINT", () => { void stopForSignal(130); });
 process.on("SIGTERM", () => { void stopForSignal(143); });
 
 try {
-  sleepPreventer = await startSleepPrevention();
   await requireMissingOutput();
+  await requireOutputOutsideWorktree();
+  sleepPreventer = await startSleepPrevention();
   const outputFilesystem = await requireApfsOutput();
   await requireFreePort();
 
