@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-use std::ffi::OsStr;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,15 +39,12 @@ fn real_main() -> Result<(), String> {
         .map_err(|e| format!("create {}: {e}", args.output_dir.display()))?;
     let work_dirs = WorkDirs::create(&args.work_dir)?;
 
-    let project_root = create_project(&args.asset, &args.label, &work_dirs.projects)?;
-    let asset_id = format!(
-        "external/{}",
-        args.asset
-            .file_name()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| format!("asset has no file name: {}", args.asset.display()))?
-    );
-    let staged_asset = project_root.join(&asset_id);
+    let project_root = create_project(&args.assets, &args.label, &work_dirs.projects)?;
+    let asset_ids = args
+        .assets
+        .iter()
+        .map(|asset| staged_asset_id(asset))
+        .collect::<Result<Vec<_>, _>>()?;
     let config =
         Config::load(Some(&project_root)).map_err(|e| format!("load indexer config: {e}"))?;
     let mut servers: Vec<_> = config
@@ -73,10 +70,13 @@ fn real_main() -> Result<(), String> {
         ));
     }
 
-    let assets = vec![AssetInput {
-        id: AssetId::new(asset_id.clone()),
-        path: staged_asset,
-    }];
+    let assets: Vec<_> = asset_ids
+        .iter()
+        .map(|asset_id| AssetInput {
+            id: AssetId::new(asset_id.clone()),
+            path: project_root.join(asset_id),
+        })
+        .collect();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -109,7 +109,7 @@ fn real_main() -> Result<(), String> {
             output_dir: args.output_dir.display().to_string(),
             concurrency: args.concurrency,
             included_indexers,
-            assets: vec![asset_id],
+            assets: asset_ids,
         },
         PerfMachine {
             os: std::env::consts::OS.to_string(),
@@ -118,7 +118,11 @@ fn real_main() -> Result<(), String> {
                 .map(usize::from)
                 .unwrap_or(1),
         },
-        probe_media(&args.asset),
+        probe_media(
+            args.assets
+                .first()
+                .ok_or_else(|| "at least one --asset is required".to_string())?,
+        ),
         &report,
         &project_root,
     );
@@ -139,7 +143,7 @@ fn real_main() -> Result<(), String> {
 
 #[derive(Debug)]
 struct Args {
-    asset: PathBuf,
+    assets: Vec<PathBuf>,
     output_dir: PathBuf,
     work_dir: PathBuf,
     label: String,
@@ -149,7 +153,7 @@ struct Args {
 
 impl Args {
     fn parse(raw: Vec<String>) -> Result<Self, String> {
-        let mut asset = None;
+        let mut assets = Vec::new();
         let mut output_dir = PathBuf::from("artifacts/perf/indexing-optimization");
         let mut work_dir = std::env::temp_dir().join("montage-index-perf");
         let mut label = "baseline".to_string();
@@ -161,7 +165,11 @@ impl Args {
             match raw[i].as_str() {
                 "--asset" => {
                     i += 1;
-                    asset = raw.get(i).map(PathBuf::from);
+                    assets.push(
+                        raw.get(i)
+                            .map(PathBuf::from)
+                            .ok_or_else(|| "--asset requires a value".to_string())?,
+                    );
                 }
                 "--output-dir" => {
                     i += 1;
@@ -210,15 +218,24 @@ impl Args {
             }
             i += 1;
         }
-        let asset = asset.ok_or_else(usage)?;
-        if !asset.is_file() {
-            return Err(format!("asset is not a file: {}", asset.display()));
+        if assets.is_empty() {
+            return Err(usage());
+        }
+        let mut staged_asset_ids = HashSet::new();
+        for asset in &assets {
+            if !asset.is_file() {
+                return Err(format!("asset is not a file: {}", asset.display()));
+            }
+            let asset_id = staged_asset_id(asset)?;
+            if !staged_asset_ids.insert(asset_id.clone()) {
+                return Err(format!("duplicate staged filename: {asset_id}"));
+            }
         }
         if indexers.is_empty() {
             return Err("--indexers cannot be empty".into());
         }
         Ok(Self {
-            asset,
+            assets,
             output_dir,
             work_dir,
             label,
@@ -229,7 +246,7 @@ impl Args {
 }
 
 fn usage() -> String {
-    "usage: montage-index-perf --asset <video> [--output-dir <dir>] [--work-dir <dir>] [--label baseline] [--concurrency 2] [--indexers a,b,c]".into()
+    "usage: montage-index-perf --asset <video> [--asset <video>] [--output-dir <dir>] [--work-dir <dir>] [--label baseline] [--concurrency 2] [--indexers a,b,c]".into()
 }
 
 #[derive(Debug)]
@@ -274,7 +291,7 @@ fn apply_work_env(servers: &mut [montage_config::McpServer], work_dirs: &WorkDir
     }
 }
 
-fn create_project(asset: &Path, label: &str, projects_dir: &Path) -> Result<PathBuf, String> {
+fn create_project(assets: &[PathBuf], label: &str, projects_dir: &Path) -> Result<PathBuf, String> {
     let root = projects_dir.join(format!(
         "montage-index-perf-{label}-{}-{}",
         std::process::id(),
@@ -282,14 +299,23 @@ fn create_project(asset: &Path, label: &str, projects_dir: &Path) -> Result<Path
     ));
     fs::create_dir_all(root.join("external")).map_err(|e| format!("create temp project: {e}"))?;
     fs::create_dir_all(root.join(".montage")).map_err(|e| format!("create .montage: {e}"))?;
-    let dest = root.join("external").join(
-        asset
-            .file_name()
-            .ok_or_else(|| format!("asset has no file name: {}", asset.display()))?,
-    );
-    symlink_file(asset, &dest)
-        .map_err(|e| format!("symlink {} -> {}: {e}", dest.display(), asset.display()))?;
+    for asset in assets {
+        let asset_id = staged_asset_id(asset)?;
+        let dest = root.join(asset_id);
+        symlink_file(asset, &dest)
+            .map_err(|e| format!("symlink {} -> {}: {e}", dest.display(), asset.display()))?;
+    }
     Ok(root)
+}
+
+fn staged_asset_id(asset: &Path) -> Result<String, String> {
+    let file_name = asset
+        .file_name()
+        .ok_or_else(|| format!("asset has no file name: {}", asset.display()))?;
+    let file_name = file_name
+        .to_str()
+        .ok_or_else(|| format!("asset filename is not valid UTF-8: {}", asset.display()))?;
+    Ok(format!("external/{file_name}"))
 }
 
 #[cfg(unix)]
@@ -431,7 +457,7 @@ mod tests {
         ])
         .expect("args parse");
 
-        assert_eq!(args.asset, asset);
+        assert_eq!(args.assets, vec![asset]);
         assert_eq!(args.work_dir, PathBuf::from("/bench/work"));
         assert_eq!(args.output_dir, PathBuf::from("/bench/out"));
         assert_eq!(args.label, "fresh");
@@ -460,6 +486,40 @@ mod tests {
                 "shot",
             ]
         );
+    }
+
+    #[test]
+    fn rejects_duplicate_staged_filenames_before_dispatch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let first = asset_in(&temp.path().join("first"), "same-name.mp4");
+        let second = asset_in(&temp.path().join("second"), "same-name.mp4");
+
+        let error = Args::parse(vec![
+            "--asset".into(),
+            first.display().to_string(),
+            "--asset".into(),
+            second.display().to_string(),
+        ])
+        .expect_err("duplicate staged filenames must be rejected before dispatch");
+
+        assert!(error.contains("duplicate staged filename"), "{error}");
+        assert!(error.contains("same-name.mp4"), "{error}");
+    }
+
+    #[test]
+    fn parses_repeated_assets_in_caller_order() {
+        let first = tiny_asset("first-repeated-asset");
+        let second = tiny_asset("second-repeated-asset");
+
+        let args = Args::parse(vec![
+            "--asset".into(),
+            first.display().to_string(),
+            "--asset".into(),
+            second.display().to_string(),
+        ])
+        .expect("args parse");
+
+        assert_eq!(args.assets, vec![first, second]);
     }
 
     #[test]
@@ -500,6 +560,13 @@ mod tests {
             timestamp_nanos()
         ));
         fs::write(&path, b"not a real video").expect("write tiny asset");
+        path
+    }
+
+    fn asset_in(dir: &Path, name: &str) -> PathBuf {
+        fs::create_dir_all(dir).expect("create asset directory");
+        let path = dir.join(name);
+        fs::write(&path, b"not a real video").expect("write asset");
         path
     }
 }
