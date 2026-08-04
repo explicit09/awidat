@@ -47,6 +47,37 @@ import { useTimelineStore, type TimelineSnapshot } from "./store";
 import { useFlashRanges } from "../state/focusController";
 import { drawFlashRanges } from "./flashOverlay.ts";
 
+const TIMELINE_PAINT_METRICS_KEY =
+  import.meta.env.MODE === "perf" ? "__montageTimelinePaintMetrics" : undefined;
+
+type TimelinePaintMetrics = {
+  count: number;
+  totalMs: number;
+  maxMs: number;
+  durationsMs: number[];
+  reasonCounts: Record<TimelinePaintReason, number>;
+};
+
+type TimelinePaintReason = "effect" | "resize" | "thumbnail" | "waveform";
+
+function recordTimelinePaint(durationMs: number, reason: TimelinePaintReason) {
+  if (!TIMELINE_PAINT_METRICS_KEY || !Number.isFinite(durationMs)) return;
+  const perfWindow = window as typeof window & Record<string, TimelinePaintMetrics | undefined>;
+  const metrics = perfWindow[TIMELINE_PAINT_METRICS_KEY] ?? {
+    count: 0,
+    totalMs: 0,
+    maxMs: 0,
+    durationsMs: [],
+    reasonCounts: { effect: 0, resize: 0, thumbnail: 0, waveform: 0 },
+  };
+  metrics.count += 1;
+  metrics.totalMs += durationMs;
+  metrics.maxMs = Math.max(metrics.maxMs, durationMs);
+  metrics.durationsMs.push(durationMs);
+  metrics.reasonCounts[reason] += 1;
+  perfWindow[TIMELINE_PAINT_METRICS_KEY] = metrics;
+}
+
 /** Wrapper that owns layout state (pps, width) so the canvas can
  *  publish it on each paint and the handles can subscribe. Avoids
  *  recomputing layout in two places. */
@@ -174,8 +205,9 @@ function TimelineCanvas({
     const container = containerRef.current;
     if (!canvas || !container) return;
 
-    function paint() {
+    function paint(reason: TimelinePaintReason) {
       if (!canvas || !container) return;
+      const paintStartedAt = TIMELINE_PAINT_METRICS_KEY ? performance.now() : 0;
       const dpr = window.devicePixelRatio || 1;
       const viewportWidth =
         container.parentElement?.clientWidth || container.clientWidth;
@@ -316,18 +348,21 @@ function TimelineCanvas({
       if (userMove) {
         drawMoveGhost(ctx, snapshot, currentTime, userMove, pps, laneHeight);
       }
+      if (TIMELINE_PAINT_METRICS_KEY) {
+        recordTimelinePaint(performance.now() - paintStartedAt, reason);
+      }
     }
 
-    paint();
+    paint("effect");
 
     // Repaint on resize. ResizeObserver is the right tool — covers
     // window resize AND parent flex/grid resizes.
-    const ro = new ResizeObserver(() => paint());
+    const ro = new ResizeObserver(() => paint("resize"));
     ro.observe(container);
     // Repaint when a thumbnail or waveform finishes decoding so the
     // strip / amplitude line populate as their data loads.
-    const unsubThumb = onThumbnailDecoded(() => paint());
-    const unsubWave = onWaveformDecoded(() => paint());
+    const unsubThumb = onThumbnailDecoded(() => paint("thumbnail"));
+    const unsubWave = onWaveformDecoded(() => paint("waveform"));
     return () => {
       ro.disconnect();
       unsubThumb();

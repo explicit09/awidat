@@ -2,8 +2,21 @@
 /** Playback baseline for the production-minified Chromium renderer harness. */
 
 import { chromium } from "playwright";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import assert from "node:assert/strict";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
+
+function verifyTimelinePaintInstrumentation() {
+  const source = readFileSync(new URL("../src/timeline/TimelineSurface.tsx", import.meta.url), "utf8");
+  assert.match(source, /const TIMELINE_PAINT_METRICS_KEY\s*=\s*import\.meta\.env\.MODE\s*===\s*"perf"/);
+  assert.match(source, /__montageTimelinePaintMetrics/);
+}
+
+if (process.env.PERF_TIMELINE_PAINT_STATIC_TEST === "1") {
+  verifyTimelinePaintInstrumentation();
+  console.log("timeline paint instrumentation: OK");
+  process.exit(0);
+}
 
 const BASE_URL = process.env.PERF_URL;
 const OUT_DIR = process.env.PERF_PLAYBACK_OUT_DIR ?? process.env.PERF_OUT_DIR ?? "tests/perf-results";
@@ -35,6 +48,7 @@ const TARGETS = {
   activeFrameGapMs: 125,
   sourceTimeToleranceS: 0.08,
 };
+const TIMELINE_PAINT_REASONS = ["effect", "resize", "thumbnail", "waveform"];
 
 if (!BASE_URL) throw new Error("PERF_URL is required for production playback benchmarking");
 if (!Number.isInteger(WARMUPS) || WARMUPS < 0) throw new Error("PERF_PLAYBACK_WARMUPS must be a non-negative integer");
@@ -285,6 +299,15 @@ function validPlaybackFixture(fixture) {
 async function runPlayback(page, client, seconds, requireFullSweep) {
   await waitForPlaybackReady(page);
   const controlRaf = await measureControlRaf(page);
+  await page.evaluate(() => {
+    window.__montageTimelinePaintMetrics = {
+      count: 0,
+      totalMs: 0,
+      maxMs: 0,
+      durationsMs: [],
+      reasonCounts: { effect: 0, resize: 0, thumbnail: 0, waveform: 0 },
+    };
+  });
   await page.evaluate(() => window.__montagePlaybackMetrics.start());
   await page.evaluate(() => window.__montagePlaybackMetrics.observe());
   const beforeCdp = await cdpMetrics(client);
@@ -316,12 +339,54 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     renderCount: window.__montagePerfAppRootRenderCount ?? null,
     state: window.__montagePlayback.state(),
     metrics: window.__montagePlaybackMetrics,
+    timelinePaint: window.__montageTimelinePaintMetrics ?? null,
     fixture: window.__montagePlayback.fixture,
   }));
   const raf = after.metrics.rafIntervals;
   const longTasks = after.metrics.longTasks;
   const clockAdvanceS = after.state.timelineTime - before.state.timelineTime;
   const cutCrossings = Math.floor(after.state.timelineTime) - Math.floor(before.state.timelineTime);
+  const timelinePaintDurations = after.timelinePaint?.durationsMs;
+  const timelinePaintReasonCounts = after.timelinePaint?.reasonCounts;
+  const timelinePaintValid =
+    Number.isInteger(after.timelinePaint?.count) &&
+    after.timelinePaint.count > 0 &&
+    Number.isFinite(after.timelinePaint.totalMs) &&
+    after.timelinePaint.totalMs >= 0 &&
+    Number.isFinite(after.timelinePaint.maxMs) &&
+    after.timelinePaint.maxMs >= 0 &&
+    Array.isArray(timelinePaintDurations) &&
+    timelinePaintDurations.length === after.timelinePaint.count &&
+    timelinePaintDurations.every((value) => Number.isFinite(value) && value >= 0) &&
+    timelinePaintReasonCounts !== null &&
+    typeof timelinePaintReasonCounts === "object" &&
+    TIMELINE_PAINT_REASONS.every((reason) =>
+      Number.isInteger(timelinePaintReasonCounts[reason]) && timelinePaintReasonCounts[reason] >= 0
+    ) &&
+    TIMELINE_PAINT_REASONS.reduce((total, reason) => total + timelinePaintReasonCounts[reason], 0) === after.timelinePaint.count;
+  const timelinePaint = timelinePaintValid
+    ? {
+        count: after.timelinePaint.count,
+        totalMs: after.timelinePaint.totalMs,
+        maxMs: after.timelinePaint.maxMs,
+        p95Ms: percentile(timelinePaintDurations, 95),
+        durationsMs: timelinePaintDurations,
+        reasonCounts: Object.fromEntries(
+          TIMELINE_PAINT_REASONS.map((reason) => [reason, timelinePaintReasonCounts[reason]]),
+        ),
+        window: "transport start through settled pause",
+        valid: true,
+      }
+    : {
+        count: null,
+        totalMs: null,
+        maxMs: null,
+        p95Ms: null,
+        durationsMs: [],
+        reasonCounts: null,
+        window: "transport start through settled pause",
+        valid: false,
+      };
   const resource = {
     appRootRenderAttempts: before.renderCount === null || after.renderCount === null ? null : after.renderCount - before.renderCount,
     taskDurationMs: metricDelta(beforeCdp, afterCdp, "TaskDuration", 1000),
@@ -394,6 +459,7 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     activeFrameSourceTimes: activeFrameSourceTimesValid,
     noActiveLoadStall: media.activeWaiting === 0 && media.activeStalled === 0,
     activeFrameCadence: maxActiveFrameGapMs !== null && maxActiveFrameGapMs <= TARGETS.activeFrameGapMs,
+    timelinePaint: timelinePaint.valid,
     finiteMetrics: finiteMetrics && qualityMetricsFinite,
   };
   return {
@@ -401,6 +467,7 @@ async function runPlayback(page, client, seconds, requireFullSweep) {
     elapsedMs: endedAt - startedAt,
     timeline: { start: before.state.timelineTime, end: after.state.timelineTime, duration: after.state.timelineDuration, advance: clockAdvanceS, cutCrossings },
     controlRaf,
+    timelinePaint,
     isPlayingTransitions: media.playingTransitions,
     media: {
       ...media,
@@ -469,6 +536,14 @@ try {
   const validSamples = samples.filter((sample) => sample.valid);
   const summaries = {
     appRootRenderAttempts: summary(validSamples.map((sample) => sample.resource.appRootRenderAttempts)),
+    timelinePaintCount: summary(validSamples.map((sample) => sample.timelinePaint.count)),
+    timelinePaintTotalMs: summary(validSamples.map((sample) => sample.timelinePaint.totalMs)),
+    timelinePaintP95Ms: summary(validSamples.map((sample) => sample.timelinePaint.p95Ms)),
+    timelinePaintMaxMs: summary(validSamples.map((sample) => sample.timelinePaint.maxMs)),
+    timelinePaintEffectCount: summary(validSamples.map((sample) => sample.timelinePaint.reasonCounts.effect)),
+    timelinePaintResizeCount: summary(validSamples.map((sample) => sample.timelinePaint.reasonCounts.resize)),
+    timelinePaintThumbnailCount: summary(validSamples.map((sample) => sample.timelinePaint.reasonCounts.thumbnail)),
+    timelinePaintWaveformCount: summary(validSamples.map((sample) => sample.timelinePaint.reasonCounts.waveform)),
     taskDurationMs: summary(validSamples.map((sample) => sample.resource.taskDurationMs)),
     scriptDurationMs: summary(validSamples.map((sample) => sample.resource.scriptDurationMs)),
     layoutDurationMs: summary(validSamples.map((sample) => sample.resource.layoutDurationMs)),

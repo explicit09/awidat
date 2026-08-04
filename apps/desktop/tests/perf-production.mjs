@@ -3,7 +3,7 @@
 
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
-import { lstat, mkdtemp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -28,7 +28,10 @@ const SOURCE_PROVENANCE_PATHS = [
   "apps/desktop/tests/perf-full.mjs",
   "apps/desktop/tests/perf-playback.mjs",
   "apps/desktop/src/App.tsx",
+  "apps/desktop/src/timeline/TimelineSurface.tsx",
 ];
+const TIMELINE_PAINT_SENTINEL = "__montageTimelinePaintMetrics";
+const NORMAL_HTML_INPUTS = ["gallery.html", "glass.html", "index.html", "shell.html", "studio.html"];
 
 function fail(message) {
   throw new Error(message);
@@ -110,6 +113,14 @@ async function hashEntries(paths) {
   return Promise.all(paths.map(async (path) => ({ path, sha256: await hashFile(path) })));
 }
 
+async function filesContaining(paths, needle) {
+  const matches = [];
+  for (const path of paths) {
+    if ((await readFile(path, "utf8")).includes(needle)) matches.push(path);
+  }
+  return matches;
+}
+
 async function existingParent(path) {
   let candidate = path;
   while (true) {
@@ -169,12 +180,14 @@ const buildCommand = commandText("pnpm", buildArgs);
 const previewCommand = commandText("pnpm", previewArgs);
 const fixturePath = join(DESKTOP_DIR, "tests/fixtures/perf-preview.mp4");
 let preview = null;
+let normalOutputDir = null;
 let stopping = false;
 
 async function stopForSignal(code) {
   if (stopping) return;
   stopping = true;
   await stopChild(preview);
+  if (normalOutputDir) await rm(normalOutputDir, { recursive: true, force: true });
   process.exit(code);
 }
 
@@ -185,6 +198,27 @@ try {
   await requireMissingOutput();
   const outputFilesystem = await requireApfsOutput();
   await requireFreePort();
+
+  normalOutputDir = await mkdtemp(join(os.tmpdir(), "montage-desktop-normal-dce-"));
+  const normalBuildArgs = ["--dir", "apps/desktop", "exec", "vite", "build", "--outDir", normalOutputDir];
+  const normalBuildCommand = commandText("pnpm", normalBuildArgs);
+  const normalBuildResult = await run("pnpm", normalBuildArgs);
+  if (normalBuildResult.code !== 0) fail(`normal Vite build failed (${normalBuildResult.code ?? normalBuildResult.signal})`);
+  const normalFiles = await filesUnder(normalOutputDir);
+  const normalHtmlInputs = normalFiles
+    .filter((path) => path.endsWith(".html"))
+    .map((path) => path.slice(normalOutputDir.length + 1))
+    .sort();
+  if (JSON.stringify(normalHtmlInputs) !== JSON.stringify(NORMAL_HTML_INPUTS)) {
+    fail(`normal build HTML inputs changed: ${normalHtmlInputs.join(", ")}`);
+  }
+  if (normalFiles.some((path) => path.endsWith("tests/ui-harness.html") || /perf-preview-.*\.mp4$/.test(path))) {
+    fail("normal build contains a perf-only harness or media fixture");
+  }
+  const normalJavascript = normalFiles.filter((path) => path.endsWith(".js"));
+  const normalSentinelMatches = await filesContaining(normalJavascript, TIMELINE_PAINT_SENTINEL);
+  if (normalSentinelMatches.length !== 0) fail("timeline paint instrumentation leaked into the normal build");
+
   const buildResult = await run("pnpm", buildArgs);
   if (buildResult.code !== 0) fail(`perf Vite build failed (${buildResult.code ?? buildResult.signal})`);
 
@@ -193,6 +227,9 @@ try {
   const mediaPaths = builtFiles.filter((path) => /^perf-preview-[A-Za-z0-9_-]{8,}\.mp4$/.test(basename(path)));
   if (!builtFiles.includes(harnessPath)) fail(`missing production harness: ${harnessPath}`);
   if (mediaPaths.length !== 1) fail(`expected exactly one hashed perf-preview MP4 asset, found ${mediaPaths.length}`);
+  const perfJavascript = builtFiles.filter((path) => path.endsWith(".js"));
+  const perfSentinelMatches = await filesContaining(perfJavascript, TIMELINE_PAINT_SENTINEL);
+  if (perfSentinelMatches.length === 0) fail("perf build is missing timeline paint instrumentation");
   const fixtureSha256 = await hashFile(fixturePath);
   const emittedMedia = await hashEntries(mediaPaths);
   if (emittedMedia[0].sha256 !== fixtureSha256) fail("emitted perf-preview MP4 SHA-256 does not match source fixture");
@@ -205,7 +242,21 @@ try {
   const buildEvidence = {
     label: LABEL,
     generatedAt: new Date().toISOString(),
-    build: { mode: "perf", command: buildCommand, outputDir: OUTPUT_DIR, outputFilesystem, harness: { path: harnessPath, sha256: await hashFile(harnessPath) } },
+    build: {
+      mode: "perf",
+      command: buildCommand,
+      outputDir: OUTPUT_DIR,
+      outputFilesystem,
+      harness: { path: harnessPath, sha256: await hashFile(harnessPath) },
+      timelinePaintSentinelPresent: true,
+      timelinePaintSentinelFiles: perfSentinelMatches.map((path) => path.slice(OUTPUT_DIR.length + 1)),
+    },
+    normalBuildDce: {
+      command: normalBuildCommand,
+      htmlInputs: normalHtmlInputs,
+      perfArtifactsAbsent: true,
+      timelinePaintSentinelAbsent: true,
+    },
     fixture: { path: fixturePath, sha256: fixtureSha256, emittedAssetVerified: true },
     sourceProvenance: await Promise.all(SOURCE_PROVENANCE_PATHS.map(async (path) => ({ path, sha256: await hashFile(join(WORKSPACE_ROOT, path)) }))),
     emittedAssets: {
@@ -282,4 +333,5 @@ try {
   if (runs.some((runResult) => runResult.exitCode !== 0)) process.exitCode = 1;
 } finally {
   await stopChild(preview);
+  if (normalOutputDir) await rm(normalOutputDir, { recursive: true, force: true });
 }
