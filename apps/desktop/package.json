@@ -8,6 +8,7 @@
     "mcp-server": "make -C ../.. desktop-mcp-server",
     "dev": "pnpm mcp-server && vite",
     "build": "pnpm mcp-server && tsc && vite build",
+    "build:frontend": "tsc && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:tokens": "node tests/tokens-presence.mjs",
     "test:landing": "node tests/landing-project-manager.mjs",
