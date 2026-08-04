@@ -23,13 +23,15 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import threading
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pyloudnorm as pyln
+from scipy import signal
 
 from montage_mcp import IndexAssetRequest, IndexerServer
 
@@ -84,22 +86,15 @@ def _ffmpeg_path() -> str:
 # the cleanest mapping to EBU R128 short-term blocks (3s window =
 # 144,000 samples) and matches typical podcast/interview source rates.
 _TARGET_SR = 48_000
+_DECODE_CHUNK_BYTES = 64 * 1024
+_PCM_SAMPLE_BYTES = np.dtype(np.float32).itemsize
+_EBU_BLOCK_S = 0.400
+_EBU_STEP = 1.0 - 0.75
 
 
-def _load_mono(path: str) -> _LoadedAudio:
-    """Decode any audio/video container to mono 32-bit float PCM via ffmpeg.
-
-    Why not soundfile/libsndfile: it only handles WAV/FLAC/Ogg. Real
-    podcast/interview footage arrives as MOV/MP4/HEVC/AAC; libsndfile
-    rejects them with "Format not recognised". ffmpeg is already a
-    hard dependency for montage (rendering), so we shell out to it
-    here for decode too.
-
-    Output: 32-bit float PCM, mono, resampled to _TARGET_SR.
-    """
-    ffmpeg = _ffmpeg_path()
-    cmd = [
-        ffmpeg,
+def _ffmpeg_command(path: str) -> list[str]:
+    return [
+        _ffmpeg_path(),
         "-nostdin",
         "-loglevel", "error",
         "-i", path,
@@ -109,40 +104,282 @@ def _load_mono(path: str) -> _LoadedAudio:
         "-f", "f32le",          # raw 32-bit float little-endian
         "-",                    # to stdout
     ]
-    tmp = tempfile.NamedTemporaryFile(prefix="montage-audio-", suffix=".f32", delete=False)
-    tmp_path = Path(tmp.name)
-    tmp.close()
-    try:
-        with tmp_path.open("wb") as stdout:
-            proc = subprocess.run(
-                cmd,
-                check=False,
-                stdout=stdout,
-                stderr=subprocess.PIPE,
-            )
-        if proc.returncode != 0:
-            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(
-                f"ffmpeg decode failed (exit {proc.returncode}) for {path}: {stderr}"
-            )
-        sample_count = tmp_path.stat().st_size // np.dtype(np.float32).itemsize
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
 
-    if sample_count == 0:
-        tmp_path.unlink(missing_ok=True)
-        # No audio stream — emit a quiet silent buffer so downstream
-        # math doesn't divide by zero.
-        print(
-            f"audio-energy: no audio stream in {path}; emitting empty result",
-            file=sys.stderr,
+
+class _StreamingAudio:
+    """Bounded mono PCM analysis with pyloudnorm-compatible calculations."""
+
+    def __init__(self, sample_rate: int) -> None:
+        self.sample_rate = sample_rate
+        self._sample_count = 0
+        self._remainder = bytearray()
+
+        self._peak = 0.0
+        self._has_nan = False
+
+        self._windows: list[dict[str, float]] = []
+        self._rms_samples = np.empty(0, dtype=np.float32)
+        self._rms_window_count = 0
+
+        self._short_samples = np.empty(0, dtype=np.float32)
+        self._short_buffer_start = 0
+        self._next_short_start = 0
+        self._short_term: list[dict[str, float]] = []
+
+        self._ebu_samples = np.empty(0, dtype=np.float32)
+        self._ebu_buffer_start = 0
+        self._block_energies: list[float] = []
+
+        meter = pyln.Meter(sample_rate, block_size=_EBU_BLOCK_S)
+        self._filter_stages = tuple(meter._filters.values())
+        self._filter_states = [
+            np.zeros(max(len(stage.a), len(stage.b)) - 1)
+            for stage in self._filter_stages
+        ]
+
+    def consume_bytes(self, fragment: bytes) -> None:
+        self._remainder.extend(fragment)
+        byte_count = len(self._remainder) - len(self._remainder) % _PCM_SAMPLE_BYTES
+        if byte_count == 0:
+            return
+        samples = np.frombuffer(
+            self._remainder,
+            dtype=np.dtype("<f4"),
+            count=byte_count // _PCM_SAMPLE_BYTES,
+        ).copy()
+        del self._remainder[:byte_count]
+        self.consume_samples(samples)
+
+    def consume_samples(self, samples: np.ndarray) -> None:
+        if len(samples) == 0:
+            return
+
+        samples = np.asarray(samples, dtype=np.float32)
+        self._sample_count += len(samples)
+        if np.isnan(samples).any():
+            self._has_nan = True
+        else:
+            self._peak = max(self._peak, float(np.max(np.abs(samples))))
+
+        self._append_rms(samples)
+        self._append_short_term(samples)
+        self._append_ebu_blocks(self._filter(samples))
+
+    def _append_rms(self, samples: np.ndarray) -> None:
+        self._rms_samples = np.concatenate((self._rms_samples, samples))
+        window_samples = max(1, int(self.sample_rate * WINDOW_MS / 1000))
+        while len(self._rms_samples) >= window_samples:
+            window = self._rms_samples[:window_samples].reshape(1, window_samples)
+            rms = np.sqrt(np.mean(np.square(window, dtype=np.float32), axis=1))
+            rms_db = 20.0 * np.log10(np.maximum(rms, 1e-7))
+            self._windows.append(
+                {
+                    "start_s": float(self._rms_window_count * WINDOW_MS / 1000.0),
+                    "rms_db": float(rms_db[0]),
+                }
+            )
+            self._rms_window_count += 1
+            self._rms_samples = self._rms_samples[window_samples:].copy()
+
+    def _append_short_term(self, samples: np.ndarray) -> None:
+        self._short_samples = np.concatenate((self._short_samples, samples))
+        window_samples = 3 * self.sample_rate
+        step_samples = self.sample_rate
+        while self._next_short_start + window_samples <= self._sample_count:
+            offset = self._next_short_start - self._short_buffer_start
+            block = self._short_samples[offset : offset + window_samples]
+            try:
+                lufs = float(
+                    pyln.Meter(self.sample_rate, block_size=_EBU_BLOCK_S).integrated_loudness(
+                        block
+                    )
+                )
+            except ValueError:
+                pass
+            else:
+                if math.isfinite(lufs):
+                    self._short_term.append(
+                        {"start_s": float(self._next_short_start / self.sample_rate), "lufs": lufs}
+                    )
+            self._next_short_start += step_samples
+
+        drop = self._next_short_start - self._short_buffer_start
+        if drop:
+            self._short_samples = self._short_samples[drop:].copy()
+            self._short_buffer_start += drop
+
+    def _filter(self, samples: np.ndarray) -> np.ndarray:
+        filtered = samples
+        for index, stage in enumerate(self._filter_stages):
+            filtered, self._filter_states[index] = signal.lfilter(
+                stage.b,
+                stage.a,
+                filtered,
+                zi=self._filter_states[index],
+            )
+            filtered = filtered.astype(np.float32)
+        return filtered
+
+    def _ebu_bounds(self, block_index: int) -> tuple[int, int]:
+        lower = int(_EBU_BLOCK_S * (block_index * _EBU_STEP) * self.sample_rate)
+        upper = int(_EBU_BLOCK_S * (block_index * _EBU_STEP + 1) * self.sample_rate)
+        return lower, upper
+
+    def _block_energy(self, samples: np.ndarray) -> float:
+        return float(
+            (1.0 / (_EBU_BLOCK_S * self.sample_rate)) * np.sum(np.square(samples))
         )
-        samples = np.zeros(_TARGET_SR, dtype=np.float32)
-        return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR)
 
-    samples = np.memmap(tmp_path, dtype=np.float32, mode="r", shape=(sample_count,))
-    return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR, temp_path=tmp_path)
+    def _append_ebu_blocks(self, samples: np.ndarray) -> None:
+        self._ebu_samples = np.concatenate((self._ebu_samples, samples))
+        while True:
+            lower, upper = self._ebu_bounds(len(self._block_energies))
+            if upper > self._sample_count:
+                break
+            offset = lower - self._ebu_buffer_start
+            self._block_energies.append(
+                self._block_energy(self._ebu_samples[offset : offset + (upper - lower)])
+            )
+
+        next_lower, _ = self._ebu_bounds(len(self._block_energies))
+        drop = next_lower - self._ebu_buffer_start
+        if drop:
+            self._ebu_samples = self._ebu_samples[drop:].copy()
+            self._ebu_buffer_start += drop
+
+    def _finish_ebu_blocks(self) -> None:
+        duration = self._sample_count / self.sample_rate
+        block_count = int(
+            np.round((duration - _EBU_BLOCK_S) / (_EBU_BLOCK_S * _EBU_STEP)) + 1
+        )
+        while len(self._block_energies) < block_count:
+            lower, upper = self._ebu_bounds(len(self._block_energies))
+            offset = lower - self._ebu_buffer_start
+            self._block_energies.append(
+                self._block_energy(self._ebu_samples[offset : offset + (upper - lower)])
+            )
+
+    def _integrated_loudness(self) -> float:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            block_loudness = [
+                -0.691 + 10.0 * np.log10(np.sum([energy]))
+                for energy in self._block_energies
+            ]
+        absolute_gated = [
+            index for index, lufs in enumerate(block_loudness) if lufs >= -70.0
+        ]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            mean_energy = np.mean([self._block_energies[index] for index in absolute_gated])
+            relative_gate = -0.691 + 10.0 * np.log10(np.sum([mean_energy])) - 10.0
+        relative_gated = [
+            index
+            for index, lufs in enumerate(block_loudness)
+            if lufs > relative_gate and lufs > -70.0
+        ]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            mean_energy = np.nan_to_num(
+                np.array([np.mean([self._block_energies[index] for index in relative_gated])])
+            )[0]
+        with np.errstate(divide="ignore"):
+            return float(-0.691 + 10.0 * np.log10(np.sum([mean_energy])))
+
+    def result(self, path: str) -> dict[str, Any]:
+        if self._sample_count == 0:
+            print(
+                f"audio-energy: no audio stream in {path}; emitting empty result",
+                file=sys.stderr,
+            )
+            self.consume_samples(np.zeros(self.sample_rate, dtype=np.float32))
+
+        if self._sample_count < _EBU_BLOCK_S * self.sample_rate:
+            raise ValueError("Audio must have length greater than the block size.")
+
+        self._finish_ebu_blocks()
+        integrated = self._integrated_loudness()
+        loudness = (
+            {"integrated_lufs": None, "short_term": []}
+            if not math.isfinite(integrated)
+            else {"integrated_lufs": integrated, "short_term": self._short_term}
+        )
+        peak = None
+        if not self._has_nan and self._peak > 0.0 and math.isfinite(self._peak):
+            peak = float(20.0 * math.log10(self._peak))
+        silences = _silences(loudness)
+        return {
+            "sample_rate": self.sample_rate,
+            "duration_s": float(self._sample_count / self.sample_rate),
+            "window_ms": WINDOW_MS,
+            "windows": self._windows,
+            "loudness_integrated_lufs": loudness.get("integrated_lufs"),
+            "true_peak_dbfs": peak,
+            "loudness_short_term": loudness.get("short_term", []),
+            "silences": silences,
+            "silence_relative_lu": SILENCE_RELATIVE_LU,
+        }
+
+
+def _terminate_ffmpeg(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+
+def _stream_mono(path: str) -> dict[str, Any]:
+    """Decode and analyze mono f32le PCM without staging decoded audio."""
+    process = subprocess.Popen(
+        _ffmpeg_command(path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.stdout is None or process.stderr is None:
+        _terminate_ffmpeg(process)
+        raise RuntimeError("ffmpeg decode did not provide stdout and stderr pipes")
+
+    stderr_parts: list[bytes] = []
+    stderr_errors: list[BaseException] = []
+
+    def drain_stderr() -> None:
+        try:
+            while fragment := process.stderr.read(_DECODE_CHUNK_BYTES):
+                stderr_parts.append(fragment)
+        except BaseException as error:
+            stderr_errors.append(error)
+
+    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+    stderr_thread.start()
+    analysis = _StreamingAudio(_TARGET_SR)
+    try:
+        while fragment := process.stdout.read(_DECODE_CHUNK_BYTES):
+            analysis.consume_bytes(fragment)
+        return_code = process.wait()
+    except BaseException:
+        _terminate_ffmpeg(process)
+        raise
+    finally:
+        _terminate_ffmpeg(process)
+        stderr_thread.join()
+        process.stdout.close()
+        process.stderr.close()
+
+    if return_code != 0:
+        stderr = b"".join(stderr_parts).decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg decode failed (exit {return_code}) for {path}: {stderr}")
+    if stderr_errors:
+        raise stderr_errors[0]
+    return analysis.result(path)
 
 
 def _windowed_rms_db(audio: _LoadedAudio) -> list[dict[str, float]]:
@@ -235,25 +472,7 @@ def _silences(loudness: dict[str, Any]) -> list[dict[str, float]]:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
-    audio = _load_mono(req.asset_path)
-    try:
-        windows = _windowed_rms_db(audio)
-        loudness = _loudness(audio)
-        silences = _silences(loudness)
-        return {
-            "sample_rate": audio.sample_rate,
-            "duration_s": float(len(audio.samples) / audio.sample_rate),
-            "window_ms": WINDOW_MS,
-            "windows": windows,
-            "loudness_integrated_lufs": loudness.get("integrated_lufs"),
-            "true_peak_dbfs": _true_peak_dbfs(audio),
-            "loudness_short_term": loudness.get("short_term", []),
-            "silences": silences,
-            "silence_relative_lu": SILENCE_RELATIVE_LU,
-        }
-    finally:
-        if audio.temp_path is not None:
-            audio.temp_path.unlink(missing_ok=True)
+    return _stream_mono(req.asset_path)
 
 
 def main() -> None:
