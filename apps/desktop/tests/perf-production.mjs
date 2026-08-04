@@ -199,8 +199,10 @@ if (OUTPUT_DIR === WORKSPACE_ROOT || OUTPUT_DIR.startsWith(`${WORKSPACE_ROOT}/`)
 
 const buildArgs = ["--dir", "apps/desktop", "exec", "vite", "build", "--mode", "perf", "--outDir", OUTPUT_DIR];
 const previewArgs = ["--dir", "apps/desktop", "exec", "vite", "preview", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort", "--outDir", OUTPUT_DIR];
+const typecheckArgs = ["--dir", "apps/desktop", "typecheck"];
 const buildCommand = commandText("pnpm", buildArgs);
 const previewCommand = commandText("pnpm", previewArgs);
+const typecheckCommand = commandText("pnpm", typecheckArgs);
 const fixturePath = join(DESKTOP_DIR, "tests/fixtures/perf-preview.mp4");
 let preview = null;
 let sleepPreventer = null;
@@ -224,6 +226,9 @@ try {
   await requireMissingOutput();
   const outputFilesystem = await requireApfsOutput();
   await requireFreePort();
+
+  const typecheckResult = await run("pnpm", typecheckArgs);
+  if (typecheckResult.code !== 0) fail(`desktop typecheck failed (${typecheckResult.code ?? typecheckResult.signal})`);
 
   normalOutputDir = await mkdtemp(join(os.tmpdir(), "montage-desktop-normal-dce-"));
   const normalBuildArgs = ["--dir", "apps/desktop", "exec", "vite", "build", "--outDir", normalOutputDir];
@@ -288,6 +293,7 @@ try {
     build: {
       mode: "perf",
       command: buildCommand,
+      typecheck: { command: typecheckCommand, passed: true },
       outputDir: OUTPUT_DIR,
       outputFilesystem,
       harness: { path: harnessPath, sha256: await hashFile(harnessPath) },

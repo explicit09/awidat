@@ -20,6 +20,14 @@ const SWITCH_SAMPLES = Number(process.env.PERF_SWITCH_SAMPLES ?? 8);
 const SERVER_MODE = process.env.PERF_SERVER_MODE ?? (process.env.PERF_URL ? "external" : "vite-dev");
 const VIEWPORT = { width: 1400, height: 1000, deviceScaleFactor: 1 };
 const WORKSPACE_ROOT = new URL("../../..", import.meta.url);
+const REQUIRED_TIMELINE_IPC = [
+  "current_project_root",
+  "read_timeline",
+  "list_source_media",
+  "list_proxies",
+];
+const MEDIA_URL_COMMAND = "media_url_for_path";
+const PRESENTATION_FRAME_COUNT = 2;
 
 const TARGETS = {
   warmStartupUsableShellMs: 2_500,
@@ -223,33 +231,154 @@ async function firstContentfulPaint(page) {
   return entries[0] ?? null;
 }
 
+async function waitForPresentationFrames(page, count = PRESENTATION_FRAME_COUNT) {
+  const timestamps = await page.evaluate(async (frameCount) => {
+    const frames = [];
+    for (let index = 0; index < frameCount; index += 1) {
+      const timestamp = await new Promise((resolve) => requestAnimationFrame(resolve));
+      if (!Number.isFinite(timestamp)) throw new Error("presentation frame did not provide a finite timestamp");
+      frames.push(timestamp);
+    }
+    return frames;
+  }, count);
+  if (timestamps.length !== count || timestamps.some((timestamp) => !Number.isFinite(timestamp))) {
+    throw new Error(`expected ${count} finite presentation frames`);
+  }
+  return timestamps;
+}
+
 async function measureLoadedProject(page) {
   const navStart = Date.now();
   await page.goto(projectHarnessUrl(), { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ state: "visible" });
   const shellInteractiveMs = Date.now() - navStart;
 
-  await page.waitForFunction(() => {
+  await page.waitForFunction((requiredCommands) => {
     const calls = window.__montageIpcCalls ?? [];
-    return ["current_project_root", "read_timeline", "list_source_media", "list_proxies"].every(
-      (command) => calls.some((call) => call.command === command),
+    return requiredCommands.every((command) =>
+      calls.some(
+        (call) =>
+          call.command === command &&
+          Number.isFinite(call.atMs) &&
+          Number.isFinite(call.resolvedAtMs) &&
+          call.resolvedAtMs >= call.atMs,
+      ),
     );
+  }, REQUIRED_TIMELINE_IPC);
+  await page.waitForFunction(() => {
+    if (document.querySelector(".timeline-empty")) return false;
+    const canvas = document.querySelector("canvas.timeline-canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return false;
+    const { width: cssWidth, height: cssHeight } = canvas.getBoundingClientRect();
+    if (![cssWidth, cssHeight, canvas.width, canvas.height].every((dimension) => Number.isFinite(dimension) && dimension > 0)) {
+      return false;
+    }
+    try {
+      return (canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data[3] ?? 0) > 0;
+    } catch {
+      return false;
+    }
   });
+  const timelinePresentationFrames = await waitForPresentationFrames(page);
+  if (await page.evaluate(() => document.querySelector(".timeline-empty") !== null)) {
+    throw new Error("timeline became empty before interactive readiness");
+  }
   const timelineInteractiveMs = Date.now() - navStart;
 
+  await page.waitForFunction((command) => {
+    const calls = window.__montageIpcCalls ?? [];
+    return calls.some(
+      (call) =>
+        call.command === command &&
+        Number.isFinite(call.atMs) &&
+        Number.isFinite(call.resolvedAtMs) &&
+        call.resolvedAtMs >= call.atMs,
+    );
+  }, MEDIA_URL_COMMAND);
   await page.waitForFunction(() =>
     Array.from(document.querySelectorAll("video")).some(
       (video) => video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA,
     ),
   );
+  const previewPresentationFrames = await waitForPresentationFrames(page);
   const firstPreviewFrameMs = Date.now() - navStart;
 
-  const perf = await page.evaluate(() => window.__montagePerf);
-  const ipcCalls = await page.evaluate(() => window.__montageIpcCalls ?? []);
-  const mediaUrlCall = ipcCalls.find((call) => call.command === "media_url_for_path");
+  const { perf, ipcCalls, readiness } = await page.evaluate(({ requiredCommands, mediaUrlCommand }) => {
+    const calls = window.__montageIpcCalls ?? [];
+    const canvas = document.querySelector("canvas.timeline-canvas");
+    const rect = canvas?.getBoundingClientRect();
+    const emptyStatePresent = document.querySelector(".timeline-empty") !== null;
+    const timelineCanvas = {
+      selector: "canvas.timeline-canvas",
+      present: canvas instanceof HTMLCanvasElement,
+      painted: false,
+      cssWidth: rect?.width ?? 0,
+      cssHeight: rect?.height ?? 0,
+      backingWidth: canvas?.width ?? 0,
+      backingHeight: canvas?.height ?? 0,
+      emptyStatePresent,
+    };
+    if (canvas instanceof HTMLCanvasElement) {
+      try {
+        timelineCanvas.painted = (canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data[3] ?? 0) > 0;
+      } catch {}
+    }
+    const currentDataVideo = Array.from(document.querySelectorAll("video")).find(
+      (video) => video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA,
+    );
+    return {
+      perf: window.__montagePerf,
+      ipcCalls: calls,
+      readiness: {
+        timeline: {
+          requiredIpc: requiredCommands.map((command) => {
+            const call = calls.find(
+              (candidate) =>
+                candidate.command === command &&
+                Number.isFinite(candidate.atMs) &&
+                Number.isFinite(candidate.resolvedAtMs) &&
+                candidate.resolvedAtMs >= candidate.atMs,
+            );
+            return {
+              command,
+              atMs: call?.atMs ?? null,
+              resolvedAtMs: call?.resolvedAtMs ?? null,
+            };
+          }),
+          canvas: timelineCanvas,
+        },
+        firstPreviewFrame: {
+          mediaUrlIpc: (() => {
+            const call = calls.find(
+              (candidate) =>
+                candidate.command === mediaUrlCommand &&
+                Number.isFinite(candidate.atMs) &&
+                Number.isFinite(candidate.resolvedAtMs) &&
+                candidate.resolvedAtMs >= candidate.atMs,
+            );
+            return {
+              command: mediaUrlCommand,
+              atMs: call?.atMs ?? null,
+              resolvedAtMs: call?.resolvedAtMs ?? null,
+            };
+          })(),
+          currentData: currentDataVideo !== undefined,
+          readyState: currentDataVideo?.readyState ?? null,
+        },
+      },
+    };
+  }, { requiredCommands: REQUIRED_TIMELINE_IPC, mediaUrlCommand: MEDIA_URL_COMMAND });
+  readiness.timeline.presentationRafTimestamps = timelinePresentationFrames;
+  readiness.firstPreviewFrame.presentationRafTimestamps = previewPresentationFrames;
+  if (readiness.timeline.canvas.emptyStatePresent) {
+    throw new Error("timeline became empty before readiness evidence was recorded");
+  }
+  const mediaUrlCall = ipcCalls.find(
+    (call) => call.command === MEDIA_URL_COMMAND && Number.isFinite(call.resolvedAtMs),
+  );
   const previewFrameMark = perf?.marks?.firstPreviewFrame ?? null;
   const previewEngineInitMs =
-    mediaUrlCall && previewFrameMark !== null ? previewFrameMark - mediaUrlCall.atMs : null;
+    mediaUrlCall && previewFrameMark !== null ? previewFrameMark - mediaUrlCall.resolvedAtMs : null;
 
   return {
     shellInteractiveMs,
@@ -258,6 +387,7 @@ async function measureLoadedProject(page) {
     previewEngineInitMs,
     perf,
     ipcCalls,
+    readiness,
   };
 }
 
@@ -271,7 +401,7 @@ async function measureSwitches(page) {
   const samples = [];
   for (let iteration = 0; iteration < SWITCH_SAMPLES; iteration += 1) {
     for (const { name, shortcut, heading } of switches) {
-      const durationMs = await page.evaluate(async ({ shortcutKey, destinationHeading }) => {
+      const result = await page.evaluate(async ({ shortcutKey, destinationHeading, presentationFrameCount }) => {
         const isVisible = (element) =>
           !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
         const destinationReady = () => {
@@ -322,12 +452,23 @@ async function measureSwitches(page) {
             resolve();
           }
         });
-        return performance.now() - startedAt;
-      }, { shortcutKey: shortcut, destinationHeading: heading });
+        const presentationRafTimestamps = [];
+        for (let frame = 0; frame < presentationFrameCount; frame += 1) {
+          const timestamp = await new Promise((resolve) => requestAnimationFrame(resolve));
+          if (!Number.isFinite(timestamp)) throw new Error("workspace presentation frame did not provide a finite timestamp");
+          presentationRafTimestamps.push(timestamp);
+        }
+        return { durationMs: performance.now() - startedAt, presentationRafTimestamps };
+      }, {
+        shortcutKey: shortcut,
+        destinationHeading: heading,
+        presentationFrameCount: PRESENTATION_FRAME_COUNT,
+      });
       samples.push({
         name,
         iteration,
-        durationMs,
+        durationMs: result.durationMs,
+        presentationRafTimestamps: result.presentationRafTimestamps,
       });
     }
   }
@@ -416,6 +557,13 @@ ${report.switches.samples
 
 Observed ${report.longTasks.length} long task(s) over 50 ms. Max: ${round(report.metrics.maxLongTaskMs) ?? 0} ms.
 
+## Readiness Evidence
+
+- Required timeline IPC responses: ${report.readiness.timeline.requiredIpc.map((call) => `${call.command} (${round(call.resolvedAtMs)} ms)`).join(", ")}
+- Timeline canvas: ${round(report.readiness.timeline.canvas.cssWidth)} × ${round(report.readiness.timeline.canvas.cssHeight)} CSS px; ${report.readiness.timeline.canvas.backingWidth} × ${report.readiness.timeline.canvas.backingHeight} backing px; painted ${report.readiness.timeline.canvas.painted}; empty state present ${report.readiness.timeline.canvas.emptyStatePresent}.
+- Timeline presentation frames: ${report.readiness.timeline.presentationRafTimestamps.length}.
+- Preview media URL response: ${round(report.readiness.firstPreviewFrame.mediaUrlIpc.resolvedAtMs)} ms. Current data: ${report.readiness.firstPreviewFrame.currentData} (readyState ${report.readiness.firstPreviewFrame.readyState}); presentation frames: ${report.readiness.firstPreviewFrame.presentationRafTimestamps.length}.
+
 ## Commands
 
 ${report.commands.map((command) => `- \`${command}\``).join("\n")}
@@ -436,7 +584,8 @@ function htmlReport(report) {
   const rows = reportRows(report)
     .map(([name, result, target]) => `<tr><td>${escapeHtml(name)}</td><td>${result === null ? "not measured" : `${round(result)} ms`}</td><td>${target} ms</td><td class="${status(result, target)}">${status(result, target)}</td></tr>`)
     .join("");
-  return `<!doctype html><meta charset="utf-8"><title>Desktop UX Performance</title><style>body{font:14px system-ui;margin:24px;color:#17212b}table{border-collapse:collapse;width:min(900px,100%)}td,th{border-bottom:1px solid #d8dee4;padding:8px;text-align:left}.pass{color:#087443}.fail{color:#b42318}.not_measured{color:#667085}small{color:#667085}</style><h1>Desktop UX Performance</h1><p>${escapeHtml(report.label)} · ${escapeHtml(report.provenance.server.mode)} (${report.provenance.server.managedByBenchmark ? "managed" : "external"})</p><table><thead><tr><th>Metric</th><th>Result</th><th>Target</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table><p><small>${escapeHtml(scopeDescription())} Cold native process start remains unsupported.</small></p>`;
+  const readiness = report.readiness;
+  return `<!doctype html><meta charset="utf-8"><title>Desktop UX Performance</title><style>body{font:14px system-ui;margin:24px;color:#17212b}table{border-collapse:collapse;width:min(900px,100%)}td,th{border-bottom:1px solid #d8dee4;padding:8px;text-align:left}.pass{color:#087443}.fail{color:#b42318}.not_measured{color:#667085}small{color:#667085}</style><h1>Desktop UX Performance</h1><p>${escapeHtml(report.label)} · ${escapeHtml(report.provenance.server.mode)} (${report.provenance.server.managedByBenchmark ? "managed" : "external"})</p><table><thead><tr><th>Metric</th><th>Result</th><th>Target</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table><h2>Readiness evidence</h2><ul><li>Required timeline IPC responses: ${escapeHtml(readiness.timeline.requiredIpc.map((call) => call.command).join(", "))}</li><li>Timeline canvas: ${round(readiness.timeline.canvas.cssWidth)} × ${round(readiness.timeline.canvas.cssHeight)} CSS px; ${readiness.timeline.canvas.backingWidth} × ${readiness.timeline.canvas.backingHeight} backing px; painted ${readiness.timeline.canvas.painted}; empty state present ${readiness.timeline.canvas.emptyStatePresent}.</li><li>Timeline presentation frames: ${readiness.timeline.presentationRafTimestamps.length}; preview media URL response: ${round(readiness.firstPreviewFrame.mediaUrlIpc.resolvedAtMs)} ms; preview current data: ${readiness.firstPreviewFrame.currentData}; preview presentation frames: ${readiness.firstPreviewFrame.presentationRafTimestamps.length}.</li></ul><p><small>${escapeHtml(scopeDescription())} Cold native process start remains unsupported.</small></p>`;
 }
 
 process.on("SIGINT", async () => {
@@ -498,6 +647,7 @@ try {
     },
     switches,
     longTasks,
+    readiness: project.readiness,
     marks: {
       firstVideoAttachedMs: round(project.perf?.marks?.firstVideoAttached ?? null),
       firstPreviewMetadataMs: round(project.perf?.marks?.firstPreviewMetadata ?? null),
@@ -506,6 +656,7 @@ try {
     ipcSummary: project.ipcCalls.map((call) => ({
       command: call.command,
       atMs: round(call.atMs),
+      resolvedAtMs: round(call.resolvedAtMs),
     })),
     provenance: provenance(browser.version(), userAgent),
     commands: [

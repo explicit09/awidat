@@ -443,13 +443,20 @@
       let useTimelineSelectionStore;
       let useProposalStore;
       mockIPC((cmd, args) => {
-        window.__montageIpcCalls.push({
+        const call = {
           command: cmd,
           atMs: performance.now() - ipcStart,
-        });
+        };
+        window.__montageIpcCalls.push(call);
         const reply = (value) => {
-          if (!slowNonCritical || !nonCriticalIpc.has(cmd)) return value;
-          return new Promise((resolve) => window.setTimeout(() => resolve(value), 2000));
+          const markResolved = (result) => {
+            const resolvedAtMs = performance.now() - ipcStart;
+            if (Number.isFinite(resolvedAtMs)) call.resolvedAtMs = resolvedAtMs;
+            return result;
+          };
+          const resolveReply = () => Promise.resolve(value).then(markResolved);
+          if (!slowNonCritical || !nonCriticalIpc.has(cmd)) return resolveReply();
+          return new Promise((resolve) => window.setTimeout(resolve, 2000)).then(resolveReply);
         };
         switch (cmd) {
           case "current_project_root":
