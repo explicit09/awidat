@@ -106,6 +106,26 @@ class BenchAudioEnergyTests(unittest.TestCase):
         )
         self.assertEqual(runtime["executable"]["path"], str(Path(sys.executable).resolve()))
 
+    def test_sampler_timing_allows_a_recorded_swap_stall_with_dense_coverage(self) -> None:
+        timing = bench.validate_sampler_timing(
+            "baseline",
+            wall_seconds=3.64,
+            sampler_count=101,
+            sample_gaps_seconds=[0.025] * 100 + [1.14],
+        )
+
+        self.assertAlmostEqual(timing["observed_rate_hz"], 101 / 3.64)
+        self.assertEqual(timing["gap_ms"]["max"], 1140.0)
+
+    def test_sampler_timing_rejects_sparse_coverage(self) -> None:
+        with self.assertRaisesRegex(bench.BenchError, "sample rate"):
+            bench.validate_sampler_timing(
+                "baseline",
+                wall_seconds=10.0,
+                sampler_count=10,
+                sample_gaps_seconds=[1.0] * 9,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
