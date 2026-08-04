@@ -188,18 +188,18 @@
         <table>
           <thead><tr><th>Gate</th><th>Status</th><th>Current evidence</th></tr></thead>
           <tbody>
-            <tr><td>Independent code review</td><td class="pass">Pass</td><td>The full branch reviewed clean after reproduced red/green fixes; the final test-only clippy delta received a separate clean review.</td></tr>
+            <tr><td>Independent code review</td><td class="pass">Pass</td><td>The full branch reviewed clean after reproduced red/green fixes; subsequent test-only clippy and macOS lifecycle-helper deltas each received focused clean review.</td></tr>
             <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite, 22 UI smoke checks, seven SSIM 1.000000 stage cases, and production build including the release MCP sidecar.</td></tr>
             <tr><td>Python</td><td class="pass">Pass</td><td>15 analyzer plus 41 benchmark-controller tests under Python 3.11; 41 controller tests under Python 3.14; safe 14-package smoke; real dispatcher audio smoke.</td></tr>
             <tr><td>Affected Rust crates</td><td class="pass">Pass</td><td>Formatting; all-target checks and warning-denied clippy across the non-vendored workspace; focused waveform tests. The literal full workspace remains baseline-blocked by absent vendored Codex PEM fixtures.</td></tr>
-            <tr><td>Exact app persistence dogfood</td><td class="warn">Awaiting unlock</td><td>Final-head bundle <code>b363c9b0</code> built, resources verified, ad-hoc signed, and strictly validated. Native quit/edit/save/reopen proof on a disposable project still requires an unlocked Mac.</td></tr>
-            <tr><td>Remote CI</td><td class="warn">Pending final head</td><td>Draft PR #106 exists; the corrected branch must be pushed and all final-head jobs rechecked. No CI speedup is claimed.</td></tr>
+            <tr><td>Exact app persistence dogfood</td><td class="pass">Pass</td><td>Signed production-code bundle <code>b363c9b0</code> opened a fresh disposable clone at 2 clips / SHA <code>3b749972…</code>. A visible split was accepted and saved at 3 clips / <code>0b90166f…</code>; native Quit reaped the app, Codex, and MCP at every 0–20 s poll. Reopen showed the same 3 clips in UI and the same on-disk hash.</td></tr>
+            <tr><td>Remote CI</td><td class="pass">Pass</td><td>Draft PR #106 at <code>ba106c3d</code>: macOS Rust 13m45s, Ubuntu Rust 13m12s, restored full frontend 7m16s, format 23s, and security 49s all pass. The macOS lifecycle-helper failure was reproduced, fixed, and cleared; no CI speedup is claimed.</td></tr>
           </tbody>
         </table>
       </article>
       <article class="card" style="margin-top:12px">
         <h3>Stop-condition verdict</h3>
-        <p>No remaining high- or medium-priority product-runtime candidate has both measured headroom and a bounded, proportionate implementation path. The large CI candidate was rejected because it removed required MCP validation. Delivery remains open for exact native quit/reopen persistence proof, final-head CI, and remote reconciliation.</p>
+        <p>No remaining high- or medium-priority product-runtime candidate has both measured headroom and a bounded, proportionate implementation path. The large CI candidate was rejected because it removed required MCP validation. Product runtime and persistence are verified; delivery remains open for final CI, report reconciliation, and native closure of the reopened no-changes instance after macOS re-locked.</p>
       </article>
     </section>
 
