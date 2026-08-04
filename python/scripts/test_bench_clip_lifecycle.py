@@ -102,6 +102,10 @@ class BenchClipLifecycleTests(unittest.TestCase):
         *,
         git_states: list[dict[str, object]],
         source_states: list[dict[str, object]],
+        runtime_input_states: list[dict[str, object]] | None = None,
+        model_lookup: mock.Mock | None = None,
+        controller_lookup: mock.Mock | None = None,
+        sample_runner: mock.Mock | None = None,
         write: mock.Mock,
     ) -> Path:
         assets = [root / f"asset-{index}.mp4" for index in range(bench.ASSET_COUNT)]
@@ -129,20 +133,52 @@ class BenchClipLifecycleTests(unittest.TestCase):
             evidence_dir=root / "evidence",
             label="test",
         )
+        model_lookup = model_lookup or mock.Mock(
+            return_value=(weights, hf_home, {})
+        )
+        controller_lookup = controller_lookup or mock.Mock(return_value={})
+        sample_runner = sample_runner or mock.Mock(return_value=(sample, b"stable"))
+        def complete_runtime_input(
+            overrides: dict[str, object],
+        ) -> dict[str, object]:
+            state: dict[str, object] = {
+                "dispatcher_binary": {"sha256": "b" * 64},
+                "controller_python": {},
+                "assets": {
+                    asset_id: {
+                        "asset_fingerprint": "a" * 64,
+                        "content": {
+                            "path": str(asset),
+                            "sha256": "c" * 64,
+                            "size_bytes": asset.stat().st_size,
+                            "mtime_ns": asset.stat().st_mtime_ns,
+                        },
+                    }
+                    for asset, asset_id in zip(
+                        assets, bench.requested_asset_ids(assets), strict=True
+                    )
+                },
+                "model": {},
+                "tools": {},
+            }
+            state.update(overrides)
+            return state
+
+        runtime_input_states = [
+            complete_runtime_input(state)
+            for state in (
+                runtime_input_states
+                or [{"runtime": "same"}, {"runtime": "same"}, {"runtime": "same"}]
+            )
+        ]
         with (
             mock.patch.object(bench, "git_provenance", side_effect=git_states),
-            mock.patch.object(
-                bench, "controller_python_provenance", return_value={}
-            ),
+            mock.patch.object(bench, "controller_python_provenance", new=controller_lookup),
             mock.patch.object(bench, "resolve_executable", return_value=binary),
             mock.patch.object(
                 bench, "resolve_python_workspace", return_value=python_root
             ),
-            mock.patch.object(
-                bench,
-                "model_provenance",
-                return_value=(weights, hf_home, {}),
-            ),
+            mock.patch.object(bench, "model_provenance", new=model_lookup),
             mock.patch.object(bench, "runtime_preflight", return_value={}),
             mock.patch.object(
                 bench,
@@ -170,11 +206,15 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 side_effect=lambda path: {"path": str(path)},
             ),
             mock.patch.object(bench, "unique_filesystems", return_value=[]),
-            mock.patch.object(
-                bench, "run_sample", return_value=(sample, b"stable")
-            ),
+            mock.patch.object(bench, "run_sample", new=sample_runner),
             mock.patch.object(
                 bench, "source_provenance", side_effect=source_states
+            ),
+            mock.patch.object(
+                bench,
+                "clip_execution_inputs_provenance",
+                side_effect=runtime_input_states,
+                create=True,
             ),
             mock.patch.object(bench, "tool_provenance", return_value={}),
             mock.patch.object(bench, "atomic_write_json", write),
@@ -357,6 +397,116 @@ class BenchClipLifecycleTests(unittest.TestCase):
 
         write.assert_not_called()
 
+    def test_benchmark_rejects_runtime_inputs_changed_during_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            write = mock.Mock()
+            git = {"head": "a" * 40, "git_status_clean": True}
+
+            with self.assertRaisesRegex(bench.BenchError, "execution inputs changed"):
+                self.run_mocked_benchmark(
+                    Path(directory),
+                    git_states=[git, git],
+                    source_states=[{"manifest": "same"}, {"manifest": "same"}],
+                    runtime_input_states=[
+                        {"dispatcher_binary": {"sha256": "a" * 64}},
+                        {"dispatcher_binary": {"sha256": "a" * 64}},
+                        {"dispatcher_binary": {"sha256": "b" * 64}},
+                    ],
+                    write=write,
+                )
+
+        write.assert_not_called()
+
+    def test_benchmark_rechecks_model_before_running_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_calls = 0
+
+            def model_lookup(_path: Path) -> tuple[Path, Path, dict[str, object]]:
+                nonlocal model_calls
+                model_calls += 1
+                if model_calls == 2:
+                    raise bench.BenchError("model changed during fixture observation")
+                return root / "weights", root / "huggingface", {}
+
+            with self.assertRaisesRegex(
+                bench.BenchError, "model changed during fixture observation"
+            ):
+                self.run_mocked_benchmark(
+                    root,
+                    git_states=[{"head": "a" * 40, "git_status_clean": True}] * 2,
+                    source_states=[{"manifest": "same"}] * 2,
+                    model_lookup=mock.Mock(side_effect=model_lookup),
+                    sample_runner=mock.Mock(
+                        side_effect=AssertionError("sample ran before model recheck")
+                    ),
+                    write=mock.Mock(),
+                )
+
+    def test_benchmark_rechecks_controller_at_each_integrity_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller_lookup = mock.Mock(return_value={})
+            self.run_mocked_benchmark(
+                Path(directory),
+                git_states=[{"head": "a" * 40, "git_status_clean": True}] * 2,
+                source_states=[{"manifest": "same"}] * 2,
+                controller_lookup=controller_lookup,
+                write=mock.Mock(),
+            )
+
+        self.assertEqual(controller_lookup.call_count, 3)
+
+    def test_clip_execution_inputs_bind_asset_content_beyond_size_and_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "montage-index-perf"
+            binary.write_bytes(b"binary")
+            assets = [root / f"asset-{index}.mp4" for index in range(bench.ASSET_COUNT)]
+            for asset in assets:
+                asset.write_bytes(b"asset-a")
+            asset_ids = bench.requested_asset_ids(assets)
+            tools = [root / name for name in ("uv", "ffmpeg", "ffprobe")]
+            for tool in tools:
+                tool.write_bytes(tool.name.encode("utf-8"))
+            original_stat = assets[0].stat()
+
+            with mock.patch.object(
+                bench,
+                "tool_provenance",
+                side_effect=lambda path, _args: bench.binary_provenance(path),
+            ):
+                before = bench.clip_execution_inputs_provenance(
+                    binary,
+                    assets,
+                    asset_ids,
+                    {"resolved_blob": {"sha256": "c" * 64}},
+                    {"resolved_binary": {"sha256": "d" * 64}},
+                    uv=tools[0],
+                    ffmpeg=tools[1],
+                    ffprobe=tools[2],
+                )
+                assets[0].write_bytes(b"asset-b")
+                os.utime(
+                    assets[0],
+                    ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                )
+                after = bench.clip_execution_inputs_provenance(
+                    binary,
+                    assets,
+                    asset_ids,
+                    {"resolved_blob": {"sha256": "c" * 64}},
+                    {"resolved_binary": {"sha256": "d" * 64}},
+                    uv=tools[0],
+                    ffmpeg=tools[1],
+                    ffprobe=tools[2],
+                )
+
+        self.assertEqual(
+            before["assets"][asset_ids[0]]["asset_fingerprint"],
+            after["assets"][asset_ids[0]]["asset_fingerprint"],
+        )
+        self.assertNotEqual(before, after)
+
     def test_source_provenance_binds_ignored_venv_file_contents(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             python_root = Path(directory)
@@ -499,6 +649,7 @@ class BenchClipLifecycleTests(unittest.TestCase):
 
     def test_model_provenance_derives_hf_home_without_replacing_home(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
             hf_home = Path(directory) / "huggingface"
             blob = hf_home / "hub/models--timm--vit_base_patch32_clip_224.openai/blobs/test-blob"
             blob.parent.mkdir(parents=True)
@@ -511,6 +662,12 @@ class BenchClipLifecycleTests(unittest.TestCase):
             snapshot.parent.mkdir(parents=True)
             snapshot.symlink_to("../../blobs/test-blob")
             digest = hashlib.sha256(b"pinned weights").hexdigest()
+            uv = root / "uv"
+            ffmpeg = root / "ffmpeg"
+            ffprobe = root / "ffprobe"
+            for executable in (uv, ffmpeg, ffprobe):
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
 
             with mock.patch.object(bench, "MODEL_SHA256", digest):
                 weights, derived_hf_home, provenance = bench.model_provenance(snapshot)
@@ -519,9 +676,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
                     sample_root=Path(directory) / "sample",
                     python_root=Path(directory) / "python",
                     hf_home=derived_hf_home,
-                    uv=Path(directory) / "uv",
-                    ffmpeg=Path(directory) / "ffmpeg",
-                    ffprobe=Path(directory) / "ffprobe",
+                    uv=uv,
+                    ffmpeg=ffmpeg,
+                    ffprobe=ffprobe,
                 )
 
         self.assertEqual(weights, snapshot)
@@ -666,6 +823,14 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             binary.chmod(0o755)
+            tool_root = root / "tools"
+            tool_root.mkdir()
+            uv = tool_root / "uv"
+            ffmpeg = tool_root / "ffmpeg"
+            ffprobe = tool_root / "ffprobe"
+            for executable in (uv, ffmpeg, ffprobe):
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
             session_root = root / "session"
             session_root.mkdir()
             assets = [root / f"asset-{index}.mp4" for index in range(bench.ASSET_COUNT)]
@@ -695,9 +860,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
                             },
                             python_root=root / "python",
                             hf_home=root / "huggingface",
-                            uv=Path("/usr/bin/true"),
-                            ffmpeg=Path("/usr/bin/true"),
-                            ffprobe=Path("/usr/bin/true"),
+                            uv=uv,
+                            ffmpeg=ffmpeg,
+                            ffprobe=ffprobe,
                             timeout_seconds=5.0,
                         )
                 pgid = int(pid_path.read_text(encoding="utf-8"))

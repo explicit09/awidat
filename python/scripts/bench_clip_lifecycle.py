@@ -38,8 +38,10 @@ from bench_audio_energy import (
     sha256_file,
     summarize,
     tool_provenance,
+    validate_benchmark_output_locations,
     validate_sampler_timing,
     wait_for_no_orphans,
+    workspace_manifest,
 )
 
 
@@ -164,6 +166,38 @@ def asset_fingerprint(path: Path) -> str:
         f"montage-asset-fingerprint-v1\0{stat.st_size}\0{modified_seconds}\0{modified_nanos}"
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def clip_execution_inputs_provenance(
+    binary: Path,
+    assets: list[Path],
+    asset_ids: list[str],
+    model: dict[str, Any],
+    controller_python: dict[str, Any],
+    *,
+    uv: Path,
+    ffmpeg: Path,
+    ffprobe: Path,
+) -> dict[str, Any]:
+    if len(assets) != ASSET_COUNT or len(asset_ids) != ASSET_COUNT:
+        raise BenchError("CLIP execution inputs require exactly six assets")
+    return {
+        "dispatcher_binary": binary_provenance(binary),
+        "controller_python": controller_python,
+        "assets": {
+            asset_id: {
+                "asset_fingerprint": asset_fingerprint(asset),
+                "content": binary_provenance(asset),
+            }
+            for asset, asset_id in zip(assets, asset_ids, strict=True)
+        },
+        "model": model,
+        "tools": {
+            "uv": tool_provenance(uv, ["--version"]),
+            "ffmpeg": tool_provenance(ffmpeg, ["-version"]),
+            "ffprobe": tool_provenance(ffprobe, ["-version"]),
+        },
+    }
 
 
 def observe_clip_fixture(
@@ -442,60 +476,6 @@ def source_provenance(python_root: Path) -> dict[str, dict[str, Any]]:
         raise BenchError(f"required source provenance is missing: {error}") from error
     provenance["python_workspace"] = workspace_manifest(python_root)
     return provenance
-
-
-def workspace_manifest(root: Path) -> dict[str, Any]:
-    try:
-        root = root.resolve(strict=True)
-    except OSError as error:
-        raise BenchError(f"runtime workspace does not exist: {root}: {error}") from error
-    if not root.is_dir():
-        raise BenchError(f"runtime workspace is not a directory: {root}")
-    entries: list[dict[str, Any]] = []
-    try:
-        paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
-        for path in paths:
-            relative_path = path.relative_to(root).as_posix()
-            symlink_target = os.readlink(path) if path.is_symlink() else None
-            if path.is_symlink() and path.resolve(strict=True).is_dir():
-                if not path.resolve(strict=True).is_relative_to(root):
-                    raise BenchError(
-                        f"runtime workspace has an external directory symlink: {path}"
-                    )
-                entries.append(
-                    {
-                        "relative_path": relative_path,
-                        "kind": "symlink-directory",
-                        "mode": path.lstat().st_mode & 0o7777,
-                        "symlink_target": symlink_target,
-                    }
-                )
-                continue
-            if path.is_dir():
-                continue
-            if not path.is_file():
-                raise BenchError(f"runtime workspace has an unsupported entry: {path}")
-            stat = path.stat()
-            entries.append(
-                {
-                    "relative_path": relative_path,
-                    "kind": "symlink-file" if path.is_symlink() else "file",
-                    "mode": path.lstat().st_mode & 0o7777,
-                    "symlink_target": symlink_target,
-                    "size_bytes": stat.st_size,
-                    "sha256": sha256_file(path),
-                }
-            )
-    except OSError as error:
-        raise BenchError(f"runtime workspace manifest failed under {root}: {error}") from error
-    _canonical, digest = canonical_data(entries)
-    return {
-        "root": str(root),
-        "protocol": "montage-python-workspace-v1",
-        "sha256": digest,
-        "entry_count": len(entries),
-        "content_bytes": sum(entry.get("size_bytes", 0) for entry in entries),
-    }
 
 
 def unique_filesystems(paths: list[Path]) -> list[dict[str, Any]]:
@@ -1001,6 +981,14 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     git = git_provenance()
     controller_python = controller_python_provenance()
     binary, python_root = resolve_executable(args.binary), resolve_python_workspace(args.python_root)
+    validate_benchmark_output_locations(
+        python_root,
+        {
+            "work root": args.work_root,
+            "evidence directory": args.evidence_dir,
+            "run directory": args.work_root / "runs",
+        },
+    )
     weights, hf_home, model = model_provenance(args.model_weights)
     runtime = runtime_preflight(python_root, hf_home, weights)
     sources = source_provenance(python_root)
@@ -1013,10 +1001,16 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     session_root = args.work_root / "runs" / session_id
     session_root.mkdir(parents=True, exist_ok=False)
     asset_ids = requested_asset_ids(assets)
-    asset_fingerprints = {
-        asset_id: asset_fingerprint(asset)
-        for asset, asset_id in zip(assets, asset_ids, strict=True)
-    }
+    execution_inputs = clip_execution_inputs_provenance(
+        binary,
+        assets,
+        asset_ids,
+        model,
+        controller_python,
+        uv=uv,
+        ffmpeg=ffmpeg,
+        ffprobe=ffprobe,
+    )
     fixture_observations = {
         asset_id: observe_clip_fixture(
             asset,
@@ -1026,9 +1020,28 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         )
         for asset, asset_id in zip(assets, asset_ids, strict=True)
     }
+    _observed_weights, _observed_hf_home, observed_model = model_provenance(
+        args.model_weights
+    )
+    observed_execution_inputs = clip_execution_inputs_provenance(
+        binary,
+        assets,
+        asset_ids,
+        observed_model,
+        controller_python_provenance(),
+        uv=uv,
+        ffmpeg=ffmpeg,
+        ffprobe=ffprobe,
+    )
+    if observed_execution_inputs != execution_inputs:
+        raise BenchError("benchmark execution inputs changed during fixture observation")
+    asset_fingerprints = {
+        asset_id: execution_inputs["assets"][asset_id]["asset_fingerprint"]
+        for asset_id in asset_ids
+    }
     fixtures: list[dict[str, Any]] = []
     for asset, asset_id in zip(assets, asset_ids, strict=True):
-        content = binary_provenance(asset)
+        content = execution_inputs["assets"][asset_id]["content"]
         fixtures.append(
             {
                 "asset_id": asset_id,
@@ -1063,6 +1076,21 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     final_sources = source_provenance(python_root)
     if final_sources != sources:
         raise BenchError("Python workspace changed during benchmark")
+    _final_weights, _final_hf_home, final_model = model_provenance(
+        args.model_weights
+    )
+    final_execution_inputs = clip_execution_inputs_provenance(
+        binary,
+        assets,
+        asset_ids,
+        final_model,
+        controller_python_provenance(),
+        uv=uv,
+        ffmpeg=ffmpeg,
+        ffprobe=ffprobe,
+    )
+    if final_execution_inputs != execution_inputs:
+        raise BenchError("benchmark execution inputs changed during samples")
     report = {
         "schema_version": 1,
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -1073,14 +1101,14 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         },
         "fixtures": fixtures,
         "provenance": {
-            "dispatcher_binary": binary_provenance(binary),
-            "controller_python": controller_python,
+            "dispatcher_binary": execution_inputs["dispatcher_binary"],
+            "controller_python": execution_inputs["controller_python"],
             "python_runtime": {
                 "workspace": str(python_root),
                 **runtime,
             },
-            "model": model,
-            "tools": {"uv": tool_provenance(uv, ["--version"]), "ffmpeg": tool_provenance(ffmpeg, ["-version"]), "ffprobe": tool_provenance(ffprobe, ["-version"])},
+            "model": execution_inputs["model"],
+            "tools": execution_inputs["tools"],
             "sources": sources,
             "git": git,
             "filesystems": {

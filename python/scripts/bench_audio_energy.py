@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import math
@@ -18,6 +19,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +107,78 @@ def canonical_data(data: Any) -> tuple[bytes, str]:
     except (TypeError, ValueError) as error:
         raise BenchError(f"could not encode canonical JSON: {error}") from error
     return encoded, hashlib.sha256(encoded).hexdigest()
+
+
+def workspace_manifest(root: Path) -> dict[str, Any]:
+    try:
+        root = root.resolve(strict=True)
+    except OSError as error:
+        raise BenchError(f"runtime workspace does not exist: {root}: {error}") from error
+    if not root.is_dir():
+        raise BenchError(f"runtime workspace is not a directory: {root}")
+    entries: list[dict[str, Any]] = []
+    try:
+        paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+        for path in paths:
+            relative_path = path.relative_to(root).as_posix()
+            symlink_target = os.readlink(path) if path.is_symlink() else None
+            if path.is_symlink() and path.resolve(strict=True).is_dir():
+                if not path.resolve(strict=True).is_relative_to(root):
+                    raise BenchError(
+                        f"runtime workspace has an external directory symlink: {path}"
+                    )
+                entries.append(
+                    {
+                        "relative_path": relative_path,
+                        "kind": "symlink-directory",
+                        "mode": path.lstat().st_mode & 0o7777,
+                        "symlink_target": symlink_target,
+                    }
+                )
+                continue
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise BenchError(f"runtime workspace has an unsupported entry: {path}")
+            stat = path.stat()
+            entries.append(
+                {
+                    "relative_path": relative_path,
+                    "kind": "symlink-file" if path.is_symlink() else "file",
+                    "mode": path.lstat().st_mode & 0o7777,
+                    "symlink_target": symlink_target,
+                    "size_bytes": stat.st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+    except OSError as error:
+        raise BenchError(f"runtime workspace manifest failed under {root}: {error}") from error
+    _canonical, digest = canonical_data(entries)
+    return {
+        "root": str(root),
+        "protocol": "montage-python-workspace-v1",
+        "sha256": digest,
+        "entry_count": len(entries),
+        "content_bytes": sum(entry.get("size_bytes", 0) for entry in entries),
+    }
+
+
+def validate_benchmark_output_locations(
+    workspace_root: Path,
+    locations: dict[str, Path],
+) -> None:
+    try:
+        workspace_root = workspace_root.resolve(strict=True)
+        resolved_locations = {
+            label: path.resolve() for label, path in locations.items()
+        }
+    except OSError as error:
+        raise BenchError(f"benchmark output location resolution failed: {error}") from error
+    for label, path in resolved_locations.items():
+        if path.is_relative_to(workspace_root):
+            raise BenchError(
+                f"benchmark {label} is inside the Python runtime workspace: {path}"
+            )
 
 
 def sha256_file(path: Path) -> str:
@@ -355,6 +430,16 @@ def probe_fixture(path: Path, ffprobe: Path, duration_seconds: int) -> dict[str,
     return probe
 
 
+@contextmanager
+def fixture_cache_lock(path: Path) -> Iterator[None]:
+    with path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def prepare_fixture(
     fixture_root: Path,
     duration_seconds: int,
@@ -362,14 +447,43 @@ def prepare_fixture(
     ffprobe: Path,
 ) -> dict[str, Any]:
     fixture_root.mkdir(parents=True, exist_ok=True)
+    lock_path = fixture_root / f".audio-energy-mixed-{duration_seconds}s.lock"
+    with fixture_cache_lock(lock_path):
+        return _prepare_fixture_locked(
+            fixture_root, duration_seconds, ffmpeg, ffprobe
+        )
+
+
+def _prepare_fixture_locked(
+    fixture_root: Path,
+    duration_seconds: int,
+    ffmpeg: Path,
+    ffprobe: Path,
+) -> dict[str, Any]:
     fixture = fixture_root / f"audio-energy-mixed-{duration_seconds}s.m4a"
     metadata_path = fixture_root / f"audio-energy-mixed-{duration_seconds}s.json"
     generator_args = fixture_generator_args(duration_seconds)
     generated = False
 
-    if fixture.exists() or metadata_path.exists():
-        if not fixture.is_file() or not metadata_path.is_file():
-            raise BenchError("fixture and fixture metadata must either both exist or both be absent")
+    fixture_exists, metadata_exists = fixture.exists(), metadata_path.exists()
+    if fixture_exists != metadata_exists:
+        orphan = fixture if fixture_exists else metadata_path
+        if not orphan.is_file() or orphan.is_symlink():
+            raise BenchError(f"incomplete fixture cache has a non-regular entry: {orphan}")
+        try:
+            orphan.unlink()
+        except OSError as error:
+            raise BenchError(f"remove incomplete fixture cache entry {orphan}: {error}") from error
+        fixture_exists = metadata_exists = False
+
+    if fixture_exists and metadata_exists:
+        if (
+            not fixture.is_file()
+            or fixture.is_symlink()
+            or not metadata_path.is_file()
+            or metadata_path.is_symlink()
+        ):
+            raise BenchError("fixture and fixture metadata must be regular files")
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -394,24 +508,28 @@ def prepare_fixture(
                 stderr=subprocess.PIPE,
                 timeout=max(120, min(1800, duration_seconds)),
             )
+            probe_fixture(partial, ffprobe, duration_seconds)
+            metadata = {
+                "schema_version": 1,
+                "duration_seconds": duration_seconds,
+                "generator_args": generator_args,
+                "generator_argv_template": [
+                    str(ffmpeg),
+                    *generator_args,
+                    "<atomic-output>",
+                ],
+                "generator_tool": generator_tool,
+                "sha256": sha256_file(partial),
+            }
             os.replace(partial, fixture)
         except (OSError, subprocess.SubprocessError) as error:
             raise BenchError(f"fixture generation failed: {error}") from error
         finally:
             partial.unlink(missing_ok=True)
-        metadata = {
-            "schema_version": 1,
-            "duration_seconds": duration_seconds,
-            "generator_args": generator_args,
-            "generator_argv_template": [
-                str(ffmpeg),
-                *generator_args,
-                "<atomic-output>",
-            ],
-            "generator_tool": generator_tool,
-            "sha256": sha256_file(fixture),
-        }
-        atomic_write_json(metadata_path, metadata)
+        try:
+            atomic_write_json(metadata_path, metadata)
+        except OSError as error:
+            raise BenchError(f"fixture metadata publication failed: {error}") from error
 
     probe = probe_fixture(fixture, ffprobe, duration_seconds)
     stat = fixture.stat()
@@ -422,6 +540,7 @@ def prepare_fixture(
         "duration_seconds": duration_seconds,
         "size_bytes": stat.st_size,
         "sha256": sha256_file(fixture),
+        "metadata_sha256": sha256_file(metadata_path),
         "generator_args": metadata["generator_args"],
         "generator_argv_template": metadata["generator_argv_template"],
         "generator_tool": metadata["generator_tool"],
@@ -714,6 +833,17 @@ def controlled_environment(sample_root: Path, ffmpeg: Path, ffprobe: Path, uv: P
             "TZ": "UTC",
         }
     )
+    for command, expected in (("uv", uv), ("ffprobe", ffprobe), ("ffmpeg", ffmpeg)):
+        resolved = shutil.which(command, path=environment["PATH"])
+        try:
+            actual = Path(resolved or command).resolve(strict=True)
+            expected_path = expected.resolve(strict=True)
+        except OSError as error:
+            raise BenchError(f"controlled PATH could not resolve {command}: {error}") from error
+        if actual != expected_path:
+            raise BenchError(
+                f"controlled PATH resolves {command} to {actual}, expected {expected_path}"
+            )
     return environment
 
 
@@ -874,6 +1004,7 @@ def source_provenance() -> dict[str, dict[str, Any]]:
             "sha256": sha256_file(path),
             "size_bytes": path.stat().st_size,
         }
+    result["python_workspace"] = workspace_manifest(ROOT / "python")
     return result
 
 
@@ -894,6 +1025,43 @@ def find_uv(binary: Path) -> Path:
         return resolve_executable(found)
     fallback = Path.home() / ".local/bin/uv"
     return resolve_executable(fallback)
+
+
+def execution_inputs_provenance(
+    binary: Path,
+    fixture: dict[str, Any],
+    ffmpeg: Path,
+    ffprobe: Path,
+    uv: Path,
+) -> dict[str, Any]:
+    try:
+        fixture_path = Path(fixture["path"]).resolve(strict=True)
+        metadata_path = Path(fixture["metadata_path"]).resolve(strict=True)
+    except (KeyError, OSError, TypeError) as error:
+        raise BenchError(f"fixture execution input is missing: {error}") from error
+    audio_runtime = audio_runtime_provenance(uv)
+    tools = {
+        "ffmpeg": tool_provenance(ffmpeg, ["-version"]),
+        "ffprobe": tool_provenance(ffprobe, ["-version"]),
+        "uv": tool_provenance(uv, ["--version"]),
+    }
+    fixture_files = {
+        "media": binary_provenance(fixture_path),
+        "metadata": binary_provenance(metadata_path),
+    }
+    if (
+        fixture_files["media"]["sha256"] != fixture.get("sha256")
+        or fixture_files["metadata"]["sha256"] != fixture.get("metadata_sha256")
+    ):
+        raise BenchError("fixture cache changed before benchmark samples")
+    return {
+        "dispatcher_binary": binary_provenance(binary),
+        "fixture_files": fixture_files,
+        "audio_energy_runtime": audio_runtime,
+        "tools": tools,
+        "sources": source_provenance(),
+        "git": git_provenance(),
+    }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -940,10 +1108,18 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     ffmpeg = resolve_executable(args.ffmpeg)
     ffprobe = resolve_executable(args.ffprobe)
     uv = find_uv(binary)
-    audio_runtime = audio_runtime_provenance(uv)
     python_root = ROOT / "python"
     if not (python_root / "pyproject.toml").is_file():
         raise BenchError(f"python workspace missing: {python_root}")
+    validate_benchmark_output_locations(
+        python_root,
+        {
+            "work root": args.work_root,
+            "evidence directory": args.evidence_dir,
+            "run directory": args.work_root / "runs",
+            "fixture cache": args.work_root / "fixtures",
+        },
+    )
 
     args.work_root.mkdir(parents=True, exist_ok=True)
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -955,6 +1131,9 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     session_root.mkdir(parents=True, exist_ok=False)
     fixture = prepare_fixture(
         args.work_root / "fixtures", args.duration_seconds, ffmpeg, ffprobe
+    )
+    execution_inputs = execution_inputs_provenance(
+        binary, fixture, ffmpeg, ffprobe, uv
     )
 
     common = {
@@ -977,6 +1156,12 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             )
         samples.append(sample)
 
+    final_execution_inputs = execution_inputs_provenance(
+        binary, fixture, ffmpeg, ffprobe, uv
+    )
+    if final_execution_inputs != execution_inputs:
+        raise BenchError("benchmark execution inputs changed during samples")
+
     report = {
         "schema_version": 2,
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -992,15 +1177,12 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         },
         "fixture": fixture,
         "provenance": {
-            "dispatcher_binary": binary_provenance(binary),
-            "audio_energy_runtime": audio_runtime,
-            "tools": {
-                "ffmpeg": tool_provenance(ffmpeg, ["-version"]),
-                "ffprobe": tool_provenance(ffprobe, ["-version"]),
-                "uv": tool_provenance(uv, ["--version"]),
-            },
-            "sources": source_provenance(),
-            "git": git_provenance(),
+            "dispatcher_binary": execution_inputs["dispatcher_binary"],
+            "fixture_files": execution_inputs["fixture_files"],
+            "audio_energy_runtime": execution_inputs["audio_energy_runtime"],
+            "tools": execution_inputs["tools"],
+            "sources": execution_inputs["sources"],
+            "git": execution_inputs["git"],
             "filesystems": {
                 "work": filesystem_provenance(args.work_root),
                 "evidence": filesystem_provenance(args.evidence_dir),

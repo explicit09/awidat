@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_audio_energy as bench
@@ -61,7 +66,82 @@ def write_dispatcher_output(
     )
 
 
+def generate_fake_fixture(command: list[str], **_kwargs: object) -> None:
+    Path(command[-1]).write_bytes(b"deterministic fixture")
+
+
 class BenchAudioEnergyTests(unittest.TestCase):
+    def run_mocked_benchmark(
+        self,
+        root: Path,
+        *,
+        input_states: list[dict[str, object]],
+        write: mock.Mock,
+    ) -> Path:
+        binary = root / "montage-index-perf"
+        ffmpeg = root / "ffmpeg"
+        ffprobe = root / "ffprobe"
+        uv = root / "uv"
+        fixture_path = root / "fixture.m4a"
+        metadata_path = root / "fixture.json"
+        fixture_path.write_bytes(b"fixture")
+        metadata_path.write_text("{}", encoding="utf-8")
+        fixture = {
+            "path": str(fixture_path),
+            "metadata_path": str(metadata_path),
+            "duration_seconds": 2,
+        }
+        sample = {
+            "canonical_data_sha256": "stable",
+            "wall_ms": 10.0,
+            "process_tree_peak_rss_bytes": 4096,
+            "temp_directory_high_water_bytes": 0,
+            "dispatcher_tool_ms": 8,
+            "cleanup": {"passed": True},
+        }
+        args = SimpleNamespace(
+            binary=binary,
+            ffmpeg=ffmpeg,
+            ffprobe=ffprobe,
+            duration_seconds=2,
+            samples=1,
+            timeout_seconds=60.0,
+            work_root=root / "work",
+            evidence_dir=root / "evidence",
+            label="test",
+        )
+        with (
+            mock.patch.object(
+                bench, "resolve_executable", side_effect=lambda value: Path(value)
+            ),
+            mock.patch.object(bench, "find_uv", return_value=uv),
+            mock.patch.object(bench, "audio_runtime_provenance", return_value={}),
+            mock.patch.object(bench, "prepare_fixture", return_value=fixture),
+            mock.patch.object(
+                bench,
+                "execution_inputs_provenance",
+                side_effect=input_states,
+                create=True,
+            ),
+            mock.patch.object(
+                bench, "run_sample", return_value=(sample, b"stable")
+            ),
+            mock.patch.object(
+                bench, "temp_directory_observation", return_value={}
+            ),
+            mock.patch.object(bench, "binary_provenance", return_value={}),
+            mock.patch.object(bench, "tool_provenance", return_value={}),
+            mock.patch.object(bench, "source_provenance", return_value={}),
+            mock.patch.object(bench, "git_provenance", return_value={}),
+            mock.patch.object(
+                bench,
+                "filesystem_provenance",
+                side_effect=lambda path: {"path": str(path)},
+            ),
+            mock.patch.object(bench, "atomic_write_json", write),
+        ):
+            return bench.run_benchmark(args)
+
     def test_process_table_parser_ignores_headers_and_malformed_rows(self) -> None:
         rows = bench.parse_ps_table(
             " PID PPID RSS\n"
@@ -120,6 +200,199 @@ class BenchAudioEnergyTests(unittest.TestCase):
     def test_canonical_data_reports_nonfinite_json_as_a_benchmark_error(self) -> None:
         with self.assertRaisesRegex(bench.BenchError, "canonical JSON"):
             bench.canonical_data({"value": float("nan")})
+
+    def test_benchmark_rejects_execution_inputs_changed_during_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            write = mock.Mock()
+            with self.assertRaisesRegex(bench.BenchError, "execution inputs changed"):
+                self.run_mocked_benchmark(
+                    Path(directory),
+                    input_states=[
+                        {"dispatcher_binary": {"sha256": "a" * 64}},
+                        {"dispatcher_binary": {"sha256": "b" * 64}},
+                    ],
+                    write=write,
+                )
+
+        write.assert_not_called()
+
+    def test_workspace_manifest_binds_same_stat_venv_content_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            python_root = Path(directory)
+            dependency = python_root / ".venv/lib/python3.11/site-packages/numpy/core.py"
+            dependency.parent.mkdir(parents=True)
+            dependency.write_text("VALUE = 1\n", encoding="utf-8")
+            original_stat = dependency.stat()
+
+            before = bench.workspace_manifest(python_root)
+            dependency.write_text("VALUE = 2\n", encoding="utf-8")
+            os.utime(
+                dependency,
+                ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+            )
+            after = bench.workspace_manifest(python_root)
+
+        self.assertNotEqual(before, after)
+
+    def test_benchmark_output_locations_reject_a_runtime_workspace_descendant(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "python"
+            workspace.mkdir()
+
+            with self.assertRaisesRegex(
+                bench.BenchError, "inside the Python runtime workspace"
+            ):
+                bench.validate_benchmark_output_locations(
+                    workspace,
+                    {"work root": workspace / "benchmark-output"},
+                )
+
+    def test_controlled_environment_rejects_a_shadowed_provenanced_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            uv = root / "uv/bin/uv"
+            ffmpeg = root / "ffmpeg/bin/ffmpeg"
+            ffprobe = root / "ffprobe/bin/ffprobe"
+            shadow_ffmpeg = uv.parent / "ffmpeg"
+            for executable in (uv, ffmpeg, ffprobe, shadow_ffmpeg):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
+
+            with self.assertRaisesRegex(bench.BenchError, "PATH resolves ffmpeg"):
+                bench.controlled_environment(
+                    root / "sample", ffmpeg, ffprobe, uv
+                )
+
+    def test_fixture_cache_lock_blocks_another_process_until_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "fixture.lock"
+            script = (
+                "import fcntl,sys\n"
+                "handle=open(sys.argv[1], 'a+b')\n"
+                "fcntl.flock(handle.fileno(), fcntl.LOCK_EX)\n"
+                "print('acquired', flush=True)\n"
+            )
+            with bench.fixture_cache_lock(lock_path):
+                process = subprocess.Popen(
+                    [sys.executable, "-c", script, str(lock_path)],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                time.sleep(0.1)
+                self.assertIsNone(process.poll())
+            stdout, _stderr = process.communicate(timeout=3)
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(stdout.strip(), "acquired")
+
+    def test_fixture_cache_recovers_either_lone_publication(self) -> None:
+        for orphan in ("media", "metadata"):
+            with self.subTest(orphan=orphan), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = root / "audio-energy-mixed-2s.m4a"
+                metadata = root / "audio-energy-mixed-2s.json"
+                if orphan == "media":
+                    fixture.write_bytes(b"orphan")
+                else:
+                    metadata.write_text("{}", encoding="utf-8")
+
+                with (
+                    mock.patch.object(
+                        bench.subprocess, "run", side_effect=generate_fake_fixture
+                    ),
+                    mock.patch.object(
+                        bench, "tool_provenance", return_value={"path": "ffmpeg"}
+                    ),
+                    mock.patch.object(bench, "probe_fixture", return_value={"ok": True}),
+                    mock.patch.object(
+                        bench, "filesystem_provenance", return_value={"mount": "test"}
+                    ),
+                ):
+                    result = bench.prepare_fixture(
+                        root, 2, Path("/fake/ffmpeg"), Path("/fake/ffprobe")
+                    )
+
+                self.assertTrue(result["generated"])
+                self.assertTrue(fixture.is_file())
+                self.assertTrue(metadata.is_file())
+                self.assertEqual(
+                    json.loads(metadata.read_text(encoding="utf-8"))["sha256"],
+                    bench.sha256_file(fixture),
+                )
+
+    def test_fixture_cache_still_rejects_a_corrupt_complete_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "audio-energy-mixed-2s.m4a"
+            metadata = root / "audio-energy-mixed-2s.json"
+            fixture.write_bytes(b"corrupt")
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "duration_seconds": 2,
+                        "generator_args": bench.fixture_generator_args(2),
+                        "sha256": "0" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(bench.subprocess, "run") as generate:
+                with self.assertRaisesRegex(bench.BenchError, "checksum"):
+                    bench.prepare_fixture(
+                        root, 2, Path("/fake/ffmpeg"), Path("/fake/ffprobe")
+                    )
+
+        generate.assert_not_called()
+
+    def test_fixture_cache_recovers_after_metadata_publication_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "audio-energy-mixed-2s.m4a"
+            metadata = root / "audio-energy-mixed-2s.json"
+            with (
+                mock.patch.object(
+                    bench.subprocess, "run", side_effect=generate_fake_fixture
+                ),
+                mock.patch.object(
+                    bench, "tool_provenance", return_value={"path": "ffmpeg"}
+                ),
+                mock.patch.object(bench, "probe_fixture", return_value={"ok": True}),
+                mock.patch.object(
+                    bench, "filesystem_provenance", return_value={"mount": "test"}
+                ),
+                mock.patch.object(
+                    bench, "atomic_write_json", side_effect=OSError("disk full")
+                ),
+            ):
+                with self.assertRaisesRegex(bench.BenchError, "metadata publication"):
+                    bench.prepare_fixture(
+                        root, 2, Path("/fake/ffmpeg"), Path("/fake/ffprobe")
+                    )
+            self.assertTrue(fixture.is_file())
+            self.assertFalse(metadata.exists())
+
+            with (
+                mock.patch.object(
+                    bench.subprocess, "run", side_effect=generate_fake_fixture
+                ),
+                mock.patch.object(
+                    bench, "tool_provenance", return_value={"path": "ffmpeg"}
+                ),
+                mock.patch.object(bench, "probe_fixture", return_value={"ok": True}),
+                mock.patch.object(
+                    bench, "filesystem_provenance", return_value={"mount": "test"}
+                ),
+            ):
+                bench.prepare_fixture(
+                    root, 2, Path("/fake/ffmpeg"), Path("/fake/ffprobe")
+                )
+
+            self.assertTrue(fixture.is_file())
+            self.assertTrue(metadata.is_file())
 
     def test_dispatcher_output_rejects_malformed_audio_numeric_fields(self) -> None:
         cases = {
