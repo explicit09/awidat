@@ -63,16 +63,20 @@ fn main() {
         .map(|output| output.lines().collect::<Vec<_>>().join(" | "))
         .unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=MONTAGE_PROJECT_READ_RUSTC_VV={rustc_version}");
-    let mut build_environment: Vec<_> = env::vars()
-        .filter(|(key, _)| relevant_build_setting(key))
+    let mut build_environment: Vec<_> = env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            relevant_build_setting(&key).then_some((key, value))
+        })
         .collect();
     build_environment.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     let mut build_environment_hasher = Sha256::new();
     for (key, value) in &build_environment {
+        let value = value.as_encoded_bytes();
         build_environment_hasher.update((key.len() as u64).to_le_bytes());
         build_environment_hasher.update(key.as_bytes());
         build_environment_hasher.update((value.len() as u64).to_le_bytes());
-        build_environment_hasher.update(value.as_bytes());
+        build_environment_hasher.update(value);
         println!("cargo:rerun-if-env-changed={key}");
     }
     println!(
