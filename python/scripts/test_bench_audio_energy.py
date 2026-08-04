@@ -83,6 +83,55 @@ class BenchAudioEnergyTests(unittest.TestCase):
             temp_high_water_bytes=0,
         )
 
+    def test_temp_directory_observation_includes_nonzero_warmup_baseline(self) -> None:
+        observation = bench.temp_directory_observation(
+            [
+                {
+                    "temp_directory_high_water_bytes": 4096,
+                    "sampler": {
+                        "gap_ms": {"max": 40.0},
+                        "observed_rate_hz": 38.5,
+                    },
+                    "cleanup": {
+                        "passed": True,
+                        "leaked_audio_temp_files": [],
+                        "remaining_temp_files": ["/tmp/uv-cache.lock"],
+                    },
+                },
+                {
+                    "temp_directory_high_water_bytes": 2048,
+                    "sampler": {
+                        "gap_ms": {"max": 55.0},
+                        "observed_rate_hz": 20.0,
+                    },
+                    "cleanup": {
+                        "passed": True,
+                        "leaked_audio_temp_files": [],
+                        "remaining_temp_files": [],
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(
+            observation,
+            {
+                "method": "periodic recursive byte-size polling of isolated TMPDIRs",
+                "target_interval_ms": 25.0,
+                "maximum_observed_high_water_bytes": 4096,
+                "maximum_observed_sampler_gap_ms": 55.0,
+                "minimum_observed_rate_hz": 20.0,
+                "post_run_audio_temp_leak_check": {
+                    "passed": True,
+                    "leaked_audio_temp_files": [],
+                },
+                "limitation": (
+                    "Periodic polling cannot exclude transient files between samples "
+                    "or prove decoder transport."
+                ),
+            },
+        )
+
     def test_audio_runtime_provenance_resolves_the_executed_environment(self) -> None:
         runtime = bench.parse_audio_runtime_provenance(
             json.dumps(

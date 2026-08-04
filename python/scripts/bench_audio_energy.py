@@ -510,6 +510,37 @@ def validate_sampler_timing(
     }
 
 
+def temp_directory_observation(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    if not samples:
+        raise BenchError("cannot observe an empty sample set")
+    leaked_audio_temp_files = sorted(
+        path
+        for sample in samples
+        for path in sample["cleanup"]["leaked_audio_temp_files"]
+    )
+    return {
+        "method": "periodic recursive byte-size polling of isolated TMPDIRs",
+        "target_interval_ms": SAMPLE_INTERVAL_SECONDS * 1000.0,
+        "maximum_observed_high_water_bytes": max(
+            sample["temp_directory_high_water_bytes"] for sample in samples
+        ),
+        "maximum_observed_sampler_gap_ms": max(
+            sample["sampler"]["gap_ms"]["max"] for sample in samples
+        ),
+        "minimum_observed_rate_hz": min(
+            sample["sampler"]["observed_rate_hz"] for sample in samples
+        ),
+        "post_run_audio_temp_leak_check": {
+            "passed": not leaked_audio_temp_files,
+            "leaked_audio_temp_files": leaked_audio_temp_files,
+        },
+        "limitation": (
+            "Periodic polling cannot exclude transient files between samples or prove "
+            "decoder transport."
+        ),
+    }
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -907,7 +938,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         samples.append(sample)
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
         "configuration": {
             "label": args.label,
@@ -955,9 +986,9 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         "correctness": {
             "canonical_audio_energy_data_sha256": warmup["canonical_data_sha256"],
             "all_timed_samples_exactly_equal_to_warmup": True,
-            "audio_stream_verified": True,
             "nonempty_audio_energy_verified": True,
         },
+        "temp_directory_observation": temp_directory_observation([warmup, *samples]),
         "warmup": warmup,
         "samples": samples,
         "statistics": {
