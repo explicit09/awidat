@@ -1807,13 +1807,14 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("ready");
-        let mut command = Command::new("/usr/bin/python3");
+        let mut command = Command::new("/bin/sh");
         command
             .args([
                 "-c",
-                "import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(30)",
-                &ready.display().to_string(),
+                "trap '' TERM; : > \"$1\"; while :; do sleep 30; done",
+                "term-ignoring-helper",
             ])
+            .arg(&ready)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1929,7 +1930,7 @@ mod tests {
 
     #[cfg(unix)]
     fn wait_for_test_file(path: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !path.is_file() {
             assert!(Instant::now() < deadline, "test helper never became ready");
             thread::sleep(Duration::from_millis(10));
