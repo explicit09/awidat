@@ -28,7 +28,7 @@ const WAVEFORM_SAMPLE_RATE_HZ: usize = 8000;
 const DURATION_TOLERANCE_S: f64 = 1.0 / WAVEFORM_SAMPLE_RATE_HZ as f64;
 const CANCELLATION_DELAY: Duration = Duration::from_millis(1);
 const RSS_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);
-const RSS_SAMPLE_MAX_GAP: Duration = Duration::from_millis(20);
+const RSS_SAMPLE_MAX_GAP: Duration = Duration::from_millis(100);
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
