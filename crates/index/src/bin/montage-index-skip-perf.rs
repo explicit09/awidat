@@ -2,14 +2,15 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use montage_config::{IndexerResourceClass, McpServer, McpServerKind};
 use montage_index::{AssetInput, PairOutcome, asset_fingerprint, run, sidecar_path};
 use montage_mcp::ClientInfo;
-use montage_proto::index::AssetId;
+use montage_proto::index::{AssetId, IndexSidecar};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 fn main() {
@@ -139,6 +140,7 @@ impl Args {
                 index += 1;
             }
         }
+        sidecar_minimum_bytes(args.sidecar_mib)?;
         Ok(args)
     }
 }
@@ -151,6 +153,12 @@ fn parse_positive(flag: &str, value: &str) -> Result<usize, String> {
         return Err(format!("{flag} must be greater than zero"));
     }
     Ok(count)
+}
+
+fn sidecar_minimum_bytes(sidecar_mib: usize) -> Result<usize, String> {
+    sidecar_mib
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| format!("--sidecar-mib {sidecar_mib} is too large"))
 }
 
 fn usage() -> String {
@@ -188,7 +196,7 @@ fn prepare_fixture(work_dir: &Path, config: FixtureConfig) -> Result<Fixture, St
         let _ = fs::remove_dir_all(&temporary_root);
         return Err(error);
     }
-    Ok(fixture_from_parts(root, config))
+    read_fixture(&root, config)
 }
 
 fn fixture_root(work_dir: &Path, config: &FixtureConfig) -> PathBuf {
@@ -210,7 +218,9 @@ fn read_fixture(root: &Path, config: FixtureConfig) -> Result<Fixture, String> {
             metadata_path.display()
         ));
     }
-    Ok(fixture_from_parts(root.to_path_buf(), config))
+    let fixture = fixture_from_parts(root.to_path_buf(), config);
+    validate_fixture(&fixture)?;
+    Ok(fixture)
 }
 
 fn build_fixture(root: &Path, config: &FixtureConfig) -> Result<(), String> {
@@ -233,7 +243,7 @@ fn build_fixture(root: &Path, config: &FixtureConfig) -> Result<(), String> {
                 &asset.id,
                 &asset_fingerprint(&asset.path)
                     .map_err(|error| format!("fingerprint {}: {error}", asset.path.display()))?,
-                fixture.config.sidecar_mib * 1024 * 1024,
+                sidecar_minimum_bytes(fixture.config.sidecar_mib)?,
             )?;
         }
     }
@@ -242,6 +252,60 @@ fn build_fixture(root: &Path, config: &FixtureConfig) -> Result<(), String> {
     let metadata_path = root.join("fixture.json");
     fs::write(&metadata_path, metadata)
         .map_err(|error| format!("write {}: {error}", metadata_path.display()))?;
+    Ok(())
+}
+
+fn validate_fixture(fixture: &Fixture) -> Result<(), String> {
+    let minimum_bytes = sidecar_minimum_bytes(fixture.config.sidecar_mib)?;
+    let minimum_bytes_u64 = u64::try_from(minimum_bytes)
+        .map_err(|_| format!("sidecar minimum {minimum_bytes} does not fit in u64"))?;
+    for asset in &fixture.assets {
+        let expected_fingerprint = asset_fingerprint(&asset.path)
+            .map_err(|error| format!("fingerprint {}: {error}", asset.path.display()))?;
+        for server in &fixture.servers {
+            let path = sidecar_path(&fixture.root, &server.name, &asset.id)
+                .map_err(|error| format!("sidecar path: {error}"))?;
+            let file =
+                File::open(&path).map_err(|error| format!("open {}: {error}", path.display()))?;
+            let actual_bytes = file
+                .metadata()
+                .map_err(|error| format!("metadata {}: {error}", path.display()))?
+                .len();
+            if actual_bytes < minimum_bytes_u64 {
+                return Err(format!(
+                    "fixture sidecar {} is smaller than requested: {actual_bytes} < {minimum_bytes_u64} bytes",
+                    path.display()
+                ));
+            }
+            let sidecar: IndexSidecar<IgnoredAny> =
+                serde_json::from_reader(BufReader::new(file))
+                    .map_err(|error| format!("parse {}: {error}", path.display()))?;
+            if sidecar.header.indexer != server.name {
+                return Err(format!(
+                    "fixture sidecar {} indexer mismatch: {:?} != {:?}",
+                    path.display(),
+                    sidecar.header.indexer,
+                    server.name
+                ));
+            }
+            if sidecar.header.asset_id != asset.id {
+                return Err(format!(
+                    "fixture sidecar {} asset id mismatch: {:?} != {:?}",
+                    path.display(),
+                    sidecar.header.asset_id,
+                    asset.id
+                ));
+            }
+            if sidecar.header.asset_sha256 != expected_fingerprint {
+                return Err(format!(
+                    "fixture sidecar {} fingerprint mismatch: {:?} != {:?}",
+                    path.display(),
+                    sidecar.header.asset_sha256,
+                    expected_fingerprint
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -596,6 +660,13 @@ mod tests {
     }
 
     #[test]
+    fn args_reject_sidecar_sizes_that_overflow_bytes() {
+        let error = Args::parse(vec!["--sidecar-mib".into(), usize::MAX.to_string()])
+            .expect_err("overflowing sidecar size rejected");
+        assert!(error.contains("too large"));
+    }
+
+    #[test]
     fn relative_output_filename_uses_current_directory() {
         assert_eq!(
             output_directory(Path::new("report.json")),
@@ -678,6 +749,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reused_fixture_rejects_a_tiny_replacement_sidecar() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let fixture = prepare_fixture(temp.path(), config.clone()).expect("fixture");
+        let asset = &fixture.assets[0];
+        let server = &fixture.servers[0];
+        let sidecar = sidecar_path(&fixture.root, &server.name, &asset.id).expect("sidecar path");
+        write_sidecar(
+            &sidecar,
+            &server.name,
+            &asset.id,
+            &asset_fingerprint(&asset.path).expect("fingerprint"),
+            1,
+        )
+        .expect("replace sidecar");
+
+        let error = prepare_fixture(temp.path(), config)
+            .err()
+            .expect("tiny reused sidecar rejected");
+        assert!(error.contains("smaller than"));
+    }
+
+    #[test]
+    fn reused_fixture_rejects_invalid_sidecar_json() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let fixture = prepare_fixture(temp.path(), config.clone()).expect("fixture");
+        let sidecar = sidecar_path(
+            &fixture.root,
+            &fixture.servers[0].name,
+            &fixture.assets[0].id,
+        )
+        .expect("sidecar path");
+        std::fs::write(&sidecar, vec![b'x'; 1024 * 1024]).expect("replace sidecar");
+
+        let error = prepare_fixture(temp.path(), config)
+            .err()
+            .expect("invalid reused sidecar rejected");
+        assert!(error.contains("parse"));
+    }
+
+    #[test]
+    fn reused_fixture_rejects_asset_fingerprint_drift() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let fixture = prepare_fixture(temp.path(), config.clone()).expect("fixture");
+        std::fs::write(&fixture.assets[0].path, b"modified benchmark asset\n")
+            .expect("modify asset");
+
+        let error = prepare_fixture(temp.path(), config)
+            .err()
+            .expect("stale reused sidecar rejected");
+        assert!(error.contains("fingerprint"));
     }
 
     #[tokio::test]
