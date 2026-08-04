@@ -205,7 +205,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def run_text(command: list[str], *, timeout: float = 30.0) -> str:
+def run_text(
+    command: list[str],
+    *,
+    timeout: float = 30.0,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> str:
     try:
         completed = subprocess.run(
             command,
@@ -213,6 +219,8 @@ def run_text(command: list[str], *, timeout: float = 30.0) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
+            cwd=cwd,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise BenchError(f"command failed: {command!r}: {error}") from error
@@ -256,7 +264,12 @@ def binary_provenance(path: Path) -> dict[str, Any]:
     }
 
 
-def parse_audio_runtime_provenance(raw: str, expected_module: Path) -> dict[str, Any]:
+def parse_audio_runtime_provenance(
+    raw: str,
+    expected_module: Path,
+    *,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -265,7 +278,7 @@ def parse_audio_runtime_provenance(raw: str, expected_module: Path) -> dict[str,
     if not isinstance(value, dict) or any(
         not isinstance(value.get(key), str) or not value[key]
         for key in required
-    ):
+    ) or "module_paths" not in value:
         raise BenchError(f"audio-energy runtime provenance is incomplete: {value!r}")
 
     executable = resolve_executable(value["executable"])
@@ -276,6 +289,44 @@ def parse_audio_runtime_provenance(raw: str, expected_module: Path) -> dict[str,
         raise BenchError(f"could not resolve audio-energy module provenance: {error}") from error
     if module != expected:
         raise BenchError(f"audio-energy resolved from {module}, expected {expected}")
+    module_paths = value["module_paths"]
+    package_names = ("audio_energy_mcp", "numpy", "scipy", "pyloudnorm")
+    if not isinstance(module_paths, dict) or any(
+        not isinstance(module_paths.get(name), str) or not module_paths[name]
+        for name in package_names
+    ):
+        raise BenchError(f"audio-energy module locations are incomplete: {module_paths!r}")
+    try:
+        resolved_modules = {
+            name: Path(module_paths[name]).resolve(strict=True) for name in package_names
+        }
+        prepared_workspace = (
+            workspace_root.resolve(strict=True) if workspace_root is not None else None
+        )
+        prepared_venv = prepared_workspace / ".venv" if prepared_workspace else None
+    except OSError as error:
+        raise BenchError(f"could not resolve audio-energy package provenance: {error}") from error
+    if resolved_modules["audio_energy_mcp"] != module:
+        raise BenchError(
+            "audio-energy module location disagrees with its imported module: "
+            f"{resolved_modules['audio_energy_mcp']} != {module}"
+        )
+    if prepared_venv is not None:
+        expected_executable = resolve_executable(
+            prepared_venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        )
+        if executable != expected_executable:
+            raise BenchError(
+                f"audio-energy used {executable}, expected prepared venv {expected_executable}"
+            )
+        if not module.is_relative_to(prepared_workspace):
+            raise BenchError(f"audio-energy module is outside workspace: {module}")
+        for name in ("numpy", "scipy", "pyloudnorm"):
+            if not resolved_modules[name].is_relative_to(prepared_venv):
+                raise BenchError(
+                    f"audio-energy {name} resolved outside prepared venv: "
+                    f"{resolved_modules[name]}"
+                )
     module_stat = module.stat()
     return {
         "python_version": value["python"],
@@ -290,7 +341,38 @@ def parse_audio_runtime_provenance(raw: str, expected_module: Path) -> dict[str,
             "scipy": value["scipy"],
             "pyloudnorm": value["pyloudnorm"],
         },
+        "package_modules": {
+            name: binary_provenance(path) for name, path in resolved_modules.items()
+        },
     }
+
+
+def python_runtime_environment() -> dict[str, str]:
+    python_root = ROOT / "python"
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(("PYTHON", "UV_")) and name != "VIRTUAL_ENV"
+    }
+    environment.update(
+        {
+            "MONTAGE_PYTHON_ROOT": str(python_root),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONSAFEPATH": "1",
+            "PYTHONHASHSEED": "0",
+            "PYTHONUTF8": "1",
+            "UV_OFFLINE": "1",
+            "UV_NO_SYNC": "1",
+            "UV_NO_CONFIG": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+            "UV_PROJECT_ENVIRONMENT": str(python_root / ".venv"),
+            "LC_ALL": "C",
+            "LANG": "C",
+            "TZ": "UTC",
+        }
+    )
+    return environment
 
 
 def audio_runtime_provenance(uv: Path) -> dict[str, Any]:
@@ -301,6 +383,7 @@ import sys
 
 import audio_energy_mcp
 import numpy
+import pyloudnorm
 import scipy
 
 print(json.dumps({
@@ -310,6 +393,12 @@ print(json.dumps({
     "numpy": numpy.__version__,
     "scipy": scipy.__version__,
     "pyloudnorm": importlib.metadata.version("pyloudnorm"),
+    "module_paths": {
+        "audio_energy_mcp": audio_energy_mcp.__file__,
+        "numpy": numpy.__file__,
+        "scipy": scipy.__file__,
+        "pyloudnorm": pyloudnorm.__file__,
+    },
 }))
 """
     output = run_text(
@@ -326,11 +415,15 @@ print(json.dumps({
             script,
         ],
         timeout=120.0,
+        env=python_runtime_environment(),
+        cwd=ROOT / "python",
     )
     expected_module = (
         ROOT / "python/packages/audio-energy-mcp/src/audio_energy_mcp/__init__.py"
     )
-    return parse_audio_runtime_provenance(output, expected_module)
+    return parse_audio_runtime_provenance(
+        output, expected_module, workspace_root=ROOT / "python"
+    )
 
 
 def filesystem_provenance(path: Path) -> dict[str, Any]:
@@ -979,19 +1072,15 @@ def controlled_environment(sample_root: Path, ffmpeg: Path, ffprobe: Path, uv: P
     inherited_path = os.environ.get("PATH")
     if inherited_path:
         path_parts.append(inherited_path)
-    environment = os.environ.copy()
+    environment = python_runtime_environment()
     environment.update(
         {
             "PATH": os.pathsep.join(path_parts),
-            "MONTAGE_PYTHON_ROOT": str(ROOT / "python"),
             "MONTAGE_FFMPEG": str(ffmpeg),
             "TMPDIR": str(temp_root),
             "TEMP": str(temp_root),
             "TMP": str(temp_root),
             "XDG_CONFIG_HOME": str(config_root),
-            "PYTHONHASHSEED": "0",
-            "LC_ALL": "C",
-            "TZ": "UTC",
         }
     )
     for command, expected in (("uv", uv), ("ffprobe", ffprobe), ("ffmpeg", ffmpeg)):
@@ -1225,6 +1314,9 @@ def find_uv(binary: Path) -> Path:
     sibling = binary.parent / ("uv.exe" if os.name == "nt" else "uv")
     if sibling.is_file():
         return resolve_executable(sibling)
+    explicit = os.environ.get("MONTAGE_UV")
+    if explicit:
+        return resolve_executable(explicit)
     found = shutil.which("uv")
     if found:
         return resolve_executable(found)
@@ -1406,8 +1498,22 @@ def run_benchmark(args: argparse.Namespace) -> Path:
                 "XDG_CONFIG_HOME": "isolated per sample",
                 "TMPDIR": "isolated per sample",
                 "UV_CACHE_DIR": "assigned by dispatcher under each sample work root",
+                "UV_OFFLINE": "1",
+                "UV_NO_SYNC": "1",
+                "UV_NO_CONFIG": "1",
+                "UV_PYTHON_DOWNLOADS": "never",
+                "UV_PROJECT_ENVIRONMENT": str(python_root / ".venv"),
+                "PYTHONPATH": "unset",
+                "PYTHONHOME": "unset",
+                "PYTHONUSERBASE": "unset",
+                "VIRTUAL_ENV": "unset",
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONSAFEPATH": "1",
                 "PYTHONHASHSEED": "0",
+                "PYTHONUTF8": "1",
                 "LC_ALL": "C",
+                "LANG": "C",
                 "TZ": "UTC",
             },
         },

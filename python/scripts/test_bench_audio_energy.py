@@ -947,6 +947,12 @@ class BenchAudioEnergyTests(unittest.TestCase):
                     "numpy": "2.4.4",
                     "scipy": "1.17.1",
                     "pyloudnorm": "0.2.0",
+                    "module_paths": {
+                        "audio_energy_mcp": bench.__file__,
+                        "numpy": bench.__file__,
+                        "scipy": bench.__file__,
+                        "pyloudnorm": bench.__file__,
+                    },
                 }
             ),
             Path(bench.__file__).resolve(),
@@ -959,6 +965,150 @@ class BenchAudioEnergyTests(unittest.TestCase):
             {"numpy": "2.4.4", "scipy": "1.17.1", "pyloudnorm": "0.2.0"},
         )
         self.assertEqual(runtime["executable"]["path"], str(Path(sys.executable).resolve()))
+
+    def test_python_runtime_environment_removes_hostile_uv_and_import_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hostile = Path(directory)
+            (hostile / "audio_energy_mcp.py").write_text("raise RuntimeError\n")
+            inherited = {
+                "PYTHONPATH": str(hostile),
+                "PYTHONHOME": str(hostile),
+                "PYTHONUSERBASE": str(hostile),
+                "PYTHONSTARTUP": str(hostile / "startup.py"),
+                "PYTHONWARNINGS": "error",
+                "VIRTUAL_ENV": str(hostile),
+                "UV_PROJECT": str(hostile),
+                "UV_PYTHON": str(hostile / "python"),
+                "UV_PROJECT_ENVIRONMENT": str(hostile / "venv"),
+                "UV_CONFIG_FILE": str(hostile / "uv.toml"),
+                "UV_OFFLINE": "0",
+            }
+            with mock.patch.dict(
+                bench.os.environ,
+                inherited,
+                clear=True,
+            ):
+                environment = bench.python_runtime_environment()
+
+        for key in inherited:
+            if key in {"UV_OFFLINE", "UV_PROJECT_ENVIRONMENT"}:
+                continue
+            self.assertNotIn(key, environment)
+        self.assertNotIn("VIRTUAL_ENV", environment)
+        self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
+        self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
+        self.assertEqual(environment["PYTHONHASHSEED"], "0")
+        self.assertEqual(environment["PYTHONUTF8"], "1")
+        self.assertEqual(environment["UV_OFFLINE"], "1")
+        self.assertEqual(environment["UV_NO_SYNC"], "1")
+        self.assertEqual(environment["UV_NO_CONFIG"], "1")
+        self.assertEqual(environment["UV_PYTHON_DOWNLOADS"], "never")
+        self.assertEqual(environment["LC_ALL"], "C")
+        self.assertEqual(environment["LANG"], "C")
+        self.assertEqual(environment["TZ"], "UTC")
+
+    def test_preflight_and_sample_share_the_sanitized_python_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            uv = root / "tools/uv"
+            ffmpeg = root / "tools/ffmpeg"
+            ffprobe = root / "tools/ffprobe"
+            for executable in (uv, ffmpeg, ffprobe):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
+
+            with mock.patch.dict(
+                bench.os.environ,
+                {
+                    "PYTHONPATH": "/hostile",
+                    "PYTHONUSERBASE": "/hostile",
+                    "VIRTUAL_ENV": "/hostile",
+                    "UV_PROJECT": "/hostile",
+                    "UV_PYTHON": "/hostile/python",
+                    "UV_PROJECT_ENVIRONMENT": "/hostile/venv",
+                },
+                clear=True,
+            ):
+                preflight = bench.python_runtime_environment()
+                sample = bench.controlled_environment(root / "sample", ffmpeg, ffprobe, uv)
+
+        for key in (
+            "MONTAGE_PYTHON_ROOT",
+            "PYTHONNOUSERSITE",
+            "PYTHONDONTWRITEBYTECODE",
+            "PYTHONSAFEPATH",
+            "PYTHONHASHSEED",
+            "PYTHONUTF8",
+            "UV_OFFLINE",
+            "UV_NO_SYNC",
+            "UV_NO_CONFIG",
+            "UV_PYTHON_DOWNLOADS",
+            "UV_PROJECT_ENVIRONMENT",
+            "LC_ALL",
+            "LANG",
+            "TZ",
+        ):
+            self.assertEqual(sample[key], preflight[key])
+        self.assertNotIn("PYTHONPATH", sample)
+        self.assertNotIn("PYTHONUSERBASE", sample)
+        self.assertNotIn("VIRTUAL_ENV", sample)
+        self.assertNotIn("UV_PROJECT", sample)
+        self.assertNotIn("UV_PYTHON", sample)
+
+    def test_find_uv_prefers_dispatcher_sibling_to_environment_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "bin/montage-index-perf"
+            sibling = binary.parent / "uv"
+            override = root / "override/uv"
+            for executable in (binary, sibling, override):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
+
+            with mock.patch.dict(
+                bench.os.environ, {"MONTAGE_UV": str(override)}, clear=True
+            ):
+                resolved = bench.find_uv(binary)
+
+        self.assertEqual(resolved, sibling.resolve())
+
+    def test_runtime_provenance_rejects_dependency_outside_prepared_venv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "python"
+            module = workspace / "packages/audio-energy-mcp/src/audio_energy_mcp/__init__.py"
+            module.parent.mkdir(parents=True)
+            module.write_text("", encoding="utf-8")
+            runtime_python = workspace / ".venv/bin/python"
+            runtime_python.parent.mkdir(parents=True)
+            runtime_python.symlink_to(Path(sys.executable))
+            venv_module = workspace / ".venv/lib/python3.11/site-packages/numpy/__init__.py"
+            venv_module.parent.mkdir(parents=True)
+            venv_module.write_text("", encoding="utf-8")
+            hostile = Path(directory) / "hostile.py"
+            hostile.write_text("", encoding="utf-8")
+            raw = json.dumps(
+                {
+                    "python": sys.version,
+                    "executable": sys.executable,
+                    "module": str(module),
+                    "numpy": "2.4.4",
+                    "scipy": "1.17.1",
+                    "pyloudnorm": "0.2.0",
+                    "module_paths": {
+                        "audio_energy_mcp": str(module),
+                        "numpy": str(hostile),
+                        "scipy": str(venv_module),
+                        "pyloudnorm": str(venv_module),
+                    },
+                }
+            )
+
+            with self.assertRaisesRegex(bench.BenchError, "outside prepared venv"):
+                bench.parse_audio_runtime_provenance(
+                    raw, module, workspace_root=workspace
+                )
 
     def test_sampler_timing_allows_a_recorded_swap_stall_with_dense_coverage(self) -> None:
         timing = bench.validate_sampler_timing(

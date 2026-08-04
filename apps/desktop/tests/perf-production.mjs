@@ -17,9 +17,17 @@ const PORT = Number(process.env.PERF_PORT ?? 4173);
 const RUNS = Number(process.env.PERF_RUNS ?? 3);
 const SUITE = process.env.PERF_SUITE ?? "full";
 const safeLabel = LABEL?.replace(/[^a-zA-Z0-9._-]/g, "-");
-const defaultOutput = `/private/tmp/montage-desktop-production-perf-${safeLabel ?? "missing"}-${process.pid}`;
+const defaultOutput = join(
+  os.tmpdir(),
+  `montage-desktop-production-perf-${safeLabel ?? "missing"}-${process.pid}`,
+);
+const defaultEvidence = join(
+  os.tmpdir(),
+  "montage-desktop-production-perf",
+  "evidence",
+);
 const OUTPUT_DIR = resolve(process.env.PERF_OUTPUT_DIR ?? defaultOutput);
-const EVIDENCE_DIR = resolve(process.env.PERF_EVIDENCE_DIR ?? "/Volumes/My Passport for Mac/awidat-build/desktop-production-perf/evidence");
+const EVIDENCE_DIR = resolve(process.env.PERF_EVIDENCE_DIR ?? defaultEvidence);
 const BASE_URL = `http://127.0.0.1:${PORT}/`;
 const SLEEP_PREVENTION_ARGS = process.platform === "darwin"
   ? ["-disu", "-w", String(process.pid)]
