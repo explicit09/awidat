@@ -23,7 +23,10 @@ def audio_energy_data() -> dict[str, object]:
         "sample_rate": 48_000,
         "duration_s": 2.0,
         "window_ms": 100,
-        "windows": [{"start_s": 0.0, "rms_db": -12.0}],
+        "windows": [
+            {"start_s": index / 10.0, "rms_db": -12.0}
+            for index in range(20)
+        ],
         "loudness_integrated_lufs": -18.0,
         "true_peak_dbfs": -1.0,
         "loudness_short_term": [{"start_s": 0.0, "lufs": -18.0}],
@@ -495,6 +498,9 @@ class BenchAudioEnergyTests(unittest.TestCase):
                 "loudness_integrated_lufs", float("inf")
             ),
             "boolean window size": lambda data: data.__setitem__("window_ms", True),
+            "non-integer window size": lambda data: data.__setitem__(
+                "window_ms", 100.0
+            ),
             "non-object window": lambda data: data.__setitem__("windows", [True]),
             "nonfinite window value": lambda data: data.__setitem__(
                 "windows", [{"start_s": 0.0, "rms_db": float("nan")}]
@@ -508,6 +514,36 @@ class BenchAudioEnergyTests(unittest.TestCase):
             ),
             "boolean silence threshold": lambda data: data.__setitem__(
                 "silence_relative_lu", True
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                data = audio_energy_data()
+                mutate(data)
+                output_root = Path(directory)
+                write_dispatcher_output(output_root, data)
+
+                with self.assertRaises(bench.BenchError):
+                    bench.validate_dispatcher_output(
+                        output_root, "sample", {"duration_seconds": 2.0}
+                    )
+
+    def test_dispatcher_output_accepts_complete_rms_window_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory)
+            write_dispatcher_output(output_root, audio_energy_data())
+
+            _, _, metrics = bench.validate_dispatcher_output(
+                output_root, "sample", {"duration_seconds": 2.0}
+            )
+
+            self.assertEqual(metrics["windows_count"], 20)
+
+    def test_dispatcher_output_requires_complete_rms_window_grid(self) -> None:
+        cases = {
+            "truncated windows": lambda data: data["windows"].pop(),
+            "misaligned window": lambda data: data["windows"][1].__setitem__(
+                "start_s", 0.15
             ),
         }
         for name, mutate in cases.items():

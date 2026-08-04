@@ -975,6 +975,36 @@ def _finite_rows(value: Any, fields: tuple[str, ...]) -> bool:
     )
 
 
+def _complete_rms_window_grid(
+    windows: Any,
+    duration: Any,
+    sample_rate: Any,
+    window_ms: Any,
+) -> bool:
+    if (
+        not _finite_rows(windows, ("start_s", "rms_db"))
+        or not windows
+        or not _finite_number(duration)
+        or duration <= 0
+        or sample_rate != 48_000
+        or not _nonnegative_int(window_ms)
+        or window_ms != 100
+    ):
+        return False
+    sample_count = round(float(duration) * sample_rate)
+    window_samples = int(sample_rate * window_ms / 1000)
+    expected_count = sample_count // window_samples
+    return len(windows) == expected_count and all(
+        math.isclose(
+            float(window["start_s"]),
+            index * window_ms / 1000.0,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        for index, window in enumerate(windows)
+    )
+
+
 def validate_dispatcher_output(
     output_root: Path,
     run_label: str,
@@ -1018,16 +1048,14 @@ def validate_dispatcher_output(
     windows = data.get("windows")
     duration = data.get("duration_s")
     if (
-        not _finite_rows(windows, ("start_s", "rms_db"))
-        or not windows
-        or not all(window["start_s"] >= 0 for window in windows)
-        or not _finite_number(duration)
-        or duration <= 0
+        not _complete_rms_window_grid(
+            windows,
+            duration,
+            data.get("sample_rate"),
+            data.get("window_ms"),
+        )
         or abs(float(duration) - fixture["duration_seconds"])
         > max(0.5, fixture["duration_seconds"] * 0.001)
-        or data.get("sample_rate") != 48_000
-        or not _nonnegative_int(data.get("window_ms"))
-        or data["window_ms"] == 0
         or not _finite_number(data.get("true_peak_dbfs"))
         or not _finite_number(data.get("loudness_integrated_lufs"))
         or not _finite_rows(data.get("loudness_short_term"), ("start_s", "lufs"))

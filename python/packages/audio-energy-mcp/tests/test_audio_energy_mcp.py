@@ -186,6 +186,40 @@ class AudioEnergyMeterTests(unittest.TestCase):
             if close is not None:
                 close()
 
+    def test_streaming_integrated_loudness_matches_numpy_gating_for_varied_long_input(
+        self,
+    ) -> None:
+        cases = {
+            "relative gate boundary": np.array(
+                [0.7071115012974338, 0.6650520335944493, 0.04731598396178909]
+            ),
+            "one-hour-scale varied energies": 10.0
+            ** np.random.default_rng(0).uniform(-8.0, 0.0, 36_001),
+        }
+        for name, energies in cases.items():
+            with self.subTest(name=name):
+                loudness = -0.691 + 10.0 * np.log10(energies)
+                absolute_gated = energies[loudness >= -70.0]
+                relative_gate = (
+                    -0.691 + 10.0 * np.log10(np.mean(absolute_gated)) - 10.0
+                )
+                relative_gated = energies[
+                    (loudness > relative_gate) & (loudness > -70.0)
+                ]
+                expected = float(
+                    -0.691 + 10.0 * np.log10(np.mean(relative_gated))
+                )
+
+                analysis = _StreamingAudio(48_000)
+                try:
+                    analysis._energy_file.write(
+                        energies.astype("<f8", copy=False).tobytes()
+                    )
+
+                    self.assertEqual(analysis._integrated_loudness(), expected)
+                finally:
+                    analysis.close()
+
     def test_handle_rejects_incomplete_pcm_frame_after_successful_decode(self) -> None:
         raw = np.full(48_000, 0.25, dtype="<f4").tobytes() + b"\x00"
         process = _FakeFfmpeg([raw])

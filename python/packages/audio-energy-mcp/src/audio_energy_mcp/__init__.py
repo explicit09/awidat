@@ -19,6 +19,7 @@ Schema version: "1".
 from __future__ import annotations
 
 import math
+import mmap
 import os
 import shutil
 import struct
@@ -290,35 +291,48 @@ class _StreamingAudio:
             )
 
     def _integrated_loudness(self) -> float:
-        absolute_count = 0
-
-        def absolute_gated() -> Iterator[float]:
-            nonlocal absolute_count
-            for energy in self._block_energy_values():
-                if self._energy_loudness(energy) >= -70.0:
-                    absolute_count += 1
-                    yield energy
-
-        absolute_sum = math.fsum(absolute_gated())
-        if absolute_count == 0:
+        mean_energy = self._gated_energy_mean(relative_gate=None)
+        if mean_energy is None:
             return -math.inf
-        mean_energy = absolute_sum / absolute_count
         relative_gate = self._energy_loudness(mean_energy) - 10.0
+        mean_energy = self._gated_energy_mean(relative_gate=relative_gate)
+        if mean_energy is None:
+            return -math.inf
+        return self._energy_loudness(mean_energy)
 
-        relative_count = 0
-
-        def relative_gated() -> Iterator[float]:
-            nonlocal relative_count
+    def _gated_energy_mean(self, relative_gate: float | None) -> float | None:
+        count = 0
+        with tempfile.TemporaryFile(
+            mode="w+b", prefix="montage-audio-energy-gated-", suffix=".f64"
+        ) as gated_file:
+            buffer = bytearray()
             for energy in self._block_energy_values():
                 loudness = self._energy_loudness(energy)
-                if loudness > relative_gate and loudness > -70.0:
-                    relative_count += 1
-                    yield energy
+                included = (
+                    loudness >= -70.0
+                    if relative_gate is None
+                    else loudness > relative_gate and loudness > -70.0
+                )
+                if not included:
+                    continue
+                buffer.extend(struct.pack("<d", energy))
+                count += 1
+                if len(buffer) >= _DECODE_CHUNK_BYTES:
+                    gated_file.write(buffer)
+                    buffer.clear()
+            if buffer:
+                gated_file.write(buffer)
+            if count == 0:
+                return None
 
-        relative_sum = math.fsum(relative_gated())
-        if relative_count == 0:
-            return -math.inf
-        return self._energy_loudness(relative_sum / relative_count)
+            gated_file.flush()
+            # A disk-backed contiguous view preserves pyloudnorm's np.mean
+            # reduction order without retaining all gated blocks in Python RAM.
+            with mmap.mmap(gated_file.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+                energies = np.frombuffer(mapped, dtype=np.dtype("<f8"), count=count)
+                mean = float(np.mean(energies))
+                del energies
+                return mean
 
     def close(self) -> None:
         self._energy_file.close()
