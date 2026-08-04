@@ -425,8 +425,10 @@ def _stream_mono(path: str) -> dict[str, Any]:
                 _terminate_ffmpeg(process)
 
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-        stderr_thread.start()
+        stderr_thread_started = False
         try:
+            stderr_thread.start()
+            stderr_thread_started = True
             while fragment := process.stdout.read(_DECODE_CHUNK_BYTES):
                 analysis.consume_bytes(fragment)
             return_code = process.wait()
@@ -435,7 +437,8 @@ def _stream_mono(path: str) -> dict[str, Any]:
             raise
         finally:
             _terminate_ffmpeg(process)
-            stderr_thread.join()
+            if stderr_thread_started:
+                stderr_thread.join()
             process.stdout.close()
             process.stderr.close()
 

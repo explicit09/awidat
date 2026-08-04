@@ -328,6 +328,22 @@ class AudioEnergyMeterTests(unittest.TestCase):
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
 
+    def test_handle_reaps_ffmpeg_when_stderr_thread_cannot_start(self) -> None:
+        start_error = RuntimeError("cannot start thread")
+        process = _FakeFfmpeg([])
+
+        with (
+            patch("audio_energy_mcp.subprocess.Popen", return_value=process),
+            patch("audio_energy_mcp.threading.Thread.start", side_effect=start_error),
+            self.assertRaisesRegex(RuntimeError, "cannot start thread"),
+        ):
+            handle(SimpleNamespace(asset_path="thread-exhaustion.wav"))
+
+        self.assertTrue(process.terminated)
+        self.assertGreaterEqual(process.wait_calls, 1)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
+
     def test_handle_reaps_ffmpeg_when_stream_read_is_cancelled(self) -> None:
         process = _FakeFfmpeg([b"\\x00\\x00", KeyboardInterrupt()])
 
