@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use montage_config::{IndexerResourceClass, McpServer, McpServerKind};
 use montage_index::{AssetInput, PairOutcome, asset_fingerprint, run, sidecar_path};
@@ -309,14 +312,26 @@ fn validate_fixture(fixture: &Fixture) -> Result<(), String> {
     Ok(())
 }
 
+const FIXTURE_GUARD_MARKER: &[u8] = b"montage-index-skip-perf-v2\n";
+
 #[derive(Debug)]
 struct FixtureGuard {
-    path: PathBuf,
+    advisory_lock: File,
+    advisory_path: PathBuf,
+    legacy_path: PathBuf,
 }
 
 impl Drop for FixtureGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        if validate_marker_bearing_legacy_lock(
+            &self.advisory_lock,
+            &self.advisory_path,
+            &self.legacy_path,
+        )
+        .is_ok()
+        {
+            let _ = fs::remove_file(&self.legacy_path);
+        }
     }
 }
 
@@ -327,15 +342,188 @@ fn acquire_fixture_guard(work_dir: &Path, config: &FixtureConfig) -> Result<Fixt
     let name = fixture
         .file_name()
         .ok_or_else(|| format!("fixture has no name: {}", fixture.display()))?;
-    let path = work_dir.join(format!(".{}.lock", name.to_string_lossy()));
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(_) => Ok(FixtureGuard { path }),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
-            "fixture build already in progress: {}",
-            fixture.display()
-        )),
-        Err(error) => Err(format!("create {}: {error}", path.display())),
+    let legacy_path = work_dir.join(format!(".{}.lock", name.to_string_lossy()));
+    let advisory_path = work_dir.join(format!(".{}.lock.v2", name.to_string_lossy()));
+    let mut advisory_lock = open_advisory_lock(&advisory_path)?;
+    match advisory_lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(format!(
+                "fixture build already in progress: {}",
+                fixture.display()
+            ));
+        }
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(format!("lock {}: {error}", advisory_path.display()));
+        }
     }
+    claim_legacy_fixture_barrier(&mut advisory_lock, &advisory_path, &legacy_path)?;
+    Ok(FixtureGuard {
+        advisory_lock,
+        advisory_path,
+        legacy_path,
+    })
+}
+
+fn open_advisory_lock(path: &Path) -> Result<File, String> {
+    #[cfg(unix)]
+    {
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|error| format!("open {}: {error}", path.display()))?;
+        validate_advisory_lock_path(&lock, path)?;
+        Ok(lock)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err("safe advisory fixture locking is unavailable on this platform".into())
+    }
+}
+
+#[cfg(unix)]
+fn validate_advisory_lock_path(lock: &File, path: &Path) -> Result<(), String> {
+    let opened = lock
+        .metadata()
+        .map_err(|error| format!("metadata {}: {error}", path.display()))?;
+    let linked = fs::symlink_metadata(path)
+        .map_err(|error| format!("metadata {}: {error}", path.display()))?;
+    if !opened.file_type().is_file()
+        || !linked.file_type().is_file()
+        || opened.dev() != linked.dev()
+        || opened.ino() != linked.ino()
+    {
+        return Err(format!("unsafe advisory fixture lock: {}", path.display()));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_unlinked_advisory_lock(
+    lock: &File,
+    advisory_path: &Path,
+    legacy_path: &Path,
+) -> Result<(), String> {
+    validate_advisory_lock_path(lock, advisory_path)?;
+    let metadata = lock
+        .metadata()
+        .map_err(|error| format!("metadata {}: {error}", advisory_path.display()))?;
+    if metadata.nlink() != 1 {
+        return Err(format!(
+            "unexpected advisory fixture lock link count: {}",
+            advisory_path.display()
+        ));
+    }
+    match fs::symlink_metadata(legacy_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "legacy fixture build already in progress: {}",
+            legacy_path.display()
+        )),
+        Err(error) => Err(format!("metadata {}: {error}", legacy_path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn validate_unlinked_advisory_lock(
+    _lock: &File,
+    _advisory_path: &Path,
+    _legacy_path: &Path,
+) -> Result<(), String> {
+    Err("safe advisory fixture locking is unavailable on this platform".into())
+}
+
+#[cfg(unix)]
+fn validate_marker_bearing_legacy_lock(
+    lock: &File,
+    advisory_path: &Path,
+    legacy_path: &Path,
+) -> Result<(), String> {
+    validate_advisory_lock_path(lock, advisory_path)?;
+    let advisory = lock
+        .metadata()
+        .map_err(|error| format!("metadata {}: {error}", advisory_path.display()))?;
+    let legacy = fs::symlink_metadata(legacy_path)
+        .map_err(|error| format!("metadata {}: {error}", legacy_path.display()))?;
+    if advisory.nlink() != 2
+        || !legacy.file_type().is_file()
+        || advisory.dev() != legacy.dev()
+        || advisory.ino() != legacy.ino()
+        || advisory.len() != FIXTURE_GUARD_MARKER.len() as u64
+    {
+        return Err(format!(
+            "legacy fixture build already in progress: {}",
+            legacy_path.display()
+        ));
+    }
+    if read_advisory_marker(lock, advisory_path)? != FIXTURE_GUARD_MARKER {
+        return Err(format!(
+            "legacy fixture build already in progress: {}",
+            legacy_path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_advisory_marker(lock: &File, path: &Path) -> Result<Vec<u8>, String> {
+    let mut reader = lock
+        .try_clone()
+        .map_err(|error| format!("clone {}: {error}", path.display()))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seek {}: {error}", path.display()))?;
+    let mut marker = Vec::new();
+    reader
+        .read_to_end(&mut marker)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    Ok(marker)
+}
+
+#[cfg(not(unix))]
+fn validate_marker_bearing_legacy_lock(
+    _lock: &File,
+    _advisory_path: &Path,
+    _legacy_path: &Path,
+) -> Result<(), String> {
+    Err("safe advisory fixture locking is unavailable on this platform".into())
+}
+
+fn claim_legacy_fixture_barrier(
+    advisory_lock: &mut File,
+    advisory_path: &Path,
+    legacy_path: &Path,
+) -> Result<(), String> {
+    match fs::symlink_metadata(legacy_path) {
+        Ok(_) => {
+            validate_marker_bearing_legacy_lock(advisory_lock, advisory_path, legacy_path)?;
+            fs::remove_file(legacy_path)
+                .map_err(|error| format!("remove {}: {error}", legacy_path.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("metadata {}: {error}", legacy_path.display())),
+    }
+    validate_unlinked_advisory_lock(advisory_lock, advisory_path, legacy_path)?;
+    advisory_lock
+        .set_len(0)
+        .and_then(|()| advisory_lock.seek(SeekFrom::Start(0)).map(|_| ()))
+        .and_then(|()| advisory_lock.write_all(FIXTURE_GUARD_MARKER))
+        .and_then(|()| advisory_lock.sync_all())
+        .map_err(|error| format!("write {}: {error}", advisory_path.display()))?;
+    validate_unlinked_advisory_lock(advisory_lock, advisory_path, legacy_path)?;
+    fs::hard_link(advisory_path, legacy_path).map_err(|error| {
+        format!(
+            "publish {} -> {}: {error}",
+            advisory_path.display(),
+            legacy_path.display()
+        )
+    })?;
+    validate_marker_bearing_legacy_lock(advisory_lock, advisory_path, legacy_path)
 }
 
 fn unique_temporary_path(path: &Path) -> Result<PathBuf, String> {
@@ -634,6 +822,12 @@ fn median(sorted: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn summary_uses_nearest_rank_p95_and_median_absolute_deviation() {
@@ -675,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_guard_is_exclusive_and_releases() {
+    fn fixture_guard_v2_lock_is_exclusive_and_releases() {
         let temp = tempfile::tempdir().expect("tempdir");
         let config = FixtureConfig {
             assets: 2,
@@ -687,6 +881,237 @@ mod tests {
         assert!(error.contains("fixture build already in progress"));
         drop(guard);
         acquire_fixture_guard(temp.path(), &config).expect("guard released");
+    }
+
+    #[test]
+    fn fixture_guard_recovers_a_marker_bearing_crash_left_legacy_lock() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let lock = temp
+            .path()
+            .join(format!(".{}.lock", name.to_string_lossy()));
+        let advisory = temp
+            .path()
+            .join(format!(".{}.lock.v2", name.to_string_lossy()));
+        std::fs::write(&advisory, b"montage-index-skip-perf-v2\n").expect("stale lock");
+        std::fs::hard_link(&advisory, &lock).expect("legacy marker link");
+
+        acquire_fixture_guard(temp.path(), &config).expect("stale lock recovered");
+        assert!(advisory.is_file());
+    }
+
+    #[test]
+    fn fixture_guard_refuses_empty_or_unknown_legacy_locks() {
+        for contents in [b"".as_slice(), b"legacy sentinel".as_slice()] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let config = FixtureConfig {
+                assets: 1,
+                indexers: 1,
+                sidecar_mib: 1,
+            };
+            let root = fixture_root(temp.path(), &config);
+            let name = root.file_name().expect("fixture name");
+            let lock = temp
+                .path()
+                .join(format!(".{}.lock", name.to_string_lossy()));
+            std::fs::write(&lock, contents).expect("legacy lock");
+
+            let error = acquire_fixture_guard(temp.path(), &config)
+                .expect_err("unknown legacy lock blocks v2 builder");
+            assert!(error.contains("legacy fixture build already in progress"));
+        }
+    }
+
+    #[test]
+    fn fixture_guard_removes_its_legacy_barrier_on_drop() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let lock = temp
+            .path()
+            .join(format!(".{}.lock", name.to_string_lossy()));
+        let advisory = temp
+            .path()
+            .join(format!(".{}.lock.v2", name.to_string_lossy()));
+
+        let guard = acquire_fixture_guard(temp.path(), &config).expect("v2 guard");
+        assert_eq!(
+            std::fs::read(&lock).expect("v2 legacy marker"),
+            b"montage-index-skip-perf-v2\n"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&lock).expect("legacy metadata").ino(),
+            std::fs::metadata(&advisory)
+                .expect("advisory metadata")
+                .ino()
+        );
+        drop(guard);
+        assert!(!lock.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_guard_rejects_a_symlinked_advisory_lock_without_mutating_its_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let advisory = temp
+            .path()
+            .join(format!(".{}.lock.v2", name.to_string_lossy()));
+        let target = temp.path().join("sentinel");
+        std::fs::write(&target, b"do not truncate").expect("sentinel");
+        symlink(&target, &advisory).expect("advisory symlink");
+
+        assert!(acquire_fixture_guard(temp.path(), &config).is_err());
+        assert_eq!(
+            std::fs::read(&target).expect("sentinel preserved"),
+            b"do not truncate"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_guard_rejects_a_hard_linked_advisory_lock_without_mutating_its_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let advisory = temp
+            .path()
+            .join(format!(".{}.lock.v2", name.to_string_lossy()));
+        let target = temp.path().join("sentinel");
+        std::fs::write(&target, b"do not truncate").expect("sentinel");
+        std::fs::hard_link(&target, &advisory).expect("advisory hard link");
+
+        assert!(acquire_fixture_guard(temp.path(), &config).is_err());
+        assert_eq!(
+            std::fs::read(&target).expect("sentinel preserved"),
+            b"do not truncate"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_guard_rejects_a_legacy_fifo_symlink_without_following_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let legacy = temp
+            .path()
+            .join(format!(".{}.lock", name.to_string_lossy()));
+        let fifo = temp.path().join("legacy-fifo");
+        let status = std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo command");
+        assert!(status.success());
+        symlink(&fifo, &legacy).expect("legacy symlink");
+
+        let work_dir = temp.path().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(acquire_fixture_guard(&work_dir, &config));
+        });
+        let result = match receiver.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+                loop {
+                    match OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                    {
+                        Ok(writer) => {
+                            drop(writer);
+                            break;
+                        }
+                        Err(error)
+                            if error.raw_os_error() == Some(libc::ENXIO)
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("bounded fifo writer: {error}"),
+                    }
+                }
+                let _ = receiver
+                    .recv_timeout(std::time::Duration::from_millis(200))
+                    .expect("unblocked fixture guard");
+                worker.join().expect("fixture guard worker");
+                panic!("legacy symlink blocked fixture guard");
+            }
+            Err(error) => panic!("fixture guard result channel: {error}"),
+        };
+        worker.join().expect("fixture guard worker");
+
+        assert!(result.is_err());
+        assert!(
+            std::fs::symlink_metadata(&legacy)
+                .expect("legacy symlink metadata")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_guard_drop_preserves_an_unowned_legacy_symlink() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = FixtureConfig {
+            assets: 1,
+            indexers: 1,
+            sidecar_mib: 1,
+        };
+        let root = fixture_root(temp.path(), &config);
+        let name = root.file_name().expect("fixture name");
+        let legacy = temp
+            .path()
+            .join(format!(".{}.lock", name.to_string_lossy()));
+        let target = temp.path().join("sentinel");
+
+        let guard = acquire_fixture_guard(temp.path(), &config).expect("v2 guard");
+        std::fs::remove_file(&legacy).expect("remove owned legacy marker");
+        std::fs::write(&target, FIXTURE_GUARD_MARKER).expect("sentinel");
+        symlink(&target, &legacy).expect("legacy symlink");
+        drop(guard);
+
+        assert!(
+            std::fs::symlink_metadata(&legacy)
+                .expect("legacy symlink metadata")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(&target).expect("sentinel preserved"),
+            FIXTURE_GUARD_MARKER
+        );
     }
 
     #[test]

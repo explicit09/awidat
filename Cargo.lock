@@ -10222,6 +10222,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "futures",
+ "libc",
  "montage-config",
  "montage-mcp",
  "montage-proto",
@@ -10275,6 +10276,7 @@ name = "montage-render"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "libc",
  "montage-proto",
  "montage-render-gpu",
  "serde",

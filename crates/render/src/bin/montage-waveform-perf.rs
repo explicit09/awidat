@@ -29,6 +29,8 @@ const DURATION_TOLERANCE_S: f64 = 1.0 / WAVEFORM_SAMPLE_RATE_HZ as f64;
 const CANCELLATION_DELAY: Duration = Duration::from_millis(1);
 const RSS_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);
 const RSS_SAMPLE_MAX_GAP: Duration = Duration::from_millis(100);
+const HELPER_TERMINATION_GRACE: Duration = Duration::from_millis(500);
+const HELPER_TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
@@ -332,7 +334,8 @@ fn run_helper_sample(
         .ok_or_else(|| format!("no parent for {}", result_path.display()))?;
     fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
     let started = Instant::now();
-    let child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args([
             "--helper",
             "--asset",
@@ -344,7 +347,9 @@ fn run_helper_sample(
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    configure_helper_process_group(&mut command);
+    let child = command
         .spawn()
         .map_err(|error| format!("spawn helper: {error}"))?;
     let measured = monitor_process_tree(child, started)?;
@@ -385,7 +390,32 @@ struct MeasuredChild {
     pid: u32,
 }
 
-fn monitor_process_tree(mut child: Child, started: Instant) -> Result<MeasuredChild, String> {
+fn monitor_process_tree(child: Child, started: Instant) -> Result<MeasuredChild, String> {
+    monitor_process_tree_with_sampler(child, started, sample_process_tree_usage)
+}
+
+fn monitor_process_tree_with_sampler<F>(
+    mut child: Child,
+    started: Instant,
+    mut sampler: F,
+) -> Result<MeasuredChild, String>
+where
+    F: FnMut(u32) -> Result<TreeUsage, String>,
+{
+    let result = monitor_process_tree_inner(&mut child, started, &mut sampler);
+    if let Err(error) = result {
+        terminate_and_reap_helper_process_group(&mut child)
+            .map_err(|cleanup| format!("{error}; helper cleanup failed: {cleanup}"))?;
+        return Err(error);
+    }
+    result
+}
+
+fn monitor_process_tree_inner(
+    child: &mut Child,
+    started: Instant,
+    sampler: &mut impl FnMut(u32) -> Result<TreeUsage, String>,
+) -> Result<MeasuredChild, String> {
     let pid = child.id();
     let mut peak_rss_bytes = 0;
     let mut peak_cpu_time = Duration::ZERO;
@@ -397,16 +427,13 @@ fn monitor_process_tree(mut child: Child, started: Instant) -> Result<MeasuredCh
         if let Some(previous) = last_sample.replace(sample_started) {
             max_sample_gap = max_sample_gap.max(sample_started.duration_since(previous));
         }
-        let usage = sample_process_tree_usage(pid)?;
+        let usage = sampler(pid)?;
         if usage.rss_bytes > 0 {
             sample_count += 1;
             peak_rss_bytes = peak_rss_bytes.max(usage.rss_bytes);
         }
         peak_cpu_time = peak_cpu_time.max(usage.cpu_time);
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("wait helper: {error}"))?
-        {
+        if helper_has_exited_without_reaping(pid)? {
             if sample_count == 0 {
                 return Err("process-tree RSS sampler never observed the helper".into());
             }
@@ -417,6 +444,13 @@ fn monitor_process_tree(mut child: Child, started: Instant) -> Result<MeasuredCh
                     RSS_SAMPLE_MAX_GAP.as_millis()
                 ));
             }
+            #[cfg(unix)]
+            if !helper_process_group_descendants(pid)?.is_empty() {
+                return Err("helper exited with lingering process-group descendants".into());
+            }
+            let status = child
+                .wait()
+                .map_err(|error| format!("reap helper: {error}"))?;
             return Ok(MeasuredChild {
                 status,
                 wall: started.elapsed(),
@@ -432,6 +466,208 @@ fn monitor_process_tree(mut child: Child, started: Instant) -> Result<MeasuredCh
             thread::sleep(RSS_SAMPLE_INTERVAL - elapsed);
         }
     }
+}
+
+fn configure_helper_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
+fn terminate_and_reap_helper_process_group(child: &mut Child) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let process_group = child.id();
+        finish_helper_process_group_cleanup(
+            |signal| signal_helper_process_group(process_group, signal),
+            |grace| wait_for_helper_process_group_quiescent(process_group, grace),
+            || reap_helper_child_with_timeout(child, HELPER_TERMINATION_GRACE),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        child
+            .kill()
+            .map_err(|error| format!("terminate helper: {error}"))?;
+        reap_helper_child_with_timeout(child, HELPER_TERMINATION_GRACE)
+    }
+}
+
+#[cfg(unix)]
+fn finish_helper_process_group_cleanup<S, W, R>(
+    mut signal: S,
+    mut wait_for_quiescence: W,
+    reap_leader: R,
+) -> Result<(), String>
+where
+    S: FnMut(&str) -> Result<(), String>,
+    W: FnMut(Duration) -> Result<bool, String>,
+    R: FnOnce() -> Result<(), String>,
+{
+    let term_error = signal("TERM").err();
+    let after_term = wait_for_quiescence(HELPER_TERMINATION_GRACE);
+    let (kill_error, after_final_signal) = if matches!(&after_term, Ok(true)) {
+        (None, after_term)
+    } else {
+        (
+            signal("KILL").err(),
+            wait_for_quiescence(HELPER_TERMINATION_GRACE),
+        )
+    };
+    let signal_errors = [term_error, kill_error]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let signal_context = if signal_errors.is_empty() {
+        String::new()
+    } else {
+        format!("; cleanup signal failures: {}", signal_errors.join("; "))
+    };
+
+    match after_final_signal {
+        Ok(true) => {
+            reap_leader()?;
+            if signal_errors.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "helper process group cleanup signal failures: {}",
+                    signal_errors.join("; ")
+                ))
+            }
+        }
+        Ok(false) => Err(format!(
+            "helper process group remained live after final signal{signal_context}"
+        )),
+        Err(error) => Err(format!(
+            "helper process group final quiescence check failed: {error}{signal_context}"
+        )),
+    }
+}
+
+fn reap_helper_child_with_timeout(child: &mut Child, grace: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("reap helper: {error}"))?
+        {
+            Some(_) => return Ok(()),
+            None if Instant::now() >= deadline => {
+                return Err("helper process did not exit after final signal".into());
+            }
+            None => thread::sleep(HELPER_TERMINATION_POLL_INTERVAL),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_helper_process_group_quiescent(
+    process_group: u32,
+    grace: Duration,
+) -> Result<bool, String> {
+    let deadline = Instant::now() + grace;
+    while !helper_process_group_live_members(process_group)?.is_empty() {
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(HELPER_TERMINATION_POLL_INTERVAL);
+    }
+    Ok(true)
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessGroupMember {
+    pid: u32,
+    state: String,
+}
+
+#[cfg(unix)]
+fn helper_process_group_members(process_group: u32) -> Result<Vec<ProcessGroupMember>, String> {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,pgid=,stat="])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("sample helper process group {process_group}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sample helper process group {process_group} exited {}",
+            output.status
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let pgid = fields.next()?.parse::<u32>().ok()?;
+            let state = fields.next()?.to_string();
+            (pgid == process_group).then_some(ProcessGroupMember { pid, state })
+        })
+        .collect())
+}
+
+#[cfg(unix)]
+fn helper_process_group_descendants(process_group: u32) -> Result<Vec<u32>, String> {
+    Ok(helper_process_group_members(process_group)?
+        .into_iter()
+        .filter(|member| member.pid != process_group)
+        .map(|member| member.pid)
+        .collect())
+}
+
+#[cfg(unix)]
+fn helper_process_group_live_members(process_group: u32) -> Result<Vec<u32>, String> {
+    Ok(helper_process_group_members(process_group)?
+        .into_iter()
+        .filter(|member| !member.state.starts_with('Z'))
+        .map(|member| member.pid)
+        .collect())
+}
+
+fn helper_has_exited_without_reaping(pid: u32) -> Result<bool, String> {
+    let output = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("sample helper state {pid}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sample helper state {pid} exited {}",
+            output.status
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .any(|state| state.starts_with('Z')))
+}
+
+#[cfg(unix)]
+fn signal_helper_process_group(process_group: u32, signal: &str) -> Result<(), String> {
+    let signal_number = match signal {
+        "TERM" => libc::SIGTERM,
+        "KILL" => libc::SIGKILL,
+        _ => return Err(format!("unsupported helper process group signal {signal}")),
+    };
+    let process_group = i32::try_from(process_group)
+        .map_err(|_| format!("helper process group ID {process_group} exceeds i32"))?;
+    let target = process_group
+        .checked_neg()
+        .ok_or_else(|| format!("invalid helper process group ID {process_group}"))?;
+    // SAFETY: a negative, checked process-group ID targets only the child group we created.
+    if unsafe { libc::kill(target, signal_number) } == -1 {
+        return Err(format!(
+            "signal {signal} helper process group {process_group}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1392,6 +1628,215 @@ fn write_atomically_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_cleanup_signals_before_reaping_the_group_leader() {
+        use std::cell::RefCell;
+        use std::collections::VecDeque;
+
+        let events = RefCell::new(Vec::<String>::new());
+        let observations = RefCell::new(VecDeque::from([false, true]));
+        finish_helper_process_group_cleanup(
+            |signal| {
+                events.borrow_mut().push(signal.into());
+                Ok(())
+            },
+            |_| {
+                events.borrow_mut().push("observe".into());
+                Ok(observations.borrow_mut().pop_front().unwrap())
+            },
+            || {
+                events.borrow_mut().push("reap".into());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            events.into_inner(),
+            vec!["TERM", "observe", "KILL", "observe", "reap"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_cleanup_does_not_reap_when_signaling_or_quiescence_fails() {
+        use std::cell::Cell;
+
+        let reaped = Cell::new(false);
+        let result = finish_helper_process_group_cleanup(
+            |_| Err("cannot signal helper process group".into()),
+            |_| Ok(false),
+            || {
+                reaped.set(true);
+                Ok(())
+            },
+        );
+        let final_quiescence_reaped = Cell::new(false);
+        let final_quiescence_result = finish_helper_process_group_cleanup(
+            |_| Ok(()),
+            |_| Ok(false),
+            || {
+                final_quiescence_reaped.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(final_quiescence_result.is_err());
+        assert!(
+            !reaped.get(),
+            "cleanup must not reap before a successful final signal and quiescence check"
+        );
+        assert!(
+            !final_quiescence_reaped.get(),
+            "cleanup must not reap after a final non-quiescent observation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn term_ignoring_leader_requires_kill_before_reap() {
+        use std::os::unix::process::CommandExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("ready");
+        let mut command = Command::new("/usr/bin/python3");
+        command
+            .args([
+                "-c",
+                "import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(30)",
+                &ready.display().to_string(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let process_group = child.id();
+        let cleanup = TestProcessGroup::new(process_group);
+        wait_for_test_file(&ready);
+        assert!(test_process_exists(process_group));
+
+        signal_helper_process_group(process_group, "TERM").unwrap();
+        assert!(test_process_exists(process_group));
+
+        assert!(
+            !wait_for_helper_process_group_quiescent(process_group, Duration::ZERO).unwrap(),
+            "a live TERM-ignoring leader must force SIGKILL before reap"
+        );
+        finish_helper_process_group_cleanup(
+            |signal| signal_helper_process_group(process_group, signal),
+            |grace| wait_for_helper_process_group_quiescent(process_group, grace),
+            || reap_helper_child_with_timeout(&mut child, HELPER_TERMINATION_GRACE),
+        )
+        .unwrap();
+        assert!(!process_group_exists(process_group));
+        drop(cleanup);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn monitor_sampling_error_terminates_and_reaps_the_helper_process_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let descendant_pid = directory.path().join("descendant.pid");
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                &format!(
+                    "sleep 30 & echo $! > \"{}\" && wait",
+                    descendant_pid.display()
+                ),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_helper_process_group(&mut command);
+        let child = command.spawn().unwrap();
+        let process_group = child.id();
+        let cleanup = TestProcessGroup::new(process_group);
+        let descendant = wait_for_test_pid(&descendant_pid);
+        assert!(test_process_exists(descendant));
+
+        let result = monitor_process_tree_with_sampler(child, Instant::now(), |_| {
+            Err("intentional sampler failure".into())
+        });
+
+        assert!(result.is_err());
+        assert!(
+            !process_group_exists(process_group),
+            "sampling failure left helper process group {process_group} alive"
+        );
+        assert!(
+            !test_process_exists(descendant),
+            "sampling failure left descendant {descendant} alive"
+        );
+        drop(cleanup);
+    }
+
+    #[cfg(unix)]
+    struct TestProcessGroup(u32);
+
+    #[cfg(unix)]
+    impl TestProcessGroup {
+        fn new(process_group: u32) -> Self {
+            Self(process_group)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TestProcessGroup {
+        fn drop(&mut self) {
+            let _ = signal_helper_process_group(self.0, "KILL");
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_group_exists(process_group: u32) -> bool {
+        let Ok(process_group) = i32::try_from(process_group) else {
+            return false;
+        };
+        let Some(target) = process_group.checked_neg() else {
+            return false;
+        };
+        // SAFETY: signal zero checks the existence of the specified process group.
+        unsafe { libc::kill(target, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    fn wait_for_test_pid(path: &Path) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Ok(value) = fs::read_to_string(path) {
+                return value.trim().parse().unwrap();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "descendant PID was never recorded"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn wait_for_test_file(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !path.is_file() {
+            assert!(Instant::now() < deadline, "test helper never became ready");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn test_process_exists(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: signal zero checks the existence of the specified process.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
 
     #[test]
     fn parses_ps_rows_and_ignores_headers_or_malformed_rows() {

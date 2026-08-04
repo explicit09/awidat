@@ -791,7 +791,7 @@ class BenchClipLifecycleTests(unittest.TestCase):
             [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
         )
         try:
-            members: list[tuple[int, int, int, int]] = []
+            members: list[bench.ProcessRow] = []
             for _ in range(50):
                 members = bench.process_group_members(process.pid)
                 if any(member[0] == process.pid for member in members):
@@ -805,6 +805,53 @@ class BenchClipLifecycleTests(unittest.TestCase):
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3)
+
+    def test_process_group_cleanup_keeps_leader_unreaped_through_final_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready"
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import subprocess; "
+                        f"subprocess.Popen([{sys.executable!r}, '-c', "
+                        f"\"import signal,time; from pathlib import Path; "
+                        f"signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                        f"Path({str(ready)!r}).write_text('ready'); time.sleep(60)\"]);"
+                    ),
+                ],
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + 3
+                while not ready.exists():
+                    self.assertLess(time.monotonic(), deadline, "descendant did not start")
+                    time.sleep(0.01)
+                time.sleep(0.05)
+                signal_returncodes: list[int | None] = []
+                real_killpg = os.killpg
+
+                def record_killpg(pgid: int, sig: int) -> None:
+                    signal_returncodes.append(process.returncode)
+                    real_killpg(pgid, sig)
+
+                with mock.patch.object(bench.os, "killpg", side_effect=record_killpg):
+                    self.assertEqual(bench.terminate_process_group(process.pid, process), [])
+
+                self.assertEqual(signal_returncodes, [None, None])
+            finally:
+                if process.returncode is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=3)
+
+    def test_group_wait_rejects_a_live_leader_missing_from_the_snapshot(self) -> None:
+        process = mock.Mock(pid=123, returncode=None)
+        process.wait.side_effect = subprocess.TimeoutExpired(["dispatcher"], 0.1)
+
+        with mock.patch.object(bench, "process_group_members", return_value=[]):
+            with self.assertRaisesRegex(bench.BenchError, "missing live dispatcher"):
+                bench.wait_for_process_group_absent(123, process, timeout_seconds=0)
 
     def test_successful_dispatcher_exit_rejects_a_worker_requiring_forced_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -838,11 +885,24 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 asset_id: "a" * 64
                 for asset_id in bench.requested_asset_ids(assets)
             }
+            real_terminate_process_group = bench.terminate_process_group
+
+            def terminate_unreaped_dispatcher_group(
+                pgid: int, process: subprocess.Popen[bytes]
+            ) -> list[bench.ProcessRow]:
+                self.assertIsNone(process.returncode)
+                return real_terminate_process_group(pgid, process)
 
             try:
                 with mock.patch.object(
                     bench, "validate_dispatcher_output", return_value=([], {})
-                ), mock.patch.object(bench, "sampler_evidence", return_value={}):
+                ), mock.patch.object(
+                    bench, "sampler_evidence", return_value={}
+                ), mock.patch.object(
+                    bench,
+                    "terminate_process_group",
+                    side_effect=terminate_unreaped_dispatcher_group,
+                ):
                     with self.assertRaisesRegex(bench.BenchError, "required forced cleanup"):
                         bench.run_sample(
                             name="leaky-success",
@@ -869,9 +929,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 self.assertEqual(bench.process_group_members(pgid), [])
             finally:
                 if pid_path.exists():
-                    bench.terminate_process_group(
-                        int(pid_path.read_text(encoding="utf-8"))
-                    )
+                    pgid = int(pid_path.read_text(encoding="utf-8"))
+                    if bench.process_group_members(pgid):
+                        os.killpg(pgid, signal.SIGKILL)
 
     def test_dispatcher_output_retains_pair_and_sidecar_timing_attribution(self) -> None:
         expected_ids = [f"external/{index}.mp4" for index in range(6)]

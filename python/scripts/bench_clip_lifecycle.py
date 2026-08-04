@@ -762,10 +762,13 @@ def controlled_environment(
     return environment
 
 
-def process_snapshot() -> list[tuple[int, int, int, int]]:
+ProcessRow = tuple[int, int, int, int, str]
+
+
+def process_snapshot() -> list[ProcessRow]:
     try:
         completed = subprocess.run(
-            ["ps", "-axo", "pid=,pgid=,ppid=,rss="],
+            ["ps", "-axo", "pid=,pgid=,ppid=,rss=,state="],
             check=True,
             capture_output=True,
             text=True,
@@ -773,50 +776,84 @@ def process_snapshot() -> list[tuple[int, int, int, int]]:
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise BenchError(f"process-group sampler failed: {error}") from error
-    rows: list[tuple[int, int, int, int]] = []
+    rows: list[ProcessRow] = []
     for line in completed.stdout.splitlines():
         fields = line.split()
-        if len(fields) < 4:
+        if len(fields) < 5:
             continue
         try:
-            rows.append(tuple(int(value) for value in fields[:4]))
+            pid, pgid, ppid, rss_kib = (int(value) for value in fields[:4])
         except ValueError:
             continue
+        rows.append((pid, pgid, ppid, rss_kib, fields[4]))
     if not rows:
         raise BenchError("process-group sampler returned no parseable rows")
     return rows
 
 
-def process_group_members(pgid: int) -> list[tuple[int, int, int, int]]:
+def process_group_members(pgid: int) -> list[ProcessRow]:
     return [row for row in process_snapshot() if row[1] == pgid]
 
 
 def wait_for_process_group_absent(
     pgid: int, process: subprocess.Popen[Any] | None = None, timeout_seconds: float = 3.0
-) -> list[tuple[int, int, int, int]]:
+) -> list[ProcessRow]:
     deadline = time.monotonic() + timeout_seconds
     while True:
-        if process is not None:
-            process.poll()
         members = process_group_members(pgid)
-        if not members or time.monotonic() >= deadline:
+        if process is None:
+            active = members
+        elif process.returncode is not None:
             return members
+        else:
+            active = [
+                row
+                for row in members
+                if row[0] != process.pid or not row[4].startswith("Z")
+            ]
+            if not active:
+                try:
+                    process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    raise BenchError(
+                        f"process-group sampler is missing live dispatcher {process.pid}"
+                    ) from None
+                else:
+                    return []
+        if not active or time.monotonic() >= deadline:
+            return active
         time.sleep(0.05)
 
 
 def terminate_process_group(
-    pgid: int, process: subprocess.Popen[Any] | None = None
-) -> list[tuple[int, int, int, int]]:
-    members = process_group_members(pgid)
+    pgid: int, process: subprocess.Popen[Any]
+) -> list[ProcessRow]:
+    if process.returncode is not None:
+        return process_group_members(pgid)
+    cleanup_error: BenchError | None = None
+    members: list[ProcessRow] | None = None
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        if not members:
-            return []
         try:
             os.killpg(pgid, sig)
         except ProcessLookupError:
+            pass
+        try:
+            members = wait_for_process_group_absent(pgid, process)
+        except BenchError as error:
+            cleanup_error = error
+            continue
+        if not members:
             return []
-        members = wait_for_process_group_absent(pgid, process)
-    return members
+        if process.returncode is not None:
+            return members
+    if process.returncode is None:
+        try:
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise BenchError(f"reap dispatcher after SIGKILL: {error}") from error
+    if cleanup_error is not None:
+        raise BenchError(f"verify dispatcher process-group cleanup: {cleanup_error}")
+    return members or []
 
 
 def run_sample(
@@ -848,6 +885,7 @@ def run_sample(
     observed_pids: set[int] = set()
     raw_samples: list[dict[str, Any]] = []
     peak_rss_bytes, started = 0, time.perf_counter()
+    dispatcher_status: int | None = None
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
         try:
             process = subprocess.Popen(
@@ -866,10 +904,10 @@ def run_sample(
             while True:
                 sampled_at = time.perf_counter()
                 rows = process_snapshot()
-                tree_rows = [(pid, ppid, rss_kib) for pid, _, ppid, rss_kib in rows]
+                tree_rows = [(pid, ppid, rss_kib) for pid, _, ppid, rss_kib, _ in rows]
                 tree_pids, _ = aggregate_process_tree(process.pid, tree_rows)
-                rss_by_pid = {pid: rss_kib for pid, _, _, rss_kib in rows}
-                group_pids = {pid for pid, row_pgid, _, _ in rows if row_pgid == pgid}
+                rss_by_pid = {pid: rss_kib for pid, _, _, rss_kib, _ in rows}
+                group_pids = {pid for pid, row_pgid, _, _, _ in rows if row_pgid == pgid}
                 live_pids = (tree_pids | group_pids) & set(rss_by_pid)
                 if live_pids:
                     observed_pids.update(live_pids)
@@ -884,47 +922,57 @@ def run_sample(
                     })
                 if sampled_at - started > timeout_seconds:
                     raise BenchError(f"{name} exceeded timeout of {timeout_seconds:.1f}s")
-                if process.poll() is not None:
-                    if process.returncode == 0:
-                        lingering = wait_for_process_group_absent(pgid, process)
-                        if lingering:
-                            remaining = terminate_process_group(pgid, process)
-                            if remaining:
-                                raise BenchError(
-                                    f"{name} cleanup failed: process_group_members={remaining}"
-                                )
+                leader = next((row for row in rows if row[0] == process.pid), None)
+                if leader is None:
+                    raise BenchError(
+                        f"{name} sampler lost the unreaped dispatcher PID {process.pid}"
+                    )
+                if leader[4].startswith("Z"):
+                    lingering = wait_for_process_group_absent(pgid, process)
+                    if lingering:
+                        remaining = terminate_process_group(pgid, process)
+                        dispatcher_status = process.returncode
+                        if remaining:
+                            raise BenchError(
+                                f"{name} cleanup failed: process_group_members={remaining}"
+                            )
+                        if dispatcher_status == 0:
                             raise BenchError(
                                 f"{name} required forced cleanup after a successful dispatcher "
                                 f"exit: process_group_members={lingering}"
                             )
-                        break
-                    remaining = terminate_process_group(pgid, process)
-                    if remaining:
-                        raise BenchError(f"{name} cleanup failed: process_group_members={remaining}")
+                    else:
+                        dispatcher_status = process.returncode
+                    if dispatcher_status is None:
+                        raise BenchError(f"{name} dispatcher was not reaped after exit")
                     break
                 time.sleep(max(0.0, SAMPLE_INTERVAL_SECONDS - (time.perf_counter() - sampled_at)))
         except BaseException as error:
-            remaining = terminate_process_group(pgid, process)
+            if process.returncode is None:
+                remaining = terminate_process_group(pgid, process)
+            else:
+                remaining = process_group_members(pgid)
             if remaining:
                 raise BenchError(f"{name} cleanup failed: process_group_members={remaining}") from error
             raise
     wall_seconds = time.perf_counter() - started
-    if process.returncode != 0:
-        remaining = terminate_process_group(pgid, process)
-        if remaining:
-            raise BenchError(f"{name} cleanup failed: process_group_members={remaining}")
+    if dispatcher_status != 0:
         tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        raise BenchError(f"{name} dispatcher exited {process.returncode}: {tail}")
+        raise BenchError(f"{name} dispatcher exited {dispatcher_status}: {tail}")
     if peak_rss_bytes <= 0:
         raise BenchError(f"{name} process-tree sampler did not observe positive RSS")
     remaining = process_group_members(pgid)
     if remaining:
-        remaining = terminate_process_group(pgid, process)
-    if remaining:
         raise BenchError(f"{name} cleanup failed: process_group_members={remaining}")
+    # The production dispatcher, MCP workers, and FFmpeg descendants inherit this
+    # process group. Never signal an escaped bare PID: macOS exposes no race-free
+    # process handle, so PID reuse could target an unrelated process.
     orphans = wait_for_no_orphans(observed_pids - {process.pid})
     if orphans:
-        raise BenchError(f"{name} cleanup failed: orphan_pids={orphans}")
+        raise BenchError(
+            f"{name} cleanup failed: observed descendant PIDs remain outside the "
+            f"dispatcher process group and are not signaled by bare PID: {orphans}"
+        )
     records, dispatcher = validate_dispatcher_output(
         output_root,
         name.replace("-", "_"),
@@ -940,6 +988,9 @@ def run_sample(
         "process_tree_peak_rss_bytes": peak_rss_bytes,
         "sampler": sampler_evidence(name, wall_seconds, raw_samples),
         "cleanup": {
+            "containment_scope": "dispatcher process group",
+            "launcher": "start_new_session",
+            "bare_pid_signaling": False,
             "process_group_pgid": pgid,
             "orphan_pids": [],
             "process_group_members": [],
