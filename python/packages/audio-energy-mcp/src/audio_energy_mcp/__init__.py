@@ -87,6 +87,7 @@ def _ffmpeg_path() -> str:
 # 144,000 samples) and matches typical podcast/interview source rates.
 _TARGET_SR = 48_000
 _DECODE_CHUNK_BYTES = 64 * 1024
+_MAX_STDERR_DIAGNOSTIC_BYTES = 64 * 1024
 _PCM_SAMPLE_BYTES = np.dtype(np.float32).itemsize
 _EBU_BLOCK_S = 0.400
 _EBU_STEP = 1.0 - 0.75
@@ -337,6 +338,16 @@ def _terminate_ffmpeg(process: subprocess.Popen[bytes]) -> None:
             process.wait()
 
 
+def _retain_stderr_tail(tail: bytearray, fragment: bytes) -> None:
+    if len(fragment) >= _MAX_STDERR_DIAGNOSTIC_BYTES:
+        tail[:] = fragment[-_MAX_STDERR_DIAGNOSTIC_BYTES:]
+        return
+    overflow = len(tail) + len(fragment) - _MAX_STDERR_DIAGNOSTIC_BYTES
+    if overflow > 0:
+        del tail[:overflow]
+    tail.extend(fragment)
+
+
 def _stream_mono(path: str) -> dict[str, Any]:
     """Decode and analyze mono f32le PCM without staging decoded audio."""
     process = subprocess.Popen(
@@ -348,15 +359,16 @@ def _stream_mono(path: str) -> dict[str, Any]:
         _terminate_ffmpeg(process)
         raise RuntimeError("ffmpeg decode did not provide stdout and stderr pipes")
 
-    stderr_parts: list[bytes] = []
+    stderr_tail = bytearray()
     stderr_errors: list[BaseException] = []
 
     def drain_stderr() -> None:
         try:
             while fragment := process.stderr.read(_DECODE_CHUNK_BYTES):
-                stderr_parts.append(fragment)
+                _retain_stderr_tail(stderr_tail, fragment)
         except BaseException as error:
             stderr_errors.append(error)
+            _terminate_ffmpeg(process)
 
     stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
     stderr_thread.start()
@@ -374,11 +386,11 @@ def _stream_mono(path: str) -> dict[str, Any]:
         process.stdout.close()
         process.stderr.close()
 
-    if return_code != 0:
-        stderr = b"".join(stderr_parts).decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"ffmpeg decode failed (exit {return_code}) for {path}: {stderr}")
     if stderr_errors:
         raise stderr_errors[0]
+    if return_code != 0:
+        stderr = bytes(stderr_tail).decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg decode failed (exit {return_code}) for {path}: {stderr}")
     return analysis.result(path)
 
 

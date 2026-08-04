@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 import textwrap
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +39,19 @@ class _FragmentedPipe:
         self.closed = True
 
 
+class _LiveStdoutPipe:
+    def __init__(self, released: threading.Event) -> None:
+        self._released = released
+        self.closed = False
+
+    def read(self, _size: int = -1) -> bytes:
+        self._released.wait()
+        return b""
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _FakeFfmpeg:
     def __init__(
         self,
@@ -53,6 +67,7 @@ class _FakeFfmpeg:
         self.terminated = False
         self.killed = False
         self.wait_calls = 0
+        self.terminated_event = threading.Event()
 
     def poll(self) -> int | None:
         return self.returncode
@@ -67,10 +82,12 @@ class _FakeFfmpeg:
     def terminate(self) -> None:
         self.terminated = True
         self.returncode = -15
+        self.terminated_event.set()
 
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+        self.terminated_event.set()
 
 
 def _reference_data(samples: np.ndarray) -> dict[str, object]:
@@ -196,6 +213,58 @@ class AudioEnergyMeterTests(unittest.TestCase):
             handle(SimpleNamespace(asset_path="broken.wav"))
 
         self.assertEqual(process.wait_calls, 1)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
+
+    def test_handle_retains_only_the_stderr_diagnostic_tail(self) -> None:
+        tail = b"final ffmpeg diagnostic"
+        process = _FakeFfmpeg(
+            [],
+            return_code=13,
+            stderr_fragments=[b"early diagnostic\n" + b"x" * 130_000, tail],
+        )
+
+        with patch("audio_energy_mcp.subprocess.Popen", return_value=process):
+            with self.assertRaises(RuntimeError) as raised:
+                handle(SimpleNamespace(asset_path="verbose-broken.wav"))
+
+        diagnostic = str(raised.exception)
+        self.assertLess(len(diagnostic.encode()), 100_000)
+        self.assertNotIn("early diagnostic", diagnostic)
+        self.assertIn(tail.decode(), diagnostic)
+
+    def test_handle_reaps_a_live_child_when_stderr_drain_fails(self) -> None:
+        drain_error = OSError("stderr read failed")
+        process = _FakeFfmpeg([], stderr_fragments=[drain_error])
+        process.stdout = _LiveStdoutPipe(process.terminated_event)
+        completed = threading.Event()
+        errors: list[BaseException] = []
+
+        def invoke() -> None:
+            try:
+                handle(SimpleNamespace(asset_path="drain-failure.wav"))
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                completed.set()
+
+        with patch("audio_energy_mcp.subprocess.Popen", return_value=process):
+            worker = threading.Thread(target=invoke)
+            worker.start()
+            try:
+                self.assertTrue(
+                    completed.wait(0.5),
+                    "stderr drain failure did not terminate the live child promptly",
+                )
+            finally:
+                if not completed.is_set():
+                    process.terminate()
+                worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [drain_error])
+        self.assertTrue(process.terminated)
+        self.assertGreaterEqual(process.wait_calls, 1)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
 
