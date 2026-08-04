@@ -41,6 +41,8 @@ pub struct PerfMachine {
 /// Source media metadata from ffprobe or equivalent probing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerfMedia {
+    /// Dispatcher asset id.
+    pub asset_id: String,
     /// Absolute source path on disk.
     pub path: String,
     /// Duration in seconds.
@@ -150,8 +152,8 @@ pub struct PerfReport {
     pub command: PerfCommand,
     /// Machine context.
     pub machine: PerfMachine,
-    /// Media context.
-    pub media: PerfMedia,
+    /// Media contexts.
+    pub media: Vec<PerfMedia>,
     /// Report body.
     pub report: PerfReportBody,
 }
@@ -161,7 +163,7 @@ pub fn build_perf_report(
     label: impl Into<String>,
     command: PerfCommand,
     machine: PerfMachine,
-    media: PerfMedia,
+    media: Vec<PerfMedia>,
     report: &IndexReport,
     project_root: &Path,
 ) -> PerfReport {
@@ -218,31 +220,45 @@ pub fn to_markdown(report: &PerfReport) -> String {
     out.push_str("# Indexing Performance Report\n\n");
     let label = &report.label;
     let project_root = &report.command.project_root;
-    let media_path = &report.media.path;
     let concurrency = report.command.concurrency;
     out.push_str(&format!("- Label: `{label}`\n"));
     out.push_str(&format!("- Project: `{project_root}`\n"));
-    out.push_str(&format!("- Source: `{media_path}`\n"));
-    if let Some(duration) = report.media.duration_s {
-        out.push_str(&format!("- Duration: {duration:.3}s\n"));
-    }
-    if let (Some(width), Some(height)) = (report.media.width, report.media.height) {
-        out.push_str(&format!("- Resolution: {width}x{height}\n"));
-    }
-    if let Some(codec) = &report.media.video_codec {
-        out.push_str(&format!("- Video codec: `{codec}`\n"));
-    }
-    if let Some(fps) = &report.media.avg_frame_rate {
-        out.push_str(&format!("- FPS: `{fps}`\n"));
-    }
-    if let Some(size) = report.media.size_bytes {
-        out.push_str(&format!("- File size: {size} bytes\n"));
-    }
     out.push_str(&format!("- Concurrency: {concurrency}\n"));
     out.push_str(&format!(
         "- Indexers: {}\n\n",
         report.command.included_indexers.join(", ")
     ));
+    out.push_str("## Media\n\n");
+    out.push_str("| Asset | Source | Duration | Video | Audio | Resolution | FPS | Size bytes | Bit rate |\n");
+    out.push_str("| --- | --- | ---: | --- | --- | --- | --- | ---: | ---: |\n");
+    for media in &report.media {
+        let duration = media
+            .duration_s
+            .map_or(String::new(), |value| format!("{value:.3}s"));
+        let resolution = match (media.width, media.height) {
+            (Some(width), Some(height)) => format!("{width}x{height}"),
+            _ => String::new(),
+        };
+        let size = media
+            .size_bytes
+            .map_or(String::new(), |value| value.to_string());
+        let bit_rate = media
+            .bit_rate
+            .map_or(String::new(), |value| value.to_string());
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            media.asset_id,
+            media.path,
+            duration,
+            media.video_codec.as_deref().unwrap_or_default(),
+            media.audio_codec.as_deref().unwrap_or_default(),
+            resolution,
+            media.avg_frame_rate.as_deref().unwrap_or_default(),
+            size,
+            bit_rate
+        ));
+    }
+    out.push('\n');
     out.push_str("## Timing Semantics\n\n");
     out.push_str(
         "- `total_ms` is pair wall time from scheduler enqueue and includes `queued_ms`.\n",
@@ -267,8 +283,8 @@ pub fn to_markdown(report: &PerfReport) -> String {
         report.report.max_tool_ms
     ));
     out.push_str("## Pair Timings\n\n");
-    out.push_str("| Indexer | Outcome | Total ms | Tool ms | Queue ms | Launch ms | Write ms | Frames | Output bytes | Perf phases |\n");
-    out.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    out.push_str("| Indexer | Asset | Outcome | Total ms | Tool ms | Queue ms | Launch ms | Write ms | Frames | Output bytes | Perf phases |\n");
+    out.push_str("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
     for pair in &report.report.pairs {
         let frames = pair
             .sidecar
@@ -285,8 +301,9 @@ pub fn to_markdown(report: &PerfReport) -> String {
             .and_then(|m| m.perf.as_ref())
             .map_or(String::new(), format_perf_phases);
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             pair.indexer,
+            pair.asset_id,
             pair.outcome,
             pair.total_ms,
             pair.tool_ms,
@@ -610,6 +627,94 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn report_serializes_and_renders_each_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = IndexReport {
+            outcomes: vec![
+                PairOutcome::Wrote {
+                    indexer: "shot".into(),
+                    asset: AssetId::new("external/a.mp4"),
+                    path: dir.path().join("index/shot/external/a.mp4.json"),
+                    telemetry: telemetry(321, 123),
+                },
+                PairOutcome::Wrote {
+                    indexer: "shot".into(),
+                    asset: AssetId::new("external/b.mp4"),
+                    path: dir.path().join("index/shot/external/b.mp4.json"),
+                    telemetry: telemetry(654, 456),
+                },
+            ],
+        };
+        let perf = build_perf_report(
+            "test",
+            PerfCommand {
+                project_root: dir.path().display().to_string(),
+                output_dir: dir.path().display().to_string(),
+                concurrency: 2,
+                included_indexers: vec!["shot".into()],
+                assets: vec!["external/a.mp4".into(), "external/b.mp4".into()],
+            },
+            PerfMachine {
+                os: "test".into(),
+                arch: "test".into(),
+                parallelism: 1,
+            },
+            vec![
+                PerfMedia {
+                    asset_id: "external/a.mp4".into(),
+                    path: "/tmp/a.mp4".into(),
+                    duration_s: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
+                    avg_frame_rate: None,
+                    size_bytes: None,
+                    bit_rate: None,
+                },
+                PerfMedia {
+                    asset_id: "external/b.mp4".into(),
+                    path: "/tmp/b.mp4".into(),
+                    duration_s: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
+                    avg_frame_rate: None,
+                    size_bytes: None,
+                    bit_rate: None,
+                },
+            ],
+            &report,
+            dir.path(),
+        );
+
+        let json = serde_json::to_value(&perf).unwrap();
+        assert_eq!(json["media"][0]["asset_id"], "external/a.mp4");
+        assert_eq!(json["media"][0]["path"], "/tmp/a.mp4");
+        assert_eq!(json["media"][1]["asset_id"], "external/b.mp4");
+        assert_eq!(json["media"][1]["path"], "/tmp/b.mp4");
+
+        let markdown = to_markdown(&perf);
+        assert!(
+            markdown.contains("## Media\n\n| Asset | Source |"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| Indexer | Asset | Outcome |"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| shot | external/a.mp4 | wrote |"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| shot | external/b.mp4 | wrote |"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
     fn report_preserves_total_as_queue_inclusive_wall_time() {
         let dir = tempfile::tempdir().unwrap();
         let asset = AssetId::new("external/a.mp4");
@@ -642,7 +747,8 @@ mod tests {
                 arch: "test".into(),
                 parallelism: 1,
             },
-            PerfMedia {
+            vec![PerfMedia {
+                asset_id: "external/a.mp4".into(),
                 path: "/tmp/a.mp4".into(),
                 duration_s: None,
                 video_codec: None,
@@ -652,7 +758,7 @@ mod tests {
                 avg_frame_rate: None,
                 size_bytes: None,
                 bit_rate: None,
-            },
+            }],
             &report,
             dir.path(),
         );

@@ -44,7 +44,7 @@ fn real_main() -> Result<(), String> {
     let asset_ids = args
         .assets
         .iter()
-        .map(|asset| staged_asset_id(asset))
+        .map(staged_asset_id)
         .collect::<Result<Vec<_>, _>>()?;
     let config =
         Config::load(Some(&project_root)).map_err(|e| format!("load indexer config: {e}"))?;
@@ -103,6 +103,12 @@ fn real_main() -> Result<(), String> {
         .map_err(|e| format!("copy index sidecars to {}: {e}", run_dir.display()))?;
 
     let included_indexers: Vec<String> = servers.iter().map(|server| server.name.clone()).collect();
+    let media = args
+        .assets
+        .iter()
+        .zip(&asset_ids)
+        .map(|(asset, asset_id)| probe_media(asset_id, asset))
+        .collect();
     let perf = build_perf_report(
         args.label.clone(),
         PerfCommand {
@@ -119,11 +125,7 @@ fn real_main() -> Result<(), String> {
                 .map(usize::from)
                 .unwrap_or(1),
         },
-        probe_media(
-            args.assets
-                .first()
-                .ok_or_else(|| "at least one --asset is required".to_string())?,
-        ),
+        media,
         &report,
         &project_root,
     );
@@ -171,7 +173,7 @@ impl Args {
                     i += 1;
                     assets.push(
                         raw.get(i)
-                            .map(|value| PathBuf::from(value))
+                            .map(PathBuf::from)
                             .ok_or_else(|| "--asset requires a value".to_string())?,
                     );
                 }
@@ -179,14 +181,14 @@ impl Args {
                     i += 1;
                     output_dir = raw
                         .get(i)
-                        .map(|value| PathBuf::from(value))
+                        .map(PathBuf::from)
                         .ok_or_else(|| "--output-dir requires a value".to_string())?;
                 }
                 "--work-dir" => {
                     i += 1;
                     work_dir = raw
                         .get(i)
-                        .map(|value| PathBuf::from(value))
+                        .map(PathBuf::from)
                         .ok_or_else(|| "--work-dir requires a value".to_string())?;
                 }
                 "--label" => {
@@ -320,7 +322,8 @@ fn create_project(assets: &[PathBuf], label: &str, projects_dir: &Path) -> Resul
     Ok(root)
 }
 
-fn staged_asset_id(asset: &Path) -> Result<String, String> {
+fn staged_asset_id(asset: impl AsRef<Path>) -> Result<String, String> {
+    let asset = asset.as_ref();
     let file_name = asset
         .file_name()
         .ok_or_else(|| format!("asset has no file name: {}", asset.display()))?;
@@ -362,8 +365,9 @@ fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn probe_media(path: &Path) -> PerfMedia {
+fn probe_media(asset_id: &str, path: &Path) -> PerfMedia {
     let mut media = PerfMedia {
+        asset_id: asset_id.to_string(),
         path: path.display().to_string(),
         duration_s: None,
         video_codec: None,
