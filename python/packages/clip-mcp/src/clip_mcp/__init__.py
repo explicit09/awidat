@@ -45,7 +45,8 @@ INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
 
 # Pinned model id. ViT-B-32 / OpenAI is the smallest CLIP that gives
-# usable retrieval — ~150 MB, runs CPU-only at ~30 frames/sec on M-series.
+# usable retrieval. Its pinned blob is 605,143,284 bytes; use the six-asset
+# lifecycle benchmark for end-to-end performance evidence.
 # Larger models (ViT-L-14, EVA-CLIP) live behind a config flag in v1.5.
 MODEL_ARCH = "ViT-B-32"
 MODEL_PRETRAINED = "openai"
