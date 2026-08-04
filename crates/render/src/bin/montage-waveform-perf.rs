@@ -1914,10 +1914,10 @@ mod tests {
     fn wait_for_test_pid(path: &Path) -> u32 {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            if let Ok(value) = fs::read_to_string(path) {
-                if let Ok(pid) = value.trim().parse() {
-                    return pid;
-                }
+            if let Ok(value) = fs::read_to_string(path)
+                && let Ok(pid) = value.trim().parse()
+            {
+                return pid;
             }
             assert!(
                 Instant::now() < deadline,
