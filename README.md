@@ -136,6 +136,45 @@ MONTAGE_WAVEFORM_PERF_ARGS="--duration-s 12 --label internal-smoke" \
 make perf-waveform
 ```
 
+## Production Indexer Benchmarks
+
+`make perf-audio-energy` and `make perf-clip-lifecycle` are manual, heavyweight performance workflows. They are not part of `make check` or normal CI. Each target performs one release build of `montage-index-perf` in the caller's `CARGO_TARGET_DIR` (or this checkout's `target/`), then gives its controller that exact executable.
+
+The audio-energy controller runs the real dispatcher/indexer path against a deterministic mixed-signal M4A fixture. Its full default is a one-hour fixture, one warmup, and five timed samples, so run it manually only when that cost is intended. It needs the already prepared `audio-energy-mcp` Python environment, `uv`, `ffmpeg`, and `ffprobe`. It records end-to-end wall time (including dispatcher/process setup), sampled process-tree peak RSS, temporary-directory high water, and median/p95/MAD summaries. It rejects malformed or empty audio output and requires every timed canonical audio-energy payload to exactly match the warmup. A successful run writes a unique JSON evidence report below its work root's `evidence/` directory, retaining per-sample work and provenance for the binary, sources, tools, machine, and filesystems.
+
+The CLIP lifecycle controller measures the real six-asset dispatcher path: one warmup and seven timed samples by default. It validates all six sidecars, asset fingerprints, embeddings, and stable semantic output against the warmup while excluding volatile timestamps and per-run timing fields from that comparison. Its report also records sampled process-tree peak RSS, tool/runtime/model/source/filesystem provenance, and retained sample logs. Both reports are performance evidence only when the fixture/model/machine facts in their provenance are comparable.
+
+CLIP is deliberately offline and pre-provisioned: `perf-clip-lifecycle` never runs `uv sync`, installs packages, or fetches/downloads a model. Before calling it, supply an existing isolated Python workspace in `MONTAGE_PYTHON_ROOT`, six distinct existing video paths in `MONTAGE_CLIP_ASSET_1` through `MONTAGE_CLIP_ASSET_6` (with distinct filenames), and `MONTAGE_CLIP_MODEL_WEIGHTS` pointing to the pinned Hugging Face snapshot symlink:
+
+```text
+<HF_HOME>/hub/models--timm--vit_base_patch32_clip_224.openai/snapshots/a6f597a30f7b82c51704746581f9a4e41421e878/open_clip_model.safetensors
+```
+
+That artifact is 605,143,284 bytes. The controller requires that exact snapshot layout and validates its SHA-256 (`e6d1bd7789aa45192b3bf90570a789b478bae1b74ebcce7eddd908e83a2b7c31`) before benchmarking.
+
+For short, non-comparable smoke checks, retain the controllers' minimum five timed samples and use small disposable inputs:
+
+```bash
+CARGO_TARGET_DIR=target \
+MONTAGE_AUDIO_ENERGY_PERF_ARGS="--duration-seconds 12 --samples 5 --work-root /private/tmp/montage-audio-energy-smoke --label smoke" \
+make perf-audio-energy
+```
+
+```bash
+export MONTAGE_PYTHON_ROOT=/absolute/path/to/montage/python
+export MONTAGE_CLIP_MODEL_WEIGHTS=/absolute/path/to/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai/snapshots/a6f597a30f7b82c51704746581f9a4e41421e878/open_clip_model.safetensors
+export MONTAGE_CLIP_ASSET_1=/absolute/path/to/smoke-1.mp4
+export MONTAGE_CLIP_ASSET_2=/absolute/path/to/smoke-2.mp4
+export MONTAGE_CLIP_ASSET_3=/absolute/path/to/smoke-3.mp4
+export MONTAGE_CLIP_ASSET_4=/absolute/path/to/smoke-4.mp4
+export MONTAGE_CLIP_ASSET_5=/absolute/path/to/smoke-5.mp4
+export MONTAGE_CLIP_ASSET_6=/absolute/path/to/smoke-6.mp4
+MONTAGE_CLIP_LIFECYCLE_ARGS="--samples 5 --timeout-seconds 120 --work-root /private/tmp/montage-clip-lifecycle-smoke --label smoke" \
+make perf-clip-lifecycle
+```
+
+Use `MONTAGE_AUDIO_ENERGY_PERF_ARGS` or `MONTAGE_CLIP_LIFECYCLE_ARGS` for the controllers' other manual options. The short examples exercise the full lifecycle but are intentionally not substitutes for the heavy default benchmark.
+
 ## macOS Consumer Releases
 
 `.github/workflows/release.yml` builds a signed, notarized `Montage-aarch64-apple-darwin.dmg` and publishes it with its `.sha256` and `checksums.txt` as a GitHub release on `v*` tag pushes. Manual `workflow_dispatch` runs from a non-`v*` ref rehearse the build without publishing. The build is strict: missing Apple secrets, stub sidecars, or failed signing, notarization, or stapling fail the release.

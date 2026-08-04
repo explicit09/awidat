@@ -122,9 +122,12 @@ transformers, opencv). On first model use, models also download:
 | whisper (`small.en` fallback) | ~470MB | same |
 | whisper diarization (`pyannote/speaker-diarization-community-1`) | ~30MB | same; requires `HF_TOKEN` and accepting the model EULA at <https://huggingface.co/pyannote/speaker-diarization-community-1> |
 | topic (`all-MiniLM-L6-v2`) | ~80MB | same |
-| clip (`ViT-B-32` / OpenAI) | ~150MB | `~/.cache/clip/` (open_clip default) |
+| clip (`timm` ViT-B/32 / OpenAI) | 605,143,284 bytes | Hugging Face snapshot symlink at `~/.cache/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai/snapshots/a6f597a30f7b82c51704746581f9a4e41421e878/open_clip_model.safetensors`; the lifecycle benchmark validates that snapshot and its SHA-256 |
 | face, gaze (dlib `face_recognition_models`) | ~70MB | bundled in the wheel |
 | scenedetect, audio-energy, shot, composition, frame-quality | none | n/a |
+
+The offline CLIP lifecycle benchmark does not perform this setup or download
+weights; point `MONTAGE_CLIP_MODEL_WEIGHTS` at the pinned snapshot above.
 
 ## Smoke each indexer
 

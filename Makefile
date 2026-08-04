@@ -1,4 +1,4 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio perf-index-skip perf-waveform desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio perf-index-skip perf-waveform perf-audio-energy perf-clip-lifecycle desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
 FFMPEG_VERSION ?= 7.1.1
@@ -84,6 +84,60 @@ perf-index-skip:
 
 perf-waveform:
 	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-/Volumes/My Passport for Mac/awidat-build/main-target}" cargo run --release -p montage-render --bin montage-waveform-perf -- --work-dir "$${MONTAGE_WAVEFORM_PERF_WORK_DIR:-/Volumes/My Passport for Mac/awidat-build/waveform-perf}" --evidence-dir "$${MONTAGE_WAVEFORM_PERF_EVIDENCE_DIR:-/Volumes/My Passport for Mac/awidat-build/waveform-perf/evidence}" $${MONTAGE_WAVEFORM_PERF_ARGS:-}
+
+perf-audio-energy:
+	@set -eu; \
+	target_dir="$${CARGO_TARGET_DIR:-$(CURDIR)/target}"; \
+	binary="$$target_dir/release/montage-index-perf"; \
+	CARGO_TARGET_DIR="$$target_dir" cargo build --release -p montage-index --bin montage-index-perf; \
+	python3 python/scripts/bench_audio_energy.py $${MONTAGE_AUDIO_ENERGY_PERF_ARGS:-} --binary "$$binary"
+
+perf-clip-lifecycle:
+	@set -eu; \
+	if [ -z "$${MONTAGE_PYTHON_ROOT:-}" ]; then \
+		echo "perf-clip-lifecycle requires MONTAGE_PYTHON_ROOT" >&2; \
+		exit 2; \
+	fi; \
+	if [ -z "$${MONTAGE_CLIP_MODEL_WEIGHTS:-}" ]; then \
+		echo "perf-clip-lifecycle requires MONTAGE_CLIP_MODEL_WEIGHTS" >&2; \
+		exit 2; \
+	fi; \
+	if [ -z "$${MONTAGE_CLIP_ASSET_1:-}" ] || [ -z "$${MONTAGE_CLIP_ASSET_2:-}" ] || \
+		[ -z "$${MONTAGE_CLIP_ASSET_3:-}" ] || [ -z "$${MONTAGE_CLIP_ASSET_4:-}" ] || \
+		[ -z "$${MONTAGE_CLIP_ASSET_5:-}" ] || [ -z "$${MONTAGE_CLIP_ASSET_6:-}" ]; then \
+		echo "perf-clip-lifecycle requires MONTAGE_CLIP_ASSET_1 through MONTAGE_CLIP_ASSET_6" >&2; \
+		exit 2; \
+	fi; \
+	set -- "$${MONTAGE_CLIP_ASSET_1}" "$${MONTAGE_CLIP_ASSET_2}" "$${MONTAGE_CLIP_ASSET_3}" \
+		"$${MONTAGE_CLIP_ASSET_4}" "$${MONTAGE_CLIP_ASSET_5}" "$${MONTAGE_CLIP_ASSET_6}"; \
+	asset_index=1; \
+	for asset in "$$@"; do \
+		if [ ! -f "$$asset" ]; then \
+			echo "perf-clip-lifecycle MONTAGE_CLIP_ASSET_$$asset_index must name an existing file: $$asset" >&2; \
+			exit 2; \
+		fi; \
+		asset_index=$$((asset_index + 1)); \
+	done; \
+	for asset in "$$@"; do \
+		matches=0; \
+		for candidate in "$$@"; do \
+			if [ "$$asset" = "$$candidate" ]; then matches=$$((matches + 1)); fi; \
+		done; \
+		if [ "$$matches" -ne 1 ]; then \
+			echo "perf-clip-lifecycle requires six distinct MONTAGE_CLIP_ASSET_1 through MONTAGE_CLIP_ASSET_6 paths" >&2; \
+			exit 2; \
+		fi; \
+	done; \
+	target_dir="$${CARGO_TARGET_DIR:-$(CURDIR)/target}"; \
+	binary="$$target_dir/release/montage-index-perf"; \
+	CARGO_TARGET_DIR="$$target_dir" cargo build --release -p montage-index --bin montage-index-perf; \
+	HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 UV_OFFLINE=1 UV_NO_SYNC=1 \
+		python3 python/scripts/bench_clip_lifecycle.py $${MONTAGE_CLIP_LIFECYCLE_ARGS:-} \
+		--asset "$${MONTAGE_CLIP_ASSET_1}" --asset "$${MONTAGE_CLIP_ASSET_2}" \
+		--asset "$${MONTAGE_CLIP_ASSET_3}" --asset "$${MONTAGE_CLIP_ASSET_4}" \
+		--asset "$${MONTAGE_CLIP_ASSET_5}" --asset "$${MONTAGE_CLIP_ASSET_6}" \
+		--binary "$$binary" --python-root "$${MONTAGE_PYTHON_ROOT}" \
+		--model-weights "$${MONTAGE_CLIP_MODEL_WEIGHTS}"
 
 # Montage desktop (Tauri) — install frontend deps + run dev shell.
 # Frontend deps live under apps/desktop/node_modules; the Rust
