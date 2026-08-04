@@ -53,6 +53,8 @@ MODEL_REVISION = "a6f597a30f7b82c51704746581f9a4e41421e878"
 MODEL_FILENAME = "open_clip_model.safetensors"
 MODEL_SHA256 = "e6d1bd7789aa45192b3bf90570a789b478bae1b74ebcce7eddd908e83a2b7c31"
 MODEL_HF_HUB = "timm/vit_base_patch32_clip_224.openai/"
+EXPECTED_MODEL = "ViT-B-32/openai"
+EXPECTED_EMBEDDING_DIM = 512
 RUNTIME_PACKAGES = {
     "clip-mcp": "clip_mcp",
     "montage-mcp": "montage_mcp",
@@ -170,6 +172,8 @@ def parse_runtime_preflight(raw: str, python_root: Path, weights: Path) -> dict[
         raise BenchError(f"runtime preflight returned invalid JSON: {error}") from error
     if not isinstance(value, dict) or not isinstance(value.get("python"), str):
         raise BenchError("runtime preflight is incomplete")
+    if value.get("clip_model") != EXPECTED_MODEL:
+        raise BenchError("runtime preflight did not import the pinned CLIP model")
     reported_launcher = value.get("executable")
     if not isinstance(reported_launcher, str) or not reported_launcher:
         raise BenchError("runtime preflight executable is missing")
@@ -268,6 +272,7 @@ modules = {
 print(json.dumps({
     "python": sys.version,
     "executable": sys.executable,
+    "clip_model": f"{clip_mcp.MODEL_ARCH}/{clip_mcp.MODEL_PRETRAINED}",
     "packages": {
         name: {
             "version": importlib.metadata.version(name),
@@ -282,12 +287,15 @@ print(json.dumps({
 }))
 """
     environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
     environment.update(
         {
             "HF_HOME": str(hf_home),
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
             "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONSAFEPATH": "1",
         }
     )
     try:
@@ -308,13 +316,41 @@ print(json.dumps({
 def git_provenance() -> dict[str, Any]:
     head = run_text(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).strip()
     status = run_text(
-        ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"]
+        ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"]
     ).rstrip()
     if not head:
         raise BenchError("git returned an empty HEAD")
     if status:
-        raise BenchError(f"refusing dirty tracked source state:\n{status}")
-    return {"head": head, "tracked_clean": True, "untracked_ignored_evidence_allowed": True}
+        raise BenchError(f"refusing dirty source state:\n{status}")
+    ignored = run_text(
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            "python",
+        ]
+    ).splitlines()
+    unsafe_ignored = [
+        path
+        for path in ignored
+        if not path.startswith("python/.venv/")
+        and not ("/__pycache__/" in path and path.endswith(".pyc"))
+    ]
+    if unsafe_ignored:
+        raise BenchError(
+            "refusing dirty source state with ignored runtime inputs:\n"
+            + "\n".join(unsafe_ignored)
+        )
+    return {
+        "head": head,
+        "git_status_clean": True,
+        "ignored_venv_and_bytecode_bound_by_workspace_manifest": True,
+    }
 
 
 def source_provenance(python_root: Path) -> dict[str, dict[str, Any]]:
@@ -327,9 +363,68 @@ def source_provenance(python_root: Path) -> dict[str, dict[str, Any]]:
         "python_lock": python_root / "uv.lock",
     }
     try:
-        return {name: binary_provenance(path.resolve(strict=True)) for name, path in sources.items()}
+        provenance = {
+            name: binary_provenance(path.resolve(strict=True))
+            for name, path in sources.items()
+        }
     except OSError as error:
         raise BenchError(f"required source provenance is missing: {error}") from error
+    provenance["python_workspace"] = workspace_manifest(python_root)
+    return provenance
+
+
+def workspace_manifest(root: Path) -> dict[str, Any]:
+    try:
+        root = root.resolve(strict=True)
+    except OSError as error:
+        raise BenchError(f"runtime workspace does not exist: {root}: {error}") from error
+    if not root.is_dir():
+        raise BenchError(f"runtime workspace is not a directory: {root}")
+    entries: list[dict[str, Any]] = []
+    try:
+        paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+        for path in paths:
+            relative_path = path.relative_to(root).as_posix()
+            symlink_target = os.readlink(path) if path.is_symlink() else None
+            if path.is_symlink() and path.resolve(strict=True).is_dir():
+                if not path.resolve(strict=True).is_relative_to(root):
+                    raise BenchError(
+                        f"runtime workspace has an external directory symlink: {path}"
+                    )
+                entries.append(
+                    {
+                        "relative_path": relative_path,
+                        "kind": "symlink-directory",
+                        "mode": path.lstat().st_mode & 0o7777,
+                        "symlink_target": symlink_target,
+                    }
+                )
+                continue
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise BenchError(f"runtime workspace has an unsupported entry: {path}")
+            stat = path.stat()
+            entries.append(
+                {
+                    "relative_path": relative_path,
+                    "kind": "symlink-file" if path.is_symlink() else "file",
+                    "mode": path.lstat().st_mode & 0o7777,
+                    "symlink_target": symlink_target,
+                    "size_bytes": stat.st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+    except OSError as error:
+        raise BenchError(f"runtime workspace manifest failed under {root}: {error}") from error
+    _canonical, digest = canonical_data(entries)
+    return {
+        "root": str(root),
+        "protocol": "montage-python-workspace-v1",
+        "sha256": digest,
+        "entry_count": len(entries),
+        "content_bytes": sum(entry.get("size_bytes", 0) for entry in entries),
+    }
 
 
 def unique_filesystems(paths: list[Path]) -> list[dict[str, Any]]:
@@ -396,6 +491,12 @@ def validate_clip_sidecar(
     data = sidecar.get("data")
     if not isinstance(data, dict):
         raise BenchError(f"CLIP sidecar has no data object for {expected_asset_id}")
+    if data.get("model") != EXPECTED_MODEL:
+        raise BenchError(f"CLIP sidecar did not use the pinned CLIP model for {expected_asset_id}")
+    if data.get("embedding_dim") != EXPECTED_EMBEDDING_DIM:
+        raise BenchError(
+            f"CLIP sidecar was not 512-dimensional for {expected_asset_id}"
+        )
     frames, dimension, timestamps = (
         data.get("frame_count"),
         data.get("embedding_dim"),
@@ -412,8 +513,6 @@ def validate_clip_sidecar(
         or len(timestamps) != frames
         or not all(_finite_number(timestamp) and timestamp >= 0 for timestamp in timestamps)
         or any(right <= left for left, right in zip(timestamps, timestamps[1:]))
-        or not isinstance(data.get("model"), str)
-        or not data["model"]
         or data.get("embedding_dtype") != "float16"
         or data.get("embedding_encoding") != "base64"
         or data.get("frame_rate_sampled") != 0.5
@@ -555,6 +654,7 @@ def controlled_environment(
 ) -> dict[str, str]:
     environment = base_controlled_environment(sample_root, ffmpeg, ffprobe, uv)
     environment.pop("HF_TOKEN", None)
+    environment.pop("PYTHONPATH", None)
     environment["PATH"] = os.pathsep.join((str(python_root / ".venv/bin"), environment["PATH"]))
     environment.update(
         {
@@ -563,6 +663,9 @@ def controlled_environment(
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
             "CLIP_SAMPLE_FPS": "0.5",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONSAFEPATH": "1",
             "PYTHONHASHSEED": "0",
             "LC_ALL": "C",
             "TZ": "UTC",
@@ -696,6 +799,19 @@ def run_sample(
                 if sampled_at - started > timeout_seconds:
                     raise BenchError(f"{name} exceeded timeout of {timeout_seconds:.1f}s")
                 if process.poll() is not None:
+                    if process.returncode == 0:
+                        lingering = wait_for_process_group_absent(pgid, process)
+                        if lingering:
+                            remaining = terminate_process_group(pgid, process)
+                            if remaining:
+                                raise BenchError(
+                                    f"{name} cleanup failed: process_group_members={remaining}"
+                                )
+                            raise BenchError(
+                                f"{name} required forced cleanup after a successful dispatcher "
+                                f"exit: process_group_members={lingering}"
+                            )
+                        break
                     remaining = terminate_process_group(pgid, process)
                     if remaining:
                         raise BenchError(f"{name} cleanup failed: process_group_members={remaining}")
@@ -845,7 +961,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
                 "model": filesystem_provenance(weights),
             },
             "machine": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "cpu_count": os.cpu_count()},
-            "controlled_environment": {"MONTAGE_PYTHON_ROOT": str(python_root), "HF_HOME": str(hf_home), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "CLIP_SAMPLE_FPS": "0.5", "PYTHONHASHSEED": "0", "LC_ALL": "C", "TZ": "UTC", "UV_OFFLINE": "1", "UV_NO_SYNC": "1"},
+            "controlled_environment": {"MONTAGE_PYTHON_ROOT": str(python_root), "HF_HOME": str(hf_home), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "CLIP_SAMPLE_FPS": "0.5", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONSAFEPATH": "1", "PYTHONPATH": "unset", "PYTHONHASHSEED": "0", "LC_ALL": "C", "TZ": "UTC", "UV_OFFLINE": "1", "UV_NO_SYNC": "1"},
         },
         "correctness": {
             "expected_asset_ids": asset_ids,
