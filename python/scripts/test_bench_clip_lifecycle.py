@@ -297,7 +297,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
                     "write_ms": 4,
                     "total_ms": 10,
                     "peak_rss_bytes": 4096,
-                    "sidecar": {"perf": {"model_load_ms": 5, "inference_ms": 6}},
+                    "sidecar": {
+                        "perf": {"model_load_ms": 5, "inference_ms": 6, "frames_processed": 1}
+                    },
                 }
                 for asset_id in expected_ids
             ]
@@ -342,7 +344,7 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 "write_ms": 4,
                 "total_ms": 10,
                 "direct_peak_rss_bytes": 4096,
-                "sidecar_perf_ms": {"model_load_ms": 5, "inference_ms": 6},
+                "sidecar_perf": {"model_load_ms": 5, "inference_ms": 6, "frames_processed": 1},
             },
         )
 

@@ -471,7 +471,7 @@ def pair_telemetry(pair: dict[str, Any], asset_id: str) -> dict[str, Any]:
         "asset_id": asset_id,
         **{key: pair[key] for key in timing_keys},
         "direct_peak_rss_bytes": direct_rss,
-        "sidecar_perf_ms": perf,
+        "sidecar_perf": perf,
     }
 
 
