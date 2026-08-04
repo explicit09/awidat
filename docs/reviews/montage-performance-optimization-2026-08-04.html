@@ -121,18 +121,12 @@
         <article class="card win">
           <h3>Audio energy · stream decoded PCM</h3>
           <p>The real Rust dispatcher and Python MCP now stream ffmpeg output into analysis instead of staging an hour of decoded PCM.</p>
-          <span class="delta">4.069 GiB → 267.3 MiB RSS · 18.163 → 9.334 s</span>
-          <p class="muted">Median/p95 RSS −93.59%/−93.34%; wall −48.61%/−56.44%; 691,200,000-byte observed temp high-water removed; bit-exact 36,000-window output and teardown held.</p>
-        </article>
-        <article class="card win">
-          <h3>Frontend CI · remove work that cannot ship</h3>
-          <p>The mocked frontend lane no longer compiles an unused release MCP sidecar, while Tauri, release, development, and sidecar lanes retain it.</p>
-          <span class="delta">Remote Build 277 s → 16 s · −94.2%</span>
-          <p class="muted">The candidate saved 261 seconds and cleared the frozen acceptance gate of at least 180 seconds and 60%. All five configured CI jobs passed.</p>
+          <span class="delta">4.069 GiB → ~267 MiB RSS · 18.163 → 9.22–9.33 s</span>
+          <p class="muted">Median/p95 RSS −93.59%/−93.34%; wall −48.61%/−56.44%; 691,200,000-byte observed temp high-water removed; exact 36,000-window output and teardown held. Two final one-hour confirmations stayed within the accepted envelope.</p>
         </article>
         <article class="card wide">
           <h3>Smaller accepted cleanup</h3>
-          <p>The frontend job also dropped a duplicate strict TypeScript invocation after seven local hot samples measured a 4.71 s median; <code>pnpm build</code> still runs the same type gate.</p>
+          <p>The frontend job dropped one duplicate strict TypeScript invocation after seven local hot samples measured a 4.71 s median. The retained <code>pnpm build</code> still runs that type gate and builds the release MCP sidecar.</p>
         </article>
       </div>
     </section>
@@ -163,7 +157,7 @@
         </article>
         <article class="card wide">
           <h3>Evidence integrity</h3>
-          <p>The project-read verifier rehashes live binaries and source/build inputs, recomputes summaries and gates from raw samples, requires two distinct full reports, and now binds machine/filesystem provenance. Index-skip fixtures validate fingerprints, size, complete streamed JSON, and header identity before timing. CLIP evidence now binds the exact model/dimension, imported module configuration, complete Python workspace (including ignored venv inputs), isolated import environment, and natural process-group teardown.</p>
+          <p>The project-read verifier rehashes live binaries and inputs, recomputes gates from raw samples, and binds machine/filesystem provenance. Index-skip and waveform fixtures are revalidated before samples and published atomically under locks. Audio keeps exact NumPy reduction semantics, enforces the complete RMS window grid, and reaps ffmpeg on every thread-start failure. CLIP evidence binds the model, dimension, imported configuration, Python workspace, and process-group teardown. Output directories are checked by resolved physical path, including symlink aliases.</p>
         </article>
       </div>
     </section>
@@ -179,6 +173,7 @@
             <tr><td>Default-gain WebAudio deferral</td><td>Open, first frame, preview init, and long task all regressed</td><td class="reject">Rejected; safety-preserving candidate lost</td></tr>
             <tr><td>Duplicate 6,757-file thumbnail traversal</td><td>Only 3.43–4.85 ms saved</td><td class="reject">Rejected below 20 ms gate</td></tr>
             <tr><td>Asset-filtered transcript scan</td><td>18.280–19.942 ms total baseline</td><td class="reject">Rejected before edit; absolute gate unreachable</td></tr>
+            <tr><td>Frontend-only CI build</td><td>277 s → 16 s, but skipped release MCP build and validation</td><td class="reject">Rejected and restored; speedup removed required coverage</td></tr>
           </tbody>
         </table>
       </article>
@@ -193,18 +188,18 @@
         <table>
           <thead><tr><th>Gate</th><th>Status</th><th>Current evidence</th></tr></thead>
           <tbody>
-            <tr><td>Independent code review</td><td class="pass">Pass</td><td>Accepted production paths and retained harnesses reviewed. Project-report machine binding plus CLIP model, provenance, and lifecycle findings were reproduced, fixed with red/green tests, and re-reviewed clean.</td></tr>
-            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Typecheck, full UI suite, seven SSIM 1.000000 stage cases, and production frontend build.</td></tr>
-            <tr><td>Python</td><td class="pass">Pass</td><td>Audio-energy unit tests; 32 benchmark-controller tests under Python 3.11 and 3.14; safe 14-package smoke; real dispatcher audio smoke.</td></tr>
-            <tr><td>Affected Rust crates</td><td class="pass">Pass</td><td>Formatting, focused tests, clippy with warnings denied, and diff hygiene pass at the final code head. Full-workspace all-targets remains baseline-blocked by absent vendored Codex PEM test fixtures.</td></tr>
-            <tr><td>Exact app persistence dogfood</td><td class="warn">In progress</td><td>Exact bundle built, resources verified, locally sealed, and launched. A disposable split persisted from one clip to two on disk; macOS locked before the native quit/reopen step.</td></tr>
-            <tr><td>Remote CI / CI timing</td><td class="pass">Pass</td><td>Draft PR #106: frontend Build passed in 16 s versus 277 s baseline (−94.2%, 261 s saved); macOS Rust, Ubuntu Rust, frontend, format, and security all passed.</td></tr>
+            <tr><td>Independent code review</td><td class="pass">Pass</td><td>The full branch reviewed clean after reproduced red/green fixes; the final test-only clippy delta received a separate clean review.</td></tr>
+            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Full suite, 22 UI smoke checks, seven SSIM 1.000000 stage cases, and production build including the release MCP sidecar.</td></tr>
+            <tr><td>Python</td><td class="pass">Pass</td><td>15 analyzer plus 41 benchmark-controller tests under Python 3.11; 41 controller tests under Python 3.14; safe 14-package smoke; real dispatcher audio smoke.</td></tr>
+            <tr><td>Affected Rust crates</td><td class="pass">Pass</td><td>Formatting; all-target checks and warning-denied clippy across the non-vendored workspace; focused waveform tests. The literal full workspace remains baseline-blocked by absent vendored Codex PEM fixtures.</td></tr>
+            <tr><td>Exact app persistence dogfood</td><td class="warn">Awaiting unlock</td><td>Final-head bundle <code>b363c9b0</code> built, resources verified, ad-hoc signed, and strictly validated. Native quit/edit/save/reopen proof on a disposable project still requires an unlocked Mac.</td></tr>
+            <tr><td>Remote CI</td><td class="warn">Pending final head</td><td>Draft PR #106 exists; the corrected branch must be pushed and all final-head jobs rechecked. No CI speedup is claimed.</td></tr>
           </tbody>
         </table>
       </article>
       <article class="card" style="margin-top:12px">
         <h3>Stop-condition verdict</h3>
-        <p>No remaining high- or medium-priority <em>product-runtime</em> candidate has both measured headroom and a bounded, proportionate implementation path. The remote CI candidate has cleared its frozen gate; delivery remains open only for exact native quit/reopen persistence proof and final-head reconciliation.</p>
+        <p>No remaining high- or medium-priority product-runtime candidate has both measured headroom and a bounded, proportionate implementation path. The large CI candidate was rejected because it removed required MCP validation. Delivery remains open for exact native quit/reopen persistence proof, final-head CI, and remote reconciliation.</p>
       </article>
     </section>
 
