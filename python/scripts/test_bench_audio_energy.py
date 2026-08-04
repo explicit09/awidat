@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -329,12 +330,25 @@ class BenchAudioEnergyTests(unittest.TestCase):
             fixture = root / "audio-energy-mixed-2s.m4a"
             metadata = root / "audio-energy-mixed-2s.json"
             fixture.write_bytes(b"corrupt")
+            generator_args = bench.fixture_generator_args(2)
             metadata.write_text(
                 json.dumps(
                     {
                         "schema_version": 1,
                         "duration_seconds": 2,
-                        "generator_args": bench.fixture_generator_args(2),
+                        "generator_args": generator_args,
+                        "generator_argv_template": [
+                            "/fake/ffmpeg",
+                            *generator_args,
+                            "<atomic-output>",
+                        ],
+                        "generator_tool": {
+                            "path": "/fake/ffmpeg",
+                            "version": "fake ffmpeg",
+                            "sha256": "a" * 64,
+                            "size_bytes": 1,
+                            "mtime_ns": 1,
+                        },
                         "sha256": "0" * 64,
                     }
                 ),
@@ -347,6 +361,34 @@ class BenchAudioEnergyTests(unittest.TestCase):
                     )
 
         generate.assert_not_called()
+
+    def test_fixture_cache_rejects_incomplete_metadata_as_a_benchmark_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "audio-energy-mixed-2s.m4a"
+            metadata = root / "audio-energy-mixed-2s.json"
+            fixture.write_bytes(b"fixture")
+            checksum = bench.sha256_file(fixture)
+            cases: list[object] = [
+                [],
+                {
+                    "schema_version": 1,
+                    "duration_seconds": 2,
+                    "generator_args": bench.fixture_generator_args(2),
+                    "sha256": checksum,
+                },
+            ]
+            for value in cases:
+                with self.subTest(value=value):
+                    metadata.write_text(json.dumps(value), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        bench.BenchError, "fixture metadata is incomplete"
+                    ):
+                        bench.prepare_fixture(
+                            root, 2, Path("/fake/ffmpeg"), Path("/fake/ffprobe")
+                        )
 
     def test_fixture_cache_recovers_after_metadata_publication_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -456,6 +498,69 @@ class BenchAudioEnergyTests(unittest.TestCase):
             leaked.write_bytes(b"pcm")
 
             self.assertEqual(bench.find_leaked_audio_temp_files(root), [str(leaked)])
+
+    def test_run_sample_terminates_an_observed_worker_after_dispatcher_exit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "child.pid"
+            binary = root / "leaky-dispatcher"
+            binary.write_text(
+                f"#!{sys.executable}\n"
+                "import subprocess\n"
+                "import time\n"
+                "from pathlib import Path\n"
+                "child = subprocess.Popen(['/bin/sleep', '60'])\n"
+                f"Path({str(child_pid_path)!r}).write_text(str(child.pid), encoding='utf-8')\n"
+                "time.sleep(0.5)\n",
+                encoding="utf-8",
+            )
+            binary.chmod(0o755)
+            tool_root = root / "tools"
+            tool_root.mkdir()
+            uv = tool_root / "uv"
+            ffmpeg = tool_root / "ffmpeg"
+            ffprobe = tool_root / "ffprobe"
+            for executable in (uv, ffmpeg, ffprobe):
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
+            fixture = root / "fixture.m4a"
+            fixture.write_bytes(b"fixture")
+            session_root = root / "session"
+            session_root.mkdir()
+            child_pid: int | None = None
+
+            try:
+                with (
+                    mock.patch.object(bench, "ORPHAN_GRACE_SECONDS", 0.1),
+                    mock.patch.object(
+                        bench, "validate_sample_observations", return_value=None
+                    ),
+                    mock.patch.object(
+                        bench,
+                        "validate_sampler_timing",
+                        return_value={"observed_rate_hz": 40.0, "gap_ms": {}},
+                    ),
+                ):
+                    with self.assertRaisesRegex(bench.BenchError, "cleanup failed"):
+                        bench.run_sample(
+                            name="leaky-success",
+                            session_root=session_root,
+                            binary=binary,
+                            fixture={"path": str(fixture), "duration_seconds": 2.0},
+                            ffmpeg=ffmpeg,
+                            ffprobe=ffprobe,
+                            uv=uv,
+                            timeout_seconds=5.0,
+                        )
+                child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+                self.assertFalse(bench.pid_alive(child_pid))
+            finally:
+                if child_pid is None and child_pid_path.exists():
+                    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+                if child_pid is not None and bench.pid_alive(child_pid):
+                    os.kill(child_pid, signal.SIGKILL)
 
     def test_zero_temp_high_water_is_a_valid_streaming_result(self) -> None:
         bench.validate_sample_observations(

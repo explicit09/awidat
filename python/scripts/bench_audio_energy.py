@@ -488,6 +488,37 @@ def _prepare_fixture_locked(
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise BenchError(f"read fixture metadata: {error}") from error
+        generator_template = (
+            metadata.get("generator_argv_template")
+            if isinstance(metadata, dict)
+            else None
+        )
+        generator_tool = (
+            metadata.get("generator_tool") if isinstance(metadata, dict) else None
+        )
+        if (
+            not isinstance(metadata, dict)
+            or not isinstance(metadata.get("generator_args"), list)
+            or not all(isinstance(value, str) for value in metadata["generator_args"])
+            or not isinstance(generator_template, list)
+            or not generator_template
+            or not all(isinstance(value, str) for value in generator_template)
+            or generator_template[-1] != "<atomic-output>"
+            or not isinstance(generator_tool, dict)
+            or any(
+                not isinstance(generator_tool.get(key), str)
+                or not generator_tool[key]
+                for key in ("path", "version", "sha256")
+            )
+            or any(
+                not isinstance(generator_tool.get(key), int)
+                or isinstance(generator_tool[key], bool)
+                or generator_tool[key] < 0
+                for key in ("size_bytes", "mtime_ns")
+            )
+            or not isinstance(metadata.get("sha256"), str)
+        ):
+            raise BenchError(f"fixture metadata is incomplete: {metadata_path}")
         if (
             metadata.get("schema_version") != 1
             or metadata.get("duration_seconds") != duration_seconds
@@ -682,16 +713,29 @@ def wait_for_no_orphans(pids: set[int]) -> list[int]:
     return alive
 
 
-def terminate_process_group(process: subprocess.Popen[Any]) -> None:
-    if process.poll() is not None:
-        return
+def terminate_process_group(
+    process: subprocess.Popen[Any], tracked_pids: set[int] | None = None
+) -> list[int]:
+    tracked_pids = set(tracked_pids or ()) - {process.pid}
     try:
         os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=3)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        try:
             process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+    remaining = wait_for_no_orphans(tracked_pids)
+    if process.poll() is None or remaining:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.poll() is None:
+            process.wait(timeout=3)
+        remaining = wait_for_no_orphans(tracked_pids)
+    return remaining
 
 
 def read_json(path: Path) -> Any:
@@ -924,14 +968,33 @@ def run_sample(
                 elapsed = time.perf_counter() - sample_started
                 if elapsed < SAMPLE_INTERVAL_SECONDS:
                     time.sleep(SAMPLE_INTERVAL_SECONDS - elapsed)
-        except BaseException:
-            terminate_process_group(process)
+        except BaseException as error:
+            remaining = terminate_process_group(
+                process, observed_pids - {process.pid}
+            )
+            if remaining:
+                raise BenchError(
+                    f"{name} cleanup failed: orphan_pids={remaining}"
+                ) from error
             raise
     wall_seconds = time.perf_counter() - started
 
+    orphans = wait_for_no_orphans(observed_pids - {process.pid})
+    remaining_orphans = (
+        terminate_process_group(process, set(orphans)) if orphans else []
+    )
+    if remaining_orphans:
+        raise BenchError(f"{name} cleanup failed: orphan_pids={remaining_orphans}")
     if process.returncode != 0:
         stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        raise BenchError(f"{name} dispatcher exited {process.returncode}: {stderr_tail}")
+        raise BenchError(
+            f"{name} dispatcher exited {process.returncode}; "
+            f"forced_cleanup_pids={orphans}: {stderr_tail}"
+        )
+    if orphans:
+        raise BenchError(
+            f"{name} cleanup failed: required forced cleanup for orphan_pids={orphans}"
+        )
     validate_sample_observations(
         name,
         sampler_count=sampler_count,
@@ -944,17 +1007,15 @@ def run_sample(
         sampler_count=sampler_count,
         sample_gaps_seconds=sample_gaps_seconds,
     )
-    orphans = wait_for_no_orphans(observed_pids - {process.pid})
     remaining_temp_files = sorted(
         str(path)
         for path in (work_root / "tmp").rglob("*")
         if path.is_file() or path.is_symlink()
     )
     leaked_audio_temp_files = find_leaked_audio_temp_files(work_root / "tmp")
-    if orphans or leaked_audio_temp_files:
+    if leaked_audio_temp_files:
         raise BenchError(
-            f"{name} cleanup failed: orphans={orphans} "
-            f"audio_temp_files={leaked_audio_temp_files}"
+            f"{name} cleanup failed: audio_temp_files={leaked_audio_temp_files}"
         )
 
     canonical, digest, output_metrics = validate_dispatcher_output(
