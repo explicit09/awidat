@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Montage performance program · 2026-08-04</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d10;
+      --panel: #12191e;
+      --line: #29343b;
+      --text: #edf5f4;
+      --muted: #9cadb2;
+      --mint: #71e2bd;
+      --cyan: #65d8e8;
+      --amber: #f0c36d;
+      --red: #ef8a87;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% 0, rgba(101, 216, 232, .14), transparent 31rem),
+        radial-gradient(circle at 94% 8%, rgba(113, 226, 189, .11), transparent 30rem),
+        var(--bg);
+      font: 14px/1.48 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { color: #d9eef3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .shell { width: min(1140px, calc(100% - 28px)); margin: 0 auto; padding: 26px 0 40px; }
+    header { display: grid; grid-template-columns: 1.35fr .65fr; gap: 22px; align-items: end; }
+    .eyebrow { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 7px 0 9px; max-width: 780px; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spacing: -.045em; }
+    .lede { max-width: 800px; margin: 0; color: #c9d6d8; font-size: 16px; }
+    .branch { color: var(--muted); font-size: 12px; text-align: right; }
+    .branch strong { display: block; color: var(--text); font-size: 13px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 22px; }
+    .card { border: 1px solid var(--line); border-radius: 15px; background: rgba(18, 25, 30, .95); padding: 16px; }
+    .metric b { display: block; color: var(--mint); font-size: 29px; line-height: 1; letter-spacing: -.035em; }
+    .metric span { display: block; margin-top: 7px; color: var(--muted); }
+    nav { display: flex; gap: 6px; margin-top: 18px; padding: 7px; border: 1px solid var(--line); border-radius: 13px; background: rgba(9, 13, 16, .9); }
+    button { border: 0; border-radius: 9px; padding: 8px 12px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; }
+    button[aria-selected="true"] { color: var(--text); background: #1b252b; box-shadow: inset 0 0 0 1px var(--line); }
+    .panel { display: none; padding-top: 14px; }
+    .panel.active { display: block; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .wide { grid-column: 1 / -1; }
+    h2 { margin: 2px 0 12px; font-size: 21px; }
+    h3 { margin: 0 0 7px; font-size: 15px; }
+    p { margin: 6px 0; }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    li + li { margin-top: 5px; }
+    .win { border-left: 3px solid var(--mint); }
+    .pending { border-left: 3px solid var(--amber); }
+    .pass { color: var(--mint); }
+    .warn { color: var(--amber); }
+    .reject { color: var(--red); }
+    .muted { color: var(--muted); }
+    .delta { display: inline-block; margin-top: 6px; color: var(--mint); font-weight: 750; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 760px) {
+      header, .grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .branch { text-align: left; }
+      nav { overflow-x: auto; }
+      button { white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">Montage · benchmark-driven optimization</div>
+        <h1>Three runtime wins. Every miss stayed out.</h1>
+        <p class="lede">Real dispatcher, renderer, ffmpeg, Python MCP, and project-protocol work was measured before and after. Production changes survived only when repeatable gains cleared frozen gates and correctness stayed exact.</p>
+      </div>
+      <div class="branch">
+        <strong><code>codex/montage-performance-optimization</code></strong>
+        based on <code>37a82d57</code> · 2026-08-04<br />
+        stacked on PR #105 · not merged or released
+      </div>
+    </header>
+
+    <section class="metrics" aria-label="Headline outcomes">
+      <div class="card metric"><b>−56%</b><span>existing-sidecar skip median</span></div>
+      <div class="card metric"><b>−18.9%</b><span>playback task-time median</span></div>
+      <div class="card metric"><b>−93.6%</b><span>audio-energy peak RSS median</span></div>
+      <div class="card metric"><b>0 B</b><span>observed audio PCM temp high-water</span></div>
+    </section>
+
+    <nav role="tablist" aria-label="Performance report sections">
+      <button role="tab" aria-selected="true" aria-controls="wins">Accepted</button>
+      <button role="tab" aria-selected="false" aria-controls="method">Method</button>
+      <button role="tab" aria-selected="false" aria-controls="misses">Rejected</button>
+      <button role="tab" aria-selected="false" aria-controls="proof">Delivery proof</button>
+    </nav>
+
+    <section class="panel active" id="wins" role="tabpanel">
+      <div class="grid">
+        <article class="card win">
+          <h3>Indexer · skip without materializing JSON</h3>
+          <p>Production now validates the small typed sidecar header instead of allocating the opaque body when the current asset fingerprint already matches.</p>
+          <span class="delta">626.448 → 271.976 ms median · −56.58%</span>
+          <p class="muted">Confirmation: −56.02%; p95 −55.56% to −58.31%; max RSS collapsed from roughly 500–785 MiB to 8.3–8.4 MiB; 36/36 pairs skipped.</p>
+        </article>
+        <article class="card win">
+          <h3>Timeline · isolate the moving playhead</h3>
+          <p>The playback clock updates a dedicated playhead layer instead of repainting the complete static timeline canvas every frame.</p>
+          <span class="delta">486 → 0 static paints · 168.2 → 0 ms paint work</span>
+          <p class="muted">Task median −18.85%; script median −27.09%; task p95 −17.61%; cut, seek, decoded-frame, cadence, layout, and heap gates held.</p>
+        </article>
+        <article class="card win">
+          <h3>Audio energy · stream decoded PCM</h3>
+          <p>The real Rust dispatcher and Python MCP now stream ffmpeg output into analysis instead of staging an hour of decoded PCM.</p>
+          <span class="delta">4.069 GiB → 267.3 MiB RSS · 18.163 → 9.334 s</span>
+          <p class="muted">Median/p95 RSS −93.59%/−93.34%; wall −48.61%/−56.44%; 691,200,000-byte observed temp high-water removed; bit-exact 36,000-window output and teardown held.</p>
+        </article>
+        <article class="card win">
+          <h3>Frontend CI · remove work that cannot ship</h3>
+          <p>The mocked frontend lane no longer compiles an unused release MCP sidecar, while Tauri, release, development, and sidecar lanes retain it.</p>
+          <span class="delta">Remote Build 277 s → 16 s · −94.2%</span>
+          <p class="muted">The candidate saved 261 seconds and cleared the frozen acceptance gate of at least 180 seconds and 60%. All five configured CI jobs passed.</p>
+        </article>
+        <article class="card wide">
+          <h3>Smaller accepted cleanup</h3>
+          <p>The frontend job also dropped a duplicate strict TypeScript invocation after seven local hot samples measured a 4.71 s median; <code>pnpm build</code> still runs the same type gate.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel" id="method" role="tabpanel">
+      <div class="grid">
+        <article class="card">
+          <h3>Controlled comparison</h3>
+          <ul>
+            <li>Clean source identities and preserved binaries</li>
+            <li>Real APFS/HFS+ fixtures and production dispatch paths</li>
+            <li>Warmups, alternating arms, repeated samples, median/p95/MAD</li>
+            <li>Comparable release or minified production profiles</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Correctness and resources</h3>
+          <ul>
+            <li>Exact sidecar, timeline, frame, and audio witnesses</li>
+            <li>Process-tree RSS, temp high-water, task/script/paint work</li>
+            <li>Cancellation, failure, cleanup, orphan, and output parity</li>
+            <li>Frozen thresholds before production edits</li>
+          </ul>
+        </article>
+        <article class="card wide">
+          <h3>Retained regression infrastructure</h3>
+          <p><code>make perf-index-skip</code>, <code>make perf-project-read</code>, <code>make perf-waveform</code>, <code>make perf-audio-energy</code>, <code>make perf-clip-lifecycle</code>, and the production desktop/playback runners remain reproducible manual tiers. Heavy model/media runs stay out of normal CI; focused controller tests and the frontend build remain cheap gates.</p>
+        </article>
+        <article class="card wide">
+          <h3>Evidence integrity</h3>
+          <p>The project-read verifier rehashes live binaries and source/build inputs, recomputes summaries and gates from raw samples, requires two distinct full reports, and now binds machine/filesystem provenance. Index-skip fixtures validate fingerprints, size, complete streamed JSON, and header identity before timing. CLIP evidence now binds the exact model/dimension, imported module configuration, complete Python workspace (including ignored venv inputs), isolated import environment, and natural process-group teardown.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel" id="misses" role="tabpanel">
+      <article class="card">
+        <table>
+          <thead><tr><th>Experiment</th><th>Measured result</th><th>Disposition</th></tr></thead>
+          <tbody>
+            <tr><td>Waveform fixed-chunk streaming</td><td>Wall −3.04%; RSS +0.31%</td><td class="reject">Rejected; missed 10% latency and 25 MiB RSS gates</td></tr>
+            <tr><td>Borrowed <code>Project::read</code> JSON</td><td>Wall −4.16% to −4.18%; RSS −15.14% at 5,000 clips</td><td class="reject">Rejected and reverted; below both frozen gates</td></tr>
+            <tr><td>Root playback subscription isolation</td><td>Root renders 250→3, but task median/p95 regressed</td><td class="reject">Rejected; resource proxy did not improve user work</td></tr>
+            <tr><td>Default-gain WebAudio deferral</td><td>Open, first frame, preview init, and long task all regressed</td><td class="reject">Rejected; safety-preserving candidate lost</td></tr>
+            <tr><td>Duplicate 6,757-file thumbnail traversal</td><td>Only 3.43–4.85 ms saved</td><td class="reject">Rejected below 20 ms gate</td></tr>
+            <tr><td>Asset-filtered transcript scan</td><td>18.280–19.942 ms total baseline</td><td class="reject">Rejected before edit; absolute gate unreachable</td></tr>
+          </tbody>
+        </table>
+      </article>
+      <div class="grid" style="margin-top:12px">
+        <article class="card"><h3>Deferred low · CLIP workers</h3><p>Real six-asset baseline: 8.221 s median and 2.946 GiB RSS. Reuse is credible, but the explicit/manual path lacks a search consumer and a safe pool requires scheduler leases, resource accounting, cancellation, and process-group teardown.</p></article>
+        <article class="card"><h3>Deferred low · EDL cleanup batching</h3><p>No trace attributes meaningful user latency to it, while batching broadens topology, atomicity, and failure-semantics risk. Revisit only with a real envelope profile.</p></article>
+      </div>
+    </section>
+
+    <section class="panel" id="proof" role="tabpanel">
+      <article class="card">
+        <table>
+          <thead><tr><th>Gate</th><th>Status</th><th>Current evidence</th></tr></thead>
+          <tbody>
+            <tr><td>Independent code review</td><td class="pass">Pass</td><td>Accepted production paths and retained harnesses reviewed. Project-report machine binding plus CLIP model, provenance, and lifecycle findings were reproduced, fixed with red/green tests, and re-reviewed clean.</td></tr>
+            <tr><td>Desktop frontend</td><td class="pass">Pass</td><td>Typecheck, full UI suite, seven SSIM 1.000000 stage cases, and production frontend build.</td></tr>
+            <tr><td>Python</td><td class="pass">Pass</td><td>Audio-energy unit tests; 32 benchmark-controller tests under Python 3.11 and 3.14; safe 14-package smoke; real dispatcher audio smoke.</td></tr>
+            <tr><td>Affected Rust crates</td><td class="pass">Pass</td><td>Formatting, focused tests, clippy with warnings denied, and diff hygiene pass at the final code head. Full-workspace all-targets remains baseline-blocked by absent vendored Codex PEM test fixtures.</td></tr>
+            <tr><td>Exact app persistence dogfood</td><td class="warn">In progress</td><td>Exact bundle built, resources verified, locally sealed, and launched. A disposable split persisted from one clip to two on disk; macOS locked before the native quit/reopen step.</td></tr>
+            <tr><td>Remote CI / CI timing</td><td class="pass">Pass</td><td>Draft PR #106: frontend Build passed in 16 s versus 277 s baseline (−94.2%, 261 s saved); macOS Rust, Ubuntu Rust, frontend, format, and security all passed.</td></tr>
+          </tbody>
+        </table>
+      </article>
+      <article class="card" style="margin-top:12px">
+        <h3>Stop-condition verdict</h3>
+        <p>No remaining high- or medium-priority <em>product-runtime</em> candidate has both measured headroom and a bounded, proportionate implementation path. The remote CI candidate has cleared its frozen gate; delivery remains open only for exact native quit/reopen persistence proof and final-head reconciliation.</p>
+      </article>
+    </section>
+
+    <footer>Benchmark gates were never relaxed after seeing results. Failed candidates were removed; useful evaluators and negative evidence remain.</footer>
+  </main>
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+    tabs.forEach((tab) => tab.addEventListener('click', () => {
+      tabs.forEach((item) => item.setAttribute('aria-selected', String(item === tab)));
+      panels.forEach((panel) => panel.classList.toggle('active', panel.id === tab.getAttribute('aria-controls')));
+    }));
+  </script>
+</body>
+</html>
