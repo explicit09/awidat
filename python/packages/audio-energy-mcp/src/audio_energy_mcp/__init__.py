@@ -218,6 +218,8 @@ class _StreamingAudio:
                 filtered,
                 zi=self._filter_states[index],
             )
+            # pyloudnorm assigns each stage back into its input-typed copy, so
+            # float32 PCM is intentionally rounded here for exact compatibility.
             filtered = filtered.astype(np.float32)
         return filtered
 
