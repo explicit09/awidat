@@ -7,12 +7,15 @@
 //! production implementation free of benchmark-only telemetry.
 
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{SecondsFormat, Utc};
 use montage_render::{FfmpegError, ffmpeg_path, generate_waveform};
@@ -801,10 +804,12 @@ struct FixtureMetadata {
 fn prepare_fixture(args: &Args, ffmpeg: &Path) -> Result<Fixture, String> {
     let root = args.work_dir.join("fixture");
     fs::create_dir_all(&root).map_err(|error| format!("create {}: {error}", root.display()))?;
+    let _guard = acquire_waveform_fixture_guard(&root, args.duration_s)?;
     let path = root.join(format!("mixed-aac-{}s.m4a", args.duration_s));
     let metadata_path = root.join(format!("fixture-{}s.json", args.duration_s));
     let argv = fixture_argv(args.duration_s, &path);
-    let (generated, metadata) = if path.exists() || metadata_path.exists() {
+    recover_incomplete_fixture_pair(&path, &metadata_path)?;
+    let (generated, metadata) = if path.exists() {
         let metadata: FixtureMetadata = serde_json::from_slice(
             &fs::read(&metadata_path)
                 .map_err(|error| format!("read {}: {error}", metadata_path.display()))?,
@@ -825,30 +830,51 @@ fn prepare_fixture(args: &Args, ffmpeg: &Path) -> Result<Fixture, String> {
         }
         (false, metadata)
     } else {
-        let output = Command::new(ffmpeg)
-            .args(&argv)
-            .output()
-            .map_err(|error| format!("spawn fixture ffmpeg: {error}"))?;
+        let temporary_path = temporary_sibling(&path, "fixture")?;
+        let temporary_argv = fixture_argv(args.duration_s, &temporary_path);
+        let output = match Command::new(ffmpeg).args(&temporary_argv).output() {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary_path);
+                return Err(format!("spawn fixture ffmpeg: {error}"));
+            }
+        };
         if !output.status.success() {
+            let _ = fs::remove_file(&temporary_path);
             return Err(format!(
                 "fixture ffmpeg exited {}: {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        let sha256 = sha256_file(&path)?;
-        let metadata = FixtureMetadata {
-            duration_s: args.duration_s,
-            generator_argv: argv,
-            ffmpeg_path: ffmpeg.display().to_string(),
-            ffmpeg_version: ffmpeg_version(ffmpeg)?,
-            sha256,
-        };
-        write_atomically(
-            &metadata_path,
-            &serde_json::to_vec_pretty(&metadata)
-                .map_err(|error| format!("serialize fixture metadata: {error}"))?,
-        )?;
+        let publication = (|| {
+            let sha256 = sha256_file(&temporary_path)?;
+            let metadata = FixtureMetadata {
+                duration_s: args.duration_s,
+                // Keep the stable published path in the reproducible command;
+                // generation differs only by writing its output to a sibling
+                // temporary path before the atomic rename below.
+                generator_argv: argv,
+                ffmpeg_path: ffmpeg.display().to_string(),
+                ffmpeg_version: ffmpeg_version(ffmpeg)?,
+                sha256,
+            };
+            let metadata_bytes = serde_json::to_vec_pretty(&metadata)
+                .map_err(|error| format!("serialize fixture metadata: {error}"))?;
+            fs::rename(&temporary_path, &path).map_err(|error| {
+                format!(
+                    "publish fixture {} as {}: {error}",
+                    temporary_path.display(),
+                    path.display()
+                )
+            })?;
+            write_atomically(&metadata_path, &metadata_bytes)?;
+            Ok::<_, String>(metadata)
+        })();
+        if publication.is_err() {
+            let _ = fs::remove_file(&temporary_path);
+        }
+        let metadata = publication?;
         (true, metadata)
     };
     let size_bytes = fs::metadata(&path)
@@ -865,6 +891,70 @@ fn prepare_fixture(args: &Args, ffmpeg: &Path) -> Result<Fixture, String> {
         generator_argv: metadata.generator_argv,
         filesystem: filesystem(&path),
     })
+}
+
+#[derive(Debug)]
+struct FixturePublicationGuard {
+    lock: File,
+}
+
+impl Drop for FixturePublicationGuard {
+    fn drop(&mut self) {
+        let _ = self.lock.unlock();
+    }
+}
+
+fn acquire_waveform_fixture_guard(
+    root: &Path,
+    duration_s: u64,
+) -> Result<FixturePublicationGuard, String> {
+    fs::create_dir_all(root).map_err(|error| format!("create {}: {error}", root.display()))?;
+    let path = root.join(format!(".fixture-{duration_s}s.lock"));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let lock = options
+        .open(&path)
+        .map_err(|error| format!("open {}: {error}", path.display()))?;
+    let metadata = lock
+        .metadata()
+        .map_err(|error| format!("metadata {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("fixture lock is not a file: {}", path.display()));
+    }
+    match lock.try_lock() {
+        Ok(()) => Ok(FixturePublicationGuard { lock }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "fixture publication already in progress: {}",
+            root.display()
+        )),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(format!("lock {}: {error}", path.display()))
+        }
+    }
+}
+
+fn recover_incomplete_fixture_pair(path: &Path, metadata_path: &Path) -> Result<bool, String> {
+    let path_exists = path
+        .try_exists()
+        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    let metadata_exists = metadata_path
+        .try_exists()
+        .map_err(|error| format!("inspect {}: {error}", metadata_path.display()))?;
+    if path_exists == metadata_exists {
+        return Ok(false);
+    }
+    for incomplete in [path, metadata_path] {
+        if incomplete
+            .try_exists()
+            .map_err(|error| format!("inspect {}: {error}", incomplete.display()))?
+        {
+            fs::remove_file(incomplete)
+                .map_err(|error| format!("remove incomplete {}: {error}", incomplete.display()))?;
+        }
+    }
+    Ok(true)
 }
 
 fn fixture_argv(duration_s: u64, output: &Path) -> Vec<String> {
@@ -1574,26 +1664,41 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .parent()
         .ok_or_else(|| format!("no parent for {}", path.display()))?;
     fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let temporary = temporary_sibling(path, "report")?;
+    fs::write(&temporary, bytes)
+        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "rename {} to {}: {error}",
+            temporary.display(),
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn temporary_sibling(path: &Path, fallback_name: &str) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("no parent for {}", path.display()))?;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let temporary = parent.join(format!(
-        ".{}-{}-{suffix}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("report"),
-        std::process::id()
-    ));
-    fs::write(&temporary, bytes)
-        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, path).map_err(|error| {
-        format!(
-            "rename {} to {}: {error}",
-            temporary.display(),
-            path.display()
-        )
-    })
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(fallback_name);
+    let process_id = std::process::id();
+    let name = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map_or_else(
+            || format!(".{stem}-{process_id}-{suffix}.tmp"),
+            |extension| format!(".{stem}-{process_id}-{suffix}.tmp.{extension}"),
+        );
+    Ok(parent.join(name))
 }
 
 fn write_atomically_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -1810,7 +1915,9 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if let Ok(value) = fs::read_to_string(path) {
-                return value.trim().parse().unwrap();
+                if let Ok(pid) = value.trim().parse() {
+                    return pid;
+                }
             }
             assert!(
                 Instant::now() < deadline,
@@ -2064,5 +2171,83 @@ mod tests {
 
         assert_eq!(first.duration_s, first_duration_s);
         assert_eq!(second.duration_s, second_duration_s);
+    }
+
+    #[test]
+    fn incomplete_fixture_pairs_are_recovered_without_masking_complete_corruption() {
+        for (media_exists, metadata_exists) in [(true, false), (false, true)] {
+            let root = tempfile::tempdir().unwrap();
+            let media = root.path().join("fixture.m4a");
+            let metadata = root.path().join("fixture.json");
+            if media_exists {
+                fs::write(&media, b"partial media").unwrap();
+            }
+            if metadata_exists {
+                fs::write(&metadata, b"partial metadata").unwrap();
+            }
+
+            assert!(recover_incomplete_fixture_pair(&media, &metadata).unwrap());
+            assert!(!media.exists());
+            assert!(!metadata.exists());
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let media = root.path().join("fixture.m4a");
+        let metadata = root.path().join("fixture.json");
+        fs::write(&media, b"corrupt media").unwrap();
+        fs::write(&metadata, b"corrupt metadata").unwrap();
+
+        assert!(!recover_incomplete_fixture_pair(&media, &metadata).unwrap());
+        assert_eq!(fs::read(&media).unwrap(), b"corrupt media");
+        assert_eq!(fs::read(&metadata).unwrap(), b"corrupt metadata");
+    }
+
+    #[test]
+    fn complete_corrupt_fixture_pair_still_fails_closed() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let root = work_dir.path().join("fixture");
+        fs::create_dir_all(&root).unwrap();
+        let media = root.join("mixed-aac-3s.m4a");
+        let metadata = root.join("fixture-3s.json");
+        fs::write(&media, b"corrupt media").unwrap();
+        fs::write(&metadata, b"corrupt metadata").unwrap();
+
+        let error = prepare_fixture(
+            &Args {
+                work_dir: work_dir.path().to_path_buf(),
+                evidence_dir: work_dir.path().join("evidence"),
+                label: "test".into(),
+                duration_s: 3,
+            },
+            Path::new("ffmpeg-must-not-run"),
+        )
+        .expect_err("complete corrupt fixture pair rejected");
+
+        assert!(error.contains("parse"));
+        assert_eq!(fs::read(&media).unwrap(), b"corrupt media");
+        assert_eq!(fs::read(&metadata).unwrap(), b"corrupt metadata");
+    }
+
+    #[test]
+    fn temporary_fixture_path_preserves_the_media_extension() {
+        let final_path = Path::new("/fixture/mixed-aac-3s.m4a");
+        let temporary = temporary_sibling(final_path, "fixture").unwrap();
+
+        assert_eq!(temporary.parent(), final_path.parent());
+        assert_eq!(temporary.extension(), final_path.extension());
+        assert_ne!(temporary, final_path);
+    }
+
+    #[test]
+    fn fixture_publication_guard_is_exclusive_and_releases() {
+        let root = tempfile::tempdir().unwrap();
+        let first = acquire_waveform_fixture_guard(root.path(), 3).unwrap();
+
+        let error = acquire_waveform_fixture_guard(root.path(), 3)
+            .expect_err("concurrent fixture publication rejected");
+        assert!(error.contains("already in progress"));
+
+        drop(first);
+        acquire_waveform_fixture_guard(root.path(), 3).expect("guard released");
     }
 }
