@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -106,6 +107,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
         model_lookup: mock.Mock | None = None,
         controller_lookup: mock.Mock | None = None,
         sample_runner: mock.Mock | None = None,
+        observe_fixture: mock.Mock | None = None,
+        work_root: Path | None = None,
+        evidence_dir: Path | None = None,
         write: mock.Mock,
     ) -> Path:
         assets = [root / f"asset-{index}.mp4" for index in range(bench.ASSET_COUNT)]
@@ -129,8 +133,8 @@ class BenchClipLifecycleTests(unittest.TestCase):
             model_weights=weights,
             samples=1,
             timeout_seconds=60.0,
-            work_root=root / "work",
-            evidence_dir=root / "evidence",
+            work_root=work_root or root / "work",
+            evidence_dir=evidence_dir or root / "evidence",
             label="test",
         )
         model_lookup = model_lookup or mock.Mock(
@@ -138,6 +142,13 @@ class BenchClipLifecycleTests(unittest.TestCase):
         )
         controller_lookup = controller_lookup or mock.Mock(return_value={})
         sample_runner = sample_runner or mock.Mock(return_value=(sample, b"stable"))
+        observe_fixture = observe_fixture or mock.Mock(
+            return_value={
+                "duration_s": 2.0,
+                "frame_count": 1,
+                "sample_fps": 0.5,
+            }
+        )
         def complete_runtime_input(
             overrides: dict[str, object],
         ) -> dict[str, object]:
@@ -180,15 +191,7 @@ class BenchClipLifecycleTests(unittest.TestCase):
             ),
             mock.patch.object(bench, "model_provenance", new=model_lookup),
             mock.patch.object(bench, "runtime_preflight", return_value={}),
-            mock.patch.object(
-                bench,
-                "observe_clip_fixture",
-                return_value={
-                    "duration_s": 2.0,
-                    "frame_count": 1,
-                    "sample_fps": 0.5,
-                },
-            ),
+            mock.patch.object(bench, "observe_clip_fixture", new=observe_fixture),
             mock.patch.object(bench, "asset_fingerprint", return_value="a" * 64),
             mock.patch.object(
                 bench,
@@ -220,6 +223,68 @@ class BenchClipLifecycleTests(unittest.TestCase):
             mock.patch.object(bench, "atomic_write_json", write),
         ):
             return bench.run_benchmark(args)
+
+    def test_parse_args_rejects_nonfinite_timeout_values(self) -> None:
+        for value in ("nan", "inf"):
+            with self.subTest(value=value):
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit) as error:
+                        bench.parse_args(
+                            [
+                                "--asset",
+                                "fixture.mp4",
+                                "--python-root",
+                                "/tmp/python",
+                                "--model-weights",
+                                "/tmp/weights",
+                                "--timeout-seconds",
+                                value,
+                            ]
+                        )
+                self.assertEqual(error.exception.code, 2)
+
+    def test_benchmark_rejects_repository_output_before_fixture_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            write = mock.Mock()
+            observe_fixture = mock.Mock(
+                return_value={
+                    "duration_s": 2.0,
+                    "frame_count": 1,
+                    "sample_fps": 0.5,
+                }
+            )
+            git = {"head": "a" * 40, "git_status_clean": True}
+            test_root = bench.ROOT / (
+                f".clip-lifecycle-location-regression-{os.getpid()}-{time.time_ns()}"
+            )
+            test_root.mkdir(exist_ok=False)
+            sentinel = test_root / "pre-existing-sentinel"
+            sentinel.write_text("preserve me", encoding="utf-8")
+            work_root = test_root / "candidate"
+            self.assertFalse(work_root.exists())
+
+            try:
+                with self.assertRaisesRegex(bench.BenchError, "inside repository root"):
+                    self.run_mocked_benchmark(
+                        Path(directory),
+                        git_states=[git, git],
+                        source_states=[{"manifest": "same"}, {"manifest": "same"}],
+                        observe_fixture=observe_fixture,
+                        work_root=work_root,
+                        evidence_dir=work_root / "evidence",
+                        write=write,
+                    )
+            finally:
+                try:
+                    self.assertEqual(
+                        sentinel.read_text(encoding="utf-8"), "preserve me"
+                    )
+                    self.assertFalse(work_root.exists())
+                finally:
+                    shutil.rmtree(test_root)
+
+        observe_fixture.assert_not_called()
+        write.assert_not_called()
 
     def test_clip_sidecar_decodes_little_endian_float16_and_hashes_its_bytes(self) -> None:
         record = bench.validate_clip_sidecar(

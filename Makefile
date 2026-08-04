@@ -80,10 +80,10 @@ python-smoke-audio:
 	python3 python/scripts/smoke_indexers.py --safe --audio-energy
 
 perf-index-skip:
-	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-/Volumes/My Passport for Mac/awidat-build/main-target}" cargo run --release -p montage-index --bin montage-index-skip-perf -- --work-dir "$${MONTAGE_INDEX_SKIP_WORK_DIR:-$${TMPDIR:-/tmp}/montage-index-skip-perf}" --output "$${MONTAGE_INDEX_SKIP_OUTPUT:-$${TMPDIR:-/tmp}/montage-index-skip-perf.json}" $${MONTAGE_INDEX_SKIP_ARGS:-}
+	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-$(CURDIR)/target}" cargo run --release -p montage-index --bin montage-index-skip-perf -- --work-dir "$${MONTAGE_INDEX_SKIP_WORK_DIR:-$${TMPDIR:-/tmp}/montage-index-skip-perf}" --output "$${MONTAGE_INDEX_SKIP_OUTPUT:-$${TMPDIR:-/tmp}/montage-index-skip-perf.json}" $${MONTAGE_INDEX_SKIP_ARGS:-}
 
 perf-waveform:
-	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-/Volumes/My Passport for Mac/awidat-build/main-target}" cargo run --release -p montage-render --bin montage-waveform-perf -- --work-dir "$${MONTAGE_WAVEFORM_PERF_WORK_DIR:-/Volumes/My Passport for Mac/awidat-build/waveform-perf}" --evidence-dir "$${MONTAGE_WAVEFORM_PERF_EVIDENCE_DIR:-/Volumes/My Passport for Mac/awidat-build/waveform-perf/evidence}" $${MONTAGE_WAVEFORM_PERF_ARGS:-}
+	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-$(CURDIR)/target}" cargo run --release -p montage-render --bin montage-waveform-perf -- --work-dir "$${MONTAGE_WAVEFORM_PERF_WORK_DIR:-$${TMPDIR:-/tmp}/montage-waveform-perf}" --evidence-dir "$${MONTAGE_WAVEFORM_PERF_EVIDENCE_DIR:-$${TMPDIR:-/tmp}/montage-waveform-perf/evidence}" $${MONTAGE_WAVEFORM_PERF_ARGS:-}
 
 perf-audio-energy:
 	@set -eu; \

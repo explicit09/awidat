@@ -1018,7 +1018,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.python_root is None or args.model_weights is None:
         parser.error("--python-root and --model-weights are required")
-    if args.samples < 5 or args.timeout_seconds <= 0:
+    if (
+        args.samples < 5
+        or not math.isfinite(args.timeout_seconds)
+        or args.timeout_seconds <= 0
+    ):
         parser.error("--samples must be at least 5 and --timeout-seconds must be positive")
     if not LABEL_RE.fullmatch(args.label):
         parser.error("--label must contain only letters, digits, '-' or '_'")
@@ -1032,13 +1036,15 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     git = git_provenance()
     controller_python = controller_python_provenance()
     binary, python_root = resolve_executable(args.binary), resolve_python_workspace(args.python_root)
+    output_locations = {
+        "work root": args.work_root,
+        "evidence directory": args.evidence_dir,
+        "run directory": args.work_root / "runs",
+    }
     validate_benchmark_output_locations(
         python_root,
-        {
-            "work root": args.work_root,
-            "evidence directory": args.evidence_dir,
-            "run directory": args.work_root / "runs",
-        },
+        output_locations,
+        repository_root=ROOT,
     )
     weights, hf_home, model = model_provenance(args.model_weights)
     runtime = runtime_preflight(python_root, hf_home, weights)

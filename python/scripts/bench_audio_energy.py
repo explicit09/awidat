@@ -21,6 +21,7 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -42,14 +43,14 @@ class BenchError(RuntimeError):
     pass
 
 
-def parse_ps_table(text: str) -> list[tuple[int, int, int]]:
-    rows: list[tuple[int, int, int]] = []
+def parse_ps_table(text: str) -> list[tuple[int, int, int, str]]:
+    rows: list[tuple[int, int, int, str]] = []
     for line in text.splitlines():
         fields = line.split()
-        if len(fields) < 3:
+        if len(fields) < 4:
             continue
         try:
-            rows.append((int(fields[0]), int(fields[1]), int(fields[2])))
+            rows.append((int(fields[0]), int(fields[1]), int(fields[2]), fields[3]))
         except ValueError:
             continue
     return rows
@@ -67,6 +68,12 @@ def aggregate_process_tree(
         pids.update(added)
     rss_bytes = sum(by_pid[pid][1] * 1024 for pid in pids if pid in by_pid)
     return pids, rss_bytes
+
+
+def dispatcher_exited_in_snapshot(
+    pid: int, rows: list[tuple[int, int, int, str]]
+) -> bool:
+    return any(row_pid == pid and state.startswith("Z") for row_pid, _, _, state in rows)
 
 
 def parse_df_posix(text: str) -> tuple[str, str]:
@@ -166,9 +173,14 @@ def workspace_manifest(root: Path) -> dict[str, Any]:
 def validate_benchmark_output_locations(
     workspace_root: Path,
     locations: dict[str, Path],
+    *,
+    repository_root: Path | None = None,
 ) -> None:
     try:
         workspace_root = workspace_root.resolve(strict=True)
+        repository_root = (
+            repository_root.resolve(strict=True) if repository_root is not None else None
+        )
         resolved_locations = {
             label: path.resolve() for label, path in locations.items()
         }
@@ -178,6 +190,10 @@ def validate_benchmark_output_locations(
         if path.is_relative_to(workspace_root):
             raise BenchError(
                 f"benchmark {label} is inside the Python runtime workspace: {path}"
+            )
+        if repository_root is not None and path.is_relative_to(repository_root):
+            raise BenchError(
+                f"benchmark {label} is inside repository root: {path}"
             )
 
 
@@ -580,10 +596,10 @@ def _prepare_fixture_locked(
     }
 
 
-def sample_processes() -> list[tuple[int, int, int]]:
+def sample_processes() -> list[tuple[int, int, int, str]]:
     try:
         completed = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,rss="],
+            ["ps", "-axo", "pid=,ppid=,rss=,stat="],
             check=True,
             capture_output=True,
             text=True,
@@ -713,29 +729,130 @@ def wait_for_no_orphans(pids: set[int]) -> list[int]:
     return alive
 
 
-def terminate_process_group(
-    process: subprocess.Popen[Any], tracked_pids: set[int] | None = None
-) -> list[int]:
-    tracked_pids = set(tracked_pids or ()) - {process.pid}
+def process_group_nonquiescent_members(process_group: int) -> list[int]:
     try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    if process.poll() is None:
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,pgid=,stat="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise BenchError(f"process-group sampler failed: {error}") from error
+
+    members: list[int] = []
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
         try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            pass
-    remaining = wait_for_no_orphans(tracked_pids)
-    if process.poll() is None or remaining:
+            pid = int(fields[0])
+            pgid = int(fields[1])
+        except ValueError:
+            continue
+        if pgid != process_group:
+            continue
+        if pid == process_group and fields[2].startswith("Z"):
+            continue
+        members.append(pid)
+    return sorted(members)
+
+
+def wait_for_process_group_quiescence(process_group: int) -> list[int]:
+    deadline = time.monotonic() + ORPHAN_GRACE_SECONDS
+    remaining = process_group_nonquiescent_members(process_group)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.05)
+        remaining = process_group_nonquiescent_members(process_group)
+    return remaining
+
+
+def dispatcher_exited_without_reaping(process: subprocess.Popen[Any]) -> bool:
+    if process.returncode is not None:
+        return True
+    try:
+        completed = subprocess.run(
+            ["/bin/ps", "-p", str(process.pid), "-o", "stat="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise BenchError(f"observe dispatcher completion: {error}") from error
+    return any(state.startswith("Z") for state in completed.stdout.split())
+
+
+@dataclass
+class ProcessGroupCleanup:
+    forced_group_members: list[int]
+    remaining_group_members: list[int]
+    observed_remaining_members: list[int]
+    errors: list[str]
+
+
+def terminate_process_group(
+    process: subprocess.Popen[Any],
+    tracked_pids: set[int] | None = None,
+    *,
+    allow_natural_exit: bool = False,
+) -> ProcessGroupCleanup:
+    tracked_pids = set(tracked_pids or ()) - {process.pid}
+    if process.returncode is not None:
+        return ProcessGroupCleanup([], [], wait_for_no_orphans(tracked_pids), [])
+
+    forced_members: set[int] = set()
+    errors: list[str] = []
+
+    def sample_group() -> list[int] | None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            return process_group_nonquiescent_members(process.pid)
+        except BenchError as error:
+            errors.append(str(error))
+            return None
+
+    def wait_for_group_quiescence() -> list[int] | None:
+        try:
+            return wait_for_process_group_quiescence(process.pid)
+        except BenchError as error:
+            errors.append(str(error))
+            return None
+
+    def signal_group(group_signal: signal.Signals) -> None:
+        try:
+            os.killpg(process.pid, group_signal)
         except ProcessLookupError:
             pass
-        if process.poll() is None:
-            process.wait(timeout=3)
-        remaining = wait_for_no_orphans(tracked_pids)
-    return remaining
+        except OSError as error:
+            errors.append(f"signal process group {process.pid} {group_signal.name}: {error}")
+
+    initial_members = (
+        wait_for_group_quiescence() if allow_natural_exit else sample_group()
+    )
+    if initial_members is None or initial_members:
+        forced_members.update(initial_members or [])
+        signal_group(signal.SIGTERM)
+        after_term = wait_for_group_quiescence()
+    else:
+        after_term = []
+    if after_term is None or after_term:
+        forced_members.update(after_term or [])
+        signal_group(signal.SIGKILL)
+        remaining = wait_for_group_quiescence()
+    else:
+        remaining = after_term
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        remaining = sorted({*(remaining or []), process.pid})
+    observed_remaining = wait_for_no_orphans(tracked_pids)
+    return ProcessGroupCleanup(
+        forced_group_members=sorted(forced_members),
+        remaining_group_members=remaining or [],
+        observed_remaining_members=observed_remaining,
+        errors=errors,
+    )
 
 
 def read_json(path: Path) -> Any:
@@ -953,15 +1070,18 @@ def run_sample(
                     sample_gaps_seconds.append(sample_started - last_sample_started)
                 last_sample_started = sample_started
                 rows = sample_processes()
-                tree_pids, rss_bytes = aggregate_process_tree(process.pid, rows)
-                if process.pid in {pid for pid, _, _ in rows}:
+                tree_pids, rss_bytes = aggregate_process_tree(
+                    process.pid,
+                    [(pid, ppid, rss_kib) for pid, ppid, rss_kib, _state in rows],
+                )
+                if process.pid in {pid for pid, _, _, _ in rows}:
                     sampler_count += 1
                     observed_pids.update(tree_pids)
                     peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
                 temp_high_water_bytes = max(
                     temp_high_water_bytes, directory_bytes(work_root / "tmp")
                 )
-                if process.poll() is not None:
+                if dispatcher_exited_in_snapshot(process.pid, rows):
                     break
                 if sample_started - started > timeout_seconds:
                     raise BenchError(f"{name} exceeded timeout of {timeout_seconds:.1f}s")
@@ -969,31 +1089,53 @@ def run_sample(
                 if elapsed < SAMPLE_INTERVAL_SECONDS:
                     time.sleep(SAMPLE_INTERVAL_SECONDS - elapsed)
         except BaseException as error:
-            remaining = terminate_process_group(
-                process, observed_pids - {process.pid}
+            cleanup = terminate_process_group(
+                process, observed_pids - {process.pid}, allow_natural_exit=False
             )
-            if remaining:
+            if (
+                cleanup.remaining_group_members
+                or cleanup.observed_remaining_members
+                or cleanup.errors
+            ):
                 raise BenchError(
-                    f"{name} cleanup failed: orphan_pids={remaining}"
+                    f"{name} failed: {error}; cleanup failed: group_members="
+                    f"{cleanup.remaining_group_members} orphan_pids="
+                    f"{cleanup.observed_remaining_members} errors={cleanup.errors}"
                 ) from error
             raise
     wall_seconds = time.perf_counter() - started
 
-    orphans = wait_for_no_orphans(observed_pids - {process.pid})
-    remaining_orphans = (
-        terminate_process_group(process, set(orphans)) if orphans else []
+    observed_orphans = wait_for_no_orphans(observed_pids - {process.pid})
+    cleanup = terminate_process_group(
+        process, observed_pids - {process.pid}, allow_natural_exit=True
     )
-    if remaining_orphans:
-        raise BenchError(f"{name} cleanup failed: orphan_pids={remaining_orphans}")
+    if (
+        cleanup.remaining_group_members
+        or cleanup.observed_remaining_members
+        or cleanup.errors
+    ):
+        raise BenchError(
+            f"{name} cleanup failed: group_members="
+            f"{cleanup.remaining_group_members} orphan_pids="
+            f"{cleanup.observed_remaining_members} errors={cleanup.errors}"
+        )
+    if process.returncode is None:
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired as error:
+            raise BenchError(f"{name} dispatcher did not reap after completion") from error
     if process.returncode != 0:
         stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
         raise BenchError(
             f"{name} dispatcher exited {process.returncode}; "
-            f"forced_cleanup_pids={orphans}: {stderr_tail}"
+            f"forced_process_group_members={cleanup.forced_group_members} "
+            f"forced_cleanup_pids={observed_orphans}: {stderr_tail}"
         )
-    if orphans:
+    if cleanup.forced_group_members or observed_orphans:
         raise BenchError(
-            f"{name} cleanup failed: required forced cleanup for orphan_pids={orphans}"
+            f"{name} cleanup failed: required forced process-group cleanup for "
+            f"members={cleanup.forced_group_members}; "
+            f"observed_orphan_pids={observed_orphans}"
         )
     validate_sample_observations(
         name,
@@ -1036,6 +1178,8 @@ def run_sample(
         },
         "cleanup": {
             "orphan_pids": [],
+            "forced_process_group_members": [],
+            "errors": [],
             "leaked_audio_temp_files": [],
             "remaining_temp_files": remaining_temp_files,
             "passed": True,
@@ -1151,7 +1295,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--duration-seconds must be positive")
     if args.samples < 5:
         parser.error("--samples must be at least 5")
-    if args.timeout_seconds <= 0:
+    if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
     if not LABEL_RE.fullmatch(args.label):
         parser.error("--label must contain only letters, digits, '-' or '_'")
@@ -1180,6 +1324,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             "run directory": args.work_root / "runs",
             "fixture cache": args.work_root / "fixtures",
         },
+        repository_root=ROOT,
     )
 
     args.work_root.mkdir(parents=True, exist_ok=True)

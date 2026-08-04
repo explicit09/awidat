@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
 import signal
@@ -145,14 +147,14 @@ class BenchAudioEnergyTests(unittest.TestCase):
 
     def test_process_table_parser_ignores_headers_and_malformed_rows(self) -> None:
         rows = bench.parse_ps_table(
-            " PID PPID RSS\n"
-            " 41 1 1024\n"
-            " 42 41 2048\n"
+            " PID PPID RSS STAT\n"
+            " 41 1 1024 S\n"
+            " 42 41 2048 Z\n"
             " missing fields\n"
-            " 43 42 nope\n"
+            " 43 42 nope S\n"
         )
 
-        self.assertEqual(rows, [(41, 1, 1024), (42, 41, 2048)])
+        self.assertEqual(rows, [(41, 1, 1024, "S"), (42, 41, 2048, "Z")])
 
     def test_recursive_tree_rss_excludes_unrelated_processes(self) -> None:
         pids, rss_bytes = bench.aggregate_process_tree(
@@ -167,6 +169,26 @@ class BenchAudioEnergyTests(unittest.TestCase):
 
         self.assertEqual(pids, {10, 11, 12})
         self.assertEqual(rss_bytes, 28 * 1024)
+
+    def test_process_snapshot_identifies_an_unreaped_zombie_leader(self) -> None:
+        rows = [(41, 1, 1024, "Z"), (42, 41, 2048, "S")]
+
+        self.assertTrue(bench.dispatcher_exited_in_snapshot(41, rows))
+        self.assertFalse(bench.dispatcher_exited_in_snapshot(42, rows))
+
+    def test_process_sampler_collects_state_in_its_single_snapshot(self) -> None:
+        completed = SimpleNamespace(stdout="41 1 1024 Z\n")
+        with mock.patch.object(bench.subprocess, "run", return_value=completed) as run:
+            rows = bench.sample_processes()
+
+        self.assertEqual(rows, [(41, 1, 1024, "Z")])
+        run.assert_called_once_with(
+            ["ps", "-axo", "pid=,ppid=,rss=,stat="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
 
     def test_df_parser_preserves_mount_paths_with_spaces(self) -> None:
         device, mount = bench.parse_df_posix(
@@ -249,6 +271,35 @@ class BenchAudioEnergyTests(unittest.TestCase):
                     workspace,
                     {"work root": workspace / "benchmark-output"},
                 )
+
+    def test_benchmark_rejects_a_repository_output_root_before_fixture_preparation(
+        self,
+    ) -> None:
+        work_root = bench.ROOT / ".audio-energy-benchmark-test-output"
+        args = SimpleNamespace(
+            binary=Path("/fake/montage-index-perf"),
+            ffmpeg=Path("/fake/ffmpeg"),
+            ffprobe=Path("/fake/ffprobe"),
+            duration_seconds=2,
+            samples=5,
+            timeout_seconds=60.0,
+            work_root=work_root,
+            evidence_dir=work_root / "evidence",
+            label="test",
+        )
+        prepare_fixture = mock.Mock()
+
+        with (
+            mock.patch.object(
+                bench, "resolve_executable", side_effect=lambda value: Path(value)
+            ),
+            mock.patch.object(bench, "find_uv", return_value=Path("/fake/uv")),
+            mock.patch.object(bench, "prepare_fixture", prepare_fixture),
+            self.assertRaisesRegex(bench.BenchError, "inside repository root"),
+        ):
+            bench.run_benchmark(args)
+
+        prepare_fixture.assert_not_called()
 
     def test_controlled_environment_rejects_a_shadowed_provenanced_tool(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -534,6 +585,7 @@ class BenchAudioEnergyTests(unittest.TestCase):
             try:
                 with (
                     mock.patch.object(bench, "ORPHAN_GRACE_SECONDS", 0.1),
+                    mock.patch.object(bench, "wait_for_no_orphans", return_value=[]),
                     mock.patch.object(
                         bench, "validate_sample_observations", return_value=None
                     ),
@@ -543,7 +595,9 @@ class BenchAudioEnergyTests(unittest.TestCase):
                         return_value={"observed_rate_hz": 40.0, "gap_ms": {}},
                     ),
                 ):
-                    with self.assertRaisesRegex(bench.BenchError, "cleanup failed"):
+                    with self.assertRaisesRegex(
+                        bench.BenchError, "required forced process-group cleanup"
+                    ):
                         bench.run_sample(
                             name="leaky-success",
                             session_root=session_root,
@@ -561,6 +615,270 @@ class BenchAudioEnergyTests(unittest.TestCase):
                     child_pid = int(child_pid_path.read_text(encoding="utf-8"))
                 if child_pid is not None and bench.pid_alive(child_pid):
                     os.kill(child_pid, signal.SIGKILL)
+
+    def test_cleanup_never_signals_a_reaped_dispatcher_process_group(self) -> None:
+        process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
+
+        with (
+            mock.patch.object(bench, "wait_for_no_orphans", return_value=[]),
+            mock.patch.object(bench.os, "killpg") as killpg,
+        ):
+            cleanup = bench.terminate_process_group(process, {67890})
+
+        self.assertEqual(cleanup.remaining_group_members, [])
+        self.assertEqual(cleanup.observed_remaining_members, [])
+        killpg.assert_not_called()
+
+    def test_cleanup_keeps_the_leader_unreaped_through_group_signals(self) -> None:
+        class Process:
+            pid = 12345
+            returncode: int | None = None
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def wait(self, *, timeout: float) -> int:
+                self.returncode = 0
+                return 0
+
+        process = Process()
+        returncodes_at_signal: list[int | None] = []
+
+        def record_group_signal(_pgid: int, _signal: signal.Signals) -> None:
+            returncodes_at_signal.append(process.returncode)
+
+        with (
+            mock.patch.object(
+                bench,
+                "process_group_nonquiescent_members",
+                return_value=[67890],
+            ),
+            mock.patch.object(
+                bench,
+                "wait_for_process_group_quiescence",
+                side_effect=[[67890], []],
+            ),
+            mock.patch.object(
+                bench,
+                "wait_for_no_orphans",
+                return_value=[],
+            ),
+            mock.patch.object(bench.os, "killpg", side_effect=record_group_signal),
+        ):
+            cleanup = bench.terminate_process_group(process, {67890})
+
+        self.assertEqual(cleanup.remaining_group_members, [])
+        self.assertEqual(returncodes_at_signal, [None, None])
+
+    def test_cleanup_reports_forced_and_remaining_group_members(self) -> None:
+        class Process:
+            pid = 12345
+            returncode: int | None = None
+
+            def wait(self, *, timeout: float) -> int:
+                self.returncode = 0
+                return 0
+
+        process = Process()
+        with (
+            mock.patch.object(
+                bench,
+                "process_group_nonquiescent_members",
+                return_value=[67890],
+            ),
+            mock.patch.object(
+                bench,
+                "wait_for_process_group_quiescence",
+                side_effect=[[67890], [67890]],
+            ),
+            mock.patch.object(bench, "wait_for_no_orphans", return_value=[]),
+            mock.patch.object(bench.os, "killpg"),
+        ):
+            cleanup = bench.terminate_process_group(process, set())
+
+        self.assertEqual(cleanup.forced_group_members, [67890])
+        self.assertEqual(cleanup.remaining_group_members, [67890])
+
+    def test_cleanup_falls_back_to_group_signals_when_sampling_fails(self) -> None:
+        class Process:
+            pid = 12345
+            returncode: int | None = None
+
+            def __init__(self) -> None:
+                self.wait_timeouts: list[float] = []
+
+            def wait(self, *, timeout: float) -> int:
+                self.wait_timeouts.append(timeout)
+                self.returncode = 0
+                return 0
+
+        process = Process()
+        returncodes_at_signal: list[int | None] = []
+        signals: list[signal.Signals] = []
+
+        def record_group_signal(_pgid: int, group_signal: signal.Signals) -> None:
+            returncodes_at_signal.append(process.returncode)
+            signals.append(group_signal)
+
+        with (
+            mock.patch.object(
+                bench,
+                "process_group_nonquiescent_members",
+                side_effect=bench.BenchError("initial group sample failed"),
+            ),
+            mock.patch.object(
+                bench,
+                "wait_for_process_group_quiescence",
+                side_effect=[bench.BenchError("final group sample failed"), []],
+            ),
+            mock.patch.object(bench, "wait_for_no_orphans", return_value=[]),
+            mock.patch.object(bench.os, "killpg", side_effect=record_group_signal),
+        ):
+            cleanup = bench.terminate_process_group(process, set())
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(returncodes_at_signal, [None, None])
+        self.assertEqual(process.wait_timeouts, [3])
+        self.assertEqual(cleanup.forced_group_members, [])
+        self.assertEqual(cleanup.remaining_group_members, [])
+        self.assertEqual(
+            cleanup.errors,
+            ["initial group sample failed", "final group sample failed"],
+        )
+
+    def test_cleanup_kills_an_untracked_term_ignoring_group_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            child_pid_path = Path(directory) / "child.pid"
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import pathlib, subprocess, sys; "
+                        "child = subprocess.Popen([sys.executable, '-c', "
+                        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                        "time.sleep(60)']); "
+                        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')"
+                    ),
+                    str(child_pid_path),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            child_pid: int | None = None
+
+            try:
+                deadline = time.monotonic() + 1.0
+                while not child_pid_path.exists():
+                    self.assertLess(time.monotonic(), deadline, "child PID was not recorded")
+                    time.sleep(0.01)
+                child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+                while not bench.dispatcher_exited_without_reaping(process):
+                    self.assertLess(time.monotonic(), deadline, "leader did not exit")
+                    time.sleep(0.01)
+
+                with mock.patch.object(bench, "ORPHAN_GRACE_SECONDS", 0.1):
+                    cleanup = bench.terminate_process_group(process, set())
+
+                self.assertEqual(cleanup.remaining_group_members, [])
+                self.assertEqual(cleanup.forced_group_members, [child_pid])
+
+                self.assertFalse(bench.pid_alive(child_pid))
+            finally:
+                if child_pid is not None and bench.pid_alive(child_pid):
+                    os.kill(child_pid, signal.SIGKILL)
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+
+    def test_success_cleanup_allows_an_untracked_short_lived_group_descendant(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            child_pid_path = Path(directory) / "child.pid"
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import pathlib, subprocess, sys; "
+                        "child = subprocess.Popen([sys.executable, '-c', "
+                        "'import time; time.sleep(0.1)']); "
+                        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')"
+                    ),
+                    str(child_pid_path),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            child_pid: int | None = None
+
+            try:
+                deadline = time.monotonic() + 1.0
+                while not child_pid_path.exists():
+                    self.assertLess(time.monotonic(), deadline, "child PID was not recorded")
+                    time.sleep(0.01)
+                child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+                while not bench.dispatcher_exited_without_reaping(process):
+                    self.assertLess(time.monotonic(), deadline, "leader did not exit")
+                    time.sleep(0.01)
+
+                with (
+                    mock.patch.object(bench, "ORPHAN_GRACE_SECONDS", 0.5),
+                    mock.patch.object(bench.os, "killpg") as killpg,
+                ):
+                    cleanup = bench.terminate_process_group(
+                        process, set(), allow_natural_exit=True
+                    )
+
+                killpg.assert_not_called()
+                self.assertEqual(cleanup.forced_group_members, [])
+                self.assertEqual(cleanup.remaining_group_members, [])
+                self.assertEqual(cleanup.errors, [])
+                self.assertFalse(bench.pid_alive(child_pid))
+            finally:
+                if child_pid is not None and bench.pid_alive(child_pid):
+                    os.kill(child_pid, signal.SIGKILL)
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+
+    def test_dispatcher_exit_observer_does_not_require_waitid(self) -> None:
+        process = subprocess.Popen(
+            [sys.executable, "-c", ""],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            deadline = time.monotonic() + 1.0
+            with mock.patch.object(bench.os, "waitid", new=None, create=True):
+                while not bench.dispatcher_exited_without_reaping(process):
+                    self.assertLess(time.monotonic(), deadline, "leader did not exit")
+                    time.sleep(0.01)
+            self.assertIsNone(process.returncode)
+        finally:
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+
+    def test_parse_args_rejects_nonfinite_timeout_values(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            for value in ("nan", "inf", "-inf"):
+                with self.subTest(value=value), self.assertRaises(SystemExit):
+                    bench.parse_args([f"--timeout-seconds={value}"])
 
     def test_zero_temp_high_water_is_a_valid_streaming_result(self) -> None:
         bench.validate_sample_observations(
