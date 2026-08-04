@@ -10,6 +10,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_audio_energy as bench
 
 
+def audio_energy_data() -> dict[str, object]:
+    return {
+        "sample_rate": 48_000,
+        "duration_s": 2.0,
+        "window_ms": 100,
+        "windows": [{"start_s": 0.0, "rms_db": -12.0}],
+        "loudness_integrated_lufs": -18.0,
+        "true_peak_dbfs": -1.0,
+        "loudness_short_term": [{"start_s": 0.0, "lufs": -18.0}],
+        "silences": [{"start_s": 0.5, "end_s": 1.0}],
+        "silence_relative_lu": -30.0,
+    }
+
+
+def write_dispatcher_output(
+    output_root: Path,
+    data: dict[str, object],
+    *,
+    pair_overrides: dict[str, object] | None = None,
+) -> None:
+    pair: dict[str, object] = {
+        "indexer": "audio-energy",
+        "outcome": "wrote",
+        "tool_ms": 10,
+        "total_ms": 12,
+        "peak_rss_bytes": 4096,
+    }
+    pair.update(pair_overrides or {})
+    (output_root / "sample-indexing-performance.json").write_text(
+        json.dumps(
+            {
+                "command": {"included_indexers": ["audio-energy"]},
+                "report": {
+                    "pair_count": 1,
+                    "wrote": 1,
+                    "failed": 0,
+                    "dep_skipped": 0,
+                    "pairs": [pair],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar = output_root / "index-run-test/audio-energy/external/fixture.m4a.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps({"indexer": "audio-energy", "data": data}),
+        encoding="utf-8",
+    )
+
+
 class BenchAudioEnergyTests(unittest.TestCase):
     def test_process_table_parser_ignores_headers_and_malformed_rows(self) -> None:
         rows = bench.parse_ps_table(
@@ -65,6 +116,64 @@ class BenchAudioEnergyTests(unittest.TestCase):
             digest,
             "843dc42a984a1c7f307f2d0b00159e385a1db0b7edf56989dcc00590fb8126fc",
         )
+
+    def test_canonical_data_reports_nonfinite_json_as_a_benchmark_error(self) -> None:
+        with self.assertRaisesRegex(bench.BenchError, "canonical JSON"):
+            bench.canonical_data({"value": float("nan")})
+
+    def test_dispatcher_output_rejects_malformed_audio_numeric_fields(self) -> None:
+        cases = {
+            "boolean duration": lambda data: data.__setitem__("duration_s", True),
+            "boolean peak": lambda data: data.__setitem__("true_peak_dbfs", True),
+            "nonfinite loudness": lambda data: data.__setitem__(
+                "loudness_integrated_lufs", float("inf")
+            ),
+            "boolean window size": lambda data: data.__setitem__("window_ms", True),
+            "non-object window": lambda data: data.__setitem__("windows", [True]),
+            "nonfinite window value": lambda data: data.__setitem__(
+                "windows", [{"start_s": 0.0, "rms_db": float("nan")}]
+            ),
+            "nonfinite short-term value": lambda data: data.__setitem__(
+                "loudness_short_term",
+                [{"start_s": 0.0, "lufs": float("inf")}],
+            ),
+            "nonfinite silence value": lambda data: data.__setitem__(
+                "silences", [{"start_s": 0.5, "end_s": float("nan")}]
+            ),
+            "boolean silence threshold": lambda data: data.__setitem__(
+                "silence_relative_lu", True
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                data = audio_energy_data()
+                mutate(data)
+                output_root = Path(directory)
+                write_dispatcher_output(output_root, data)
+
+                with self.assertRaises(bench.BenchError):
+                    bench.validate_dispatcher_output(
+                        output_root, "sample", {"duration_seconds": 2.0}
+                    )
+
+    def test_dispatcher_output_rejects_invalid_timing_and_rss_provenance(self) -> None:
+        cases = {
+            "boolean tool time": {"tool_ms": True},
+            "negative total time": {"total_ms": -1},
+            "string peak RSS": {"peak_rss_bytes": "4096"},
+            "negative peak RSS": {"peak_rss_bytes": -1},
+        }
+        for name, overrides in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                output_root = Path(directory)
+                write_dispatcher_output(
+                    output_root, audio_energy_data(), pair_overrides=overrides
+                )
+
+                with self.assertRaises(bench.BenchError):
+                    bench.validate_dispatcher_output(
+                        output_root, "sample", {"duration_seconds": 2.0}
+                    )
 
     def test_audio_temp_leak_check_ignores_uv_locks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

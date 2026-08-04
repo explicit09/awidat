@@ -93,13 +93,16 @@ def summarize(values: list[float]) -> dict[str, float]:
 
 
 def canonical_data(data: Any) -> tuple[bytes, str]:
-    encoded = json.dumps(
-        data,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    try:
+        encoded = json.dumps(
+            data,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise BenchError(f"could not encode canonical JSON: {error}") from error
     return encoded, hashlib.sha256(encoded).hexdigest()
 
 
@@ -579,6 +582,26 @@ def read_json(path: Path) -> Any:
         raise BenchError(f"read JSON {path}: {error}") from error
 
 
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _finite_rows(value: Any, fields: tuple[str, ...]) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(row, dict)
+        and all(_finite_number(row.get(field)) for field in fields)
+        for row in value
+    )
+
+
 def validate_dispatcher_output(
     output_root: Path,
     run_label: str,
@@ -622,15 +645,26 @@ def validate_dispatcher_output(
     windows = data.get("windows")
     duration = data.get("duration_s")
     if (
-        not isinstance(windows, list)
+        not _finite_rows(windows, ("start_s", "rms_db"))
         or not windows
-        or not isinstance(duration, (int, float))
+        or not all(window["start_s"] >= 0 for window in windows)
+        or not _finite_number(duration)
         or duration <= 0
         or abs(float(duration) - fixture["duration_seconds"])
         > max(0.5, fixture["duration_seconds"] * 0.001)
         or data.get("sample_rate") != 48_000
-        or not isinstance(data.get("true_peak_dbfs"), (int, float))
-        or not isinstance(data.get("loudness_integrated_lufs"), (int, float))
+        or not _nonnegative_int(data.get("window_ms"))
+        or data["window_ms"] == 0
+        or not _finite_number(data.get("true_peak_dbfs"))
+        or not _finite_number(data.get("loudness_integrated_lufs"))
+        or not _finite_rows(data.get("loudness_short_term"), ("start_s", "lufs"))
+        or not all(row["start_s"] >= 0 for row in data["loudness_short_term"])
+        or not _finite_rows(data.get("silences"), ("start_s", "end_s"))
+        or not all(
+            0 <= row["start_s"] < row["end_s"] <= duration
+            for row in data["silences"]
+        )
+        or not _finite_number(data.get("silence_relative_lu"))
     ):
         raise BenchError(f"audio-energy sidecar is empty/no-audio or malformed: {sidecars[0]}")
     canonical, digest = canonical_data(data)
@@ -645,8 +679,14 @@ def validate_dispatcher_output(
         "dispatcher_total_ms": pair.get("total_ms"),
         "dispatcher_peak_rss_bytes": pair.get("peak_rss_bytes"),
     }
-    if not all(isinstance(metrics[key], int) for key in ["dispatcher_tool_ms", "dispatcher_total_ms"]):
+    if not all(
+        _nonnegative_int(metrics[key])
+        for key in ["dispatcher_tool_ms", "dispatcher_total_ms"]
+    ):
         raise BenchError(f"dispatcher timing provenance is incomplete: {pair!r}")
+    peak_rss = metrics["dispatcher_peak_rss_bytes"]
+    if peak_rss is not None and not _nonnegative_int(peak_rss):
+        raise BenchError(f"dispatcher RSS provenance is invalid: {pair!r}")
     return canonical, digest, metrics
 
 

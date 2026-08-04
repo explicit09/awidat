@@ -55,6 +55,7 @@ MODEL_SHA256 = "e6d1bd7789aa45192b3bf90570a789b478bae1b74ebcce7eddd908e83a2b7c31
 MODEL_HF_HUB = "timm/vit_base_patch32_clip_224.openai/"
 EXPECTED_MODEL = "ViT-B-32/openai"
 EXPECTED_EMBEDDING_DIM = 512
+EXPECTED_SAMPLE_FPS = 0.5
 RUNTIME_PACKAGES = {
     "clip-mcp": "clip_mcp",
     "montage-mcp": "montage_mcp",
@@ -163,6 +164,76 @@ def asset_fingerprint(path: Path) -> str:
         f"montage-asset-fingerprint-v1\0{stat.st_size}\0{modified_seconds}\0{modified_nanos}"
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def observe_clip_fixture(
+    asset: Path,
+    *,
+    ffmpeg: Path,
+    ffprobe: Path,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    duration_command = [
+        str(ffprobe),
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(asset),
+    ]
+    raw_duration = run_text(duration_command, timeout=timeout_seconds).strip()
+    try:
+        duration_s = float(raw_duration)
+    except ValueError as error:
+        raise BenchError(f"invalid fixture duration for {asset}: {raw_duration!r}") from error
+    if not math.isfinite(duration_s) or duration_s <= 0:
+        raise BenchError(f"invalid fixture duration for {asset}: {raw_duration!r}")
+
+    frame_command = [
+        str(ffmpeg),
+        "-nostdin",
+        "-v",
+        "error",
+        "-i",
+        str(asset),
+        "-map",
+        "0:v:0",
+        "-vf",
+        f"fps={EXPECTED_SAMPLE_FPS:g},scale=224:224",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-f",
+        "null",
+        "-",
+    ]
+    progress = run_text(frame_command, timeout=timeout_seconds)
+    frame_values: list[int] = []
+    progress_ended = False
+    for line in progress.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        if key == "frame":
+            try:
+                frame_values.append(int(value.strip()))
+            except ValueError as error:
+                raise BenchError(f"invalid FFmpeg frame progress for {asset}: {line!r}") from error
+        elif key == "progress" and value.strip() == "end":
+            progress_ended = True
+    if not progress_ended or not frame_values or frame_values[-1] <= 0:
+        raise BenchError(f"incomplete FFmpeg frame-count oracle for {asset}")
+    return {
+        "duration_s": duration_s,
+        "frame_count": frame_values[-1],
+        "sample_fps": EXPECTED_SAMPLE_FPS,
+        "duration_probe_command": duration_command,
+        "frame_count_oracle_command": frame_command,
+    }
 
 
 def parse_runtime_preflight(raw: str, python_root: Path, weights: Path) -> dict[str, Any]:
@@ -472,7 +543,10 @@ def _finite_number(value: Any) -> bool:
 
 
 def validate_clip_sidecar(
-    sidecar: Any, expected_asset_id: str, expected_asset_fingerprint: str
+    sidecar: Any,
+    expected_asset_id: str,
+    expected_asset_fingerprint: str,
+    expected_observation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not SHA256_RE.fullmatch(expected_asset_fingerprint):
         raise BenchError(f"invalid expected asset fingerprint for {expected_asset_id}")
@@ -515,12 +589,39 @@ def validate_clip_sidecar(
         or any(right <= left for left, right in zip(timestamps, timestamps[1:]))
         or data.get("embedding_dtype") != "float16"
         or data.get("embedding_encoding") != "base64"
-        or data.get("frame_rate_sampled") != 0.5
+        or data.get("frame_rate_sampled") != EXPECTED_SAMPLE_FPS
         or not _finite_number(data.get("duration_s"))
         or data["duration_s"] <= 0
         or not isinstance(data.get("embeddings_b64"), str)
     ):
         raise BenchError(f"invalid CLIP data for {expected_asset_id}")
+    expected_timestamps = [index / EXPECTED_SAMPLE_FPS for index in range(frames)]
+    if timestamps != expected_timestamps:
+        raise BenchError(f"invalid CLIP timestamp grid for {expected_asset_id}")
+    if expected_observation is not None:
+        expected_frames = expected_observation.get("frame_count")
+        expected_duration = expected_observation.get("duration_s")
+        if (
+            not isinstance(expected_frames, int)
+            or isinstance(expected_frames, bool)
+            or expected_frames <= 0
+            or not _finite_number(expected_duration)
+            or expected_duration <= 0
+            or expected_observation.get("sample_fps") != EXPECTED_SAMPLE_FPS
+        ):
+            raise BenchError(f"invalid fixture observation for {expected_asset_id}")
+        if frames != expected_frames:
+            raise BenchError(
+                f"CLIP frame count mismatch for {expected_asset_id}: "
+                f"{frames} != {expected_frames}"
+            )
+        if not math.isclose(
+            data["duration_s"], expected_duration, rel_tol=1e-9, abs_tol=1e-6
+        ):
+            raise BenchError(
+                f"CLIP duration mismatch for {expected_asset_id}: "
+                f"{data['duration_s']} != {expected_duration}"
+            )
     try:
         encoded = base64.b64decode(data["embeddings_b64"], validate=True)
     except (TypeError, ValueError) as error:
@@ -594,12 +695,14 @@ def validate_dispatcher_output(
     run_label: str,
     expected_asset_ids: list[str],
     expected_asset_fingerprints: dict[str, str],
+    expected_fixture_observations: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if (
         set(expected_asset_fingerprints) != set(expected_asset_ids)
         or any(not SHA256_RE.fullmatch(value) for value in expected_asset_fingerprints.values())
+        or set(expected_fixture_observations) != set(expected_asset_ids)
     ):
-        raise BenchError("expected asset fingerprints do not match the six requested asset ids")
+        raise BenchError("expected fixture evidence does not match the six requested asset ids")
     report_path = output_root / f"{run_label}-indexing-performance.json"
     document = read_json(report_path)
     try:
@@ -634,7 +737,10 @@ def validate_dispatcher_output(
     pairs_by_asset = {pair["asset_id"]: pair for pair in pairs}
     records = [
         validate_clip_sidecar(
-            read_json(sidecars[asset_id]), asset_id, expected_asset_fingerprints[asset_id]
+            read_json(sidecars[asset_id]),
+            asset_id,
+            expected_asset_fingerprints[asset_id],
+            expected_fixture_observations[asset_id],
         )
         for asset_id in expected_asset_ids
     ]
@@ -655,7 +761,6 @@ def controlled_environment(
     environment = base_controlled_environment(sample_root, ffmpeg, ffprobe, uv)
     environment.pop("HF_TOKEN", None)
     environment.pop("PYTHONPATH", None)
-    environment["PATH"] = os.pathsep.join((str(python_root / ".venv/bin"), environment["PATH"]))
     environment.update(
         {
             "HF_HOME": str(hf_home),
@@ -741,6 +846,7 @@ def run_sample(
     binary: Path,
     assets: list[Path],
     asset_fingerprints: dict[str, str],
+    fixture_observations: dict[str, dict[str, Any]],
     python_root: Path,
     hf_home: Path,
     uv: Path,
@@ -840,7 +946,11 @@ def run_sample(
     if orphans:
         raise BenchError(f"{name} cleanup failed: orphan_pids={orphans}")
     records, dispatcher = validate_dispatcher_output(
-        output_root, name.replace("-", "_"), expected_asset_ids, asset_fingerprints
+        output_root,
+        name.replace("-", "_"),
+        expected_asset_ids,
+        asset_fingerprints,
+        fixture_observations,
     )
     semantics, digest = canonical_data([record["stable_semantic_metadata"] for record in records])
     return {
@@ -893,6 +1003,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     binary, python_root = resolve_executable(args.binary), resolve_python_workspace(args.python_root)
     weights, hf_home, model = model_provenance(args.model_weights)
     runtime = runtime_preflight(python_root, hf_home, weights)
+    sources = source_provenance(python_root)
     uv = resolve_executable(os.environ.get("MONTAGE_UV", "uv"))
     ffmpeg = resolve_executable(os.environ.get("MONTAGE_FFMPEG", "ffmpeg"))
     ffprobe = resolve_executable(os.environ.get("MONTAGE_FFPROBE", "ffprobe"))
@@ -906,6 +1017,15 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         asset_id: asset_fingerprint(asset)
         for asset, asset_id in zip(assets, asset_ids, strict=True)
     }
+    fixture_observations = {
+        asset_id: observe_clip_fixture(
+            asset,
+            ffmpeg=ffmpeg,
+            ffprobe=ffprobe,
+            timeout_seconds=args.timeout_seconds,
+        )
+        for asset, asset_id in zip(assets, asset_ids, strict=True)
+    }
     fixtures: list[dict[str, Any]] = []
     for asset, asset_id in zip(assets, asset_ids, strict=True):
         content = binary_provenance(asset)
@@ -913,6 +1033,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             {
                 "asset_id": asset_id,
                 "asset_fingerprint": asset_fingerprints[asset_id],
+                "clip_observation": fixture_observations[asset_id],
                 "content_sha256": content["sha256"],
                 **content,
                 "filesystem": filesystem_provenance(asset),
@@ -920,7 +1041,9 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         )
     common = {
         "session_root": session_root, "binary": binary, "assets": assets, "python_root": python_root,
-        "asset_fingerprints": asset_fingerprints, "hf_home": hf_home,
+        "asset_fingerprints": asset_fingerprints,
+        "fixture_observations": fixture_observations,
+        "hf_home": hf_home,
         "uv": uv, "ffmpeg": ffmpeg, "ffprobe": ffprobe,
         "timeout_seconds": args.timeout_seconds,
     }
@@ -934,6 +1057,12 @@ def run_benchmark(args: argparse.Namespace) -> Path:
                 f"{sample['semantic_signature_sha256']} != {warmup['semantic_signature_sha256']}"
             )
         samples.append(sample)
+    final_git = git_provenance()
+    if final_git != git:
+        raise BenchError(f"Git state changed during benchmark: {git!r} != {final_git!r}")
+    final_sources = source_provenance(python_root)
+    if final_sources != sources:
+        raise BenchError("Python workspace changed during benchmark")
     report = {
         "schema_version": 1,
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -952,7 +1081,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             },
             "model": model,
             "tools": {"uv": tool_provenance(uv, ["--version"]), "ffmpeg": tool_provenance(ffmpeg, ["-version"]), "ffprobe": tool_provenance(ffprobe, ["-version"])},
-            "sources": source_provenance(python_root),
+            "sources": sources,
             "git": git,
             "filesystems": {
                 "work": filesystem_provenance(args.work_root),
@@ -961,11 +1090,12 @@ def run_benchmark(args: argparse.Namespace) -> Path:
                 "model": filesystem_provenance(weights),
             },
             "machine": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "cpu_count": os.cpu_count()},
-            "controlled_environment": {"MONTAGE_PYTHON_ROOT": str(python_root), "HF_HOME": str(hf_home), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "CLIP_SAMPLE_FPS": "0.5", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONSAFEPATH": "1", "PYTHONPATH": "unset", "PYTHONHASHSEED": "0", "LC_ALL": "C", "TZ": "UTC", "UV_OFFLINE": "1", "UV_NO_SYNC": "1"},
+            "controlled_environment": {"MONTAGE_PYTHON_ROOT": str(python_root), "HF_HOME": str(hf_home), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "CLIP_SAMPLE_FPS": "0.5", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONSAFEPATH": "1", "PYTHONPATH": "unset", "PYTHONHASHSEED": "0", "LC_ALL": "C", "TZ": "UTC", "UV_OFFLINE": "1", "UV_NO_SYNC": "1", "UV_PROJECT_ENVIRONMENT": str(python_root / ".venv"), "PATH_PREFIX": [str(uv.parent), str(ffprobe.parent), str(ffmpeg.parent)]},
         },
         "correctness": {
             "expected_asset_ids": asset_ids,
             "asset_fingerprints": asset_fingerprints,
+            "fixture_observations": fixture_observations,
             "warmup_semantic_signature_sha256": warmup["semantic_signature_sha256"],
             "all_timed_samples_exactly_match_warmup": True,
             "comparison_excludes": ["produced_at", "data.perf"],

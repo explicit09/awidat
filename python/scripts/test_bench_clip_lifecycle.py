@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -94,6 +96,91 @@ def runtime_preflight_fixture(
 
 
 class BenchClipLifecycleTests(unittest.TestCase):
+    def run_mocked_benchmark(
+        self,
+        root: Path,
+        *,
+        git_states: list[dict[str, object]],
+        source_states: list[dict[str, object]],
+        write: mock.Mock,
+    ) -> Path:
+        assets = [root / f"asset-{index}.mp4" for index in range(bench.ASSET_COUNT)]
+        for asset in assets:
+            asset.write_bytes(b"fixture")
+        binary = root / "montage-index-perf"
+        python_root = root / "python"
+        weights = root / "weights"
+        hf_home = root / "huggingface"
+        python_root.mkdir()
+        sample = {
+            "semantic_signature_sha256": "stable",
+            "wall_ms": 10.0,
+            "process_tree_peak_rss_bytes": 4096,
+            "cleanup": {"passed": True},
+        }
+        args = SimpleNamespace(
+            asset=assets,
+            binary=binary,
+            python_root=python_root,
+            model_weights=weights,
+            samples=1,
+            timeout_seconds=60.0,
+            work_root=root / "work",
+            evidence_dir=root / "evidence",
+            label="test",
+        )
+        with (
+            mock.patch.object(bench, "git_provenance", side_effect=git_states),
+            mock.patch.object(
+                bench, "controller_python_provenance", return_value={}
+            ),
+            mock.patch.object(bench, "resolve_executable", return_value=binary),
+            mock.patch.object(
+                bench, "resolve_python_workspace", return_value=python_root
+            ),
+            mock.patch.object(
+                bench,
+                "model_provenance",
+                return_value=(weights, hf_home, {}),
+            ),
+            mock.patch.object(bench, "runtime_preflight", return_value={}),
+            mock.patch.object(
+                bench,
+                "observe_clip_fixture",
+                return_value={
+                    "duration_s": 2.0,
+                    "frame_count": 1,
+                    "sample_fps": 0.5,
+                },
+            ),
+            mock.patch.object(bench, "asset_fingerprint", return_value="a" * 64),
+            mock.patch.object(
+                bench,
+                "binary_provenance",
+                side_effect=lambda path: {
+                    "path": str(path),
+                    "sha256": "b" * 64,
+                    "size_bytes": 1,
+                    "mtime_ns": 1,
+                },
+            ),
+            mock.patch.object(
+                bench,
+                "filesystem_provenance",
+                side_effect=lambda path: {"path": str(path)},
+            ),
+            mock.patch.object(bench, "unique_filesystems", return_value=[]),
+            mock.patch.object(
+                bench, "run_sample", return_value=(sample, b"stable")
+            ),
+            mock.patch.object(
+                bench, "source_provenance", side_effect=source_states
+            ),
+            mock.patch.object(bench, "tool_provenance", return_value={}),
+            mock.patch.object(bench, "atomic_write_json", write),
+        ):
+            return bench.run_benchmark(args)
+
     def test_clip_sidecar_decodes_little_endian_float16_and_hashes_its_bytes(self) -> None:
         record = bench.validate_clip_sidecar(
             clip_sidecar(), "external/a.mp4", "a" * 64
@@ -132,6 +219,69 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 clip_sidecar(embedding_dim=3, embeddings_b64="ADwAQABC"),
                 "external/a.mp4",
                 "a" * 64,
+            )
+
+    def test_clip_sidecar_rejects_timestamps_off_the_sampling_grid(self) -> None:
+        sidecar = clip_sidecar()
+        sidecar["data"]["timestamps_s"] = [0.5]
+
+        with self.assertRaisesRegex(bench.BenchError, "timestamp grid"):
+            bench.validate_clip_sidecar(sidecar, "external/a.mp4", "a" * 64)
+
+    def test_fixture_observation_uses_independent_duration_and_frame_oracles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "fixture.mp4"
+            asset.write_bytes(b"fixture")
+            ffmpeg = Path(directory) / "ffmpeg"
+            ffprobe = Path(directory) / "ffprobe"
+            with mock.patch.object(
+                bench,
+                "run_text",
+                side_effect=[
+                    "12.5\n",
+                    "frame=1\nprogress=continue\nframe=6\nprogress=end\n",
+                ],
+            ) as run:
+                observation = bench.observe_clip_fixture(
+                    asset,
+                    ffmpeg=ffmpeg,
+                    ffprobe=ffprobe,
+                    timeout_seconds=60.0,
+                )
+
+        self.assertEqual(observation["duration_s"], 12.5)
+        self.assertEqual(observation["frame_count"], 6)
+        self.assertEqual(observation["sample_fps"], 0.5)
+        duration_command = run.call_args_list[0].args[0]
+        frame_command = run.call_args_list[1].args[0]
+        self.assertEqual(duration_command[0], str(ffprobe))
+        self.assertIn("format=duration", duration_command)
+        self.assertEqual(frame_command[0], str(ffmpeg))
+        self.assertEqual(
+            frame_command[frame_command.index("-vf") + 1],
+            "fps=0.5,scale=224:224",
+        )
+        self.assertEqual(
+            frame_command[frame_command.index("-progress") + 1], "pipe:1"
+        )
+
+    def test_clip_sidecar_must_match_the_independent_fixture_observation(self) -> None:
+        partial = clip_sidecar()
+        partial["data"]["duration_s"] = 120.0
+        with self.assertRaisesRegex(bench.BenchError, "frame count"):
+            bench.validate_clip_sidecar(
+                partial,
+                "external/a.mp4",
+                "a" * 64,
+                {"duration_s": 120.0, "frame_count": 60, "sample_fps": 0.5},
+            )
+
+        with self.assertRaisesRegex(bench.BenchError, "duration"):
+            bench.validate_clip_sidecar(
+                clip_sidecar(),
+                "external/a.mp4",
+                "a" * 64,
+                {"duration_s": 3.0, "frame_count": 1, "sample_fps": 0.5},
             )
 
     def test_controller_python_provenance_records_the_controller_runtime(self) -> None:
@@ -175,6 +325,37 @@ class BenchClipLifecycleTests(unittest.TestCase):
             with mock.patch.object(bench, "ROOT", root):
                 with self.assertRaisesRegex(bench.BenchError, "dirty source state"):
                     bench.git_provenance()
+
+    def test_benchmark_rejects_git_state_changed_during_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            write = mock.Mock()
+            before = {"head": "a" * 40, "git_status_clean": True}
+            after = {"head": "b" * 40, "git_status_clean": True}
+
+            with self.assertRaisesRegex(bench.BenchError, "Git state changed"):
+                self.run_mocked_benchmark(
+                    Path(directory),
+                    git_states=[before, after],
+                    source_states=[{"manifest": "same"}, {"manifest": "same"}],
+                    write=write,
+                )
+
+        write.assert_not_called()
+
+    def test_benchmark_rejects_python_workspace_changed_during_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            write = mock.Mock()
+            git = {"head": "a" * 40, "git_status_clean": True}
+
+            with self.assertRaisesRegex(bench.BenchError, "Python workspace changed"):
+                self.run_mocked_benchmark(
+                    Path(directory),
+                    git_states=[git, git],
+                    source_states=[{"manifest": "before"}, {"manifest": "after"}],
+                    write=write,
+                )
+
+        write.assert_not_called()
 
     def test_source_provenance_binds_ignored_venv_file_contents(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -242,12 +423,18 @@ class BenchClipLifecycleTests(unittest.TestCase):
     def test_dispatcher_output_rejects_malformed_or_partial_six_asset_results(self) -> None:
         expected_ids = [f"external/{index}.mp4" for index in range(6)]
         fingerprints = {asset_id: "a" * 64 for asset_id in expected_ids}
+        observations = {
+            asset_id: {"duration_s": 2.0, "frame_count": 1, "sample_fps": 0.5}
+            for asset_id in expected_ids
+        }
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory)
             malformed = output_root / "malformed-indexing-performance.json"
             malformed.write_text(json.dumps({"command": {}}), encoding="utf-8")
             with self.assertRaisesRegex(bench.BenchError, "malformed dispatcher report"):
-                bench.validate_dispatcher_output(output_root, "malformed", expected_ids, fingerprints)
+                bench.validate_dispatcher_output(
+                    output_root, "malformed", expected_ids, fingerprints, observations
+                )
 
             partial = output_root / "partial-indexing-performance.json"
             partial.write_text(
@@ -278,7 +465,9 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(bench.BenchError, "six CLIP writes"):
-                bench.validate_dispatcher_output(output_root, "partial", expected_ids, fingerprints)
+                bench.validate_dispatcher_output(
+                    output_root, "partial", expected_ids, fingerprints, observations
+                )
 
     def test_summary_uses_nearest_rank_p95_and_median_absolute_deviation(self) -> None:
         self.assertEqual(
@@ -344,22 +533,43 @@ class BenchClipLifecycleTests(unittest.TestCase):
 
     def test_controlled_environment_excludes_external_python_code_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python_root = root / "python"
+            uv = root / "uv-tool/bin/uv"
+            ffmpeg = root / "ffmpeg-tool/bin/ffmpeg"
+            ffprobe = root / "ffprobe-tool/bin/ffprobe"
+            shadow_uv = python_root / ".venv/bin/uv"
+            for executable in (uv, ffmpeg, ffprobe, shadow_uv):
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
             with mock.patch.dict(
                 os.environ, {"PYTHONPATH": "/untrusted/python"}, clear=False
             ):
                 environment = bench.controlled_environment(
-                    sample_root=Path(directory) / "sample",
-                    python_root=Path(directory) / "python",
-                    hf_home=Path(directory) / "huggingface",
-                    uv=Path(directory) / "uv",
-                    ffmpeg=Path(directory) / "ffmpeg",
-                    ffprobe=Path(directory) / "ffprobe",
+                    sample_root=root / "sample",
+                    python_root=python_root,
+                    hf_home=root / "huggingface",
+                    uv=uv,
+                    ffmpeg=ffmpeg,
+                    ffprobe=ffprobe,
                 )
+            resolved_uv = shutil.which("uv", path=environment["PATH"])
 
         self.assertNotIn("PYTHONPATH", environment)
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertEqual(environment["PYTHONSAFEPATH"], "1")
+        path_parts = environment["PATH"].split(os.pathsep)
+        self.assertEqual(
+            path_parts[:3],
+            [str(uv.parent), str(ffprobe.parent), str(ffmpeg.parent)],
+        )
+        self.assertNotIn(str(python_root / ".venv/bin"), path_parts)
+        self.assertEqual(
+            Path(resolved_uv or "").resolve(),
+            uv.resolve(),
+        )
 
     def test_asset_fingerprint_matches_the_rust_metadata_algorithm_and_binds_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -475,6 +685,14 @@ class BenchClipLifecycleTests(unittest.TestCase):
                             binary=binary,
                             assets=assets,
                             asset_fingerprints=fingerprints,
+                            fixture_observations={
+                                asset_id: {
+                                    "duration_s": 2.0,
+                                    "frame_count": 1,
+                                    "sample_fps": 0.5,
+                                }
+                                for asset_id in fingerprints
+                            },
                             python_root=root / "python",
                             hf_home=root / "huggingface",
                             uv=Path("/usr/bin/true"),
@@ -493,6 +711,10 @@ class BenchClipLifecycleTests(unittest.TestCase):
     def test_dispatcher_output_retains_pair_and_sidecar_timing_attribution(self) -> None:
         expected_ids = [f"external/{index}.mp4" for index in range(6)]
         fingerprints = {asset_id: f"{index:064x}" for index, asset_id in enumerate(expected_ids)}
+        observations = {
+            asset_id: {"duration_s": 2.0, "frame_count": 1, "sample_fps": 0.5}
+            for asset_id in expected_ids
+        }
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory)
             pairs = [
@@ -540,7 +762,11 @@ class BenchClipLifecycleTests(unittest.TestCase):
                 )
 
             _records, dispatcher = bench.validate_dispatcher_output(
-                output_root, "complete", expected_ids, fingerprints
+                output_root,
+                "complete",
+                expected_ids,
+                fingerprints,
+                observations,
             )
 
         self.assertEqual(
