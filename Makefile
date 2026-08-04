@@ -1,4 +1,4 @@
-.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio perf-index-skip perf-waveform perf-audio-energy perf-clip-lifecycle desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
+.PHONY: check check-app check-agent check-desktop-rust fmt fmt-app fmt-agent clippy clippy-app clippy-agent test test-app test-agent python-smoke python-smoke-audio perf-index-skip perf-waveform perf-audio-energy perf-clip-lifecycle perf-project-read desktop desktop-stop desktop-deps desktop-yt-dlp desktop-ffmpeg desktop-uv desktop-rg desktop-mcp-server desktop-codex desktop-sidecar-check-stubs desktop-codex-check-stub
 
 YT_DLP_VERSION ?= 2026.03.17
 FFMPEG_VERSION ?= 7.1.1
@@ -138,6 +138,37 @@ perf-clip-lifecycle:
 		--asset "$${MONTAGE_CLIP_ASSET_5}" --asset "$${MONTAGE_CLIP_ASSET_6}" \
 		--binary "$$binary" --python-root "$${MONTAGE_PYTHON_ROOT}" \
 		--model-weights "$${MONTAGE_CLIP_MODEL_WEIGHTS}"
+
+# Manual macOS/APFS Project::read A/B evidence. The candidate binary is the
+# controller and both supplied binaries must already have been built and kept.
+perf-project-read:
+	@set -eu; \
+	if [ -z "$${MONTAGE_PROJECT_READ_BASELINE:-}" ] || [ -z "$${MONTAGE_PROJECT_READ_CANDIDATE:-}" ]; then \
+		echo "perf-project-read requires MONTAGE_PROJECT_READ_BASELINE and MONTAGE_PROJECT_READ_CANDIDATE" >&2; \
+		exit 2; \
+	fi; \
+	if [ -z "$${MONTAGE_PROJECT_READ_BASELINE_SOURCE:-}" ] || [ -z "$${MONTAGE_PROJECT_READ_CANDIDATE_SOURCE:-}" ]; then \
+		echo "perf-project-read requires MONTAGE_PROJECT_READ_BASELINE_SOURCE and MONTAGE_PROJECT_READ_CANDIDATE_SOURCE" >&2; \
+		exit 2; \
+	fi; \
+	canonical_binary() { \
+		case "$$1" in /*) ;; *) echo "perf-project-read requires absolute binary paths" >&2; return 1;; esac; \
+		canonical=$$(realpath "$$1") || { echo "perf-project-read could not canonicalize $$1" >&2; return 1; }; \
+		if [ ! -f "$$canonical" ] || [ ! -x "$$canonical" ]; then echo "perf-project-read requires executable regular files" >&2; return 1; fi; \
+		printf '%s\n' "$$canonical"; \
+	}; \
+	baseline=$$(canonical_binary "$${MONTAGE_PROJECT_READ_BASELINE}") || exit 2; \
+	candidate=$$(canonical_binary "$${MONTAGE_PROJECT_READ_CANDIDATE}") || exit 2; \
+	if [ ! -d "$${MONTAGE_PROJECT_READ_BASELINE_SOURCE}" ] || [ ! -d "$${MONTAGE_PROJECT_READ_CANDIDATE_SOURCE}" ]; then \
+		echo "perf-project-read requires baseline and candidate source directories" >&2; \
+		exit 2; \
+	fi; \
+	"$$candidate" \
+		--baseline "$$baseline" \
+		--candidate "$$candidate" \
+		--baseline-source "$${MONTAGE_PROJECT_READ_BASELINE_SOURCE}" \
+		--candidate-source "$${MONTAGE_PROJECT_READ_CANDIDATE_SOURCE}" \
+		$${MONTAGE_PROJECT_READ_ARGS:-}
 
 # Montage desktop (Tauri) — install frontend deps + run dev shell.
 # Frontend deps live under apps/desktop/node_modules; the Rust

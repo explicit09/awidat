@@ -120,6 +120,42 @@ MONTAGE_INDEX_SKIP_ARGS="--label controlled-12x3x8 --assets 12 --indexers 3 --si
 
 The JSON report records the fixture configuration, machine facts, exact dispatch correctness counts, raw samples in milliseconds, and median/p95/MAD statistics. The `time -l` output supplies the CPU, peak-memory, page-fault, and filesystem-I/O evidence alongside that report.
 
+## `Project::read` A/B Benchmark
+
+`make perf-project-read` is a manual macOS/APFS controller, never a CI lane. Build and preserve a literal `release` `montage-project-read-perf` binary from each clean source tree; the harness source, build script, workspace and crate manifests, `.cargo/config.toml`, `Cargo.lock`, compiler identity, target, exact Cargo target-directory profile, and captured build-setting hash (Rust flags, wrappers, profile overrides, target settings, and native-tool flags) must match. A qualifying pair's tracked source snapshots must differ only at `crates/proto/src/project.rs`. The target deliberately builds nothing and canonicalizes both absolute executable paths before starting the candidate controller:
+
+```bash
+MONTAGE_PROJECT_READ_BASELINE=/absolute/baseline/montage-project-read-perf \
+MONTAGE_PROJECT_READ_CANDIDATE=/absolute/candidate/montage-project-read-perf \
+MONTAGE_PROJECT_READ_BASELINE_SOURCE=/absolute/baseline/awidat \
+MONTAGE_PROJECT_READ_CANDIDATE_SOURCE=/absolute/candidate/awidat \
+MONTAGE_PROJECT_READ_ARGS="--label read-a --work-dir /private/tmp/montage-project-read-a" \
+make perf-project-read
+```
+
+It writes deterministic production `Project::write` fixtures at 100, 1,000, and 5,000 clips outside measurement, including a nonempty edit-plan item and index-manifest entry with fixed assets and timestamp. It then runs 3 warmups and 15 alternating, fresh-helper samples per arm. Helpers run with `LC_ALL=C` and `TZ=UTC`; each report records controller-observed end-to-end wrapper wall time and `/usr/bin/time -l` peak-RSS samples, input re-hashes, typed compact witnesses, unmeasured full typed signatures for every measured fixture, and canonical contracts for valid input, `Clip.99`, malformed marker recovery, and unknown-schema failure.
+
+Run the full command twice independently. Each report has only a `single_report_gate_passed` field and can never itself assert program acceptance. A report must show no p95 latency regression at 100/1k/5k, plus either a 5k median-latency gain of at least 10% and 10 ms with non-worse 5k p95, or a 5k median-RSS gain of at least 25% and 10 MiB with non-worse 5k median/p95 latency. The 1k result is corroboration only. Verify the two absolute report paths together. The verifier re-hashes the preserved binaries and invokes their embedded identity protocol, re-hashes relevant source files, revalidates contracts/full typed witnesses, recomputes sample summaries and the frozen gate from raw evidence, enforces the alternating schedule, rejects identical raw measurement sets even if cosmetic report fields change, and requires distinct report/session IDs, generation times, project-source hashes, and matching methodology provenance:
+
+```bash
+/absolute/candidate/montage-project-read-perf --verify-reports \
+  /absolute/reports/first-project-read-ab.json \
+  /absolute/reports/second-project-read-ab.json
+```
+
+For a non-qualifying baseline-vs-itself smoke on reduced inputs, make that intent explicit:
+
+```bash
+MONTAGE_PROJECT_READ_BASELINE=/absolute/candidate/montage-project-read-perf \
+MONTAGE_PROJECT_READ_CANDIDATE=/absolute/candidate/montage-project-read-perf \
+MONTAGE_PROJECT_READ_BASELINE_SOURCE=/absolute/candidate/awidat \
+MONTAGE_PROJECT_READ_CANDIDATE_SOURCE=/absolute/candidate/awidat \
+MONTAGE_PROJECT_READ_ARGS="--smoke --clips 10 --warmups 1 --samples 2" \
+make perf-project-read
+```
+
+`--allow-dirty-source` is available only with `--smoke`; qualifying reports fail closed on any source-tree dirt.
+
 ## Waveform Benchmark
 
 `make perf-waveform` creates a deterministic two-hour mixed-signal AAC/M4A fixture outside the measured helpers. Before the warmup or timed samples, an independent oracle directly decodes that fixture with FFmpeg to f32le and applies a benchmark-owned implementation of the production bucket semantics. The warmup and all seven fresh 2048-bucket helpers must match the oracle's exact duration bits, bucket bits, and canonical hash, as well as finite `[0,1]`, nonzero, mixed-signal, and one-8-kHz-sample duration checks. Separate probes require no-audio, bad-input, and live cancellation behavior.
