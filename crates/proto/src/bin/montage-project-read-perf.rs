@@ -490,6 +490,7 @@ struct VerificationProvenance {
     source_snapshot: VerificationSourceSnapshot,
     helper_environment: VerificationHelperEnvironment,
     tools: VerificationToolProvenance,
+    machine: Machine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2601,7 +2602,7 @@ fn command_stdout(program: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Machine {
     os: String,
     arch: String,
@@ -2610,7 +2611,7 @@ struct Machine {
     report_filesystem: Filesystem,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Filesystem {
     file_system_personality: String,
     device: String,
@@ -2831,6 +2832,48 @@ mod tests {
         ])
         .expect("two distinct matching full reports must aggregate");
         fs::remove_dir_all(&root).expect("remove verifier test root");
+    }
+
+    #[test]
+    fn verifier_rejects_reports_from_different_machines() {
+        let root = unique_test_dir("machine-verifier");
+        let first_path = root.join("first.json");
+        let second_path = root.join("second.json");
+        let artifacts = verification_artifacts(&root);
+        let first = verification_report(
+            "report-one",
+            "session-one",
+            "2026-08-04T00:00:01Z",
+            80.0,
+            &artifacts,
+        );
+        let mut second = verification_report(
+            "report-two",
+            "session-two",
+            "2026-08-04T00:00:02Z",
+            79.0,
+            &artifacts,
+        );
+        second.provenance.machine.parallelism = 10;
+        write_atomically_new(
+            &first_path,
+            &serde_json::to_vec(&first).expect("serialize first report"),
+        )
+        .expect("write first report");
+        write_atomically_new(
+            &second_path,
+            &serde_json::to_vec(&second).expect("serialize second report"),
+        )
+        .expect("write second report");
+
+        let error = verify_reports_main(&[
+            "--verify-reports".into(),
+            first_path.display().to_string(),
+            second_path.display().to_string(),
+        ])
+        .expect_err("reports from different machines must not establish acceptance");
+        assert!(error.contains("matching binary, source, and methodology provenance"));
+        fs::remove_dir_all(&root).expect("remove machine-verifier test root");
     }
 
     #[test]
@@ -3231,6 +3274,21 @@ mod tests {
                     rustc_version_verbose: "rustc".into(),
                     cargo_version: "cargo".into(),
                     macos_version: "macOS".into(),
+                },
+                machine: Machine {
+                    os: "macos".into(),
+                    arch: "aarch64".into(),
+                    parallelism: 8,
+                    work_filesystem: Filesystem {
+                        file_system_personality: "APFS".into(),
+                        device: "/dev/disk1s1".into(),
+                        mount: "/".into(),
+                    },
+                    report_filesystem: Filesystem {
+                        file_system_personality: "APFS".into(),
+                        device: "/dev/disk2s1".into(),
+                        mount: "/Volumes/Benchmarks".into(),
+                    },
                 },
             },
             contracts: verification_contract_report(),
