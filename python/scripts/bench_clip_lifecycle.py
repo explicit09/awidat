@@ -13,6 +13,7 @@ import os
 import platform
 import re
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -103,6 +104,15 @@ def python_launcher(python_root: Path) -> Path:
     if not launcher.is_file() or not os.access(launcher, os.X_OK):
         raise BenchError(f"supplied Python environment has no executable launcher: {launcher}")
     return launcher
+
+
+def controller_python_provenance() -> dict[str, Any]:
+    executable = resolve_executable(sys.executable)
+    return {
+        "sys_executable": sys.executable,
+        "resolved_binary": binary_provenance(executable),
+        "sys_version": sys.version,
+    }
 
 
 def model_provenance(value: str | Path) -> tuple[Path, Path, dict[str, Any]]:
@@ -414,10 +424,15 @@ def validate_clip_sidecar(
         raise BenchError(f"invalid CLIP data for {expected_asset_id}")
     try:
         encoded = base64.b64decode(data["embeddings_b64"], validate=True)
-        values = memoryview(encoded).cast("e")
     except (TypeError, ValueError) as error:
         raise BenchError(f"invalid base64 float16 CLIP embeddings for {expected_asset_id}") from error
-    if len(encoded) != frames * dimension * 2 or not all(math.isfinite(value) for value in values):
+    if len(encoded) != frames * dimension * 2:
+        raise BenchError(f"invalid float16 CLIP embeddings for {expected_asset_id}")
+    try:
+        finite = all(math.isfinite(value) for (value,) in struct.iter_unpack("<e", encoded))
+    except struct.error as error:
+        raise BenchError(f"invalid float16 CLIP embeddings for {expected_asset_id}") from error
+    if not finite:
         raise BenchError(f"invalid float16 CLIP embeddings for {expected_asset_id}")
     digest = hashlib.sha256(encoded).hexdigest()
     stable_metadata = {
@@ -758,6 +773,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def run_benchmark(args: argparse.Namespace) -> Path:
     assets = validate_assets(args.asset)
     git = git_provenance()
+    controller_python = controller_python_provenance()
     binary, python_root = resolve_executable(args.binary), resolve_python_workspace(args.python_root)
     weights, hf_home, model = model_provenance(args.model_weights)
     runtime = runtime_preflight(python_root, hf_home, weights)
@@ -813,6 +829,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         "fixtures": fixtures,
         "provenance": {
             "dispatcher_binary": binary_provenance(binary),
+            "controller_python": controller_python,
             "python_runtime": {
                 "workspace": str(python_root),
                 **runtime,

@@ -18,7 +18,10 @@ import bench_clip_lifecycle as bench
 
 
 def clip_sidecar(
-    asset_id: str = "external/a.mp4", asset_sha256: str = "a" * 64
+    asset_id: str = "external/a.mp4",
+    asset_sha256: str = "a" * 64,
+    embedding_dim: int = 2,
+    embeddings_b64: str = "ADwAQA==",
 ) -> dict[str, object]:
     return {
         "indexer": "clip",
@@ -29,20 +32,58 @@ def clip_sidecar(
         "produced_at": "2026-08-04T12:00:00+00:00",
         "data": {
             "model": "ViT-B-32/openai",
-            "embedding_dim": 2,
+            "embedding_dim": embedding_dim,
             "embedding_dtype": "float16",
             "embedding_encoding": "base64",
             "frame_rate_sampled": 0.5,
             "duration_s": 2.0,
             "frame_count": 1,
             "timestamps_s": [0.0],
-            "embeddings_b64": "ADwAQA==",
+            "embeddings_b64": embeddings_b64,
             "perf": {"model_load_ms": 12, "inference_ms": 3},
         },
     }
 
 
 class BenchClipLifecycleTests(unittest.TestCase):
+    def test_clip_sidecar_decodes_little_endian_float16_and_hashes_its_bytes(self) -> None:
+        record = bench.validate_clip_sidecar(
+            clip_sidecar(embedding_dim=1, embeddings_b64="fgA="), "external/a.mp4", "a" * 64
+        )
+
+        self.assertEqual(
+            record["embedding_bytes_sha256"],
+            "da73abdb5c5eca1f53d241f53c2aec335b43f356584e1f66c1f38750221eb236",
+        )
+
+    def test_clip_sidecar_rejects_nonfinite_little_endian_float16_embeddings(self) -> None:
+        with self.assertRaisesRegex(bench.BenchError, "invalid float16 CLIP embeddings"):
+            bench.validate_clip_sidecar(
+                clip_sidecar(embedding_dim=1, embeddings_b64="AH4="), "external/a.mp4", "a" * 64
+            )
+
+    def test_clip_sidecar_rejects_float16_byte_length_mismatch(self) -> None:
+        with self.assertRaisesRegex(bench.BenchError, "invalid float16 CLIP embeddings"):
+            bench.validate_clip_sidecar(
+                clip_sidecar(embeddings_b64="ADw="), "external/a.mp4", "a" * 64
+            )
+
+    def test_controller_python_provenance_records_the_controller_runtime(self) -> None:
+        provenance = bench.controller_python_provenance()
+        executable = Path(sys.executable).resolve(strict=True)
+
+        self.assertEqual(provenance["sys_executable"], sys.executable)
+        self.assertEqual(provenance["sys_version"], sys.version)
+        self.assertEqual(
+            provenance["resolved_binary"],
+            {
+                "path": str(executable),
+                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "size_bytes": executable.stat().st_size,
+                "mtime_ns": executable.stat().st_mtime_ns,
+            },
+        )
+
     def test_clip_sidecar_records_exact_float16_embedding_and_stable_metadata(self) -> None:
         record = bench.validate_clip_sidecar(clip_sidecar(), "external/a.mp4", "a" * 64)
 
