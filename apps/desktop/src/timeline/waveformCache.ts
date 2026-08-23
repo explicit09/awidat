@@ -26,6 +26,7 @@ export interface Waveform {
 
 const cache = new Map<string, Waveform | "pending">();
 const onLoadedHooks = new Set<() => void>();
+let cacheGeneration = 0;
 
 /** Subscribe to "a new waveform finished loading." */
 export function onWaveformDecoded(cb: () => void): () => void {
@@ -49,12 +50,14 @@ export function getWaveform(path: string): Waveform | null {
   if (cached) return cached;
 
   cache.set(path, "pending");
+  const requestGeneration = cacheGeneration;
   void (async () => {
     try {
       const data = await invoke<{ buckets: number[]; duration_s: number }>(
         "read_waveform",
         { path },
       );
+      if (requestGeneration !== cacheGeneration) return;
       // Float32Array beats Array<number> for canvas drawing — tighter
       // memory, faster numeric iteration on V8.
       const wave: Waveform = {
@@ -66,7 +69,7 @@ export function getWaveform(path: string): Waveform | null {
     } catch {
       // Failed read — drop the pending sentinel so a future paint
       // can retry (e.g. if the sidecar lands later).
-      cache.delete(path);
+      if (requestGeneration === cacheGeneration) cache.delete(path);
     }
   })();
   return null;
@@ -74,5 +77,6 @@ export function getWaveform(path: string): Waveform | null {
 
 /** Visible for tests. */
 export function clearWaveformCache(): void {
+  cacheGeneration += 1;
   cache.clear();
 }

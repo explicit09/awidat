@@ -54,6 +54,8 @@ export type SelectionRange = {
   endWordIdx: number;
 };
 
+let cacheGeneration = 0;
+
 export const useTranscriptStore = create<State>((set, get) => ({
   byStem: {},
   activeStem: null,
@@ -63,6 +65,7 @@ export const useTranscriptStore = create<State>((set, get) => ({
     if (!stem) return;
     const existing = get().byStem[stem];
     if (existing && existing.state !== "missing") return;
+    const requestGeneration = cacheGeneration;
     set((s) => ({
       byStem: { ...s.byStem, [stem]: { state: "loading" } },
     }));
@@ -70,6 +73,7 @@ export const useTranscriptStore = create<State>((set, get) => ({
       const result = await invoke<Transcript | null>("read_transcript", {
         stem,
       });
+      if (requestGeneration !== cacheGeneration) return;
       set((s) => ({
         byStem: {
           ...s.byStem,
@@ -80,6 +84,7 @@ export const useTranscriptStore = create<State>((set, get) => ({
         },
       }));
     } catch (err) {
+      if (requestGeneration !== cacheGeneration) return;
       // eslint-disable-next-line no-console
       console.warn("read_transcript failed", stem, err);
       set((s) => ({
@@ -102,7 +107,8 @@ export const useTranscriptStore = create<State>((set, get) => ({
     set({ activeStem: stem, selection: null });
   },
 
-  clearCache: () =>
+  clearCache: () => {
+    cacheGeneration += 1;
     set((s) => ({
       // Wipe everything except the active stem's loading state, which
       // we re-trigger to repopulate. Avoids a flicker where the user
@@ -113,7 +119,8 @@ export const useTranscriptStore = create<State>((set, get) => ({
         s.selection && s.activeStem !== null && s.selection.stem === s.activeStem
           ? s.selection
           : null,
-    })),
+    }));
+  },
 
   setSelection: (sel) => set({ selection: sel }),
 }));

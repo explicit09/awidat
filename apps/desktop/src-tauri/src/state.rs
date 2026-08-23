@@ -89,7 +89,7 @@ pub struct MontageState {
     /// proposes) and the command-thread pool (when the user
     /// responds).
     pub pending_proposals: Mutex<HashMap<String, PendingProposal>>,
-    /// Whisper-transcript cache keyed by proxy stem. Populated on
+    /// Whisper-transcript cache keyed by project root + proxy stem. Populated on
     /// first `read_transcript(stem)` call; invalidated when a
     /// whisper-indexer job completes (signal that the sidecar may
     /// have been refreshed). Keeps the transcript pane snappy on

@@ -142,30 +142,7 @@ try {
   domNodes = await page.evaluate(() => document.querySelectorAll("*").length);
   console.log(`  DOM nodes: ${domNodes} (budget ${BUDGETS.domNodes})`);
 
-  console.log("→ measuring workspace switching …");
-  const workspaceTabs = page.locator('[role="tablist"][aria-label="Workspace"] button[role="tab"]');
-  const tabCount = await workspaceTabs.count();
-  if (tabCount === 0) {
-    console.log("  workspace switch: skipped (workspace tablist not present)");
-  } else {
-    workspaceSwitchMs = 0;
-    for (let index = 0; index < tabCount; index += 1) {
-      const tab = workspaceTabs.nth(index);
-      const selected = await tab.getAttribute("aria-selected");
-      if (selected === "true") continue;
-      const start = Date.now();
-      await tab.click();
-      await page.evaluate(
-      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
-    const elapsed = Date.now() - start;
-    console.log(`    ${((await tab.textContent()) ?? "").trim()}: ${elapsed.toFixed(1)} ms`);
-    workspaceSwitchMs = Math.max(workspaceSwitchMs, elapsed);
-  }
-    console.log(
-      `  slowest workspace switch: ${workspaceSwitchMs.toFixed(1)} ms (budget ${BUDGETS.workspaceSwitchMs})`,
-    );
-  }
+  console.log("→ workspace switching: skipped (browser demo pins the legacy workspace)");
 
   await page.close();
 
@@ -176,8 +153,16 @@ try {
   projectUrl.searchParams.set("slowNonCritical", "1");
   const projectStart = Date.now();
   await projectPage.goto(projectUrl.toString(), { waitUntil: "domcontentloaded" });
-  const projectButtonNames = ["Deliver", "Schedule", "Skills"];
-  await projectPage.getByRole("button", { name: "Stage" }).waitFor({ state: "visible" });
+  const projectButtonNames = [
+    "Media",
+    "Index",
+    "Transcript",
+    "Deliver",
+    "Inspector",
+    "Vedit",
+    "Chat",
+  ];
+  await projectPage.getByRole("button", { name: "Media", exact: true }).waitFor({ state: "visible" });
   projectShellMs = Date.now() - projectStart;
   console.log(`  project shell visible: ${projectShellMs} ms (budget ${BUDGETS.projectShellMs})`);
 
@@ -199,16 +184,24 @@ try {
 
   projectWorkspaceSwitchMs = 0;
   for (const name of projectButtonNames) {
-    const tab = projectPage
-      .locator("button")
-      .filter({ hasText: new RegExp(`${name}$`) })
-      .first();
-    const start = Date.now();
-    await tab.click();
-    await projectPage.evaluate(
-      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
-    const elapsed = Date.now() - start;
+    const { elapsed, active } = await projectPage.evaluate(async (tabName) => {
+      const tab = Array.from(
+        document.querySelectorAll("button.stage-left-tab, button.stage-right-tab"),
+      ).find((button) => button.textContent?.trim() === tabName);
+      if (!(tab instanceof HTMLButtonElement)) {
+        throw new Error(`project workspace tab not found: ${tabName}`);
+      }
+      const start = performance.now();
+      tab.click();
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      return {
+        elapsed: performance.now() - start,
+        active: tab.getAttribute("data-active") === "true",
+      };
+    }, name);
+    if (!active) throw new Error(`project workspace tab did not become active: ${name}`);
     console.log(`    ${name}: ${elapsed.toFixed(1)} ms`);
     projectWorkspaceSwitchMs = Math.max(projectWorkspaceSwitchMs, elapsed);
   }

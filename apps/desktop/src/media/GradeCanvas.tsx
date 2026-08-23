@@ -28,30 +28,14 @@ import {
   isDefaultGrade,
   lutToRgba8,
 } from "./gradeMath";
+import {
+  fetchPreviewLut,
+  previewLutCacheKey,
+  type PreviewLutData,
+} from "./previewLutCache";
 
-type PreviewLutData = {
-  size: number;
-  domainMin: [number, number, number];
-  domainMax: [number, number, number];
-  rgba: Uint8Array;
-};
-
-// One parse per LUT path per project state — relative LUT paths resolve
-// against the active project root, so the cache key must include it.
-const lutCache = new Map<string, Promise<PreviewLutData | null>>();
-
-function previewLutCacheKey(projectRoot: string | null, lutPath: string): string {
-  return `${projectRoot ?? ""}\u0000${lutPath}`;
-}
-
-function fetchPreviewLut(
-  projectRoot: string | null,
-  lutPath: string,
-): Promise<PreviewLutData | null> {
-  const cacheKey = previewLutCacheKey(projectRoot, lutPath);
-  let pending = lutCache.get(cacheKey);
-  if (!pending) {
-    pending = invoke<{
+function loadPreviewLut(lutPath: string): Promise<PreviewLutData | null> {
+  return invoke<{
       size: number;
       domain_min: [number, number, number];
       domain_max: [number, number, number];
@@ -68,9 +52,6 @@ function fetchPreviewLut(
         console.warn(`preview LUT load failed (${lutPath})`, e);
         return null;
       });
-    lutCache.set(cacheKey, pending);
-  }
-  return pending;
 }
 
 const VERT = `#version 300 es
@@ -305,7 +286,7 @@ export function GradeCanvas({
     let stale = false;
     setLut(null);
     setLutKey("");
-    fetchPreviewLut(projectRoot, lutPath).then((data) => {
+    fetchPreviewLut(projectRoot, lutPath, () => loadPreviewLut(lutPath)).then((data) => {
       if (stale) return;
       setLut(data);
       setLutKey(data ? previewLutCacheKey(projectRoot, lutPath) : "");

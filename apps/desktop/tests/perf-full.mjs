@@ -182,7 +182,7 @@ async function firstContentfulPaint(page) {
 async function measureLoadedProject(page) {
   const navStart = Date.now();
   await page.goto(projectHarnessUrl(), { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "Stage" }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Media", exact: true }).waitFor({ state: "visible" });
   const shellInteractiveMs = Date.now() - navStart;
 
   await page.waitForFunction(() => {
@@ -219,31 +219,44 @@ async function measureLoadedProject(page) {
 
 async function measureSwitches(page) {
   const switches = [
+    { id: "media", name: "Media" },
+    { id: "index", name: "Index" },
+    { id: "transcript", name: "Transcript" },
     { id: "deliver", name: "Deliver" },
-    { id: "schedule", name: "Schedule" },
-    { id: "skills", name: "Skills" },
-    { id: "edit", name: "Stage" },
+    { id: "inspector", name: "Inspector" },
+    { id: "vedit", name: "Vedit" },
+    { id: "chat", name: "Chat" },
   ];
   const samples = [];
   for (let iteration = 0; iteration < SWITCH_SAMPLES; iteration += 1) {
     for (const { id, name } of switches) {
-      const durationMs = await page.evaluate(async (stageId) => {
-        const button = document.querySelector(`[data-perf-stage-switch="${stageId}"]`);
-        if (!button) throw new Error(`stage button not found: ${stageId}`);
+      const durationMs = await page.evaluate(async ({ stageId, stageName }) => {
+        const button = Array.from(
+          document.querySelectorAll("button.stage-left-tab, button.stage-right-tab"),
+        ).find((candidate) => candidate.textContent?.trim() === stageName);
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error(`workspace tab not found: ${stageId}`);
+        }
         const startedAt = performance.now();
         button.click();
         for (let attempt = 0; attempt < 20; attempt += 1) {
-          if (button.getAttribute("data-active") === "true") {
+          await Promise.resolve();
+          const activeButton = Array.from(
+            document.querySelectorAll("button.stage-left-tab, button.stage-right-tab"),
+          ).find((candidate) => candidate.textContent?.trim() === stageName);
+          if (activeButton?.getAttribute("data-active") === "true") {
             return performance.now() - startedAt;
           }
-          await Promise.resolve();
         }
         await new Promise((resolve) => setTimeout(resolve, 0));
-        if (button.getAttribute("data-active") !== "true") {
-          throw new Error(`stage button did not become active: ${stageId}`);
+        const activeButton = Array.from(
+          document.querySelectorAll("button.stage-left-tab, button.stage-right-tab"),
+        ).find((candidate) => candidate.textContent?.trim() === stageName);
+        if (activeButton?.getAttribute("data-active") !== "true") {
+          throw new Error(`workspace tab did not become active: ${stageId}`);
         }
         return performance.now() - startedAt;
-      }, id);
+      }, { stageId: id, stageName: name });
       samples.push({
         name,
         iteration,
