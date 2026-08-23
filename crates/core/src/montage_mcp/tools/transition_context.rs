@@ -4,7 +4,7 @@
 //! candidate transition boundary.
 
 use montage_proto::otio::{
-    Clip, ExternalReference, MediaReference, StackChild, Timeline, TrackChild,
+    Clip, ExternalReference, MediaReference, Stack, StackChild, Timeline, TrackChild,
 };
 use montage_proto::project::Project;
 use schemars::JsonSchema;
@@ -248,15 +248,42 @@ fn clip_packet(clip: &ClipPacket) -> serde_json::Value {
     })
 }
 
+/// Sequential duration a track child occupies on its parent's timeline.
+/// Transitions are zero-width overlays. A nested stack occupies the
+/// duration of its longest child track, so the parent cursor advances
+/// past it rather than collapsing it to zero.
 fn child_duration_s(child: &TrackChild) -> f64 {
     match child {
-        TrackChild::Clip(clip) => clip
-            .source_range
-            .as_ref()
-            .map(|range| range.duration.to_seconds())
-            .unwrap_or(0.0),
+        TrackChild::Clip(clip) => clip_duration_s(clip),
         TrackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
-        TrackChild::Transition(_) | TrackChild::Stack(_) => 0.0,
+        TrackChild::Transition(_) => 0.0,
+        TrackChild::Stack(stack) => stack_duration_s(stack),
+    }
+}
+
+fn clip_duration_s(clip: &Clip) -> f64 {
+    clip.source_range
+        .as_ref()
+        .map(|range| range.duration.to_seconds())
+        .unwrap_or(0.0)
+}
+
+/// A stack's children run in parallel, so its duration is the longest of
+/// them, computed recursively.
+fn stack_duration_s(stack: &Stack) -> f64 {
+    stack
+        .children
+        .iter()
+        .map(stack_child_duration_s)
+        .fold(0.0_f64, f64::max)
+}
+
+fn stack_child_duration_s(child: &StackChild) -> f64 {
+    match child {
+        StackChild::Track(track) => track.children.iter().map(child_duration_s).sum(),
+        StackChild::Stack(stack) => stack_duration_s(stack),
+        StackChild::Clip(clip) => clip_duration_s(clip),
+        StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
     }
 }
 
@@ -330,25 +357,58 @@ fn word_packet(word: WhisperWord) -> serde_json::Value {
 }
 
 /// Count visible transitions on the timeline in `[max(0, at_s - 30), at_s)`,
-/// matching the window `assess_edit_quality` uses. Each track carries its own
-/// cursor advanced by clip and gap durations; nested stacks are walked too.
+/// matching the window `assess_edit_quality` uses. The lower bound is
+/// inclusive and the upper bound exclusive, so a transition exactly at the
+/// boundary is not counted as prior context.
 fn count_recent_transitions(timeline: &Timeline, at_s: f64) -> usize {
     let window_start_s = (at_s - 30.0).max(0.0);
     timeline
         .tracks
         .children
         .iter()
-        .map(|stack_child| count_in_stack_child(stack_child, window_start_s, at_s))
+        .map(|stack_child| count_in_stack_child(stack_child, 0.0, window_start_s, at_s))
         .sum()
 }
 
-fn count_in_stack_child(stack_child: &StackChild, window_start_s: f64, at_s: f64) -> usize {
-    let StackChild::Track(track) = stack_child else {
-        return 0;
-    };
+/// Count transitions inside one stack child. `origin_s` is the parent
+/// timeline position the child starts at — a stack's children all start at
+/// the stack's own origin, so nested transitions keep the offset they
+/// inherited instead of being measured from zero.
+fn count_in_stack_child(
+    stack_child: &StackChild,
+    origin_s: f64,
+    window_start_s: f64,
+    at_s: f64,
+) -> usize {
+    match stack_child {
+        StackChild::Track(track) => count_in_track_children(
+            &track.children,
+            origin_s,
+            window_start_s,
+            at_s,
+        ),
+        StackChild::Stack(stack) => count_in_stack(stack, origin_s, window_start_s, at_s),
+        StackChild::Clip(_) | StackChild::Gap(_) => 0,
+    }
+}
+
+fn count_in_stack(stack: &Stack, origin_s: f64, window_start_s: f64, at_s: f64) -> usize {
+    stack
+        .children
+        .iter()
+        .map(|nested| count_in_stack_child(nested, origin_s, window_start_s, at_s))
+        .sum()
+}
+
+fn count_in_track_children(
+    children: &[TrackChild],
+    origin_s: f64,
+    window_start_s: f64,
+    at_s: f64,
+) -> usize {
     let mut count = 0_usize;
-    let mut cursor_s = 0.0_f64;
-    for child in &track.children {
+    let mut cursor_s = origin_s;
+    for child in children {
         match child {
             TrackChild::Transition(_) => {
                 if window_start_s <= cursor_s && cursor_s < at_s {
@@ -356,11 +416,8 @@ fn count_in_stack_child(stack_child: &StackChild, window_start_s: f64, at_s: f64
                 }
             }
             TrackChild::Stack(stack) => {
-                count += stack
-                    .children
-                    .iter()
-                    .map(|nested| count_in_stack_child(nested, window_start_s, at_s))
-                    .sum::<usize>();
+                count += count_in_stack(stack, cursor_s, window_start_s, at_s);
+                cursor_s += stack_duration_s(stack);
             }
             TrackChild::Clip(_) | TrackChild::Gap(_) => cursor_s += child_duration_s(child),
         }
@@ -799,6 +856,228 @@ mod tests {
             body.pointer("/style_context/transition_density_last_30s")
                 .and_then(Value::as_u64),
             Some(3)
+        );
+    }
+
+    /// `lead` (40s) then a nested stack (5s) then `clip-a` (5s) `clip-b`.
+    /// The nested stack's single track is `gap(2s) T gap(3s)`, so the nested
+    /// transition sits at parent time 42s, not at 2s. The stack's duration is
+    /// the max of its child tracks, so the boundary lands at 50s and the
+    /// window is `[20, 50)` — which contains 42 but not 2.
+    fn project_with_nested_stack_transition() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+
+        let mut nested_track = Track::empty("nested", TrackKind::Video);
+        nested_track
+            .children
+            .push(TrackChild::Gap(Gap::of_duration(2.0, 24.0)));
+        nested_track
+            .children
+            .push(TrackChild::Transition(Transition::symmetric(
+                "SMPTE_Dissolve",
+                0.5,
+                24.0,
+            )));
+        nested_track
+            .children
+            .push(TrackChild::Gap(Gap::of_duration(3.0, 24.0)));
+        let mut nested = Stack::empty("nested-stack");
+        nested.children.push(StackChild::Track(nested_track));
+
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip(
+            "lead", "lead", "raw/a.mp4", 0.0, 40.0, 80.0,
+        )));
+        track.children.push(TrackChild::Stack(nested));
+        track.children.push(TrackChild::Clip(clip(
+            "a", "clip-a", "raw/a.mp4", 45.0, 5.0, 80.0,
+        )));
+        track.children.push(TrackChild::Clip(clip(
+            "b", "clip-b", "raw/a.mp4", 50.0, 4.0, 80.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(dir.path()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn nested_stack_transitions_inherit_the_parent_cursor_offset() {
+        let dir = project_with_nested_stack_transition();
+        let body = body_for(dir.path(), "clip-a", "clip-b");
+
+        // The nested stack advances the parent cursor by its own 5s duration,
+        // so `lead`(40s) + stack(5s) + `clip-a`(5s) puts the boundary at 50s.
+        assert_eq!(
+            body.pointer("/boundary/at_s").and_then(Value::as_f64),
+            Some(50.0)
+        );
+        // The nested transition sits at parent time 42s, inside `[20, 50)`.
+        // Counting it against a reset cursor would place it at 2s and miss it.
+        assert_eq!(
+            body.pointer("/style_context/transition_density_last_30s")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    /// `clip-a`(5s) `clip-b` on `V1` — boundary at 5s. Each entry in
+    /// `sibling_transitions_at_s` becomes its own sibling track holding a gap
+    /// of that length followed by a transition, so the transition lands at
+    /// exactly that timeline position.
+    fn project_with_sibling_transitions(
+        lead_duration_s: f64,
+        sibling_transitions_at_s: &[f64],
+    ) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut track = Track::empty("V1", TrackKind::Video);
+        if lead_duration_s > 0.0 {
+            track.children.push(TrackChild::Clip(clip(
+                "lead",
+                "lead",
+                "raw/a.mp4",
+                0.0,
+                lead_duration_s,
+                400.0,
+            )));
+        }
+        track.children.push(TrackChild::Clip(clip(
+            "a",
+            "clip-a",
+            "raw/a.mp4",
+            lead_duration_s,
+            5.0,
+            400.0,
+        )));
+        track.children.push(TrackChild::Clip(clip(
+            "b",
+            "clip-b",
+            "raw/a.mp4",
+            lead_duration_s + 5.0,
+            4.0,
+            400.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+
+        for (index, at_s) in sibling_transitions_at_s.iter().enumerate() {
+            let mut sibling = Track::empty(format!("S{index}"), TrackKind::Video);
+            sibling
+                .children
+                .push(TrackChild::Gap(Gap::of_duration(*at_s, 1000.0)));
+            sibling
+                .children
+                .push(TrackChild::Transition(Transition::symmetric(
+                    "SMPTE_Dissolve",
+                    0.5,
+                    24.0,
+                )));
+            project
+                .timeline
+                .tracks
+                .children
+                .push(StackChild::Track(sibling));
+        }
+        project.write(dir.path()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_transition_exactly_at_the_boundary_is_excluded() {
+        // `lead`(40s) + `clip-a`(5s) puts the boundary at 45s.
+        let dir = project_with_sibling_transitions(40.0, &[44.999, 45.0]);
+        let body = body_for(dir.path(), "clip-a", "clip-b");
+
+        assert_eq!(
+            body.pointer("/boundary/at_s").and_then(Value::as_f64),
+            Some(45.0)
+        );
+        // Window `[15, 45)`: 44.999 counts, 45.0 sits on the exclusive upper
+        // bound and does not.
+        assert_eq!(
+            body.pointer("/style_context/transition_density_last_30s")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn the_window_lower_bound_is_inclusive_and_earlier_transitions_are_excluded() {
+        // Boundary at 45s → window `[15, 45)`.
+        let dir = project_with_sibling_transitions(40.0, &[14.999, 15.0]);
+        let body = body_for(dir.path(), "clip-a", "clip-b");
+
+        assert_eq!(
+            body.pointer("/boundary/at_s").and_then(Value::as_f64),
+            Some(45.0)
+        );
+        // 14.999 falls strictly before `max(0, at_s - 30)` and is excluded;
+        // 15.0 sits on the inclusive lower bound and is counted.
+        assert_eq!(
+            body.pointer("/style_context/transition_density_last_30s")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    /// One asset, two diarized speakers: `SPEAKER_00` ends just before the
+    /// cut at source 7s, `SPEAKER_01` starts just after it.
+    fn project_with_speaker_change() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip(
+            "a", "same-a", "raw/a.mp4", 2.0, 5.0, 20.0,
+        )));
+        track.children.push(TrackChild::Clip(clip(
+            "b", "same-b", "raw/a.mp4", 7.0, 4.0, 20.0,
+        )));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(dir.path()).unwrap();
+        write_whisper(
+            dir.path(),
+            "raw/a.mp4",
+            vec![("outgoing", 6.4, 6.9), ("incoming", 7.1, 7.4)],
+            vec![(2.0, 6.9, "SPEAKER_00"), (7.05, 11.0, "SPEAKER_01")],
+        );
+        dir
+    }
+
+    #[test]
+    fn reports_speaker_change_across_a_within_asset_boundary() {
+        let dir = project_with_speaker_change();
+        let body = body_for(dir.path(), "same-a", "same-b");
+
+        assert_eq!(
+            body.pointer("/dialogue/relation").and_then(Value::as_str),
+            Some("speaker_change")
+        );
+        assert_eq!(
+            body.pointer("/dialogue/same_asset")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            body.pointer("/dialogue/outgoing_speaker")
+                .and_then(Value::as_str),
+            Some("SPEAKER_00")
+        );
+        assert_eq!(
+            body.pointer("/dialogue/incoming_speaker")
+                .and_then(Value::as_str),
+            Some("SPEAKER_01")
         );
     }
 }
