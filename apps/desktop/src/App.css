@@ -3456,7 +3456,7 @@ button {
 .broadcast-chapter-card {
   position: absolute;
   left: 50%;
-  top: 38%;
+  top: 64%;
   height: 4.63%;
   /* Hug the text: a fixed min-width centers the BAR, leaving the
      text visually off-center. fit-content + translate centers the

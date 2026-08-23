@@ -309,6 +309,16 @@ fn score_asset(asset_id: &str, segments: &[Segment], search_until_s: f64) -> Vec
                 score += 1.0;
                 reasons.push("follows a noticeable reset/gap".into());
             }
+            if gap >= 2.0
+                && positive == 0
+                && DIRECT_START_AFTER_RESET_CUES
+                    .iter()
+                    .any(|cue| previous.contains(cue))
+            {
+                score += 6.5;
+                positive += 1;
+                reasons.push("direct topic opening follows an explicit recording reset".into());
+            }
         }
 
         let mut rejected = false;
@@ -429,6 +439,8 @@ const START_REJECT_CUES: &[(&str, f64, &str)] = &[
     ),
 ];
 
+const DIRECT_START_AFTER_RESET_CUES: &[&str] = &["let s let s let s try this", "let s try this"];
+
 fn add_if(
     text: &str,
     needle: &str,
@@ -547,3 +559,42 @@ recordings often begin with real but unpublished chatter. Returns a \
 recommended start time, confidence, evidence transcript, and rejected \
 candidates. Requires the whisper transcript index.\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_topic_after_explicit_reset_is_a_start_candidate() {
+        let segments = vec![
+            Segment {
+                start_s: 699.28,
+                end_s: 707.44,
+                speaker_id: serde_json::Value::String("SPEAKER_00".into()),
+                text: "Okay, let me see how I can say it in very short end yeah, but let's let's let's try".into(),
+            },
+            Segment {
+                start_s: 707.44,
+                end_s: 710.44,
+                speaker_id: serde_json::Value::Null,
+                text: "this.".into(),
+            },
+            Segment {
+                start_s: 714.4,
+                end_s: 720.0,
+                speaker_id: serde_json::Value::String("SPEAKER_00".into()),
+                text: "One of the things that is hard is the marketing part, right?".into(),
+            },
+        ];
+
+        let candidates = score_asset("raw/episode.mkv", &segments, 1800.0);
+        let candidate = candidates
+            .iter()
+            .find(|candidate| (candidate.start_s - 714.4).abs() < 0.001);
+
+        assert!(
+            candidate.is_some_and(|candidate| !candidate.rejected && candidate.score >= 6.0),
+            "expected direct topic after an explicit reset to be recommended: {candidates:#?}"
+        );
+    }
+}

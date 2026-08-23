@@ -13,7 +13,9 @@
 //! # Order of resolution
 //!
 //! [`get`] tries env var first, then the cached provider vault, then the
-//! legacy per-key keychain entry. Env-first because:
+//! legacy per-key keychain entry. A successful legacy lookup is migrated into
+//! the shared vault so future processes do not repeatedly prompt for it.
+//! Env-first because:
 //! 1. CI and ephemeral runners only have env vars; keychain calls error out.
 //! 2. Override-by-env is the universal "set this for this one run" idiom.
 //!
@@ -197,6 +199,7 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
     }
 
     if let Some(value) = per_key_keychain_value(account)? {
+        set_vault_secret(account, &value)?;
         trace!(account, "secret resolved from legacy keychain entry");
         return Ok(Some(value));
     }
@@ -268,13 +271,15 @@ fn get_with_backend_and_vault(
         return Ok(Some(value.to_string()));
     }
 
-    let vault = load_vault_with_backend(backend)?;
+    let mut vault = load_vault_with_backend(backend)?;
     if let Some(value) = vault.get(account) {
         trace!(account, "secret resolved from provider vault");
         return Ok(Some(value.to_string()));
     }
 
     if let Some(value) = per_key_keychain_value_with_backend(backend, account)? {
+        vault.set(account, &value);
+        save_vault_with_backend(backend, &vault)?;
         trace!(account, "secret resolved from legacy keychain entry");
         return Ok(Some(value));
     }
@@ -720,6 +725,24 @@ mod tests {
                 accounts::PEXELS_API_KEY.to_string()
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_lookup_is_migrated_into_shared_vault() -> Result<(), SecretError> {
+        let backend = MemorySecretBackend::default();
+        backend.insert(accounts::PEXELS_API_KEY, "legacy-pexels");
+
+        let resolved = get_with_backend_and_vault(
+            &backend,
+            None,
+            env_vars::PEXELS_API_KEY,
+            accounts::PEXELS_API_KEY,
+        )?;
+
+        assert_eq!(resolved.as_deref(), Some("legacy-pexels"));
+        let vault = load_vault_with_backend(&backend)?;
+        assert_eq!(vault.get(accounts::PEXELS_API_KEY), Some("legacy-pexels"));
         Ok(())
     }
 
