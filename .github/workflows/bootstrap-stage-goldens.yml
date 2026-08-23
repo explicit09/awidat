@@ -34,7 +34,7 @@ jobs:
   bootstrap:
     runs-on: ${{ inputs.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v4

@@ -39,7 +39,7 @@ jobs:
       RUSTFLAGS: "-C debuginfo=0"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - name: Compute sidecar cache key
         id: key

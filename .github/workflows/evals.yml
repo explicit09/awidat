@@ -27,7 +27,7 @@ jobs:
     name: Product and golden evals
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -55,7 +55,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_audio_energy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v5
       - uses: Swatinem/rust-cache@v2
@@ -69,7 +69,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Refuse missing API key
@@ -96,7 +96,7 @@ jobs:
       MONTAGE_COMPOSITION_MODEL_MIN_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS }}
       MONTAGE_COMPOSITION_MODEL_MAX_INVALID_REGIONS: ${{ vars.MONTAGE_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Refuse missing real corpus path
