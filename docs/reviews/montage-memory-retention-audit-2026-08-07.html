@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Montage memory-retention audit — 2026-08-07</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0c1117; --panel:#151c25; --line:#2d3744; --text:#edf3f8; --muted:#9aa7b5; --red:#ff7b72; --amber:#e3b341; --blue:#66adff; --green:#56d364; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 75% -20%,#162b45 0,transparent 42%),var(--bg); color:var(--text); font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { width:min(1100px,calc(100% - 32px)); margin:26px auto 48px; }
+    h1 { margin:0 0 3px; font-size:26px; letter-spacing:-.025em; }
+    h2,h3 { margin:0; } h2 { font-size:17px; } h3 { font-size:15px; }
+    p { margin:6px 0; } a { color:#96ceff; } code { background:#202a36; border-radius:5px; padding:1px 5px; }
+    .muted,.evidence { color:var(--muted); } .evidence { font-size:12px; margin-top:8px; }
+    .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:19px 0; }
+    .metric,.card,.note { background:color-mix(in srgb,var(--panel) 94%,transparent); border:1px solid var(--line); border-radius:12px; }
+    .metric { padding:13px 14px; } .metric b { display:block; font-size:22px; line-height:1.15; }
+    nav { display:flex; gap:26px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+    button { border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); padding:9px 1px; cursor:pointer; font:inherit; }
+    button.active { color:var(--text); border-color:var(--blue); } section[hidden] { display:none; }
+    .cards { display:grid; gap:10px; } .two { grid-template-columns:1.15fr .85fr; }
+    .card { padding:15px 16px; } .card-head { display:flex; align-items:center; gap:9px; margin-bottom:6px; }
+    .tag { border:1px solid currentColor; border-radius:999px; padding:1px 7px; font-size:11px; font-weight:750; white-space:nowrap; }
+    .red { color:var(--red); } .amber { color:var(--amber); } .blue { color:var(--blue); } .green { color:var(--green); }
+    table { width:100%; border-collapse:collapse; margin-top:10px; font-variant-numeric:tabular-nums; }
+    th,td { padding:6px 7px; text-align:right; border-bottom:1px solid var(--line); } th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font-size:12px; }
+    .bar-row { display:grid; grid-template-columns:95px 1fr 75px; gap:9px; align-items:center; margin:10px 0; font-variant-numeric:tabular-nums; }
+    .bar { height:9px; background:#222d39; border-radius:99px; overflow:hidden; } .bar i { display:block; width:var(--w); height:100%; background:linear-gradient(90deg,var(--blue),#a276ff); }
+    .note { padding:12px 15px; margin-top:10px; } ul { margin:8px 0 0; padding-left:19px; } li+li { margin-top:5px; }
+    @media(max-width:780px){ .summary,.two { grid-template-columns:repeat(2,1fr); } .two { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Montage memory-retention audit</h1>
+  <p class="muted">Native runtime soak + source lifecycle trace · <code>f7c610f3</code> · debug bundle · 7 Aug 2026</p>
+
+  <div class="summary">
+    <div class="metric"><b class="green">−65.7%</b>8-tile Project Manager RSS</div>
+    <div class="metric"><b class="green">+18.2 MiB</b>0 → 8 tiles after fix</div>
+    <div class="metric"><b class="green">437 tests</b>native crate passed</div>
+    <div class="metric"><b class="green">16 opens</b>native switch soak plateaued</div>
+  </div>
+
+  <nav aria-label="Audit sections">
+    <button class="active" data-tab="runtime">Runtime proof</button>
+    <button data-tab="findings">Findings</button>
+    <button data-tab="verification">Checks &amp; limits</button>
+  </nav>
+
+  <section id="runtime">
+    <div class="cards two">
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed</span><h2>Recent-project amplification</h2></div>
+        <p>Recent cards now load one cached still frame instead of mounting a metadata-preloaded video decoder per project.</p>
+        <table>
+          <thead><tr><th>Fresh launch</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
+          <tbody>
+            <tr><td>0 tiles</td><td>267.0</td><td>259.6 MiB</td><td>−2.8%</td></tr>
+            <tr><td>1 tile</td><td>369.4</td><td>267.4 MiB</td><td>−27.6%</td></tr>
+            <tr><td>8 tiles</td><td>808.7</td><td>277.8 MiB</td><td>−65.7%</td></tr>
+          </tbody>
+        </table>
+        <p class="evidence">Aggregate RSS, same debug bundle and cached fixture. Incremental 0→8 cost fell from 541.7 MiB to 18.2 MiB (96.6% lower).</p>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed + measured</span><h2>Project-switch decoder retention</h2></div>
+        <p>The initial cache fix bounded app-owned transcript/LUT/filmstrip/waveform state, but a 16-open native control still reached 1,143.2 MiB; the GPU process alone reached 622.3 MiB. Explicit unload was insufficient because WebKit retained allocations for newly created media elements.</p>
+        <p>The final implementation keeps one double-buffered preview host mounted across Project Manager transitions, unloads it on each root change, and reuses the same two media elements. Unity-gain playback also avoids allocating WebAudio.</p>
+        <table>
+          <thead><tr><th>Same native process</th><th>Aggregate RSS</th><th>Change</th></tr></thead>
+          <tbody>
+            <tr><td>Project Manager baseline</td><td>285.3 MiB</td><td>—</td></tr>
+            <tr><td>Open 1</td><td>491.3 MiB</td><td>—</td></tr>
+            <tr><td>Open 8</td><td>641.7 MiB</td><td>+150.4 MiB</td></tr>
+            <tr><td>Open 16</td><td>661.9 MiB</td><td>+20.2 MiB</td></tr>
+          </tbody>
+        </table>
+        <div class="note"><strong>Runtime proof:</strong> all 16 opens loaded the expected 4,000 segments and project marker. The second eight-project cycle added only 20.2 MiB (3.1%) and finished 42.1% below the earlier 1,143.2 MiB failure.</div>
+      </article>
+    </div>
+  </section>
+
+  <section id="findings" hidden>
+    <div class="cards">
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed + tested</span><h3>Project/transcript state accumulates across switches</h3></div>
+        <p>Native keys are now project-scoped and the cache clears on open, close, init, and active deletion. Frontend transcript state clears on root changes and generation guards reject stale async completions.</p>
+        <p class="evidence"><a href="file:///Users/tadies/Projects/awidat/apps/desktop/src-tauri/src/commands/transcript.rs#L65">backend transcript cache</a> · <a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/state/appGlue.ts#L325">frontend project reset</a></p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed + measured</span><h3>Project Manager mounts every recent preview video at once</h3></div>
+        <p>Cards now render lazy still images from cached project thumbnails. The eight-tile fresh-restart result fell from 808.7 MiB to 277.8 MiB.</p>
+        <p class="evidence"><a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/shell/empty/Landing.tsx#L25">all-recent preview resolution</a> · <a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/shell/empty/Landing.tsx#L209">video tile mounting</a></p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed + tested</span><h3>Filmstrip, waveform, and LUT caches outlive projects</h3></div>
+        <p>A single project lifecycle reset now clears all three caches. Generation guards prevent requests started under the old root from repopulating them after a switch.</p>
+        <p class="evidence"><a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/timeline/thumbnailCache.ts#L29">thumbnail cache</a> · <a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/timeline/waveformCache.ts#L27">waveform cache</a></p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="tag green">fixed + tested</span><h3>GPU transition preview has no in-flight backpressure</h3></div>
+        <p>The preview queue now permits one render in flight, collapses queued work to the newest frame, suppresses stale results, and invalidates work when the transition window closes.</p>
+        <p class="evidence"><a href="file:///Users/tadies/Projects/awidat/apps/desktop/src/media/useGpuTransitionPreview.ts#L91">frontend request loop</a> · <a href="file:///Users/tadies/Projects/awidat/apps/desktop/src-tauri/src/commands/preview.rs#L60">backend allocations</a></p>
+      </article>
+    </div>
+  </section>
+
+  <section id="verification" hidden>
+    <div class="cards two">
+      <article class="card">
+        <div class="card-head"><span class="tag green">passed</span><h2>Build and focused gates</h2></div>
+        <ul>
+          <li>Native debug <code>Montage.app</code> packaged and launched.</li>
+          <li>Full frontend suite passed, including 6 memory-lifecycle tests, 22 desktop smoke checks, and 7/7 Stage SSIM goldens.</li>
+          <li><code>cargo test -p montage-desktop</code>: 437 passed, 0 failed.</li>
+          <li>Desktop <code>cargo fmt --check</code> and Clippy with <code>-D warnings</code> passed.</li>
+          <li>Native Cmd+Q removed main, GPU, network, and WebContent PIDs.</li>
+        </ul>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="tag blue">method</span><h2>Interpretation limits</h2></div>
+        <ul>
+          <li>RSS sampled with clean-restart controls; <code>vmmap</code> spot checks corroborated WebContent growth.</li>
+          <li>Absolute values are from an unoptimized debug bundle; slopes and within-build controls are the useful comparison.</li>
+          <li>The performance-budget harness was updated from removed <code>Stage</code>/WorkspaceRow controls to the current pane rails. All budgets passed: 917 ms load, 27.8 MiB heap, 600 ms FCP, 513 ms project shell, and 451.3 ms maximum painted pane switch.</li>
+          <li>The deeper dev benchmark measured 7.7 ms p95 pane activation. It also observed one non-gating 106 ms startup long task; native leak conclusions do not depend on that browser-dev diagnostic.</li>
+          <li>Initial ffmpeg proxy generation peaked near 479 MiB but exited; it was excluded from retained totals.</li>
+        </ul>
+      </article>
+    </div>
+    <div class="note"><strong>Scope:</strong> leak fixes are implemented and runtime-proven in the exact debug bundle. Native menu Quit removed the main, GPU, network, and WebContent PIDs immediately. Unrelated working-tree edits were preserved, and the original recent-project list was restored after the disposable soak.</div>
+  </section>
+</main>
+<script>
+  const buttons=[...document.querySelectorAll('button[data-tab]')];
+  const sections=[...document.querySelectorAll('main>section')];
+  for(const button of buttons) button.addEventListener('click',()=>{
+    for(const item of buttons) item.classList.toggle('active',item===button);
+    for(const section of sections) section.hidden=section.id!==button.dataset.tab;
+  });
+</script>
+</body>
+</html>

@@ -311,14 +311,16 @@ export function StageShell(props: StageShellProps) {
     setDraft("");
   };
 
-  if (!hasProject) {
-    return (
-      <div className="relative z-10 h-full w-full">{landing}</div>
-    );
-  }
-
   return (
-    <div className="relative z-10 h-full w-full overflow-hidden font-sans text-[var(--color-text-primary)]">
+    <>
+    {!hasProject ? (
+      <div className="relative z-10 h-full w-full">{landing}</div>
+    ) : null}
+    <div
+      aria-hidden={!hasProject}
+      className="relative z-10 h-full w-full overflow-hidden font-sans text-[var(--color-text-primary)]"
+      style={{ display: hasProject ? undefined : "none" }}
+    >
       {/* floating top chrome */}
       <div className="absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-5 py-3" data-tauri-drag-region>
         <BrandMark size={26} className="rounded-[8px]" />
@@ -541,6 +543,7 @@ export function StageShell(props: StageShellProps) {
       ) : null}
 
     </div>
+    </>
   );
 }
 

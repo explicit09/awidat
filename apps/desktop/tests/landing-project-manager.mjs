@@ -7,9 +7,9 @@ const required = [
   ["window drag strip", "data-tauri-drag-region"],
   ["recent project grid", 'data-testid="recent-project-grid"'],
   ["recent project tile", 'data-testid="recent-project-tile"'],
-  ["preview media command", '"project_preview_media"'],
+  ["still preview loader", "loadRecentProjectPreview"],
   ["preview state", "previewByPath"],
-  ["proxy video preview", "preview?.kind === \"video\""],
+  ["lazy image preview", 'loading="lazy"'],
   ["glass project surface", "pm-glass"],
   ["large project tiles", "minmax(280px,1fr)"],
   ["visible recent heading", "Recent Projects"],
@@ -40,6 +40,10 @@ if (src.includes("window.confirm")) {
 
 if (src.indexOf("setDeleteBusy(true)") > src.indexOf('await invoke("delete_project"')) {
   throw new Error("Landing starts permanent deletion before disabling the confirmation controls");
+}
+
+if (src.includes("<video")) {
+  throw new Error("Landing recent-project tiles still mount video decoders");
 }
 
 console.log(`landing-project-manager: OK (${required.length} checks)`);

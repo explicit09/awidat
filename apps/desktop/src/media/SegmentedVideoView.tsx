@@ -53,9 +53,11 @@ import {
   timelineTimeForSegmentPosition,
 } from "./previewHandoff";
 import {
+  releasePreviewElementGain,
   resumePreviewAudio,
   setPreviewElementGain,
 } from "./previewAudioGraph";
+import { releasePreviewMediaElement } from "./previewMediaRelease";
 import { colorPreviewCssFilter } from "./colorPreviewFilter";
 import { GradeCanvas } from "./GradeCanvas";
 import { useColorPreviewOverride } from "../properties/store";
@@ -122,26 +124,28 @@ export function SegmentedVideoView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timelineDurationS]);
 
-  if (segments.length === 0) {
-    const awaitingProxy = transcodingCount > 0;
-    return (
-      <div className="video-wrap">
-        <div className="video-stack">
-          <div className="media-empty media-empty-stacked">
-            <p className="media-empty-title">
-              {awaitingProxy ? "Generating preview..." : "No playable clips yet"}
-            </p>
-            <p className="media-empty-hint">
-              {awaitingProxy
-                ? `${transcodingCount} clip${transcodingCount === 1 ? "" : "s"} waiting for proxy media.`
-                : "Add a clip from the Media bin to start your timeline preview."}
-            </p>
-          </div>
-        </div>
+  const emptyState =
+    segments.length === 0 ? (
+      <div className="media-empty media-empty-stacked">
+        <p className="media-empty-title">
+          {transcodingCount > 0 ? "Generating preview..." : "No playable clips yet"}
+        </p>
+        <p className="media-empty-hint">
+          {transcodingCount > 0
+            ? `${transcodingCount} clip${transcodingCount === 1 ? "" : "s"} waiting for proxy media.`
+            : "Add a clip from the Media bin to start your timeline preview."}
+        </p>
       </div>
-    );
-  }
-  return <SegmentedPlayer segments={segments} chrome={chrome} volume={volume} rate={rate} />;
+    ) : null;
+  return (
+    <SegmentedPlayer
+      segments={segments}
+      chrome={chrome}
+      volume={volume}
+      rate={rate}
+      emptyState={emptyState}
+    />
+  );
 }
 
 // One slot in the double-buffer.
@@ -192,11 +196,13 @@ function SegmentedPlayer({
   chrome,
   volume,
   rate,
+  emptyState,
 }: {
   segments: PlaySegment[];
   chrome: boolean;
   volume: number;
   rate: number;
+  emptyState: React.ReactNode;
 }) {
   const videoOverlays = useVideoOverlaySegments();
   const previewTransitions = usePreviewTransitions();
@@ -284,6 +290,20 @@ function SegmentedPlayer({
   // the source.
   const lastViewKeyRef = useRef<string>("");
 
+  useEffect(
+    () => () => {
+      previewClockPause(clockRef.current);
+      for (const slot of Object.values(slotsRef.current)) {
+        const video = slot.ref.current;
+        if (!video) continue;
+        releasePreviewElementGain(video);
+        releasePreviewMediaElement(video);
+        slot.segIdx = -1;
+      }
+    },
+    [],
+  );
+
   // Latest segments captured into a ref so the rVFC tick can read
   // them without forcing the rAF-style callback to re-register on
   // every render.
@@ -310,8 +330,23 @@ function SegmentedPlayer({
   useEffect(() => {
     slotsRef.current.a.segIdx = -1;
     slotsRef.current.b.segIdx = -1;
+    if (segments.length === 0) {
+      for (const slot of Object.values(slotsRef.current)) {
+        const video = slot.ref.current;
+        if (video) releasePreviewMediaElement(video);
+      }
+    }
     forceMediaSyncRef.current = true;
   }, [segments]);
+
+  useEffect(() => {
+    for (const slot of Object.values(slotsRef.current)) {
+      const video = slot.ref.current;
+      if (video) releasePreviewMediaElement(video);
+      slot.segIdx = -1;
+    }
+    forceMediaSyncRef.current = true;
+  }, [projectRoot]);
 
   useEffect(() => {
     const clock = clockRef.current;
@@ -945,6 +980,7 @@ function SegmentedPlayer({
         style={monitorShellStyle}
       >
         <div className="video-stack" ref={stackRef} style={monitorFrameCss}>
+          {emptyState}
           {mediaError && <MediaErrorOverlay message={mediaError} />}
           <video
             ref={refA}

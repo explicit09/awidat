@@ -143,30 +143,7 @@ try {
   domNodes = await page.evaluate(() => document.querySelectorAll("*").length);
   console.log(`  DOM nodes: ${domNodes} (budget ${BUDGETS.domNodes})`);
 
-  console.log("→ measuring workspace switching …");
-  const workspaceTabs = page.locator('[role="tablist"][aria-label="Workspace"] button[role="tab"]');
-  const tabCount = await workspaceTabs.count();
-  if (tabCount === 0) {
-    console.log("  workspace switch: skipped (workspace tablist not present)");
-  } else {
-    workspaceSwitchMs = 0;
-    for (let index = 0; index < tabCount; index += 1) {
-      const tab = workspaceTabs.nth(index);
-      const selected = await tab.getAttribute("aria-selected");
-      if (selected === "true") continue;
-      const start = Date.now();
-      await tab.click();
-      await page.evaluate(
-      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
-    const elapsed = Date.now() - start;
-    console.log(`    ${((await tab.textContent()) ?? "").trim()}: ${elapsed.toFixed(1)} ms`);
-    workspaceSwitchMs = Math.max(workspaceSwitchMs, elapsed);
-  }
-    console.log(
-      `  slowest workspace switch: ${workspaceSwitchMs.toFixed(1)} ms (budget ${BUDGETS.workspaceSwitchMs})`,
-    );
-  }
+  console.log("→ workspace switching: skipped (browser demo pins the legacy workspace)");
 
   await page.close();
 

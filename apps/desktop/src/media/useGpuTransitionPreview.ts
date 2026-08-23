@@ -25,6 +25,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { PreviewTransition } from "../timeline/usePlaySegments";
+import {
+  createLatestPreviewQueue,
+  type LatestPreviewQueue,
+} from "./latestPreviewQueue";
 
 /** Set of montage transition ids that should render via the GPU
  *  command instead of the CSS-based overlay. Kept in sync with
@@ -85,16 +89,30 @@ export function useGpuTransitionPreview(
 ): string | null {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const lastRequestedTimeRef = useRef<number>(Number.NEGATIVE_INFINITY);
-  const requestIdRef = useRef<number>(0);
-  const latestSettledRef = useRef<number>(0);
+  const queueRef = useRef<LatestPreviewQueue<PreviewRequest> | null>(null);
+
+  if (queueRef.current === null) {
+    queueRef.current = createLatestPreviewQueue(
+      (args) => invoke<string>("render_transition_preview_frame", { args }),
+      (url) => setDataUrl(url || null),
+      (err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[gpu-preview] render failed", err);
+      },
+    );
+  }
+
+  useEffect(() => {
+    const queue = queueRef.current;
+    return () => queue?.dispose();
+  }, []);
 
   useEffect(() => {
     if (!shouldRenderTransitionOnGpu(transition) || !transition) {
       // Clear any stale preview when leaving a GPU-routed window so
       // the underlying video doesn't show through a transparent PNG.
-      if (dataUrl !== null) {
-        setDataUrl(null);
-      }
+      setDataUrl(null);
+      queueRef.current?.reset();
       lastRequestedTimeRef.current = Number.NEGATIVE_INFINITY;
       return;
     }
@@ -105,7 +123,6 @@ export function useGpuTransitionPreview(
     if (delta < 0.033) return;
     lastRequestedTimeRef.current = timelineTime;
 
-    const reqId = ++requestIdRef.current;
     const progress = transitionProgress(transition, timelineTime);
     const fromSourceS = clampToSegment(
       transition.from.sourceEnd - transition.inOffset + (timelineTime - transition.timelineStart),
@@ -128,23 +145,8 @@ export function useGpuTransitionPreview(
       height: Math.max(8, Math.round(height)),
     };
 
-    invoke<string>("render_transition_preview_frame", { args })
-      .then((url) => {
-        // Discard if a newer request has already settled.
-        if (reqId < latestSettledRef.current) return;
-        latestSettledRef.current = reqId;
-        // Empty string is the backend's "no GPU mapping" signal —
-        // we honor it by clearing rather than treating it as a load.
-        setDataUrl(url || null);
-      })
-      .catch((err) => {
-        // The frontend's responsibility on error is to fall back to
-        // the CSS overlay rather than show a broken state. Log it
-        // for now — the hook just stays at its last known data URL.
-        // eslint-disable-next-line no-console
-        console.warn("[gpu-preview] render failed", err);
-      });
-  }, [transition, timelineTime, width, height, dataUrl]);
+    queueRef.current?.request(args);
+  }, [transition, timelineTime, width, height]);
 
   return dataUrl;
 }

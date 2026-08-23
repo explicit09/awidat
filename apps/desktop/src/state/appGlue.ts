@@ -21,6 +21,7 @@ import { useAgentStore } from "../agent/store";
 import { isAuthReadyForAgent } from "../agent/composerAuthGate";
 import { useProjectStore } from "../app/state";
 import { clearMediaStreamUrlCache } from "../media/mediaStreamUrl";
+import { clearProjectScopedFrontendState } from "./projectCacheLifecycle";
 import { useMediaStore } from "../media/store";
 import {
   brollEntryFromGenerated,
@@ -327,6 +328,7 @@ export function useAppGlue() {
 
   // Project lifecycle — reset everything when the project changes.
   useEffect(() => {
+    clearProjectScopedFrontendState();
     clearAgent();
     clearProposal();
     clearPendingProposals();

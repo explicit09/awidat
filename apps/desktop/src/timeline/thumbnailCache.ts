@@ -28,6 +28,7 @@ type StripEntry = {
 
 const cache = new Map<string, StripEntry | "pending">();
 const onLoadedHooks = new Set<() => void>();
+let cacheGeneration = 0;
 
 /** Subscribe to "a new frame just decoded somewhere." Called from
  *  the canvas paint effect so it can `paint()` again. */
@@ -61,9 +62,11 @@ export function getStrip(dir: string): StripEntry | null {
   if (cached) return cached;
 
   cache.set(dir, "pending");
+  const requestGeneration = cacheGeneration;
   void (async () => {
     try {
       const paths = await invoke<string[]>("list_thumbnail_frames", { dir });
+      if (requestGeneration !== cacheGeneration) return;
       cache.set(dir, {
         paths,
         images: paths.map(() => null),
@@ -75,7 +78,7 @@ export function getStrip(dir: string): StripEntry | null {
     } catch {
       // Failed list — wipe the pending sentinel so a future paint
       // can retry.
-      cache.delete(dir);
+      if (requestGeneration === cacheGeneration) cache.delete(dir);
     }
   })();
   return null;
@@ -105,5 +108,6 @@ export function ensureFrame(dir: string, index: number): void {
 /** Visible for tests + the rare "the dir got regenerated, drop
  *  cached frames" path (no current callers — included for parity). */
 export function clearStripCache(): void {
+  cacheGeneration += 1;
   cache.clear();
 }

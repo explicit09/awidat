@@ -72,7 +72,7 @@ pub async fn set_project_root(
         ));
     }
 
-    *state.project_root.lock().await = Some(buf.clone());
+    set_active_project_root(&state, Some(buf.clone())).await;
     // The codex bridge holds project_root + MCP env in its Config, so
     // a project change requires a fresh bridge. Tear down here; the
     // next `start_turn` will launch a new one (lazily) against `buf`.
@@ -126,7 +126,7 @@ pub async fn current_project_root(
 #[tauri::command]
 pub async fn close_project(state: State<'_, MontageState>) -> Result<(), String> {
     ensure_project_switch_allowed(&state).await?;
-    *state.project_root.lock().await = None;
+    set_active_project_root(&state, None).await;
     tear_down_codex_session(&state).await;
     tear_down_generated_media_watcher(&state).await;
     crate::commands::media::clear_media_server_files(&state)?;
@@ -209,7 +209,7 @@ pub async fn init_project(
         }
     }
 
-    *state.project_root.lock().await = Some(project_dir.clone());
+    set_active_project_root(&state, Some(project_dir.clone())).await;
     // Drain any pre-existing bridge so the next start_turn picks up
     // the new project_root.
     tear_down_codex_session(&state).await;
@@ -768,7 +768,7 @@ pub async fn delete_project(
         .is_some_and(|current| current == &buf);
     if is_active {
         ensure_project_switch_allowed(&state).await?;
-        *state.project_root.lock().await = None;
+        set_active_project_root(&state, None).await;
         tear_down_codex_session(&state).await;
         tear_down_generated_media_watcher(&state).await;
         crate::commands::media::clear_media_server_files(&state)?;
@@ -806,6 +806,11 @@ fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf
         ));
     }
     Ok(buf)
+}
+
+async fn set_active_project_root(state: &MontageState, project_root: Option<PathBuf>) {
+    *state.project_root.lock().await = project_root;
+    crate::commands::transcript::clear_transcript_cache(state).await;
 }
 
 /// Cancel an in-flight background job by its protocol-Item id. No-op if the id
@@ -924,6 +929,30 @@ mod tests {
         let err =
             validate_delete_target(bogus.to_str().unwrap(), "definitely-not-montage").unwrap_err();
         assert!(err.contains("non-Montage directory"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn setting_active_project_releases_previous_transcript_cache() {
+        let state = MontageState::default();
+        state.transcript_cache.lock().await.insert(
+            "old-project\0clip".to_string(),
+            montage_desktop_protocol::Transcript {
+                asset_stem: "clip".to_string(),
+                language: "en".to_string(),
+                diarized: false,
+                segments: Vec::new(),
+                words: Vec::new(),
+                speakers: Vec::new(),
+            },
+        );
+
+        set_active_project_root(&state, Some(PathBuf::from("/projects/new"))).await;
+
+        assert_eq!(
+            state.project_root.lock().await.as_deref(),
+            Some(Path::new("/projects/new")),
+        );
+        assert!(state.transcript_cache.lock().await.is_empty());
     }
 
     #[tokio::test]

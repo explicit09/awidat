@@ -4,16 +4,10 @@ import { Clock3, FolderOpen, Import, MoreVertical, Plus, Search } from "lucide-r
 import { BrandMark } from "../../brand/BrandMark";
 import { useProjectStore } from "../../app/state";
 import { MENU_COMMANDS, emitMenuCommand } from "../../app/menuCommands";
-
-type ProjectPreview = {
-  kind: "image" | "video";
-  src: string;
-};
-
-type ProjectPreviewResponse = {
-  kind: ProjectPreview["kind"];
-  path: string;
-};
+import {
+  loadRecentProjectPreview,
+  type RecentProjectPreview,
+} from "./recentProjectPreview";
 
 type PendingDelete = {
   name: string;
@@ -29,7 +23,7 @@ export function Landing() {
   const recentPaths = useProjectStore((s) => s.recent);
   const refreshProjects = useProjectStore((s) => s.refresh);
   const recents = recentPaths.map((p) => ({ name: basename(p), path: p }));
-  const [previewByPath, setPreviewByPath] = useState<Record<string, ProjectPreview>>({});
+  const [previewByPath, setPreviewByPath] = useState<Record<string, RecentProjectPreview>>({});
   const [query, setQuery] = useState("");
   const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
@@ -58,19 +52,9 @@ export function Landing() {
       const entries = await Promise.all(
         recents.map(async (project) => {
           try {
-            const preview = await invoke<ProjectPreviewResponse | null>("project_preview_media", {
-              path: project.path,
-            });
+            const preview = await loadRecentProjectPreview(project.path);
             if (!preview) return null;
-            // Serve via the local media stream server, validated against the
-            // tile's OWN project (not the loaded one — Landing has none). The
-            // asset:// protocol used previously isn't wired into this window's
-            // capabilities, so convertFileSrc URLs silently failed to load.
-            const src = await invoke<string>("project_preview_url", {
-              projectPath: project.path,
-              mediaPath: preview.path,
-            });
-            return [project.path, { kind: preview.kind, src }] as const;
+            return [project.path, preview] as const;
           } catch (err) {
             console.warn("project_preview_media failed", err);
             return null;
@@ -438,7 +422,7 @@ function RecentProjectTile({
 }: {
   name: string;
   path: string;
-  preview?: ProjectPreview;
+  preview?: RecentProjectPreview;
   onOpen: () => void;
   menuOpen: boolean;
   onToggleMenu: () => void;
@@ -464,15 +448,7 @@ function RecentProjectTile({
       <button type="button" onClick={onOpen} className="block w-full text-left">
         <div className="pm-project-frame">
         <div className="relative flex h-full items-end justify-between bg-[radial-gradient(circle_at_24%_10%,rgba(239,68,68,0.10),transparent_34%),linear-gradient(135deg,#202020,#0A0A0A)] p-4">
-          {preview?.kind === "video" ? (
-            <video
-              src={`${preview.src}#t=1`}
-              className="absolute inset-0 h-full w-full object-cover"
-              muted
-              playsInline
-              preload="metadata"
-            />
-          ) : preview?.kind === "image" ? (
+          {preview ? (
             <img
               src={preview.src}
               alt=""

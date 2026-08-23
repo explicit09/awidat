@@ -16,7 +16,12 @@
 
 let ctx: AudioContext | null = null;
 let dead = false;
-const gains = new WeakMap<HTMLMediaElement, GainNode>();
+let connectedElementCount = 0;
+type PreviewAudioNodes = {
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
+};
+const nodes = new WeakMap<HTMLMediaElement, PreviewAudioNodes>();
 
 /** Hard ceiling for preview gain — matches the Inspector's 4× slider
  *  range; protects ears and speakers from runaway values. */
@@ -38,18 +43,24 @@ export function setPreviewElementGain(
   gain: number,
 ): boolean {
   if (dead) return false;
+  let elementNodes = nodes.get(v);
+  if (!elementNodes && gain <= 1) {
+    return false;
+  }
   try {
     if (!ctx) {
       ctx = new AudioContext();
     }
-    let node = gains.get(v);
-    if (!node) {
+    if (!elementNodes) {
       const source = ctx.createMediaElementSource(v);
-      node = ctx.createGain();
-      source.connect(node);
-      node.connect(ctx.destination);
-      gains.set(v, node);
+      const gain = ctx.createGain();
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      elementNodes = { source, gain };
+      nodes.set(v, elementNodes);
+      connectedElementCount += 1;
     }
+    const node = elementNodes.gain;
     const clamped = Number.isFinite(gain)
       ? Math.max(0, Math.min(PREVIEW_GAIN_MAX, gain))
       : 1;
@@ -64,5 +75,20 @@ export function setPreviewElementGain(
     console.warn("preview audio graph unavailable; falling back to element volume", e);
     dead = true;
     return false;
+  }
+}
+
+/** Disconnect the WebAudio graph that otherwise retains an unmounted video element. */
+export function releasePreviewElementGain(v: HTMLMediaElement): void {
+  const elementNodes = nodes.get(v);
+  if (!elementNodes) return;
+  elementNodes.source.disconnect();
+  elementNodes.gain.disconnect();
+  nodes.delete(v);
+  connectedElementCount = Math.max(0, connectedElementCount - 1);
+  if (connectedElementCount === 0 && ctx) {
+    const idleContext = ctx;
+    ctx = null;
+    void idleContext.close().catch(() => {});
   }
 }

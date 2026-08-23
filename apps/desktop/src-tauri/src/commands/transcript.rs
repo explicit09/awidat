@@ -25,7 +25,7 @@
 //! ```
 //!
 //! Caching: `MontageState::transcript_cache` holds parsed `Transcript`
-//! values keyed by stem. The cache is invalidated on indexer-job
+//! values keyed by project root + stem. The cache is invalidated on indexer-job
 //! Completed (the run-loop emits a `JobKind::Index` event that the
 //! frontend can listen to and re-call `read_transcript`). For v1 we
 //! keep the cache simple and don't auto-invalidate on file mtime
@@ -62,9 +62,11 @@ pub async fn read_transcript(
         None => return Ok(None),
     };
 
+    let cache_key = transcript_cache_key(&project_root, &stem);
+
     // Cache check first — a 4 MB transcript shouldn't be re-parsed
     // on every tab toggle.
-    if let Some(hit) = state.transcript_cache.lock().await.get(&stem) {
+    if let Some(hit) = state.transcript_cache.lock().await.get(&cache_key) {
         return Ok(Some(hit.clone()));
     }
 
@@ -73,18 +75,19 @@ pub async fn read_transcript(
     // minus `.mp4`. Walk raw/ and recompute each candidate's proxy
     // stem, matching against ours.
     let stem_clone = stem.clone();
+    let project_root_for_read = project_root.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Option<Transcript>, String> {
-        let asset_abs = match resolve_asset_for_stem(&project_root, &stem_clone) {
+        let asset_abs = match resolve_asset_for_stem(&project_root_for_read, &stem_clone) {
             Some(p) => p,
             None => return Ok(None),
         };
         let asset_id_rel = asset_abs
-            .strip_prefix(&project_root)
+            .strip_prefix(&project_root_for_read)
             .map_err(|_| format!("asset {} not under project root", asset_abs.display()))?
             .to_string_lossy()
             .replace('\\', "/");
         let asset_id = AssetId::new(asset_id_rel);
-        match montage_index::read_sidecar(&project_root, "whisper", &asset_id) {
+        match montage_index::read_sidecar(&project_root_for_read, "whisper", &asset_id) {
             Ok(value) => Ok(Some(parse_transcript(stem_clone, value)?)),
             Err(montage_index::SidecarError::NotFound { .. }) => Ok(None),
             Err(e) => Err(format!("read whisper sidecar: {e}")),
@@ -93,12 +96,14 @@ pub async fn read_transcript(
     .await
     .map_err(|e| format!("transcript join: {e}"))??;
 
-    if let Some(transcript) = &result {
+    if let Some(transcript) = &result
+        && state.project_root.lock().await.as_ref() == Some(&project_root)
+    {
         state
             .transcript_cache
             .lock()
             .await
-            .insert(stem, transcript.clone());
+            .insert(cache_key, transcript.clone());
     }
     Ok(result)
 }
@@ -112,6 +117,10 @@ pub async fn read_transcript(
 /// tab toggle is cheaper than that walk.
 pub async fn clear_transcript_cache(state: &MontageState) {
     state.transcript_cache.lock().await.clear();
+}
+
+fn transcript_cache_key(project_root: &Path, stem: &str) -> String {
+    format!("{}\0{stem}", project_root.to_string_lossy())
 }
 
 /// Rename every occurrence of a speaker label in the whisper sidecar
@@ -146,13 +155,15 @@ pub async fn rename_speaker(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
+    let cache_key = transcript_cache_key(&project_root, &stem);
     let new_owned = trimmed.to_string();
     let stem_clone = stem.clone();
+    let project_root_for_write = project_root.clone();
     let count = tokio::task::spawn_blocking(move || -> Result<usize, String> {
-        let asset_abs = resolve_asset_for_stem(&project_root, &stem_clone)
+        let asset_abs = resolve_asset_for_stem(&project_root_for_write, &stem_clone)
             .ok_or_else(|| format!("no asset for stem {stem_clone}"))?;
         let asset_id_rel = asset_abs
-            .strip_prefix(&project_root)
+            .strip_prefix(&project_root_for_write)
             .map_err(|_| format!("asset {} not under project root", asset_abs.display()))?
             .to_string_lossy()
             .replace('\\', "/");
@@ -160,8 +171,9 @@ pub async fn rename_speaker(
         // Reuse the canonical sidecar-path resolver from montage-index so
         // the path layout (including the `raw/` segment and the file's
         // original extension) stays consistent with `read_transcript`.
-        let sidecar_path = montage_index::sidecar_path(&project_root, "whisper", &asset_id)
-            .map_err(|e| format!("resolve whisper sidecar path: {e}"))?;
+        let sidecar_path =
+            montage_index::sidecar_path(&project_root_for_write, "whisper", &asset_id)
+                .map_err(|e| format!("resolve whisper sidecar path: {e}"))?;
         let bytes = std::fs::read(&sidecar_path)
             .map_err(|e| format!("read whisper sidecar {}: {e}", sidecar_path.display()))?;
         let mut json: serde_json::Value =
@@ -181,7 +193,7 @@ pub async fn rename_speaker(
     .map_err(|e| format!("rename_speaker join: {e}"))??;
 
     // Drop any cached transcript so the next read sees the rename.
-    state.transcript_cache.lock().await.remove(&stem);
+    state.transcript_cache.lock().await.remove(&cache_key);
     Ok(count)
 }
 
@@ -566,5 +578,15 @@ mod tests {
         std::fs::create_dir_all(&proxies_dir).unwrap();
         std::fs::write(raw_dir.join("clip.MOV"), b"src").unwrap();
         assert!(walk_for_match(&raw_dir, &proxies_dir, "unrelated.mp4").is_none());
+    }
+
+    #[test]
+    fn transcript_cache_key_scopes_same_stem_to_project() {
+        let project_a = Path::new("/projects/a");
+        let project_b = Path::new("/projects/b");
+        assert_ne!(
+            transcript_cache_key(project_a, "shared-stem"),
+            transcript_cache_key(project_b, "shared-stem"),
+        );
     }
 }
