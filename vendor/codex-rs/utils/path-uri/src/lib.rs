@@ -397,8 +397,10 @@ impl PathUri {
                 use std::os::windows::ffi::OsStringExt;
                 path_bytes.len().is_multiple_of(2).then(|| {
                     let path_wide = path_bytes
-                        .chunks_exact(2)
-                        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|&bytes| u16::from_le_bytes(bytes))
                         .collect::<Vec<_>>();
                     std::path::PathBuf::from(std::ffi::OsString::from_wide(&path_wide))
                 })
@@ -575,8 +577,10 @@ fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
     }
 
     let mut path_wide = path_bytes
-        .chunks_exact(2)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&bytes| u16::from_le_bytes(bytes));
     let first = path_wide.next()?;
     let second = path_wide.next()?;
     let has_drive = u8::try_from(first).is_ok_and(|drive| drive.is_ascii_alphabetic())

@@ -1121,8 +1121,8 @@ fn reference_bucket_bits_from_f32le(
             reader
                 .read_exact(&mut buffer[..count])
                 .map_err(|error| format!("read {}: {error}", path.display()))?;
-            for frame in buffer[..count].chunks_exact(4) {
-                let sample = f32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]);
+            for &frame in buffer[..count].as_chunks::<4>().0 {
+                let sample = f32::from_le_bytes(frame);
                 if !sample.is_finite() {
                     return Err("reference FFmpeg emitted a non-finite f32 sample".into());
                 }

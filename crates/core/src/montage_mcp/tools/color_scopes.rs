@@ -163,7 +163,7 @@ pub fn compute_color_scopes(input: &ColorScopeInput) -> Result<ColorScopeSnapsho
     };
     let mut vectorscope = grid(bins);
 
-    for (idx, px) in input.rgb.chunks_exact(3).enumerate() {
+    for (idx, px) in input.rgb.as_chunks::<3>().0.iter().enumerate() {
         let x = idx % input.width;
         let r = px[0];
         let g = px[1];

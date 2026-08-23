@@ -1570,9 +1570,7 @@ async fn generate_waveform_inner(
             // Drop any trailing bytes the kernel hands us that don't
             // make a full f32 frame.
             let aligned = n - (n % 4);
-            for chunk in buf[..aligned].chunks_exact(4) {
-                let mut bytes = [0u8; 4];
-                bytes.copy_from_slice(chunk);
+            for &bytes in buf[..aligned].as_chunks::<4>().0 {
                 samples.push(f32::from_le_bytes(bytes));
             }
         }
