@@ -101,7 +101,11 @@ jobs:
             libssl-dev
       - name: Install macOS media dependencies
         if: matrix.os == 'macos-latest'
-        run: brew install ffmpeg
+        run: |
+          if brew tap | grep -qx 'aws/tap'; then
+            brew untap aws/tap
+          fi
+          brew install ffmpeg
       # The `v8` crate's build script downloads a prebuilt static lib from
       # GitHub releases; on a rust-cache miss that unauthenticated download
       # gets rate-limited on shared runner IPs and the whole job dies with
@@ -214,11 +218,11 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.0.10
         with:
           package_json_file: apps/desktop/package.json
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -248,7 +252,7 @@ jobs:
         run: pnpm --dir apps/desktop test
       - name: Upload stage-harness screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: stage-harness-screenshots
           path: apps/desktop/tests/smoke/stage-harness-*.png
