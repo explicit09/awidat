@@ -6,7 +6,8 @@
  * Boots (or reuses) the desktop dev server, then for each case in
  * CASES loads the deterministic `/stage-harness` route at a frozen
  * clock time, waits for `document.title === "stage-harness-ready"`,
- * DOM-asserts the expected overlays landed, screenshots just the
+ * verifies the decoded video pixels independently, DOM-asserts the
+ * expected overlays landed, screenshots just the
  * program-frame element, and compares it against a committed
  * per-platform golden via ffmpeg SSIM (see `scripts/ssim-compare.sh`).
  * Before capture, the video's decoded content is verified in-page
@@ -266,6 +267,39 @@ async function stopAppServer() {
   }
 }
 
+async function assertReadinessDoesNotDependOnVideoFrameCallback(browser) {
+  const ctx = await browser.newContext(CONTEXT_OPTIONS);
+  await ctx.addInitScript(() => {
+    Object.defineProperty(HTMLVideoElement.prototype, "requestVideoFrameCallback", {
+      configurable: true,
+      value: () => 1,
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "cancelVideoFrameCallback", {
+      configurable: true,
+      value: () => {},
+    });
+  });
+
+  const page = await ctx.newPage();
+  try {
+    const harnessUrl = new URL(
+      "/stage-harness?t=1.0&scene=/fixtures/stage/scene-basic.json",
+      BASE_URL,
+    ).toString();
+    await page.goto(harnessUrl, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.title === "stage-harness-ready", null, {
+      timeout: 10000,
+    });
+    assert.equal(
+      await page.locator('[data-testid="stage-harness-scene-error"]').count(),
+      0,
+      "harness reported a scene/asset load error while the video-frame callback was stalled",
+    );
+  } finally {
+    await ctx.close();
+  }
+}
+
 process.on("SIGINT", () => {
   stopAppServer();
   process.exit(130);
@@ -289,13 +323,10 @@ async function captureCase(ctx, testCase, shotPath) {
     });
 
     await page.goto(harnessUrl, { waitUntil: "networkidle" });
-    // Readiness = the presented-frame handshake (video seek + decode +
-    // requestVideoFrameCallback), which on a loaded CI runner can
-    // legitimately take >15s — that timeout flaked twice in one day on
-    // DIFFERENT scenes (kinetic-text t=0.5, progress-bar t=0.3), i.e.
-    // runner load, not scene content. 45s keeps the gate honest (a
-    // genuinely wedged harness still fails) without tripping on slow
-    // decode.
+    // Readiness covers the video seek, fonts, scene JSON, and overlay assets.
+    // The decoded frame itself is verified below; do not gate this signal on
+    // requestVideoFrameCallback because headless Chromium can stop delivering
+    // it for a paused video, which would prevent the recovery loop from running.
     await page.waitForFunction(() => document.title === "stage-harness-ready", null, { timeout: 45000 });
 
     assert.deepEqual(errors, [], `harness console/page errors: ${errors.join("; ")}`);
@@ -645,6 +676,7 @@ async function runCase(ctx, testCase) {
 await ensureAppServer();
 
 const browser = await chromium.launch();
+await assertReadinessDoesNotDependOnVideoFrameCallback(browser);
 const ctx = await browser.newContext(CONTEXT_OPTIONS);
 
 let failures = 0;
