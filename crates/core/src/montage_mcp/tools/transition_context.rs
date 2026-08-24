@@ -381,12 +381,9 @@ fn count_in_stack_child(
     at_s: f64,
 ) -> usize {
     match stack_child {
-        StackChild::Track(track) => count_in_track_children(
-            &track.children,
-            origin_s,
-            window_start_s,
-            at_s,
-        ),
+        StackChild::Track(track) => {
+            count_in_track_children(&track.children, origin_s, window_start_s, at_s)
+        }
         StackChild::Stack(stack) => count_in_stack(stack, origin_s, window_start_s, at_s),
         StackChild::Clip(_) | StackChild::Gap(_) => 0,
     }
@@ -887,14 +884,29 @@ mod tests {
 
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip(
-            "lead", "lead", "raw/a.mp4", 0.0, 40.0, 80.0,
+            "lead",
+            "lead",
+            "raw/a.mp4",
+            0.0,
+            40.0,
+            80.0,
         )));
         track.children.push(TrackChild::Stack(nested));
         track.children.push(TrackChild::Clip(clip(
-            "a", "clip-a", "raw/a.mp4", 45.0, 5.0, 80.0,
+            "a",
+            "clip-a",
+            "raw/a.mp4",
+            45.0,
+            5.0,
+            80.0,
         )));
         track.children.push(TrackChild::Clip(clip(
-            "b", "clip-b", "raw/a.mp4", 50.0, 4.0, 80.0,
+            "b",
+            "clip-b",
+            "raw/a.mp4",
+            50.0,
+            4.0,
+            80.0,
         )));
         project
             .timeline
@@ -1035,10 +1047,20 @@ mod tests {
         let mut project = Project::init(dir.path()).unwrap();
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip(
-            "a", "same-a", "raw/a.mp4", 2.0, 5.0, 20.0,
+            "a",
+            "same-a",
+            "raw/a.mp4",
+            2.0,
+            5.0,
+            20.0,
         )));
         track.children.push(TrackChild::Clip(clip(
-            "b", "same-b", "raw/a.mp4", 7.0, 4.0, 20.0,
+            "b",
+            "same-b",
+            "raw/a.mp4",
+            7.0,
+            4.0,
+            20.0,
         )));
         project
             .timeline
