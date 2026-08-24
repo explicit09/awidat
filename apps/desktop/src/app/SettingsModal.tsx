@@ -20,7 +20,7 @@ import { useWelcome } from "../state/welcome";
 import { WORKSPACE_SHORTCUTS } from "../state";
 import type { IndexerConfigSnapshot } from "../shell";
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.2.0";
 // `Montage Pro 1.2` is the placeholder label Wave 1 used in the footer.
 // When the backend exposes a `get_agent_model` invoke we can replace
 // this with the real value — see `TODO(redesign):` below.

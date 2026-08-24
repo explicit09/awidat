@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-08-23
+
 - Prepared the repository for developer-preview open-source publication.
 - Added a strict macOS consumer release path for signed and notarized Tauri DMG artifacts on `v*` tags.
 - Completed the desktop editing and project-management workflows, including explicit project deletion and bounded project/media lifecycle cleanup.
