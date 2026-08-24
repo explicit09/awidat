@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPT-5.6 Codex capability unlock</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0d10; --panel:#14181d; --ink:#f4f1e8; --muted:#9ca6af; --line:#29313a; --accent:#dfb86c; --good:#74c69d; --warn:#f2a65a; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 85% 0,#20251f 0,transparent 34%),var(--bg); color:var(--ink); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:1120px; margin:auto; padding:36px 28px 48px; }
+    header { display:grid; grid-template-columns:1.4fr .8fr; gap:28px; align-items:end; margin-bottom:24px; }
+    .eyebrow { color:var(--accent); text-transform:uppercase; letter-spacing:.16em; font-size:11px; }
+    h1 { font:600 clamp(34px,5vw,62px)/.98 Georgia,serif; margin:10px 0 14px; max-width:760px; }
+    .lead { color:var(--muted); max-width:720px; font-size:17px; }
+    .decision { border-left:2px solid var(--accent); padding-left:18px; color:var(--muted); }
+    .decision strong { color:var(--ink); display:block; margin-bottom:5px; }
+    nav { display:flex; gap:8px; border-bottom:1px solid var(--line); margin-bottom:22px; }
+    button { appearance:none; border:0; color:var(--muted); background:transparent; padding:11px 14px; cursor:pointer; border-bottom:2px solid transparent; font:inherit; }
+    button.active { color:var(--ink); border-color:var(--accent); }
+    section { display:none; }
+    section.active { display:block; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .card { background:linear-gradient(145deg,#171c21,#111418); border:1px solid var(--line); border-radius:14px; padding:18px; min-height:152px; }
+    .card h2 { font-size:15px; margin:0 0 9px; }
+    .card p,.card li { color:var(--muted); }
+    .card p { margin:0; }
+    .num { color:var(--accent); font:600 12px/1 ui-monospace,monospace; margin-bottom:22px; }
+    .profiles { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .profile { border:1px solid var(--line); border-radius:14px; padding:24px; background:var(--panel); }
+    .profile.deep { border-color:#6d5a38; box-shadow:inset 0 0 0 1px #332a19; }
+    .profile h2 { margin:0 0 6px; font:600 28px/1.1 Georgia,serif; }
+    code { color:#f1cd85; }
+    ul { padding-left:18px; margin:12px 0 0; }
+    .flow { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:12px; align-items:center; }
+    .node { border:1px solid var(--line); border-radius:12px; padding:18px; background:var(--panel); }
+    .arrow { color:var(--accent); font-size:22px; }
+    .keep { border-color:#285841; }
+    .change { border-color:#70512f; }
+    .tag { display:inline-block; border:1px solid currentColor; border-radius:999px; padding:2px 8px; font-size:11px; margin-bottom:10px; }
+    .keep .tag { color:var(--good); } .change .tag { color:var(--warn); }
+    footer { color:#66717b; border-top:1px solid var(--line); margin-top:24px; padding-top:14px; font-size:12px; }
+    @media (max-width:760px) { header,.grid,.profiles,.flow { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); text-align:center; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow">Montage · architecture decision</div>
+      <h1>Unlock Codex without loosening the edit graph.</h1>
+      <div class="lead">Give GPT-5.6 real frames, focused tools, deliberate model tiers, and more working context. Keep proposals, validation, approval, and rendered proof.</div>
+    </div>
+    <div class="decision"><strong>Default decision</strong>Balanced stays default. Deep Edit is visible and explicit. Max/ultra never starts silently.</div>
+  </header>
+  <nav>
+    <button class="active" data-tab="shape">System shape</button>
+    <button data-tab="profiles">Profiles</button>
+    <button data-tab="boundaries">Boundaries</button>
+    <button data-tab="rollout">Rollout</button>
+  </nav>
+  <section id="shape" class="active">
+    <div class="flow">
+      <div class="node"><strong>Video evidence</strong><br><span class="lead">transcript · indexes · selected frames</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><strong>GPT-5.6 Codex</strong><br><span class="lead">skills · focused MCP · visual review</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><strong>Reviewable edit</strong><br><span class="lead">proposal · render · accept/reject</span></div>
+    </div>
+    <div class="grid" style="margin-top:14px">
+      <div class="card"><div class="num">01</div><h2>Real image content</h2><p>MCP image blocks replace base64 hidden inside text JSON.</p></div>
+      <div class="card"><div class="num">02</div><h2>Focused tools</h2><p>Bootstrap tools plus the active skill surface replace 133 schemas at once.</p></div>
+      <div class="card"><div class="num">03</div><h2>Useful context</h2><p>GPT-5.6 compacts at 250K by default, below the current long-context price step.</p></div>
+    </div>
+  </section>
+  <section id="profiles">
+    <div class="profiles">
+      <article class="profile"><div class="tag">Default</div><h2>Balanced</h2><p><code>gpt-5.6-terra · medium</code></p><ul><li>Routine cleanup</li><li>Mechanical execution</li><li>Normal conversation</li></ul></article>
+      <article class="profile deep"><div class="tag">Explicit</div><h2>Deep Edit</h2><p><code>gpt-5.6-sol · high</code></p><ul><li>Story and take judgment</li><li>Montage, B-roll, transitions</li><li>Visual quality review</li></ul></article>
+    </div>
+  </section>
+  <section id="boundaries">
+    <div class="grid">
+      <div class="card change"><div class="tag">Change</div><h2>Autonomous exploration</h2><p>Inspect, compare, make notes, construct proposals, render previews, and revise without asking at every reversible step.</p></div>
+      <div class="card keep"><div class="tag">Keep</div><h2>Human authority</h2><p>Approval remains for accepting graph changes, overwriting exports, publishing, uploads, and disclosed external cost.</p></div>
+      <div class="card keep"><div class="tag">Keep</div><h2>Mechanical proof</h2><p>Timestamp mapping, validation, continuity, diffing, cancellation, persistence, and render verification remain gates.</p></div>
+    </div>
+  </section>
+  <section id="rollout">
+    <div class="grid">
+      <div class="card"><div class="num">A</div><h2>Transport + profiles</h2><p>Test image content, profile persistence, model and effort updates.</p></div>
+      <div class="card"><div class="num">B</div><h2>Exposure A/B</h2><p>Keep direct mode until organic prompts safely discover Montage tools on Terra and Sol.</p></div>
+      <div class="card"><div class="num">C</div><h2>Packaged proof</h2><p>Select profile, inspect a frame, approve a proposal, save, quit/reopen, verify disk state.</p></div>
+    </div>
+  </section>
+  <footer>Full normative design: 2026-08-24-gpt-5-6-codex-capability-unlock-design.md</footer>
+</main>
+<script>
+  const buttons = [...document.querySelectorAll('button[data-tab]')];
+  const sections = [...document.querySelectorAll('main > section')];
+  buttons.forEach(button => button.addEventListener('click', () => {
+    buttons.forEach(item => item.classList.toggle('active', item === button));
+    sections.forEach(section => section.classList.toggle('active', section.id === button.dataset.tab));
+  }));
+</script>
+</body>
+</html>
