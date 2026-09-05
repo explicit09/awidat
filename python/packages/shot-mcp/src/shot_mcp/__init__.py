@@ -257,11 +257,6 @@ def _grab_frame(asset_path: str, t_s: float, target_w: int) -> np.ndarray | None
     return np.frombuffer(raw, dtype=np.uint8).reshape(h, target_w, 3).copy()
 
 
-def _flow_magnitude(prev: np.ndarray, curr: np.ndarray) -> float:
-    """Mean per-pixel pixel-distance via Farneback dense flow."""
-    return _flow_direction_summary(prev, curr)["motion_magnitude"]
-
-
 def _flow_direction_summary(prev: np.ndarray, curr: np.ndarray) -> dict[str, Any]:
     """Compact edit-aware optical-flow summary for one frame pair."""
     g_prev = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)

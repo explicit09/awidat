@@ -9,7 +9,6 @@ derives a local tempo from inter-beat intervals.
 from __future__ import annotations
 
 import array
-import math
 import os
 import shutil
 import statistics

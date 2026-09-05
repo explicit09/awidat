@@ -326,10 +326,6 @@ def _parse_env_int(name: str, raw_value: str | None, default: int, *, minimum: i
     return value
 
 
-def _env_int(name: str, default: int, *, minimum: int) -> int:
-    return _parse_env_int(name, os.environ.get(name), default, minimum=minimum)
-
-
 def _first_non_blank_env(*names: str) -> str | None:
     for name in names:
         value = os.environ.get(name)

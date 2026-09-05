@@ -250,16 +250,6 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     }
 
 
-def decode_embeddings(body: dict[str, Any]) -> np.ndarray:
-    """Helper for downstream consumers (clip_search tool, tests).
-    Inverse of `_pack_embeddings_b64`. Public so the Rust core / future
-    Python tests can recover the float32 (N, dim) array."""
-    raw = base64.b64decode(body["embeddings_b64"])
-    n = body["frame_count"]
-    dim = body["embedding_dim"]
-    return np.frombuffer(raw, dtype=np.float16).reshape(n, dim).astype(np.float32)
-
-
 def encode_text(query: str) -> np.ndarray:
     """Encode a free-text query into the same 512-dim CLIP embedding
     space as the indexed frames. Returns a single L2-normalized

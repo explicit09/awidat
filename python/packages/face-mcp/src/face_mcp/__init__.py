@@ -24,7 +24,6 @@ Schema version: "1".
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -37,7 +36,6 @@ from typing import Any
 
 import face_recognition
 import numpy as np
-from PIL import Image
 from sklearn.cluster import DBSCAN
 
 from montage_mcp import IndexAssetRequest, IndexerServer
