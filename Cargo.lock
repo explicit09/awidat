@@ -10045,7 +10045,6 @@ version = "0.2.0"
 dependencies = [
  "codex-login",
  "codex-utils-home-dir",
- "pretty_assertions",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -10080,13 +10079,6 @@ dependencies = [
 name = "montage-codex-bridge"
 version = "0.2.0"
 dependencies = [
- "codex-app-server-client",
- "codex-app-server-protocol",
- "codex-arg0",
- "codex-config",
- "codex-core",
- "codex-feedback",
- "codex-protocol",
  "codex-utils-home-dir",
  "montage-desktop-protocol",
  "pretty_assertions",
@@ -10133,7 +10125,6 @@ dependencies = [
  "montage-proto",
  "montage-render",
  "montage-secrets",
- "pretty_assertions",
  "reqwest 0.12.28",
  "rmcp",
  "schemars 1.2.1",
@@ -10233,7 +10224,6 @@ dependencies = [
  "montage-mcp",
  "montage-proto",
  "montage-secrets",
- "montage-test-support",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -10256,7 +10246,6 @@ name = "montage-mcp"
 version = "0.2.0"
 dependencies = [
  "montage-test-support",
- "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
@@ -10304,7 +10293,6 @@ dependencies = [
  "montage-proto",
  "png 0.17.16",
  "pollster",
- "tempfile",
  "thiserror 2.0.18",
  "wgpu",
 ]
@@ -10373,8 +10361,6 @@ version = "0.2.0"
 dependencies = [
  "montage-mcp",
  "montage-proto",
- "pretty_assertions",
- "serde_json",
  "tempfile",
 ]
 

@@ -223,19 +223,6 @@ impl SkillRegistry {
             .collect();
         Some(crate::context::AvailableSkillsFragment { skill_lines })
     }
-
-    /// **Deprecated** — kept temporarily to avoid breaking the few
-    /// existing tests that call it. Prefer `l1_fragment()` for new
-    /// code; the system prompt no longer carries the catalog.
-    #[deprecated(note = "use l1_fragment() — catalog is now per-turn, not in system prompt")]
-    pub fn l1_catalog(&self) -> String {
-        self.l1_fragment()
-            .map(|f| {
-                use crate::context::ContextualUserFragment;
-                f.render()
-            })
-            .unwrap_or_default()
-    }
 }
 
 /// True when a directory's basename starts with `.` or `_`. We use it

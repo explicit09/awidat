@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use montage_core::generated_media::registry::{
-    GeneratedMediaRecord, REGISTRY_RELATIVE_PATH, Registry,
+    GeneratedMediaRecord, Registry,
 };
 use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
 use serde::{Deserialize, Serialize};
@@ -270,21 +270,7 @@ pub fn disclosure_for_project_root(project_root: &Path) -> AiDisclosure {
     AiDisclosure::from_credits(cut_contains_generated_media(&timeline, project_root))
 }
 
-/// Same as [`disclosure_for_project_root`] but borrowing the in-memory
-/// [`Timeline`] — the callers that already have one parsed (e.g. the
-/// dispatcher mid-render) skip the disk round-trip.
-#[allow(dead_code)]
-pub fn disclosure_for_timeline(timeline: &Timeline, project_root: &Path) -> AiDisclosure {
-    AiDisclosure::from_credits(cut_contains_generated_media(timeline, project_root))
-}
 
-/// Relative path under the project root where the registry lives.
-/// Re-exported so external callers can compose the absolute path
-/// without depending on `montage-core` directly.
-#[allow(dead_code)]
-pub fn registry_relative_path() -> &'static str {
-    REGISTRY_RELATIVE_PATH
-}
 
 #[cfg(test)]
 mod tests {

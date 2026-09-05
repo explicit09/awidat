@@ -4,9 +4,7 @@
 //! # What this crate owns
 //!
 //! * [`CodexAppServer`] — per-project lifecycle around a Codex
-//!   app-server backend and one `thread_id`. The default backend is an
-//!   external `codex app-server` process; the historical in-process
-//!   backend is available behind the `in-process-codex` feature.
+//!   external `codex app-server` process and one `thread_id`.
 //! * The mappers (see [`mappers`]) that translate codex
 //!   `ServerNotification` / `ServerRequest` / `v2::ThreadItem` payloads
 //!   into [`montage_desktop_protocol::Item`] values the React renderer
@@ -21,7 +19,7 @@
 //! * Tauri commands / event channels — the desktop integration step
 //!   plugs [`ItemEmitter`] into Tauri's `app.emit(...)` and exposes
 //!   thin Tauri commands that call into this crate.
-//! * Persistence — `state_db` is left as `None` for v1.
+//! * Persistence — Codex owns thread storage and resume.
 //! * The MCP server binary path — callers pass it in as an
 //!   `Option<PathBuf>`. The desktop knows how to find it on macOS
 //!   bundle layouts; the bridge does not.
@@ -35,29 +33,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(feature = "in-process-codex")]
-use codex_app_server_client::{
-    AppServerRequestHandle, EnvironmentManager, ExecServerRuntimePaths, InProcessAppServerClient,
-    InProcessClientStartArgs, InProcessServerEvent,
-};
-#[cfg(feature = "in-process-codex")]
-use codex_app_server_protocol::{
-    ClientRequest, JSONRPCErrorError, RequestId as CodexRequestId, ThreadResumeParams,
-    ThreadResumeResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnStartParams, TurnStartResponse, UserInput,
-};
-#[cfg(feature = "in-process-codex")]
-use codex_arg0::Arg0DispatchPaths;
-#[cfg(feature = "in-process-codex")]
-use codex_config::{CloudConfigBundleLoader, LoaderOverrides};
-#[cfg(feature = "in-process-codex")]
-use codex_core::config::ConfigBuilder;
-#[cfg(feature = "in-process-codex")]
-use codex_feedback::CodexFeedback;
-#[cfg(feature = "in-process-codex")]
-use codex_protocol::openai_models::ReasoningEffort;
-#[cfg(feature = "in-process-codex")]
-use codex_protocol::protocol::SessionSource;
 use montage_desktop_protocol::{AgentProfile, Item};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -153,34 +128,11 @@ pub enum BridgeError {
     Resolve(String),
 }
 
-/// One unit of work for the resolve channel: either a successful
-/// resolve or a rejection. The pump-side worker owns the in-process
-/// client and calls the matching method.
-///
-/// `Reject` is unused by v1 of the public surface (the desktop only
-/// surfaces Allow/Deny which both round-trip through `Resolve`) but
-/// the pump wires it up so a future integration step that adds a
-/// "force-cancel approval" affordance has the plumbing ready.
-#[cfg(feature = "in-process-codex")]
-#[allow(dead_code)]
-enum ResolveCommand {
-    Resolve {
-        request_id: CodexRequestId,
-        result: serde_json::Value,
-        ack: oneshot::Sender<Result<(), String>>,
-    },
-    Reject {
-        request_id: CodexRequestId,
-        error: JSONRPCErrorError,
-        ack: oneshot::Sender<Result<(), String>>,
-    },
-}
-
 /// Top-level handle to one project's codex session. Rebuild when the
 /// desktop switches projects.
 pub struct CodexAppServer {
-    /// Runtime backend for typed requests and approval resolution.
-    backend: CodexBackend,
+    /// External process client for requests and approval resolution.
+    client: external::ExternalAppServerClient,
     /// Stable codex thread id (one per project lifecycle).
     thread_id: String,
     /// Pre-rendered L1 skills catalog. Prepended to every turn so the
@@ -202,19 +154,8 @@ pub struct CodexAppServer {
     pump_task: Option<JoinHandle<()>>,
 }
 
-enum CodexBackend {
-    #[cfg(feature = "in-process-codex")]
-    InProcess {
-        request_handle: AppServerRequestHandle,
-        resolve_tx: mpsc::Sender<ResolveCommand>,
-    },
-    External {
-        client: external::ExternalAppServerClient,
-    },
-}
-
 impl CodexAppServer {
-    /// Spawn the in-process app-server for `project_root` and start its
+    /// Spawn the external app-server for `project_root` and start its
     /// event pump.
     ///
     /// When `resume_thread_id` is `Some`, the bridge issues a
@@ -222,41 +163,6 @@ impl CodexAppServer {
     /// rollout's history is re-loaded and the same `thread_id` is
     /// retained. Otherwise a fresh thread is created.
     pub async fn launch(
-        emit: Arc<dyn ItemEmitter>,
-        project_root: PathBuf,
-        mcp_server_path: Option<PathBuf>,
-        developer_instructions: Option<String>,
-        skills_catalog: Option<String>,
-        recent_feedback: Option<String>,
-        resume_thread_id: Option<String>,
-    ) -> Result<Self, BridgeError> {
-        #[cfg(feature = "in-process-codex")]
-        if should_use_in_process_runtime() {
-            return Self::launch_in_process(
-                emit,
-                project_root,
-                mcp_server_path,
-                developer_instructions,
-                skills_catalog,
-                recent_feedback,
-                resume_thread_id,
-            )
-            .await;
-        }
-
-        Self::launch_external(
-            emit,
-            project_root,
-            mcp_server_path,
-            developer_instructions,
-            skills_catalog,
-            recent_feedback,
-            resume_thread_id,
-        )
-        .await
-    }
-
-    async fn launch_external(
         emit: Arc<dyn ItemEmitter>,
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
@@ -318,219 +224,7 @@ impl CodexAppServer {
         });
 
         Ok(Self {
-            backend: CodexBackend::External { client },
-            thread_id,
-            skills_catalog,
-            recent_feedback,
-            pending,
-            shutdown_tx: Some(shutdown_tx),
-            pump_task: Some(pump_task),
-        })
-    }
-
-    #[cfg(feature = "in-process-codex")]
-    async fn launch_in_process(
-        emit: Arc<dyn ItemEmitter>,
-        project_root: PathBuf,
-        mcp_server_path: Option<PathBuf>,
-        developer_instructions: Option<String>,
-        skills_catalog: Option<String>,
-        recent_feedback: Option<String>,
-        resume_thread_id: Option<String>,
-    ) -> Result<Self, BridgeError> {
-        // 1. Build the CLI overrides FIRST so they're baked into the
-        //    Config we hand off to the in-process app-server. The
-        //    server's ConfigManager only re-applies overrides on later
-        //    config reloads — the first turn uses the Config we pass
-        //    directly, so the mcp_servers.montage entries MUST be in
-        //    there already. Codex `.env_clear()`s on MCP spawn (see
-        //    vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs:259),
-        //    so MONTAGE_PROJECT_ROOT has to ride the per-server env
-        //    override. DO NOT regress af731e69 / 2889dc59.
-        let mut cli_overrides: Vec<(String, toml::Value)> = Vec::new();
-
-        // Auto-compaction. Codex's compact machinery
-        // (vendor/codex-rs/core/src/compact.rs) only fires when this
-        // config is set — default is None, meaning the agent runs
-        // until it hits the model's hard context limit and stalls.
-        // We hit exactly that in a session today: 24 polls + 12 video
-        // jobs ate the full 258k window before the edit finished.
-        // GPT-5.6's larger working window lets Montage compact later while
-        // retaining enough headroom for a useful post-compaction turn.
-        cli_overrides.push((
-            "model_auto_compact_token_limit".to_string(),
-            toml::Value::Integer(external::compact_token_limit(wire::MONTAGE_DEFAULT_MODEL)),
-        ));
-
-        if let Some(mcp_path) = mcp_server_path {
-            cli_overrides.push((
-                "mcp_servers.montage.command".to_string(),
-                toml::Value::String(mcp_path.display().to_string()),
-            ));
-            cli_overrides.push((
-                "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT".to_string(),
-                toml::Value::String(project_root.display().to_string()),
-            ));
-            cli_overrides.push((
-                "mcp_servers.montage.env.MONTAGE_CODEX_TOOL_EXPOSURE".to_string(),
-                toml::Value::String(tool_exposure::configured_tool_exposure().to_string()),
-            ));
-
-            // R31: force direct MCP-tool exposure. The refreshed codex
-            // defers every MCP tool behind tool-search for search-tool
-            // models (all of them), so without this the agent never sees
-            // the Montage tools on organic prompts and shell-edits the
-            // OTIO instead. A patched model catalog with
-            // supports_search_tool=false is the only lever; see
-            // `tool_exposure`. Best-effort: on failure we log and fall
-            // back to codex's deferred behavior rather than blocking the
-            // session. Mirrors the same override on the external path
-            // (`external::app_server_args`), which the default desktop
-            // build actually spawns.
-            if let Some(catalog) = tool_exposure::direct_exposure_catalog_override_value() {
-                cli_overrides.push((
-                    "model_catalog_json".to_string(),
-                    toml::Value::String(catalog),
-                ));
-            }
-        } else {
-            warn!("montage-mcp-server path not provided; codex will run without Montage tools");
-        }
-
-        // 2. Build the app-server Config WITH the overrides applied,
-        //    anchored at project_root.
-        let config = ConfigBuilder::default()
-            .fallback_cwd(Some(project_root.clone()))
-            .cli_overrides(cli_overrides.clone())
-            .build()
-            .await
-            .map_err(|e| BridgeError::Startup(format!("ConfigBuilder::build: {e}")))?;
-
-        // 3. Mirror vendor/codex-rs/exec/src/lib.rs:530-555. arg0 +
-        //    EnvironmentManager + ExecServerRuntimePaths drive the
-        //    sandbox / re-exec dance.
-        //
-        // Default's codex_self_exe is None — that's fine when codex
-        // owns the process (`arg0_dispatch_or_else` populates it from
-        // argv[0]), but the bridge runs in-process inside the Tauri
-        // app where argv[0] is the host binary. Stamp it from
-        // `current_exe()` so ExecServerRuntimePaths::from_optional_paths
-        // doesn't reject the startup. (Risk 6.1 from the planning doc.)
-        let mut arg0_paths = Arg0DispatchPaths::default();
-        if arg0_paths.codex_self_exe.is_none() {
-            arg0_paths.codex_self_exe = std::env::current_exe().ok();
-        }
-        let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )
-        .map_err(|e| BridgeError::Startup(format!("ExecServerRuntimePaths: {e}")))?;
-        let environment_manager = EnvironmentManager::from_codex_home(
-            config.codex_home.clone(),
-            Some(local_runtime_paths),
-        )
-        .await
-        .map_err(|e| BridgeError::Startup(format!("EnvironmentManager: {e}")))?;
-
-        // 4. Build the InProcessClientStartArgs. Tracks
-        //    vendor/codex-rs/exec/src/lib.rs:536-555.
-        let start_args = InProcessClientStartArgs {
-            arg0_paths,
-            config: Arc::new(config),
-            cli_overrides,
-            loader_overrides: LoaderOverrides::default(),
-            strict_config: false,
-            cloud_config_bundle: CloudConfigBundleLoader::default(),
-            feedback: CodexFeedback::new(),
-            log_db: None,
-            // v1: skip persistence; the desktop integration step can
-            // wire state_db if resume lands here.
-            state_db: None,
-            environment_manager: Arc::new(environment_manager),
-            config_warnings: Vec::new(),
-            session_source: SessionSource::Exec,
-            enable_codex_api_key_env: true,
-            client_name: "montage-desktop".to_string(),
-            client_version: env!("CARGO_PKG_VERSION").to_string(),
-            experimental_api: true,
-            // Matches the exec reference impl (vendor/codex-rs/exec/src/lib.rs):
-            // opt out of the OpenAI-form MCP elicitation flow, which is a
-            // codex-apps hosted-server feature Montage's stdio MCP server
-            // doesn't participate in.
-            mcp_server_openai_form_elicitation: false,
-            opt_out_notification_methods: Vec::new(),
-            channel_capacity: codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        };
-
-        // 5. Start the in-process server.
-        let mut client = InProcessAppServerClient::start(start_args)
-            .await
-            .map_err(|e| BridgeError::Startup(format!("InProcessAppServerClient::start: {e}")))?;
-        let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
-
-        // 6. Start (or resume) the thread. The Montage per-format addendum
-        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides on
-        //    `developer_instructions`; the compact skills catalog stays
-        //    per-turn so resumed sessions see current routing options.
-        //
-        //    Resume path: when the desktop asks to continue an existing
-        //    chat we call `thread/resume` against the stored thread_id.
-        //    Codex's `ThreadResumeParams` loads the rollout from disk
-        //    (vendor/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
-        //    and the resulting thread keeps the same id, so subsequent
-        //    `turn/start` calls thread off the persisted history.
-        let thread_id = if let Some(resume_id) = resume_thread_id {
-            let resume_response: ThreadResumeResponse = request_handle
-                .request_typed(ClientRequest::ThreadResume {
-                    request_id: CodexRequestId::Integer(1),
-                    params: ThreadResumeParams {
-                        thread_id: resume_id.clone(),
-                        cwd: Some(project_root.display().to_string()),
-                        developer_instructions,
-                        ..ThreadResumeParams::default()
-                    },
-                })
-                .await
-                .map_err(|e| BridgeError::Startup(format!("thread/resume: {e}")))?;
-            resume_response.thread.id
-        } else {
-            let thread_response: ThreadStartResponse = request_handle
-                .request_typed(ClientRequest::ThreadStart {
-                    request_id: CodexRequestId::Integer(1),
-                    params: ThreadStartParams {
-                        cwd: Some(project_root.display().to_string()),
-                        developer_instructions,
-                        ..ThreadStartParams::default()
-                    },
-                })
-                .await
-                .map_err(|e| BridgeError::Startup(format!("thread/start: {e}")))?;
-            thread_response.thread.id
-        };
-
-        // 7. Set up the pump's communication channels.
-        let pending: Arc<Mutex<HashMap<String, PendingServerRequest>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let pump_pending = Arc::clone(&pending);
-        let pump_emit = Arc::clone(&emit);
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-        let (resolve_tx, mut resolve_rx) = mpsc::channel::<ResolveCommand>(32);
-        let pump_task = tokio::spawn(async move {
-            run_event_pump(
-                &mut client,
-                pump_pending,
-                pump_emit,
-                &mut shutdown_rx,
-                &mut resolve_rx,
-            )
-            .await;
-        });
-
-        Ok(Self {
-            backend: CodexBackend::InProcess {
-                request_handle,
-                resolve_tx,
-            },
+            client,
             thread_id,
             skills_catalog,
             recent_feedback,
@@ -553,74 +247,30 @@ impl CodexAppServer {
             self.skills_catalog.as_deref(),
             &input,
         );
-        let turn_id = match &self.backend {
-            CodexBackend::External { client } => {
-                let response: wire::TurnStartResponse = client
-                    .request(wire::turn_start_request(
-                        next_request_id(),
-                        &self.thread_id,
-                        text,
-                        profile,
-                    ))
-                    .await?;
-                response.turn.id
-            }
-            #[cfg(feature = "in-process-codex")]
-            CodexBackend::InProcess { request_handle, .. } => {
-                let (model, effort) = wire::profile_settings(profile);
-                request_handle
-                    .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {
-                        request_id: CodexRequestId::Integer(next_request_id()),
-                        params: TurnStartParams {
-                            thread_id: self.thread_id.clone(),
-                            input: vec![UserInput::Text {
-                                text,
-                                text_elements: Vec::new(),
-                            }],
-                            model: Some(model.to_string()),
-                            effort: Some(match effort {
-                                "high" => ReasoningEffort::High,
-                                _ => ReasoningEffort::Medium,
-                            }),
-                            ..TurnStartParams::default()
-                        },
-                    })
-                    .await
-                    .map_err(|e| BridgeError::Request(format!("turn/start: {e}")))?
-                    .turn
-                    .id
-            }
-        };
-        Ok(turn_id)
+        let response: wire::TurnStartResponse = self
+            .client
+            .request(wire::turn_start_request(
+                next_request_id(),
+                &self.thread_id,
+                text,
+                profile,
+            ))
+            .await?;
+        Ok(response.turn.id)
     }
 
     /// Interrupt the given turn. Best-effort; an already-finished turn
     /// yields an error from codex which we swallow because the
     /// user-facing action ("cancel") is idempotent.
     pub async fn interrupt(&self, turn_id: &str) -> Result<(), BridgeError> {
-        let result: Result<serde_json::Value, BridgeError> = match &self.backend {
-            CodexBackend::External { client } => {
-                client
-                    .request(wire::turn_interrupt_request(
-                        next_request_id(),
-                        &self.thread_id,
-                        turn_id,
-                    ))
-                    .await
-            }
-            #[cfg(feature = "in-process-codex")]
-            CodexBackend::InProcess { request_handle, .. } => request_handle
-                .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
-                    request_id: CodexRequestId::Integer(next_request_id()),
-                    params: TurnInterruptParams {
-                        thread_id: self.thread_id.clone(),
-                        turn_id: turn_id.to_string(),
-                    },
-                })
-                .await
-                .map(|response| serde_json::to_value(response).unwrap_or_default())
-                .map_err(|e| BridgeError::Request(format!("turn/interrupt: {e}"))),
-        };
+        let result: Result<serde_json::Value, BridgeError> = self
+            .client
+            .request(wire::turn_interrupt_request(
+                next_request_id(),
+                &self.thread_id,
+                turn_id,
+            ))
+            .await;
         if let Err(e) = result {
             debug!(
                 error = %e,
@@ -738,11 +388,7 @@ impl CodexAppServer {
         {
             warn!(error = ?e, "codex-bridge pump task join error");
         }
-        match &self.backend {
-            CodexBackend::External { client } => client.shutdown().await,
-            #[cfg(feature = "in-process-codex")]
-            CodexBackend::InProcess { .. } => {}
-        }
+        self.client.shutdown().await;
         Ok(())
     }
 
@@ -751,33 +397,13 @@ impl CodexAppServer {
         &self.thread_id
     }
 
-    /// Forward a resolve to the pump task and await the ack.
+    /// Resolve a pending approval or input request through the external client.
     async fn send_resolve(
         &self,
         request_id: RequestId,
         result: serde_json::Value,
     ) -> Result<(), BridgeError> {
-        match &self.backend {
-            #[cfg(feature = "in-process-codex")]
-            CodexBackend::InProcess { resolve_tx, .. } => {
-                let (ack_tx, ack_rx) = oneshot::channel();
-                let request_id: CodexRequestId = serde_json::from_value(request_id)
-                    .map_err(|e| BridgeError::Resolve(format!("deserialize request id: {e}")))?;
-                resolve_tx
-                    .send(ResolveCommand::Resolve {
-                        request_id,
-                        result,
-                        ack: ack_tx,
-                    })
-                    .await
-                    .map_err(|_| BridgeError::Resolve("resolve channel closed".to_string()))?;
-                ack_rx
-                    .await
-                    .map_err(|_| BridgeError::Resolve("resolve ack channel dropped".to_string()))?
-                    .map_err(BridgeError::Resolve)
-            }
-            CodexBackend::External { client } => client.resolve(request_id, result).await,
-        }
+        self.client.resolve(request_id, result).await
     }
 }
 
@@ -788,59 +414,6 @@ impl Drop for CodexAppServer {
             let _ = tx.send(());
         }
     }
-}
-
-/// Body of the spawned event-pump task. Owns the only `&mut self`-grade
-/// handle to the in-process client, and is also the only path that
-/// owns `&InProcessAppServerClient` for `resolve_server_request` —
-/// we route resolves through this task via `resolve_rx`.
-#[cfg(feature = "in-process-codex")]
-async fn run_event_pump(
-    client: &mut InProcessAppServerClient,
-    pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
-    emit: Arc<dyn ItemEmitter>,
-    shutdown_rx: &mut oneshot::Receiver<()>,
-    resolve_rx: &mut mpsc::Receiver<ResolveCommand>,
-) {
-    let mut text_buffers: HashMap<String, String> = HashMap::new();
-    loop {
-        tokio::select! {
-            _ = &mut *shutdown_rx => {
-                debug!("codex-bridge pump received shutdown signal");
-                break;
-            }
-            event = client.next_event() => {
-                let Some(event) = event else {
-                    debug!("codex-bridge pump: event stream closed by server");
-                    break;
-                };
-                handle_pump_event(event, &pending, &emit, &mut text_buffers).await;
-            }
-            resolve = resolve_rx.recv() => {
-                match resolve {
-                    Some(ResolveCommand::Resolve { request_id, result, ack }) => {
-                        let outcome = client
-                            .resolve_server_request(request_id, result)
-                            .await
-                            .map_err(|e| format!("{e}"));
-                        let _ = ack.send(outcome);
-                    }
-                    Some(ResolveCommand::Reject { request_id, error, ack }) => {
-                        let outcome = client
-                            .reject_server_request(request_id, error)
-                            .await
-                            .map_err(|e| format!("{e}"));
-                        let _ = ack.send(outcome);
-                    }
-                    None => {
-                        // Sender dropped (caller dropped CodexAppServer);
-                        // we'll exit on shutdown_rx soon.
-                    }
-                }
-            }
-        }
-    }
-    let _ = client;
 }
 
 async fn run_external_event_pump(
@@ -874,41 +447,6 @@ async fn run_external_event_pump(
     }
 }
 
-/// Dispatch one [`InProcessServerEvent`].
-#[cfg(feature = "in-process-codex")]
-async fn handle_pump_event(
-    event: InProcessServerEvent,
-    pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
-    emit: &Arc<dyn ItemEmitter>,
-    text_buffers: &mut HashMap<String, String>,
-) {
-    match event {
-        InProcessServerEvent::Lagged { skipped } => {
-            warn!(skipped, "codex-bridge pump lagged");
-        }
-        InProcessServerEvent::ServerNotification(notification) => {
-            match serde_json::to_value(notification)
-                .ok()
-                .and_then(|value| serde_json::from_value::<ServerNotification>(value).ok())
-            {
-                Some(notification) => {
-                    handle_notification(notification, pending, emit, text_buffers).await;
-                }
-                None => warn!("codex-bridge: failed to convert in-process notification"),
-            }
-        }
-        InProcessServerEvent::ServerRequest(request) => {
-            match serde_json::to_value(request)
-                .ok()
-                .and_then(|value| serde_json::from_value::<ServerRequest>(value).ok())
-            {
-                Some(request) => handle_server_request(request, pending, emit).await,
-                None => warn!("codex-bridge: failed to convert in-process server request"),
-            }
-        }
-    }
-}
-
 async fn handle_notification(
     notification: ServerNotification,
     pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
@@ -931,13 +469,6 @@ async fn handle_notification(
         clear_pending_for_turn(pending, &turn_end.turn_id).await;
         emit.emit_turn_end(turn_end.turn_id, turn_end.error);
     }
-}
-
-#[cfg(feature = "in-process-codex")]
-fn should_use_in_process_runtime() -> bool {
-    std::env::var("MONTAGE_CODEX_APP_SERVER_RUNTIME")
-        .map(|value| value.eq_ignore_ascii_case("in-process"))
-        .unwrap_or(false)
 }
 
 /// If this notification marks the end of a turn, return the per-turn
@@ -1152,7 +683,7 @@ fn next_request_id() -> i64 {
 /// leads. When absent, we send the user's input as-is.
 ///
 /// Extracted from `CodexAppServer::start_turn` so the unit test can pin
-/// the exact composition without standing up the in-process app-server.
+/// the exact composition without launching the external app-server.
 fn compose_turn_input(
     recent_feedback: Option<&str>,
     skills_catalog: Option<&str>,

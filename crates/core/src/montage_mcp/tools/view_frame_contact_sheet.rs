@@ -5,12 +5,13 @@ use std::io::Cursor;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use image::{DynamicImage, Rgba, RgbaImage, imageops};
-use rmcp::model::{Annotated, CallToolResult, Content, RawContent, RawImageContent};
+use rmcp::model::{CallToolResult, RawContent};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::montage_mcp::context::McpToolCtx;
 
+use super::image_result::{Detail, image_tool_result};
 use super::view_frame::{self, ViewFrameArgs};
 
 const MAX_FRAMES: usize = 12;
@@ -89,7 +90,7 @@ pub async fn run(
         .map(|(index, time)| format!("{}={time:.3}s", index + 1))
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(contact_sheet_result(
+    Ok(image_tool_result(
         format!(
             "source-frame contact sheet for {}; tile order: {key}; {}x{}",
             args.asset,
@@ -97,6 +98,8 @@ pub async fn run(
             sheet.height()
         ),
         png.get_ref(),
+        "image/png",
+        Detail::Preview,
     ))
 }
 
@@ -119,20 +122,6 @@ fn compose_contact_sheet(frames: &[DynamicImage], columns: u32) -> DynamicImage 
     DynamicImage::ImageRgba8(canvas)
 }
 
-fn contact_sheet_result(summary: String, bytes: &[u8]) -> CallToolResult {
-    CallToolResult::success(vec![
-        Content::text(summary),
-        Annotated::new(
-            RawContent::Image(RawImageContent {
-                data: B64.encode(bytes),
-                mime_type: "image/png".into(),
-                meta: None,
-            }),
-            None,
-        ),
-    ])
-}
-
 pub const DESCRIPTION: &str = "Create a bounded grid from 2 to 12 ranked source-frame times and return it as one native image. Use the contact sheet for inexpensive visual selection, then call view_frame with detail='original' only for tiles that need closer inspection.";
 
 #[cfg(test)]
@@ -141,20 +130,12 @@ mod tests {
     use image::GenericImageView;
 
     #[test]
-    fn contact_sheet_is_bounded_and_uses_native_image_content() {
+    fn contact_sheet_is_bounded() {
         let frames = vec![
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(640, 360, Rgba([255, 0, 0, 255]))),
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(360, 640, Rgba([0, 0, 255, 255]))),
         ];
         let sheet = compose_contact_sheet(&frames, 2);
         assert_eq!(sheet.dimensions(), (768, 384));
-
-        let result = contact_sheet_result("tiles 1-2".into(), &[0, 1, 2, 3]);
-        assert!(matches!(result.content[0].raw, RawContent::Text(_)));
-        let RawContent::Image(image) = &result.content[1].raw else {
-            panic!("second block should be native image content");
-        };
-        assert_eq!(image.mime_type, "image/png");
-        assert_eq!(image.data, "AAECAw==");
     }
 }

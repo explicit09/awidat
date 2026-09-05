@@ -9,18 +9,18 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::UNIX_EPOCH;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64;
 use montage_proto::project::files;
 use montage_render::RenderJobSpec;
 use montage_render::ffmpeg::{ImageFormat, extract_frame_filtered};
-use rmcp::model::{Annotated, CallToolResult, Content, Meta, RawContent, RawImageContent};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 
 use crate::montage_mcp::context::McpToolCtx;
+
+use super::image_result::{Detail, image_tool_result};
 
 const PREVIEW_MAX_DIM: u32 = 768;
 const FRAME_WINDOW_S: f64 = 0.12;
@@ -127,12 +127,6 @@ pub async fn run(args: ViewProgramFrameArgs, ctx: McpToolCtx) -> Result<CallTool
     ))
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Detail {
-    Preview,
-    Original,
-}
-
 fn program_image_tool_result(
     summary: String,
     bytes: &[u8],
@@ -140,26 +134,7 @@ fn program_image_tool_result(
     detail: Detail,
     structured_content: serde_json::Value,
 ) -> CallToolResult {
-    let meta = match detail {
-        Detail::Preview => None,
-        Detail::Original => {
-            let mut meta = Meta::new();
-            meta.insert(
-                "codex/imageDetail".to_string(),
-                serde_json::json!("original"),
-            );
-            Some(meta)
-        }
-    };
-    let image = Annotated::new(
-        RawContent::Image(RawImageContent {
-            data: B64.encode(bytes),
-            mime_type: mime_type.to_string(),
-            meta,
-        }),
-        None,
-    );
-    let mut result = CallToolResult::success(vec![Content::text(summary), image]);
+    let mut result = image_tool_result(summary, bytes, mime_type, detail);
     result.structured_content = Some(structured_content);
     result
 }
@@ -325,28 +300,6 @@ mod tests {
         assert_eq!(
             result.structured_content,
             Some(serde_json::json!({"t_s": 8.0}))
-        );
-    }
-
-    #[test]
-    fn original_program_frame_requests_original_codex_image_detail() {
-        let result = program_image_tool_result(
-            "original program frame".to_string(),
-            &[0, 1, 2, 3],
-            "image/jpeg",
-            Detail::Original,
-            serde_json::json!({}),
-        );
-        let RawContent::Image(image) = &result.content[1].raw else {
-            panic!("second block should be native image content");
-        };
-
-        assert_eq!(
-            image
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.get("codex/imageDetail")),
-            Some(&serde_json::json!("original"))
         );
     }
 

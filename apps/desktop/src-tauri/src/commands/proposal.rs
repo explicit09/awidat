@@ -1,31 +1,6 @@
-//! Approval-as-diff proposals — the desktop equivalent of the TUI's
-//! modal approval card. Agents and users both fire EDL changes
-//! through this same machinery: the proposal is computed (apply
-//! against a clone, capture the post-state), shown to the user as
-//! a ghost overlay on the timeline, then committed (or denied) by
-//! the user.
-//!
-//! State of the world per proposal:
-//! - **Pending**: lives in `MontageState::pending_proposals`, keyed
-//!   by call_id. Frontend has the corresponding `Item::ProposedEdit`
-//!   ghost rendered on the canvas.
-//! - **Adjusted**: user dragged a handle. `adjust_proposal` mutates
-//!   the cached envelope, re-runs apply, emits a `ProposedEdit`
-//!   Delta with bumped `revision`.
-//! - **Accepted**: user pressed Enter. `accept_proposal` writes the
-//!   proposed timeline to disk via `Project::write`, sends `Deny`
-//!   on the agent's reply oneshot (because the user might have
-//!   adjusted — the agent's *original* envelope didn't land), drops
-//!   the entry, emits a `ProposedEdit` Completed.
-//! - **Rejected**: user pressed Esc. `reject_proposal` sends `Deny`
-//!   on the reply oneshot, drops the entry, emits Completed with
-//!   the rejected status.
-//!
-//! Why Deny on accept (per Step 5 architectural decision):
-//! we apply the *user's* envelope, not the agent's. Even when the
-//! user accepted unchanged, that's still "user took over"; the
-//! agent's tool_result text spells out what actually landed. Keeps
-//! the agent's history honest.
+//! Desktop EDL proposals: compute a timeline preview, let the user adjust
+//! it, then write the accepted timeline or discard the rejected proposal.
+//! Codex tool approvals are handled separately by `commands::turn`.
 
 use std::path::Path;
 
@@ -33,7 +8,6 @@ use montage_core::edl::{ApplyError, EdlEnvelope, EdlOp, apply, parse};
 use montage_core::montage_mcp::tools::plan_visual_support_proposals::{
     PlanVisualSupportProposalArgs, merge_visual_support_defaults, plan_visual_support_proposals,
 };
-use montage_core::tool::ApprovalDecision;
 use montage_desktop_protocol::{
     AdjustField, AppliedDiff, ConfidenceTier, EditAdjustment, Id, Item, ItemLifecycle,
     ProposalEvidence, ProposalEvidenceKind, ProposalSource, RiskLevel, Side, TimelineSnapshot,
@@ -52,69 +26,36 @@ use crate::state::{MontageState, PendingProposal};
 /// `Timeline` for the proposed state, and emits the corresponding
 /// `Item::ProposedEdit`.
 ///
-/// `reply` is the agent's approval oneshot for agent-initiated
-/// proposals; `None` for user-initiated. On accept we send `Deny` on
-/// the agent's oneshot per the plan's "user took over" semantics.
-///
-/// `reasoning` is the agent's one-sentence justification for this
-/// envelope (e.g. "trimmed 0.42s silence per podcast defaults"),
-/// captured from `apply_edl(reasoning = …)`. The user-edit path
-/// (`propose_user_edit`) has no agent voice and passes `None`; the
-/// agent-initiated path threads the field through so Wave 3's
-/// ProposalInspector / pill tooltip have the rationale to render.
-///
 /// The id is the proposal's stable identifier — re-used across
 /// adjustment Deltas. Frontend keys its rendering on it.
-#[allow(clippy::too_many_arguments)]
-pub async fn build_proposal(
+async fn build_proposal(
     app: &AppHandle,
     state: &State<'_, MontageState>,
     id: String,
     edl_text: String,
     project_root: &Path,
-    source: ProposalSource,
-    reply: Option<tokio::sync::oneshot::Sender<ApprovalDecision>>,
-    reasoning: Option<String>,
 ) -> Result<(), String> {
-    let mut reply = reply;
-    let envelope = match parse(&edl_text) {
-        Ok(envelope) => envelope,
-        Err(e) => {
-            allow_agent_to_receive_apply_error(&mut reply);
-            return Err(format!("parse EDL: {e}"));
-        }
-    };
+    let envelope = parse(&edl_text).map_err(|e| format!("parse EDL: {e}"))?;
 
     let project_root_buf = project_root.to_path_buf();
-    let project = match tokio::task::spawn_blocking(move || Project::read(&project_root_buf)).await
-    {
-        Ok(Ok(project)) => project,
-        Ok(Err(e)) => {
-            allow_agent_to_receive_apply_error(&mut reply);
-            return Err(format!("project read: {e}"));
-        }
-        Err(e) => return Err(format!("project join: {e}")),
-    };
+    let project = tokio::task::spawn_blocking(move || Project::read(&project_root_buf))
+        .await
+        .map_err(|e| format!("project join: {e}"))?
+        .map_err(|e| format!("project read: {e}"))?;
 
     let original_timeline = project.timeline.clone();
     let envelope_for_apply = envelope.clone();
     let project_root_for_ctx = project_root.to_path_buf();
     let original_for_apply = original_timeline.clone();
     let (proposed_timeline, applied) =
-        match tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
+        tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
             let ctx = montage_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
             let (proposed, outcome) = apply(&original_for_apply, &envelope_for_apply, &ctx)?;
             Ok((proposed, outcome.applied))
         })
         .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(e)) => {
-                allow_agent_to_receive_apply_error(&mut reply);
-                return Err(format!("apply: {e}"));
-            }
-            Err(e) => return Err(format!("apply join: {e}")),
-        };
+        .map_err(|e| format!("apply join: {e}"))?
+        .map_err(|e| format!("apply: {e}"))?;
 
     let snapshot =
         crate::commands::timeline::flatten_timeline_public(&proposed_timeline, project_root);
@@ -127,14 +68,12 @@ pub async fn build_proposal(
     let edl_text_for_item = edl_text.clone();
 
     let proposal = PendingProposal {
-        call_id: id.clone(),
         project_root: project_root.to_path_buf(),
         envelope,
         original_timeline,
         proposed_timeline,
         applied,
         revision: 0,
-        reply,
     };
     state
         .pending_proposals
@@ -147,7 +86,7 @@ pub async fn build_proposal(
         Item::ProposedEdit {
             id: Id::new(&id),
             phase: ItemLifecycle::Started,
-            source,
+            source: ProposalSource::User,
             edl_text: edl_text_for_item,
             snapshot,
             diff_hints,
@@ -170,45 +109,13 @@ pub async fn build_proposal(
                 .map(|metadata| metadata.evidence.clone())
                 .unwrap_or_default(),
             alternatives: vec![],
-            // `rationale` is the agent's one-sentence justification
-            // ("trimmed 0.42s silence per podcast defaults") that
-            // Wave 3 surfaces on every proposal pill / Brief row.
-            // For agent-initiated proposals it comes from
-            // `apply_edl(reasoning = …)`; user-initiated callers
-            // (drag-to-trim, transcript delete) pass `None` here
-            // because there's no agent voice to surface.
-            rationale: reasoning,
+            rationale: None,
         },
     );
     Ok(())
 }
 
-fn allow_agent_to_receive_apply_error(
-    reply: &mut Option<tokio::sync::oneshot::Sender<ApprovalDecision>>,
-) {
-    if let Some(reply) = reply.take() {
-        let _ = reply.send(ApprovalDecision::Allow);
-    }
-}
-
-/// User accepted the proposal (possibly with adjustments). Three
-/// commit paths depending on origin and whether the user adjusted:
-///
-/// 1. **Agent-initiated, no adjustments (revision == 0)**: send
-///    `Allow` on the oneshot. The agent's `apply_edl` handler
-///    runs against the on-disk project, applies its own envelope,
-///    writes. Desktop does NOT write — that would double-apply
-///    (insert duplicates, fail trims that are already at bounds).
-///    The timeline preview the user accepted matches what the
-///    handler produces because the envelopes are identical and
-///    apply() is deterministic.
-/// 2. **Agent-initiated, with adjustments (revision > 0)**: send
-///    `Deny` so the agent sees its envelope didn't land verbatim.
-///    Desktop writes the adjusted timeline directly — the agent's
-///    handler doesn't have the adjusted envelope to re-derive from.
-///    The agent's next `read_timeline` sees the committed state.
-/// 3. **User-initiated (no reply oneshot)**: write directly. There's
-///    no agent path to defer to.
+/// Commit the accepted desktop proposal, including any user adjustments.
 #[tauri::command]
 pub async fn accept_proposal(
     app: AppHandle,
@@ -222,91 +129,67 @@ pub async fn accept_proposal(
         .remove(&call_id)
         .ok_or_else(|| format!("no pending proposal for {call_id}"))?;
 
-    let user_adjusted = proposal.revision > 0;
-    let agent_initiated = proposal.reply.is_some();
-
-    // For agent-initiated + unchanged proposals the agent's handler
-    // does the write after we send Allow; writing here would cause a
-    // double-apply.
-    let desktop_writes = !agent_initiated || user_adjusted;
-
-    if desktop_writes {
-        let project_root = proposal.project_root.clone();
-        let proposed_timeline = proposal.proposed_timeline.clone();
-        let applied_descriptions: Vec<String> = proposal
+    let project_root = proposal.project_root.clone();
+    let proposed_timeline = proposal.proposed_timeline.clone();
+    let applied_descriptions: Vec<String> = proposal
+        .applied
+        .iter()
+        .map(|a| a.description.clone())
+        .collect();
+    // Resolve the seat-holder identity once, at the handler
+    // entry point, so the spawn_blocking closure carries an
+    // owned `CommitAuthor`. Without this the auto-commit hook
+    // would stamp every desktop apply_edl as "montage agent" even
+    // though the user is the one driving the keyboard.
+    let seat_author = crate::commands::vedit::desktop_commit_author();
+    let action_metadata = montage_core::vc::ActionMetadata {
+        source: Some("agent".into()),
+        operations: proposal
             .applied
             .iter()
-            .map(|a| a.description.clone())
-            .collect();
-        // Resolve the seat-holder identity once, at the handler
-        // entry point, so the spawn_blocking closure carries an
-        // owned `CommitAuthor`. Without this the auto-commit hook
-        // would stamp every desktop apply_edl as "montage agent" even
-        // though the user is the one driving the keyboard.
-        let seat_author = crate::commands::vedit::desktop_commit_author();
-        let action_metadata = montage_core::vc::ActionMetadata {
-            source: Some("agent".into()),
-            operations: proposal
-                .applied
-                .iter()
-                .map(|a| a.metadata.clone())
-                .collect(),
-        };
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let _mutation = montage_core::vc::lock_timeline_mutation(&project_root)
-                .map_err(|e| format!("lock timeline mutation: {e}"))?;
-            let mut project =
-                Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
-            project.timeline = proposed_timeline;
-            project
-                .write(&project_root)
-                .map_err(|e| format!("project write: {e}"))?;
+            .map(|a| a.metadata.clone())
+            .collect(),
+    };
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let _mutation = montage_core::vc::lock_timeline_mutation(&project_root)
+            .map_err(|e| format!("lock timeline mutation: {e}"))?;
+        let mut project = Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
+        project.timeline = proposed_timeline;
+        project
+            .write(&project_root)
+            .map_err(|e| format!("project write: {e}"))?;
 
-            // Phase B auto-commit (desktop-writes path). Mirrors the
-            // agent-side hook in `apply_edl.rs`. Best-effort: failures
-            // are logged but never unwind the disk write. The `_as`
-            // variant stamps the seat-holder on the commit; passing
-            // `None` for the author falls back to the env + default chain.
-            match montage_core::vc::open_or_init(&project_root) {
-                Ok(repo) => {
-                    if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
-                        &repo,
-                        &applied_descriptions,
-                        None,
-                        seat_author,
-                        Some(&action_metadata),
-                    ) {
-                        tracing::warn!(
-                            error = %e,
-                            "vedit auto-commit failed (desktop-writes path)"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(
+        // Phase B auto-commit (desktop-writes path). Mirrors the
+        // agent-side hook in `apply_edl.rs`. Best-effort: failures
+        // are logged but never unwind the disk write. The `_as`
+        // variant stamps the seat-holder on the commit; passing
+        // `None` for the author falls back to the env + default chain.
+        match montage_core::vc::open_or_init(&project_root) {
+            Ok(repo) => {
+                if let Err(e) = montage_core::vc::auto_commit_apply_as_with_metadata(
+                    &repo,
+                    &applied_descriptions,
+                    None,
+                    seat_author,
+                    Some(&action_metadata),
+                ) {
+                    tracing::warn!(
                         error = %e,
-                        "vedit repo unavailable; skipping auto-commit"
+                        "vedit auto-commit failed (desktop-writes path)"
                     );
                 }
             }
-            Ok(())
-        })
-        .await
-        .map_err(|e| format!("write join: {e}"))??;
-    }
-
-    // Tell the agent what landed:
-    //  - revision == 0 → Allow. Agent's handler runs and writes.
-    //  - revision > 0  → Deny. Agent sees its envelope didn't land
-    //    verbatim; we already wrote the adjusted version above.
-    if let Some(reply) = proposal.reply {
-        let decision = if user_adjusted {
-            ApprovalDecision::Deny
-        } else {
-            ApprovalDecision::Allow
-        };
-        let _ = reply.send(decision);
-    }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "vedit repo unavailable; skipping auto-commit"
+                );
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("write join: {e}"))??;
 
     // Final ProposedEdit Completed so the frontend collapses the
     // ghost overlay. summary mirrors what the agent will see.
@@ -330,18 +213,7 @@ pub async fn accept_proposal(
         Item::ProposedEdit {
             id: Id::new(&call_id),
             phase: ItemLifecycle::Completed,
-            // Refresh semantics on the frontend key off this completed
-            // source: User means the desktop already wrote the proposed
-            // timeline; Agent means the accepted original apply_edl is
-            // about to run and emit its own tool completion after disk
-            // write.
-            source: if desktop_writes {
-                ProposalSource::User
-            } else {
-                ProposalSource::Agent {
-                    tool_name: "apply_edl".into(),
-                }
-            },
+            source: ProposalSource::User,
             edl_text: String::new(),
             snapshot,
             diff_hints,
@@ -362,9 +234,7 @@ pub async fn accept_proposal(
     Ok(())
 }
 
-/// User rejected the proposal. Sends Deny on the reply oneshot
-/// (agent sees its envelope was denied), drops the entry. No disk
-/// write.
+/// Discard a rejected desktop proposal without writing the timeline.
 #[tauri::command]
 pub async fn reject_proposal(
     app: AppHandle,
@@ -377,10 +247,6 @@ pub async fn reject_proposal(
         .await
         .remove(&call_id)
         .ok_or_else(|| format!("no pending proposal for {call_id}"))?;
-
-    if let Some(reply) = proposal.reply {
-        let _ = reply.send(ApprovalDecision::Deny);
-    }
 
     emit_item(
         &app,
@@ -510,8 +376,7 @@ pub async fn adjust_proposal(
 }
 
 /// User-initiated proposal — drag-to-trim, transcript delete, etc.
-/// No agent reply oneshot; on accept we apply directly via the same
-/// `accept_proposal` path.
+/// Accepted changes are committed by `accept_proposal`.
 ///
 /// Returns the freshly-allocated call_id so the frontend knows
 /// which proposal to track in subsequent adjust/accept calls.
@@ -533,18 +398,7 @@ pub async fn propose_user_edit(
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
 
-    build_proposal(
-        &app,
-        &state,
-        id.clone(),
-        edl_text,
-        &project_root,
-        ProposalSource::User,
-        None,
-        // User-edit path: no agent voice, so no rationale on the wire.
-        None,
-    )
-    .await?;
+    build_proposal(&app, &state, id.clone(), edl_text, &project_root).await?;
 
     Ok(id)
 }
@@ -716,17 +570,7 @@ pub async fn propose_visual_support(
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
     let _ = &proposal.summary;
-    build_proposal(
-        &app,
-        &state,
-        id.clone(),
-        proposal.edl_text,
-        &project_root,
-        ProposalSource::User,
-        None,
-        None,
-    )
-    .await?;
+    build_proposal(&app, &state, id.clone(), proposal.edl_text, &project_root).await?;
     Ok(id)
 }
 

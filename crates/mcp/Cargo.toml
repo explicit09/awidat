@@ -22,7 +22,6 @@ rmcp = { workspace = true, features = ["client", "transport-child-process", "mac
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "macros", "rt", "rt-multi-thread"] }
 tokio-util = { workspace = true }
 montage-test-support = { workspace = true }
-pretty_assertions = { workspace = true }
 
 [[test]]
 name = "client_against_test_server"

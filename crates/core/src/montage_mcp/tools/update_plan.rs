@@ -1,26 +1,13 @@
-//! `update_plan` — record the agent's current editorial plan. Ported
-//! from `crates/core/src/tools/update_plan.rs` to the in-process MCP
-//! server.
-//!
-//! In the old harness this tool broadcast a `SessionEvent::EditPlanUpdate`
-//! so the TUI/REPL could render the plan as a checklist next to the
-//! timeline. The MCP server has no enclosing `Session` and no event
-//! bus, so the broadcast goes away. The remaining contract is: validate
-//! the plan, echo it back as the tool result so the model has a stable
-//! record in its own transcript, and let the client decide what (if
-//! anything) to do with the structured plan items.
-//!
-//! Annotated `read_only_hint = true`: no filesystem writes, no event
-//! broadcast, no external side-effects.
+//! Record an editorial plan in the tool response so it remains in the
+//! conversation transcript. The client decides how to display the items;
+//! this tool does not write files or broadcast events.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::montage_mcp::context::McpToolCtx;
 
-/// One item in the agent's editorial plan. Local to this module to keep
-/// the MCP port free of `crate::tool::PlanItem` (which lives in the
-/// legacy harness module slated for deletion in step 7).
+/// One item in the agent's editorial plan.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PlanItem {
     /// Short imperative description of the step.

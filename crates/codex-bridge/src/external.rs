@@ -713,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_crates_are_not_required_default_dependencies() {
+    fn bridge_does_not_embed_the_codex_runtime() {
         let manifest =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
                 .expect("read manifest");
@@ -732,22 +732,11 @@ mod tests {
             "codex-arg0",
             "codex-feedback",
         ] {
-            let dependency = dependencies.get(name).expect("codex dependency exists");
-            let optional = dependency
-                .get("optional")
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(false);
-            assert!(optional, "{name} must be optional");
+            assert!(
+                !dependencies.contains_key(name),
+                "{name} must stay in the sidecar"
+            );
         }
-
-        let features = parsed
-            .get("features")
-            .and_then(toml::Value::as_table)
-            .expect("features table");
-        assert!(
-            features.contains_key("in-process-codex"),
-            "in-process-codex feature must own vendored Codex dependencies"
-        );
     }
 
     #[tokio::test]

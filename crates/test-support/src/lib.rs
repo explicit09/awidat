@@ -6,6 +6,5 @@
 
 #![allow(clippy::expect_used)]
 
-pub mod assert;
 pub mod fixture;
 pub mod mcp;

@@ -22,8 +22,5 @@ thiserror = { workspace = true }
 # lighter dep next to `image`.
 png = "0.17"
 
-[dev-dependencies]
-tempfile = { workspace = true }
-
 [lints]
 workspace = true

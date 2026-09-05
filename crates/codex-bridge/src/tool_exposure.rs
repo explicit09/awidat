@@ -27,7 +27,7 @@
 //! — and writes it under `codex_home` so the override is a stable on-disk
 //! path. The transform is a pure JSON edit (one boolean per model) over
 //! `serde_json::Value`, so it does **not** pull the vendored model-catalog
-//! type graph into the default (non-`in-process-codex`) bridge build that
+//! type graph into the bridge build that
 //! the external app-server path compiles into. Deriving from the vendored
 //! source (rather than a hand-frozen copy) means the patch auto-tracks
 //! upstream catalog changes on each fork refresh: new models, renamed
@@ -154,8 +154,7 @@ pub fn write_direct_exposure_catalog(codex_home: &Path) -> Result<PathBuf, Catal
 /// override and let codex fall back to its deferred behavior rather than
 /// failing a session launch over a tool-exposure tweak.
 ///
-/// Shared by both the external app-server path (`external::app_server_args`,
-/// the default desktop build) and the in-process path.
+/// Used by `external::app_server_args` when starting the Codex sidecar.
 pub fn direct_exposure_catalog_override_value() -> Option<String> {
     if configured_tool_exposure() == "native_search" {
         return None;

@@ -97,28 +97,8 @@ pub struct SkillConfig {
     pub pinned: Vec<PinnedSkill>,
 }
 
-/// Back-compat alias — old code referenced the type by its v1 name.
-/// New code should use `SkillConfig`.
-#[allow(dead_code)]
-pub type DisabledSkillsConfig = SkillConfig;
-
 fn default_version() -> u32 {
     CURRENT_VERSION
-}
-
-/// Read the per-project disabled-skills list. Returns an empty vec when
-/// the file is absent or malformed — see module docs for the fail-mode
-/// rationale.
-///
-/// Synchronous helper so [`crate::codex_session`] can call it during
-/// session launch without spinning up a separate async task.
-///
-/// Wave 5 B2 added [`load_skill_config_sync`] which returns the full
-/// config (including `pinned`); this helper stays as a thin shim for
-/// older call sites and tests that only need the disabled list.
-#[allow(dead_code)]
-pub fn load_disabled_skills_sync(project_root: &Path) -> Vec<String> {
-    load_skill_config_sync(project_root).disabled
 }
 
 /// Read the full per-project skill config. Returns the default
@@ -360,27 +340,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn load_disabled_skills_sync_matches_async_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".montage")).unwrap();
-        std::fs::write(
-            tmp.path().join(".montage/skills.json"),
-            br#"{"version":1,"disabled":["auto-cutter"]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            load_disabled_skills_sync(tmp.path()),
-            vec!["auto-cutter".to_string()]
-        );
-    }
-
-    #[test]
-    fn load_disabled_skills_sync_returns_empty_when_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(load_disabled_skills_sync(tmp.path()).is_empty());
     }
 
     #[tokio::test]

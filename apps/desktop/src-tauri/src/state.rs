@@ -6,12 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use montage_core::edl::{AppliedOp, EdlEnvelope};
-use montage_core::tool::ApprovalDecision;
 use montage_desktop_protocol::Transcript;
 use montage_proto::otio::Timeline;
 use montage_render::JobManager;
 use montage_render_gpu::{GpuTransitionRenderer, TransitionShader};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 /// All app-level state that has to outlive a single command call.
@@ -149,20 +148,11 @@ pub struct MediaServerInner {
     pub files: Arc<StdMutex<HashMap<String, PathBuf>>>,
 }
 
-/// One in-flight EDL proposal. Created by the bridge when an agent
-/// `apply_edl` lands in the approval channel, or by
-/// `propose_user_edit` for drag-to-trim / transcript-delete flows.
+/// One in-flight desktop EDL proposal, created by `propose_user_edit`
+/// or the visual-support planner.
 /// Mutated by `adjust_proposal`; consumed (and removed from the
 /// state map) by `accept_proposal` or `reject_proposal`.
-///
-/// Several fields are unread until the commands::proposal module
-/// (next commits) consumes them; allow(dead_code) keeps the warning
-/// out while the struct shape lands ahead of its consumers.
-#[allow(dead_code)]
 pub struct PendingProposal {
-    /// Stable identifier — matches the agent's tool `call_id` for
-    /// agent-initiated proposals, freshly-allocated for user-initiated.
-    pub call_id: String,
     /// Project root the proposal applies to. Captured at proposal
     /// time so the accept path doesn't have to re-resolve project
     /// state if the user changed projects mid-proposal (we'd reject
@@ -187,11 +177,6 @@ pub struct PendingProposal {
     /// from rapid drag races. Starts at 0 (the initial Started
     /// emit).
     pub revision: u32,
-    /// Reply oneshot for agent-initiated proposals. `None` for
-    /// user-initiated. On accept we drop or send `Allow` per
-    /// the "Deny + apply user's version" semantics described in
-    /// the plan.
-    pub reply: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
 /// Snapshot of what the user is looking at in the media pane.
@@ -213,11 +198,6 @@ pub struct ViewState {
 pub struct TurnHandle {
     /// Stable id for the active turn. Completion tasks use this to
     /// avoid clearing a newer turn if an older cleanup path runs late.
-    /// Read-after-write for the codex subprocess driver in step 8 is
-    /// in the reader task itself; the surface API doesn't expose it
-    /// yet, so `#[allow(dead_code)]` keeps the warning quiet until
-    /// step 8b adds the turn-correlation in turn-end events.
-    #[allow(dead_code)]
     pub id: String,
     /// Token the run-loop watches; flipped by `cancel_turn`.
     pub cancel: CancellationToken,

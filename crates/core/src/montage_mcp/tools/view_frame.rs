@@ -6,18 +6,18 @@
 
 use std::path::{Path, PathBuf};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64;
 use montage_proto::otio::{StackChild, Timeline, TrackChild};
 use montage_proto::project::files;
 use montage_render::ffmpeg::{ImageFormat, extract_frame_complex, extract_frame_filtered};
 use montage_render::{ClipGradePreview, build_clip_preview_filtergraph};
-use rmcp::model::{Annotated, CallToolResult, Content, Meta, RawContent, RawImageContent};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::montage_mcp::context::McpToolCtx;
+
+use super::image_result::{Detail, image_tool_result};
 
 /// Default longest-edge dimension for `detail = "preview"`. Big
 /// enough to be useful, small enough to fit comfortably in the
@@ -173,40 +173,6 @@ pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<CallToolResult,
     ))
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Detail {
-    Preview,
-    Original,
-}
-
-fn image_tool_result(
-    summary: String,
-    bytes: &[u8],
-    mime_type: &str,
-    detail: Detail,
-) -> CallToolResult {
-    let meta = match detail {
-        Detail::Preview => None,
-        Detail::Original => {
-            let mut meta = Meta::new();
-            meta.insert(
-                "codex/imageDetail".to_string(),
-                serde_json::json!("original"),
-            );
-            Some(meta)
-        }
-    };
-    let image = Annotated::new(
-        RawContent::Image(RawImageContent {
-            data: B64.encode(bytes),
-            mime_type: mime_type.to_string(),
-            meta,
-        }),
-        None,
-    );
-    CallToolResult::success(vec![Content::text(summary), image])
-}
-
 fn resolve_asset_path(project_root: &Path, asset: &str) -> Result<PathBuf, String> {
     let p = Path::new(asset);
     if asset.contains("..") {
@@ -309,54 +275,3 @@ detail='original' returns source resolution. format='png' (default) | \
 'jpeg'. Frames are cached under .montage/cache/frames/ keyed by \
 (asset, time, format, dim, grade).\
 ";
-
-#[cfg(test)]
-mod image_result_tests {
-    use super::*;
-    use rmcp::model::RawContent;
-
-    #[test]
-    fn frame_result_uses_native_image_content_without_base64_text() {
-        let result = image_tool_result(
-            "frame 1.250s of raw/take.mov (image/png, 4 bytes)".to_string(),
-            &[0, 1, 2, 3],
-            "image/png",
-            Detail::Preview,
-        );
-
-        assert_eq!(result.content.len(), 2);
-        let RawContent::Text(text) = &result.content[0].raw else {
-            panic!("first block should be text provenance");
-        };
-        assert!(text.text.contains("frame 1.250s"));
-        assert!(!text.text.contains("AAECAw=="));
-
-        let RawContent::Image(image) = &result.content[1].raw else {
-            panic!("second block should be native image content");
-        };
-        assert_eq!(image.data, "AAECAw==");
-        assert_eq!(image.mime_type, "image/png");
-        assert!(image.meta.is_none());
-    }
-
-    #[test]
-    fn original_frame_requests_original_codex_image_detail() {
-        let result = image_tool_result(
-            "original frame".to_string(),
-            &[0, 1, 2, 3],
-            "image/jpeg",
-            Detail::Original,
-        );
-        let RawContent::Image(image) = &result.content[1].raw else {
-            panic!("second block should be native image content");
-        };
-
-        assert_eq!(
-            image
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.get("codex/imageDetail")),
-            Some(&serde_json::json!("original"))
-        );
-    }
-}

@@ -2,18 +2,8 @@
 //! supporting types the codex-driven harness in `vendor/codex-rs/` calls
 //! into.
 //!
-//! Step 8e/W: the legacy in-process agent loop (`session`, `orchestrator`,
-//! `compact`, the hand-rolled `anthropic` client, the `rollout` recorder,
-//! and the `montage_md` system-prompt assembler) was deleted in this step.
-//! The codex subprocess in `vendor/codex-rs/` is now the only agent loop.
-//! What remains here:
-//! - [`error::FunctionCallError`] — tool dispatch result shape, copied
-//!   verbatim from `vendor/codex-rs/core/src/function_tool.rs`.
-//! - [`montage_mcp`] — MCP-server tool definitions codex invokes, plus
-//!   their in-process implementations (the legacy `tools` module was
-//!   deleted once this tree stopped depending on it).
-//! - [`events`] — `SessionEvent` / `SessionError` shape kept for forward
-//!   compatibility while consumers migrate to codex's event stream.
+//! The Codex subprocess owns the agent loop; this crate owns editorial
+//! operations, project state, and the MCP tools exposed to that runtime.
 
 #![allow(
     clippy::clone_on_copy,
@@ -49,7 +39,6 @@
 pub mod audio_finishing;
 pub mod broll_recommendations;
 pub mod capabilities;
-pub mod capability_metadata;
 pub mod caption;
 pub mod caption_rendered_output_scorer;
 pub mod captions;
@@ -62,8 +51,6 @@ pub mod editorial_skills;
 pub mod editorial_tags;
 pub mod edl;
 pub mod episode_map;
-pub mod error;
-pub mod events;
 pub mod generated_media;
 pub mod lessons;
 pub mod mcp_host;
@@ -92,9 +79,7 @@ pub mod short_form_review;
 pub mod short_form_review_context;
 pub mod skill_session;
 pub mod skills;
-pub mod subagent;
 pub mod system_prompt;
-pub mod tool;
 pub mod transcript_alignment;
 pub mod transcript_cleanup;
 pub mod transcript_pack;
@@ -104,10 +89,6 @@ pub mod verify;
 pub mod visual_qa;
 pub mod visual_signals;
 pub mod x_trends;
-
-pub use capability_metadata::{CapabilityMetadata, SupportLevel};
-pub use error::FunctionCallError;
-pub use events::{SessionError, SessionEvent};
 
 /// Returns the version of the agent core.
 pub fn version() -> &'static str {

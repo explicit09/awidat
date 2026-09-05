@@ -16,7 +16,7 @@
 //!    arrive as ToolResult blocks, not as hand-injected user text).
 //!  - One code path, two triggers.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use montage_core::skills::SkillRegistry;
@@ -131,6 +131,3 @@ fn discover_registry() -> Result<(SkillRegistry, Vec<montage_core::skills::Skill
         SkillRegistry::discover_many(bundled.as_deref(), user_roots.iter().map(PathBuf::as_path));
     Ok((reg, errs))
 }
-
-#[allow(dead_code)]
-fn _unused(_p: &Path) {}

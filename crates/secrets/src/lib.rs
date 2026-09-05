@@ -204,24 +204,6 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
     Ok(None)
 }
 
-/// Fetch a secret from env or the shared provider vault only. This intentionally
-/// skips legacy per-key keychain entries so startup/background paths do not
-/// prompt for old entries outside explicit import or compatibility flows.
-pub fn get_env_or_vault(env_var_name: &str, account: &str) -> Result<Option<String>, SecretError> {
-    if let Ok(value) = std::env::var(env_var_name)
-        && !value.is_empty()
-    {
-        trace!(env_var = env_var_name, "secret resolved from env var");
-        return Ok(Some(value));
-    }
-
-    if let Some(value) = cached_vault_value(account)? {
-        trace!(account, "secret resolved from provider vault");
-        return Ok(Some(value));
-    }
-
-    Ok(None)
-}
 
 fn cached_vault_value(account: &str) -> Result<Option<String>, SecretError> {
     cached_vault_value_with_backend(&CACHED_VAULT, &KeychainSecretBackend, account)

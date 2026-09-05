@@ -3,11 +3,8 @@
 //!
 //! # Why this crate exists
 //!
-//! `crates/core` exposes `montage_core::SessionEvent` — an
-//! internal enum the TUI consumes directly. The desktop frontend cannot
-//! consume that enum: it is not `serde`-friendly (carries non-serializable
-//! variants like `Usage`), it is not stable across releases, and its
-//! shape is dictated by the agent loop's needs, not the renderer's.
+//! The desktop renders Codex agent activity through a protocol independent
+//! of the runtime's internal event types.
 //!
 //! This crate defines a stable, versioned, `serde` + TypeScript-friendly
 //! protocol that:
@@ -773,8 +770,7 @@ mod agent_profile_contract_tests {
     }
 }
 
-/// One row in a Plan item — mirrors `montage_core::tool::PlanItem` but
-/// stripped to fields the frontend actually renders.
+/// One row in an editorial plan, with the fields the frontend renders.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct PlanStep {

@@ -6,18 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 description = "Codex app-server bridge for Montage surfaces"
 
-[features]
-default = []
-in-process-codex = [
-    "dep:codex-app-server-client",
-    "dep:codex-app-server-protocol",
-    "dep:codex-config",
-    "dep:codex-core",
-    "dep:codex-protocol",
-    "dep:codex-arg0",
-    "dep:codex-feedback",
-]
-
 [lib]
 name = "montage_codex_bridge"
 
@@ -25,22 +13,7 @@ name = "montage_codex_bridge"
 # Desktop wire protocol — the `Item` types we emit.
 montage-desktop-protocol = { workspace = true }
 
-# Codex app-server in-process client + protocol types.
-# These stay optional so default desktop builds use the external app-server
-# binary and do not compile the vendored Codex Rust graph.
-codex-app-server-client = { workspace = true, optional = true }
-codex-app-server-protocol = { workspace = true, optional = true }
-codex-config = { workspace = true, optional = true }
-codex-core = { workspace = true, optional = true }
-codex-protocol = { workspace = true, optional = true }
-codex-arg0 = { workspace = true, optional = true }
-codex-feedback = { workspace = true, optional = true }
-
-# Non-optional: the R31 direct-tool-exposure override
-# (`src/tool_exposure.rs`) resolves codex_home to write the patched model
-# catalog, and it runs on the *external* app-server path that the default
-# desktop build compiles (no `in-process-codex`). This crate is light —
-# `dirs` + absolute-path, no vendored protocol graph.
+# Lightweight helper for locating the Codex home and patched model catalog.
 codex-utils-home-dir = { workspace = true }
 
 serde = { workspace = true }

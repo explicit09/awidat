@@ -18,7 +18,7 @@
 //! The watcher is best-effort: registry-read failures are logged
 //! and retried next tick.
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -217,12 +217,4 @@ fn first_line(s: &str) -> String {
     } else {
         head.to_string()
     }
-}
-
-#[allow(dead_code)]
-pub fn registry_path(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".montage")
-        .join("generated-media")
-        .join("registry.json")
 }

@@ -1,20 +1,7 @@
-//! Ported Montage video tools, in MCP-native form.
-//!
-//! Each submodule corresponds to one tool that used to live in
-//! `crates/core/src/tools/`. Step 5 of the codex-harness migration
-//! ports them onto `MontageMcpServer`. The original files in
-//! `crates/core/src/tools/` stay live until step 7 deletes the old
-//! Montage agent loop; until then, both call sites use distinct
-//! copies of the logic.
-//!
-//! Rule of thumb when porting:
-//! - Copy the pure helpers (validation, collection, rendering) into
-//!   the new module. They do NOT depend on `ToolContext`.
-//! - Each `pub fn` here is callable from `montage_mcp::mod`'s
-//!   `#[tool(...)]` method. The method handles serde and result
-//!   shaping; the helpers handle real work.
-//! - Use [`crate::montage_mcp::context::McpToolCtx::resolve`] to get
-//!   the project root.
+//! Montage MCP tools. Each module implements one tool; the router in
+//! `montage_mcp::mod` handles argument decoding and tool registration.
+
+mod image_result;
 
 pub mod analyze_sync;
 pub mod apply_edl;

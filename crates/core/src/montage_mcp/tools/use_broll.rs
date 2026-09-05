@@ -9,7 +9,6 @@
 //! behaviors are intentionally dropped in the port: codex performs the
 //! destructive-hint approval before dispatching the call.
 
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use schemars::JsonSchema;
@@ -285,11 +284,6 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}…", &s[..cut])
 }
 
-/// Project-relative b-roll directory. Exposed so the post-import
-/// chain or other tools can discover Pexels-fetched assets.
-pub fn broll_dir(project_root: &Path) -> PathBuf {
-    project_root.join("raw").join("broll")
-}
 
 pub const DESCRIPTION: &str = "\
 Download a Pexels video chosen from a prior `search_broll` result \

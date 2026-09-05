@@ -1,16 +1,7 @@
-//! Per-tool-call execution context for the in-process MCP server.
+//! Per-tool-call context for the Montage MCP server.
 //!
-//! Codex spawns `montage-mcp-server` as a child process. The server
-//! has no enclosing `Session`, so the rich `crate::tool::ToolContext`
-//! (events_tx, approval_tx, job_manager, mcp_host, …) doesn't apply
-//! here. Most of the simple read-only tools only need `project_root`;
-//! this shim resolves that from an env var with a cwd fallback. The
-//! intentionally-tiny surface is what step 5 of the migration plan
-//! ports tools against.
-//!
-//! When a future ported tool needs more state (a render job_manager,
-//! a lazy MCP indexer pool) we'll grow this struct rather than
-//! widening every tool signature.
+//! Resolves the project root from the environment, with a current-directory
+//! fallback, for tools running in the Codex-spawned server process.
 
 use std::path::PathBuf;
 
