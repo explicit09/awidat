@@ -122,7 +122,7 @@ async function makePage() {
   const errors = [];
   activePage = page;
   activeErrors = errors;
-  page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
+  page.on("pageerror", (e) => errors.push(`pageerror: ${e.stack ?? e.message}`));
   page.on("console", (m) => {
     if (m.type() === "error") errors.push(`console.error: ${m.text()}`);
   });
@@ -187,12 +187,12 @@ try {
     assert.deepEqual(errors, []);
     await page.close();
   });
-  await check("proposal queue uses the edited clip's actual time", async () => {
+  await check("proposal queue uses the actual trim boundary", async () => {
     const { page, errors } = await makePage();
     await page.goto(new URL("tests/ui-harness.html?project=1&scenario=proposal", BASE_URL).href);
     const change = page.getByRole("button", { name: /Change 1/ });
     await change.waitFor();
-    assert.match(await change.innerText(), /0:00/);
+    assert.match(await change.innerText(), /0:07/);
     await change.click();
     assert.deepEqual(errors, []);
     await page.close();
@@ -226,6 +226,26 @@ try {
       const { useMediaStore } = await import("/src/media/store.ts");
       return Math.abs(useMediaStore.getState().timelineTime - 6) < 0.1;
     });
+    assert.deepEqual(errors, []);
+    await page.close();
+  });
+
+
+  await check("delivery, skills, and history use the live workspace", async () => {
+    const { page, errors } = await makePage();
+    await page.goto(new URL("tests/ui-harness.html?project=1", BASE_URL).href);
+    await page.getByRole("button", { name: "Chat", exact: true }).waitFor();
+    for (const stage of ["deliver", "skills", "history"]) {
+      await page.evaluate(async (next) => {
+        const { useStageStore } = await import("/src/state/stages.ts");
+        useStageStore.getState().set(next);
+      }, stage);
+      await page.getByRole("button", { name: "← Stage", exact: true }).waitFor();
+      await page.locator("span.capitalize").filter({ hasText: new RegExp(`^${stage}$`) }).waitFor();
+      if (stage === "skills") await page.getByText("Podcast edit", { exact: true }).waitFor();
+      assert.equal(await page.getByText("Delivery confidence", { exact: true }).count(), 0);
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/${stage}.png` });
+    }
     assert.deepEqual(errors, []);
     await page.close();
   });

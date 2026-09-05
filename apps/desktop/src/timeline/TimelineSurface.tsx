@@ -38,7 +38,6 @@ import {
 } from "./renderer.ts";
 import { computeCanvasLayout } from "./canvasLayout.ts";
 import { buildGhostRanges } from "./ghostClipRanges.ts";
-import { usePendingProposals } from "./pendingProposals.ts";
 import { useTimelineProposalFocus } from "./timelineProposalFocus.ts";
 import { TimelineEditorialOverlay } from "./TimelineEditorialOverlay.tsx";
 import { TimelineGhostOverlay } from "./TimelineGhostOverlay.tsx";
@@ -189,7 +188,7 @@ function TimelineCanvas({
   // Pending cut-medium proposals power the ghost-overlay pass. The
   // DOM <TimelineGhostOverlay> sibling owns the hover affordance and
   // keyboard handling; the canvas just draws the dashed-cyan bands.
-  const pendingProposals = usePendingProposals((s) => s.pending);
+  const pendingProposals = useProposalStore((s) => s.pending);
   const focusedProposalId = useTimelineProposalFocus((s) => s.focusedId);
   // Wave 4 W4.6 — Review → flashes. Subscribe to the focus controller's
   // ephemeral range set so the canvas re-paints when a range arrives

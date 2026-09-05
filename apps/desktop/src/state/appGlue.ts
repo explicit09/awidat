@@ -31,7 +31,6 @@ import {
 import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
-import { usePendingProposals } from "../timeline/pendingProposals";
 import {
   isApprovalRequestItem,
   useBriefProposalsStore,
@@ -74,8 +73,6 @@ export function useAppGlue() {
   const clearProposal = useProposalStore((s) => s.clear);
   const ingestProposal = useProposalStore((s) => s.ingest);
   const activeProposal = useProposalStore((s) => s.active);
-  const ingestPendingProposal = usePendingProposals((s) => s.ingest);
-  const clearPendingProposals = usePendingProposals((s) => s.clear);
   const ingestBriefApproval = useBriefProposalsStore((s) => s.ingestApproval);
   const ingestBriefBroll = useBriefProposalsStore((s) => s.ingestBroll);
   const clearBriefProposals = useBriefProposalsStore((s) => s.clear);
@@ -124,7 +121,6 @@ export function useAppGlue() {
       const item = event.payload.item;
       if (isProposedEditItem(item)) {
         ingestProposal(item);
-        ingestPendingProposal(item);
       }
       if (isApprovalRequestItem(item)) {
         ingestBriefApproval(item);
@@ -176,7 +172,6 @@ export function useAppGlue() {
     setActiveTurnId,
     setTurnError,
     ingestProposal,
-    ingestPendingProposal,
     ingestBriefApproval,
     ingestNote,
     refreshGeneratedMedia,
@@ -331,7 +326,6 @@ export function useAppGlue() {
     clearProjectScopedFrontendState();
     clearAgent();
     clearProposal();
-    clearPendingProposals();
     clearBriefProposals();
     clearMediaStreamUrlCache();
     clearMediaSelection(null);
@@ -387,7 +381,6 @@ export function useAppGlue() {
     current,
     clearAgent,
     clearProposal,
-    clearPendingProposals,
     clearBriefProposals,
     clearMediaSelection,
     clearSelection,

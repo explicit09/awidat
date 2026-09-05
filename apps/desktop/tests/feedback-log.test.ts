@@ -22,7 +22,7 @@ import {
   type BriefDispatch,
   type FeedbackPayload,
 } from "../src/state/briefProposals.ts";
-import { usePendingProposals } from "../src/timeline/pendingProposals.ts";
+import { useProposalStore } from "../src/timeline/proposal.ts";
 import { useProjectStore } from "../src/app/state.ts";
 
 interface FeedbackCall {
@@ -54,7 +54,7 @@ function reset(opts: {
     brollDecided: new Set(),
     dispatch,
   });
-  usePendingProposals.setState({ pending: [] });
+  useProposalStore.setState({ pending: [] });
   // Set / unset project root for logFeedback's gate.
   useProjectStore.setState({
     current: opts.projectPath === undefined ? "/proj-a" : opts.projectPath,
@@ -83,7 +83,7 @@ function ingestApproval(
 
 function ingestProposedEdit(id: string, summary: string, rationale?: string): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  usePendingProposals.getState().ingest({
+  useProposalStore.getState().ingest({
     kind: "proposed_edit",
     id,
     phase: "started",

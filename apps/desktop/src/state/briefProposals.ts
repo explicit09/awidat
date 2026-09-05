@@ -1,3 +1,4 @@
+import type { ProposalMedium } from "../timeline/proposalMedium";
 // useBriefProposalsStore — single source of truth for the Brief stack.
 //
 // Two flows feed the Brief surface (Wave 3 B1):
@@ -6,7 +7,7 @@
 //     bash) — owned by this store, kept in its own approvals map.
 //
 //  2. User/agent-initiated `Item::ProposedEdit` — owned by
-//     `usePendingProposals` (timeline ghost overlay lifecycle). We
+//     `useProposalStore` (timeline ghost overlay lifecycle). We
 //     mirror it read-only here; one source of truth, two views.
 //
 // Auto-decided exclusion: codex itself decides which server-requests
@@ -20,10 +21,9 @@ import { create } from "zustand";
 import type { Item, ItemLifecycle } from "../protocol";
 import { useColorPreviewOverride } from "../properties/store.ts";
 import {
-  usePendingProposals,
+  useProposalStore,
   type PendingProposal,
-  type ProposalMedium,
-} from "../timeline/pendingProposals.ts";
+} from "../timeline/proposal.ts";
 import { useProjectStore } from "../app/state.ts";
 import {
   buildHistoryEntry,
@@ -154,7 +154,7 @@ interface BriefState {
   ingestBroll: (entry: BrollEntry) => void;
   /** Drop a generated-broll row when the underlying job disappears. */
   removeBroll: (jobId: string) => void;
-  /** Combined view: approvals ∪ usePendingProposals.pending ∪ broll, newest first. */
+  /** Combined view: approvals ∪ useProposalStore.pending ∪ broll, newest first. */
   pending: () => BriefProposal[];
   accept: (id: string) => Promise<void>;
   reject: (id: string, reason?: string) => Promise<void>;
@@ -296,7 +296,7 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
     const approvals = Array.from(get().approvals.values()).map(
       approvalToBriefProposal,
     );
-    const proposedEdits = usePendingProposals
+    const proposedEdits = useProposalStore
       .getState()
       .pending.map(pendingToBriefProposal);
     const broll = Array.from(get().brollProposals.values()).map(
@@ -338,7 +338,7 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
       logDecision(snapshot, "accepted", timelineSnapshot);
       return;
     }
-    // Otherwise it's a proposed_edit — usePendingProposals clears its
+    // Otherwise it's a proposed_edit — useProposalStore clears its
     // own entry when the backend emits Completed.
     await state.dispatch.acceptProposal(id);
     const timelineSnapshot = await state.dispatch.captureTimelineSnapshot();

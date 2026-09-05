@@ -1,22 +1,10 @@
-// Zustand store for the in-flight EDL proposal. Subscribed to the
-// `montage://item` Tauri channel for `Item::ProposedEdit` deltas.
-// Drops Deltas with stale revisions (rapid-drag race protection).
-//
-// The backend's pending_proposals map is per-call_id, so concurrent
-// proposals can coexist. The canvas still shows one ghost overlay at
-// a time, but the store keeps the rest available for inspector
-// selection instead of dropping them.
-
+// One proposal queue owns the timeline, inspector, and Brief lifecycle.
 import { create } from "zustand";
 import type {
-  AppliedDiff,
-  Item,
-  ProposalAlternative,
-  ProposalEvidence,
-  ProposalSource,
-  RiskLevel,
-  TimelineSnapshot,
+  AppliedDiff, Item, ProposalAlternative, ProposalEvidence, ProposalSource,
+  RiskLevel, TimelineSnapshot,
 } from "../protocol";
+import { deriveMedium, type ProposalMedium } from "./proposalMedium.ts";
 
 /** Subset of `Item::ProposedEdit` the canvas + actions need. */
 export type ActiveProposal = {
@@ -44,61 +32,54 @@ export type ActiveProposal = {
   rationale?: string;
 };
 
+export interface PendingProposal extends ActiveProposal {
+  medium: ProposalMedium;
+  firstSeenAt: number;
+}
+
 type ProposalState = {
-  /** The single in-flight proposal, or null when none is open. */
-  active: ActiveProposal | null;
-  /** All pending proposals known to the desktop, ordered by arrival. */
-  pending: ActiveProposal[];
-  /** Apply an Item::ProposedEdit emission. Drops stale Deltas. */
+  active: PendingProposal | null;
+  pending: PendingProposal[];
   ingest: (item: Extract<Item, { kind: "proposed_edit" }>) => void;
-  /** Make one pending proposal the active canvas/inspector proposal. */
   select: (callId: string) => void;
-  /** Drop the active proposal. Called after Accept/Reject completes. */
   clear: () => void;
 };
 
 export const useProposalStore = create<ProposalState>((set) => ({
   active: null,
   pending: [],
-  ingest: (item) =>
-    set((state) => {
-      // Completed phase always wins — it ends the lifecycle.
-      if (item.phase === "completed") {
-        const pending = state.pending.filter(
-          (proposal) => proposal.callId !== item.id,
-        );
-        if (state.active?.callId === item.id) {
-          return { active: pending[pending.length - 1] ?? null, pending };
-        }
-        return { pending };
-      }
-      if (item.phase === "started") {
-        const proposal = proposalFromStartedItem(item);
-        return {
-          active: proposal,
-          pending: upsertProposal(state.pending, proposal),
-        };
-      }
-      // Delta: only apply if the call_id matches and revision is
-      // newer than what we have. Stale-Delta drops protect against
-      // rapid-drag races.
-      const pending = state.pending.map((proposal) =>
-        proposal.callId === item.id
-          ? proposalFromDeltaItem(proposal, item)
-          : proposal,
-      );
-      if (state.active?.callId === item.id) {
-        const active = proposalFromDeltaItem(state.active, item);
-        return { active, pending: upsertProposal(pending, active) };
-      }
-      return { pending };
-    }),
-  select: (callId) =>
-    set((state) => ({
-      active:
-        state.pending.find((proposal) => proposal.callId === callId) ??
-        state.active,
-    })),
+  ingest: (item) => set((state) => {
+    if (item.phase === "completed") {
+      const pending = state.pending.filter((proposal) => proposal.callId !== item.id);
+      return {
+        pending,
+        active: state.active?.callId === item.id
+          ? pending[pending.length - 1] ?? null : state.active,
+      };
+    }
+    const existing = state.pending.find((proposal) => proposal.callId === item.id);
+    // Late deltas cannot recreate completed proposals or rewind their revision.
+    if (item.phase === "delta" && !existing) return state;
+    if (existing && item.revision <= existing.revision) return state;
+    const projected = existing
+      ? proposalFromDeltaItem(existing, item) : proposalFromStartedItem(item);
+    const proposal: PendingProposal = {
+      ...projected,
+      medium: deriveMedium(projected),
+      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+    };
+    if (existing) recordRevision(existing);
+    const pending = existing
+      ? state.pending.map((entry) => entry.callId === item.id ? proposal : entry)
+      : [...state.pending, proposal];
+    return {
+      pending,
+      active: !existing || state.active?.callId === item.id ? proposal : state.active,
+    };
+  }),
+  select: (callId) => set((state) => ({
+    active: state.pending.find((proposal) => proposal.callId === callId) ?? state.active,
+  })),
   clear: () => set({ active: null, pending: [] }),
 }));
 
@@ -149,19 +130,42 @@ function proposalFromDeltaItem(
   };
 }
 
-function upsertProposal(
-  pending: readonly ActiveProposal[],
-  proposal: ActiveProposal,
-): ActiveProposal[] {
-  const index = pending.findIndex((item) => item.callId === proposal.callId);
-  if (index === -1) return [...pending, proposal];
-  return pending.map((item, itemIndex) =>
-    itemIndex === index ? proposal : item,
-  );
-}
-
 export function isProposedEditItem(
   item: Item,
 ): item is Extract<Item, { kind: "proposed_edit" }> {
   return item.kind === "proposed_edit";
+}
+
+/**
+ * Append a "revised" event to the persisted history log for the prior
+ * state of a pending proposal. Dynamic-imported to keep this module
+ * free of the project-store / history-store dependency cycle (the
+ * brief proposals store also imports here).
+ */
+function recordRevision(prior: PendingProposal): void {
+  void Promise.all([import("../app/state"), import("../state/proposalHistory")])
+    .then(([{ useProjectStore }, { buildHistoryEntry, useProposalHistoryStore }]) => {
+      const projectPath = useProjectStore.getState().current;
+      if (!projectPath) return;
+      const entry = buildHistoryEntry({
+        proposal: {
+          id: prior.callId,
+          source: "proposed_edit",
+          medium: prior.medium,
+          title:
+            prior.summary && prior.summary.trim().length > 0
+              ? prior.summary
+              : "Proposed edit",
+          rationale: prior.rationale,
+          firstSeenAt: prior.firstSeenAt,
+          toolName: undefined,
+        },
+        projectPath,
+        decision: "revised",
+      });
+      useProposalHistoryStore.getState().record(entry);
+    })
+    .catch(() => {
+      // History logging is best-effort chrome. Never fail an ingest.
+    });
 }

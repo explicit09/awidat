@@ -32,8 +32,6 @@ export type DeliveryRenderSummary = {
   duration: string;
   estimatedSize?: string;
   outputs: number;
-  /** 0..1 — how confident the system is that the render will be clean. */
-  confidence: number;
 };
 
 export const ALL_TARGETS: DeliveryTargetKey[] = [

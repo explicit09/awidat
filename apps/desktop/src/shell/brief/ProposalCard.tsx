@@ -21,7 +21,7 @@ import type {
 } from "../../state/briefProposals";
 import { useBriefProposalsStore } from "../../state/briefProposals";
 import { useFocusController } from "../../state/focusController";
-import { usePendingProposals } from "../../timeline/pendingProposals";
+import { useProposalStore } from "../../timeline/proposal";
 import { RejectReasonPicker } from "./RejectReasonPicker";
 
 /**
@@ -143,7 +143,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     // PendingProposal entry — we look them up by callId rather than
     // adding them to the BriefProposal projection (keeps that view
     // load-bearing-data-free for the row chrome).
-    const pending = usePendingProposals
+    const pending = useProposalStore
       .getState()
       .pending.find((p) => p.callId === proposal.id);
     focusProposal({

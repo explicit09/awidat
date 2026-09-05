@@ -2,7 +2,7 @@
 // merges agent-initiated ApprovalRequests with user/agent-initiated
 // ProposedEdits.
 //
-// The store mirrors `usePendingProposals` for ProposedEdit-backed rows
+// The store mirrors `useProposalStore` for ProposedEdit-backed rows
 // (no copy of state), and owns its own ApprovalRequest map. We exercise:
 //
 //  1. ApprovalRequest enters via ingestApproval, lands on the stack.
@@ -23,7 +23,7 @@ import {
   useBriefProposalsStore,
   type BriefDispatch,
 } from "../src/state/briefProposals.ts";
-import { usePendingProposals } from "../src/timeline/pendingProposals.ts";
+import { useProposalStore } from "../src/timeline/proposal.ts";
 
 function resetAll(mockDispatch?: Partial<BriefDispatch>): {
   respondCalls: Array<{ callId: string; decision: string }>;
@@ -66,7 +66,7 @@ function resetAll(mockDispatch?: Partial<BriefDispatch>): {
     brollDecided: new Set(),
     dispatch,
   });
-  usePendingProposals.setState({ pending: [] });
+  useProposalStore.setState({ pending: [] });
   return {
     respondCalls,
     acceptCalls,
@@ -125,7 +125,7 @@ function ingestApproval(fake: unknown): void {
 
 function ingestPending(fake: unknown): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  usePendingProposals.getState().ingest(fake as any);
+  useProposalStore.getState().ingest(fake as any);
 }
 
 // 1. ApprovalRequest enters via ingestApproval and is queryable
@@ -449,14 +449,14 @@ function ingestPending(fake: unknown): void {
 }
 
 // 9. clear() drops only approvals — proposed_edits are owned by
-//    usePendingProposals and aren't this store's to forget.
+//    useProposalStore and aren't this store's to forget.
 {
   resetAll();
   ingestApproval(makeApproval("a1", "started", "apply_edl"));
   ingestPending(makeProposedEdit("p1", "started"));
   useBriefProposalsStore.getState().clear();
   // Approvals gone, proposed_edits still visible through pending()
-  // because they live in usePendingProposals.
+  // because they live in useProposalStore.
   const pending = useBriefProposalsStore.getState().pending();
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.source, "proposed_edit");

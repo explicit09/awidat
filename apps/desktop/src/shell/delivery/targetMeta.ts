@@ -79,3 +79,8 @@ export function targetKeyForKind(
   }
   return null;
 }
+
+/** Targets that support publishing after render. */
+export function isUploadCapableTarget(key: DeliveryTargetKey): boolean {
+  return key === "youtube" || key === "twitter_x";
+}
