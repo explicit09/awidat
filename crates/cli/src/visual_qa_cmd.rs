@@ -10,6 +10,7 @@ use montage_core::montage_mcp::tools::view_program_frame::{
 use montage_core::visual_qa::audit_motion_scenes;
 use montage_proto::otio::{Clip, Stack, StackChild, Track, TrackChild};
 use montage_proto::project::Project;
+use rmcp::model::RawContent;
 use serde_json::Value;
 
 pub struct MotionScenesArgs {
@@ -146,7 +147,7 @@ fn render_program_frame_json(args: ProgramFrameArgs) -> Result<Value> {
         .enable_all()
         .build()
         .context("failed to build async runtime")?;
-    let raw = runtime
+    let result = runtime
         .block_on(render_program_frame(
             ViewProgramFrameArgs {
                 t_s: args.t_s,
@@ -158,12 +159,20 @@ fn render_program_frame_json(args: ProgramFrameArgs) -> Result<Value> {
             },
         ))
         .map_err(|message| anyhow::anyhow!(message))?;
-    let mut value: Value =
-        serde_json::from_str(&raw).context("program frame returned invalid JSON")?;
-    if !args.include_base64
+    let mut value = result
+        .structured_content
+        .context("program frame returned no structured metadata")?;
+    if args.include_base64
+        && let Some(image) = result
+            .content
+            .iter()
+            .find_map(|content| match &content.raw {
+                RawContent::Image(image) => Some(image),
+                _ => None,
+            })
         && let Some(object) = value.as_object_mut()
     {
-        object.remove("image_base64");
+        object.insert("image_base64".into(), Value::String(image.data.clone()));
     }
     Ok(value)
 }

@@ -183,6 +183,7 @@ use crate::montage_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::montage_mcp::tools::verify_render::{self, VerifyRenderArgs};
 use crate::montage_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::montage_mcp::tools::view_frame::{self, ViewFrameArgs};
+use crate::montage_mcp::tools::view_frame_contact_sheet::{self, ViewFrameContactSheetArgs};
 use crate::montage_mcp::tools::view_program_frame::{self, ViewProgramFrameArgs};
 use crate::montage_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
@@ -1367,13 +1368,11 @@ direction predictions more carefully.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
-    /// `view_frame` — extract one frame from an asset and return it
-    /// as a JSON payload with a base64-encoded image.
+    /// `view_frame` — extract one frame from an asset as native image content.
     #[tool(
         description = "\
-Extract a single frame from a video asset at time `t_s` and return it \
-as a JSON payload carrying base64-encoded image bytes plus a textual \
-summary. Use this to *see* a moment — for example, to confirm a cut \
+Extract a single frame from a video asset at time `t_s` and return native \
+image content plus a provenance summary. Use this to *see* a moment — for example, to confirm a cut \
 lands on the right shot, or to read text on screen. detail='preview' \
 (default, <=768px longest edge) keeps the image cheap; \
 detail='original' returns source resolution. format='png' (default) | \
@@ -1381,18 +1380,34 @@ detail='original' returns source resolution. format='png' (default) | \
 (asset, time, format, dim, grade).",
         annotations(read_only_hint = true)
     )]
-    pub async fn view_frame(&self, args: Parameters<ViewFrameArgs>) -> Result<String, ErrorData> {
+    pub async fn view_frame(
+        &self,
+        args: Parameters<ViewFrameArgs>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         view_frame::run(args.0, gated_ctx("view_frame")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
-    /// `view_program_frame` — render one composed timeline frame and
-    /// return it as a JSON payload with a base64-encoded image.
+    /// `view_frame_contact_sheet` — compose ranked source frames into one grid.
+    #[tool(
+        description = "Create a bounded grid from 2 to 12 ranked source-frame times and return it as one native image. Use the contact sheet for inexpensive visual selection, then call view_frame with detail='original' only for tiles that need closer inspection.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_frame_contact_sheet(
+        &self,
+        args: Parameters<ViewFrameContactSheetArgs>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        view_frame_contact_sheet::run(args.0, gated_ctx("view_frame_contact_sheet")?)
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_program_frame` — render one composed timeline frame as native image content.
     #[tool(
         description = "\
-Render one composed program frame at timeline-local `t_s` and return a JSON \
-payload carrying base64-encoded image bytes plus cache paths. Use this after \
+Render one composed program frame at timeline-local `t_s` and return native \
+image content plus cache provenance. Use this after \
 applying visual changes to inspect what the rendered program frame actually \
 looks like: MotionScene layers, titles, B-roll/PiP, annotations, and broadcast \
 overlays are captured together. detail='preview' (default, <=768px longest \
@@ -1403,7 +1418,7 @@ format='png' (default) | 'jpeg'.",
     pub async fn view_program_frame(
         &self,
         args: Parameters<ViewProgramFrameArgs>,
-    ) -> Result<String, ErrorData> {
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         view_program_frame::run(args.0, gated_ctx("view_program_frame")?)
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
@@ -2771,5 +2786,34 @@ functional once the MCP indexer pool lands.",
     }
 }
 
+// Keep the catalog stable: the bundled Codex client caches tools at startup
+// and does not refresh them on tools/list_changed. Skill restrictions are
+// enforced at invocation by gated_ctx, rather than by hiding tool schemas.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MontageMcpServer {}
+
+#[cfg(test)]
+mod direct_tool_surface_tests {
+    use super::*;
+
+    #[test]
+    fn cached_catalog_contains_tools_for_later_skill_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = MontageMcpServer::new();
+        let cached = server.tool_router.list_all();
+        for (skill, tool) in [("render-review", "start_render"), ("import", "import_local")] {
+            assert!(cached.iter().any(|entry| entry.name == tool));
+            assert!(!crate::skill_session::allowed_in_direct_mode(dir.path(), tool));
+            crate::skill_session::set_active_skill(dir.path(), skill, vec![tool.into()]).unwrap();
+            assert!(crate::skill_session::allowed_in_direct_mode(dir.path(), tool));
+        }
+        assert!(!crate::skill_session::allowed_in_direct_mode(
+            dir.path(),
+            "start_render"
+        ));
+        assert!(crate::skill_session::allowed_in_direct_mode(
+            dir.path(),
+            "load_skill"
+        ));
+    }
+}

@@ -62,6 +62,8 @@ pub struct RenderCanvas {
     pub width: u32,
     /// Canvas height in pixels.
     pub height: u32,
+    /// Output cadence in frames per second.
+    pub frame_rate: u32,
 }
 
 impl Default for RenderCanvas {
@@ -71,6 +73,7 @@ impl Default for RenderCanvas {
         Self {
             width: TIMELINE_RENDER_WIDTH,
             height: TIMELINE_RENDER_HEIGHT,
+            frame_rate: TIMELINE_RENDER_FPS,
         }
     }
 }
@@ -87,14 +90,17 @@ impl RenderCanvas {
             "9:16" => Self {
                 width: 1080,
                 height: 1920,
+                frame_rate: TIMELINE_RENDER_FPS,
             },
             "1:1" => Self {
                 width: 1080,
                 height: 1080,
+                frame_rate: TIMELINE_RENDER_FPS,
             },
             "4:5" => Self {
                 width: 1080,
                 height: 1350,
+                frame_rate: TIMELINE_RENDER_FPS,
             },
             // "16:9" and anything unrecognized.
             _ => Self::default(),
@@ -105,12 +111,45 @@ impl RenderCanvas {
 /// Read the conform canvas from a timeline's `output_format` metadata,
 /// defaulting to the 16:9 1920×1080 master when absent or malformed.
 fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderCanvas {
-    metadata
+    let format = metadata
         .and_then(|m| m.extra.get("output_format"))
+        .filter(|format| format.is_object());
+    let mut canvas = format
         .and_then(|format| format.get("aspect_ratio"))
         .and_then(|ratio| ratio.as_str())
         .map(RenderCanvas::from_aspect_ratio)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(format) = format {
+        let width = format.get("width").and_then(|value| value.as_u64());
+        let height = format.get("height").and_then(|value| value.as_u64());
+        if let (Some(width), Some(height)) = (width, height)
+            && width.is_multiple_of(2)
+            && height.is_multiple_of(2)
+            && (16..=8192).contains(&width)
+            && (16..=8192).contains(&height)
+        {
+            canvas.width = width as u32;
+            canvas.height = height as u32;
+        }
+        if let Some(frame_rate) = format.get("frame_rate").and_then(|value| value.as_f64())
+            && frame_rate.fract() == 0.0
+            && (1.0..=120.0).contains(&frame_rate)
+        {
+            canvas.frame_rate = frame_rate as u32;
+        }
+    }
+    canvas
+}
+
+fn timeline_encode_profile(canvas: RenderCanvas) -> (&'static str, &'static str) {
+    if canvas.width > TIMELINE_RENDER_WIDTH
+        || canvas.height > TIMELINE_RENDER_HEIGHT
+        || canvas.frame_rate > TIMELINE_RENDER_FPS
+    {
+        ("medium", "18")
+    } else {
+        ("veryfast", "20")
+    }
 }
 /// Output frame rate the timeline renderer conforms every segment to
 /// before `concat`. Matches [`timeline_frame_rate`]'s default fallback
@@ -144,8 +183,8 @@ fn append_segment_conform_filter(
     }
     let w = canvas.width;
     let h = canvas.height;
-    let fps = TIMELINE_RENDER_FPS;
-    if canvas == RenderCanvas::default() {
+    let fps = canvas.frame_rate;
+    if canvas.width > canvas.height {
         filter.push_str(&format!(
             "{video_label}scale={w}:{h}:force_original_aspect_ratio=decrease,\
 pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p{conform_label};"
@@ -5556,6 +5595,7 @@ fn append_video_overlays(
     base: FilterPlan,
     video_overlays: &[VideoOverlayPlan],
     first_overlay_input: usize,
+    canvas: RenderCanvas,
 ) -> FilterPlan {
     if video_overlays.is_empty() {
         return base;
@@ -5586,6 +5626,7 @@ fn append_video_overlays(
             motion_blurred_overlay_transform_filter(MotionBlurTransformContext {
                 idx,
                 overlay,
+                canvas,
                 source_label: &pts_label,
                 base_label: &current,
                 start,
@@ -5599,7 +5640,7 @@ fn append_video_overlays(
         }
         let rotation_deg = overlay_rotation_deg_expr(overlay, "t");
         let has_rotation = rotation_deg.is_some();
-        let scale_expr = overlay_scale_expr(overlay, "t");
+        let scale_expr = overlay_scale_expr(overlay, "t", canvas);
         let (x_expr, y_expr) = overlay_position_exprs(overlay, has_rotation, "t");
         let (rotation_filter, rotated_label) = if let Some(rotation_deg) = rotation_deg {
             let rotated_label = format!("[media_overlay_rot{idx}]");
@@ -6383,7 +6424,9 @@ fn overlay_mask_keyframe_value_expr(
     }
 }
 
-fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
+fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str, canvas: RenderCanvas) -> String {
+    let width = canvas.width;
+    let height = canvas.height;
     let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1", time_var);
     // Keep overlay sizing independent from the live program stream.
     // Using scale2ref here makes every overlay wait on the previous
@@ -6393,17 +6436,17 @@ fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
         VideoOverlayMode::FullFrame => {
             if has_overlay_animation(overlay, "overlay.scale") {
                 format!(
-                    "w={TIMELINE_RENDER_WIDTH}*({scale_multiplier}):h={TIMELINE_RENDER_HEIGHT}*({scale_multiplier}):eval=frame"
+                    "w={width}*({scale_multiplier}):h={height}*({scale_multiplier}):eval=frame"
                 )
             } else {
-                format!("w={TIMELINE_RENDER_WIDTH}:h={TIMELINE_RENDER_HEIGHT}")
+                format!("w={width}:h={height}")
             }
         }
         VideoOverlayMode::PiP { scale, .. } => {
             if has_overlay_animation(overlay, "overlay.scale") {
-                format!("w={TIMELINE_RENDER_WIDTH}*{scale}*({scale_multiplier}):h=-2:eval=frame")
+                format!("w={width}*{scale}*({scale_multiplier}):h=-2:eval=frame")
             } else {
-                format!("w={TIMELINE_RENDER_WIDTH}*{scale}:h=-2")
+                format!("w={width}*{scale}:h=-2")
             }
         }
     }
@@ -6475,6 +6518,7 @@ fn overlay_position_exprs(
 struct MotionBlurTransformContext<'a> {
     idx: usize,
     overlay: &'a VideoOverlayPlan,
+    canvas: RenderCanvas,
     source_label: &'a str,
     base_label: &'a str,
     start: f64,
@@ -6531,7 +6575,7 @@ fn motion_blurred_overlay_transform_filter(
 
     for (sample_idx, offset) in offsets.into_iter().enumerate() {
         let sample_time_var = offset_time_var("t", offset);
-        let sample_scale = overlay_scale_expr(context.overlay, &sample_time_var);
+        let sample_scale = overlay_scale_expr(context.overlay, &sample_time_var, context.canvas);
         filter.push_str(&format!(
             "{}scale={sample_scale}{};",
             sample_labels[sample_idx], scaled_labels[sample_idx],
@@ -10627,6 +10671,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     ass_workdir: Option<&Path>,
     canvas: RenderCanvas,
 ) -> Vec<String> {
+    let (encode_preset, encode_crf) = timeline_encode_profile(canvas);
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
     let first_matte_input = first_motion_image_input
@@ -10667,7 +10712,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     let base = FilterPlanner::new(&segs, transitions)
         .with_canvas(canvas)
         .plan();
-    let media = append_video_overlays(base, &video_overlays, segs.len());
+    let media = append_video_overlays(base, &video_overlays, segs.len(), canvas);
     let annotated = append_motion_images_and_annotations(
         media,
         motion_images,
@@ -10728,9 +10773,9 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
-        "veryfast".into(),
+        encode_preset.into(),
         "-crf".into(),
-        "20".into(),
+        encode_crf.into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
     ]);
@@ -10903,6 +10948,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     ass_workdir: Option<&Path>,
     canvas: RenderCanvas,
 ) -> Vec<String> {
+    let (encode_preset, encode_crf) = timeline_encode_profile(canvas);
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_motion_image_input = segs.len() + video_overlays.len();
     let first_matte_input = first_motion_image_input
@@ -10970,6 +11016,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         },
         &video_overlays,
         segs.len(),
+        canvas,
     );
     let annotated = append_motion_images_and_annotations(
         media,
@@ -11039,9 +11086,9 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
-        "veryfast".into(),
+        encode_preset.into(),
         "-crf".into(),
-        "20".into(),
+        encode_crf.into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
     ]);
@@ -11065,8 +11112,8 @@ fn plan_video_only_filter(
     let mut filter = String::new();
     if segs.is_empty() {
         filter.push_str(&format!(
-            "color=c=black:s={}x{}:r=30:d={fallback_duration_s}[vonly];",
-            canvas.width, canvas.height
+            "color=c=black:s={}x{}:r={}:d={fallback_duration_s}[vonly];",
+            canvas.width, canvas.height, canvas.frame_rate
         ));
         return filter;
     }
@@ -12073,6 +12120,7 @@ fn build_single_asset_concat_demuxer_reencode_argv(
     output_path: &Path,
     canvas: RenderCanvas,
 ) -> Vec<String> {
+    let (encode_preset, encode_crf) = timeline_encode_profile(canvas);
     let mut argv = vec![
         "-y".into(),
         "-loglevel".into(),
@@ -12094,16 +12142,16 @@ fn build_single_asset_concat_demuxer_reencode_argv(
             "select=concatdec_select,setpts=PTS-STARTPTS,\
 scale={}:{}:force_original_aspect_ratio=decrease,\
 pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={},format=yuv420p",
-            canvas.width, canvas.height, canvas.width, canvas.height, TIMELINE_RENDER_FPS
+            canvas.width, canvas.height, canvas.width, canvas.height, canvas.frame_rate
         ),
         "-af".into(),
         "aselect=concatdec_select,asetpts=N/SR/TB,aresample=async=1:first_pts=0".into(),
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
-        "veryfast".into(),
+        encode_preset.into(),
         "-crf".into(),
-        "20".into(),
+        encode_crf.into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
     ];
@@ -15476,21 +15524,24 @@ mod tests {
             RenderCanvas::from_aspect_ratio("9:16"),
             RenderCanvas {
                 width: 1080,
-                height: 1920
+                height: 1920,
+                frame_rate: 30,
             }
         );
         assert_eq!(
             RenderCanvas::from_aspect_ratio("1:1"),
             RenderCanvas {
                 width: 1080,
-                height: 1080
+                height: 1080,
+                frame_rate: 30,
             }
         );
         assert_eq!(
             RenderCanvas::from_aspect_ratio("4:5"),
             RenderCanvas {
                 width: 1080,
-                height: 1350
+                height: 1350,
+                frame_rate: 30,
             }
         );
         // 16:9 and unknown labels fall back to the landscape default.
@@ -15506,7 +15557,8 @@ mod tests {
             RenderCanvas::default(),
             RenderCanvas {
                 width: 1920,
-                height: 1080
+                height: 1080,
+                frame_rate: 30,
             }
         );
     }
@@ -15522,7 +15574,8 @@ mod tests {
             timeline_render_canvas(Some(&meta)),
             RenderCanvas {
                 width: 1080,
-                height: 1920
+                height: 1920,
+                frame_rate: 30,
             }
         );
         // Absent metadata -> landscape default.
@@ -17933,6 +17986,94 @@ layout_box: None,
     }
 
     #[test]
+    fn output_canvas_sizes_overlays_in_both_audio_paths() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        for canvas in [
+            RenderCanvas {
+                width: 2560,
+                height: 1440,
+                frame_rate: 60,
+            },
+            RenderCanvas {
+                width: 1080,
+                height: 1920,
+                frame_rate: 60,
+            },
+        ] {
+            for animated in [false, true] {
+                let overlay = VideoOverlayPlan {
+                    segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+                    track_start_s: 0.0,
+                    mode: VideoOverlayMode::FullFrame,
+                    rotation_deg: 0.0,
+                    motion_blur: animated.then_some(OverlayMotionBlurPlan { shutter_s: 0.02 }),
+                    corner_pin_filter: None,
+                    matte_source: None,
+                    matte_input_index: None,
+                    mask: None,
+                    animations: if animated {
+                        vec![RenderParameterAnimation {
+                            parameter: "overlay.scale".to_string(),
+                            keyframes: vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 1.5)],
+                            pre_extrapolation: ExtrapolationMode::Hold,
+                            post_extrapolation: ExtrapolationMode::Hold,
+                            motion_path: None,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                };
+                let overlays = [overlay];
+                let implicit_audio = build_timeline_argv_full_with_annotations_and_ass(
+                    &segs,
+                    &[],
+                    &overlays,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    None,
+                    None,
+                    Path::new("/tmp/out.mp4"),
+                    None,
+                    canvas,
+                );
+                let explicit_audio = build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
+                    &segs,
+                    &[],
+                    &overlays,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    None,
+                    None,
+                    &[],
+                    Path::new("/tmp/out.mp4"),
+                    None,
+                    canvas,
+                );
+                for argv in [implicit_audio, explicit_audio] {
+                    let filter = filter_complex_from_argv(&argv);
+                    let expected = if animated {
+                        format!("scale=w={}*(", canvas.width)
+                    } else {
+                        format!("scale=w={}:h={}", canvas.width, canvas.height)
+                    };
+                    let samples = if animated { 3 } else { 1 };
+                    assert!(filter.matches(&expected).count() >= samples, "{filter}");
+                    if animated {
+                        let expected_height = format!(":h={}*(", canvas.height);
+                        assert!(filter.matches(&expected_height).count() >= 3, "{filter}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn timeline_argv_composites_pip_overlay_after_base_concat() {
         let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
         let overlays = vec![VideoOverlayPlan {
@@ -20318,6 +20459,7 @@ layout_box: None,
         let vertical_canvas = RenderCanvas {
             width: 1080,
             height: 1920,
+            frame_rate: 30,
         };
 
         // Exercise the first production call site:

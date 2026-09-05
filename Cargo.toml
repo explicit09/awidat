@@ -613,6 +613,9 @@ ignored = [
 # backtraces lose line numbers (use the `profiling` profile when you need them).
 debug = "none"
 strip = "symbols"
+# Incremental state accounted for 6.1 GiB after one rebuild on this machine.
+# Prefer slower clean recompiles over silently retaining hundreds of sessions.
+incremental = false
 
 [profile.dev-small]
 # Codex's "fast iterate" dev profile.
@@ -651,6 +654,7 @@ strip = false
 # backtraces while shrinking the linked output substantially.
 [profile.test]
 debug = "line-tables-only"
+incremental = false
 
 [profile.ci-test]
 # Codex CI profile — smaller debug info, no optimization.

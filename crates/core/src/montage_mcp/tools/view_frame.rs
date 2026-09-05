@@ -1,10 +1,7 @@
-//! `view_frame` — extract one frame from an asset and return it as a
-//! base64-encoded image payload. Ported from
+//! `view_frame` — extract one frame from an asset and return native MCP
+//! image content. Ported from
 //! `crates/core/src/tools/view_frame.rs` to the in-process MCP server.
 //!
-//! The rmcp `#[tool]` wrapper here only returns `Result<String, _>`,
-//! so the response is a JSON document carrying the base64 image,
-//! media type, byte length, and a textual summary the model can use.
 //! Cache layout: `<project>/.montage/cache/frames/<asset-hash>/<t_ms>_<dim>_<grade>.<ext>`.
 
 use std::path::{Path, PathBuf};
@@ -15,6 +12,7 @@ use montage_proto::otio::{StackChild, Timeline, TrackChild};
 use montage_proto::project::files;
 use montage_render::ffmpeg::{ImageFormat, extract_frame_complex, extract_frame_filtered};
 use montage_render::{ClipGradePreview, build_clip_preview_filtergraph};
+use rmcp::model::{Annotated, CallToolResult, Content, Meta, RawContent, RawImageContent};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,9 +47,8 @@ pub struct ViewFrameArgs {
 }
 
 /// Run `view_frame` against the project resolved from
-/// [`McpToolCtx`]. Returns a JSON body that carries the base64 image
-/// payload, media type, byte count, and a textual summary.
-pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<String, String> {
+/// [`McpToolCtx`]. Returns text provenance followed by native image content.
+pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<CallToolResult, String> {
     if !args.t_s.is_finite() || args.t_s < 0.0 {
         return Err(format!(
             "view_frame: t_s ({}) must be finite and >= 0",
@@ -139,7 +136,6 @@ pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<String, String>
         bytes
     };
 
-    let b64 = B64.encode(&bytes);
     let grade_summary = match grade.as_ref() {
         Some(p) => {
             let mut s = if p.graph.is_some() {
@@ -169,21 +165,46 @@ pub async fn run(args: ViewFrameArgs, ctx: McpToolCtx) -> Result<String, String>
         grade_summary,
     );
 
-    Ok(serde_json::json!({
-        "summary": summary,
-        "asset": args.asset,
-        "t_s": args.t_s,
-        "media_type": format.media_type(),
-        "byte_len": bytes.len(),
-        "image_base64": b64,
-    })
-    .to_string())
+    Ok(image_tool_result(
+        format!("{summary}; cache={}", cache_path.display()),
+        &bytes,
+        format.media_type(),
+        detail,
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Detail {
     Preview,
     Original,
+}
+
+fn image_tool_result(
+    summary: String,
+    bytes: &[u8],
+    mime_type: &str,
+    detail: Detail,
+) -> CallToolResult {
+    let meta = match detail {
+        Detail::Preview => None,
+        Detail::Original => {
+            let mut meta = Meta::new();
+            meta.insert(
+                "codex/imageDetail".to_string(),
+                serde_json::json!("original"),
+            );
+            Some(meta)
+        }
+    };
+    let image = Annotated::new(
+        RawContent::Image(RawImageContent {
+            data: B64.encode(bytes),
+            mime_type: mime_type.to_string(),
+            meta,
+        }),
+        None,
+    );
+    CallToolResult::success(vec![Content::text(summary), image])
 }
 
 fn resolve_asset_path(project_root: &Path, asset: &str) -> Result<PathBuf, String> {
@@ -280,11 +301,62 @@ fn resolve_grade_preview(project_root: &Path, clip_name: &str) -> Result<ClipGra
 
 pub const DESCRIPTION: &str = "\
 Extract a single frame from a video asset at time `t_s` and return it \
-as a JSON payload carrying base64-encoded image bytes plus a textual \
-summary. Use this to *see* a moment — for example, to confirm a cut \
+as native image content plus a short provenance summary. Use this to \
+*see* a moment — for example, to confirm a cut \
 lands on the right shot, or to read text on screen. detail='preview' \
 (default, <=768px longest edge) keeps the image cheap; \
 detail='original' returns source resolution. format='png' (default) | \
 'jpeg'. Frames are cached under .montage/cache/frames/ keyed by \
 (asset, time, format, dim, grade).\
 ";
+
+#[cfg(test)]
+mod image_result_tests {
+    use super::*;
+    use rmcp::model::RawContent;
+
+    #[test]
+    fn frame_result_uses_native_image_content_without_base64_text() {
+        let result = image_tool_result(
+            "frame 1.250s of raw/take.mov (image/png, 4 bytes)".to_string(),
+            &[0, 1, 2, 3],
+            "image/png",
+            Detail::Preview,
+        );
+
+        assert_eq!(result.content.len(), 2);
+        let RawContent::Text(text) = &result.content[0].raw else {
+            panic!("first block should be text provenance");
+        };
+        assert!(text.text.contains("frame 1.250s"));
+        assert!(!text.text.contains("AAECAw=="));
+
+        let RawContent::Image(image) = &result.content[1].raw else {
+            panic!("second block should be native image content");
+        };
+        assert_eq!(image.data, "AAECAw==");
+        assert_eq!(image.mime_type, "image/png");
+        assert!(image.meta.is_none());
+    }
+
+    #[test]
+    fn original_frame_requests_original_codex_image_detail() {
+        let result = image_tool_result(
+            "original frame".to_string(),
+            &[0, 1, 2, 3],
+            "image/jpeg",
+            Detail::Original,
+        );
+        let RawContent::Image(image) = &result.content[1].raw else {
+            panic!("second block should be native image content");
+        };
+
+        assert_eq!(
+            image
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("codex/imageDetail")),
+            Some(&serde_json::json!("original"))
+        );
+    }
+}

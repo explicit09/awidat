@@ -225,15 +225,16 @@ fn format_addendum(format: &ProjectFormat) -> &'static str {
 fn permission_line(mode: PromptPermissionMode) -> &'static str {
     match mode {
         PromptPermissionMode::Manual => {
-            "**Permission mode: manual.** Every proposal needs explicit user approval. \
-             Surface findings via Editorial Notes when asked; don't propose edits unprompted. \
+            "**Permission mode: manual.** Inspect freely and create Notes, reversible \
+             proposals and previews proactively when they help answer the request; the \
+             user must explicitly accept before any proposal changes the timeline. \
              For dirty continuity verdicts, surface a continuity_warning Note quoting the \
              rule reasons rather than auto-bundling a transition — the user decides."
         }
         PromptPermissionMode::Copilot => {
-            "**Permission mode: copilot.** Surface editorial findings as Notes proactively. \
-             Don't issue apply_edl proposals unless the user explicitly asks (or clicks 'Fix' \
-             on a Note); your role is to flag, the user's role is to act. For dirty continuity \
+            "**Permission mode: copilot.** Surface findings as Notes and create reversible \
+             proposals and previews proactively when they advance the user's goal; the \
+             user must explicitly accept before any proposal changes the timeline. For dirty continuity \
              verdicts, the Note's reasons array is the user's primary signal — they decide \
              whether to accept the bundled fix you suggested or cut anyway."
         }
@@ -244,7 +245,8 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
              repair: recut to a cleaner boundary, `*** Set Audio Lead` / `*** Set Audio Trail` \
              for J/L cuts, a motivated b-roll cover for visual jar, or a visible transition only \
              when the recommendation names a transition job. The user reviews the bundle in the \
-             ghost overlay and accepts or rejects as a whole."
+             ghost overlay and must explicitly accept or reject it as a whole. Never publish \
+             or export without an explicit user request."
         }
     }
 }
@@ -799,6 +801,20 @@ mod tests {
         // Each mode's line must be distinct.
         assert!(!manual.contains("autopilot"));
         assert!(!autopilot.contains("manual"));
+    }
+
+    #[test]
+    fn reversible_proposals_are_allowed_without_weakening_acceptance_safety() {
+        let manual = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
+        let copilot =
+            assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Copilot);
+
+        for prompt in [&manual, &copilot] {
+            assert!(prompt.contains("proposals and previews proactively"));
+            assert!(prompt.contains("user must explicitly accept"));
+            assert!(!prompt.contains("don't propose edits unprompted"));
+            assert!(!prompt.contains("Don't issue apply_edl proposals unless"));
+        }
     }
 
     #[test]

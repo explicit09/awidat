@@ -61,6 +61,7 @@ pub async fn start_turn(
     );
 
     let turn_context = context.unwrap_or_default();
+    let agent_profile = super::agent_profile::read_profile(&project_root);
     let model_input = format_model_input(
         &input,
         state.view_state.lock().await.as_ref(),
@@ -120,7 +121,7 @@ pub async fn start_turn(
             .ok_or_else(|| "codex session vanished mid-launch".to_string())?;
         session
             .bridge
-            .start_turn(model_input, None)
+            .start_turn(model_input, agent_profile)
             .await
             .map_err(|e| format!("start_turn: {e}"))?
     };

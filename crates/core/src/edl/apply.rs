@@ -841,12 +841,18 @@ fn apply_one(
             aspect_ratio,
             platform,
             safe_area,
+            width,
+            height,
+            frame_rate,
         } => apply_set_output_format(
             working,
             index,
             aspect_ratio,
             platform.as_deref(),
             safe_area.as_deref(),
+            *width,
+            *height,
+            *frame_rate,
         ),
         EdlOp::SetLoudnessTarget {
             integrated_lufs,
@@ -8715,6 +8721,9 @@ fn apply_set_output_format(
     aspect_ratio: &str,
     platform: Option<&str>,
     safe_area: Option<&str>,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate: Option<u32>,
 ) -> Result<String, ApplyError> {
     const SUPPORTED: &[&str] = &["16:9", "9:16", "1:1", "4:5"];
     if !SUPPORTED.contains(&aspect_ratio) {
@@ -8725,6 +8734,32 @@ fn apply_set_output_format(
             ),
         });
     }
+    if width.is_some() != height.is_some() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_output_format: width and height must be supplied together".into(),
+        });
+    }
+    if let (Some(width), Some(height)) = (width, height)
+        && (!(16..=8192).contains(&width)
+            || !(16..=8192).contains(&height)
+            || !width.is_multiple_of(2)
+            || !height.is_multiple_of(2))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_output_format: width and height must be even values from 16 to 8192"
+                .into(),
+        });
+    }
+    if let Some(frame_rate) = frame_rate
+        && !(1..=120).contains(&frame_rate)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_output_format: frame_rate must be from 1 to 120".into(),
+        });
+    }
     let meta = timeline_montage_metadata(working);
     meta.extra.insert(
         "output_format".into(),
@@ -8732,11 +8767,14 @@ fn apply_set_output_format(
             "aspect_ratio": aspect_ratio,
             "platform": platform,
             "safe_area": safe_area,
+            "width": width,
+            "height": height,
+            "frame_rate": frame_rate,
         }),
     );
     Ok(format!(
-        "set output format to aspect_ratio={aspect_ratio:?}, platform={:?}, safe_area={:?}",
-        platform, safe_area
+        "set output format to aspect_ratio={aspect_ratio:?}, platform={:?}, safe_area={:?}, dimensions={:?}x{:?}, frame_rate={:?}",
+        platform, safe_area, width, height, frame_rate
     ))
 }
 
@@ -15743,6 +15781,9 @@ mod tests {
                     aspect_ratio: "9:16".into(),
                     platform: Some("youtube_shorts".into()),
                     safe_area: Some("mobile".into()),
+                    width: Some(1080),
+                    height: Some(1920),
+                    frame_rate: Some(60),
                 },
                 EdlOp::SetLoudnessTarget {
                     integrated_lufs: -16.0,
@@ -15769,6 +15810,20 @@ mod tests {
                 .and_then(|v| v.get("aspect_ratio"))
                 .and_then(|v| v.as_str()),
             Some("9:16"),
+        );
+        assert_eq!(
+            extra
+                .get("output_format")
+                .and_then(|v| v.get("width"))
+                .and_then(|v| v.as_u64()),
+            Some(1080),
+        );
+        assert_eq!(
+            extra
+                .get("output_format")
+                .and_then(|v| v.get("frame_rate"))
+                .and_then(|v| v.as_u64()),
+            Some(60),
         );
         assert_eq!(
             extra

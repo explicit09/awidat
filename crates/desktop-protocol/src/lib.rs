@@ -743,6 +743,36 @@ pub enum PermissionMode {
     Autopilot,
 }
 
+/// Per-project Codex capability profile. Balanced preserves the routine
+/// Terra/medium cost-quality point; Deep Edit opts into Sol/high for work
+/// where editorial and visual judgment matter more than latency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfile {
+    /// Routine cleanup and mechanical execution.
+    Balanced,
+    /// Story, montage, transition, and visual-review work.
+    DeepEdit,
+}
+
+#[cfg(test)]
+mod agent_profile_contract_tests {
+    use super::AgentProfile;
+
+    #[test]
+    fn agent_profiles_serialize_as_stable_project_values() {
+        assert_eq!(
+            serde_json::to_string(&AgentProfile::Balanced).unwrap(),
+            "\"balanced\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentProfile::DeepEdit).unwrap(),
+            "\"deep_edit\""
+        );
+    }
+}
+
 /// One row in a Plan item — mirrors `montage_core::tool::PlanItem` but
 /// stripped to fields the frontend actually renders.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

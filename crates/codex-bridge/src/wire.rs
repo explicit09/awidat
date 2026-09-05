@@ -1,3 +1,4 @@
+use montage_desktop_protocol::AgentProfile;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -105,8 +106,9 @@ pub fn turn_start_request(
     id: i64,
     thread_id: &str,
     text: String,
-    model: Option<String>,
+    profile: AgentProfile,
 ) -> serde_json::Value {
+    let (model, effort) = profile_settings(profile);
     json!({
         "id": id,
         "method": "turn/start",
@@ -118,8 +120,16 @@ pub fn turn_start_request(
                 "textElements": [],
             }],
             "model": model,
+            "effort": effort,
         },
     })
+}
+
+pub(crate) fn profile_settings(profile: AgentProfile) -> (&'static str, &'static str) {
+    match profile {
+        AgentProfile::Balanced => (MONTAGE_DEFAULT_MODEL, "medium"),
+        AgentProfile::DeepEdit => ("gpt-5.6-sol", "high"),
+    }
 }
 
 pub fn turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> serde_json::Value {
@@ -131,4 +141,36 @@ pub fn turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> serde_
             "turnId": turn_id,
         },
     })
+}
+
+#[cfg(test)]
+mod agent_profile_tests {
+    use super::*;
+    use montage_desktop_protocol::AgentProfile;
+
+    #[test]
+    fn deep_edit_turn_selects_sol_with_high_effort() {
+        let request = turn_start_request(
+            7,
+            "thread-1",
+            "shape the story".to_string(),
+            AgentProfile::DeepEdit,
+        );
+
+        assert_eq!(request["params"]["model"], "gpt-5.6-sol");
+        assert_eq!(request["params"]["effort"], "high");
+    }
+
+    #[test]
+    fn balanced_turn_selects_terra_with_medium_effort() {
+        let request = turn_start_request(
+            8,
+            "thread-1",
+            "remove dead air".to_string(),
+            AgentProfile::Balanced,
+        );
+
+        assert_eq!(request["params"]["model"], "gpt-5.6-terra");
+        assert_eq!(request["params"]["effort"], "medium");
+    }
 }

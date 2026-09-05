@@ -73,6 +73,7 @@ export type { EditorialNoteKind } from "./generated/EditorialNoteKind";
 export type { EditorialNoteStatus } from "./generated/EditorialNoteStatus";
 export type { ProjectType } from "./generated/ProjectType";
 export type { PermissionMode } from "./generated/PermissionMode";
+export type { AgentProfile } from "./generated/AgentProfile";
 // Continuity engine (Phase 2).
 export type { ContinuityVerdictTag } from "./generated/ContinuityVerdictTag";
 // B-roll suggestions (Phase 3).

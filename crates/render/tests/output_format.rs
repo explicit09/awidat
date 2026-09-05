@@ -96,3 +96,41 @@ fn default_output_format_stays_landscape() {
         "expected the default 1920x1080 landscape conform canvas, got: {cmd}",
     );
 }
+
+#[test]
+fn explicit_output_profile_controls_canvas_and_frame_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_output_format(dir.path(), "16:9");
+    let timeline_path = dir.path().join(files::OTIO);
+    let mut timeline: Timeline =
+        serde_json::from_str(&fs::read_to_string(&timeline_path).unwrap()).unwrap();
+    timeline.metadata.montage.as_mut().unwrap().extra.insert(
+        "output_format".to_string(),
+        serde_json::json!({
+            "aspect_ratio": "16:9",
+            "width": 2560,
+            "height": 1440,
+            "frame_rate": 60.0,
+        }),
+    );
+    fs::write(
+        &timeline_path,
+        serde_json::to_string_pretty(&timeline).unwrap(),
+    )
+    .unwrap();
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("scale=2560:1440:force_original_aspect_ratio=decrease,pad=2560:1440"),
+        "expected an explicit 2560x1440 conform canvas, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("fps=60"),
+        "expected the explicit 60 fps cadence, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("-preset medium -crf 18"),
+        "expected the high-quality encode profile, got: {cmd}",
+    );
+}

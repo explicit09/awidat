@@ -1,5 +1,4 @@
-//! Force direct MCP-tool exposure by neutralizing codex's tool-search
-//! deferral (R31).
+//! Configure direct or native-search MCP tool exposure (R31).
 //!
 //! The refreshed codex (upstream 315195492c80) defers **every** MCP tool
 //! behind a tool-search mechanism whenever the active model reports
@@ -16,14 +15,14 @@
 //! The only remaining lever is `model_info.supports_search_tool`, and the
 //! only config surface that reaches it is a full model-catalog override
 //! (`model_catalog_json`, `vendor/codex-rs/core/src/config/mod.rs:360`).
-//! For Montage this deferral is a regression, not a feature: on organically
+//! For Montage this deferral was a regression: on organically
 //! phrased editing prompts ("do a quick cleanup pass") the model never
 //! issues a tool-search, never sees the 116-tool Montage surface, and
 //! shell-scripts edits to `project.otio.json` directly — bypassing the
 //! validate/diff/proposal flow the whole product is built around
 //! (confirmed in the live A/B, 2026-07-20).
 //!
-//! This module derives a patched catalog from the vendored `models.json`
+//! Direct mode derives a patched catalog from the vendored `models.json`
 //! at runtime — flipping `supports_search_tool` to `false` on every model
 //! — and writes it under `codex_home` so the override is a stable on-disk
 //! path. The transform is a pure JSON edit (one boolean per model) over
@@ -33,7 +32,11 @@
 //! source (rather than a hand-frozen copy) means the patch auto-tracks
 //! upstream catalog changes on each fork refresh: new models, renamed
 //! slugs, and reasoning edits all flow through untouched except for the
-//! one flag we clear.
+//! one flag we clear. The MCP server advertises a stable catalog and checks
+//! the bootstrap tools plus active skill allowlist at invocation time.
+//! `MONTAGE_CODEX_TOOL_EXPOSURE=native_search`
+//! opts into Codex's native deferred discovery for evaluation; direct remains
+//! the safe default until the checked-in organic-prompt gate passes.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +52,27 @@ const BUNDLED_MODELS_JSON: &str =
 
 /// Filename for the patched catalog under `<codex_home>`.
 const DIRECT_EXPOSURE_CATALOG_FILE: &str = "montage-direct-tools-catalog.json";
+const TOOL_EXPOSURE_ENV: &str = "MONTAGE_CODEX_TOOL_EXPOSURE";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolExposureMode {
+    Direct,
+    NativeSearch,
+}
+
+fn tool_exposure_mode(value: Option<&str>) -> ToolExposureMode {
+    match value.map(str::trim) {
+        Some("native_search") => ToolExposureMode::NativeSearch,
+        _ => ToolExposureMode::Direct,
+    }
+}
+
+pub(crate) fn configured_tool_exposure() -> &'static str {
+    match tool_exposure_mode(std::env::var(TOOL_EXPOSURE_ENV).ok().as_deref()) {
+        ToolExposureMode::Direct => "direct",
+        ToolExposureMode::NativeSearch => "native_search",
+    }
+}
 
 /// Errors deriving or writing the direct-exposure catalog. Non-fatal at
 /// the call site: the bridge logs and continues without the override
@@ -133,6 +157,9 @@ pub fn write_direct_exposure_catalog(codex_home: &Path) -> Result<PathBuf, Catal
 /// Shared by both the external app-server path (`external::app_server_args`,
 /// the default desktop build) and the in-process path.
 pub fn direct_exposure_catalog_override_value() -> Option<String> {
+    if configured_tool_exposure() == "native_search" {
+        return None;
+    }
     let codex_home = match codex_utils_home_dir::find_codex_home() {
         Ok(home) => home,
         Err(e) => {
@@ -158,6 +185,19 @@ pub fn direct_exposure_catalog_override_value() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_exposure_defaults_to_direct_and_allows_native_search_trials() {
+        assert_eq!(tool_exposure_mode(None), ToolExposureMode::Direct);
+        assert_eq!(
+            tool_exposure_mode(Some("native_search")),
+            ToolExposureMode::NativeSearch
+        );
+        assert_eq!(
+            tool_exposure_mode(Some("unknown")),
+            ToolExposureMode::Direct
+        );
+    }
 
     #[test]
     fn every_model_has_search_tool_cleared() {

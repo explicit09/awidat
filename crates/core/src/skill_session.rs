@@ -29,6 +29,27 @@ pub const ALWAYS_ALLOWED: &[&str] = &[
     "set_picture_lock",
 ];
 
+/// Tools callable in direct mode before an editorial skill is active.
+/// It is intentionally sufficient to discover the project, inspect visual
+/// evidence, select a skill, and construct a reviewable edit proposal.
+pub const DIRECT_BOOTSTRAP_TOOLS: &[&str] = &[
+    "load_skill",
+    "load_project_instructions",
+    "attempt_completion",
+    "update_plan",
+    "request_user_input",
+    "set_picture_lock",
+    "view_episode",
+    "list_assets",
+    "view_timeline",
+    "view_frame",
+    "view_frame_contact_sheet",
+    "view_program_frame",
+    "assess_edit_quality",
+    "vedit_diff",
+    "apply_edl",
+];
+
 /// Persisted active skill binding for a project.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveSkill {
@@ -101,6 +122,15 @@ pub fn check_tool_allowed(project_root: &Path, tool: &str) -> Result<(), String>
     if std::env::var_os("MONTAGE_DISABLE_SKILL_ALLOWLIST").is_some() {
         return Ok(());
     }
+    if std::env::var("MONTAGE_CODEX_TOOL_EXPOSURE").as_deref() == Ok("direct") {
+        return if allowed_in_direct_mode(project_root, tool) {
+            Ok(())
+        } else {
+            Err(format!(
+                "tool `{tool}` is outside the active skill allowlist. Load the matching skill to enable it."
+            ))
+        };
+    }
     if ALWAYS_ALLOWED.contains(&tool) {
         return Ok(());
     }
@@ -120,6 +150,17 @@ pub fn check_tool_allowed(project_root: &Path, tool: &str) -> Result<(), String>
         active.name,
         active.tools_allowlist.join(", ")
     ))
+}
+
+/// Decide whether a tool is callable under direct mode's skill restrictions.
+/// The active skill extends the bootstrap rather than replacing it so the
+/// model can always recover, inspect, and propose safely.
+pub fn allowed_in_direct_mode(project_root: &Path, tool: &str) -> bool {
+    if DIRECT_BOOTSTRAP_TOOLS.contains(&tool) {
+        return true;
+    }
+    read_active_skill(project_root)
+        .is_some_and(|active| active.tools_allowlist.iter().any(|name| name == tool))
 }
 
 #[cfg(test)]
@@ -154,5 +195,22 @@ mod tests {
         set_active_skill(dir.path(), "y", Vec::new()).unwrap();
         assert!(read_active_skill(dir.path()).is_none());
         assert!(check_tool_allowed(dir.path(), "start_render").is_ok());
+    }
+
+    #[test]
+    fn direct_surface_is_bootstrap_plus_active_skill_allowlist() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(allowed_in_direct_mode(dir.path(), "view_episode"));
+        assert!(!allowed_in_direct_mode(dir.path(), "start_render"));
+
+        set_active_skill(
+            dir.path(),
+            "visual-review",
+            vec!["start_render".into(), "verify_render".into()],
+        )
+        .unwrap();
+        assert!(allowed_in_direct_mode(dir.path(), "start_render"));
+        assert!(allowed_in_direct_mode(dir.path(), "view_episode"));
+        assert!(!allowed_in_direct_mode(dir.path(), "publish_social"));
     }
 }

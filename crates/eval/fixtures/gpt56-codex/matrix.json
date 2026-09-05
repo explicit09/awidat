@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "profiles": ["balanced", "deep_edit"],
+  "native_search_default_gate": "organic-edit-discovery",
+  "required_metrics": [
+    "editorial_outcome",
+    "invalid_edit_attempts",
+    "direct_otio_mutations",
+    "tool_calls",
+    "approval_turns",
+    "input_tokens",
+    "output_tokens",
+    "elapsed_ms",
+    "visual_verification"
+  ],
+  "cases": [
+    { "id": "organic-edit-discovery", "prompt": "Do a quick cleanup pass.", "skill": "auto-cutter", "required_tools": ["view_episode", "load_skill", "apply_edl", "view_program_frame"] },
+    { "id": "podcast-cleanup", "prompt": "Tighten this podcast while preserving natural pacing.", "skill": "podcast-episode-producer", "required_tools": ["view_episode", "load_skill", "apply_edl"] },
+    { "id": "rough-cut", "prompt": "Build a coherent rough cut from the strongest story beats.", "skill": "rough-cut-assembler", "required_tools": ["view_episode", "load_skill", "apply_edl"] },
+    { "id": "retakes", "prompt": "Find retakes and keep the best delivery.", "skill": "cut-director", "required_tools": ["view_episode", "load_skill", "apply_edl"] },
+    { "id": "b-roll", "prompt": "Suggest and preview motivated B-roll coverage.", "skill": "b-roll-suggester", "required_tools": ["load_skill", "view_frame", "apply_edl"] },
+    { "id": "thematic-montage", "prompt": "Surface a labeled thematic montage option without applying it.", "skill": "thematic-montage-director", "required_tools": ["load_skill", "view_frame", "apply_edl"] },
+    { "id": "multicam", "prompt": "Choose multicam angles that support the speaker and reaction beats.", "skill": "multicam-director", "required_tools": ["load_skill", "view_program_frame", "apply_edl"] },
+    { "id": "pacing", "prompt": "Improve pacing without making the conversation feel robotic.", "skill": "pacing-optimizer", "required_tools": ["load_skill", "assess_edit_quality", "apply_edl"] },
+    { "id": "transitions", "prompt": "Repair only the cuts whose continuity evidence calls for it.", "skill": "transition-director", "required_tools": ["load_skill", "assess_edit_quality", "apply_edl"] },
+    { "id": "reframing", "prompt": "Create a vertical reframe and verify the subject remains composed.", "skill": "short-form-reframing", "required_tools": ["load_skill", "view_program_frame", "apply_edl"] },
+    { "id": "color-review", "prompt": "Review color consistency and propose only evidence-backed fixes.", "skill": "color-corrector", "required_tools": ["load_skill", "view_frame", "view_program_frame"] },
+    { "id": "short-form", "prompt": "Extract the strongest short-form clip with a clear opening hook.", "skill": "short-form", "required_tools": ["load_skill", "view_episode", "apply_edl"] },
+    { "id": "final-visual-qa", "prompt": "Run final visual QA on the rendered program.", "skill": "color-corrector", "required_tools": ["load_skill", "view_program_frame", "verify_render"] }
+  ]
+}

@@ -9,7 +9,7 @@ import { useSettings } from "../state/settings";
 import { FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
-import type { PermissionMode } from "../protocol";
+import type { AgentProfile, PermissionMode } from "../protocol";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 
@@ -120,6 +120,8 @@ export type StageShellProps = {
   onNewChat?: () => void;
   permissionMode?: PermissionMode;
   onSetPermissionMode?: (mode: PermissionMode) => void;
+  agentProfile?: AgentProfile;
+  onSetAgentProfile?: (profile: AgentProfile) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;
   projectType?: string;
@@ -137,6 +139,7 @@ export function StageShell(props: StageShellProps) {
     chatSessions = [], activeChatSession = null, chatLoading = false,
     onOpenHistory, onSelectChatSession, onNewChat,
     permissionMode = "manual", onSetPermissionMode,
+    agentProfile = "balanced", onSetAgentProfile,
     projectLabel, projectType, timecode, agentRead,
   } = props;
 
@@ -429,6 +432,8 @@ export function StageShell(props: StageShellProps) {
                 onNewChat={onNewChat}
                 permissionMode={permissionMode}
                 onSetPermissionMode={onSetPermissionMode}
+                agentProfile={agentProfile}
+                onSetAgentProfile={onSetAgentProfile}
               />
             ) : rightNode}
           </div>

@@ -377,6 +377,9 @@ mod tests {
                     aspect_ratio: "16:9".into(),
                     platform: None,
                     safe_area: None,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
                 },
             ),
             (

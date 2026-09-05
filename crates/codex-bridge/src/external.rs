@@ -29,6 +29,14 @@ const SERVER_ERROR: i64 = -32000;
 const AUTH_REFRESH_UNSUPPORTED: &str =
     "chatgpt auth token refresh is not supported for external app-server runtime";
 const PERMISSION_MODE_FILE: &str = "permission_mode";
+
+pub(crate) fn compact_token_limit(model: &str) -> i64 {
+    if model.starts_with("gpt-5.6-") {
+        250_000
+    } else {
+        200_000
+    }
+}
 const SUPPORTED_SERVER_REQUEST_METHODS: &[&str] = &[
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
@@ -254,7 +262,10 @@ fn app_server_args_with_openrouter_cost_estimate(
         "stdio://".to_string(),
         "--enable-codex-api-key-env".to_string(),
         "-c".to_string(),
-        "model_auto_compact_token_limit=200000".to_string(),
+        format!(
+            "model_auto_compact_token_limit={}",
+            compact_token_limit(crate::wire::MONTAGE_DEFAULT_MODEL)
+        ),
         "-c".to_string(),
         format_toml_string_override_value("compact_prompt", COMPACT_PROMPT),
         "-c".to_string(),
@@ -270,6 +281,11 @@ fn app_server_args_with_openrouter_cost_estimate(
             format_toml_string_override(
                 "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT",
                 project_root,
+            ),
+            "-c".to_string(),
+            format_toml_string_override_value(
+                "mcp_servers.montage.env.MONTAGE_CODEX_TOOL_EXPOSURE",
+                crate::tool_exposure::configured_tool_exposure(),
             ),
         ]);
 
@@ -584,6 +600,9 @@ mod tests {
             dir.display()
         );
         assert!(args.iter().any(|arg| arg == &project_override));
+        assert!(args.iter().any(|arg| {
+            arg == "mcp_servers.montage.env.MONTAGE_CODEX_TOOL_EXPOSURE=\"direct\""
+        }));
         // R31: the dead always-defer feature flag must NOT be emitted — it
         // is a removed no-op upstream and we now force direct exposure via
         // the model_catalog_json override instead (asserted end-to-end in
@@ -626,7 +645,7 @@ mod tests {
             "stdio://".into(),
             "--enable-codex-api-key-env".into(),
             "-c".into(),
-            "model_auto_compact_token_limit=200000".into(),
+            "model_auto_compact_token_limit=250000".into(),
             "-c".into(),
             format_toml_string_override_value("compact_prompt", COMPACT_PROMPT),
             "-c".into(),
@@ -654,6 +673,13 @@ mod tests {
             Some(COMPACT_PROMPT),
         );
         assert!(COMPACT_PROMPT.contains("load_skill again"));
+    }
+
+    #[test]
+    fn gpt_56_compacts_later_with_a_conservative_unknown_fallback() {
+        assert_eq!(compact_token_limit("gpt-5.6-terra"), 250_000);
+        assert_eq!(compact_token_limit("gpt-5.6-sol"), 250_000);
+        assert_eq!(compact_token_limit("future-model"), 200_000);
     }
 
     #[test]

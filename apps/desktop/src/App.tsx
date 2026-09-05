@@ -120,7 +120,7 @@ import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, onMenuCommand } from "./app/menuCommands";
-import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
+import type { AgentProfile, Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
 import { TIMELINE_CHANGED_EVENT } from "./protocol";
 import {
   screen2Activity,
@@ -323,6 +323,7 @@ function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [agentFocusMode, setAgentFocusMode] = useState(false);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("manual");
+  const [agentProfile, setAgentProfileState] = useState<AgentProfile>("balanced");
   // Default-expanded: the saved layout in localStorage gives the
   // Inspector a real proportion (~21%) and the user expects that
   // width back on reload. Starting collapsed loaded a different
@@ -1251,6 +1252,28 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!isTauri() || !current) {
+      setAgentProfileState("balanced");
+      return;
+    }
+    return deferNonCriticalHydration(() => {
+      invoke<AgentProfile>("get_agent_profile")
+        .then((profile) => setAgentProfileState(profile))
+        .catch(() => setAgentProfileState("balanced"));
+    });
+  }, [current]);
+
+  async function changeAgentProfile(next: AgentProfile) {
+    setAgentProfileState(next);
+    if (!isTauri()) return;
+    try {
+      await invoke("set_agent_profile", { profile: next });
+    } catch (error) {
+      console.warn("set_agent_profile failed", error);
+    }
+  }
+
   // Distill agent items into the CommandRail's plan + activity lists.
   // Real agent producers populate `Plan` items, `ToolCall` items, etc.
   // We translate them into shell-friendly shapes here.
@@ -1948,6 +1971,8 @@ function App() {
       onRemoveChip={(chip) => dismissContextChip(chip)}
       permissionMode={permissionMode}
       onSetPermissionMode={(mode) => void changePermissionMode(mode)}
+      agentProfile={agentProfile}
+      onSetAgentProfile={(profile) => void changeAgentProfile(profile)}
       onRenameChat={(session, newTitle) => renameChat(session, newTitle)}
       onDeleteChat={(session) => deleteChat(session)}
       mediaSuggestions={mediaSuggestions}
@@ -2216,6 +2241,8 @@ function App() {
         onNewChat={() => void startNewChat()}
         permissionMode={permissionMode}
         onSetPermissionMode={(mode) => void changePermissionMode(mode)}
+        agentProfile={agentProfile}
+        onSetAgentProfile={(profile) => void changeAgentProfile(profile)}
         projectLabel={current ? projectName(current) : undefined}
         agentRead={
           hasProject

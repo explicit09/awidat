@@ -171,6 +171,8 @@ pub fn run() {
             commands::notes::dismissals_path,
             commands::permission::get_permission_mode,
             commands::permission::set_permission_mode,
+            commands::agent_profile::get_agent_profile,
+            commands::agent_profile::set_agent_profile,
             commands::auth::auth_status,
             commands::auth::auth_set_api_key,
             commands::auth::auth_logout,

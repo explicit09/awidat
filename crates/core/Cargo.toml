@@ -35,6 +35,7 @@ vedit-core = { workspace = true }
 fslock = { workspace = true }
 dirs = { workspace = true }
 base64 = "0.22"
+image = { workspace = true, features = ["png", "jpeg"] }
 sha2 = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

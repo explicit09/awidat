@@ -131,5 +131,6 @@ pub mod vedit_tag;
 pub mod verify_render;
 pub mod view_episode;
 pub mod view_frame;
+pub mod view_frame_contact_sheet;
 pub mod view_program_frame;
 pub mod view_timeline;

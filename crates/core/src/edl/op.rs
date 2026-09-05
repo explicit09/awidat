@@ -764,6 +764,12 @@ pub enum EdlOp {
         platform: Option<String>,
         /// Optional safe-area profile, e.g. `"mobile"`.
         safe_area: Option<String>,
+        /// Optional explicit output width. Must be supplied with `height`.
+        width: Option<u32>,
+        /// Optional explicit output height. Must be supplied with `width`.
+        height: Option<u32>,
+        /// Optional integer output cadence in frames per second.
+        frame_rate: Option<u32>,
     },
     /// Store project-level loudness intent on the timeline graph.
     SetLoudnessTarget {

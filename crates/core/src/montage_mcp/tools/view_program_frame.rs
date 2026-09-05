@@ -14,6 +14,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use montage_proto::project::files;
 use montage_render::RenderJobSpec;
 use montage_render::ffmpeg::{ImageFormat, extract_frame_filtered};
+use rmcp::model::{Annotated, CallToolResult, Content, Meta, RawContent, RawImageContent};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -38,9 +39,9 @@ pub struct ViewProgramFrameArgs {
     pub format: Option<String>,
 }
 
-/// Render the composed program frame at `t_s` and return a JSON body
-/// carrying a base64 image payload plus cache paths/evidence.
-pub async fn run(args: ViewProgramFrameArgs, ctx: McpToolCtx) -> Result<String, String> {
+/// Render the composed program frame at `t_s` and return text provenance
+/// followed by native image content.
+pub async fn run(args: ViewProgramFrameArgs, ctx: McpToolCtx) -> Result<CallToolResult, String> {
     if !args.t_s.is_finite() || args.t_s < 0.0 {
         return Err(format!(
             "view_program_frame: t_s ({}) must be finite and >= 0",
@@ -105,23 +106,62 @@ pub async fn run(args: ViewProgramFrameArgs, ctx: McpToolCtx) -> Result<String, 
         format.media_type(),
         bytes.len()
     );
-    Ok(serde_json::json!({
-        "summary": summary,
-        "t_s": args.t_s,
-        "media_type": format.media_type(),
-        "byte_len": bytes.len(),
-        "image_base64": B64.encode(&bytes),
-        "frame_path": frame_path,
-        "render_window_path": clip_path,
-        "render_window_s": FRAME_WINDOW_S,
-    })
-    .to_string())
+    Ok(program_image_tool_result(
+        format!(
+            "{summary}; cache={}; render_window={}; render_window_s={FRAME_WINDOW_S}",
+            frame_path.display(),
+            clip_path.display()
+        ),
+        &bytes,
+        format.media_type(),
+        detail,
+        serde_json::json!({
+            "summary": summary,
+            "t_s": args.t_s,
+            "media_type": format.media_type(),
+            "byte_len": bytes.len(),
+            "frame_path": frame_path,
+            "render_window_path": clip_path,
+            "render_window_s": FRAME_WINDOW_S,
+        }),
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Detail {
     Preview,
     Original,
+}
+
+fn program_image_tool_result(
+    summary: String,
+    bytes: &[u8],
+    mime_type: &str,
+    detail: Detail,
+    structured_content: serde_json::Value,
+) -> CallToolResult {
+    let meta = match detail {
+        Detail::Preview => None,
+        Detail::Original => {
+            let mut meta = Meta::new();
+            meta.insert(
+                "codex/imageDetail".to_string(),
+                serde_json::json!("original"),
+            );
+            Some(meta)
+        }
+    };
+    let image = Annotated::new(
+        RawContent::Image(RawImageContent {
+            data: B64.encode(bytes),
+            mime_type: mime_type.to_string(),
+            meta,
+        }),
+        None,
+    );
+    let mut result = CallToolResult::success(vec![Content::text(summary), image]);
+    result.structured_content = Some(structured_content);
+    result
 }
 
 async fn render_program_window(
@@ -246,8 +286,8 @@ fn tail(value: &str, max_chars: usize) -> String {
 }
 
 pub const DESCRIPTION: &str = "\
-Render one composed program frame at timeline-local `t_s` and return a JSON \
-payload carrying base64-encoded image bytes plus cache paths. This is for \
+Render one composed program frame at timeline-local `t_s` and return native \
+image content plus a short cache-provenance summary. This is for \
 visual QA after applying timeline visuals: it uses the same timeline render \
 lowering as start_render, so MotionScene layers and broadcast overlays are \
 captured together. detail='preview' (default, <=768px longest edge) keeps the \
@@ -258,6 +298,57 @@ image cheap; detail='original' returns source resolution. format='png' \
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::RawContent;
+
+    #[test]
+    fn program_result_uses_native_image_content_with_paths_in_text_only() {
+        let result = program_image_tool_result(
+            "composed program frame 8.000s; cache=/tmp/frame.png".to_string(),
+            &[0, 1, 2, 3],
+            "image/png",
+            Detail::Preview,
+            serde_json::json!({"t_s": 8.0}),
+        );
+
+        assert_eq!(result.content.len(), 2);
+        let RawContent::Text(text) = &result.content[0].raw else {
+            panic!("first block should be text provenance");
+        };
+        assert!(text.text.contains("cache=/tmp/frame.png"));
+        assert!(!text.text.contains("AAECAw=="));
+
+        let RawContent::Image(image) = &result.content[1].raw else {
+            panic!("second block should be native image content");
+        };
+        assert_eq!(image.data, "AAECAw==");
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"t_s": 8.0}))
+        );
+    }
+
+    #[test]
+    fn original_program_frame_requests_original_codex_image_detail() {
+        let result = program_image_tool_result(
+            "original program frame".to_string(),
+            &[0, 1, 2, 3],
+            "image/jpeg",
+            Detail::Original,
+            serde_json::json!({}),
+        );
+        let RawContent::Image(image) = &result.content[1].raw else {
+            panic!("second block should be native image content");
+        };
+
+        assert_eq!(
+            image
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("codex/imageDetail")),
+            Some(&serde_json::json!("original"))
+        );
+    }
 
     #[test]
     fn rewrite_timeline_argv_replaces_output_and_clips_window() {

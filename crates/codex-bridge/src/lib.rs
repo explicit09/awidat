@@ -55,8 +55,10 @@ use codex_core::config::ConfigBuilder;
 #[cfg(feature = "in-process-codex")]
 use codex_feedback::CodexFeedback;
 #[cfg(feature = "in-process-codex")]
+use codex_protocol::openai_models::ReasoningEffort;
+#[cfg(feature = "in-process-codex")]
 use codex_protocol::protocol::SessionSource;
-use montage_desktop_protocol::Item;
+use montage_desktop_protocol::{AgentProfile, Item};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -353,11 +355,11 @@ impl CodexAppServer {
         // until it hits the model's hard context limit and stalls.
         // We hit exactly that in a session today: 24 polls + 12 video
         // jobs ate the full 258k window before the edit finished.
-        // 200_000 trips compaction at ~78% utilization, leaving the
-        // post-compaction turn room to actually do something.
+        // GPT-5.6's larger working window lets Montage compact later while
+        // retaining enough headroom for a useful post-compaction turn.
         cli_overrides.push((
             "model_auto_compact_token_limit".to_string(),
-            toml::Value::Integer(200_000),
+            toml::Value::Integer(external::compact_token_limit(wire::MONTAGE_DEFAULT_MODEL)),
         ));
 
         if let Some(mcp_path) = mcp_server_path {
@@ -368,6 +370,10 @@ impl CodexAppServer {
             cli_overrides.push((
                 "mcp_servers.montage.env.MONTAGE_PROJECT_ROOT".to_string(),
                 toml::Value::String(project_root.display().to_string()),
+            ));
+            cli_overrides.push((
+                "mcp_servers.montage.env.MONTAGE_CODEX_TOOL_EXPOSURE".to_string(),
+                toml::Value::String(tool_exposure::configured_tool_exposure().to_string()),
             ));
 
             // R31: force direct MCP-tool exposure. The refreshed codex
@@ -535,11 +541,12 @@ impl CodexAppServer {
     }
 
     /// Start a new turn with `input` as the user message. Returns the
-    /// codex-assigned `turn_id`. `model` overrides the per-turn model.
+    /// codex-assigned `turn_id`. `profile` selects the per-turn model and
+    /// reasoning effort, and remains sticky for subsequent turns.
     pub async fn start_turn(
         &self,
         input: String,
-        model: Option<String>,
+        profile: AgentProfile,
     ) -> Result<String, BridgeError> {
         let text = compose_turn_input(
             self.recent_feedback.as_deref(),
@@ -553,13 +560,14 @@ impl CodexAppServer {
                         next_request_id(),
                         &self.thread_id,
                         text,
-                        model,
+                        profile,
                     ))
                     .await?;
                 response.turn.id
             }
             #[cfg(feature = "in-process-codex")]
             CodexBackend::InProcess { request_handle, .. } => {
+                let (model, effort) = wire::profile_settings(profile);
                 request_handle
                     .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {
                         request_id: CodexRequestId::Integer(next_request_id()),
@@ -569,7 +577,11 @@ impl CodexAppServer {
                                 text,
                                 text_elements: Vec::new(),
                             }],
-                            model,
+                            model: Some(model.to_string()),
+                            effort: Some(match effort {
+                                "high" => ReasoningEffort::High,
+                                _ => ReasoningEffort::Medium,
+                            }),
                             ..TurnStartParams::default()
                         },
                     })

@@ -15,7 +15,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Stack, StatusPill, cn } from "../ui";
-import type { PermissionMode } from "../protocol";
+import { AGENT_PROFILE_LABELS, AGENT_PROFILE_OPTIONS } from "../agent/agentProfile";
+import type { AgentProfile, PermissionMode } from "../protocol";
 
 /**
  * Command Rail — the left rail of the cockpit.
@@ -166,6 +167,10 @@ export type CommandRailProps = {
   permissionMode?: PermissionMode;
   /** Called when the user picks a new permission mode from the chip. */
   onSetPermissionMode?: (mode: PermissionMode) => void;
+  /** Current GPT-5.6 Codex capability profile. */
+  agentProfile?: AgentProfile;
+  /** Called when the user changes the capability profile. */
+  onSetAgentProfile?: (profile: AgentProfile) => void;
   /** Called when the user renames a chat from the context menu. */
   onRenameChat?: (session: ChatSessionSummary, newTitle: string) => Promise<void> | void;
   /** Called when the user deletes a chat from the context menu. */
@@ -217,6 +222,8 @@ export function CommandRail({
   onToggleFocus,
   permissionMode,
   onSetPermissionMode,
+  agentProfile = "balanced",
+  onSetAgentProfile,
   onRenameChat,
   onDeleteChat,
   mediaSuggestions = [],
@@ -799,6 +806,10 @@ export function CommandRail({
             </div>
           ) : null}
           <div className="montage-composer-actions">
+            <AgentProfileMenu
+              profile={agentProfile}
+              onChange={onSetAgentProfile}
+            />
             <PermissionModeMenu
               mode={effectivePermissionMode}
               onChange={onSetPermissionMode}
@@ -1484,6 +1495,34 @@ function PermissionModeMenu({
       >
         {options.map((option) => (
           <option key={option.mode} value={option.mode}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function AgentProfileMenu({
+  profile,
+  onChange,
+}: {
+  profile: AgentProfile;
+  onChange?: (next: AgentProfile) => void;
+}) {
+  return (
+    <label className="montage-permission-menu" title="GPT-5.6 Codex capability profile">
+      <Sparkles className="h-3 w-3 stroke-[1.75]" aria-hidden />
+      <span>{AGENT_PROFILE_LABELS[profile]}</span>
+      <ChevronDown className="h-3 w-3 stroke-[1.75]" aria-hidden />
+      <select
+        value={profile}
+        disabled={!onChange}
+        onChange={(event) => onChange?.(event.target.value as AgentProfile)}
+        aria-label="GPT-5.6 Codex capability profile"
+      >
+        {AGENT_PROFILE_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value} title={option.description}>
             {option.label}
           </option>
         ))}

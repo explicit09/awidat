@@ -36,6 +36,7 @@ fn bundled_output_workflow_skills_load() {
         "b-roll-suggester",
         "color-corrector",
         "cut-director",
+        "generated-explainer",
         "interview-tightener",
         "meeting-highlights",
         "multicam-director",
@@ -63,6 +64,50 @@ fn bundled_output_workflow_skills_load() {
         assert!(
             !skill.body.trim().is_empty(),
             "skill {name} must have a body"
+        );
+    }
+}
+
+#[test]
+fn generated_explainer_preserves_scene_sources_and_routes_existing_backends() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("generated-explainer")
+        .expect("generated-explainer exists");
+    for tool in [
+        "plan_visual_support",
+        "plan_motion_scene",
+        "apply_edl",
+        "view_timeline",
+        "view_frame",
+        "start_render",
+        "poll_render",
+        "bash",
+    ] {
+        assert!(
+            skill
+                .meta
+                .tools_allowlist
+                .iter()
+                .any(|allowed| allowed == tool),
+            "generated-explainer must allow {tool}"
+        );
+    }
+    for required in [
+        "generated/explainers/",
+        "explainer_bundle.py",
+        "MotionScene",
+        "Manim",
+        "scene source",
+        "regenerate",
+        "user confirms the scene plan",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "generated-explainer must mention {required:?}"
         );
     }
 }

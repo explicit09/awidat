@@ -1408,6 +1408,10 @@ impl OpBuilder {
                     aspect_ratio,
                     platform: take_field_string(&mut fields, "platform"),
                     safe_area: take_field_string(&mut fields, "safe_area"),
+                    width: take_field_usize(&mut fields, "width").map(|value| value as u32),
+                    height: take_field_usize(&mut fields, "height").map(|value| value as u32),
+                    frame_rate: take_field_usize(&mut fields, "frame_rate")
+                        .map(|value| value as u32),
                 })
             }
             OpKind::SetLoudnessTarget => {
@@ -3446,6 +3450,9 @@ mod tests {
 + aspect_ratio: 9:16
 + platform: youtube_shorts
 + safe_area: mobile
++ width: 1080
++ height: 1920
++ frame_rate: 60
 *** Set Loudness Target
 + integrated_lufs: -16
 + true_peak_db: -1
@@ -3462,7 +3469,10 @@ mod tests {
             EdlOp::SetOutputFormat {
                 aspect_ratio,
                 platform: Some(platform),
-                safe_area: Some(safe_area)
+                safe_area: Some(safe_area),
+                width: Some(1080),
+                height: Some(1920),
+                frame_rate: Some(60)
             } if aspect_ratio == "9:16" && platform == "youtube_shorts" && safe_area == "mobile"
         ));
         assert!(matches!(

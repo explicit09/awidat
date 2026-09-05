@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { History, Plus } from "lucide-react";
+import { History, Plus, Sparkles } from "lucide-react";
 import { ChatStream } from "../agent/ChatStream";
+import { AGENT_PROFILE_OPTIONS } from "../agent/agentProfile";
+import type { AgentProfile } from "../protocol/generated/AgentProfile";
 import type { PermissionMode } from "../protocol/generated/PermissionMode";
 import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
 
@@ -21,6 +23,8 @@ type ConversationPanelProps = {
   onNewChat?: () => void;
   permissionMode?: PermissionMode;
   onSetPermissionMode?: (mode: PermissionMode) => void;
+  agentProfile?: AgentProfile;
+  onSetAgentProfile?: (profile: AgentProfile) => void;
 };
 
 export function ConversationPanel({
@@ -40,6 +44,8 @@ export function ConversationPanel({
   onNewChat,
   permissionMode = "manual",
   onSetPermissionMode,
+  agentProfile = "balanced",
+  onSetAgentProfile,
 }: ConversationPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
@@ -179,6 +185,22 @@ export function ConversationPanel({
               <option value="manual">Manual</option>
               <option value="copilot">Copilot</option>
               <option value="autopilot">Auto</option>
+            </select>
+          </label>
+          <label className="stage-permission-control" title="GPT-5.6 Codex capability profile">
+            <Sparkles className="stage-permission-icon h-3 w-3 stroke-[1.75]" aria-hidden />
+            <select
+              className="stage-permission-select"
+              value={agentProfile}
+              disabled={!onSetAgentProfile}
+              onChange={(event) => onSetAgentProfile?.(event.target.value as AgentProfile)}
+              aria-label="GPT-5.6 Codex capability profile"
+            >
+              {AGENT_PROFILE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value} title={option.description}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
         </div>

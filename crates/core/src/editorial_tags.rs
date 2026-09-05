@@ -62,6 +62,7 @@ pub fn editorial_tags_for_envelope(envelope: &EdlEnvelope) -> Vec<String> {
                 aspect_ratio,
                 platform,
                 safe_area,
+                ..
             } => {
                 push_tag(&mut tags, "format_aspect", Some(aspect_ratio.as_str()));
                 push_tag(&mut tags, "format_platform", platform.as_deref());
