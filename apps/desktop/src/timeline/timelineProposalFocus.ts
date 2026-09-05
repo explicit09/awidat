@@ -17,7 +17,7 @@
 //     action (e.g. cursor enters the timeline canvas with pending cuts).
 //   - `cycle(ids, direction)` walks Tab / Shift+Tab through the list.
 //     Ids are passed in so the store doesn't need its own subscription
-//     to `usePendingProposals`.
+//     to `useProposalStore`.
 //   - `clear()` drops focus (proposal accepted/rejected, ghost gone).
 
 import { create } from "zustand";

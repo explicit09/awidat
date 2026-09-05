@@ -107,10 +107,10 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   ]);
   const hints: AppliedDiff[] = [
     { kind: "insert", op_index: 0, track_index: 0, item_index: 1 },
-    { kind: "trim_edge", op_index: 1, track_index: 0, item_index: 0, side: "end", delta_s: -5 },
+    { kind: "trim_edge", op_index: 1, track_index: 0, item_index: 0, side: "right", delta_s: -5 },
   ];
   const ranges = deriveRanges(hints, current, proposed);
-  assert.deepEqual(ranges, [{ trackIndex: 0, startS: 0, endS: 10 }]);
+  assert.deepEqual(ranges, [{ trackIndex: 0, startS: 0, endS: 10, reviewTimeS: 5 }]);
 }
 
 // Ripple edits change indices and times; trim/split navigation follows identity.
@@ -122,9 +122,29 @@ for (const kind of ["trim_edge", "split"] as const) {
   const proposed = makeSnapshot([[{ index: 0, start: 0, duration: 5, uuid: "B" }]]);
   const hint: AppliedDiff = kind === "split"
     ? { kind, op_index: 1, track_index: 0, item_index: 0, at_s: 5 }
-    : { kind, op_index: 1, track_index: 0, item_index: 0, side: "end", delta_s: -5 };
+    : { kind, op_index: 1, track_index: 0, item_index: 0, side: "right", delta_s: -5 };
   assert.deepEqual(deriveRanges([hint], current, proposed),
-    [{ trackIndex: 0, startS: 10, endS: 20 }]);
+    [{ trackIndex: 0, startS: 10, endS: 20, reviewTimeS: 15 }]);
+}
+
+// Split points and trim edges map source time to playback time, including speed.
+for (const speed of [1, 2]) {
+  const current = makeSnapshot([[{ index: 0, start: 30, duration: 20, uuid: "A" }]]);
+  const proposed = makeSnapshot([[{ index: 0, start: 30, duration: 8 / speed, uuid: "A" }]]);
+  Object.assign(current.tracks[0].items[0], { source_start_s: 10, speed });
+  Object.assign(proposed.tracks[0].items[0], { source_start_s: 10, speed });
+  for (const hint of [
+    { kind: "split", op_index: 0, track_index: 0, item_index: 0, at_s: 18 },
+    { kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "right", delta_s: 12 },
+  ] as AppliedDiff[]) {
+    const ranges = deriveRanges([hint], current, proposed);
+    assert.equal(ranges[0].reviewTimeS, 30 + 8 / speed);
+    const rec = installRecorder(current);
+    useFocusController.getState().focusProposal({
+      proposalId: "exact", medium: "cut", diffHints: [hint], proposedSnapshot: proposed,
+    });
+    assert.deepEqual(rec.seeks, [30 + 8 / speed]);
+  }
 }
 
 // Moving B before A must still navigate to B in the current playback.

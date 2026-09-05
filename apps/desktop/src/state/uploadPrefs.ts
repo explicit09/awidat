@@ -10,7 +10,7 @@ import { create } from "zustand";
 import type { DeliveryTargetKey } from "../shell/delivery/types";
 
 /** Provider keys currently exposed as publishing targets. Keep in sync
- *  with `UPLOAD_CAPABLE_TARGETS` in `TargetsList.tsx`. */
+ *  with `isUploadCapableTarget` in `targetMeta.ts`. */
 const SUPPORTED: ReadonlySet<DeliveryTargetKey> = new Set([
   "youtube",
   "twitter_x",

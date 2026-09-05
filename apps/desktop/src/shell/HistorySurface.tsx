@@ -1,35 +1,11 @@
-/**
- * HistorySurface — the workspace surface for the History tab (Wave 3 T4,
- * Wave 4 W4.5 wired Restore for real).
- *
- * Renders the per-project log of proposal decisions from
- * `useProposalHistoryStore`: every accept, reject, revise, and restore
- * event is surfaced as a chronological row. The data IS the project's
- * history — the propose → ghost → decide loop is Montage's editorial
- * primitive, so the audit trail is the "git log" for a video edit.
- *
- * Layout:
- *   [ filter chips ][ search ]
- *   ──────────────────────────────
- *   | row 1 — newest decision    |
- *   | row 2                      |
- *   | ...                        |
- *
- * Each row carries: relative timestamp, medium chip, source pill,
- * title, rationale (muted), decision badge, and a "↺ Restore" button
- * on rows that carry an inline OTIO snapshot (accepted + restored).
- * Restore confirms via a token-styled modal, dispatches
- * `restore_timeline_otio` to write the snapshot back, then records a
- * "restored" entry so the action itself is reversible.
- */
+/** Project-scoped decision history with filters and snapshot restore. */
 
 import { useEffect, useMemo, useState } from "react";
-import { History as HistoryIcon, RotateCcw, Search, Sparkles, User } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { MEDIUM_STYLE } from "./brief/ProposalCard";
-import { PatternsPanel } from "./PatternsPanel";
 import { synthesizeLearnedPatterns } from "../state/learnedPatterns";
 import {
   buildRestoreEntry,
@@ -37,7 +13,7 @@ import {
   type HistoryDecision,
   type HistoryEntry,
 } from "../state/proposalHistory";
-import { useBriefProposalsStore, type BriefMedium, type BriefProposalSource } from "../state/briefProposals";
+import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
 import { useTimelineStore } from "../timeline/store";
 
 type DecisionFilter = "all" | HistoryDecision;
@@ -88,19 +64,7 @@ const DECISION_BADGE: Record<HistoryDecision, { label: string; className: string
   },
 };
 
-/**
- * `cockpit` (default) is the dense workspace layout. `sheet` is the calm,
- * glass-sheet-native decision-stream timeline used by the 2026 Stage shell.
- * Both variants share the SAME data source (`useProposalHistoryStore`) and
- * filter logic — only the chrome differs.
- */
-export type HistorySurfaceVariant = "sheet" | "cockpit";
-
-export function HistorySurface({
-  variant = "cockpit",
-}: {
-  variant?: HistorySurfaceVariant;
-} = {}) {
+export function HistorySurface() {
   const projectPath = useProjectStore((s) => s.current);
   // Subscribe to entries so re-renders fire on every decision. We
   // re-derive the per-project slice in a memo below.
@@ -112,7 +76,6 @@ export function HistorySurface({
 
   const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>("all");
   const [mediumFilter, setMediumFilter] = useState<MediumFilter>("all");
-  const [query, setQuery] = useState("");
   const [restoreEntry, setRestoreEntry] = useState<HistoryEntry | null>(null);
   const [restoreToast, setRestoreToast] = useState<string | null>(null);
 
@@ -125,139 +88,27 @@ export function HistorySurface({
   }, [restoreToast]);
 
   const filtered = useMemo(
-    () => applyFilters(entries, { decisionFilter, mediumFilter, query }),
-    [entries, decisionFilter, mediumFilter, query],
+    () => applyFilters(entries, { decisionFilter, mediumFilter }),
+    [entries, decisionFilter, mediumFilter],
   );
 
-  if (variant === "sheet") {
-    return (
-      <HistorySheet
-        entries={entries}
-        filtered={filtered}
-        decisionFilter={decisionFilter}
-        mediumFilter={mediumFilter}
-        onDecisionFilter={setDecisionFilter}
-        onMediumFilter={setMediumFilter}
-        restoreEntry={restoreEntry}
-        onOpenRestore={setRestoreEntry}
-        onCloseRestore={() => setRestoreEntry(null)}
-        restoreToast={restoreToast}
-        onRestored={setRestoreToast}
-      />
-    );
-  }
-
   return (
-    <section
-      className="panel flex h-full min-h-0 flex-col overflow-hidden"
-      aria-label="Decision history"
-    >
-      <header className="flex shrink-0 flex-col gap-2 border-b border-[var(--color-border-subtle)] px-3 py-2">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-[var(--color-text-primary)]">
-            <HistoryIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
-            <span className="text-[12px] font-semibold">Decision History</span>
-            <span className="font-mono text-[11px] text-[var(--color-text-muted)]">
-              {entries.length} total
-            </span>
-          </div>
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--color-text-muted)]"
-              strokeWidth={1.75}
-            />
-            <input
-              type="text"
-              placeholder="Filter by title or rationale"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className={cn(
-                "h-7 w-64 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
-                "bg-[var(--color-surface-input)] pl-7 pr-2 text-[11px]",
-                "text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
-                "focus:border-[var(--color-brand)] focus:outline-none",
-              )}
-              aria-label="Filter history"
-            />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {DECISION_FILTERS.map((f) => (
-            <FilterChip
-              key={f.id}
-              label={f.label}
-              active={decisionFilter === f.id}
-              onClick={() => setDecisionFilter(f.id)}
-            />
-          ))}
-          <span className="mx-1 h-3 w-px bg-[var(--color-border-subtle)]" aria-hidden />
-          {MEDIUM_FILTERS.map((f) => (
-            <FilterChip
-              key={f.id}
-              label={f.label}
-              active={mediumFilter === f.id}
-              onClick={() => setMediumFilter(f.id)}
-            />
-          ))}
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <PatternsPanel entries={entries} />
-        {entries.length === 0 ? (
-          <EmptyState>
-            No decisions yet. Accept or reject a proposal from the Brief
-            to start building history.
-          </EmptyState>
-        ) : filtered.length === 0 ? (
-          <EmptyState>No entries match these filters.</EmptyState>
-        ) : (
-          <ul className="flex flex-col">
-            {filtered.map((entry, idx) => (
-              <li key={`${entry.id}-${entry.decidedAt}-${idx}`}>
-                <HistoryRow
-                  entry={entry}
-                  onRestore={() => setRestoreEntry(entry)}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {restoreEntry && (
-        <RestoreDialog
-          entry={restoreEntry}
-          onClose={() => setRestoreEntry(null)}
-          onRestored={(message) => setRestoreToast(message)}
-        />
-      )}
-
-      {restoreToast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "pointer-events-none absolute bottom-3 left-1/2 z-10",
-            "-translate-x-1/2 rounded-[var(--radius-sm)]",
-            "border border-[var(--color-border-subtle)]",
-            "bg-[var(--color-surface-app)] px-3 py-1.5",
-            "text-[11px] text-[var(--color-text-primary)] shadow-lg",
-          )}
-        >
-          {restoreToast}
-        </div>
-      )}
-    </section>
+    <HistorySheet
+      entries={entries}
+      filtered={filtered}
+      decisionFilter={decisionFilter}
+      mediumFilter={mediumFilter}
+      onDecisionFilter={setDecisionFilter}
+      onMediumFilter={setMediumFilter}
+      restoreEntry={restoreEntry}
+      onOpenRestore={setRestoreEntry}
+      onCloseRestore={() => setRestoreEntry(null)}
+      restoreToast={restoreToast}
+      onRestored={setRestoreToast}
+    />
   );
 }
 
-/* =====================================================================
-   SHEET VARIANT — glass-sheet-native decision-stream timeline
-   Calm vertical list of glass rows with a left timeline hairline. Reuses
-   the same entries, filters, badge colors, MEDIUM_STYLE, restore flow,
-   and relative-time helper as the cockpit; only the chrome differs.
-   ===================================================================== */
 
 /** Decision → sheet accent color (mint / red / amber / blue per spec). */
 const SHEET_DECISION_COLOR: Record<HistoryDecision, string> = {
@@ -519,10 +370,8 @@ function applyFilters(
   opts: {
     decisionFilter: DecisionFilter;
     mediumFilter: MediumFilter;
-    query: string;
   },
 ): HistoryEntry[] {
-  const q = opts.query.trim().toLowerCase();
   return entries.filter((e) => {
     if (opts.decisionFilter !== "all" && e.decision !== opts.decisionFilter) {
       return false;
@@ -530,95 +379,8 @@ function applyFilters(
     if (opts.mediumFilter !== "all" && e.medium !== opts.mediumFilter) {
       return false;
     }
-    if (q.length > 0) {
-      const hay = `${e.title} ${e.rationale ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
     return true;
   });
-}
-
-type HistoryRowProps = {
-  entry: HistoryEntry;
-  onRestore: () => void;
-};
-
-function HistoryRow({ entry, onRestore }: HistoryRowProps) {
-  const medium = MEDIUM_STYLE[entry.medium];
-  const badge = DECISION_BADGE[entry.decision];
-
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-3 border-b border-[var(--color-border-subtle)] px-3 py-2",
-        "hover:bg-[var(--color-surface-hover)]",
-      )}
-    >
-      <time
-        className="w-24 shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] tabular-nums"
-        dateTime={new Date(entry.decidedAt).toISOString()}
-        title={new Date(entry.decidedAt).toLocaleString()}
-      >
-        {formatRelative(entry.decidedAt)}
-      </time>
-
-      <span
-        className={cn(
-          "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
-          medium.className,
-        )}
-      >
-        {medium.label}
-      </span>
-
-      <SourcePill source={entry.source} />
-
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
-          {entry.title}
-        </p>
-        {entry.rationale && (
-          <p className="truncate text-[11px] italic text-[var(--color-text-muted)]">
-            {entry.rationale}
-          </p>
-        )}
-        {entry.decision === "rejected" && entry.rejectReason && (
-          <p
-            className="truncate text-[11px] italic text-[var(--color-text-muted)]"
-            title={entry.rejectReason}
-          >
-            Reason: {truncateReason(entry.rejectReason)}
-          </p>
-        )}
-      </div>
-
-      <span
-        className={cn(
-          "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
-          badge.className,
-        )}
-      >
-        {badge.label}
-      </span>
-
-      {canRestore(entry) && (
-        <button
-          type="button"
-          onClick={onRestore}
-          className={cn(
-            "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-sm)]",
-            "border border-[var(--color-border-subtle)] px-1.5 py-0.5",
-            "text-[10px] text-[var(--color-text-secondary)]",
-            "hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
-          )}
-          title="Restore the timeline to this point"
-        >
-          <RotateCcw className="h-3 w-3" strokeWidth={1.75} />
-          Restore
-        </button>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -632,68 +394,6 @@ function canRestore(entry: HistoryEntry): boolean {
     return false;
   }
   return typeof entry.timelineSnapshot === "string" && entry.timelineSnapshot.length > 0;
-}
-
-/**
- * Source → "Agent" / "User edit" pill. All three current brief
- * sources (approval, proposed_edit, broll) are agent-emitted on the
- * wire today — the user-edit channel is reserved for Wave 4 when
- * direct-manipulation edits start landing in the propose stream. The
- * mapping is centralized so adding that case later is a one-line
- * change.
- */
-function SourcePill({ source }: { source: BriefProposalSource }) {
-  const isAgent = source === "approval" || source === "proposed_edit" || source === "broll";
-  const label = isAgent ? "Agent" : "User edit";
-  const Icon = isAgent ? Sparkles : User;
-  return (
-    <span
-      className={cn(
-        "shrink-0 inline-flex items-center gap-1 rounded-full",
-        "border border-[var(--color-border-subtle)] bg-[var(--color-surface-app)]",
-        "px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]",
-      )}
-    >
-      <Icon className="h-3 w-3" strokeWidth={1.75} />
-      {label}
-    </span>
-  );
-}
-
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "h-6 rounded-full border px-2 text-[10px] font-medium transition-colors",
-        active
-          ? "border-[var(--color-brand)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
-          : "border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-function EmptyState({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-full w-full items-center justify-center p-8 text-center">
-      <p className="max-w-sm text-[12px] text-[var(--color-text-muted)]">
-        {children}
-      </p>
-    </div>
-  );
 }
 
 /**

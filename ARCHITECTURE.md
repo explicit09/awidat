@@ -21,6 +21,10 @@ frontend. It presents local projects, authentication choices, timeline data,
 and desktop-specific protocol surfaces while delegating core behavior to the
 Rust workspace. `StageShell` is the application workspace; browser checks
 load this same application through the shared IPC fixture.
+Delivery, Skills, and History each have one workspace surface. The frontend
+proposal queue in `timeline/proposal.ts` owns edit lifecycle and selection;
+the Brief, inspector, and timeline derive their views from that same queue.
+Approval requests and generated-media decisions retain their distinct lifecycles.
 
 `python/` is a `uv` workspace for MCP indexers. These packages extract
 transcripts, scenes, audio energy, faces, gaze, CLIP-searchable frames, shot

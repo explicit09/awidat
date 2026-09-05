@@ -23,7 +23,7 @@ import {
   type GhostRange,
 } from "./ghostClipRanges.ts";
 import { RULER_HEIGHT, timeToX } from "./layout.ts";
-import { usePendingProposals } from "./pendingProposals.ts";
+import { useProposalStore } from "./proposal.ts";
 import { useTimelineProposalFocus } from "./timelineProposalFocus.ts";
 import type { TimelineSnapshot } from "./store.ts";
 
@@ -40,7 +40,7 @@ export function TimelineGhostOverlay({
   pps,
   laneHeight,
 }: TimelineGhostOverlayProps) {
-  const pending = usePendingProposals((s) => s.pending);
+  const pending = useProposalStore((s) => s.pending);
   const focusedId = useTimelineProposalFocus((s) => s.focusedId);
   const cheatsheetOpen = useTimelineProposalFocus((s) => s.cheatsheetOpen);
   const focus = useTimelineProposalFocus((s) => s.focus);

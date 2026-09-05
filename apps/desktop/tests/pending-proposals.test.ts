@@ -1,4 +1,5 @@
-// Tests for usePendingProposals — the stack store the Brief surface
+import { deriveMedium } from "../src/timeline/proposalMedium.ts";
+// Tests for useProposalStore — the stack store the Brief surface
 // uses to render "5 proposals waiting — 2 cuts, 1 color, 2 captions".
 //
 // We exercise the same code path the runtime uses (the store's
@@ -8,15 +9,12 @@
 
 import { strict as assert } from "node:assert";
 import {
-  deriveMedium,
-  usePendingProposals,
-  type PendingProposal,
-  type ProposalMedium,
-} from "../src/timeline/pendingProposals.ts";
+  useProposalStore,
+} from "../src/timeline/proposal.ts";
 import type { ActiveProposal } from "../src/timeline/proposal.ts";
 
 function reset(): void {
-  usePendingProposals.setState({ pending: [] });
+  useProposalStore.getState().clear();
 }
 
 type Phase = "started" | "delta" | "completed";
@@ -53,22 +51,58 @@ function makeFakeItem(id: string, phase: Phase, opts: FakeOpts = {}): unknown {
 // dragging the protocol type into every call site.
 function ingest(fake: unknown): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  usePendingProposals.getState().ingest(fake as any);
+  useProposalStore.getState().ingest(fake as any);
+}
+
+// An older delta must never roll the review queue back.
+{
+  reset();
+  ingest(makeFakeItem("race", "started", { revision: 0 }));
+  ingest(makeFakeItem("race", "delta", { revision: 2, intent: "latest" }));
+  ingest(makeFakeItem("race", "delta", { revision: 1, intent: "stale" }));
+  assert.equal(useProposalStore.getState().pending[0]!.revision, 2);
+  assert.equal(useProposalStore.getState().pending[0]!.intent, "latest");
+}
+
+// A late delta cannot resurrect an accepted or rejected proposal.
+{
+  reset();
+  ingest(makeFakeItem("done", "started"));
+  ingest(makeFakeItem("done", "completed"));
+  ingest(makeFakeItem("done", "delta", { revision: 1 }));
+  assert.equal(useProposalStore.getState().pending.length, 0);
+}
+
+// Selection and the queue share the same revision, even for background edits.
+{
+  reset();
+  ingest(makeFakeItem("a", "started"));
+  ingest(makeFakeItem("b", "started"));
+  useProposalStore.getState().select("a");
+  ingest(makeFakeItem("b", "delta", { revision: 1, intent: "background" }));
+  assert.equal(useProposalStore.getState().active!.callId, "a");
+  useProposalStore.getState().select("b");
+  assert.strictEqual(useProposalStore.getState().active,
+    useProposalStore.getState().pending.find((p) => p.callId === "b"));
+  ingest(makeFakeItem("b", "started", { revision: 0 }));
+  assert.equal(useProposalStore.getState().active!.revision, 1);
+  ingest(makeFakeItem("b", "completed"));
+  assert.equal(useProposalStore.getState().active!.callId, "a");
 }
 
 // ingest adds a new proposal
 {
   reset();
   ingest(makeFakeItem("p1", "started"));
-  assert.equal(usePendingProposals.getState().pending.length, 1);
-  assert.equal(usePendingProposals.getState().pending[0]!.callId, "p1");
+  assert.equal(useProposalStore.getState().pending.length, 1);
+  assert.equal(useProposalStore.getState().pending[0]!.callId, "p1");
 }
 
 // re-ingest same id replaces, preserves firstSeenAt across started→delta
 {
   reset();
   ingest(makeFakeItem("p1", "started", { revision: 1 }));
-  const t0 = usePendingProposals.getState().pending[0]!.firstSeenAt;
+  const t0 = useProposalStore.getState().pending[0]!.firstSeenAt;
   // Force the clock forward so a regression that re-computes
   // firstSeenAt would be detected.
   const originalNow = Date.now;
@@ -78,7 +112,7 @@ function ingest(fake: unknown): void {
   } finally {
     Date.now = originalNow;
   }
-  const state = usePendingProposals.getState();
+  const state = useProposalStore.getState();
   assert.equal(state.pending.length, 1);
   assert.equal(state.pending[0]!.firstSeenAt, t0);
   assert.equal(state.pending[0]!.intent, "refined");
@@ -98,14 +132,14 @@ function ingest(fake: unknown): void {
     }),
   );
   assert.equal(
-    usePendingProposals.getState().pending[0]!.rationale,
+    useProposalStore.getState().pending[0]!.rationale,
     "trimmed 0.42s silence per podcast defaults",
   );
   // Drag-adjust Delta — no rationale on the wire; the projection must
   // preserve the prior value rather than clobber it to undefined.
   ingest(makeFakeItem("p1", "delta", { revision: 2 }));
   assert.equal(
-    usePendingProposals.getState().pending[0]!.rationale,
+    useProposalStore.getState().pending[0]!.rationale,
     "trimmed 0.42s silence per podcast defaults",
   );
   // A Delta that *does* carry a refined rationale wins.
@@ -116,7 +150,7 @@ function ingest(fake: unknown): void {
     }),
   );
   assert.equal(
-    usePendingProposals.getState().pending[0]!.rationale,
+    useProposalStore.getState().pending[0]!.rationale,
     "kept handoff cadence under hostB laugh",
   );
 }
@@ -127,7 +161,7 @@ function ingest(fake: unknown): void {
   reset();
   ingest(makeFakeItem("p1", "started"));
   assert.equal(
-    usePendingProposals.getState().pending[0]!.rationale,
+    useProposalStore.getState().pending[0]!.rationale,
     undefined,
   );
 }
@@ -137,15 +171,7 @@ function ingest(fake: unknown): void {
   reset();
   ingest(makeFakeItem("p1", "started"));
   ingest(makeFakeItem("p1", "completed"));
-  assert.equal(usePendingProposals.getState().pending.length, 0);
-}
-
-// remove drops it explicitly
-{
-  reset();
-  ingest(makeFakeItem("p1", "started"));
-  usePendingProposals.getState().remove("p1");
-  assert.equal(usePendingProposals.getState().pending.length, 0);
+  assert.equal(useProposalStore.getState().pending.length, 0);
 }
 
 // clear wipes everything
@@ -153,8 +179,8 @@ function ingest(fake: unknown): void {
   reset();
   ingest(makeFakeItem("p1", "started"));
   ingest(makeFakeItem("p2", "started"));
-  usePendingProposals.getState().clear();
-  assert.equal(usePendingProposals.getState().pending.length, 0);
+  useProposalStore.getState().clear();
+  assert.equal(useProposalStore.getState().pending.length, 0);
 }
 
 // multiple ids accumulate, oldest first
@@ -163,7 +189,7 @@ function ingest(fake: unknown): void {
   ingest(makeFakeItem("p1", "started"));
   ingest(makeFakeItem("p2", "started"));
   ingest(makeFakeItem("p3", "started"));
-  const ids = usePendingProposals.getState().pending.map((p) => p.callId);
+  const ids = useProposalStore.getState().pending.map((p) => p.callId);
   assert.deepEqual(ids, ["p1", "p2", "p3"]);
 }
 
@@ -173,8 +199,8 @@ function ingest(fake: unknown): void {
   ingest(makeFakeItem("p1", "started"));
   ingest(makeFakeItem("p2", "started"));
   ingest(makeFakeItem("p3", "started"));
-  usePendingProposals.getState().remove("p2");
-  const ids = usePendingProposals.getState().pending.map((p) => p.callId);
+  ingest(makeFakeItem("p2", "completed"));
+  const ids = useProposalStore.getState().pending.map((p) => p.callId);
   assert.deepEqual(ids, ["p1", "p3"]);
 }
 
@@ -258,42 +284,6 @@ function ingest(fake: unknown): void {
     edlText: "*** Begin EDL\n*** End EDL\n",
   });
   assert.equal(deriveMedium(fake), "other");
-}
-
-// byMedium buckets correctly
-{
-  reset();
-  ingest(
-    makeFakeItem("p1", "started", {
-      edlText:
-        "*** Begin EDL\n*** Delete Clip\n@@ anchor: clip_uuid=a\n*** End EDL\n",
-    }),
-  );
-  ingest(
-    makeFakeItem("p2", "started", {
-      edlText:
-        "*** Begin EDL\n*** Set Color Correction\n@@ anchor: clip_uuid=b\n+ exposure_ev: 0.300\n*** End EDL\n",
-    }),
-  );
-  ingest(
-    makeFakeItem("p3", "started", {
-      edlText:
-        "*** Begin EDL\n*** Set Volume\n@@ anchor: clip_uuid=c\n+ value: 0.500\n*** End EDL\n",
-    }),
-  );
-  const buckets: Record<ProposalMedium, PendingProposal[]> =
-    usePendingProposals.getState().byMedium();
-  assert.equal(buckets.cut.length, 1);
-  assert.equal(buckets.color.length, 1);
-  assert.equal(buckets.audio.length, 1);
-  assert.equal(buckets.transition.length, 0);
-  assert.equal(buckets.broll.length, 0);
-  assert.equal(buckets.title.length, 0);
-  assert.equal(buckets.mixed.length, 0);
-  assert.equal(buckets.other.length, 0);
-  assert.equal(buckets.cut[0]!.callId, "p1");
-  assert.equal(buckets.color[0]!.callId, "p2");
-  assert.equal(buckets.audio[0]!.callId, "p3");
 }
 
 console.log("pending-proposals: OK");

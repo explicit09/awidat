@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
-  Play,
   Save,
   Sparkles,
   Upload,
@@ -11,29 +10,18 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 import {
   BrandIcon,
-  Button,
-  Inline,
   Stack,
   cn,
   type PreflightSeverity,
 } from "../ui";
-import { useMode } from "../state/mode";
 import { useProjectStore } from "../app/state";
 import { useUploadPrefs } from "../state/uploadPrefs";
-import {
-  useRenderQueueStore,
-  type RenderQueueEntry,
-} from "../app/renderQueue";
-import { TargetsList, isUploadCapableTarget } from "./delivery/TargetsList";
-import { PreflightPanel } from "./delivery/PreflightPanel";
-import { SafeAreaPreview } from "./delivery/SafeAreaPreview";
-import { IssueInspector } from "./delivery/IssueInspector";
-import { RenderSummary, KV } from "./delivery/RenderSummary";
+import { useRenderQueueStore } from "../app/renderQueue";
+import { KV } from "./delivery/RenderSummary";
 import { RenderQueuePanel } from "./delivery/RenderQueue";
 import { UploadMetadataForm } from "./delivery/UploadMetadataForm";
 import { CampaignApprovalPanel } from "./delivery/CampaignApprovalPanel";
-import { SocialPublish } from "../app/social/SocialPublish";
-import { TARGET_META, targetKeyForKind } from "./delivery/targetMeta";
+import { TARGET_META, isUploadCapableTarget } from "./delivery/targetMeta";
 import {
   ALL_TARGETS,
   countBySeverity,
@@ -57,19 +45,7 @@ export type {
  *  per-provider metadata to the backend at upload time. */
 export const DRAFT_METADATA_JOB_ID = "montage.deliver.draft";
 
-/**
- * DeliverySurface — concept Screen 7.
- *
- * Three columns: platform target preset rail on the left, preflight
- * checklist in the center, render summary + delivery confidence on the
- * right. The user picks targets, addresses findings, and exports —
- * with explicit signal about what's risky.
- *
- * Mode-aware: in Creator mode the right-column detail blocks (render
- * summary, render queue) collapse behind a "Show details" disclosure
- * so the export button stays the focus. Pro mode keeps everything
- * visible. Mirrors the IndexRailCreator pattern.
- */
+/** Configure outputs, inspect findings, and review the render queue. */
 
 export type DeliverySurfaceProps = {
   targets?: DeliveryTarget[];
@@ -80,231 +56,10 @@ export type DeliverySurfaceProps = {
   onFixIssues?: () => void;
   onSavePreset?: () => void;
   onGenerateVariants?: () => void;
-  onAgentRepair?: (finding: PreflightFinding) => void;
-  /**
-   * Layout flavor.
-   *   "cockpit" (default) — the legacy dense 3-column AppShell cockpit.
-   *   "sheet"             — the calm, single-column glass layout that
-   *                         lives inside the 2026 Stage glass sheet.
-   * The cockpit path is preserved byte-for-byte; the sheet path is a
-   * pure restyle/re-arrange over the SAME props + handlers.
-   */
-  variant?: "cockpit" | "sheet";
 };
 
-export function DeliverySurface(props: DeliverySurfaceProps) {
-  if (props.variant === "sheet") return <DeliverySheet {...props} />;
-  return <DeliveryCockpit {...props} />;
-}
 
-function DeliveryCockpit({
-  targets = [],
-  findings = [],
-  summary,
-  onToggleTarget,
-  onExportNow,
-  onFixIssues,
-  onSavePreset,
-  onGenerateVariants,
-  onAgentRepair,
-}: DeliverySurfaceProps) {
-  const mode = useMode((s) => s.mode);
-  const [severityFilter, setSeverityFilter] = useState<"all" | PreflightSeverity>("all");
-  const [confirmExportOpen, setConfirmExportOpen] = useState(false);
-  const queueEntries = useRenderQueueStore((s) => s.entries);
-  const projectRoot = useProjectStore((s) => s.current);
-  const uploadAfterRender = useUploadPrefs((s) => s.enabled);
-  const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
-
-  // Resolve targets so all 6 are always rendered.
-  const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
-    const provided = targets.find((t) => t.key === key);
-    return provided ?? { key, active: false };
-  });
-  const activeTargetCount = resolvedTargets.filter((target) => target.active).length;
-  const activeTargetKeys = resolvedTargets
-    .filter((target) => target.active)
-    .map((target) => target.key);
-  const runningRender = [...queueEntries]
-    .reverse()
-    .find((entry) => entry.status === "running" || entry.status === "pending");
-  const pendingReview = [...queueEntries]
-    .reverse()
-    .find((entry) => entry.status === "done" && entry.reviewStatus === "pending");
-
-  // Map of target key -> percent for any running entry. Lets the left
-  // rail show a `<StatusPill family="job" state="running" percent={…}/>`
-  // next to the target that's actively rendering.
-  const runningByTarget = useMemo(() => {
-    const out: Partial<Record<DeliveryTargetKey, number>> = {};
-    for (const entry of queueEntries) {
-      if (entry.status !== "running") continue;
-      const key = targetKeyForKind(entry.kind, entry.label);
-      if (!key) continue;
-      out[key] = typeof entry.progress === "number" ? entry.progress : 0;
-    }
-    return out;
-  }, [queueEntries]);
-
-  // Publishing targets the user has opted into upload-after-render
-  // *and* has currently selected as a delivery target. The form only
-  // renders for the intersection — picking "YouTube" without
-  // toggling Upload doesn't surface the form.
-  const formTargets = useMemo<DeliveryTargetKey[]>(() => {
-    const selected = new Set(
-      resolvedTargets.filter((t) => t.active).map((t) => t.key),
-    );
-    return Array.from(uploadAfterRender).filter((k) => selected.has(k));
-  }, [resolvedTargets, uploadAfterRender]);
-  // Default title for newly-touched targets. We pick the most
-  // information-bearing render-target label as the seed.
-  const formDefaultTitle = useMemo(() => {
-    if (formTargets.length === 0) return "Untitled render";
-    return TARGET_META[formTargets[0]].label;
-  }, [formTargets]);
-
-  const counts = countBySeverity(findings);
-  const filtered = severityFilter === "all"
-    ? findings
-    : findings.filter((f) => f.severity === severityFilter);
-
-  const selectedIssue = findings.find(
-    (f) => f.severity === "warning" || f.severity === "error" || f.severity === "failure",
-  ) ?? findings[0];
-
-  function confirmExport() {
-    setConfirmExportOpen(false);
-    onExportNow?.();
-  }
-
-  return (
-    <div className="grid h-full grid-cols-[292px_minmax(0,1fr)_334px] bg-[var(--color-surface-app)] min-h-0">
-      {/* LEFT — Targets list */}
-      <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
-        <TargetsList
-          resolvedTargets={resolvedTargets}
-          findings={findings}
-          runningByTarget={runningByTarget}
-          uploadAfterRender={uploadAfterRender}
-          onToggleTarget={onToggleTarget}
-          onToggleUploadAfterRender={(key) => {
-            void toggleUploadAfterRender(key);
-          }}
-          onAgentRepair={onAgentRepair}
-        />
-      </aside>
-
-      {/* CENTER — Preflight + Safe-area preview */}
-      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_minmax(220px,260px)]">
-        <PreflightPanel
-          findings={findings}
-          filtered={filtered}
-          counts={counts}
-          severityFilter={severityFilter}
-          setSeverityFilter={setSeverityFilter}
-          selectedIssue={selectedIssue}
-          onAgentRepair={onAgentRepair}
-        />
-        <SafeAreaPreview />
-      </main>
-
-      {/* RIGHT — Issue inspector + Render summary + Render queue + actions */}
-      <aside className="border-l border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
-        <div className="h-8 px-3 flex items-center border-b border-[var(--color-border-subtle)] shrink-0">
-          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-            Issue inspector
-          </span>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2.5">
-          <Stack gap="3">
-            <RenderStatusBanner
-              running={runningRender}
-              pendingReview={pendingReview}
-            />
-            <IssueInspector
-              selectedIssue={selectedIssue}
-              onAgentRepair={onAgentRepair}
-            />
-            {formTargets.length > 0 ? (
-              <UploadMetadataForm
-                selectedTargets={formTargets}
-                jobIdHint={DRAFT_METADATA_JOB_ID}
-                defaultTitle={formDefaultTitle}
-              />
-            ) : null}
-            <RightColumnDetails mode={mode}>
-              {summary ? <RenderSummary summary={summary} /> : null}
-              <CampaignApprovalPanel
-                sourceAssetId={projectRoot}
-                selectedTargets={activeTargetKeys}
-                renderEntries={queueEntries}
-              />
-              <RenderQueuePanel />
-              {/* Server-backed publishing: connect an account + schedule a
-                  finished render to it (social_bind/validate/schedule/upload). */}
-              <SocialPublish />
-            </RightColumnDetails>
-            <Stack gap="2">
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => setConfirmExportOpen(true)}
-                trailingIcon={
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="rounded-[var(--radius-xs)] border border-[rgba(0,0,0,0.18)] bg-[rgba(0,0,0,0.18)] px-1 font-mono text-[10px] leading-[14px] text-[var(--color-text-inverse)]/85">
-                      ⌘E
-                    </span>
-                    <Upload className="h-3.5 w-3.5 stroke-[1.75]" />
-                  </span>
-                }
-              >
-                Export now
-              </Button>
-              {counts.warning + counts.error + counts.failure > 0 ? (
-                <Button variant="secondary" size="md" onClick={onFixIssues}>
-                  Fix issues first
-                </Button>
-              ) : null}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onSavePreset}
-                leadingIcon={<Save className="h-3.5 w-3.5 stroke-[1.75]" />}
-              >
-                Save preset
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onGenerateVariants}
-                leadingIcon={<Download className="h-3.5 w-3.5 stroke-[1.75]" />}
-              >
-                Generate platform variants
-              </Button>
-            </Stack>
-          </Stack>
-        </div>
-      </aside>
-      {confirmExportOpen ? (
-        <ExportConfirmDialog
-          targetCount={activeTargetCount}
-          summary={summary}
-          onCancel={() => setConfirmExportOpen(false)}
-          onConfirm={confirmExport}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/* =====================================================================
-   SHEET LAYOUT — calm, single-column, glass-sheet-native (2026 Stage)
-   Same props + handlers as the cockpit; only the arrangement + skin
-   change. A centered readable column of glass cards instead of the
-   dense 3-column cockpit.
-   ===================================================================== */
-
-function DeliverySheet({
+export function DeliverySurface({
   targets = [],
   findings = [],
   summary,
@@ -315,8 +70,7 @@ function DeliverySheet({
   onGenerateVariants,
 }: DeliverySurfaceProps) {
   const [confirmExportOpen, setConfirmExportOpen] = useState(false);
-  // Publish wiring — shared with the cockpit so the Stage sheet can opt
-  // targets into upload-after-render, fill metadata, and watch the queue.
+  // Selected publishing targets share the render queue and upload preferences.
   const uploadAfterRender = useUploadPrefs((s) => s.enabled);
   const toggleUploadAfterRender = useUploadPrefs((s) => s.toggle);
   const queueEntries = useRenderQueueStore((s) => s.entries);
@@ -337,7 +91,7 @@ function DeliverySheet({
     [resolvedTargets],
   );
   // The metadata form renders for the intersection of "upload enabled" and
-  // "selected target" — mirrors the cockpit's formTargets contract exactly.
+  // "selected target".
   const formTargets = useMemo<DeliveryTargetKey[]>(() => {
     const selected = new Set(resolvedTargets.filter((t) => t.active).map((t) => t.key));
     return Array.from(uploadAfterRender).filter((k) => selected.has(k));
@@ -402,7 +156,7 @@ function DeliverySheet({
 
         {/* Publish after render — only for active, upload-capable targets.
             Opting in surfaces the metadata form below (title/description/
-            visibility), matching the cockpit's right-column publish flow. */}
+            visibility), for the selected publishing targets. */}
         {publishableActive.length > 0 ? (
           <section className="flex flex-col gap-3">
             <SheetSectionLabel>Publish after render</SheetSectionLabel>
@@ -474,7 +228,7 @@ function DeliverySheet({
         </section>
 
         {/* Render queue — appears once there's something rendering/queued so
-            the sheet stays calm when idle. Same panel the cockpit uses. */}
+            the sheet stays calm when idle.  */}
         {queueEntries.length > 0 ? (
           <section className="flex flex-col gap-3">
             <SheetSectionLabel>Render queue</SheetSectionLabel>
@@ -712,7 +466,7 @@ function severityVisual(severity: PreflightSeverity): {
   }
 }
 
-/** Compact render-summary glass card with a delivery-confidence bar. */
+/** Summary of the configured render outputs. */
 function RenderSummaryCard({
   summary,
   outputs,
@@ -720,16 +474,7 @@ function RenderSummaryCard({
   summary: DeliveryRenderSummary;
   outputs: number;
 }) {
-  const confidence = Math.max(0, Math.min(1, summary.confidence));
-  const pct = Math.round(confidence * 100);
   const outputCount = summary.outputs || outputs;
-  // Confidence reads warm(green)→amber→red as it drops.
-  const confColor =
-    confidence >= 0.85
-      ? "var(--color-success)"
-      : confidence >= 0.6
-        ? "var(--color-warning)"
-        : "var(--color-danger)";
   return (
     <div className="glass-content rounded-2xl p-4">
       <div className="grid grid-cols-2 gap-x-6 gap-y-3">
@@ -742,25 +487,7 @@ function RenderSummaryCard({
           <SummaryStat label="Est. size" value={summary.estimatedSize} />
         ) : null}
       </div>
-      <div className="mt-4 flex flex-col gap-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">
-            Delivery confidence
-          </span>
-          <span
-            className="font-mono text-[11px] font-semibold"
-            style={{ color: confColor }}
-          >
-            {pct}%
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
-          <div
-            className="h-full rounded-full transition-[width] duration-300"
-            style={{ width: `${pct}%`, background: confColor }}
-          />
-        </div>
-      </div>
+
     </div>
   );
 }
@@ -776,99 +503,6 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
-}
-
-/** Right-column detail wrapper. In Pro mode it just renders the
- *  children. In Creator mode it collapses them behind a single
- *  "Show details" toggle — mirrors the IndexRailCreator pattern so
- *  the Deliver right column doesn't overwhelm new users. */
-function RightColumnDetails({
-  mode,
-  children,
-}: {
-  mode: "pro" | "creator";
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  if (mode === "pro") return <>{children}</>;
-  return (
-    <Stack gap="2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className={cn(
-          "self-start rounded text-left text-[11px] font-semibold transition-colors",
-          "text-[var(--color-brand)] hover:text-[var(--color-text-primary)]",
-        )}
-      >
-        {open ? "▴ Hide details" : "▾ Show details"}{" "}
-        <span className="text-[var(--color-text-muted)]">
-          · render summary + queue
-        </span>
-      </button>
-      {open ? <>{children}</> : null}
-    </Stack>
-  );
-}
-
-function RenderStatusBanner({
-  running,
-  pendingReview,
-}: {
-  running?: RenderQueueEntry;
-  pendingReview?: RenderQueueEntry;
-}) {
-  if (running) {
-    const progress =
-      typeof running.progress === "number"
-        ? Math.max(0, Math.min(100, running.progress))
-        : null;
-    return (
-      <div className="rounded-[var(--radius-md)] border border-[rgba(239,68,68,0.45)] bg-[rgba(239,68,68,0.12)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.24)]">
-        <Stack gap="3">
-          <Inline justify="between" align="center">
-            <Inline gap="2" align="center" className="min-w-0">
-              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--color-brand-secondary)] animate-pulse" />
-              <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
-                Rendering final output
-              </span>
-            </Inline>
-            <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-              {progress === null ? "working" : `${Math.round(progress)}%`}
-            </span>
-          </Inline>
-          <p className="text-[var(--text-body-sm)] leading-snug text-[var(--color-text-secondary)]">
-            {running.label} is being exported. Keep this project open until the render finishes.
-          </p>
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
-            <div
-              className="h-full rounded-full bg-[var(--color-brand-secondary)] transition-[width] duration-300"
-              style={{ width: `${progress ?? 12}%` }}
-            />
-          </div>
-        </Stack>
-      </div>
-    );
-  }
-  if (pendingReview) {
-    return (
-      <div className="rounded-[var(--radius-md)] border border-[rgba(245,158,11,0.5)] bg-[rgba(245,158,11,0.1)] p-3">
-        <Stack gap="2">
-          <Inline gap="2" align="center">
-            <Play className="h-4 w-4 stroke-[1.75] text-[var(--color-warning)]" />
-            <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
-              Review final render
-            </span>
-          </Inline>
-          <p className="text-[var(--text-body-sm)] leading-snug text-[var(--color-text-secondary)]">
-            {pendingReview.label} finished. Watch the output before treating it as ready to deliver.
-          </p>
-        </Stack>
-      </div>
-    );
-  }
-  return null;
 }
 
 function ExportConfirmDialog({

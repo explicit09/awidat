@@ -76,6 +76,8 @@ export interface ProposalRange {
   trackIndex: number | null;
   startS: number;
   endS: number;
+  /** Exact edit point in current playback time, when the hint provides one. */
+  reviewTimeS?: number;
 }
 
 /** Resolve review ranges in the current timeline, which owns playback.
@@ -116,7 +118,19 @@ function rangeForHint(
     const item = track.items.find(
       (it) => it.kind === "clip" && it.clip_uuid === proposedItem.clip_uuid,
     );
-    if (item) return itemRange(item, trackIndex);
+    if (item?.kind === "clip") {
+      const range = itemRange(item, trackIndex);
+      if (hint.kind === "split" || hint.kind === "trim_edge") {
+        const speed = item.speed && item.speed > 0 ? item.speed : 1;
+        const proposedSpeed = proposedItem.speed && proposedItem.speed > 0 ? proposedItem.speed : 1;
+        const sourceTime = hint.kind === "split" ? hint.at_s
+          : (proposedItem.source_start_s ?? 0) +
+            (hint.side === "right" ? proposedItem.duration_s * proposedSpeed : 0);
+        range.reviewTimeS = Math.max(range.startS, Math.min(range.endS,
+          item.track_start_s + (sourceTime - (item.source_start_s ?? 0)) / speed));
+      }
+      return range;
+    }
   }
   return null;
 }
@@ -184,7 +198,7 @@ export const useFocusController = create<FocusControllerState>((_set, get) => ({
     const span = unionRange(ranges);
 
     if (["color", "broll", "title", "caption"].includes(medium)) {
-      if (span) adapter.requestTimelineSeek(span.startS);
+      if (span) adapter.requestTimelineSeek(ranges[0]?.reviewTimeS ?? span.startS);
       return;
     }
     focusOnTimeline(adapter, proposalId, ranges, span,
@@ -202,9 +216,9 @@ function focusOnTimeline(
   flashKind: "clip" | "transition",
 ): void {
   if (span) {
-    const midpoint = (span.startS + span.endS) / 2;
-    adapter.requestTimelineSeek(midpoint);
-    adapter.scrollTimelineTo(midpoint);
+    const time = ranges[0]?.reviewTimeS ?? (span.startS + span.endS) / 2;
+    adapter.requestTimelineSeek(time);
+    adapter.scrollTimelineTo(time);
   }
   if (ranges.length === 0) {
     // No diff_hints we could resolve — best-effort full-track flash

@@ -1436,9 +1436,8 @@ function App() {
     return {
       duration: formatDuration(timelineDuration),
       outputs: effectiveDeliveryTargets.filter((target) => target.active).length,
-      confidence: realPreflightFindings.some((finding) => finding.severity === "warning") ? 0.72 : 0.9,
     };
-  }, [effectiveDeliveryTargets, realPreflightFindings, timelineDuration]);
+  }, [effectiveDeliveryTargets, timelineDuration]);
 
   const previewChanges: PreviewChange[] = useMemo(() => {
     if (!activeProposal) return [];
@@ -1446,7 +1445,7 @@ function App() {
       const [range] = deriveRanges([hint], timelineSnapshot, activeProposal.snapshot);
       return range ? [{
         id: `${activeProposal.callId}-${i}`, index: i + 1,
-        kind: "pending" as const, timeS: range.startS,
+        kind: "pending" as const, timeS: range.reviewTimeS ?? range.startS,
       }] : [];
     });
   }, [activeProposal, timelineSnapshot]);
@@ -1493,7 +1492,6 @@ function App() {
   };
   const realDeliveryWorkspace = (
     <DeliverySurface
-      variant="sheet"
       targets={effectiveDeliveryTargets}
       findings={realPreflightFindings}
       summary={realDeliverySummary}
@@ -1502,11 +1500,6 @@ function App() {
       onFixIssues={setDeliveryRepair}
       onSavePreset={saveDeliveryPreset}
       onGenerateVariants={generateVariants}
-      onAgentRepair={(finding) => {
-        void runEngineCommand(
-          `Repair this delivery preflight finding before export: ${finding.message}`,
-        );
-      }}
     />
   );
   const realSchedulerWorkspace = <SchedulerWorkspace />;
@@ -1726,8 +1719,8 @@ function App() {
         autoInspect={activeProposal !== null}
         deliver={realDeliveryWorkspace}
         schedule={realSchedulerWorkspace}
-        skills={<SkillsSurface variant="sheet" />}
-        history={<HistorySurface variant="sheet" />}
+        skills={<SkillsSurface />}
+        history={<HistorySurface />}
         stage={stage}
         onStage={setStage}
         onCommand={(text) => void runEngineCommand(text)}
@@ -2464,7 +2457,4 @@ type ChatHistory = {
   items: Item[];
 };
 
-// Estimate a time-on-the-timeline for a diff hint when we don't have one in the
-// protocol yet. Distributes hints evenly across the timeline duration so the
-// jump chips and scrubber dots aren't all stacked at zero.
 export default App;

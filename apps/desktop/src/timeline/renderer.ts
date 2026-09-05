@@ -9,7 +9,7 @@ import {
   strokeRoundedRect,
   truncateToWidth,
 } from "./canvasPrimitives.ts";
-import type { PendingProposal } from "./pendingProposals.ts";
+import type { PendingProposal } from "./proposal.ts";
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
 import { ensureFrame, getStrip } from "./thumbnailCache.ts";
 import { getWaveform } from "./waveformCache.ts";

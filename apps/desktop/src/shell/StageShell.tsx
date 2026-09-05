@@ -1,6 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useBriefProposalsStore, type BriefMedium } from "../state/briefProposals";
-import { usePendingProposals } from "../timeline/pendingProposals";
+import { useProposalStore } from "../timeline/proposal";
 import { ProposalCard } from "./brief/ProposalCard";
 import { useTimelineStore } from "../timeline/store";
 import { useTimelineSelectionStore } from "../properties/store";
@@ -145,12 +145,12 @@ export function StageShell(props: StageShellProps) {
   } = props;
 
   // pending() merges three reactive sources — approvals + broll (both on
-  // the brief store) and proposed_edits (on usePendingProposals). Subscribe
+  // the brief store) and proposed_edits (on useProposalStore). Subscribe
   // to ALL of them so the deck re-renders when any source changes; reading
   // only s.approvals (the prior bug) missed proposed_edit + b-roll arrivals.
   useBriefProposalsStore((s) => s.approvals);
   useBriefProposalsStore((s) => s.brollProposals);
-  usePendingProposals((s) => s.pending);
+  useProposalStore((s) => s.pending);
   const pending = useBriefProposalsStore.getState().pending();
 
   const [active, setActive] = useState(0);

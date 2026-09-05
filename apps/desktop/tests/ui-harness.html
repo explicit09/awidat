@@ -459,6 +459,10 @@
           return new Promise((resolve) => window.setTimeout(resolve, 2000)).then(resolveReply);
         };
         switch (cmd) {
+          case "list_skills":
+            return reply([{ name: "podcast-edit", display_name: "Podcast edit",
+              description: "Edit a podcast from indexed footage.", when_to_use: "For podcast projects",
+              version: "1.0.0", path: "/fixture/skills/podcast-edit", provenance: "bundled" }]);
           case "current_project_root":
             return reply(projectLoaded ? projectRoot : null);
           case "recent_projects":
@@ -603,14 +607,16 @@
       }
 
       function seedProposal() {
+        const proposed = structuredClone(timeline);
+        proposed.tracks[0].items[0].duration_s = 7;
         useProposalStore.getState().ingest({
           kind: "proposed_edit",
           id: "proposal-1",
           phase: "started",
           source: { source: "agent", tool_name: "apply_edl" },
           edl_text: "*** Begin EDL\n*** Trim Clip\n*** End EDL\n",
-          snapshot: timeline,
-          diff_hints: [{ kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "end", delta_s: 1 }],
+          snapshot: proposed,
+          diff_hints: [{ kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "right", delta_s: 1 }],
           summary: "Trim intro",
           revision: 0,
         });
@@ -620,7 +626,7 @@
           phase: "started",
           source: { source: "agent", tool_name: "apply_edl" },
           edl_text: "*** Begin EDL\n*** Trim Clip\n*** End EDL\n",
-          snapshot: timeline,
+          snapshot: proposed,
           diff_hints: [],
           summary: "Trim intro",
           revision: 0,

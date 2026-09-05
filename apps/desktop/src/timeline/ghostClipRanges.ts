@@ -27,7 +27,7 @@
 //     for that proposal — we don't claim to render and silently fail.
 
 import type { AppliedDiff } from "../protocol";
-import type { PendingProposal } from "./pendingProposals.ts";
+import type { PendingProposal } from "./proposal.ts";
 import type { TimelineItem, TimelineSnapshot } from "./store.ts";
 
 export interface GhostRange {
