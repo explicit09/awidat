@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ BACKENDS = ("motion-scene", "manim", "motion-canvas")
 OUTPUT_PROFILES = {
     "standard-1080p30": {
         "name": "standard-1080p30",
+        "aspect_ratio": "16:9",
         "width": 1920,
         "height": 1080,
         "fps": 30.0,
@@ -25,6 +27,7 @@ OUTPUT_PROFILES = {
     },
     "explainer-1440p60": {
         "name": "explainer-1440p60",
+        "aspect_ratio": "16:9",
         "width": 2560,
         "height": 1440,
         "fps": 60.0,
@@ -32,6 +35,7 @@ OUTPUT_PROFILES = {
     },
     "vertical-1080p60": {
         "name": "vertical-1080p60",
+        "aspect_ratio": "9:16",
         "width": 1080,
         "height": 1920,
         "fps": 60.0,
@@ -164,7 +168,8 @@ def add_scene(
         raise ValueError("scene title must not be empty")
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of: {', '.join(BACKENDS)}")
-    if narration_start_s < 0 or narration_end_s <= narration_start_s:
+    if (not math.isfinite(narration_start_s) or not math.isfinite(narration_end_s)
+            or narration_start_s < 0 or narration_end_s <= narration_start_s):
         raise ValueError("narration range must have non-negative start and end > start")
 
     manifest = _read_manifest(bundle_dir)
@@ -226,7 +231,7 @@ def add_scene(
     return scene
 
 
-def _probe_render(path: Path) -> tuple[int, int, float]:
+def _probe_render(path: Path) -> tuple[int, int, float, float]:
     try:
         result = subprocess.run(
             [
@@ -236,7 +241,7 @@ def _probe_render(path: Path) -> tuple[int, int, float]:
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=width,height,avg_frame_rate",
+                "stream=width,height,avg_frame_rate,duration",
                 "-of",
                 "json",
                 str(path),
@@ -253,7 +258,10 @@ def _probe_render(path: Path) -> tuple[int, int, float]:
     stream = streams[0]
     numerator, denominator = str(stream["avg_frame_rate"]).split("/", 1)
     fps = float(numerator) / float(denominator)
-    return int(stream["width"]), int(stream["height"]), fps
+    duration = float(stream["duration"])
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError(f"render has no finite positive duration: {path}")
+    return int(stream["width"]), int(stream["height"]), fps, duration
 
 
 def _format_fps(value: float) -> str:
@@ -287,17 +295,21 @@ def verify_bundle(bundle_dir: Path, *, require_renders: bool = False) -> list[st
         end = float(scene.get("narration_end_s", -1.0))
         if start < previous_end:
             issues.append(f"overlapping narration: {scene.get('id')}")
-        if start < 0 or end <= start:
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
             issues.append(f"invalid narration range: {scene.get('id')}")
         previous_end = max(previous_end, end)
         render = scene.get("render")
-        if require_renders and isinstance(render, str):
+        if require_renders and scene.get("backend") != "motion-scene" and (
+            not isinstance(render, str) or not render.strip()
+        ):
+            issues.append(f"missing render path: {scene.get('id')}")
+        if require_renders and isinstance(render, str) and render.strip():
             render_path = bundle_dir / render
             if not render_path.is_file():
                 issues.append(f"missing render: {render}")
             elif profile is not None:
                 try:
-                    width, height, fps = _probe_render(render_path)
+                    width, height, fps, duration = _probe_render(render_path)
                 except (ValueError, json.JSONDecodeError, KeyError, ZeroDivisionError) as error:
                     issues.append(str(error))
                     continue
@@ -308,6 +320,11 @@ def verify_bundle(bundle_dir: Path, *, require_renders: bool = False) -> list[st
                     issues.append(
                         f"render resolution below profile: {scene.get('id')} is {width}x{height}, "
                         f"requires at least {required_width}x{required_height}"
+                    )
+                if duration + 0.001 < end - start:
+                    issues.append(
+                        f"render duration below narration range: {scene.get('id')} is {duration:.3f}s, "
+                        f"requires at least {end - start:.3f}s"
                     )
                 if fps + 0.01 < required_fps:
                     issues.append(

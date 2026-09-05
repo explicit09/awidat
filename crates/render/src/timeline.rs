@@ -64,6 +64,8 @@ pub struct RenderCanvas {
     pub height: u32,
     /// Output cadence in frames per second.
     pub frame_rate: u32,
+    /// An explicit resolution or cadence requires conforming even at default values.
+    pub explicit_profile: bool,
 }
 
 impl Default for RenderCanvas {
@@ -74,6 +76,7 @@ impl Default for RenderCanvas {
             width: TIMELINE_RENDER_WIDTH,
             height: TIMELINE_RENDER_HEIGHT,
             frame_rate: TIMELINE_RENDER_FPS,
+            explicit_profile: false,
         }
     }
 }
@@ -91,16 +94,19 @@ impl RenderCanvas {
                 width: 1080,
                 height: 1920,
                 frame_rate: TIMELINE_RENDER_FPS,
+                explicit_profile: false,
             },
             "1:1" => Self {
                 width: 1080,
                 height: 1080,
                 frame_rate: TIMELINE_RENDER_FPS,
+                explicit_profile: false,
             },
             "4:5" => Self {
                 width: 1080,
                 height: 1350,
                 frame_rate: TIMELINE_RENDER_FPS,
+                explicit_profile: false,
             },
             // "16:9" and anything unrecognized.
             _ => Self::default(),
@@ -128,6 +134,7 @@ fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderC
             && (16..=8192).contains(&width)
             && (16..=8192).contains(&height)
         {
+            canvas.explicit_profile = true;
             canvas.width = width as u32;
             canvas.height = height as u32;
         }
@@ -135,6 +142,7 @@ fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderC
             && frame_rate.fract() == 0.0
             && (1.0..=120.0).contains(&frame_rate)
         {
+            canvas.explicit_profile = true;
             canvas.frame_rate = frame_rate as u32;
         }
     }
@@ -5369,7 +5377,9 @@ impl<'a> FilterPlanner<'a> {
         let inputs: Vec<(String, String)> = inputs
             .into_iter()
             .enumerate()
-            .map(|(i, (video, audio))| reset_segment_pts(&mut filter, i, &video, &audio))
+            .map(|(i, (video, audio))| {
+                reset_segment_pts(&mut filter, i, &video, &audio, self.canvas.frame_rate)
+            })
             .collect();
 
         // Track the order of hard-cut groups. A group may be one raw
@@ -5480,11 +5490,12 @@ fn reset_segment_pts(
     i: usize,
     video_label: &str,
     audio_label: &str,
+    frame_rate: u32,
 ) -> (String, String) {
     let video_out = format!("[vpts{i}]");
     let audio_out = format!("[apts{i}]");
     filter.push_str(&format!(
-        "{video_label}setpts=PTS-STARTPTS,fps=30000/1001{video_out};"
+        "{video_label}setpts=PTS-STARTPTS,fps={frame_rate}{video_out};"
     ));
     filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
     (video_out, audio_out)
@@ -11772,6 +11783,7 @@ fn build_timeline_render_spec_inner(
             overlay_window.start_s,
             &renders_dir,
             &timestamp.to_string(),
+            canvas,
         )?)
     } else {
         None
@@ -12474,6 +12486,7 @@ fn prepare_browser_broadcast_overlay_video(
     time_offset_s: f64,
     renders_dir: &Path,
     timestamp: &str,
+    canvas: RenderCanvas,
 ) -> Result<PathBuf, RenderTimelineError> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -12510,11 +12523,11 @@ fn prepare_browser_broadcast_overlay_video(
         .arg("--output")
         .arg(&output)
         .arg("--width")
-        .arg("1920")
+        .arg(canvas.width.to_string())
         .arg("--height")
-        .arg("1080")
+        .arg(canvas.height.to_string())
         .arg("--fps")
-        .arg("30");
+        .arg(canvas.frame_rate.to_string());
     // Windowed render: shift the overlay's animation clock and the encoded
     // file's timestamps so a short clip composites at the right timeline
     // position. `view_program_frame` uses this to inspect one frame without
@@ -15524,6 +15537,7 @@ mod tests {
                 width: 1080,
                 height: 1920,
                 frame_rate: 30,
+                explicit_profile: false,
             }
         );
         assert_eq!(
@@ -15532,6 +15546,7 @@ mod tests {
                 width: 1080,
                 height: 1080,
                 frame_rate: 30,
+                explicit_profile: false,
             }
         );
         assert_eq!(
@@ -15540,6 +15555,7 @@ mod tests {
                 width: 1080,
                 height: 1350,
                 frame_rate: 30,
+                explicit_profile: false,
             }
         );
         // 16:9 and unknown labels fall back to the landscape default.
@@ -15557,8 +15573,40 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 frame_rate: 30,
+                explicit_profile: false,
             }
         );
+    }
+
+    #[test]
+    fn explicit_default_profile_prevents_stream_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_fixture_project(dir.path());
+        let mut timeline: Timeline = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        timeline.metadata.montage.get_or_insert_with(Default::default).extra.insert(
+            "output_format".into(),
+            serde_json::json!({"aspect_ratio": "16:9", "width": 1920, "height": 1080, "frame_rate": 30}),
+        );
+        fs::write(path, serde_json::to_vec(&timeline).unwrap()).unwrap();
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let command = spec.args.join(" ");
+        assert!(command.contains("libx264"), "{command}");
+        assert!(command.contains("fps=30"), "{command}");
+    }
+
+    #[test]
+    fn transition_staging_preserves_output_cadence() {
+        let segments = [seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 0.0, 2.0)];
+        let transitions = [trans(0, 1, 0.5)];
+        let plan = FilterPlanner::new(&segments, &transitions)
+            .with_canvas(RenderCanvas {
+                frame_rate: 60,
+                ..RenderCanvas::default()
+            })
+            .plan();
+        assert!(plan.filter_complex.contains("xfade="));
+        assert!(plan.filter_complex.contains("setpts=PTS-STARTPTS,fps=60"));
+        assert!(!plan.filter_complex.contains("fps=30000/1001"));
     }
 
     #[test]
@@ -15574,6 +15622,7 @@ mod tests {
                 width: 1080,
                 height: 1920,
                 frame_rate: 30,
+                explicit_profile: false,
             }
         );
         // Absent metadata -> landscape default.
@@ -17991,11 +18040,13 @@ layout_box: None,
                 width: 2560,
                 height: 1440,
                 frame_rate: 60,
+                explicit_profile: false,
             },
             RenderCanvas {
                 width: 1080,
                 height: 1920,
                 frame_rate: 60,
+                explicit_profile: false,
             },
         ] {
             for animated in [false, true] {
@@ -20458,6 +20509,7 @@ layout_box: None,
             width: 1080,
             height: 1920,
             frame_rate: 30,
+            explicit_profile: false,
         };
 
         // Exercise the first production call site:

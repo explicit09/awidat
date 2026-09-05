@@ -1404,14 +1404,28 @@ impl OpBuilder {
                             field: "aspect_ratio".into(),
                         }
                     })?;
+                let mut output_value = |key: &str| -> Result<Option<u32>, EdlParseError> {
+                    if !fields.iter().any(|(name, _)| name == key) {
+                        return Ok(None);
+                    }
+                    take_field_u32(&mut fields, key).map(Some).ok_or_else(|| {
+                        EdlParseError::BadField {
+                            line: head,
+                            raw: key.into(),
+                            message: "expected an unsigned 32-bit integer".into(),
+                        }
+                    })
+                };
+                let width = output_value("width")?;
+                let height = output_value("height")?;
+                let frame_rate = output_value("frame_rate")?;
                 Ok(EdlOp::SetOutputFormat {
                     aspect_ratio,
                     platform: take_field_string(&mut fields, "platform"),
                     safe_area: take_field_string(&mut fields, "safe_area"),
-                    width: take_field_usize(&mut fields, "width").map(|value| value as u32),
-                    height: take_field_usize(&mut fields, "height").map(|value| value as u32),
-                    frame_rate: take_field_usize(&mut fields, "frame_rate")
-                        .map(|value| value as u32),
+                    width,
+                    height,
+                    frame_rate,
                 })
             }
             OpKind::SetLoudnessTarget => {
@@ -2244,6 +2258,16 @@ fn parse_between(rest: &str, line: usize) -> Result<TransitionBetween, EdlParseE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_profile_rejects_overflow_instead_of_truncating() {
+        for key in ["width", "height", "frame_rate"] {
+            let edl = format!(
+                "*** Begin EDL\n*** Set Output Format\n+ aspect_ratio: 16:9\n+ {key}: 4294968376\n*** End EDL\n"
+            );
+            assert!(matches!(parse(&edl), Err(EdlParseError::BadField { .. })));
+        }
+    }
 
     #[test]
     fn parses_minimal_trim_envelope() {

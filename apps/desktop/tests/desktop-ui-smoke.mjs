@@ -130,6 +130,33 @@ async function makePage() {
 }
 
 try {
+  await check("agent profile persists and resets across projects", async () => {
+    const { page, errors } = await makePage();
+    await page.goto(new URL("tests/ui-harness.html?project=1", BASE_URL).href);
+    const selector = page.getByRole("combobox", { name: "GPT-5.6 Codex capability profile" });
+    const waitValue = (value) => page.waitForFunction((v) => document.querySelector('[aria-label="GPT-5.6 Codex capability profile"]')?.value === v, value);
+    await waitValue("balanced");
+    await selector.selectOption("deep_edit");
+    await waitValue("deep_edit");
+    await page.evaluate(() => { window.__failProfileSave = true; });
+    await selector.selectOption("balanced");
+    await page.getByText(/Unable to save agent profile/).waitFor();
+    assert.equal(await selector.inputValue(), "deep_edit");
+    await page.evaluate(async () => {
+      window.__holdProfileReply = true;
+      const { useProjectStore } = await import("/src/app/state.ts");
+      useProjectStore.setState({ current: "/tmp/another-project" });
+    });
+    await waitValue("");
+    assert.equal(await selector.isDisabled(), true);
+    await page.waitForFunction(() => typeof window.__resolveProfile === "function");
+    await page.evaluate(() => window.__resolveProfile("balanced"));
+    await waitValue("balanced");
+    assert.equal(await selector.isDisabled(), false);
+    assert.deepEqual(errors, []);
+    await page.close();
+  });
+
   await check("no project shows the real landing page", async () => {
     const { page, errors } = await makePage();
     await page.goto(new URL("tests/ui-harness.html", BASE_URL).href);

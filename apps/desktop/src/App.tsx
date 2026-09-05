@@ -234,7 +234,12 @@ function App() {
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("manual");
-  const [agentProfile, setAgentProfileState] = useState<AgentProfile>("balanced");
+  const [agentProfileState, setAgentProfileState] = useState<{
+    project: string | null;
+    profile: AgentProfile | null;
+  }>({ project: null, profile: null });
+  const agentProfileRequest = useRef(0);
+  const agentProfile = agentProfileState.project === current ? agentProfileState.profile : null;
   // The bottom dock used to host Timeline / Transcript / Vedit as
   // sibling tabs with docked / collapsed / popout chrome. Transcript +
   // Vedit moved to the right rail; the dock is now the timeline only,
@@ -992,24 +997,44 @@ function App() {
   }
 
   useEffect(() => {
+    const request = ++agentProfileRequest.current;
     if (!isTauri() || !current) {
-      setAgentProfileState("balanced");
+      setAgentProfileState({ project: current, profile: "balanced" });
       return;
     }
-    return deferNonCriticalHydration(() => {
+    const cancel = deferNonCriticalHydration(() => {
       invoke<AgentProfile>("get_agent_profile")
-        .then((profile) => setAgentProfileState(profile))
-        .catch(() => setAgentProfileState("balanced"));
+        .then((profile) => {
+          if (request === agentProfileRequest.current) {
+            setAgentProfileState({ project: current, profile });
+          }
+        })
+        .catch((error) => {
+          if (request === agentProfileRequest.current) {
+            setCommandError(`Unable to load agent profile: ${String(error)}`);
+          }
+        });
     });
+    return () => {
+      cancel();
+      ++agentProfileRequest.current;
+    };
   }, [current]);
 
   async function changeAgentProfile(next: AgentProfile) {
-    setAgentProfileState(next);
-    if (!isTauri()) return;
+    const previous = agentProfile;
+    const request = ++agentProfileRequest.current;
+    setAgentProfileState({ project: current, profile: null });
     try {
-      await invoke("set_agent_profile", { profile: next });
+      if (isTauri()) await invoke("set_agent_profile", { profile: next });
+      if (request === agentProfileRequest.current) {
+        setAgentProfileState({ project: current, profile: next });
+      }
     } catch (error) {
-      console.warn("set_agent_profile failed", error);
+      if (request === agentProfileRequest.current) {
+        setAgentProfileState({ project: current, profile: previous });
+        setCommandError(`Unable to save agent profile: ${String(error)}`);
+      }
     }
   }
 

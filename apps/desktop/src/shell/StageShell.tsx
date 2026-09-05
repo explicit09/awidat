@@ -121,7 +121,7 @@ export type StageShellProps = {
   onNewChat?: () => void;
   permissionMode?: PermissionMode;
   onSetPermissionMode?: (mode: PermissionMode) => void;
-  agentProfile?: AgentProfile;
+  agentProfile?: AgentProfile | null;
   onSetAgentProfile?: (profile: AgentProfile) => void;
   /** Floating-chrome bits. */
   projectLabel?: string;

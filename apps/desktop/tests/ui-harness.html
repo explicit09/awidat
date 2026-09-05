@@ -548,7 +548,14 @@
             });
             return reply(proposalId);
           case "get_agent_profile":
-            return reply("balanced");
+            if (window.__holdProfileReply) {
+              return new Promise((resolve) => { window.__resolveProfile = resolve; });
+            }
+            return reply(window.__savedProfile ?? "balanced");
+          case "set_agent_profile":
+            if (window.__failProfileSave) return Promise.reject(new Error("profile write failed"));
+            window.__savedProfile = args.profile;
+            return reply(null);
           case "get_permission_mode":
             return reply("manual");
           case "get_project_type":

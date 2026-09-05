@@ -31,7 +31,7 @@ type ConversationPanelProps = {
   onNewChat?: () => void;
   permissionMode?: PermissionMode;
   onSetPermissionMode?: (mode: PermissionMode) => void;
-  agentProfile?: AgentProfile;
+  agentProfile?: AgentProfile | null;
   onSetAgentProfile?: (profile: AgentProfile) => void;
 };
 
@@ -199,11 +199,12 @@ export function ConversationPanel({
             <Sparkles className="stage-permission-icon h-3 w-3 stroke-[1.75]" aria-hidden />
             <select
               className="stage-permission-select"
-              value={agentProfile}
-              disabled={!onSetAgentProfile}
+              value={agentProfile ?? ""}
+              disabled={!onSetAgentProfile || agentProfile === null}
               onChange={(event) => onSetAgentProfile?.(event.target.value as AgentProfile)}
               aria-label="GPT-5.6 Codex capability profile"
             >
+              {agentProfile === null && <option value="">Loading profile…</option>}
               {AGENT_PROFILE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value} title={option.description}>
                   {option.label}

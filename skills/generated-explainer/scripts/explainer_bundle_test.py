@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import explainer_bundle
@@ -35,6 +36,7 @@ class ExplainerBundleTest(unittest.TestCase):
                 manifest["output_profile"],
                 {
                     "name": "explainer-1440p60",
+                    "aspect_ratio": "16:9",
                     "width": 2560,
                     "height": 1440,
                     "fps": 60.0,
@@ -208,6 +210,44 @@ class ExplainerBundleTest(unittest.TestCase):
                 ["missing source: scenes/scene-001/scene.py"],
             )
 
+    def test_non_finite_ranges_are_rejected_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle = explainer_bundle.initialize_bundle(
+                project_root=Path(temp_dir), slug="ranges", title="Ranges", script_text="Test")
+            for start, end in [(float("nan"), 1), (0, float("nan")), (0, float("inf")), (-float("inf"), 1)]:
+                with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                    explainer_bundle.add_scene(bundle_dir=bundle, scene_id="scene", title="Scene",
+                        backend="manim", narration_start_s=start, narration_end_s=end)
+            self.assertEqual(list((bundle / "scenes").iterdir()), [])
+            explainer_bundle.add_scene(bundle_dir=bundle, scene_id="scene", title="Scene",
+                backend="manim", narration_start_s=0, narration_end_s=1)
+            manifest = json.loads((bundle / "manifest.json").read_text())
+            manifest["scenes"][0]["narration_end_s"] = float("nan")
+            (bundle / "manifest.json").write_text(json.dumps(manifest))
+            self.assertIn("invalid narration range: scene", explainer_bundle.verify_bundle(bundle))
+
+    def test_external_renders_require_paths_and_full_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle = explainer_bundle.initialize_bundle(
+                project_root=Path(temp_dir), slug="renders", title="Renders", script_text="Test")
+            scene = explainer_bundle.add_scene(bundle_dir=bundle, scene_id="scene", title="Scene",
+                backend="manim", narration_start_s=0, narration_end_s=2)
+            manifest = json.loads((bundle / "manifest.json").read_text())
+            for backend in ["manim", "motion-canvas"]:
+                for render in [None, "", 42]:
+                    manifest["scenes"][0].update(backend=backend, render=render)
+                    (bundle / "manifest.json").write_text(json.dumps(manifest))
+                    self.assertIn("missing render path: scene",
+                        explainer_bundle.verify_bundle(bundle, require_renders=True))
+            manifest["scenes"][0] = scene
+            (bundle / "manifest.json").write_text(json.dumps(manifest))
+            (bundle / scene["render"]).touch()
+            with patch.object(explainer_bundle, "_probe_render", return_value=(2560, 1440, 60, 1)):
+                self.assertEqual(explainer_bundle.verify_bundle(bundle, require_renders=True),
+                    ["render duration below narration range: scene is 1.000s, requires at least 2.000s"])
+            with patch.object(explainer_bundle, "_probe_render", return_value=(2560, 1440, 60, 2)):
+                self.assertEqual(explainer_bundle.verify_bundle(bundle, require_renders=True), [])
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
     def test_verify_bundle_rejects_render_below_output_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -247,6 +287,7 @@ class ExplainerBundleTest(unittest.TestCase):
                 explainer_bundle.verify_bundle(bundle_dir, require_renders=True),
                 [
                     "render resolution below profile: scene-001 is 1280x720, requires at least 2560x1440",
+                    "render duration below narration range: scene-001 is 0.033s, requires at least 1.000s",
                     "render frame rate below profile: scene-001 is 30 fps, requires at least 60 fps",
                 ],
             )

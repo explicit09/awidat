@@ -6,6 +6,8 @@ tier: finishing
 tools_allowlist:
   - read_index
   - view_frame
+  - view_program_frame
+  - verify_render
   - color_scopes
   - view_timeline
   - inspect_clip

@@ -13,6 +13,7 @@ tools_allowlist:
   - apply_edl
   - view_timeline
   - view_frame
+  - view_program_frame
   - inspect_moment
   - assess_edit_quality
   - vedit_diff
@@ -150,7 +151,7 @@ conform canvas identical to the generator profile; never rely on a nominal
 rate profiles use Montage's higher-quality H.264 encode path automatically.
 
 After each placement, run `view_timeline` and inspect a frame inside the scene
-with `view_frame`. A valid file path is not visual verification.
+with `view_program_frame` to check the composed timeline. A valid file path is not visual verification.
 
 ### 5. Revise by scene, not by flattening the film
 
