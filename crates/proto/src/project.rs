@@ -380,7 +380,6 @@ pub fn read_otio_timeline(
     }
 }
 
-
 /// Best-effort quarantine of malformed entries under `metadata.montage`.
 /// Returns `Some(rewritten_value)` if at least one array was sanitized
 /// (so the caller can retry deserialization), or `None` if there was

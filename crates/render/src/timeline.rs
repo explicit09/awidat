@@ -116,12 +116,12 @@ fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderC
         .filter(|format| format.is_object());
     let mut canvas = format
         .and_then(|format| format.get("aspect_ratio"))
-        .and_then(|ratio| ratio.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(RenderCanvas::from_aspect_ratio)
         .unwrap_or_default();
     if let Some(format) = format {
-        let width = format.get("width").and_then(|value| value.as_u64());
-        let height = format.get("height").and_then(|value| value.as_u64());
+        let width = format.get("width").and_then(serde_json::Value::as_u64);
+        let height = format.get("height").and_then(serde_json::Value::as_u64);
         if let (Some(width), Some(height)) = (width, height)
             && width.is_multiple_of(2)
             && height.is_multiple_of(2)
@@ -131,7 +131,7 @@ fn timeline_render_canvas(metadata: Option<&MontageTimelineMetadata>) -> RenderC
             canvas.width = width as u32;
             canvas.height = height as u32;
         }
-        if let Some(frame_rate) = format.get("frame_rate").and_then(|value| value.as_f64())
+        if let Some(frame_rate) = format.get("frame_rate").and_then(serde_json::Value::as_f64)
             && frame_rate.fract() == 0.0
             && (1.0..=120.0).contains(&frame_rate)
         {
@@ -6435,9 +6435,7 @@ fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str, canvas: Render
     match &overlay.mode {
         VideoOverlayMode::FullFrame => {
             if has_overlay_animation(overlay, "overlay.scale") {
-                format!(
-                    "w={width}*({scale_multiplier}):h={height}*({scale_multiplier}):eval=frame"
-                )
+                format!("w={width}*({scale_multiplier}):h={height}*({scale_multiplier}):eval=frame")
             } else {
                 format!("w={width}:h={height}")
             }

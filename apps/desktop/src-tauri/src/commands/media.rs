@@ -1143,8 +1143,6 @@ pub fn motion_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
     ))
 }
 
-
-
 /// Resolve the absolute waveform-sidecar path for a project-relative
 /// asset id (e.g. `raw/foo.mp3`). Returns `Some(path)` if the
 /// sidecar exists AND its on-disk JSON contains a non-empty

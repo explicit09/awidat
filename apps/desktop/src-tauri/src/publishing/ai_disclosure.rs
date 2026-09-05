@@ -7,9 +7,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use montage_core::generated_media::registry::{
-    GeneratedMediaRecord, Registry,
-};
+use montage_core::generated_media::registry::{GeneratedMediaRecord, Registry};
 use montage_proto::otio::{MediaReference, StackChild, Timeline, TrackChild};
 use serde::{Deserialize, Serialize};
 
@@ -269,8 +267,6 @@ pub fn disclosure_for_project_root(project_root: &Path) -> AiDisclosure {
     };
     AiDisclosure::from_credits(cut_contains_generated_media(&timeline, project_root))
 }
-
-
 
 #[cfg(test)]
 mod tests {

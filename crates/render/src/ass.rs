@@ -1073,6 +1073,7 @@ mod tests {
             RenderCanvas {
                 width: 1080,
                 height: 1920,
+                ..RenderCanvas::default()
             },
         );
         assert!(
@@ -1084,6 +1085,7 @@ mod tests {
             RenderCanvas {
                 width: 1920,
                 height: 1080,
+                ..RenderCanvas::default()
             },
         );
         assert!(landscape.contains("PlayResX: 1920") && landscape.contains("PlayResY: 1080"));

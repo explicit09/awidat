@@ -2801,11 +2801,20 @@ mod direct_tool_surface_tests {
         let dir = tempfile::tempdir().unwrap();
         let server = MontageMcpServer::new();
         let cached = server.tool_router.list_all();
-        for (skill, tool) in [("render-review", "start_render"), ("import", "import_local")] {
+        for (skill, tool) in [
+            ("render-review", "start_render"),
+            ("import", "import_local"),
+        ] {
             assert!(cached.iter().any(|entry| entry.name == tool));
-            assert!(!crate::skill_session::allowed_in_direct_mode(dir.path(), tool));
+            assert!(!crate::skill_session::allowed_in_direct_mode(
+                dir.path(),
+                tool
+            ));
             crate::skill_session::set_active_skill(dir.path(), skill, vec![tool.into()]).unwrap();
-            assert!(crate::skill_session::allowed_in_direct_mode(dir.path(), tool));
+            assert!(crate::skill_session::allowed_in_direct_mode(
+                dir.path(),
+                tool
+            ));
         }
         assert!(!crate::skill_session::allowed_in_direct_mode(
             dir.path(),

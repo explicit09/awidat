@@ -204,7 +204,6 @@ pub fn get(env_var_name: &str, account: &str) -> Result<Option<String>, SecretEr
     Ok(None)
 }
 
-
 fn cached_vault_value(account: &str) -> Result<Option<String>, SecretError> {
     cached_vault_value_with_backend(&CACHED_VAULT, &KeychainSecretBackend, account)
 }

@@ -284,7 +284,6 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}…", &s[..cut])
 }
 
-
 pub const DESCRIPTION: &str = "\
 Download a Pexels video chosen from a prior `search_broll` result \
 and return an EDL fragment ready to hand to `apply_edl`.\
