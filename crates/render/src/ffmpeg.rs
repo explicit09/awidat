@@ -1363,10 +1363,10 @@ pub async fn reframe_to_target(
 /// density we'd ever need (1 / second) and the frontend skips frames
 /// when zoomed out.
 ///
-/// Pipeline: `ffmpeg -i <src> -vf "fps=1,scale=120:-2" -vsync vfr
+/// Pipeline: `ffmpeg -i <src> -vf "fps=1,scale=120:-2" -fps_mode vfr
 /// <out_dir>/frame-%04d.jpg`. `scale=120:-2` keeps aspect ratio with
 /// the long edge clamped to 120 px (`-2` keeps the other dim
-/// even-numbered, ffmpeg's mjpeg requirement). `-vsync vfr` skips
+/// even-numbered, ffmpeg's mjpeg requirement). `-fps_mode vfr` skips
 /// timestamp duplicates so we don't emit identical frames on
 /// variable-FPS sources.
 ///
@@ -1410,7 +1410,7 @@ async fn generate_thumbnails_inner(
         .arg(asset_path)
         .arg("-vf")
         .arg("fps=1,scale=120:-2")
-        .arg("-vsync")
+        .arg("-fps_mode")
         .arg("vfr")
         .arg("-q:v")
         .arg("4")
