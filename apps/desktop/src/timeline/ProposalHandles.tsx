@@ -20,7 +20,6 @@ import type { AppliedDiff, AdjustField, TimelineSnapshot } from "../protocol";
  *  handles overlay the canvas; same ruler offset is baked into both.
  *  Lane height is supplied as a prop so vertical zoom flows through. */
 const HANDLE_WIDTH = 8;
-const PX_PER_SECOND_BASE = 12;
 
 type HandleSpec = {
   key: string;
@@ -258,7 +257,3 @@ function locateClipItem(
     source_start_s: item.source_start_s,
   };
 }
-
-// Reserved for parent that needs to pass pps. Kept as an export
-// stub so test imports stay stable.
-export const _PX_PER_SECOND_BASE = PX_PER_SECOND_BASE;

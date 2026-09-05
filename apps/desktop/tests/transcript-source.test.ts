@@ -1,24 +1,6 @@
-// Tests for the pure logic behind <TranscriptSource> (Wave 4 W4.4):
-//
-//   - `buildDeleteRangeOpsForStem` — word-range → Split+Split+Delete
-//     envelope. Mirrors the v1 contract from TranscriptView's private
-//     helper: only the fully-inside-one-clip case emits ops; multi-
-//     clip and empty ranges return [].
-//
-//   - `isRangeCutFromTimeline` — given a source-time range and the
-//     timeline snapshot, decide whether the range is "gone from the
-//     cut". Used by AppliedCutsOverlay to dim transcript spans that
-//     accepted cuts have removed.
-//
-//   - `isTranscriptFirstProjectType` — routing predicate the App
-//     branches on. Podcast / tutorial route to the new surface;
-//     shorts / other / null stay on the legacy preview.
-
 import { strict as assert } from "node:assert";
 import {
   buildDeleteRangeOpsForStem,
-  isRangeCutFromTimeline,
-  isTranscriptFirstProjectType,
 } from "../src/shell/source/transcriptSourceLogic.ts";
 import type { TimelineSnapshot } from "../src/protocol";
 
@@ -382,83 +364,5 @@ function snapshotWithClips(
     "source-playable clip is deletable via clipUuid even when proxy_path is null",
   );
 }
-
-/* ------------------- isRangeCutFromTimeline ------------------------ */
-
-// Stem with no clips → false (pre-timeline / source-preview case).
-{
-  const snap = snapshotWithClips([]);
-  assert.equal(
-    isRangeCutFromTimeline(snap, "foo", 10, 12),
-    false,
-    "empty timeline never paints the transcript as cut",
-  );
-}
-
-// Range inside a clip → false (still in the cut).
-{
-  const snap = snapshotWithClips([
-    makeClipItem({
-      clipUuid: "clip-a",
-      proxyPath: "/proj/.montage/proxies/foo.mp4",
-      sourceStartS: 0,
-      durationS: 60,
-    }),
-  ]);
-  assert.equal(isRangeCutFromTimeline(snap, "foo", 10, 12), false);
-  assert.equal(isRangeCutFromTimeline(snap, "foo", 59, 60), false);
-}
-
-// Range in a gap between two clips → true (cut applied).
-{
-  const snap = snapshotWithClips([
-    makeClipItem({
-      clipUuid: "clip-a",
-      proxyPath: "/proj/.montage/proxies/foo.mp4",
-      sourceStartS: 0,
-      durationS: 10,
-    }),
-    makeClipItem({
-      clipUuid: "clip-b",
-      proxyPath: "/proj/.montage/proxies/foo.mp4",
-      sourceStartS: 20,
-      durationS: 10,
-    }),
-  ]);
-  assert.equal(
-    isRangeCutFromTimeline(snap, "foo", 12, 18),
-    true,
-    "gap range is cut from cut",
-  );
-}
-
-// Different stem → false (we only care about the asset we're rendering).
-{
-  const snap = snapshotWithClips([
-    makeClipItem({
-      clipUuid: "clip-a",
-      proxyPath: "/proj/.montage/proxies/bar.mp4",
-      sourceStartS: 0,
-      durationS: 30,
-    }),
-  ]);
-  assert.equal(
-    isRangeCutFromTimeline(snap, "foo", 10, 12),
-    false,
-    "other-stem clips don't affect our stem's cut state",
-  );
-}
-
-/* ------------------- isTranscriptFirstProjectType ------------------ */
-
-assert.equal(isTranscriptFirstProjectType(null), false);
-assert.equal(isTranscriptFirstProjectType({ kind: "podcast" }), true);
-assert.equal(isTranscriptFirstProjectType({ kind: "tutorial" }), true);
-assert.equal(isTranscriptFirstProjectType({ kind: "shorts" }), false);
-assert.equal(
-  isTranscriptFirstProjectType({ kind: "other", description: "interview" }),
-  false,
-  "free-text 'other' stays on legacy preview in v1",
-);
 
 console.log("transcript-source: OK");

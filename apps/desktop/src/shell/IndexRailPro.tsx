@@ -13,7 +13,7 @@ import type {
   IndexerConfigSnapshot,
   IndexingStructurePreview,
   IndexingTask,
-} from "./IndexingDashboard";
+} from "./indexRailTypes";
 import { buildRailModel, type RailModel, type RailSignal } from "./indexRailModel";
 
 /**

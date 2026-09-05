@@ -45,7 +45,7 @@ const TIMELINE_PAINT_SENTINELS = [
   "__montageTimelinePaintMetrics",
   "__montageTimelinePaintInstrumentationVersion",
 ];
-const NORMAL_HTML_INPUTS = ["gallery.html", "glass.html", "index.html", "shell.html", "studio.html"];
+const NORMAL_HTML_INPUTS = ["index.html"];
 
 function fail(message) {
   throw new Error(message);

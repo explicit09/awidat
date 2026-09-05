@@ -49,18 +49,3 @@ export const Inline = forwardRef<HTMLDivElement, StackProps>(function Inline(
 ) {
   return <Stack ref={ref} direction={direction} align={align} gap={gap} className={className} {...rest} />;
 });
-
-export function Divider({ className, vertical = false }: { className?: string; vertical?: boolean }) {
-  return (
-    <hr
-      aria-hidden
-      className={cn(
-        "border-0",
-        vertical
-          ? "h-full w-px bg-[var(--color-border-subtle)]"
-          : "h-px w-full bg-[var(--color-border-subtle)]",
-        className,
-      )}
-    />
-  );
-}

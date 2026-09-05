@@ -22,7 +22,6 @@ import type {
 import { useBriefProposalsStore } from "../../state/briefProposals";
 import { useFocusController } from "../../state/focusController";
 import { usePendingProposals } from "../../timeline/pendingProposals";
-import type { CenterMode } from "../../state/centerMode";
 import { RejectReasonPicker } from "./RejectReasonPicker";
 
 /**
@@ -84,23 +83,6 @@ export const MEDIUM_STYLE: Record<BriefMedium, { label: string; className: strin
   },
 };
 
-/**
- * Mediums → which center surface answers "review this proposal best".
- * Exported for tests and for the BriefSurface's tab-switch handler.
- */
-export const REVIEW_MODE_FOR_MEDIUM: Record<BriefMedium, CenterMode> = {
-  cut: "timeline",
-  color: "source",
-  broll: "source",
-  audio: "timeline",
-  transition: "timeline",
-  // Title/caption land on the source preview where the user reads them.
-  title: "source",
-  caption: "source",
-  mixed: "timeline",
-  other: "brief",
-};
-
 /** One-line "Review on …" label per medium. */
 const REVIEW_LABEL: Partial<Record<BriefMedium, string>> = {
   cut: "Review on timeline",
@@ -137,16 +119,10 @@ export const REJECT_REASONS: Record<BriefMedium, readonly string[]> = {
 
 export interface ProposalCardProps {
   proposal: BriefProposal;
-  /**
-   * Optional escape hatch — tests + the demo screens still need to
-   * intercept the click without invoking the real focus controller.
-   * When omitted, the card defaults to `useFocusController.focusProposal`,
-   * which switches the tab AND focuses the entity.
-   */
-  onReview?: (mode: CenterMode, proposal: BriefProposal) => void;
+
 }
 
-export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
+export function ProposalCard({ proposal }: ProposalCardProps) {
   const accept = useBriefProposalsStore((s) => s.accept);
   const reject = useBriefProposalsStore((s) => s.reject);
   const focusProposal = useFocusController((s) => s.focusProposal);
@@ -159,7 +135,6 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
 
   const medium = MEDIUM_STYLE[proposal.medium];
   const reviewLabel = REVIEW_LABEL[proposal.medium];
-  const reviewMode = REVIEW_MODE_FOR_MEDIUM[proposal.medium];
   const presetReasons = REJECT_REASONS[proposal.medium] ?? [];
 
   function handleReview(): void {
@@ -177,10 +152,7 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
       diffHints: pending?.diffHints,
       proposedSnapshot: pending?.snapshot,
     });
-    // The legacy callback is still invoked for callers (demo screens,
-    // tests) that want to observe the tab switch — the controller
-    // already drove the tab, this is just a notification hook.
-    onReview?.(reviewMode, proposal);
+
   }
 
   async function onAccept() {

@@ -1,48 +1,10 @@
-// Focus controller (Wave 4 W4.6) — turns a Brief proposal's "Review →"
-// into a real focus action on the relevant surface.
-//
-// The Brief stack used to stop at the tab switch — Cut went to Timeline,
-// Color/B-roll/Title to Source — leaving the reviewer to hunt down the
-// affected time range or transcript segment by hand. This module wires
-// the full motion:
-//
-//   * Switch the center tab to the right surface.
-//   * Seek the playhead to the proposal's primary time.
-//   * Scroll the timeline / transcript so the entity is in view.
-//   * Flash the entity briefly so the eye lands on it.
-//
-// Architecture: one orchestrator (`useFocusController.focusProposal`) +
-// three tiny sub-stores the surfaces subscribe to:
-//
-//   * `useFlashRanges`  — Set of timeline time-ranges flashed for ~600ms;
-//     the timeline canvas paints a glow on items intersecting them.
-//   * `useSourceFocus`  — Sub-tab + "coming soon" toast for Source view,
-//     subscribed by `<TranscriptSource>`. Also drives the transcript
-//     word-flash via the same store (separate sub-tab? same animation
-//     budget — we keep it together).
-//
-// Why a separate store from `useCenterModeStore`: the center-mode store
-// is pure persistence (per-project chosen tab). The focus controller is
-// an ephemeral dispatch. Conflating them would either persist focus
-// flashes (wrong) or strip persistence from tab choice (worse).
-//
-// Best-effort, never-throws: every sub-action is guarded so a missing
-// snapshot, an empty diff_hints list, or a project without a transcript
-// stem all degrade gracefully — worst case the user sees the tab switch
-// without the flash, which is the Wave 3 contract.
+// Focus proposal review on the shared preview and timeline.
 
 import { create } from "zustand";
 import type { AppliedDiff, TimelineSnapshot } from "../protocol";
-import type { CenterMode } from "./centerMode";
 import type { BriefMedium } from "./briefProposals";
 
 /* ----------------------------- types ------------------------------- */
-
-/** Optional source-tab focus when the Source pane is active. */
-export type SourceSubTab = "transcript" | "video";
-
-/** Discrete focus-toast kinds rendered in the Source pane. */
-export type SourceToastKind = "before-after" | "insert-preview" | null;
 
 export interface FlashRange {
   /** Stable key — `${proposalId}:${idx}`. Used to clear individual
@@ -60,17 +22,6 @@ export interface FlashRange {
   kind: "clip" | "transition";
 }
 
-/** Word-level transcript flash — drives the briefly-highlighted spans
- *  inside `<TranscriptSource>`. */
-export interface TranscriptFlash {
-  /** Stable key — `${proposalId}:${idx}`. */
-  key: string;
-  /** Inclusive source-time start in seconds. */
-  startS: number;
-  /** Exclusive source-time end in seconds. */
-  endS: number;
-}
-
 interface FlashRangesState {
   ranges: FlashRange[];
   /** Adds a flash and schedules its removal after `durationMs`. */
@@ -78,27 +29,7 @@ interface FlashRangesState {
   clear: () => void;
 }
 
-interface SourceFocusState {
-  subTab: SourceSubTab;
-  toast: SourceToastKind;
-  /** Counter — TranscriptSource's effect re-runs when this bumps so a
-   *  "switch to video, even if you're already on it" still re-flashes. */
-  subTabRequestId: number;
-  setSubTab: (next: SourceSubTab) => void;
-  setToast: (next: SourceToastKind, durationMs?: number) => void;
-  clear: () => void;
-}
-
-interface TranscriptFlashState {
-  flashes: TranscriptFlash[];
-  add: (flash: TranscriptFlash, durationMs?: number) => void;
-  clear: () => void;
-}
-
-/* --------------------------- sub-stores ---------------------------- */
-
 const FLASH_DURATION_MS = 600;
-const TOAST_DURATION_MS = 2400;
 
 export const useFlashRanges = create<FlashRangesState>((set, get) => ({
   ranges: [],
@@ -120,56 +51,6 @@ export const useFlashRanges = create<FlashRangesState>((set, get) => ({
   },
 }));
 
-export const useSourceFocus = create<SourceFocusState>((set) => ({
-  subTab: "transcript",
-  toast: null,
-  subTabRequestId: 0,
-  setSubTab(next) {
-    set((state) => ({
-      subTab: next,
-      subTabRequestId: state.subTabRequestId + 1,
-    }));
-  },
-  setToast(next, durationMs = TOAST_DURATION_MS) {
-    set({ toast: next });
-    if (next !== null && typeof window !== "undefined") {
-      window.setTimeout(() => {
-        // Only clear if the same toast is still showing; otherwise a
-        // newer toast scheduled while we were waiting wins.
-        if (useSourceFocus.getState().toast === next) {
-          set({ toast: null });
-        }
-      }, durationMs);
-    }
-  },
-  clear() {
-    set({ subTab: "transcript", toast: null });
-  },
-}));
-
-export const useTranscriptFlashes = create<TranscriptFlashState>((set, get) => ({
-  flashes: [],
-  add(flash, durationMs = FLASH_DURATION_MS) {
-    set((state) => ({
-      flashes: [
-        ...state.flashes.filter((f) => f.key !== flash.key),
-        flash,
-      ],
-    }));
-    if (typeof setTimeout === "function") {
-      setTimeout(() => {
-        const next = get().flashes.filter((f) => f.key !== flash.key);
-        if (next.length !== get().flashes.length) {
-          set({ flashes: next });
-        }
-      }, durationMs);
-    }
-  },
-  clear() {
-    set({ flashes: [] });
-  },
-}));
-
 /* --------------------------- orchestrator -------------------------- */
 
 /**
@@ -177,8 +58,6 @@ export const useTranscriptFlashes = create<TranscriptFlashState>((set, get) => (
  * Defaults wire to the real stores; tests can swap any field.
  */
 export interface FocusAdapter {
-  /** Push the center pane to a new tab. */
-  setCenterMode: (mode: CenterMode) => void;
   /** Drive the timeline-time playhead. */
   requestTimelineSeek: (t: number) => void;
   /** Best-effort horizontal scroll on the timeline stage so the
@@ -187,8 +66,7 @@ export interface FocusAdapter {
    *  callee because pps lives on the canvas; we hand it a span and
    *  let it find the DOM node. */
   scrollTimelineTo: (centerTimeS: number) => void;
-  /** Read the current snapshot — used to derive a "flash every clip"
-   *  for mixed/other when no diff_hints carry time info. */
+  /** Read the timeline currently used for playback and clip flashes. */
   readTimelineSnapshot: () => TimelineSnapshot | null;
 }
 
@@ -200,12 +78,9 @@ export interface ProposalRange {
   endS: number;
 }
 
-/**
- * Walk a proposal's diff hints + optional snapshot and synthesize one
- * or more `ProposalRange` entries we can flash. The pendingProposals
- * store carries `snapshot` (the proposed snapshot) for trim/insert/
- * split/move kinds; delete hints index the original snapshot which
- * the caller passes in as `currentSnapshot`.
+/** Resolve review ranges in the current timeline, which owns playback.
+ * Proposed item indices must never be used as current timeline indices.
+ * New clips without a current identity have no playback range yet.
  */
 export function deriveRanges(
   diffHints: ReadonlyArray<AppliedDiff>,
@@ -225,63 +100,36 @@ function rangeForHint(
   currentSnapshot: TimelineSnapshot | null,
   proposedSnapshot: TimelineSnapshot | null,
 ): ProposalRange | null {
-  switch (hint.kind) {
-    case "delete": {
-      // delete indexes the *original* timeline.
-      const item = lookupItem(currentSnapshot, hint.track_index, hint.item_index);
-      return item
-        ? {
-            trackIndex: hint.track_index,
-            startS: item.start,
-            endS: item.end,
-          }
-        : null;
-    }
-    case "trim_edge":
-    case "insert":
-    case "insert_b_roll":
-    case "insert_pi_p":
-    case "split": {
-      const item = lookupItem(proposedSnapshot, hint.track_index, hint.item_index);
-      return item
-        ? {
-            trackIndex: hint.track_index,
-            startS: item.start,
-            endS: item.end,
-          }
-        : null;
-    }
-    case "move": {
-      const item = lookupItem(
-        proposedSnapshot,
-        hint.to_track_index,
-        hint.to_item_index,
-      );
-      return item
-        ? {
-            trackIndex: hint.to_track_index,
-            startS: item.start,
-            endS: item.end,
-          }
-        : null;
-    }
-    default:
-      return null;
+  if (!currentSnapshot) return null;
+  if (hint.kind === "delete" || hint.kind === "move") {
+    const trackIndex = hint.kind === "move" ? hint.from_track_index : hint.track_index;
+    const itemIndex = hint.kind === "move" ? hint.from_item_index : hint.item_index;
+    const item = currentSnapshot.tracks[trackIndex]?.items.find((it) => it.index === itemIndex);
+    return item ? itemRange(item, trackIndex) : null;
   }
+
+  const proposedItem = proposedSnapshot?.tracks[hint.track_index]?.items.find(
+    (it) => it.index === hint.item_index,
+  );
+  if (proposedItem?.kind !== "clip" || !proposedItem.clip_uuid) return null;
+  for (const [trackIndex, track] of currentSnapshot.tracks.entries()) {
+    const item = track.items.find(
+      (it) => it.kind === "clip" && it.clip_uuid === proposedItem.clip_uuid,
+    );
+    if (item) return itemRange(item, trackIndex);
+  }
+  return null;
 }
 
-function lookupItem(
-  snapshot: TimelineSnapshot | null,
+function itemRange(
+  item: TimelineSnapshot["tracks"][number]["items"][number],
   trackIndex: number,
-  itemIndex: number,
-): { start: number; end: number } | null {
-  if (!snapshot) return null;
-  const track = snapshot.tracks[trackIndex];
-  if (!track) return null;
-  const item = track.items.find((it) => it.index === itemIndex);
-  if (!item) return null;
-  const duration = Math.max(0.05, item.duration_s);
-  return { start: item.track_start_s, end: item.track_start_s + duration };
+): ProposalRange {
+  return {
+    trackIndex,
+    startS: item.track_start_s,
+    endS: item.track_start_s + Math.max(0.05, item.duration_s),
+  };
 }
 
 /**
@@ -317,7 +165,6 @@ interface FocusControllerState {
 }
 
 const noopAdapter: FocusAdapter = {
-  setCenterMode: () => {},
   requestTimelineSeek: () => {},
   scrollTimelineTo: () => {},
   readTimelineSnapshot: () => null,
@@ -332,73 +179,16 @@ export const useFocusController = create<FocusControllerState>((_set, get) => ({
     const currentSnapshot = adapter.readTimelineSnapshot();
 
     // Resolve the proposal's covering time range (empty when no hints
-    // resolve — controller still switches tabs).
+    // resolve).
     const ranges = deriveRanges(diffHints, currentSnapshot, proposedSnapshot);
     const span = unionRange(ranges);
 
-    switch (medium) {
-      case "cut":
-      case "audio":
-      case "transition":
-      case "mixed":
-      case "other": {
-        adapter.setCenterMode("timeline");
-        focusOnTimeline(
-          adapter,
-          proposalId,
-          ranges,
-          span,
-          medium === "transition" ? "transition" : "clip",
-        );
-        return;
-      }
-      case "color": {
-        adapter.setCenterMode("source");
-        useSourceFocus.getState().setSubTab("video");
-        if (span) adapter.requestTimelineSeek(span.startS);
-        useSourceFocus.getState().setToast("before-after");
-        return;
-      }
-      case "broll": {
-        adapter.setCenterMode("source");
-        useSourceFocus.getState().setSubTab("video");
-        if (span) adapter.requestTimelineSeek(span.startS);
-        useSourceFocus.getState().setToast("insert-preview");
-        return;
-      }
-      case "title": {
-        adapter.setCenterMode("source");
-        // Transcript-first projects default the sub-tab to transcript
-        // so we leave it alone there; non-transcript projects keep
-        // their last-picked sub-tab. Flash by source-time range when
-        // we have one — the TranscriptSource subscriber locates the
-        // matching `[data-word-start]` spans.
-        if (span) {
-          useTranscriptFlashes.getState().add({
-            key: proposalId,
-            startS: span.startS,
-            endS: span.endS,
-          });
-        }
-        return;
-      }
-      case "caption": {
-        // Captions live on the transcript track — always force the
-        // Transcript sub-tab so the reviewer sees the text the agent
-        // is rewriting. Transcript-first projects already default
-        // there; setting it explicitly makes the contract uniform.
-        adapter.setCenterMode("source");
-        useSourceFocus.getState().setSubTab("transcript");
-        if (span) {
-          useTranscriptFlashes.getState().add({
-            key: proposalId,
-            startS: span.startS,
-            endS: span.endS,
-          });
-        }
-        return;
-      }
+    if (["color", "broll", "title", "caption"].includes(medium)) {
+      if (span) adapter.requestTimelineSeek(span.startS);
+      return;
     }
+    focusOnTimeline(adapter, proposalId, ranges, span,
+      medium === "transition" ? "transition" : "clip");
   },
 }));
 
@@ -418,7 +208,7 @@ function focusOnTimeline(
   }
   if (ranges.length === 0) {
     // No diff_hints we could resolve — best-effort full-track flash
-    // skipped (it would be noisy). The seek + tab switch are enough.
+    // skipped because there is no affected time range.
     return;
   }
   ranges.forEach((range, idx) => {

@@ -10,7 +10,8 @@ import { FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { BrandMark } from "../brand/BrandMark";
 import { ConversationPanel } from "./StageConversation";
 import type { AgentProfile, PermissionMode } from "../protocol";
-import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
+import type { ChatSessionSummary } from "../agent/turnContext";
+import type { MediaSuggestion } from "./StageConversation";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 
 /**
@@ -83,9 +84,9 @@ type TimelineResize = { startY: number; startHeight: number };
 export type StageShellProps = {
   hasProject: boolean;
   landing: ReactNode;
-  /** The video preview hero (PreviewSurface), already composed by App. */
+  /** The video preview and transport, composed by App. */
   preview: ReactNode;
-  /** Real timeline node (TimelineHybrid + TimelinePane). */
+  /** Real timeline node (TimelinePane). */
   timeline: ReactNode;
   /** Track count drives the timeline strip height (fit all, no scroll). */
   trackCount?: number;
@@ -213,6 +214,12 @@ export function StageShell(props: StageShellProps) {
       if (id === MENU_COMMANDS.VIEW_NOTES) {
         onStage("edit");
         setRightPane("notes");
+      } else if (id === MENU_COMMANDS.VIEW_MEDIA || id === MENU_COMMANDS.NAV_MEDIA) {
+        onStage("edit");
+        setLeftPane("media");
+      } else if (id === MENU_COMMANDS.VIEW_TRANSCRIPT) {
+        onStage("edit");
+        setLeftPane("transcript");
       }
     }),
     [onStage],

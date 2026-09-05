@@ -4,7 +4,15 @@ import { ChatStream } from "../agent/ChatStream";
 import { AGENT_PROFILE_OPTIONS } from "../agent/agentProfile";
 import type { AgentProfile } from "../protocol/generated/AgentProfile";
 import type { PermissionMode } from "../protocol/generated/PermissionMode";
-import type { ChatSessionSummary, MediaSuggestion } from "./CommandRail";
+import type { ChatSessionSummary } from "../agent/turnContext";
+
+export type MediaSuggestion = {
+  id: string;
+  label: string;
+  detail?: string;
+  token: string;
+  chipLabel: string;
+};
 
 type ConversationPanelProps = {
   agentRead?: string;

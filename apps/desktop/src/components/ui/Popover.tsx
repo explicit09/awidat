@@ -14,7 +14,6 @@ import "./popover.css";
 
 export const Popover = RadixPopover.Root;
 export const PopoverTrigger = RadixPopover.Trigger;
-export const PopoverAnchor = RadixPopover.Anchor;
 
 type ContentProps = {
   children: ReactNode;

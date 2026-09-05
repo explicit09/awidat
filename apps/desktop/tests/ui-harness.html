@@ -547,8 +547,10 @@
               revision: 0,
             });
             return reply(proposalId);
+          case "get_agent_profile":
+            return reply("balanced");
           case "get_permission_mode":
-            return reply("ask");
+            return reply("manual");
           case "get_project_type":
             return reply("editorial");
           default:
@@ -608,7 +610,7 @@
           source: { source: "agent", tool_name: "apply_edl" },
           edl_text: "*** Begin EDL\n*** Trim Clip\n*** End EDL\n",
           snapshot: timeline,
-          diff_hints: [{ kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "right", delta_s: 1 }],
+          diff_hints: [{ kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "end", delta_s: 1 }],
           summary: "Trim intro",
           revision: 0,
         });

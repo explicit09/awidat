@@ -38,7 +38,13 @@ import {
   estimatedSavingsS,
   type DetectedMoment,
 } from "./insights";
-import type { PreviewChange } from "./PreviewSurface";
+export type PreviewChange = {
+  id: string;
+  index: number;
+  kind: "pending";
+  timeS: number;
+  label?: string;
+};
 
 const SILENCE_MIN_S = 2;
 const QUEUE_CAP = 9;

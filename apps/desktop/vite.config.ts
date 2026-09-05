@@ -32,10 +32,6 @@ export default defineConfig(async ({ mode }) => {
   const perfBuild = mode === "perf";
   const input = {
     main: resolve(__dirname, "index.html"),
-    gallery: resolve(__dirname, "gallery.html"),
-    shell: resolve(__dirname, "shell.html"),
-    glass: resolve(__dirname, "glass.html"),
-    studio: resolve(__dirname, "studio.html"),
     ...(perfBuild ? { "tests/ui-harness": resolve(__dirname, "tests/ui-harness.html") } : {}),
   };
 

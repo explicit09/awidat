@@ -1,33 +1,15 @@
-// Tests for useFocusController — the Wave 4 W4.6 Review → dispatcher.
-//
-// What we lock in here:
-//   1. deriveRanges turns diff_hints into (track, start, end) ranges,
-//      picking the right snapshot per hint kind.
-//   2. unionRange covers the full span when multiple ranges arrive.
-//   3. focusProposal routes mediums to the right CenterMode and pushes
-//      seek + flash + sub-tab + toast through the adapter / sub-stores.
-//   4. flashes auto-clear after the configured timeout.
-//
-// We swap the adapter to a synchronous double per test; the sub-stores
-// (`useFlashRanges`, `useSourceFocus`, `useTranscriptFlashes`) are the
-// real Zustand stores — exercising them through the public API mirrors
-// the production wire.
-
 import { strict as assert } from "node:assert";
 import type { AppliedDiff, TimelineSnapshot } from "../src/protocol";
-import type { CenterMode } from "../src/state/centerMode.ts";
 import {
   deriveRanges,
   unionRange,
   useFlashRanges,
   useFocusController,
-  useSourceFocus,
-  useTranscriptFlashes,
   type FocusAdapter,
 } from "../src/state/focusController.ts";
 
 function makeSnapshot(
-  tracks: Array<Array<{ index: number; start: number; duration: number }>>,
+  tracks: Array<Array<{ index: number; start: number; duration: number; uuid?: string }>>,
 ): TimelineSnapshot {
   return {
     duration_s: 60,
@@ -41,6 +23,7 @@ function makeSnapshot(
       items: items.map((it) => ({
         index: it.index,
         kind: "clip",
+        clip_uuid: it.uuid ?? `clip-${ti}-${it.index}`,
         track_start_s: it.start,
         duration_s: it.duration,
         source_path: null,
@@ -62,7 +45,6 @@ function makeSnapshot(
 }
 
 interface Recorder {
-  centerMode: CenterMode[];
   seeks: number[];
   scrolls: number[];
   snapshot: TimelineSnapshot | null;
@@ -70,21 +52,17 @@ interface Recorder {
 
 function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   const rec: Recorder = {
-    centerMode: [],
     seeks: [],
     scrolls: [],
     snapshot,
   };
   const adapter: FocusAdapter = {
-    setCenterMode: (m) => rec.centerMode.push(m),
     requestTimelineSeek: (t) => rec.seeks.push(t),
     scrollTimelineTo: (t) => rec.scrolls.push(t),
     readTimelineSnapshot: () => rec.snapshot,
   };
   useFocusController.setState({ adapter });
   useFlashRanges.getState().clear();
-  useSourceFocus.getState().clear();
-  useTranscriptFlashes.getState().clear();
   return rec;
 }
 
@@ -118,7 +96,7 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   assert.equal(ranges[0].endS, 5);
 }
 
-// deriveRanges — trim_edge / insert / move read the proposed snapshot
+// New insertions cannot be played yet; trims resolve to the current clip.
 {
   const current = makeSnapshot([[{ index: 0, start: 0, duration: 10 }]]);
   const proposed = makeSnapshot([
@@ -132,13 +110,44 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
     { kind: "trim_edge", op_index: 1, track_index: 0, item_index: 0, side: "end", delta_s: -5 },
   ];
   const ranges = deriveRanges(hints, current, proposed);
-  assert.equal(ranges.length, 2);
-  // insert hit
-  assert.equal(ranges[0].startS, 5);
-  assert.equal(ranges[0].endS, 9);
-  // trim_edge hit
-  assert.equal(ranges[1].startS, 0);
-  assert.equal(ranges[1].endS, 5);
+  assert.deepEqual(ranges, [{ trackIndex: 0, startS: 0, endS: 10 }]);
+}
+
+// Ripple edits change indices and times; trim/split navigation follows identity.
+for (const kind of ["trim_edge", "split"] as const) {
+  const current = makeSnapshot([[
+    { index: 0, start: 0, duration: 10, uuid: "A" },
+    { index: 1, start: 10, duration: 10, uuid: "B" },
+  ]]);
+  const proposed = makeSnapshot([[{ index: 0, start: 0, duration: 5, uuid: "B" }]]);
+  const hint: AppliedDiff = kind === "split"
+    ? { kind, op_index: 1, track_index: 0, item_index: 0, at_s: 5 }
+    : { kind, op_index: 1, track_index: 0, item_index: 0, side: "end", delta_s: -5 };
+  assert.deepEqual(deriveRanges([hint], current, proposed),
+    [{ trackIndex: 0, startS: 10, endS: 20 }]);
+}
+
+// Moving B before A must still navigate to B in the current playback.
+{
+  const current = makeSnapshot([[
+    { index: 0, start: 0, duration: 10 },
+    { index: 1, start: 10, duration: 10 },
+  ]]);
+  const proposed = makeSnapshot([[
+    { index: 0, start: 0, duration: 10 },
+    { index: 1, start: 10, duration: 10 },
+  ]]);
+  const hint: AppliedDiff = { kind: "move", op_index: 0,
+    from_track_index: 0, from_item_index: 1, to_track_index: 0, to_item_index: 0 };
+  assert.deepEqual(deriveRanges([hint], current, proposed),
+    [{ trackIndex: 0, startS: 10, endS: 20 }]);
+  const rec = installRecorder(current);
+  useFocusController.getState().focusProposal({
+    proposalId: "move-b", medium: "cut", diffHints: [hint], proposedSnapshot: proposed,
+  });
+  assert.deepEqual(rec.seeks, [15]);
+  assert.deepEqual(rec.scrolls, [15]);
+  assert.equal(useFlashRanges.getState().ranges[0].startS, 10);
 }
 
 // deriveRanges — silently skips hints that don't resolve
@@ -151,7 +160,7 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   assert.equal(ranges.length, 0);
 }
 
-// cut medium → timeline tab + seek to midpoint + scroll + flash
+// cut medium → seek to midpoint + scroll + flash
 {
   const current = makeSnapshot([
     [{ index: 0, start: 0, duration: 2 }, { index: 1, start: 2, duration: 4 }],
@@ -163,7 +172,6 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
     diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 1 }],
     proposedSnapshot: null,
   });
-  assert.deepEqual(rec.centerMode, ["timeline"]);
   // delete range is [2, 6] — midpoint 4.
   assert.deepEqual(rec.seeks, [4]);
   assert.deepEqual(rec.scrolls, [4]);
@@ -185,87 +193,23 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
     diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
     proposedSnapshot: null,
   });
-  assert.deepEqual(rec.centerMode, ["timeline"]);
   const r = useFlashRanges.getState().ranges;
   assert.equal(r.length, 1);
   assert.equal(r[0].kind, "transition");
 }
 
-// color medium → source + Video sub-tab + before/after toast
-{
-  const current = makeSnapshot([[{ index: 0, start: 4, duration: 6 }]]);
-  const rec = installRecorder(current);
+// Visual proposals seek the actual preview rather than updating retired tabs.
+for (const medium of ["color", "broll", "title", "caption"] as const) {
+  const rec = installRecorder(makeSnapshot([[{ index: 0, start: 4, duration: 6 }]]));
   useFocusController.getState().focusProposal({
-    proposalId: "p3",
-    medium: "color",
+    proposalId: `visual-${medium}`, medium,
     diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
-    proposedSnapshot: null,
   });
-  assert.deepEqual(rec.centerMode, ["source"]);
-  assert.equal(useSourceFocus.getState().subTab, "video");
-  assert.equal(useSourceFocus.getState().toast, "before-after");
-  // color seeks to range start (4), not midpoint.
   assert.deepEqual(rec.seeks, [4]);
-  // no flash on color — preview-side surfaces don't have a canvas pass.
   assert.equal(useFlashRanges.getState().ranges.length, 0);
 }
 
-// broll medium → source + Video sub-tab + insert-preview toast
-{
-  const current = makeSnapshot([[{ index: 0, start: 3, duration: 5 }]]);
-  installRecorder(current);
-  useFocusController.getState().focusProposal({
-    proposalId: "p4",
-    medium: "broll",
-    diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
-    proposedSnapshot: null,
-  });
-  assert.equal(useSourceFocus.getState().subTab, "video");
-  assert.equal(useSourceFocus.getState().toast, "insert-preview");
-}
-
-// title medium → source + transcript flash registered
-{
-  const current = makeSnapshot([[{ index: 0, start: 12, duration: 4 }]]);
-  installRecorder(current);
-  useFocusController.getState().focusProposal({
-    proposalId: "p5",
-    medium: "title",
-    diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
-    proposedSnapshot: null,
-  });
-  const flashes = useTranscriptFlashes.getState().flashes;
-  assert.equal(flashes.length, 1);
-  assert.equal(flashes[0].key, "p5");
-  assert.equal(flashes[0].startS, 12);
-  assert.equal(flashes[0].endS, 16);
-}
-
-// caption medium → source + Transcript sub-tab forced + transcript flash.
-// Distinct from title (which leaves the sub-tab alone) because captions
-// live on the transcript track and the reviewer must see the text.
-{
-  const current = makeSnapshot([[{ index: 0, start: 20, duration: 3 }]]);
-  const rec = installRecorder(current);
-  // Pre-set sub-tab to video so we can prove the controller forced it
-  // back to transcript for the caption medium.
-  useSourceFocus.getState().setSubTab("video");
-  useFocusController.getState().focusProposal({
-    proposalId: "p5c",
-    medium: "caption",
-    diffHints: [{ kind: "delete", op_index: 0, track_index: 0, item_index: 0 }],
-    proposedSnapshot: null,
-  });
-  assert.deepEqual(rec.centerMode, ["source"]);
-  assert.equal(useSourceFocus.getState().subTab, "transcript");
-  const flashes = useTranscriptFlashes.getState().flashes;
-  assert.equal(flashes.length, 1);
-  assert.equal(flashes[0].key, "p5c");
-  assert.equal(flashes[0].startS, 20);
-  assert.equal(flashes[0].endS, 23);
-}
-
-// missing diff_hints still switches the tab (no flash, no seek)
+// Missing diff hints cause no flash or seek.
 {
   installRecorder(null);
   useFocusController.getState().focusProposal({
@@ -293,19 +237,6 @@ function installRecorder(snapshot: TimelineSnapshot | null = null): Recorder {
   assert.equal(useFlashRanges.getState().ranges.length, 1);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(useFlashRanges.getState().ranges.length, 0);
-}
-
-// setSubTab bumps subTabRequestId every call (even repeats), so the
-// TranscriptSource effect re-fires on stay-on-video clicks.
-{
-  installRecorder(null);
-  const beforeId = useSourceFocus.getState().subTabRequestId;
-  useSourceFocus.getState().setSubTab("video");
-  const afterFirst = useSourceFocus.getState().subTabRequestId;
-  useSourceFocus.getState().setSubTab("video");
-  const afterSecond = useSourceFocus.getState().subTabRequestId;
-  assert.ok(afterFirst > beforeId, "first set bumps id");
-  assert.ok(afterSecond > afterFirst, "second set still bumps id");
 }
 
 console.log("focus-controller: OK");

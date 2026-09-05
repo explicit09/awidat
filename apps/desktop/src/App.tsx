@@ -1,23 +1,13 @@
-/**
- * Montage v2 App — composes the AppShell from src/shell with real wiring.
- *
- * The legacy 3-column layout has been retired (history: see git on
- * `ui-v2`). Side effects that the legacy App.tsx owned (Tauri channel
- * subscribers, menu-command routing, project lifecycle) live in
- * `src/state/appGlue.ts`. Everything below this point is pure
- * composition + glue between Zustand stores and shell components.
- */
+/** Montage workspace composition and project lifecycle wiring. */
 
-import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { PanelRightOpen } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useAgentStore } from "./agent/store";
 import { isAuthReadyForAgent } from "./agent/composerAuthGate";
-import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
 import { shouldReplaceDeferredChatHistory } from "./app/deferredHydrationGuards";
@@ -35,7 +25,6 @@ import { resumePreviewAudio } from "./media/previewAudioGraph";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { aspectRatioLabel } from "./media/programFrame";
-import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
 import { droppedImportPaths } from "./media/dropImportPaths";
 import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
 import { useTranscriptStore } from "./transcript/store";
@@ -43,26 +32,16 @@ import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
 import { NotesPanel } from "./notes/NotesPanel";
 import {
-  AppShell,
   StageShell,
-  CommandRail,
   DeliverySurface,
   DRAFT_METADATA_JOB_ID,
   SkillsSurface,
   HistorySurface,
-  BriefSurface,
-  CenterModeTabs,
   IndexRail,
-  isTranscriptFirstProjectType,
-  PreviewSurface,
   PreviewInsights,
-  TranscriptSource,
   ProposalInspector,
-  TimelineHybrid,
-  type ActivityEntry,
   type ChatSessionSummary,
   type ContextChip,
-  type ConversationTurn,
   type MediaSuggestion,
   type DeliveryRenderSummary,
   type DeliveryTarget,
@@ -70,27 +49,17 @@ import {
   type IndexingEpisodeSummary,
   type IndexingStructurePreview,
   type IndexingTask,
-  type IndexerConfigEntry,
   type IndexerConfigSnapshot,
-  type PlanItem,
   type PreflightFinding,
   type PreviewChange,
-  type PreviewViewMode,
-  type TimelineTab,
-  type TimelineViewMode,
 } from "./shell";
-import { Footer as ChromeFooter } from "./shell/chrome/Footer";
 import { Landing } from "./shell/empty/Landing";
 import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { stageFromWorkspaceShortcut, useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
-import { useIndexReadinessStore } from "./state/indexReadiness";
-import { useEpisodesStore } from "./state/episodes";
-import { useIntroState } from "./state/introState";
 import { useBriefProposalsStore } from "./state/briefProposals";
-import { useCenterModeStore, type CenterMode } from "./state/centerMode";
-import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
+import { deriveRanges, installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
 import { useAuth } from "./state/auth";
 import {
@@ -122,19 +91,6 @@ import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, onMenuCommand } from "./app/menuCommands";
 import type { AgentProfile, Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
 import { TIMELINE_CHANGED_EVENT } from "./protocol";
-import {
-  screen2Activity,
-  SCREEN2_CURRENT_TIME_S,
-  SCREEN2_DURATION_S,
-  Screen2MediaSlot,
-  screen2AudioPeaks,
-  screen2Changes,
-  screen2ContextChips,
-  screen2Inspector,
-  screen2Plan,
-  screen2Suggestions,
-} from "./shell/screen2Demo";
-import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
 import { StageHarness } from "./media/stage/StageHarness";
 import "./ui/tokens.css";
 import "./App.css";
@@ -183,7 +139,6 @@ function App() {
   useRenderQueueWorker();
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
-  const projectType = useProjectStore((s) => s.projectType);
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
   const upsertAgentItem = useAgentStore((s) => s.upsert);
@@ -193,10 +148,6 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
-  // The Stage is THE app. The legacy cockpit stays as the ternary's else
-  // branch (compiles, keeps its consts live) but has no user-facing switch,
-  // so there's nothing confusing to flip between.
-  const STAGE_SHELL = true;
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
@@ -233,37 +184,12 @@ function App() {
   const selectProposal = useProposalStore((s) => s.select);
   const inspectorData = useProposalInspectorData();
 
-  // Wave 3 B1: Brief / Source / Timeline center-pane toggle. The store
-  // resolves the active mode per-project with a default rule (Brief
-  // when the agent has work waiting or the project hasn't been
-  // introduced yet; Source otherwise).
-  //
-  // Subscribe to the slice so re-renders fire after every set(). The
-  // approvals subscription on the brief store keeps `pending().length`
-  // current; intro state is read once per project change via hasIntroduced.
   useBriefProposalsStore((s) => s.approvals);
-  useCenterModeStore((s) => s.byProject);
   const briefPendingCount = useBriefProposalsStore.getState().pending().length;
-  const hasIntroduced = useIntroState((s) => s.hasIntroduced);
-  const centerModeStoreGet = useCenterModeStore.getState().get;
-  const setCenterModeStore = useCenterModeStore.getState().set;
-  const centerMode: CenterMode = centerModeStoreGet(current, {
-    pendingCount: briefPendingCount,
-    isFirstSession: current ? !hasIntroduced(current) : false,
-  });
-  const setCenterMode = (next: CenterMode) => setCenterModeStore(current, next);
 
-  // Wave 4 W4.6 — wire the focus controller. The adapter closes over
-  // the latest `current` (project root) + setCenterMode at the time of
-  // the effect, so a project switch re-installs the adapter and the
-  // controller drives the right project's tab. `installFocusAdapter`
-  // only swaps the singleton's adapter ref — it never re-creates the
-  // controller, so subscribers stay attached across re-installs.
+  // Connect proposal review to the shared preview and timeline.
   useEffect(() => {
     installFocusAdapter({
-      setCenterMode: (next: CenterMode) => {
-        if (current) setCenterModeStore(current, next);
-      },
       requestTimelineSeek: (t) => {
         useMediaStore.getState().requestTimelineSeek(t);
       },
@@ -286,25 +212,12 @@ function App() {
       },
       readTimelineSnapshot: () => useTimelineStore.getState().snapshot,
     });
-  }, [current, setCenterModeStore]);
-
-  const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
-  const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
-  const [previewViewMode, setPreviewViewMode] = useState<PreviewViewMode>("before-after");
-  const [previewQualityMode, setPreviewQualityMode] = useState<PreviewQualityMode>("auto");
-  const [previewVolume, setPreviewVolume] = useState(0.8);
+  }, []);
+  const previewQualityMode: PreviewQualityMode = "auto";
+  const previewVolume = 0.8;
   const [previewRate, setPreviewRate] = useState(1);
   const [activePreviewChangeId, setActivePreviewChangeId] = useState<string | undefined>(undefined);
-  const [, setRealVideoFrames] = useState<string[]>([]);
-  const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
-  // Tracks whether the current `RealMediaPreviewSlot` has decoded its
-  // first frame. Lifted out of the slot so `PreviewSurface` can render
-  // the `FilmSlate` overlay until the swap and cross-fade it out once
-  // the player has something paintable. Reset to false whenever the
-  // selected media changes (see effect below) so re-selecting a clip
-  // re-shows the slate while its frame loads.
-  const [hasProxyFrame, setHasProxyFrame] = useState(false);
   const mediaReadinessCommandUnavailableRef = useRef(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [pendingImportPaths, setPendingImportPaths] = useState<string[] | null>(null);
@@ -312,7 +225,6 @@ function App() {
   const [pendingImportUrl, setPendingImportUrl] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
-  const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
   const [episodeSummary, setEpisodeSummary] = useState<IndexingEpisodeSummary | undefined>(undefined);
@@ -321,40 +233,22 @@ function App() {
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
-  const [agentFocusMode, setAgentFocusMode] = useState(false);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("manual");
   const [agentProfile, setAgentProfileState] = useState<AgentProfile>("balanced");
-  // Default-expanded: the saved layout in localStorage gives the
-  // Inspector a real proportion (~21%) and the user expects that
-  // width back on reload. Starting collapsed loaded a different
-  // layout variant (`montage.shell.h.inspector-collapsed`) and gave
-  // the Inspector a 2% stub regardless of what was saved. The auto-
-  // expand-on-proposal effect below still kicks in when a proposal
-  // arrives, but boot doesn't force the collapse anymore.
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
-  const [rightPanel, setRightPanel] = useState<"inspector" | "index" | "transcript" | "vedit">("inspector");
   // The bottom dock used to host Timeline / Transcript / Vedit as
   // sibling tabs with docked / collapsed / popout chrome. Transcript +
   // Vedit moved to the right rail; the dock is now the timeline only,
   // so the tab + dock-state hooks went with them.
 
   const hasProject = current !== null;
-  const demoMode = !hasProject && !isTauri();
   const authStatus = useAuth((s) => s.status);
   const refreshAuth = useAuth((s) => s.refresh);
   const openAuth = useAuth((s) => s.open);
-  const agentAuthReady = demoMode || isAuthReadyForAgent(authStatus);
+  const agentAuthReady = isAuthReadyForAgent(authStatus);
 
   useEffect(() => {
     void refreshAuth();
   }, [refreshAuth]);
-  const demoScreenId = demoMode
-    ? typeof window !== "undefined" && window.location.pathname === "/design/concept"
-      ? "screen1"
-      : resolveDemoScreenId(typeof window === "undefined" ? "" : window.location.search)
-    : "screen2";
-  const demoScreen = demoScreens[demoScreenId];
   const selectedProxy = useMemo(
     () =>
       proxies.find(
@@ -397,8 +291,6 @@ function App() {
       await refreshMedia();
       selectMedia(stemFromPath(imported[imported.length - 1] ?? paths[paths.length - 1]));
       setStage("edit");
-      setLeftPanel("media");
-      setRightPanel("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -413,8 +305,6 @@ function App() {
       await refreshMedia();
       selectMedia(stemFromPath(imported));
       setStage("edit");
-      setLeftPanel("media");
-      setRightPanel("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -479,7 +369,6 @@ function App() {
       await invoke("set_project_root", { path: picked });
       await refreshProject();
       setStage("edit");
-      setLeftPanel("media");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -503,18 +392,7 @@ function App() {
   }
 
   function resetSurfaceControls() {
-    setDismissedContextChips([]);
     useDeliveryTargetsStore.getState().clear();
-  }
-
-  function dismissContextChip(chip: ContextChip) {
-    const key = `${chip.kind ?? "tag"}:${chip.label}`;
-    setDismissedContextChips((previous) =>
-      previous.includes(key) ? previous : [...previous, key],
-    );
-    // Also drop any matching @-attached clip so it doesn't immediately
-    // come back the next time effectiveContextChips is recomputed.
-    setPickedMediaChips((previous) => previous.filter((c) => c.label !== chip.label));
   }
 
   async function runEngineCommand(command: string) {
@@ -532,7 +410,7 @@ function App() {
     try {
       const turnId = await invoke<string>("start_turn", {
         input,
-        context: buildTurnContext(effectiveContextChips),
+        context: buildTurnContext(realContextChips),
       });
       setActiveTurnId(turnId);
     } catch (e) {
@@ -541,7 +419,7 @@ function App() {
           await invoke("cancel_turn");
           const turnId = await invoke<string>("start_turn", {
             input,
-            context: buildTurnContext(effectiveContextChips),
+            context: buildTurnContext(realContextChips),
           });
           setActiveTurnId(turnId);
           return;
@@ -700,7 +578,7 @@ function App() {
   }
 
   async function loadIndexerConfig() {
-    if (demoMode || !isTauri()) {
+    if (!isTauri()) {
       setIndexerConfig(undefined);
       return;
     }
@@ -714,49 +592,36 @@ function App() {
   }
 
   async function loadIndexReadiness() {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       setIndexReadiness(undefined);
-      useIndexReadinessStore.getState().setSnapshot(undefined);
       return;
     }
     try {
       const snapshot = await invoke<IndexReadinessSnapshot>("index_readiness");
       setIndexReadiness(snapshot);
-      // Mirror into the shared store so evidenceAccessors and any other
-      // surface that doesn't have App-level state access can subscribe.
-      // The local React state above stays as-is to avoid a wider refactor
-      // of the cockpit slate / footer.
-      useIndexReadinessStore.getState().setSnapshot(snapshot);
     } catch (e) {
       console.warn("index_readiness failed", e);
       setIndexReadiness(undefined);
-      useIndexReadinessStore.getState().setSnapshot(undefined);
     }
   }
 
   async function loadProjectEpisodes() {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       setEpisodeSummary(undefined);
-      // Mirror the local clear into the shared store so accessors that
-      // subscribe (EpisodesDrillDown, EvidenceChipRow) drop their data
-      // when the project unloads.
-      useEpisodesStore.getState().setSnapshot(undefined);
       return;
     }
     try {
       const snapshot = await invoke<ProjectEpisodesResponse>("get_project_episodes");
       const summary = projectEpisodesToIndexingSummary(snapshot);
       setEpisodeSummary(summary);
-      useEpisodesStore.getState().setSnapshot(summary);
     } catch (e) {
       console.warn("get_project_episodes failed", e);
       setEpisodeSummary(undefined);
-      useEpisodesStore.getState().setSnapshot(undefined);
     }
   }
 
   async function loadMediaReadiness() {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       setMediaReadiness(undefined);
       return;
     }
@@ -779,7 +644,7 @@ function App() {
   }
 
   async function loadRunningJobIds() {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       setRunningJobIds(undefined);
       return;
     }
@@ -796,7 +661,7 @@ function App() {
     scheduledProject: string | null;
     scheduledItemCount: number;
   }) {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       setChatSessions([]);
       setActiveChatSession(null);
       return;
@@ -830,7 +695,7 @@ function App() {
   }
 
   async function refreshChatSessions() {
-    if (demoMode || !isTauri() || !current) return;
+    if (!isTauri() || !current) return;
     try {
       const sessions = await invoke<ChatSessionSummary[]>("list_chat_sessions");
       setChatSessions(sessions);
@@ -876,57 +741,9 @@ function App() {
     }
   }
 
-  async function renameChat(session: ChatSessionSummary, newTitle: string) {
-    if (!isTauri()) return;
-    try {
-      await invoke("rename_chat_session", {
-        logPath: session.logPath,
-        newTitle,
-      });
-      await refreshChatSessions();
-    } catch (e) {
-      setCommandError(String(e));
-    }
-  }
-
-  async function deleteChat(session: ChatSessionSummary) {
-    if (!isTauri()) return;
-    try {
-      await invoke("delete_chat_session", {
-        logPath: session.logPath,
-      });
-      // If the deleted chat was active, drop it from local state too.
-      if (activeChatSession?.logPath === session.logPath) {
-        setActiveChatSession(null);
-        replaceAgentItems([]);
-      }
-      await refreshChatSessions();
-    } catch (e) {
-      setCommandError(String(e));
-    }
-  }
-
-  async function toggleProjectIndexer(indexer: IndexerConfigEntry) {
-    if (!isTauri()) return;
-    setCommandError(null);
-    try {
-      const snapshot = await invoke<IndexerConfigSnapshot>("set_project_indexer_enabled", {
-        args: { name: indexer.name, enabled: !indexer.enabled },
-      });
-      setIndexerConfig(snapshot);
-    } catch (e) {
-      setCommandError(String(e));
-    }
-  }
-
   function openConfigPath(path: string) {
     if (!isTauri()) return;
     openPath(path).catch((e) => setCommandError(String(e)));
-  }
-
-  function revealConfigPath(path: string) {
-    if (!isTauri()) return;
-    revealItemInDir(path).catch((e) => setCommandError(String(e)));
   }
 
   function submitUrlImport() {
@@ -965,26 +782,17 @@ function App() {
   useEffect(() => {
     const currentId = activeProposal?.callId ?? null;
     if (currentId && currentId !== lastProposalIdRef.current) {
-      setInspectorCollapsed(false);
-      setRightPanel("inspector");
     }
     lastProposalIdRef.current = currentId;
   }, [activeProposal]);
 
   function inspectActiveProposal() {
-    setInspectorCollapsed(false);
     void runEngineCommand("Inspect the selected proposal in detail and list the supporting evidence.");
   }
 
   function reviseActiveProposal() {
-    setInspectorCollapsed(false);
     void runEngineCommand("Revise the selected proposal and explain the tradeoffs.");
   }
-
-  // Chrome handlers `openDeliveryFromChrome` / `openSettingsFromChrome`
-  // were removed alongside the old chrome JSX. The new `<TopChrome />`
-  // (IdentityRow + WorkspaceRow) is wired in Tasks 8–9; we will reintroduce
-  // these once the redesigned chrome handlers land.
 
   useEffect(() => {
     return onMenuCommand((id) => {
@@ -1002,20 +810,14 @@ function App() {
         useSettings.getState().open();
       } else if (id === MENU_COMMANDS.NAV_PROJECT) {
         setStage("edit");
-        setCenterMode("brief");
       } else if (id === MENU_COMMANDS.NAV_WORKSPACE) {
         setStage("edit");
-        setCenterMode("source");
       } else if (id === MENU_COMMANDS.NAV_MEDIA || id === MENU_COMMANDS.VIEW_MEDIA) {
         setStage("edit");
-        setLeftPanel("media");
-        setCenterMode("source");
       } else if (id === MENU_COMMANDS.NAV_REVIEW || id === MENU_COMMANDS.VIEW_TIMELINE) {
         setStage("edit");
-        setCenterMode("timeline");
       } else if (id === MENU_COMMANDS.VIEW_TRANSCRIPT) {
         setStage("edit");
-        setRightPanel("transcript");
       } else if (id === MENU_COMMANDS.NAV_DELIVER) {
         setStage(current ? "deliver" : "edit");
       } else if (id === MENU_COMMANDS.HELP_DOCS) {
@@ -1052,21 +854,10 @@ function App() {
   }, [setStage]);
 
   useEffect(() => {
-    if (demoMode) {
-      if (stage !== demoScreen.stage) {
-        setStage(demoScreen.stage);
-      }
-    }
-  }, [demoMode, demoScreen.stage, setStage, stage]);
-
-  useEffect(() => {
     // Dev-only: when a stage is pinned via VITE_MONTAGE_STAGE (native
     // screenshot tours), don't auto-route the stage back to "edit".
     if (import.meta.env?.VITE_MONTAGE_STAGE) return;
-    if (demoMode) {
-      routedProjectRef.current = { project: null, mode: null };
-      return;
-    }
+
     if (current === null) {
       routedProjectRef.current = { project: null, mode: null };
       setStage("edit");
@@ -1097,18 +888,17 @@ function App() {
     }
 
     setStage("edit");
-    setRightPanel("index");
-  }, [activeProposal, current, demoMode, hasImportedMedia, setStage, timelineDuration]);
+  }, [activeProposal, current, hasImportedMedia, setStage, timelineDuration]);
 
   useEffect(() => {
-    if (demoMode || !isTauri() || !current) {
+    if (!isTauri() || !current) {
       clearGeneratedMedia();
       return;
     }
     return deferNonCriticalHydration(() => {
       void refreshGeneratedMedia();
     });
-  }, [clearGeneratedMedia, current, demoMode, refreshGeneratedMedia]);
+  }, [clearGeneratedMedia, current, refreshGeneratedMedia]);
 
   useEffect(() => {
     const scheduledProject = current;
@@ -1117,7 +907,7 @@ function App() {
       void loadInitialChatHistory({ scheduledProject, scheduledItemCount });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode]);
+  }, [current]);
 
   useEffect(() => {
     if (!running) {
@@ -1134,64 +924,13 @@ function App() {
   }, [current]);
 
   useEffect(() => {
-    if (!demoMode) {
+    {
       setActiveTranscriptStem(selectedStem);
     }
-  }, [demoMode, selectedStem, setActiveTranscriptStem]);
+  }, [selectedStem, setActiveTranscriptStem]);
 
   useEffect(() => {
-    if (demoMode || !isTauri()) {
-      setRealVideoFrames([]);
-      setRealAudioPeaks([]);
-      return;
-    }
-    const { thumbnailDir, waveformPath } = firstTimelineSidecars(timelineSnapshot);
-    let cancelled = false;
-    if (!thumbnailDir) setRealVideoFrames([]);
-    if (!waveformPath) setRealAudioPeaks([]);
-
-    const cancelDeferred = deferNonCriticalHydration(() => {
-      if (thumbnailDir) {
-        invoke<string[]>("list_thumbnail_frames", { dir: thumbnailDir })
-          .then((paths) => {
-            if (cancelled) return;
-            setRealVideoFrames(sampleEvenly(paths, 24).map((path) => convertFileSrc(path)));
-          })
-          .catch((e) => {
-            console.warn("list_thumbnail_frames failed", e);
-            if (!cancelled) setRealVideoFrames([]);
-          });
-      }
-
-      if (waveformPath) {
-        invoke<number[]>("read_waveform", { path: waveformPath })
-          .then((buckets) => {
-            if (cancelled) return;
-            setRealAudioPeaks(downsamplePeaks(buckets, 180));
-          })
-          .catch((e) => {
-            console.warn("read_waveform failed", e);
-            if (!cancelled) setRealAudioPeaks([]);
-          });
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      cancelDeferred();
-    };
-  }, [demoMode, timelineSnapshot]);
-
-  // Reset the "first frame painted" flag whenever the selected media
-  // (or its quality-mode source) changes. Without this, switching to a
-  // new clip would skip showing the FilmSlate because the flag would
-  // still be true from the previously-loaded media.
-  useEffect(() => {
-    setHasProxyFrame(false);
-  }, [selectedPreviewMedia?.path]);
-
-  useEffect(() => {
-    if (demoMode || !isTauri() || !selectedPreviewMedia) {
+    if (!isTauri() || !selectedPreviewMedia) {
       setRealPreviewSrc(null);
       return;
     }
@@ -1207,10 +946,10 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [demoMode, selectedPreviewMedia]);
+  }, [selectedPreviewMedia]);
 
   useEffect(() => {
-    if (demoMode || !isTauri()) {
+    if (!isTauri()) {
       setIndexerConfig(undefined);
       return;
     }
@@ -1229,7 +968,7 @@ function App() {
       cancelled = true;
       cancelDeferred();
     };
-  }, [current, demoMode]);
+  }, [current]);
 
   // Load persisted agent permission mode so the composer chip shows
   // the right initial value. Falls back to "manual" on error.
@@ -1274,48 +1013,6 @@ function App() {
     }
   }
 
-  // Distill agent items into the CommandRail's plan + activity lists.
-  // Real agent producers populate `Plan` items, `ToolCall` items, etc.
-  // We translate them into shell-friendly shapes here.
-  const plan: PlanItem[] = useMemo(() => {
-    const planItems = items.filter(
-      (it): it is Extract<typeof items[number], { kind: "plan" }> => it.kind === "plan",
-    );
-    if (planItems.length === 0) return [];
-    // Use the latest Plan item — the agent emits incremental updates.
-    const latest = planItems[planItems.length - 1];
-    return latest.items.map((step, i) => ({
-      id: `${latest.id.toString()}-${i}`,
-      text: step.step,
-      status: stepStatus(step.status),
-    }));
-  }, [items]);
-
-  // Activity log now shows *background jobs only* (transcode,
-  // thumbnails, waveforms, indexing). Tool calls render inline under
-  // their turn — see `turns` below.
-  const activity: ActivityEntry[] = useMemo(() => {
-    return items
-      .filter(
-        (it): it is ActivitySourceItem => it.kind === "job",
-      )
-      .slice(-12)
-      .reverse()
-      .map((it) => activityFor(it));
-  }, [items]);
-
-  // Group items into turns (one per user_input). Inside a turn, the
-  // agent's outputs are kept in order: text blocks and tool_calls
-  // interleaved as they actually fired. The CommandRail renders the
-  // user bubble + the per-turn inline tool/text stream.
-  // Use the extracted helper (origin's refactor). It owns sentinel
-  // filtering (W3 F3 intro / B4 prepare) and approval-request rendering;
-  // see conversationTurns.ts.
-  const turns: ConversationTurn[] = useMemo(
-    () => itemsToConversationTurns(items, summarizeToolForRail),
-    [items],
-  );
-
   const activeJobs = useMemo(
     () =>
       items.filter(
@@ -1341,12 +1038,12 @@ function App() {
 
   useEffect(() => {
     setIndexReadiness(undefined);
-    useIndexReadinessStore.getState().setSnapshot(undefined);
+
     setEpisodeSummary(undefined);
-    useEpisodesStore.getState().setSnapshot(undefined);
+
     setRunningJobIds(undefined);
     setMediaReadiness(undefined);
-  }, [current, demoMode]);
+  }, [current]);
 
   useEffect(() => {
     return deferNonCriticalHydration(() => {
@@ -1355,7 +1052,7 @@ function App() {
       void loadRunningJobIds();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode, completedJobKinds.size, activeJobs.length, timelineSnapshot.cut_boundaries.length]);
+  }, [current, completedJobKinds.size, activeJobs.length, timelineSnapshot.cut_boundaries.length]);
 
   useEffect(() => {
     mediaReadinessCommandUnavailableRef.current = false;
@@ -1363,17 +1060,17 @@ function App() {
       void loadMediaReadiness();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode, completedJobKinds.size, activeJobs.length, sources.length, proxies.length]);
+  }, [current, completedJobKinds.size, activeJobs.length, sources.length, proxies.length]);
 
   useEffect(() => {
-    if (demoMode || !isTauri() || !current || sourceMediaCount === 0) return;
+    if (!isTauri() || !current || sourceMediaCount === 0) return;
     const id = window.setInterval(() => {
       void loadMediaReadiness();
       void loadRunningJobIds();
     }, activeJobs.length > 0 ? 2_000 : 5_000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeJobs.length, current, demoMode, sourceMediaCount]);
+  }, [activeJobs.length, current, sourceMediaCount]);
 
   // Re-poll readiness when the user comes back to the window. Covers
   // the case where indexer subprocesses kept writing sidecars while
@@ -1392,7 +1089,7 @@ function App() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode]);
+  }, [current]);
 
   // Episode metadata lives in OTIO metadata.montage.episodes, not in
   // timelineSnapshot.cut_boundaries, so the cut-boundary-keyed effect
@@ -1492,31 +1189,7 @@ function App() {
     return chips;
   }, [activeProposal, current, pickedMediaChips, selectedStem, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
-  const effectiveContextChips: ContextChip[] = useMemo(() => {
-    return realContextChips.filter(
-      (chip) => !dismissedContextChips.includes(`${chip.kind ?? "tag"}:${chip.label}`),
-    );
-  }, [dismissedContextChips, realContextChips]);
 
-  const realTaskProgress = useMemo(() => {
-    const latestJob = activeJobs[activeJobs.length - 1];
-    if (latestJob) {
-      return {
-        label: `${jobKindLabel(latestJob.job_kind)} · ${latestJob.status}`,
-        progress: latestJob.percent ?? undefined,
-      };
-    }
-    if (running) {
-      return { label: "Agent working..." };
-    }
-    if (activeProposal) {
-      return {
-        label: "Proposal awaiting review",
-        progress: activeProposal.diffHints.length > 0 ? 100 : undefined,
-      };
-    }
-    return undefined;
-  }, [activeJobs, activeProposal, running]);
 
   const realIndexingMedia: IndexingMediaItem[] = useMemo(() => {
     const importBusy = activeJobs.some((job) => job.job_kind === "local_import" || job.job_kind === "url_import");
@@ -1769,87 +1442,25 @@ function App() {
 
   const previewChanges: PreviewChange[] = useMemo(() => {
     if (!activeProposal) return [];
-    // Until backend ships per-cut surfaces, render one chip per diff hint.
-    return activeProposal.diffHints.map((hint, i) => ({
-      id: `${activeProposal.callId}-${i}`,
-      index: i + 1,
-      kind: "pending" as const,
-      timeS: estimateTimeForHint(hint, activeProposal.snapshot.duration_s, i, activeProposal.diffHints.length),
-    }));
-  }, [activeProposal]);
-
-  // Stage routing — Edit is the main working surface. Proposal preview,
-  // transcript review, evidence, and revisions all live inside this stage.
-  const isEditStage = stage === "edit";
+    return activeProposal.diffHints.flatMap((hint, i) => {
+      const [range] = deriveRanges([hint], timelineSnapshot, activeProposal.snapshot);
+      return range ? [{
+        id: `${activeProposal.callId}-${i}`, index: i + 1,
+        kind: "pending" as const, timeS: range.startS,
+      }] : [];
+    });
+  }, [activeProposal, timelineSnapshot]);
 
   useEffect(() => {
-    if (!isEditStage) {
-      setInspectorCollapsed(false);
-    }
-  }, [isEditStage]);
-
-  useEffect(() => {
-    setInspectorCollapsed(false);
-    if (activeProposal) {
-      setRightPanel("inspector");
-    }
     setActivePreviewChangeId(undefined);
   }, [activeProposal?.callId]);
 
-  const effectiveDuration = demoMode ? SCREEN2_DURATION_S : timelineDuration > 0 ? timelineDuration : sourceDurationS;
-  const effectiveCurrentTime = demoMode ? SCREEN2_CURRENT_TIME_S : timelineDuration > 0 ? timelineTimeS : sourceCurrentTimeS;
-  const effectiveChanges = demoMode ? screen2Changes : previewChanges;
-  const effectivePlan = demoMode ? screen2Plan : plan;
-  const effectiveInspector = demoMode ? screen2Inspector : inspectorData;
-  const isTimelinePreview = !demoMode && timelineDuration > 0;
-  const selectedPreviewChangeId = demoMode ? "c07" : activePreviewChangeId;
+  const effectiveDuration = timelineDuration > 0 ? timelineDuration : sourceDurationS;
+  const effectiveCurrentTime = timelineDuration > 0 ? timelineTimeS : sourceCurrentTimeS;
+  const isTimelinePreview = timelineDuration > 0;
 
-  // FilmSlate inputs — only meaningful when we're previewing real
-  // source media (not the timeline-segmented view and not demo mode).
-  // The slate stays hidden in those modes by leaving `slateSourceMedia`
-  // undefined. Fields beyond `name` are best-effort: the current media
-  // store only carries `name` + `size_bytes`, and source-time duration
-  // (`sourceDurationS`) is populated once the <video> reads metadata.
-  // Resolution / codec / audio aren't surfaced by the model yet — left
-  // undefined so the slate collapses them. TODO(redesign): wire probe
-  // metadata once it lives on `SourceMediaEntry`.
-  const slateSourceMedia = useMemo(() => {
-    if (demoMode || isTimelinePreview) return undefined;
-    if (!selectedPreviewMedia) return undefined;
-    return {
-      name: selectedPreviewMedia.name,
-      sizeBytes: selectedSource?.size_bytes,
-      durationSec: sourceDurationS > 0 ? sourceDurationS : undefined,
-    };
-  }, [demoMode, isTimelinePreview, selectedPreviewMedia, selectedSource?.size_bytes, sourceDurationS]);
-
-  // Total indexers reported by the backend snapshot — keep in sync with
-  // the boolean fields on `IndexReadinessSnapshot`. Hard-coded rather
-  // than derived because the snapshot type is a flat record, not a list.
-  const INDEXER_TOTAL = 9;
-  const slateIndexing = useMemo(() => {
-    if (!indexReadiness) {
-      // No snapshot yet — show a calm "preparing" placeholder so the
-      // slate doesn't claim more progress than is real.
-      return {
-        ready: 0.1,
-        status: "Preparing media…",
-        detail: "Awaiting indexer status",
-      };
-    }
-    const ready = indexReadiness.ready_count;
-    const fraction = Math.max(0, Math.min(1, ready / INDEXER_TOTAL));
-    const transcriptSegment = indexReadiness.transcripts
-      ? " · transcript ready"
-      : "";
-    return {
-      ready: fraction,
-      status: fraction < 1 ? "Building proxy…" : "Decoding first frame…",
-      detail: `${ready} of ${INDEXER_TOTAL} indexers ready${transcriptSegment}`,
-    };
-  }, [indexReadiness]);
   const seekPreview = (timeS: number) => {
-    if (demoMode) return;
+
     if (isTimelinePreview) {
       requestTimelineSeek(timeS);
     } else {
@@ -1861,10 +1472,10 @@ function App() {
     seekPreview(change.timeS);
   };
   const jumpPreviewChange = (direction: -1 | 1) => {
-    if (effectiveChanges.length === 0 || demoMode) return;
-    const sorted = [...effectiveChanges].sort((a, b) => a.timeS - b.timeS);
-    const currentIndex = selectedPreviewChangeId
-      ? sorted.findIndex((change) => change.id === selectedPreviewChangeId)
+    if (previewChanges.length === 0) return;
+    const sorted = [...previewChanges].sort((a, b) => a.timeS - b.timeS);
+    const currentIndex = activePreviewChangeId
+      ? sorted.findIndex((change) => change.id === activePreviewChangeId)
       : -1;
     const fallbackIndex =
       direction > 0
@@ -1899,102 +1510,7 @@ function App() {
     />
   );
   const realSchedulerWorkspace = <SchedulerWorkspace />;
-  // Multi-proposal review used to route through `BatchReviewSurface`,
-  // but that component was full of demo placeholders (fake titles,
-  // hard-coded constraints, fabricated risk notes) that lied to the
-  // user when real proposals landed. Multi-proposal review now flows
-  // through the normal Edit-stage layout: the inspector rail handles
-  // the active proposal, and the "{n} pending" pill in the header
-  // tells the user there are more. A real multi-proposal picker can
-  // land later as a small list above the inspector.
-  const realWorkspace =
-    !demoMode && !hasProject ? (
-      <Landing />
-    ) : !demoMode && stage === "deliver" ? (
-      realDeliveryWorkspace
-    ) : !demoMode && stage === "skills" ? (
-      <SkillsSurface />
-    ) : !demoMode && stage === "history" ? (
-      <HistorySurface />
-    ) : undefined;
-
-  if (demoMode && demoScreen.standalone && demoScreen.workspace) {
-    return <>{demoScreen.workspace}</>;
-  }
-
-  // Per-screen demos can override the cockpit's command rail. When a demo
-  // doesn't supply one, fall back to the screen2 demo data (or real wiring).
-  const railProps = demoMode && demoScreen.commandRail
-    ? demoScreen.commandRail
-    : {
-        contextChips: demoMode ? screen2ContextChips : effectiveContextChips,
-        plan: effectivePlan,
-        taskProgress: demoMode
-          ? { label: "Building proposal...", progress: 62, eta: "00:01:48" }
-          : realTaskProgress,
-        activity: demoMode ? screen2Activity : activity,
-        turns: demoMode ? [] : turns,
-        suggestions: demoMode ? screen2Suggestions : [],
-        initialDraft: demoMode
-          ? "Cut this into a tight 8-minute podcast episode.\nRemove dead air but preserve natural pacing."
-          : undefined,
-      };
-  const agentRail = (
-    <CommandRail
-      hasProject={hasProject || demoMode}
-      running={demoMode ? true : running}
-      {...railProps}
-      chatSessions={demoMode ? [] : chatSessions}
-      activeChatSession={demoMode ? null : activeChatSession}
-      chatLoading={chatLoading}
-      focused={agentFocusMode}
-      onToggleFocus={() => setAgentFocusMode((focused) => !focused)}
-      onSelectChatSession={(session) => void selectChatSession(session)}
-      onOpenHistory={chatSessions.length === 0 ? () => void refreshChatSessions() : undefined}
-      onNewChat={() => void startNewChat()}
-      onSubmit={(command) => void runEngineCommand(command)}
-      onCancel={() => {
-        if (!isTauri()) return;
-        invoke("cancel_turn").catch((e) =>
-          console.warn("cancel_turn failed", e),
-        );
-      }}
-      onSuggestion={(action) => void runEngineCommand(action.prompt)}
-      onRespondUserInput={async (callId, reply) => {
-        if (!isTauri()) return;
-        await invoke("respond_user_input", { callId, reply });
-      }}
-      onRespondApproval={async (callId, decision) => {
-        if (!isTauri()) return;
-        await invoke("respond_approval", { callId, decision });
-      }}
-      onRemoveChip={(chip) => dismissContextChip(chip)}
-      permissionMode={permissionMode}
-      onSetPermissionMode={(mode) => void changePermissionMode(mode)}
-      agentProfile={agentProfile}
-      onSetAgentProfile={(profile) => void changeAgentProfile(profile)}
-      onRenameChat={(session, newTitle) => renameChat(session, newTitle)}
-      onDeleteChat={(session) => deleteChat(session)}
-      mediaSuggestions={mediaSuggestions}
-      onPickMedia={attachMediaPick}
-    />
-  );
-  const workspaceOverride = agentFocusMode ? (
-    // Full-window chat. The rail itself draws the sidebar + centered
-    // conversation column; we just give it the whole workspace.
-    <div className="h-full min-h-0 w-full overflow-hidden">
-      {agentRail}
-    </div>
-  ) : demoMode && demoScreen.workspace ? (
-    demoScreen.workspace
-  ) : (
-    realWorkspace
-  );
-
-  // ---- Stage shell nodes (2026 UX) ----------------------------------
-  // A clean cinematic hero: the raw video slot + a minimal glass scrubber.
-  // Deliberately NOT the old PreviewSurface — no "Source review", no
-  // Before/After, no quality dropdown. Just the footage + transport.
+  // Preview and transport share the persistent Stage workspace.
   const stageVideoSlot = isTimelinePreview ? (
     <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
   ) : realPreviewSrc && selectedPreviewMedia ? (
@@ -2010,7 +1526,6 @@ function App() {
       onTime={setSourceTime}
       onDuration={setSourceDuration}
       onPlaying={setMediaPlaying}
-      onFirstFrame={() => setHasProxyFrame(true)}
     />
   ) : null;
   const stageProgress =
@@ -2034,9 +1549,9 @@ function App() {
           <span className="truncate">{activeProposal?.summary ?? (current ? projectName(current) : "Preview")}</span>
         </span>
         <span className="ml-auto flex items-center gap-1.5">
-          {effectiveChanges.length > 0 ? (
+          {previewChanges.length > 0 ? (
             <span className="font-mono text-[10.5px] tracking-[0.05em] text-[var(--color-text-muted)]">
-              {effectiveChanges.length} pending
+              {previewChanges.length} pending
             </span>
           ) : null}
           {activeMediaSize ? (
@@ -2058,10 +1573,10 @@ function App() {
           <div className="absolute inset-0 grid place-items-center">
             <div className="text-center">
               <div className="text-[12px] font-semibold tracking-wide text-[var(--color-text-secondary)]">
-                {slateIndexing ? "Indexing…" : "Preview"}
+                {activeJobs.some((job) => job.job_kind === "indexing") ? "Indexing…" : "Preview"}
               </div>
               <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-                {slateSourceMedia?.name ?? "Drop a clip or pick one from media"}
+                {selectedPreviewMedia?.name ?? "Drop a clip or pick one from media"}
               </div>
             </div>
           </div>
@@ -2094,8 +1609,8 @@ function App() {
       {/* insights — suggestion cards + detection/review queue absorb
           the leftover hero height with real analysis data */}
       <PreviewInsights
-        changes={effectiveChanges}
-        activeChangeId={selectedPreviewChangeId}
+        changes={previewChanges}
+        activeChangeId={activePreviewChangeId}
         onSelectChange={selectPreviewChange}
         onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
         onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
@@ -2110,10 +1625,6 @@ function App() {
     </div>
   );
 
-  // ── Shared cockpit tool nodes ──────────────────────────────────────────
-  // Defined ONCE here and reused by BOTH the Stage (summonable tool dock)
-  // and the legacy cockpit branch below (LeftWorkspaceRail / RightEditPanel).
-  // All referenced state/handlers are already in scope at this point.
   const stageMedia = (
     <ProjectMediaPanel
       projectName={current ? projectName(current) : undefined}
@@ -2135,9 +1646,9 @@ function App() {
     />
   );
   const stageInspector =
-    activeProposal || demoMode ? (
+    activeProposal ? (
       <div className="proposal-review-stack">
-        {!demoMode && pendingProposals.length > 1 ? (
+        {pendingProposals.length > 1 ? (
           <div className="proposal-picker" aria-label="Pending proposals">
             <div className="proposal-picker-header">
               <span>Pending proposals</span>
@@ -2164,7 +1675,7 @@ function App() {
           </div>
         ) : null}
         <ProposalInspector
-          data={effectiveInspector}
+          data={inspectorData}
           onAccept={acceptActiveProposal}
           onReject={rejectActiveProposal}
           onInspectDeeper={inspectActiveProposal}
@@ -2172,8 +1683,6 @@ function App() {
           onAgentRepair={() => {
             void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
           }}
-          onMaximize={() => setInspectorCollapsed(false)}
-          onCollapse={() => setInspectorCollapsed(true)}
         />
       </div>
     ) : (
@@ -2183,17 +1692,14 @@ function App() {
     <IndexRail
       tasks={realIndexingTasks}
       structurePreview={realIndexingStructure}
-      episodes={episodeSummary}
       indexerConfig={indexerConfig}
       activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
       ready={realIndexingReady}
-      onReviewIndexResults={() => {
+      onRefreshIndexers={() => {
         void loadIndexerConfig();
         void runIndexers();
       }}
-      onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
       onOpenConfigPath={openConfigPath}
-      onRevealConfigPath={revealConfigPath}
     />
   );
   const stageTranscript = <TranscriptView stem={selectedStem} />;
@@ -2203,8 +1709,7 @@ function App() {
   return (
     <>
     <AmbientBackground />
-    {STAGE_SHELL && !demoMode ? (
-      <StageShell
+    <StageShell
         hasProject={hasProject}
         landing={<Landing />}
         preview={stagePreview}
@@ -2249,236 +1754,7 @@ function App() {
             ? `${briefPendingCount} proposal${briefPendingCount === 1 ? "" : "s"} ready · ${realIndexingReady ? "indexed" : "indexing"}`
             : undefined
         }
-      />
-    ) : (
-    <AppShell
-      // Top chrome (brand, stage tabs, status, share/settings) now lives in
-      // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;
-      // Task 9 brings the workspace/stage row back.
-      workspace={workspaceOverride}
-      commandRail={
-        <LeftWorkspaceRail
-          active={leftPanel}
-          onChange={setLeftPanel}
-          agent={agentRail}
-          media={stageMedia}
-        />
-      }
-      preview={
-        isEditStage ? (
-          <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
-            <CenterModeTabs
-              active={centerMode}
-              onChange={setCenterMode}
-              badges={{ brief: briefPendingCount }}
-            />
-            {centerMode === "brief" ? (
-              <div className="flex-1 min-h-0 overflow-hidden">
-                {/* Wave 4 W4.6: the focus controller wired in
-                    `installFocusAdapter` above owns the tab switch +
-                    entity focus on every "Review →". BriefSurface no
-                    longer needs a per-click callback. */}
-                <BriefSurface />
-              </div>
-            ) : centerMode === "timeline" ? (
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <TimelineHybrid
-                  tab={timelineTab}
-                  onChangeTab={setTimelineTab}
-                  viewMode={timelineViewMode}
-                  onChangeViewMode={setTimelineViewMode}
-                  durationS={effectiveDuration}
-                  currentTimeS={effectiveCurrentTime}
-                  changeCount={effectiveChanges.length}
-                  audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-                  contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
-                />
-              </div>
-            ) : isTranscriptFirstProjectType(projectType) ? (
-              // Wave 4 W4.4: podcast/interview/tutorial projects land on
-              // the transcript-first Source view. The legacy video preview
-              // stays reachable through the Video sub-tab inside
-              // <TranscriptSource>.
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <TranscriptSource
-                  videoSlot={
-                    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
-                      <MediaOfflineBanner />
-                      <PreviewSurface
-                        proposalName={activeProposal?.summary ?? "Source review"}
-                        pendingCount={effectiveChanges.length}
-                        changes={effectiveChanges}
-                        activeChangeId={selectedPreviewChangeId}
-                        currentTimeS={effectiveCurrentTime}
-                        durationS={effectiveDuration}
-                        isPlaying={isPlaying}
-                        volume={previewVolume}
-                        rate={previewRate}
-                        qualityMode={previewQualityMode}
-                        viewMode={previewViewMode}
-                        videoSlot={
-                          isTimelinePreview ? (
-                            <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
-                          ) : realPreviewSrc && selectedPreviewMedia ? (
-                            <RealMediaPreviewSlot
-                              src={realPreviewSrc}
-                              label={selectedPreviewMedia.label}
-                              name={selectedPreviewMedia.name}
-                              isPlaying={isPlaying}
-                              volume={previewVolume}
-                              rate={previewRate}
-                              seekRequestId={sourceSeekRequestId}
-                              seekTargetS={sourceSeekTargetS}
-                              onTime={setSourceTime}
-                              onDuration={setSourceDuration}
-                              onPlaying={setMediaPlaying}
-                              onFirstFrame={() => setHasProxyFrame(true)}
-                            />
-                          ) : undefined
-                        }
-                        sourceMedia={slateSourceMedia}
-                        hasProxyFrame={hasProxyFrame}
-                        indexing={slateIndexing}
-                        onPlayPause={togglePreviewPlayback}
-                        onSelectChange={selectPreviewChange}
-                        onPrevCut={() => jumpPreviewChange(-1)}
-                        onNextCut={() => jumpPreviewChange(1)}
-                        onSeek={seekPreview}
-                        onSetVolume={setPreviewVolume}
-                        onSetRate={setPreviewRate}
-                        onSetQualityMode={setPreviewQualityMode}
-                        onSetViewMode={setPreviewViewMode}
-                        onOpenProposalMenu={() => setInspectorCollapsed(false)}
-                        onInspectProposal={inspectActiveProposal}
-                        onReviseProposal={reviseActiveProposal}
-                        onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
-                        onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
-                        onFullscreen={() => setInspectorCollapsed(false)}
-                      />
-                    </div>
-                  }
-                />
-              </div>
-            ) : (
-              <>
-            <MediaOfflineBanner />
-            <PreviewSurface
-            proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
-            pendingCount={effectiveChanges.length}
-            changes={effectiveChanges}
-            activeChangeId={selectedPreviewChangeId}
-            currentTimeS={effectiveCurrentTime}
-            durationS={effectiveDuration}
-            isPlaying={demoMode ? false : isPlaying}
-            volume={previewVolume}
-            rate={previewRate}
-            qualityMode={previewQualityMode}
-            viewMode={previewViewMode}
-            videoSlot={
-              demoMode ? (
-                <Screen2MediaSlot />
-              ) : isTimelinePreview ? (
-                <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
-              ) : realPreviewSrc && selectedPreviewMedia ? (
-                <RealMediaPreviewSlot
-                  src={realPreviewSrc}
-                  label={selectedPreviewMedia.label}
-                  name={selectedPreviewMedia.name}
-                  isPlaying={isPlaying}
-                  volume={previewVolume}
-                  rate={previewRate}
-                  seekRequestId={sourceSeekRequestId}
-                  seekTargetS={sourceSeekTargetS}
-                  onTime={setSourceTime}
-                  onDuration={setSourceDuration}
-                  onPlaying={setMediaPlaying}
-                  onFirstFrame={() => setHasProxyFrame(true)}
-                />
-              ) : undefined
-            }
-            sourceMedia={slateSourceMedia}
-            hasProxyFrame={hasProxyFrame}
-            indexing={slateIndexing}
-            onPlayPause={togglePreviewPlayback}
-            onSelectChange={selectPreviewChange}
-            onPrevCut={() => jumpPreviewChange(-1)}
-            onNextCut={() => jumpPreviewChange(1)}
-            onSeek={seekPreview}
-            onSetVolume={setPreviewVolume}
-            onSetRate={setPreviewRate}
-            onSetQualityMode={setPreviewQualityMode}
-            onSetViewMode={setPreviewViewMode}
-            onOpenProposalMenu={() => setInspectorCollapsed(false)}
-            onInspectProposal={inspectActiveProposal}
-            onReviseProposal={reviseActiveProposal}
-            onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
-            onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
-            onFullscreen={() => setInspectorCollapsed(false)}
-          />
-              </>
-            )}
-          </div>
-        ) : stage === "deliver" ? (
-          realDeliveryWorkspace
-        ) : (
-          <span />
-        )
-      }
-      timeline={
-        isEditStage ? (
-          // Bottom dock is now the timeline only. Transcript + Vedit
-          // moved to the right rail as their own tabs — the editor
-          // surface stays calm; reference panels live to the side
-          // where they don't compete with the cut for vertical space.
-          <TimelineHybrid
-            tab={timelineTab}
-            onChangeTab={setTimelineTab}
-            viewMode={timelineViewMode}
-            onChangeViewMode={setTimelineViewMode}
-            durationS={effectiveDuration}
-            currentTimeS={effectiveCurrentTime}
-            changeCount={effectiveChanges.length}
-            audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-            contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
-          />
-        ) : (
-          <span />
-        )
-      }
-      timelineCollapsed={false}
-      // Wave 4 W4.8: when the center pane is in Timeline mode the
-      // expanded TimelineHybrid renders there — the bottom dock would
-      // double up. Hide the dock entirely so the user sees the
-      // timeline exactly once. Brief and Source modes keep the dock.
-      timelineHidden={isEditStage && centerMode === "timeline"}
-      inspector={
-        isEditStage && inspectorCollapsed ? (
-          <CollapsedInspectorButton
-            onOpen={(panel) => {
-              setRightPanel(panel);
-              setInspectorCollapsed(false);
-            }}
-          />
-        ) : isEditStage ? (
-          <RightEditPanel
-            active={rightPanel}
-            onChange={setRightPanel}
-            inspector={stageInspector}
-            index={stageIndex}
-            transcript={stageTranscript}
-            vedit={stageVedit}
-          />
-        ) : (
-          <span />
-        )
-      }
-      inspectorCollapsed={isEditStage && inspectorCollapsed}
-      footer={<Footer demoMode={demoMode} />}
     />
-    )}
-    {/* The bottom dock used to support a popout mode for transcript /
-        vedit; now those panels live in the right rail, so the popout
-        is gone. */}
     {showNewProject && (
       <NewProjectForm
         onClose={() => {
@@ -2560,7 +1836,6 @@ function RealMediaPreviewSlot({
   onTime,
   onDuration,
   onPlaying,
-  onFirstFrame,
 }: {
   src: string;
   label: string;
@@ -2574,21 +1849,11 @@ function RealMediaPreviewSlot({
   onTime: (timeS: number) => void;
   onDuration: (durationS: number) => void;
   onPlaying: (playing: boolean) => void;
-  /**
-   * Fires once per mount when the `<video>` first reports that a
-   * frame is decoded and ready to display. Used by the parent to
-   * cross-fade out the `FilmSlate` loading overlay. Multiple frame
-   * events still fire `setHasPaintedFrame(true)` locally — the
-   * parent callback is invoked on every transition since it's
-   * idempotent (parent owns its own boolean).
-   */
-  onFirstFrame?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasPaintedFrame, setHasPaintedFrame] = useState(false);
   const markPainted = () => {
     setHasPaintedFrame(true);
-    onFirstFrame?.();
   };
 
   useEffect(() => {
@@ -2694,128 +1959,11 @@ function RealMediaPreviewSlot({
   );
 }
 
-
 function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   for (let i = items.length - 1; i >= 0; i -= 1) {
     if (predicate(items[i])) return i;
   }
   return -1;
-}
-
-function LeftWorkspaceRail({
-  active,
-  onChange,
-  agent,
-  media,
-}: {
-  active: "agent" | "media";
-  onChange: (panel: "agent" | "media") => void;
-  agent: ReactNode;
-  media: ReactNode;
-}) {
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PanelSwitch
-        value={active}
-        options={[
-          { value: "agent", label: "Agent" },
-          { value: "media", label: "Media" },
-        ]}
-        onChange={onChange}
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {active === "agent" ? agent : media}
-      </div>
-    </div>
-  );
-}
-
-type RightPanelKey = "inspector" | "index" | "transcript" | "vedit";
-
-function RightEditPanel({
-  active,
-  onChange,
-  inspector,
-  index,
-  transcript,
-  vedit,
-}: {
-  active: RightPanelKey;
-  onChange: (panel: RightPanelKey) => void;
-  inspector: ReactNode;
-  index: ReactNode;
-  transcript: ReactNode;
-  vedit: ReactNode;
-}) {
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PanelSwitch
-        value={active}
-        options={[
-          { value: "inspector", label: "Inspector" },
-          { value: "index", label: "Index" },
-          { value: "transcript", label: "Transcript" },
-          { value: "vedit", label: "Vedit" },
-        ]}
-        onChange={onChange}
-      />
-      {/* Transcript owns its own scroll (virtualized list); the other
-       *  tabs are short forms / commit logs that scroll the whole pane.
-       *  Transcript variant needs `display: flex` so the .transcript-pane
-       *  child's `flex: 1` resolves to the available height — without it
-       *  the pane collapses to natural content height and the inner
-       *  .transcript-scroll has nothing to scroll within. */}
-      <div
-        className={
-          active === "transcript"
-            ? "min-h-0 flex-1 flex flex-col overflow-hidden"
-            : "min-h-0 flex-1 overflow-y-auto"
-        }
-      >
-        {active === "inspector"
-          ? inspector
-          : active === "index"
-            ? index
-            : active === "transcript"
-              ? transcript
-              : vedit}
-      </div>
-    </div>
-  );
-}
-
-function PanelSwitch<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="flex shrink-0 items-center gap-0 border-b border-[var(--color-border-subtle)] px-2 py-1">
-      {options.map((option) => {
-        const selected = value === option.value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            className={[
-              "h-7 flex-1 rounded-[var(--radius-sm)] px-2 text-[var(--text-caption)] font-medium transition-colors",
-              selected
-                ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
-                : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
-            ].join(" ")}
-            aria-pressed={selected}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 function ProjectMediaPanel({
@@ -3101,65 +2249,10 @@ function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
       return "Missing";
   }
 }
-function CollapsedInspectorButton({
-  onOpen,
-}: {
-  onOpen: (panel: "inspector" | "index") => void;
-}) {
-  return (
-    <div className="flex h-full w-full flex-col items-stretch gap-1 py-2">
-      <CollapsedRailSpine
-        label="Index"
-        onOpen={() => onOpen("index")}
-      />
-      <div className="mx-1 h-px shrink-0 bg-[var(--color-border-subtle)]" aria-hidden />
-      <CollapsedRailSpine
-        label="Inspector"
-        onOpen={() => onOpen("inspector")}
-      />
-    </div>
-  );
-}
-
-function CollapsedRailSpine({
-  label,
-  onOpen,
-}: {
-  label: string;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex flex-1 min-h-[100px] flex-col items-center justify-center gap-2 px-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-      aria-label={`Open ${label}`}
-      title={`Open ${label}`}
-    >
-      <PanelRightOpen className="h-4 w-4 shrink-0 stroke-[1.75] opacity-70 group-hover:opacity-100" />
-      <span
-        className="font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--text-caption)]"
-        style={{ writingMode: "vertical-rl" }}
-      >
-        {label}
-      </span>
-    </button>
-  );
-}
 
 // `NoProjectWorkspace` was removed in Task 11 (redesign empty state). Its
 // replacement is `<Landing />` in `./shell/empty/Landing.tsx`, rendered
 // via `realWorkspace` above.
-
-/**
- * Footer — thin wrapper that delegates to the redesigned
- * `shell/chrome/Footer` (Task 10). The `demoMode` prop is retained for the
- * call site but is currently a no-op; the redesigned footer renders the
- * same job/system state in both demo and live runs.
- */
-function Footer(_: { demoMode?: boolean }) {
-  return <ChromeFooter />;
-}
 
 function projectName(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -3328,59 +2421,6 @@ function mediaCacheKeyForTask(
   }
 }
 
-function jobKindLabel(kind: string): string {
-  return kind
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function firstTimelineSidecars(snapshot: TimelineSnapshot): {
-  thumbnailDir: string | null;
-  waveformPath: string | null;
-} {
-  let thumbnailDir: string | null = null;
-  let waveformPath: string | null = null;
-  for (const track of snapshot.tracks) {
-    for (const item of track.items) {
-      if (item.kind !== "clip") continue;
-      thumbnailDir ??= item.thumbnail_dir;
-      waveformPath ??= item.waveform_path;
-      if (thumbnailDir && waveformPath) return { thumbnailDir, waveformPath };
-    }
-  }
-  return { thumbnailDir, waveformPath };
-}
-
-function sampleEvenly<T>(items: T[], maxItems: number): T[] {
-  if (items.length <= maxItems) return items;
-  if (maxItems <= 0) return [];
-  return Array.from({ length: maxItems }, (_, index) => {
-    const sourceIndex = Math.floor((index / Math.max(1, maxItems - 1)) * (items.length - 1));
-    return items[sourceIndex];
-  });
-}
-
-function downsamplePeaks(peaks: number[], targetCount: number): number[] {
-  if (peaks.length <= targetCount) return peaks.map(normalizePeak);
-  const bucketSize = peaks.length / targetCount;
-  return Array.from({ length: targetCount }, (_, index) => {
-    const start = Math.floor(index * bucketSize);
-    const end = Math.max(start + 1, Math.floor((index + 1) * bucketSize));
-    let max = 0;
-    for (let i = start; i < end && i < peaks.length; i += 1) {
-      max = Math.max(max, Math.abs(peaks[i] ?? 0));
-    }
-    return normalizePeak(max);
-  });
-}
-
-function normalizePeak(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0.04, Math.min(1, Math.abs(value)));
-}
-
 function pendingProxyAssetIdSet(snapshot: TimelineSnapshot): Set<string> {
   const ids = new Set<string>();
   for (const track of snapshot.tracks ?? []) {
@@ -3418,132 +2458,13 @@ function failedTranscodeSourceNames(items: AnyAgentItem[]): Set<string> {
 }
 
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];
-type ToolCallItem = Extract<AnyAgentItem, { kind: "tool_call" }>;
-type JobItem = Extract<AnyAgentItem, { kind: "job" }>;
-type ActivitySourceItem = JobItem;
 
 type ChatHistory = {
   session: ChatSessionSummary | null;
   items: Item[];
 };
 
-function activityFor(item: ActivitySourceItem): ActivityEntry {
-  const id = item.id.toString();
-  const status = summarizeJobStatus(item.status);
-  return {
-    id,
-    timestamp: shortTime(),
-    text: `${jobKindLabel(item.job_kind)} · ${status.summary}`,
-    detail: status.detail,
-    kind: "result",
-  };
-}
-
-/** Short human one-liner for a tool call inside the conversation rail.
- *  Mirrors the dispatch in ChatStream.tsx's `summarizeToolCall` so the
- *  same vocabulary appears in both surfaces. */
-function summarizeToolForRail(item: ToolCallItem): string {
-  const args = item.args;
-  const record =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? (args as Record<string, unknown>)
-      : null;
-  switch (item.name) {
-    case "view_timeline":
-      return "Read timeline";
-    case "view_episode":
-      return "Read episode map";
-    case "view_frame":
-      return typeof record?.at_s === "number"
-        ? `Inspected frame at ${record.at_s.toFixed(2)}s`
-        : "Inspected frame";
-    case "apply_edl":
-      return typeof record?.reasoning === "string"
-        ? oneLine(record.reasoning as string, 96)
-        : "Proposed timeline edit";
-    case "find_episode_start":
-      return "Found publishable episode start";
-    case "podcast_episode_spans":
-      return "Planned candidate episode spans";
-    case "podcast_edit_proposal":
-      return "Built edit proposal";
-    case "podcast_apply_accepted_edits":
-      return "Prepared accepted edits";
-    case "podcast_audio_polish":
-      return "Checked audio polish";
-    case "podcast_visual_polish":
-      return "Checked visual polish";
-    case "podcast_qc_report":
-      return "Ran podcast QC";
-    case "podcast_smooth_cut_boundaries":
-      return "Checked cut smoothness";
-    case "podcast_post_draft_check":
-      return "Checked draft boundaries";
-    case "find_beat":
-      return typeof record?.kind === "string"
-        ? `Found ${record.kind} beats`
-        : "Found editorial beats";
-    case "inspect_moment":
-      return typeof record?.moment_id === "string"
-        ? `Inspected ${record.moment_id}`
-        : "Inspected moment";
-    case "read_index":
-      return typeof record?.channel === "string"
-        ? `Read ${record.channel} index`
-        : "Read index";
-    case "start_indexing":
-      return "Started indexing";
-    case "start_render":
-      return "Started render";
-    default:
-      return item.name.replace(/_/g, " ");
-  }
-}
-
-function oneLine(text: string, max: number): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
-
-function summarizeJobStatus(status: string): { summary: string; detail?: string } {
-  const firstLine = status.split("\n").find((line) => line.trim().length > 0)?.trim() ?? status;
-  const failureCounts = firstLine.match(
-    /(\d+)\s+wrote,\s+(\d+)\s+skipped,\s+(\d+)\s+failed,\s+(\d+)\s+dep-skipped/,
-  );
-  if (failureCounts) {
-    const [, wrote, skipped, failed, depSkipped] = failureCounts;
-    return {
-      summary: `${wrote} wrote, ${failed} failed`,
-      detail: `${skipped} skipped, ${depSkipped} dependency-skipped. Open the Index panel for the failing indexers.`,
-    };
-  }
-  if (firstLine.length <= 120) {
-    return { summary: firstLine };
-  }
-  return {
-    summary: `${firstLine.slice(0, 96)}...`,
-    detail: firstLine.slice(96, 360),
-  };
-}
-
-function shortTime(): string {
-  const d = new Date();
-  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-}
-
-function stepStatus(s: string): PlanItem["status"] {
-  if (s === "complete" || s === "done") return "complete";
-  if (s === "in_progress" || s === "running") return "in_progress";
-  if (s === "failed" || s === "error") return "failed";
-  return "pending";
-}
-
 // Estimate a time-on-the-timeline for a diff hint when we don't have one in the
 // protocol yet. Distributes hints evenly across the timeline duration so the
 // jump chips and scrubber dots aren't all stacked at zero.
-function estimateTimeForHint(_hint: unknown, durationS: number, i: number, total: number): number {
-  if (!durationS || total === 0) return 0;
-  return ((i + 1) / (total + 1)) * durationS;
-}
-
 export default App;

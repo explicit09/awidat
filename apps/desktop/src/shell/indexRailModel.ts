@@ -4,7 +4,7 @@ import type {
   IndexerConfigSnapshot,
   IndexingStructurePreview,
   IndexingTask,
-} from "./IndexingDashboard";
+} from "./indexRailTypes";
 import type { MediaIndexingStatus } from "../ui";
 
 /**

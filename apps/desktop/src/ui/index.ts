@@ -1,6 +1,5 @@
 export { BrandIcon, type BrandIconProps, type SimpleIconShape } from "./BrandIcon";
 export { Button, type ButtonProps } from "./primitives/Button";
-export { IconButton, type IconButtonProps } from "./primitives/IconButton";
 export {
   StatusPill,
   StatusPillFromMapping,
@@ -11,8 +10,7 @@ export {
   type StatusPillMapping,
 } from "./primitives/StatusPill";
 export { Card, type CardProps } from "./primitives/Card";
-export { Stack, Inline, Divider, type StackProps } from "./primitives/Stack";
-export { EvidenceChip, type EvidenceChipProps } from "./primitives/EvidenceChip";
+export { Stack, Inline, type StackProps } from "./primitives/Stack";
 export {
   ConfidenceMeter,
   confidenceLevel,
@@ -21,21 +19,8 @@ export {
 } from "./primitives/ConfidenceMeter";
 export { ConfidenceRing, type ConfidenceRingProps } from "./primitives/ConfidenceRing";
 export { RiskIndicator, type RiskLevel, type RiskIndicatorProps } from "./primitives/RiskIndicator";
-export {
-  AgentStatusBadge,
-  type AgentStatus,
-  type AgentStatusBadgeProps,
-} from "./primitives/AgentStatusBadge";
 export { ReviewActions, type ReviewActionsProps } from "./primitives/ReviewActions";
 
-export { ProposalCard, type ProposalCardProps } from "./components/ProposalCard";
-export { RationaleHint, type RationaleHintProps } from "./components/RationaleHint";
-export { TranscriptSegment, type TranscriptSegmentProps } from "./components/TranscriptSegment";
-export {
-  TimelineMarker,
-  type TimelineMarkerKind,
-  type TimelineMarkerProps,
-} from "./components/TimelineMarker";
 export {
   MediaStatusRow,
   type MediaIndexingStatus,
@@ -46,11 +31,5 @@ export {
   type PreflightSeverity,
   type PreflightFindingRowProps,
 } from "./components/PreflightFindingRow";
-export {
-  ChannelLanes,
-  type ChannelLane,
-  type ChannelLanesProps,
-  type LaneSegment,
-} from "./components/ChannelLanes";
 
 export { cn } from "./cn";

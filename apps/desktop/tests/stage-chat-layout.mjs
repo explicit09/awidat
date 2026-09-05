@@ -86,7 +86,6 @@ const checks = [
   ["stage media selected state uses visible contrast", /\.stage-media-item\[data-selected="true"\][\s\S]+rgba\(239,68,68,0\.22\)/],
   ["stage media thumbnails use dedicated glass styling", /\.stage-media-thumb[\s\S]+aspect-ratio:\s*16 \/ 9/],
   ["stage media empty state spans the grid", /\.stage-media-empty[\s\S]+grid-column:\s*1 \/ -1/],
-  ["source preview selector has liquid-visible contrast", /\.media-asset-select[\s\S]+rgba\(10,\s*10,\s*18,\s*0\.86\)/],
   ["empty conversation does not promise to work only after indexing", /I'll work on it once indexing finishes/.test(emptyConversation) === false],
 ];
 

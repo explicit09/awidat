@@ -1,34 +1,7 @@
-export { AppShell, type AppShellProps } from "./AppShell";
 export { StageShell, type StageShellProps } from "./StageShell";
-export { StageIndicator, type StageIndicatorProps } from "./StageIndicator";
-export {
-  CommandRail,
-  type CommandRailProps,
-  type ContextChip,
-  type PlanItem,
-  type ActivityEntry,
-  type ChatSessionSummary,
-  type SuggestedAction,
-  type ConversationTurn,
-  type TurnPart,
-  type MediaSuggestion,
-} from "./CommandRail";
-export {
-  PreviewSurface,
-  type PreviewSurfaceProps,
-  type PreviewChange,
-  type PreviewViewMode,
-} from "./PreviewSurface";
-export { PreviewReviewQueue } from "./PreviewReviewQueue";
-export { PreviewInsights } from "./PreviewInsights";
-export {
-  TimelineHybrid,
-  TIMELINE_TABS,
-  TIMELINE_TAB_LABEL,
-  type TimelineHybridProps,
-  type TimelineTab,
-  type TimelineViewMode,
-} from "./TimelineHybrid";
+export type { ContextChip, ChatSessionSummary } from "../agent/turnContext";
+export type { MediaSuggestion } from "./StageConversation";
+export { PreviewInsights, type PreviewChange } from "./PreviewInsights";
 export {
   ProposalInspector,
   type ProposalInspectorProps,
@@ -38,16 +11,13 @@ export {
   type Alternative,
 } from "./ProposalInspector";
 export {
-  IndexingDashboard,
-  type IndexingDashboardProps,
   type IndexingMediaItem,
   type IndexingTask,
-  type IndexingSystemStatus,
   type IndexingStructurePreview,
   type IndexingEpisodeSummary,
   type IndexerConfigSnapshot,
   type IndexerConfigEntry,
-} from "./IndexingDashboard";
+} from "./indexRailTypes";
 export { IndexRail, type IndexRailProps } from "./IndexRail";
 export {
   DeliverySurface,
@@ -60,20 +30,3 @@ export {
 } from "./DeliverySurface";
 export { SkillsSurface, type SkillEntry } from "./SkillsSurface";
 export { HistorySurface } from "./HistorySurface";
-export { BriefSurface, type BriefSurfaceProps } from "./BriefSurface";
-export { CenterModeTabs, type CenterModeTabsProps } from "./brief/CenterModeTabs";
-export {
-  TranscriptSource,
-  type TranscriptSourceProps,
-} from "./source/TranscriptSource";
-export {
-  isTranscriptFirstProjectType,
-} from "./source/transcriptSourceLogic";
-export {
-  LoadingState,
-  ErrorState,
-  GenericEmpty,
-  type LoadingStateProps,
-  type ErrorStateProps,
-  type GenericEmptyProps,
-} from "./SystemStates";
