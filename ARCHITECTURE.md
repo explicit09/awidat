@@ -13,14 +13,14 @@ media import
   -> render/export
 ```
 
-`crates/` contains the Rust workspace. The crates cover the CLI, TUI, agent
-loop, project protocol, media indexing, rendering, desktop protocol, secrets,
+`crates/` contains the Rust workspace. The crates cover the CLI, agent integration, project protocol, media indexing, rendering, desktop protocol, secrets,
 configuration, social publishing, and shared test support.
 
 `apps/desktop/` contains the Tauri 2 desktop application and React/Vite
 frontend. It presents local projects, authentication choices, timeline data,
 and desktop-specific protocol surfaces while delegating core behavior to the
-Rust workspace.
+Rust workspace. `StageShell` is the application workspace; browser checks
+load this same application through the shared IPC fixture.
 
 `python/` is a `uv` workspace for MCP indexers. These packages extract
 transcripts, scenes, audio energy, faces, gaze, CLIP-searchable frames, shot
@@ -31,7 +31,9 @@ commands. Skills keep repeatable editing procedures close to the repository so
 agents can run them consistently instead of re-creating instructions by hand.
 
 `vendor/codex-rs/` contains the vendored Codex-derived agent runtime used by
-Montage. Local changes should stay narrow, documented, and compatible with the
+Montage as an external Codex app-server sidecar. The desktop bridge owns
+process lifecycle and protocol mapping. Local changes should stay narrow,
+documented, and compatible with the
 repository's public OAuth/API-key posture.
 
 The social publishing surface is split between `crates/social/` and

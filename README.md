@@ -6,7 +6,7 @@ This is a developer-preview source release for contributors who build from sourc
 
 ## Layout
 
-- `crates/` — Rust workspace: CLI, TUI, core agent loop, config, MCP client, project protocol, rendering, indexing, desktop protocol.
+- `crates/` — Rust workspace: CLI, agent integration, editorial tools, config, MCP client, project protocol, rendering, indexing, desktop protocol.
 - `apps/desktop/` — Tauri 2 desktop app with a React/Vite frontend.
 - `python/` — `uv` workspace of MCP indexers: Whisper transcription, scene detection, audio energy, face/gaze detection, CLIP frame search, shot classification, color analysis.
 - `skills/` — bundled editorial workflows exposed through `montage skills`.
