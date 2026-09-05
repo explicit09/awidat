@@ -2039,7 +2039,7 @@ fn broll_package_proposal(
             "kind": "broll_asset_or_generation_approval",
             "question": "Which source or generated B-roll asset should support this transcript moment?",
             "reason": "An accepted B-roll package needs a project-relative video asset before it can become a timeline object.",
-            "fallback": "Call find_generated_broll_opportunities, start_generated_media_job, poll_generated_media_job, then use_generated_media."
+            "fallback": "Choose the moment from transcript flow first; find_generated_broll_opportunities is optional scouting. Call start_generated_media_job with duration max(4, ceil(duration_s)) capped at 15, poll_generated_media_job, then use_generated_media with the original accepted timeline duration_s."
         })]
     };
     let edl = args.broll_asset.as_ref().map(|asset| {

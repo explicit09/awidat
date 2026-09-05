@@ -240,7 +240,7 @@ pub fn run(args: FindGeneratedBrollOpportunitiesArgs, ctx: McpToolCtx) -> Result
     let body = serde_json::json!({
         "findings": findings,
         "more_available": findings.len() == max_results,
-        "next_step": "Review a finding, then call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to round(duration_s), and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the same duration_s."
+        "next_step": "Choose the moment from transcript flow first; findings are optional scouting. For an accepted moment, call start_generated_media_job with provider=openrouter, artifact_kind=video, workflow_purpose=broll, prompt, model, duration set to max(4, ceil(duration_s)) capped at 15, and cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\". After the job succeeds, call use_generated_media with the original timeline duration_s, trimming the longer generated clip to the accepted span."
     });
     Ok(body.to_string())
 }
@@ -378,7 +378,7 @@ pub struct GeneratedBrollFinding {
     pub timeline_start_s: f64,
     /// Timeline-time end for the generated B-roll.
     pub timeline_end_s: f64,
-    /// Suggested generated-video and timeline-insertion duration.
+    /// Timeline-insertion duration. Generation rounds up and clamps to 4-15 seconds.
     pub duration_s: f64,
     /// Heuristic class that caused this finding.
     pub category: GeneratedBrollCategory,
@@ -535,8 +535,8 @@ fn build_fallback_prompt(subject: &str, duration_s: f64) -> String {
 
 fn prompt_duration_s(duration_s: f64) -> f64 {
     duration_s
+        .ceil()
         .clamp(MIN_BROLL_DURATION_S, MAX_BROLL_DURATION_S)
-        .round()
 }
 
 /// Return reference-asset/context requests implied by a planned generated B-roll moment.
@@ -702,3 +702,22 @@ OpenRouter/Seedance-ready prompts so the agent can review the moment \
 before calling `start_generated_media_job`; OpenRouter calls must include \
 cost_confirmation=\"OpenRouter cost unknown; explicit confirmation required\".\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_rounds_up_fractional_spans() {
+        assert_eq!(prompt_duration_s(4.1), 5.0);
+        assert!(build_prompt("a market", 4.1).contains("5 seconds"));
+        assert!(build_fallback_prompt("a market", 4.1).contains("5 seconds"));
+    }
+
+    #[test]
+    fn generation_respects_provider_limits_for_short_and_long_spans() {
+        assert_eq!(prompt_duration_s(1.5), 4.0);
+        assert_eq!(prompt_duration_s(15.0), 15.0);
+        assert_eq!(prompt_duration_s(20.0), 15.0);
+    }
+}

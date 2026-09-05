@@ -37,6 +37,10 @@ tools_allowlist:
   - verify_visual_support_artifact
   - plan_motion_scene
   - find_broll_opportunities
+  - find_generated_broll_opportunities
+  - start_generated_media_job
+  - poll_generated_media_job
+  - use_generated_media
   - inspect_clip
   - view_timeline
   - view_frame
@@ -516,9 +520,10 @@ for that from the start instead of discovering it at the end:
   4. Radio edit: classify + apply cleanup, repair boundaries
   5. Structure: order the body on the spine
   6. Brand/show package applied (or reported unavailable)
-  7. Visual support — B-roll pass (find_broll_opportunities +
-     b-roll/stock/source-backed lanes), MotionScene/cards — then
-     audio mix + loudness/package metadata
+  7. Visual support — LLM/editorial B-roll pass from transcript flow
+     first, using finder tools only as scouting/coverage checks; then
+     b-roll/stock/source-backed lanes, MotionScene/cards, cancellation
+     hygiene for generated media, audio mix + loudness/package metadata
   8. Confirm overall structure with the user
   9. Render scope="timeline", poll to completed, verify
   10. Publishing package: title/description/chapters/tags/thumbnail,
